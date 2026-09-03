@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CandidateAnswer } from './CandidateAnswer.js';
 import { CandidateProfile } from './CandidateProfile.js';
+import { CandidateProfileLink } from './CandidateProfileLink.js';
 
 describe('candidate private model projections', () => {
   it('removes contact, preference, demographic, and reusable-answer content from public output', () => {
@@ -13,6 +14,8 @@ describe('candidate private model projections', () => {
     answer.label = 'Phone number';
     answer.labelKey = 'phone number';
     answer.value = '+1 555 0100';
+    const profileLink = new CandidateProfileLink();
+    profileLink.href = 'https://example.invalid/private-profile';
 
     expect(profile.toPublicJSON()).not.toMatchObject({
       demographicsJson: expect.anything(),
@@ -24,6 +27,9 @@ describe('candidate private model projections', () => {
       label: expect.anything(),
       labelKey: expect.anything(),
       value: expect.anything(),
+    });
+    expect(profileLink.toPublicJSON()).not.toMatchObject({
+      href: expect.anything(),
     });
   });
 });

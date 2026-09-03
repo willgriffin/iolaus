@@ -146,10 +146,17 @@ const resumeReadPlanCollections = new Map<string, ResumeReadCollection>([
   ['Tag', 'tags'],
 ]);
 
+const privateResumeReadPlanClasses = new Set([
+  'CandidateProfile',
+  'CandidateProfileLink',
+]);
+
 function resumeReadPlanClassNames(): string[] {
   const names = new Set<string>();
   for (const plan of [NORMALIZED_RESUME_READ_PLAN, LEGACY_RESUME_READ_PLAN]) {
-    for (const [className] of Object.values(plan)) names.add(className);
+    for (const [className] of Object.values(plan)) {
+      if (!privateResumeReadPlanClasses.has(className)) names.add(className);
+    }
   }
   return [...names].sort();
 }
@@ -221,8 +228,8 @@ const inspectApplicationOperations = [
 /**
  * The published resume is assembled from every read-plan collection (the
  * normalized plan plus the legacy fallback), and the tailoring selection reads
- * stored configs. `CandidateProfile` is read for name/title/summary only; the
- * response never carries its contact facts.
+ * stored configs. Candidate profile records are read privately by the bounded
+ * resume service, never through a generated model permission or response.
  */
 const readResumeOperations = [
   ...resumeReadPlanClassNames().map((className) => {

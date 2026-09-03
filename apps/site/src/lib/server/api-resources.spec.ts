@@ -13,7 +13,6 @@ const legacySlugs: Record<string, string> = {
   achievementtags: 'AchievementTag',
   applications: 'Application',
   attachments: 'Attachment',
-  candidateprofilelinks: 'CandidateProfileLink',
   companies: 'Company',
   companyattachments: 'CompanyAttachment',
   companyresearches: 'CompanyResearch',
@@ -99,6 +98,8 @@ describe('apiResourceClasses', () => {
     expect(getApiResourceClass('candidate_answers')).toBeUndefined();
     expect(getApiResourceClass('candidateprofiles')).toBeUndefined();
     expect(getApiResourceClass('candidate_profiles')).toBeUndefined();
+    expect(getApiResourceClass('candidateprofilelinks')).toBeUndefined();
+    expect(getApiResourceClass('candidate_profile_links')).toBeUndefined();
     expect(getApiResourceClass('cliauthrequests')).toBeUndefined();
     expect(getApiResourceClass('people')).toBeUndefined();
     expect(getApiResourceClass('employmentpersons')).toBeUndefined();

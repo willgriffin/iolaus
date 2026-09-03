@@ -125,6 +125,7 @@ describe('decorator-driven surface exposure', () => {
     expect(hidden.map((r) => r.className).sort()).toEqual([
       'CandidateAnswer',
       'CandidateProfile',
+      'CandidateProfileLink',
       'CliAuthRequest',
       // Data-surface action state. A preview token IS the authority it
       // confers and an idempotency record holds another principal's action
@@ -135,6 +136,7 @@ describe('decorator-driven surface exposure', () => {
     ]);
     expect(resolveMcpToolClass('candidateanswer_list')).toBeUndefined();
     expect(resolveMcpToolClass('candidateprofile_get')).toBeUndefined();
+    expect(resolveMcpToolClass('candidateprofilelink_get')).toBeUndefined();
     expect(resolveMcpToolClass('cliauthrequest_get')).toBeUndefined();
     expect(resolveMcpToolClass('datasurfacepreviewtoken_list')).toBeUndefined();
     expect(
