@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getTestDatabase } from '@happyvertical/smrt-core';
+import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CandidateProfile } from '../objects/CandidateProfile.js';
 import type { ResumeAsset } from '../objects/ResumeAsset.js';
@@ -11,18 +15,41 @@ function requiredId(value: { id?: string | null }): string {
 }
 
 describe('Candidate onboarding persistence', () => {
-  let db: Awaited<ReturnType<typeof getTestDatabase>> | undefined;
+  const databases: DatabaseInterface[] = [];
+  let directory: string | undefined;
 
   afterEach(async () => {
-    await db?.close?.();
-    db = undefined;
+    await Promise.all(
+      databases.map(async (database) => await database.close?.()),
+    );
+    databases.length = 0;
+    if (directory) await rm(directory, { recursive: true, force: true });
+    directory = undefined;
   });
 
-  it('atomically assigns a resume to one contender, leaves the loser untouched, and permits owner replay', async () => {
-    const database = await getTestDatabase({
+  it('atomically assigns a resume across independent SQLite handles, rolls back the loser, and permits owner replay', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'iolaus-onboarding-'));
+    const databasePath = join(directory, 'candidate-onboarding.sqlite');
+    // `cache: false` is intentional: separate adapters to the same file avoid
+    // the per-connection transaction queue and exercise cross-handle claims.
+    const database = await getDatabase({
+      type: 'sqlite',
+      url: databasePath,
+      cache: false,
+    });
+    databases.push(database);
+    await getTestDatabase({
+      db: database,
+      type: 'sqlite',
       classes: ['CandidateProfile', 'ResumeAsset'],
     });
-    db = database;
+    const contenderDatabase = await getDatabase({
+      type: 'sqlite',
+      url: databasePath,
+      cache: false,
+    });
+    databases.push(contenderDatabase);
+    expect(contenderDatabase).not.toBe(database);
     const profiles = await getCollection<CandidateProfile>('CandidateProfile', {
       db: database,
     });
@@ -42,12 +69,15 @@ describe('Candidate onboarding persistence', () => {
       title: 'Synthetic concurrency resume',
     });
     const assetId = requiredId(asset);
-    const runTransaction = database.transaction;
-    if (!runTransaction)
-      throw new Error('Test database must support transactions.');
-
-    const associate = async (profile: CandidateProfile) =>
-      await runTransaction.call(database, async (transaction) => {
+    const associate = async (
+      handle: DatabaseInterface,
+      profile: CandidateProfile,
+    ) => {
+      const transaction = handle.transaction;
+      if (!transaction) {
+        throw new Error('Test database must support transactions.');
+      }
+      return await transaction.call(handle, async (transaction) => {
         const profileId = requiredId(profile);
         const claimed = await claimResumeAssetAtomically(
           transaction,
@@ -69,11 +99,16 @@ describe('Candidate onboarding persistence', () => {
         await persisted.save();
         return profileId;
       });
+    };
 
-    const outcomes = await Promise.allSettled([
-      associate(firstProfile),
-      associate(secondProfile),
-    ]);
+    const firstAttempt = associate(database, firstProfile);
+    // SQLite admits only one writer. Start the second independently submitted
+    // contender immediately after the first commit so it observes the durable
+    // conditional claim rather than an adapter-specific lock error.
+    const secondAttempt = firstAttempt.then(
+      async () => await associate(contenderDatabase, secondProfile),
+    );
+    const outcomes = await Promise.allSettled([firstAttempt, secondAttempt]);
     const winner = outcomes.find(
       (outcome): outcome is PromiseFulfilledResult<string> =>
         outcome.status === 'fulfilled',
@@ -85,6 +120,13 @@ describe('Candidate onboarding persistence', () => {
     expect(
       outcomes.filter((outcome) => outcome.status === 'rejected'),
     ).toHaveLength(1);
+    const rejected = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult =>
+        outcome.status === 'rejected',
+    );
+    expect(rejected?.reason).toMatchObject({
+      message: 'Resume asset was already claimed by another profile.',
+    });
     expect(winner).toBeDefined();
     if (!winner) throw new Error('Expected a successful resume claim.');
 
@@ -99,9 +141,15 @@ describe('Candidate onboarding persistence', () => {
     expect(loserProfile?.resumeAssetId).toBe('');
     expect((await assets.get(assetId))?.candidateProfileId).toBe(winner.value);
 
+    const winnerDatabase =
+      winner.value === requiredId(firstProfile) ? database : contenderDatabase;
+    const winnerTransaction = winnerDatabase.transaction;
+    if (!winnerTransaction) {
+      throw new Error('Test database must support transactions.');
+    }
     await expect(
-      runTransaction.call(
-        database,
+      winnerTransaction.call(
+        winnerDatabase,
         async (transaction) =>
           await claimResumeAssetAtomically(transaction, assetId, winner.value),
       ),
