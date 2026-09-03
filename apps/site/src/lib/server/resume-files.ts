@@ -57,6 +57,14 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
   }
 
   const parsed = JSON.parse(raw) as GetFilesystemOptions;
+  const localRuntime =
+    process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+    !process.env.SMRT_RUNTIME_PROFILE;
+  if (localRuntime && parsed.type !== 'local') {
+    throw new Error(
+      'The local runtime requires canonical local resume asset storage.',
+    );
+  }
   if (parsed.type === 'local') {
     const runtimeAssetRoot = getIolausUserAssetsRoot();
     const basePath = parsed.basePath
@@ -64,11 +72,7 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
         ? resolve(parsed.basePath)
         : resolve(process.cwd(), parsed.basePath)
       : runtimeAssetRoot;
-    if (
-      (process.env.SMRT_RUNTIME_PROFILE === 'local' ||
-        !process.env.SMRT_RUNTIME_PROFILE) &&
-      basePath !== runtimeAssetRoot
-    ) {
+    if (localRuntime && basePath !== runtimeAssetRoot) {
       throw new Error(
         'Local resume asset storage must use the canonical runtime asset root.',
       );

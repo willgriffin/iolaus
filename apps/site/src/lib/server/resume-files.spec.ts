@@ -37,7 +37,7 @@ describe('getResumeFilesConfig', () => {
     });
   });
 
-  it('rejects local filesystem config that resolves inside the source tree', () => {
+  it('rejects a local filesystem root inside the source tree', () => {
     process.chdir(resolve(repoRoot, 'apps', 'site'));
     process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
       type: 'local',
@@ -46,6 +46,28 @@ describe('getResumeFilesConfig', () => {
 
     expect(() => getResumeFilesConfig()).toThrow(
       'Local resume asset storage must use the canonical runtime asset root.',
+    );
+  });
+
+  it('rejects an arbitrary external local filesystem root', () => {
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 'local',
+      basePath: resolve(repoRoot, '..', 'iolaus-other-profile-assets'),
+    });
+
+    expect(() => getResumeFilesConfig()).toThrow(
+      'Local resume asset storage must use the canonical runtime asset root.',
+    );
+  });
+
+  it('rejects non-filesystem resume storage in the local runtime', () => {
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 's3',
+      bucket: 'example',
+    });
+
+    expect(() => getResumeFilesConfig()).toThrow(
+      'The local runtime requires canonical local resume asset storage.',
     );
   });
 
