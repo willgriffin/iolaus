@@ -12,7 +12,7 @@ import { withBearerSessionContext } from '$lib/server/terminal-auth';
 // replica never serves a public request from a cold cache. Skipped during the
 // build, which imports this module without a database.
 export const init: ServerInit = async () => {
-  if (building || process.env.IOLAUS_BUILD_SMOKE === 'true') return;
+  if (building) return;
   await ensureApplicationRuntimeReady();
   startPublishedResumePrime();
 };

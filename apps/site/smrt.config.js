@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
+import { canonicalizeDataDirectory } from '../../scripts/smrt-runtime-identity.mjs';
 
 const sourceRoot = existsSync(resolve(process.cwd(), 'apps/site/package.json'))
   ? process.cwd()
@@ -11,7 +12,7 @@ const localDatabase =
   profile === 'local'
     ? resolveLocalRuntimePaths({
         appId,
-        dataDirectory: process.env.SMRT_DATA_DIR,
+        dataDirectory: canonicalizeDataDirectory(process.env.SMRT_DATA_DIR),
         sourceRoot,
       }).database
     : undefined;

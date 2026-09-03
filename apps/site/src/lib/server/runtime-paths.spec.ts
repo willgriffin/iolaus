@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getIolausSourceRoot,
@@ -20,15 +21,16 @@ describe('Iolaus local runtime paths', () => {
   });
 
   it('honors an explicit absolute data root for agent-managed installs', () => {
-    vi.stubEnv('SMRT_DATA_DIR', '/private/tmp/iolaus-explicit-data');
+    vi.stubEnv('SMRT_DATA_DIR', '/tmp/iolaus-explicit-data');
 
     const paths = resolveIolausLocalRuntimePaths();
-    expect(paths.root).toBe('/private/tmp/iolaus-explicit-data');
+    const canonicalTemporaryRoot = realpathSync('/tmp');
+    expect(paths.root).toBe(`${canonicalTemporaryRoot}/iolaus-explicit-data`);
     expect(paths.database).toBe(
-      '/private/tmp/iolaus-explicit-data/application.sqlite',
+      `${canonicalTemporaryRoot}/iolaus-explicit-data/application.sqlite`,
     );
     expect(getIolausUserAssetsRoot()).toBe(
-      '/private/tmp/iolaus-explicit-data/assets',
+      `${canonicalTemporaryRoot}/iolaus-explicit-data/assets`,
     );
   });
 });

@@ -149,6 +149,25 @@ export function assertExternalArtifactPath(options) {
   return canonicalPath;
 }
 
+/**
+ * Canonicalize an explicit data root through its nearest existing ancestor.
+ * This preserves the runtime's no-symlink custody check while accepting
+ * platform aliases such as macOS `/tmp` -> `/private/tmp`.
+ * @param {string | undefined} value
+ */
+export function canonicalizeDataDirectory(value) {
+  if (!value) return undefined;
+  const missingSegments = [];
+  let existingAncestor = resolve(value);
+  while (!existsSync(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    missingSegments.unshift(basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  return resolve(realpathSync(existingAncestor), ...missingSegments);
+}
+
 /** @param {unknown} error */
 function errorCode(error) {
   return error && typeof error === 'object' && 'code' in error

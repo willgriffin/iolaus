@@ -33,6 +33,7 @@ import {
 } from './smrt-process.mjs';
 import {
   assertExternalArtifactPath,
+  canonicalizeDataDirectory,
   prepareApplicationStateRoot,
   resolveApplicationId,
   resolveApplicationStateRoot,
@@ -56,6 +57,11 @@ try {
   ) {
     throw error;
   }
+}
+if (process.env.SMRT_DATA_DIR) {
+  process.env.SMRT_DATA_DIR = canonicalizeDataDirectory(
+    process.env.SMRT_DATA_DIR,
+  );
 }
 const packageJson = JSON.parse(
   readFileSync(join(sourceRoot, 'package.json'), 'utf8'),
@@ -717,15 +723,18 @@ async function backup(operationLock) {
         label: 'Backup destination',
       })
     : null;
-  const paths = await validateLocalDatabaseStorage({
-    appId,
-    dataDirectory: process.env.SMRT_DATA_DIR,
-    sourceRoot,
-  });
-  const operatorLease = acquireWriterLease(preparedStateRoot(), {
-    operationInstance: operationLock?.instance,
-  });
+  const wasRunning = Boolean(readProcess());
+  if (wasRunning) await stop();
+  let operatorLease = null;
   try {
+    const paths = await validateLocalDatabaseStorage({
+      appId,
+      dataDirectory: process.env.SMRT_DATA_DIR,
+      sourceRoot,
+    });
+    operatorLease = acquireWriterLease(preparedStateRoot(), {
+      operationInstance: operationLock?.instance,
+    });
     const destination = assertExternalArtifactPath({
       sourceRoot,
       path:
@@ -760,7 +769,8 @@ async function backup(operationLock) {
       JSON.stringify({ schemaVersion: 1, status: 'backed-up', destination }),
     );
   } finally {
-    operatorLease.release();
+    operatorLease?.release();
+    if (wasRunning) await start(operationLock);
   }
 }
 

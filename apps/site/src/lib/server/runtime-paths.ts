@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
+import { canonicalizeDataDirectory } from '../../../../../scripts/smrt-runtime-identity.mjs';
 
 export const IOLAUS_APPLICATION_ID = 'iolaus';
 
@@ -16,7 +17,7 @@ export function getIolausSourceRoot(cwd = process.cwd()): string {
 export function resolveIolausLocalRuntimePaths() {
   return resolveLocalRuntimePaths({
     appId: process.env.SMRT_APP_ID || IOLAUS_APPLICATION_ID,
-    dataDirectory: process.env.SMRT_DATA_DIR,
+    dataDirectory: canonicalizeDataDirectory(process.env.SMRT_DATA_DIR),
     sourceRoot: getIolausSourceRoot(),
   });
 }
