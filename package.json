@@ -1,0 +1,47 @@
+{
+  "name": "@willgriffin/iolaus",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "files": [
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "engines": {
+    "node": ">=24.18.0",
+    "pnpm": ">=11.24.0"
+  },
+  "scripts": {
+    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || echo 'Skipping lefthook install (not in git repository)'",
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "dev": "turbo run dev",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "turbo run test",
+    "format": "biome check --write .",
+    "format-check": "biome ci --diagnostic-level=error .",
+    "format:check": "pnpm format-check",
+    "knowledge:check": "smrt knowledge:check --strict --format markdown",
+    "knowledge:check:json": "smrt knowledge:check --strict --format json",
+    "knowledge:review-context": "smrt knowledge:review-context --scope project --format markdown",
+    "knowledge:review-context:json": "smrt knowledge:review-context --scope project --format json",
+    "knowledge:architecture-context": "smrt knowledge:architecture-context --scope project --format markdown",
+    "knowledge:architecture-context:json": "smrt knowledge:architecture-context --scope project --format json",
+    "smrt:dev-mcp": "smrt-dev-mcp",
+    "typecheck": "pnpm check",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
+    "@happyvertical/smrt-cli": "0.44.1",
+    "@happyvertical/smrt-dev-mcp": "0.44.1",
+    "lefthook": "2.1.10",
+    "turbo": "2.10.5",
+    "typescript": "5.9.3"
+  },
+  "license": "MIT"
+}

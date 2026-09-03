@@ -1,0 +1,17 @@
+.smrt
+
+# SMRT auto-generated routes (from Vite plugin)
+src/routes/api/**/+server.ts
+!src/routes/api/[[]resource[]]/**/+server.ts
+!src/routes/api/_changes/**/+server.ts
+!src/routes/api/admin/**/+server.ts
+!src/routes/api/admin-resources/**/+server.ts
+!src/routes/api/cli/auth/**/+server.ts
+!src/routes/api/job-search/**/+server.ts
+!src/routes/api/_resources/**/+server.ts
+src/lib/server/smrt-register.ts
+src/types/smrt-generated/
+src/types/virtual-modules.d.ts
+
+!src/routes/api/_events/**/+server.ts
+!src/routes/api/mcp/**/+server.ts

@@ -1,0 +1,51 @@
+pre-commit:
+  commands:
+    format:
+      glob: '*.{js,jsx,ts,tsx,svelte,json,jsonc}'
+      run: pnpm biome check --write --no-errors-on-unmatched {staged_files}
+      stage_fixed: true
+
+    validate-workflows:
+      glob: '.github/workflows/*.{yml,yaml}'
+      run: |
+        exit_code=0
+        for file in {staged_files}; do
+          echo "Checking $file"
+          if [ "$file" = ".github/workflows/agent-policy.yml" ]; then
+            echo "Skipping YAML style checks for generated agent policy workflow"
+          elif command -v yamllint >/dev/null 2>&1; then
+            yamllint "$file" || exit_code=1
+          else
+            echo "yamllint not found, skipping YAML style validation"
+          fi
+          if command -v actionlint >/dev/null 2>&1; then
+            actionlint "$file" || exit_code=1
+          else
+            echo "actionlint not found, skipping GitHub Actions validation"
+          fi
+        done
+        exit $exit_code
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+      fail_text: |
+        Commit message must follow Conventional Commits.
+
+        Format: <type>: <subject> or <type>(<scope>): <subject>
+        Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+
+pre-push:
+  commands:
+    format-check:
+      run: pnpm format-check
+      skip:
+        - merge
+        - rebase
+
+    check:
+      run: pnpm check
+      skip:
+        - merge
+        - rebase

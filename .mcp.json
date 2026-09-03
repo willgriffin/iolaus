@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "smrt-dev-mcp": {
+      "command": "pnpm",
+      "args": ["exec", "smrt-dev-mcp"]
+    }
+  }
+}

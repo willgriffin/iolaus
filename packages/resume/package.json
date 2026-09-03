@@ -1,0 +1,29 @@
+{
+  "name": "@willgriffin/iolaus-resume",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "src"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@happyvertical/files": "0.76.2",
+    "@happyvertical/pdf": "0.65.9",
+    "qrcode-generator": "2.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "MIT"
+}
