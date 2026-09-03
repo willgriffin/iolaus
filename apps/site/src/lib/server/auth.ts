@@ -20,6 +20,7 @@ import {
   getAppConfig,
   getAuthConfiguration,
   getConfiguredPublicOrigin,
+  isLoopbackAddress,
   isLoopbackHostname,
 } from './app-config.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
@@ -35,7 +36,12 @@ export const singleTenantSlug = appConfig.tenantSlug;
 export const singleTenantName = appConfig.tenantName;
 
 function isLocalhost(event: RequestEvent): boolean {
-  return isLoopbackHostname(event.url.hostname);
+  if (!isLoopbackHostname(event.url.hostname)) return false;
+  try {
+    return isLoopbackAddress(event.getClientAddress());
+  } catch {
+    return false;
+  }
 }
 
 export function canUseLocalDevLogin(event: RequestEvent): boolean {

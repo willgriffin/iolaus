@@ -218,3 +218,13 @@ export function getConfiguredPublicOrigin(
 export function isLoopbackHostname(hostname: string): boolean {
   return ['127.0.0.1', '::1', 'localhost'].includes(hostname.toLowerCase());
 }
+
+/** Treat IPv4-mapped IPv6 loopback peers as local, but never trust a host header. */
+export function isLoopbackAddress(address: string): boolean {
+  const normalized = address.trim().toLowerCase();
+  if (isLoopbackHostname(normalized)) return true;
+  return (
+    normalized.startsWith('::ffff:') &&
+    isLoopbackHostname(normalized.slice('::ffff:'.length))
+  );
+}

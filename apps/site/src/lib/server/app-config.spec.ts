@@ -3,6 +3,7 @@ import {
   getAppConfig,
   getAuthConfiguration,
   getConfiguredPublicOrigin,
+  isLoopbackAddress,
   isLoopbackHostname,
 } from './app-config';
 
@@ -72,5 +73,7 @@ describe('Iolaus application configuration', () => {
     expect(isLoopbackHostname('localhost')).toBe(true);
     expect(isLoopbackHostname('127.0.0.1')).toBe(true);
     expect(isLoopbackHostname('career.example.com')).toBe(false);
+    expect(isLoopbackAddress('::ffff:127.0.0.1')).toBe(true);
+    expect(isLoopbackAddress('203.0.113.8')).toBe(false);
   });
 });

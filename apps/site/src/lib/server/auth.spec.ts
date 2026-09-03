@@ -25,8 +25,8 @@ afterEach(() => {
   }
 });
 
-function requestEventFor(url: string) {
-  return { url: new URL(url) } as never;
+function requestEventFor(url: string, clientAddress = '127.0.0.1') {
+  return { getClientAddress: () => clientAddress, url: new URL(url) } as never;
 }
 
 describe('tokenClaimsToOidcClaims', () => {
@@ -108,6 +108,16 @@ describe('canUseLocalDevLogin', () => {
     ).toBe(false);
     expect(
       canUseLocalDevLogin(requestEventFor('https://iolaus.localhost/login')),
+    ).toBe(false);
+  });
+
+  it('refuses a forged loopback host header from a remote peer', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
+
+    expect(
+      canUseLocalDevLogin(
+        requestEventFor('http://localhost:5173/login', '203.0.113.8'),
+      ),
     ).toBe(false);
   });
 });
