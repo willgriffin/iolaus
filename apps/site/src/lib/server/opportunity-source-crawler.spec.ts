@@ -5535,6 +5535,23 @@ it('uses the configured product identity for its crawl4ai user agent', () => {
   });
 });
 
+it('sanitizes an explicit crawl4ai user-agent override', () => {
+  vi.stubEnv('HAVE_SPIDER_CRAWL4AI_URL', 'http://127.0.0.1:11235');
+  vi.stubEnv('HAVE_SPIDER_USER_AGENT', 'Career Hub\r\nInjected: yes');
+
+  const options = defaultOpportunitySpiderOptions();
+  expect(options).toMatchObject({
+    adapter: 'crawl4ai',
+    userAgent: 'Career HubInjected: yes',
+  });
+  if (options.adapter !== 'crawl4ai') {
+    throw new Error('Expected configured crawl4ai adapter.');
+  }
+  const userAgent = options.userAgent;
+  if (!userAgent) throw new Error('Expected a crawl4ai user agent.');
+  expect(() => new Headers({ 'user-agent': userAgent })).not.toThrow();
+});
+
 it('records PeoplePerHour fetch body-shape diagnostics when production returns no cards', async () => {
   getCollection.mockReset();
   const opportunities = recordCollection();

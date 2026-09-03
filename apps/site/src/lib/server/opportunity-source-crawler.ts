@@ -15,7 +15,10 @@ import {
   filterLinks,
   type PlatformAdapter,
 } from '@happyvertical/spider/platform';
-import { getConfiguredUserAgent } from './app-config.js';
+import {
+  getConfiguredUserAgent,
+  getSafeOutboundHeaderValue,
+} from './app-config.js';
 import {
   cancelStaleOpportunityIntelligenceTasks,
   syncRecommendedOpportunityDecisionTasks,
@@ -1475,8 +1478,10 @@ export function defaultOpportunitySpiderOptions(): SpiderAdapterOptions {
       adapter: 'crawl4ai',
       baseUrl,
       cacheDir: '.cache/opportunity-spider',
-      userAgent:
-        process.env.HAVE_SPIDER_USER_AGENT || browserSourceCrawlerUserAgent(),
+      userAgent: getSafeOutboundHeaderValue(
+        process.env.HAVE_SPIDER_USER_AGENT ?? '',
+        browserSourceCrawlerUserAgent(),
+      ),
       waitUntil: 'networkidle',
     };
   }

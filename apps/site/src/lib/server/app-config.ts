@@ -217,7 +217,10 @@ export function getConfiguredPublicOrigin(
   return configuredPublicUrl(environment)?.origin ?? null;
 }
 
-function outboundHeaderLabel(value: string, fallback: string): string {
+export function getSafeOutboundHeaderValue(
+  value: string,
+  fallback: string,
+): string {
   const normalized = value
     .normalize('NFKD')
     .replace(/[^\x20-\x7e]/gu, '')
@@ -232,7 +235,7 @@ export function getConfiguredUserAgent(
   environment: AppConfigEnvironment = process.env,
 ): string {
   const config = getAppConfig(environment);
-  return `${outboundHeaderLabel(config.appName, config.appId)} ${outboundHeaderLabel(
+  return `${getSafeOutboundHeaderValue(config.appName, config.appId)} ${getSafeOutboundHeaderValue(
     purpose,
     'client',
   )}`;
