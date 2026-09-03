@@ -76,6 +76,32 @@ type TransactionalOnboardingDatabase = OnboardingDatabase & {
   ) => Promise<T>;
 };
 
+/**
+ * Claim an unowned resume in a single conditional write. The predicate is
+ * deliberately re-evaluated by the database at write time, rather than
+ * trusting an earlier collection read that another request could invalidate.
+ */
+export async function claimResumeAssetAtomically(
+  database: Pick<OnboardingDatabase, 'query'>,
+  assetId: string,
+  profileId: string,
+): Promise<boolean> {
+  const result = await database.query(
+    `UPDATE resume_assets
+       SET candidate_profile_id = ?
+     WHERE id = ?
+       AND asset_type = 'resume'
+       AND (candidate_profile_id IS NULL
+         OR candidate_profile_id = ''
+         OR candidate_profile_id = ?)
+   RETURNING id`,
+    profileId,
+    assetId,
+    profileId,
+  );
+  return Array.isArray(result.rows) && result.rows.length === 1;
+}
+
 export interface CandidateOnboardingCollections {
   candidateAnswers: Collection;
   candidateProfiles: Collection;
@@ -456,22 +482,8 @@ export async function saveCandidateOnboarding(
   return await database.transaction(async (transaction) => {
     const collections = await defaultCollections(
       { db: transaction },
-      async (assetId, profileId) => {
-        const result = await transaction.query(
-          `UPDATE resume_assets
-             SET candidate_profile_id = ?
-           WHERE id = ?
-             AND asset_type = 'resume'
-             AND (candidate_profile_id IS NULL
-               OR candidate_profile_id = ''
-               OR candidate_profile_id = ?)
-         RETURNING id`,
-          profileId,
-          assetId,
-          profileId,
-        );
-        return Array.isArray(result.rows) && result.rows.length === 1;
-      },
+      async (assetId, profileId) =>
+        await claimResumeAssetAtomically(transaction, assetId, profileId),
     );
     return await persistCandidateOnboarding(input, collections);
   });
