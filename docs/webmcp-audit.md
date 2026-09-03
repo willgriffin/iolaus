@@ -450,8 +450,8 @@ Use this procedure only after the reviewed deployment containing this change is
 live. Keep the production audit read-only even though bounded write operations
 are discoverable.
 
-1. Have the deployment owner provide an already-authenticated admin tab
-   tab. Do not create a new production login/session as part of this audit.
+1. Have the deployment owner provide an already-authenticated admin tab. Do
+   not create a new production login/session as part of this audit.
 2. Attach a fresh external WebMCP harness to that existing tab and request its
    tool inventory. Optionally call only the bounded browse and inspect tools.
    Do not invoke a write tool, click a control, navigate to an employer site,
