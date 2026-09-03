@@ -45,20 +45,20 @@ describe('getResumeFilesConfig', () => {
     });
 
     expect(() => getResumeFilesConfig()).toThrow(
-      'Local resume asset storage must remain outside the source tree.',
+      'Local resume asset storage must use the canonical runtime asset root.',
     );
   });
 
-  it('accepts an explicit local filesystem root outside the source tree', () => {
-    const externalRoot = resolve(repoRoot, '..', 'iolaus-test-profile-assets');
+  it('accepts an explicit local filesystem root matching the runtime assets', () => {
+    const runtimeAssetRoot = getIolausUserAssetsRoot();
     process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
       type: 'local',
-      basePath: externalRoot,
+      basePath: runtimeAssetRoot,
     });
 
     expect(getResumeFilesConfig()).toEqual({
       type: 'local',
-      basePath: externalRoot,
+      basePath: runtimeAssetRoot,
     });
   });
 });

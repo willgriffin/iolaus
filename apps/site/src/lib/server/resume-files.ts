@@ -5,11 +5,7 @@ import {
   type GetFilesystemOptions,
   getFilesystem,
 } from '@happyvertical/files';
-import { assertExternalArtifactPath } from '../../../../../scripts/smrt-runtime-identity.mjs';
-import {
-  getIolausSourceRoot,
-  getIolausUserAssetsRoot,
-} from './runtime-paths.js';
+import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const RESUME_FILES_PATH = ['var', 'profile-assets'] as const;
 
@@ -62,22 +58,24 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
 
   const parsed = JSON.parse(raw) as GetFilesystemOptions;
   if (parsed.type === 'local') {
+    const runtimeAssetRoot = getIolausUserAssetsRoot();
     const basePath = parsed.basePath
       ? isAbsolute(parsed.basePath)
         ? resolve(parsed.basePath)
         : resolve(process.cwd(), parsed.basePath)
-      : getIolausUserAssetsRoot();
+      : runtimeAssetRoot;
+    if (
+      (process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+        !process.env.SMRT_RUNTIME_PROFILE) &&
+      basePath !== runtimeAssetRoot
+    ) {
+      throw new Error(
+        'Local resume asset storage must use the canonical runtime asset root.',
+      );
+    }
     return {
       ...parsed,
-      basePath:
-        process.env.SMRT_RUNTIME_PROFILE === 'local' ||
-        !process.env.SMRT_RUNTIME_PROFILE
-          ? assertExternalArtifactPath({
-              sourceRoot: getIolausSourceRoot(),
-              path: basePath,
-              label: 'Local resume asset storage',
-            })
-          : basePath,
+      basePath,
     };
   }
   return parsed;
