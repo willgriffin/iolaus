@@ -116,9 +116,8 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
 export async function seedSyntheticDemoFixture(
   suppliedCollections?: SyntheticDemoFixtureCollections,
   environment: NodeJS.ProcessEnv = process.env,
-  runtimeProfile: typeof applicationRuntime.profile = applicationRuntime.profile,
 ): Promise<SyntheticDemoFixtureResult> {
-  assertSyntheticDemoFixtureEnabled(environment, runtimeProfile);
+  assertSyntheticDemoFixtureEnabled(environment);
   const collections = suppliedCollections ?? (await defaultCollections());
   const profile = await findOrCreate(
     collections.candidateProfiles,

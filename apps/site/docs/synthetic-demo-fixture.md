@@ -12,5 +12,6 @@ IOLAUS_ENABLE_DEMO_FIXTURES=1 pnpm --filter @willgriffin/iolaus-site exec tsx sc
 ```
 
 The fixture refuses to run without that explicit variable and always refuses
-when `NODE_ENV=production`. It is idempotent: later invocations reuse the same
+outside the resolved `local` runtime profile. `NODE_ENV` is not used to choose
+the persistence target. It is idempotent: later invocations reuse the same
 `iolaus-demo-fictional-*` records rather than creating more demo data.
