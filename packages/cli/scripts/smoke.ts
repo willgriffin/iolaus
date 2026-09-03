@@ -445,6 +445,8 @@ async function runSmoke(options: CliSmokeOptions) {
         ['IOLAUS_CLI_CONFIG', join(configDir, 'config.json')],
         ['IOLAUS_SERVER_URL', server],
         ['IOLAUS_TOKEN', token],
+        // Prove IOLAUS_* credentials and destination survive generic identity.
+        ['SMRT_APP_ID', 'career-hub'],
       ]);
 
       const status = parseJson<{ authenticated: boolean }>(

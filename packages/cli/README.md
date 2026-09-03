@@ -68,6 +68,10 @@ Older development snapshots stored a token under
 than copying that credential into the new namespace.
 Agents can override configuration with `IOLAUS_SERVER_URL`,
 `IOLAUS_TOKEN`, or `IOLAUS_CLI_CONFIG`.
+Those credential variables intentionally remain `IOLAUS_*` even when
+`SMRT_APP_ID` names a custom installation; the app ID changes storage and MCP
+identity, while the stable credential prefix keeps the configured target and
+its bearer token together.
 
 `pnpm --filter @willgriffin/iolaus-cli smoke` runs a deterministic contract check
 against a fake local SMRT API. It verifies auth status, resource discovery,

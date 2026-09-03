@@ -11,9 +11,10 @@ import { getCliAppId, getCliConfigDirectory } from './app-config.js';
 const appId = getCliAppId();
 
 await createAppCli({
-  name: appId,
   configDir: getCliConfigDirectory(),
   defaultServerUrl: 'http://localhost:5173',
+  envPrefix: 'IOLAUS',
+  name: appId,
 }).startMcpBridge({
   name: `${appId}-employment-search`,
   version: '0.1.0',

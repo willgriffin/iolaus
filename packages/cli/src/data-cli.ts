@@ -11,9 +11,12 @@ import { getCliAppId, getCliConfigDirectory } from './app-config.js';
 const appId = getCliAppId();
 
 const cli = createAppCli({
-  name: appId,
   configDir: getCliConfigDirectory(),
   defaultServerUrl: 'http://localhost:5173',
+  // The documented IOLAUS_* variables are the stable credential interface.
+  // SMRT_APP_ID changes identity and storage, never the token env namespace.
+  envPrefix: 'IOLAUS',
+  name: appId,
 });
 
 await cli.run(process.argv.slice(2));
