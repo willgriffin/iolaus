@@ -1,4 +1,14 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname } from 'node:path';
 import { platform } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
@@ -23,7 +33,27 @@ function processCommand(pid) {
 }
 
 export function writeProcessRecord(path, record) {
-  writeFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  const temporary = `${path}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  let descriptor;
+  try {
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeFileSync(descriptor, `${JSON.stringify(record)}\n`);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, path);
+    if (platform() !== 'win32') {
+      const directory = openSync(dirname(path), 'r');
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    rmSync(temporary, { force: true });
+  }
 }
 
 export function sendTerminationSignal(pid, killProcess = process.kill) {

@@ -28,7 +28,6 @@ import {
 } from '@happyvertical/smrt-config';
 import {
   readOwnedProcess,
-  writeProcessRecord,
 } from './smrt-process.mjs';
 import {
   assertExternalArtifactPath,
@@ -443,6 +442,52 @@ async function waitForReady(url, pid, instance, configuration) {
   throw new Error(`The application did not become ready at ${url}.`);
 }
 
+async function waitForPublishedProcess(expected) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const record = readProcess();
+    if (
+      record?.pid === expected.pid &&
+      record.instance === expected.instance &&
+      record.stopNonce === expected.stopNonce
+    ) {
+      return record;
+    }
+    try {
+      process.kill(expected.pid, 0);
+    } catch {
+      throw new Error(
+        'The application process exited before publishing its ownership record.',
+      );
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error(
+    'The application process did not publish a verifiable ownership record.',
+  );
+}
+
+async function requestApplicationStop(record) {
+  writePrivateAtomic(
+    stopRequestPath(),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      instance: record.instance,
+      stopNonce: record.stopNonce,
+    })}\n`,
+  );
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    try {
+      process.kill(record.pid, 0);
+    } catch {
+      return;
+    }
+  }
+  throw new Error(
+    `Application process ${record.pid} did not acknowledge its authenticated stop request.`,
+  );
+}
+
 async function start(operationLock, options = {}) {
   const runtime = await assertLocalOperation('app:start');
   const { env } = runtimeEnvironment(runtime);
@@ -475,6 +520,7 @@ async function start(operationLock, options = {}) {
         SMRT_OPERATION_INSTANCE: operationLock?.instance,
         SMRT_STOP_NONCE: stopNonce,
         SMRT_STOP_REQUEST: stopRequestPath(),
+        SMRT_PROCESS_RECORD: pidPath(),
       },
       detached: true,
       stdio: 'ignore',
@@ -482,12 +528,16 @@ async function start(operationLock, options = {}) {
   );
   child.unref();
   try {
-    writeProcessRecord(pidPath(), { pid: child.pid, instance, stopNonce });
+    await waitForPublishedProcess({ pid: child.pid, instance, stopNonce });
   } catch (error) {
     try {
-      process.kill(child.pid, 'SIGTERM');
-    } catch {
-      // The child already exited; preserve the process-record error.
+      await requestApplicationStop({ pid: child.pid, instance, stopNonce });
+      rmSync(stopRequestPath(), { force: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Application startup failed and child cleanup could not be verified.',
+      );
     }
     throw error;
   }
@@ -495,11 +545,15 @@ async function start(operationLock, options = {}) {
     await waitForReady(url, child.pid, instance, configuration);
   } catch (error) {
     try {
-      process.kill(child.pid, 'SIGTERM');
-    } catch {
-      // The child already exited; stale process state is removed below.
+      await requestApplicationStop({ pid: child.pid, instance, stopNonce });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Application startup failed and child cleanup could not be verified.',
+      );
     }
     rmSync(pidPath(), { force: true });
+    rmSync(stopRequestPath(), { force: true });
     throw error;
   }
   if (!options.silent) {
@@ -519,21 +573,7 @@ async function stop() {
     return;
   }
   const { pid, instance, stopNonce } = record;
-  writePrivateAtomic(
-    stopRequestPath(),
-    `${JSON.stringify({ schemaVersion: 1, instance, stopNonce })}\n`,
-  );
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-    try {
-      process.kill(pid, 0);
-    } catch {
-      break;
-    }
-    if (attempt === 39) {
-      throw new Error(`Application process ${pid} did not stop cleanly.`);
-    }
-  }
+  await requestApplicationStop({ pid, instance, stopNonce });
   rmSync(pidPath(), { force: true });
   rmSync(stopRequestPath(), { force: true });
   console.log(JSON.stringify({ schemaVersion: 1, status: 'stopped', pid }));
@@ -842,32 +882,32 @@ async function portability(operation, operationLock) {
   const wasRunning = runtime.profile === 'local' && Boolean(readProcess());
   if (wasRunning) await stop();
   let operatorLease = null;
-  if (runtime.profile === 'local') {
-    operatorLease = acquireWriterLease(preparedStateRoot(), {
-      operationInstance: operationLock?.instance,
-    });
-  }
-  if (operation === 'import') {
+  try {
+    if (runtime.profile === 'local') {
+      operatorLease = acquireWriterLease(preparedStateRoot(), {
+        operationInstance: operationLock?.instance,
+      });
+    }
+    if (operation === 'import') {
+      if (
+        runtime.profile !== 'local' &&
+        process.env.SMRT_MAINTENANCE_MODE !== 'true'
+      ) {
+        throw new Error(
+          'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before importing.',
+        );
+      }
+    }
     if (
+      operation === 'export' &&
       runtime.profile !== 'local' &&
+      runtime.providers.assets.provider === 'local-files' &&
       process.env.SMRT_MAINTENANCE_MODE !== 'true'
     ) {
       throw new Error(
-        'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before importing.',
+        'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before exporting filesystem assets.',
       );
     }
-  }
-  if (
-    operation === 'export' &&
-    runtime.profile !== 'local' &&
-    runtime.providers.assets.provider === 'local-files' &&
-    process.env.SMRT_MAINTENANCE_MODE !== 'true'
-  ) {
-    throw new Error(
-      'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before exporting filesystem assets.',
-    );
-  }
-  try {
     const result = await adapter[
       operation === 'export' ? 'exportApplication' : 'importApplication'
     ]({
