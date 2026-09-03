@@ -46,9 +46,10 @@ generic recovery message; it never falls back to local sign-in on a hosted
 deployment and never includes hostnames, emails, or secret values in that
 message.
 
-The CLI stores its token separately at `~/.config/<SMRT_APP_ID>/config.json`
-(by default, `~/.config/iolaus/config.json`). Do not copy that file,
-application data, or generated resumes into the source checkout.
+The CLI stores its token separately for each target server at
+`~/.config/<SMRT_APP_ID>-<server-fingerprint>/config.json`. This prevents a
+local instance on one port from reusing a token for another one. Do not copy
+that file, application data, or generated resumes into the source checkout.
 
 Earlier development snapshots used `~/.config/iolaus.localhost/`. Those
 credentials are deliberately not reused: authenticate the CLI again after

@@ -6,13 +6,13 @@
  * hand-rolled server.
  */
 import { createAppCli } from '@happyvertical/smrt-app-cli';
-import { getCliAppId } from './app-config.js';
+import { getCliAppId, getCliConfigDirectory } from './app-config.js';
 
 const appId = getCliAppId();
 
 await createAppCli({
   name: appId,
-  configDir: appId,
+  configDir: getCliConfigDirectory(),
   defaultServerUrl: 'http://localhost:5173',
 }).startMcpBridge({
   name: `${appId}-employment-search`,

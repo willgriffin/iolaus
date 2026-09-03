@@ -6,13 +6,13 @@
  * hand-maintained resource list (the old `resources.ts` is gone).
  */
 import { createAppCli } from '@happyvertical/smrt-app-cli';
-import { getCliAppId } from './app-config.js';
+import { getCliAppId, getCliConfigDirectory } from './app-config.js';
 
 const appId = getCliAppId();
 
 const cli = createAppCli({
   name: appId,
-  configDir: appId,
+  configDir: getCliConfigDirectory(),
   defaultServerUrl: 'http://localhost:5173',
 });
 

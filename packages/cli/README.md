@@ -60,8 +60,9 @@ iolaus opportunities list
 iolaus-mcp
 ```
 
-The CLI stores its bearer session in `~/.config/<SMRT_APP_ID>/config.json`
-(by default, `~/.config/iolaus/config.json`).
+The CLI stores its bearer session in a target-specific
+`~/.config/<SMRT_APP_ID>-<server-fingerprint>/config.json`; the `--server`
+option (or `IOLAUS_SERVER_URL`) selects that namespace.
 Older development snapshots stored a token under
 `~/.config/iolaus.localhost/`; run `iolaus auth login` after upgrading rather
 than copying that credential into the new namespace.
