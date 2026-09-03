@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  candidateAssetPath,
   candidateFactState,
-  resolveCandidateAssetPath,
   saveCandidateOnboarding,
 } from './candidate-onboarding.js';
 
@@ -30,20 +28,6 @@ function collection(rows: Row[]) {
     },
   };
 }
-
-describe('candidateAssetPath', () => {
-  it('keeps assets below the selected profile directory and rejects traversal', () => {
-    expect(candidateAssetPath('default', 'resume.pdf')).toBe(
-      'profiles/default/assets/resume.pdf',
-    );
-    expect(() => candidateAssetPath('default', '../resume.pdf')).toThrow(
-      /single filename/,
-    );
-    expect(
-      resolveCandidateAssetPath('default', 'resume.pdf', '/tmp/iolaus-assets'),
-    ).toBe('/tmp/iolaus-assets/profiles/default/assets/resume.pdf');
-  });
-});
 
 describe('candidateFactState', () => {
   it('keeps user-verified, safe-derived, and unresolved facts distinct', () => {

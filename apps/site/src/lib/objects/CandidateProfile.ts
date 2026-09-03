@@ -2,16 +2,18 @@ import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
 
 @smrt({
   tableName: 'candidate_profiles',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Profile fields are private candidate context. The authenticated onboarding
+  // and application services access them directly; broad generated APIs, CLI,
+  // MCP, and WebMCP must not expose even a partial profile record.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
 export class CandidateProfile extends SmrtObject {
   @field({ type: 'text' })
   profileKey = 'default';
-  // Candidate identity and preferences are intentionally not part of broad
-  // generated REST/MCP/WebMCP reads. The owner-facing onboarding and
-  // application workflows read them directly under the authenticated session.
+  // The owner-facing onboarding and application workflows read them directly
+  // under the authenticated session.
   @field({ type: 'text', sensitive: true })
   name = '';
   @field({ type: 'text', sensitive: true })
