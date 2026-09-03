@@ -63,6 +63,18 @@ function projectSmrtKnowledgePlugin(): Plugin {
     buildStart: sync,
     closeBundle: sync,
     configureServer(server) {
+      const runtimeProfile = process.env.SMRT_RUNTIME_PROFILE || 'local';
+      const host = server.config.server.host;
+      if (
+        runtimeProfile === 'local' &&
+        host !== '127.0.0.1' &&
+        host !== 'localhost' &&
+        host !== '::1'
+      ) {
+        throw new Error(
+          'The local Iolaus development server may only bind to loopback.',
+        );
+      }
       sync();
       server.watcher.on('change', (path) => {
         const normalizedPath = path.replaceAll('\\', '/');
@@ -80,6 +92,7 @@ function projectSmrtKnowledgePlugin(): Plugin {
 
 export default defineConfig({
   server: {
+    host: '127.0.0.1',
     port: 5723,
     strictPort: true,
   },

@@ -1,11 +1,15 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import {
   type FilesystemInterface,
   type GetFilesystemOptions,
   getFilesystem,
 } from '@happyvertical/files';
-import { getIolausUserAssetsRoot } from './runtime-paths.js';
+import { assertExternalArtifactPath } from '../../../../../scripts/smrt-runtime-identity.mjs';
+import {
+  getIolausSourceRoot,
+  getIolausUserAssetsRoot,
+} from './runtime-paths.js';
 
 const RESUME_FILES_PATH = ['var', 'profile-assets'] as const;
 
@@ -57,12 +61,24 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
   }
 
   const parsed = JSON.parse(raw) as GetFilesystemOptions;
-  if (
-    parsed.type === 'local' &&
-    parsed.basePath &&
-    !parsed.basePath.startsWith('/')
-  ) {
-    return { ...parsed, basePath: resolve(process.cwd(), parsed.basePath) };
+  if (parsed.type === 'local') {
+    const basePath = parsed.basePath
+      ? isAbsolute(parsed.basePath)
+        ? resolve(parsed.basePath)
+        : resolve(process.cwd(), parsed.basePath)
+      : getIolausUserAssetsRoot();
+    return {
+      ...parsed,
+      basePath:
+        process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+        !process.env.SMRT_RUNTIME_PROFILE
+          ? assertExternalArtifactPath({
+              sourceRoot: getIolausSourceRoot(),
+              path: basePath,
+              label: 'Local resume asset storage',
+            })
+          : basePath,
+    };
   }
   return parsed;
 }

@@ -37,17 +37,16 @@ describe('getResumeFilesConfig', () => {
     });
   });
 
-  it('keeps explicit relative filesystem config relative to the current process', () => {
+  it('rejects local filesystem config that resolves inside the source tree', () => {
     process.chdir(resolve(repoRoot, 'apps', 'site'));
     process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
       type: 'local',
       basePath: 'tmp/profile-assets',
     });
 
-    expect(getResumeFilesConfig()).toEqual({
-      type: 'local',
-      basePath: resolve(repoRoot, 'apps', 'site', 'tmp', 'profile-assets'),
-    });
+    expect(() => getResumeFilesConfig()).toThrow(
+      'Local resume asset storage must remain outside the source tree.',
+    );
   });
 });
 
