@@ -209,11 +209,11 @@ export function getAuthConfiguration(
   };
 }
 
-/** A configured self-hosted origin, or null for a local-only runtime. */
+/** A configured public origin, or null for a local-only runtime. */
 export function getConfiguredPublicOrigin(
   environment: AppConfigEnvironment = process.env,
 ): string | null {
-  if (getAppConfig(environment).runtimeProfile !== 'self-hosted') return null;
+  if (getAppConfig(environment).runtimeProfile === 'local') return null;
   return configuredPublicUrl(environment)?.origin ?? null;
 }
 

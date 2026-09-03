@@ -73,6 +73,13 @@ describe('Iolaus application configuration', () => {
     expect(
       getAuthConfiguration({ SMRT_RUNTIME_PROFILE: 'cloud' }),
     ).toMatchObject({ kind: 'invalid' });
+
+    expect(
+      getConfiguredPublicOrigin({
+        IOLAUS_PUBLIC_URL: 'https://cloud.example.com',
+        SMRT_RUNTIME_PROFILE: 'cloud',
+      }),
+    ).toBe('https://cloud.example.com');
   });
 
   it('recognizes only loopback hosts for local-only paths', () => {
