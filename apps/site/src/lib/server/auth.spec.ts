@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   canUseLocalDevLogin,
+  getRuntimeCookieName,
   isAuthorizedOidcAdmin,
   tokenClaimsToOidcClaims,
 } from './auth';
@@ -119,5 +120,30 @@ describe('canUseLocalDevLogin', () => {
         requestEventFor('http://localhost:5173/login', '203.0.113.8'),
       ),
     ).toBe(false);
+  });
+});
+
+describe('getRuntimeCookieName', () => {
+  it('isolates local browser cookies by runtime configuration', () => {
+    expect(
+      getRuntimeCookieName(
+        'iolaus_session',
+        'local',
+        '4e90ec8f9d9b0123456789abcdef',
+      ),
+    ).toBe('iolaus_session_4e90ec8f9d9b');
+    expect(
+      getRuntimeCookieName(
+        'iolaus_session',
+        'local',
+        '6709d982e1890123456789abcdef',
+      ),
+    ).toBe('iolaus_session_6709d982e189');
+  });
+
+  it('keeps public cookies stable on their configured origin', () => {
+    expect(
+      getRuntimeCookieName('career_hub_session', 'self-hosted', 'ignored'),
+    ).toBe('career_hub_session');
   });
 });

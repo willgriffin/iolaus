@@ -23,6 +23,10 @@ import {
   isLoopbackAddress,
   isLoopbackHostname,
 } from './app-config.js';
+import {
+  applicationRuntime,
+  applicationRuntimeConfiguration,
+} from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 
 const appConfig = getAppConfig();
@@ -30,8 +34,30 @@ const oidcStateCookie = appConfig.oidcStateCookieName;
 const oidcVerifierCookie = appConfig.oidcVerifierCookieName;
 const oidcNonceCookie = appConfig.oidcNonceCookieName;
 
-export const sessionCookieName = appConfig.sessionCookieName;
-export const loginNextCookieName = appConfig.loginNextCookieName;
+/**
+ * Browser storage already scopes itself by origin (including a local port),
+ * while cookies do not. Namespace local cookies with the runtime fingerprint
+ * so independently configured loopback Iolaus instances never share a login.
+ */
+export function getRuntimeCookieName(
+  baseCookieName: string,
+  runtimeProfile: string,
+  runtimeConfiguration: string,
+): string {
+  if (runtimeProfile !== 'local') return baseCookieName;
+  return `${baseCookieName}_${runtimeConfiguration.slice(0, 12)}`;
+}
+
+export const sessionCookieName = getRuntimeCookieName(
+  appConfig.sessionCookieName,
+  applicationRuntime.profile,
+  applicationRuntimeConfiguration,
+);
+export const loginNextCookieName = getRuntimeCookieName(
+  appConfig.loginNextCookieName,
+  applicationRuntime.profile,
+  applicationRuntimeConfiguration,
+);
 export const singleTenantSlug = appConfig.tenantSlug;
 export const singleTenantName = appConfig.tenantName;
 
