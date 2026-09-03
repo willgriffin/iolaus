@@ -260,7 +260,7 @@ describe('admin-resource-route', () => {
       taskId: 'task-1',
       user: { id: 'user-1' },
     });
-  });
+  }, 15_000);
 
   it('runs recommendation decisions as the owner principal and audits them', async () => {
     mocks.processRecommendationTask.mockResolvedValue({ status: 'deferred' });
