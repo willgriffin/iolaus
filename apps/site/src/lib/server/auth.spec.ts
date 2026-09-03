@@ -130,25 +130,20 @@ describe('canUseLocalDevLogin', () => {
 describe('getRuntimeCookieName', () => {
   it('isolates local browser cookies by runtime configuration', () => {
     expect(
-      getRuntimeCookieName(
-        'iolaus_session',
-        'local',
-        '4e90ec8f9d9b0123456789abcdef',
-      ),
+      getRuntimeCookieName('iolaus_session', '4e90ec8f9d9b0123456789abcdef'),
     ).toBe('iolaus_session_4e90ec8f9d9b');
     expect(
-      getRuntimeCookieName(
-        'iolaus_session',
-        'local',
-        '6709d982e1890123456789abcdef',
-      ),
+      getRuntimeCookieName('iolaus_session', '6709d982e1890123456789abcdef'),
     ).toBe('iolaus_session_6709d982e189');
   });
 
-  it('keeps public cookies stable on their configured origin', () => {
+  it('isolates public cookies with their configured-origin fingerprint', () => {
     expect(
-      getRuntimeCookieName('career_hub_session', 'self-hosted', 'ignored'),
-    ).toBe('career_hub_session');
+      getRuntimeCookieName(
+        'career_hub_session',
+        '8c2a194fe2150123456789abcdef',
+      ),
+    ).toBe('career_hub_session_8c2a194fe215');
   });
 });
 

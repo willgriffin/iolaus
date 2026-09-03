@@ -217,6 +217,21 @@ export function getConfiguredPublicOrigin(
   return configuredPublicUrl(environment)?.origin ?? null;
 }
 
+/** A control-character-safe product label for fixed outbound client purposes. */
+export function getConfiguredUserAgent(
+  purpose: string,
+  environment: AppConfigEnvironment = process.env,
+): string {
+  return `${getAppConfig(environment).appName} ${purpose}`;
+}
+
+/** A stable MCP server name derived from the configured application identity. */
+export function getConfiguredMcpServerName(
+  environment: AppConfigEnvironment = process.env,
+): string {
+  return `${getAppConfig(environment).appId}-employment-search`;
+}
+
 export function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
   return ['127.0.0.1', '::1', 'localhost'].includes(normalized);

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getAuth, type TokenClaims } from '@happyvertical/auth';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import {
@@ -30,33 +30,51 @@ import {
 import { getDbConfig, getSmrtOptions } from './db.js';
 
 const appConfig = getAppConfig();
-const oidcStateCookie = appConfig.oidcStateCookieName;
-const oidcVerifierCookie = appConfig.oidcVerifierCookieName;
-const oidcNonceCookie = appConfig.oidcNonceCookieName;
 
 /**
- * Browser storage already scopes itself by origin (including a local port),
- * while cookies do not. Namespace local cookies with the runtime fingerprint
- * so independently configured loopback Iolaus instances never share a login.
+ * Browser storage scopes itself by origin (including a local port), while
+ * cookies do not. Every auth cookie uses a configuration fingerprint so
+ * separate loopback or public-origin installations never share a login.
  */
 export function getRuntimeCookieName(
   baseCookieName: string,
-  runtimeProfile: string,
   runtimeConfiguration: string,
 ): string {
-  if (runtimeProfile !== 'local') return baseCookieName;
   return `${baseCookieName}_${runtimeConfiguration.slice(0, 12)}`;
 }
 
+function authCookieConfiguration(): string {
+  if (applicationRuntime.profile === 'local') {
+    return applicationRuntimeConfiguration;
+  }
+
+  const publicOrigin = getConfiguredPublicOrigin();
+  return createHash('sha256')
+    .update(publicOrigin ?? applicationRuntimeConfiguration)
+    .digest('hex');
+}
+
+const cookieConfiguration = authCookieConfiguration();
+const oidcStateCookie = getRuntimeCookieName(
+  appConfig.oidcStateCookieName,
+  cookieConfiguration,
+);
+const oidcVerifierCookie = getRuntimeCookieName(
+  appConfig.oidcVerifierCookieName,
+  cookieConfiguration,
+);
+const oidcNonceCookie = getRuntimeCookieName(
+  appConfig.oidcNonceCookieName,
+  cookieConfiguration,
+);
+
 export const sessionCookieName = getRuntimeCookieName(
   appConfig.sessionCookieName,
-  applicationRuntime.profile,
-  applicationRuntimeConfiguration,
+  cookieConfiguration,
 );
 export const loginNextCookieName = getRuntimeCookieName(
   appConfig.loginNextCookieName,
-  applicationRuntime.profile,
-  applicationRuntimeConfiguration,
+  cookieConfiguration,
 );
 export const singleTenantSlug = appConfig.tenantSlug;
 export const singleTenantName = appConfig.tenantName;

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   getAppConfig,
   getAuthConfiguration,
+  getConfiguredMcpServerName,
   getConfiguredPublicOrigin,
+  getConfiguredUserAgent,
   isLoopbackAddress,
   isLoopbackHostname,
 } from './app-config';
@@ -88,5 +90,16 @@ describe('Iolaus application configuration', () => {
     expect(isLoopbackHostname('career.example.com')).toBe(false);
     expect(isLoopbackAddress('::ffff:127.0.0.1')).toBe(true);
     expect(isLoopbackAddress('203.0.113.8')).toBe(false);
+  });
+
+  it('uses the configured product identity in outbound labels', () => {
+    expect(
+      getConfiguredUserAgent('source crawler', {
+        IOLAUS_APP_NAME: 'My Career Hub',
+      }),
+    ).toBe('My Career Hub source crawler');
+    expect(getConfiguredMcpServerName({ SMRT_APP_ID: 'career-hub' })).toBe(
+      'career-hub-employment-search',
+    );
   });
 });

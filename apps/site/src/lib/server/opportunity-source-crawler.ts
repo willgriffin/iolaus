@@ -15,6 +15,7 @@ import {
   filterLinks,
   type PlatformAdapter,
 } from '@happyvertical/spider/platform';
+import { getConfiguredUserAgent } from './app-config.js';
 import {
   cancelStaleOpportunityIntelligenceTasks,
   syncRecommendedOpportunityDecisionTasks,
@@ -163,6 +164,14 @@ function exactNonblankBinding(value: unknown): string {
   return typeof value === 'string' && value.length > 0 && value === value.trim()
     ? value
     : '';
+}
+
+function sourceCrawlerUserAgent(): string {
+  return getConfiguredUserAgent('source crawler');
+}
+
+function browserSourceCrawlerUserAgent(): string {
+  return `Mozilla/5.0 (compatible; ${sourceCrawlerUserAgent()}; )`;
 }
 
 export interface SourceLike {
@@ -1467,8 +1476,7 @@ export function defaultOpportunitySpiderOptions(): SpiderAdapterOptions {
       baseUrl,
       cacheDir: '.cache/opportunity-spider',
       userAgent:
-        process.env.HAVE_SPIDER_USER_AGENT ||
-        'Mozilla/5.0 (compatible; Iolaus source crawler; )',
+        process.env.HAVE_SPIDER_USER_AGENT || browserSourceCrawlerUserAgent(),
       waitUntil: 'networkidle',
     };
   }
@@ -1584,7 +1592,7 @@ export async function discoverAshbyCandidates(
       const response = await fetchImpl(url.toString(), {
         headers: {
           accept: 'text/html,application/xhtml+xml',
-          'user-agent': 'Iolaus source crawler',
+          'user-agent': sourceCrawlerUserAgent(),
         },
       });
       if (response.ok) {
@@ -1652,7 +1660,7 @@ export async function discoverAutomatticCandidates(
   const response = await fetchImpl(automatticJobsUrl(url), {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -1915,7 +1923,7 @@ export async function discoverRemoteRocketshipCandidates(
   const response = await fetchImpl(url.toString(), {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': 'Mozilla/5.0 (compatible; Iolaus source crawler; )',
+      'User-Agent': browserSourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -2316,7 +2324,7 @@ export async function discoverGeminiCareersCandidates(
   const response = await fetchImpl(new URL('/careers', url).toString(), {
     headers: {
       accept: 'text/html,application/xhtml+xml',
-      'user-agent': 'Iolaus source crawler',
+      'user-agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -2393,7 +2401,7 @@ export async function discoverCanonicalCandidates(
   const response = await fetchImpl(url.toString(), {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -2553,7 +2561,7 @@ async function fetchProviderLinksFromHtml(url: URL): Promise<Link[]> {
     const response = await fetch(url.toString(), {
       headers: {
         accept: 'text/html,application/xhtml+xml',
-        'user-agent': 'Iolaus source crawler',
+        'user-agent': sourceCrawlerUserAgent(),
       },
     });
     if (!response.ok) return [];
@@ -3232,7 +3240,7 @@ async function fetchA16zPortfolioSearch(
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        'User-Agent': 'Iolaus source crawler',
+        'User-Agent': sourceCrawlerUserAgent(),
         ...(session.cookie ? { Cookie: session.cookie } : {}),
         ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}),
       },
@@ -3254,7 +3262,7 @@ export async function discoverA16zPortfolioCandidates(
   const landingUrl =
     url.hostname === 'a16z.com' ? 'https://jobs.a16z.com/jobs' : url.toString();
   const response = await fetchImpl(landingUrl, {
-    headers: { 'User-Agent': 'Iolaus source crawler' },
+    headers: { 'User-Agent': sourceCrawlerUserAgent() },
   });
   if (!response.ok) return [];
   const session = extractA16zPortfolioSession(
@@ -3962,7 +3970,7 @@ export async function discoverWeWorkRemotelyCandidates(
   const response = await fetchImpl(url.toString(), {
     headers: {
       Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4015,7 +4023,7 @@ export async function discoverRemotiveCandidates(
   const response = await fetchImpl(REMOTIVE_API_URL, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4066,7 +4074,7 @@ export async function discoverWorkingNomadsCandidates(
   const response = await fetchImpl(WORKING_NOMADS_API_URL, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4120,7 +4128,7 @@ export async function discoverFreelancerCandidates(
     const response = await fetchImpl(freelancerSearchUrl(source, query), {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'Iolaus source crawler',
+        'User-Agent': sourceCrawlerUserAgent(),
       },
     });
     if (!response.ok) continue;
@@ -4166,7 +4174,7 @@ export async function discoverRemoteOkCandidates(
   const response = await fetchImpl(remoteOkApiUrl(source), {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4457,7 +4465,7 @@ export async function discoverAmazonJobsCandidates(
   const response = await fetchImpl(amazonJobsSearchUrl(source), {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4606,7 +4614,7 @@ async function fetchMicrosoftCareersDetail(
     headers: {
       Accept: 'application/json',
       Referer: microsoftCareersPostingUrl(position),
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return null;
@@ -4623,7 +4631,7 @@ export async function discoverMicrosoftCareersCandidates(
     headers: {
       Accept: 'application/json',
       Referer: 'https://apply.careers.microsoft.com/careers/search',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
   });
   if (!response.ok) return [];
@@ -4761,7 +4769,7 @@ export async function discoverWorkdayCandidates(
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      'User-Agent': 'Iolaus source crawler',
+      'User-Agent': sourceCrawlerUserAgent(),
     },
     method: 'POST',
   });
@@ -4782,7 +4790,7 @@ export async function discoverWorkdayCandidates(
     const detailResponse = await fetchImpl(detailUrl, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'Iolaus source crawler',
+        'User-Agent': sourceCrawlerUserAgent(),
       },
     });
     if (!detailResponse.ok) continue;
@@ -5432,7 +5440,7 @@ interface HtmlLink {
 const COMPANY_DISCOVERY_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5',
   'Accept-Language': 'en-US,en;q=0.9',
-  'User-Agent': 'Iolaus source crawler',
+  'User-Agent': sourceCrawlerUserAgent(),
 };
 
 const IGNORED_COMPANY_OUTBOUND_HOSTS = [

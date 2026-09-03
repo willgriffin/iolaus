@@ -2,6 +2,7 @@ import type { LookupAddress, LookupAllOptions } from 'node:dns';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { request as httpsRequest, type RequestOptions } from 'node:https';
 import { BlockList, isIP } from 'node:net';
+import { getConfiguredUserAgent } from './app-config.js';
 
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -193,7 +194,7 @@ async function pinnedHttpsTransport(
         headers: {
           accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
           'accept-encoding': 'identity',
-          'user-agent': 'Iolaus job-posting importer',
+          'user-agent': getConfiguredUserAgent('job-posting importer'),
         },
         lookup: createPinnedLookup(address),
         method: 'GET',

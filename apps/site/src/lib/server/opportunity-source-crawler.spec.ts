@@ -5526,6 +5526,15 @@ it('uses crawl4ai spider defaults from environment when configured', () => {
   }
 });
 
+it('uses the configured product identity for its crawl4ai user agent', () => {
+  vi.stubEnv('HAVE_SPIDER_CRAWL4AI_URL', 'http://127.0.0.1:11235');
+  vi.stubEnv('IOLAUS_APP_NAME', 'My Career Hub');
+
+  expect(defaultOpportunitySpiderOptions()).toMatchObject({
+    userAgent: 'Mozilla/5.0 (compatible; My Career Hub source crawler; )',
+  });
+});
+
 it('records PeoplePerHour fetch body-shape diagnostics when production returns no cards', async () => {
   getCollection.mockReset();
   const opportunities = recordCollection();
