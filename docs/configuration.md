@@ -1,0 +1,55 @@
+# Iolaus configuration
+
+Iolaus keeps personal records, assets, credentials, and deployment values out
+of source control. Copy `.env.example` to a private environment file or use
+your platform's secret manager; never commit it.
+
+## Local installation
+
+The default profile is deliberately local and loopback-only:
+
+```sh
+SMRT_RUNTIME_PROFILE=local
+SMRT_APP_ID=iolaus
+IOLAUS_APP_NAME=Iolaus
+```
+
+Local Iolaus does not need an OIDC provider. Browser sign-in is available only
+from `localhost`, `127.0.0.1`, or `::1`; a remote host cannot turn the local
+owner path into a public login endpoint.
+
+`SMRT_APP_ID` is a lowercase, hyphenated identifier. It namespaces the local
+tenant, cookies, terminal authorization code prefix, audit agent class, and
+CLI configuration directory. The default `iolaus` therefore does not share
+session or tenant identifiers with another deployment.
+
+## Self-hosted installation
+
+Set `SMRT_RUNTIME_PROFILE=self-hosted` and provide every non-secret setting
+below through private configuration:
+
+```sh
+SMRT_RUNTIME_PROFILE=self-hosted
+SMRT_APP_ID=career-hub
+IOLAUS_APP_NAME="My Career Hub"
+IOLAUS_PUBLIC_URL=https://jobs.example.com
+IOLAUS_OIDC_SERVER_URL=https://identity.example.com
+IOLAUS_OIDC_REALM=career
+IOLAUS_OIDC_CLIENT_ID=career-hub
+IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
+```
+
+`IOLAUS_OIDC_CLIENT_SECRET` is optional for a public OIDC client. When your
+provider issues a confidential client, set it only in the deployment secret
+store. Iolaus rejects incomplete or malformed public authentication with a
+generic recovery message; it never falls back to local sign-in on a hosted
+deployment and never includes hostnames, emails, or secret values in that
+message.
+
+The CLI stores its token separately at `~/.config/<SMRT_APP_ID>/config.json`
+(by default, `~/.config/iolaus/config.json`). Do not copy that file,
+application data, or generated resumes into the source checkout.
+
+Earlier development snapshots used `~/.config/iolaus.localhost/`. Those
+credentials are deliberately not reused: authenticate the CLI again after
+upgrading so a generic Iolaus installation cannot inherit an old local token.

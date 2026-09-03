@@ -7,13 +7,14 @@ import {
   PrincipalToolNotAllowedError,
 } from '@happyvertical/smrt-agents';
 import { OperationPermissionError, type User } from '@happyvertical/smrt-users';
+import { getAppConfig } from './app-config.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import { listOwnerToolNames } from './tool-catalog.js';
 
 /**
  * Stable agent-class identifier recorded on every owner-principal audit entry.
  */
-export const OWNER_AGENT_CLASS = 'iolaus.localhost/owner';
+export const OWNER_AGENT_CLASS = getAppConfig().agentClass;
 
 /**
  * The slice of `App.Locals` the owner principal binds from. Both the cookie

@@ -147,8 +147,7 @@ export const sourceReadMcpTools = [
 export function createGenerator(user?: Pick<User, 'id'> | null): MCPGenerator {
   return new MCPGenerator(
     {
-      description:
-        'SMRT MCP server for iolaus.localhost employment-search data.',
+      description: 'SMRT MCP server for Iolaus employment-search data.',
       name: 'iolaus-employment-search',
       version: '0.1.0',
     },

@@ -154,7 +154,7 @@ const tokenRecord = {
   tenantId: null,
   onBehalfOfUserId: null,
   actsAsProfileId: null,
-  agentClass: 'iolaus.localhost/owner',
+  agentClass: 'iolaus/owner',
   identityKey: 'admin-opportunities:table',
   actionId: 'review',
   actionFingerprint: 'action-fp',

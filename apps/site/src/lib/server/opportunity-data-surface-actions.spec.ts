@@ -59,7 +59,7 @@ const QUERY_FINGERPRINT = 'query-fp';
 // The shape the adapter snapshots: ExecuteAsPrincipalOptions, whose own
 // `principal` is the binding carrying the fail-closed tool allow-list.
 const principal = {
-  agentClass: 'iolaus.localhost/owner',
+  agentClass: 'iolaus/owner',
   onBehalfOfUserId: 'user-1',
   permissions: [],
   principal: {

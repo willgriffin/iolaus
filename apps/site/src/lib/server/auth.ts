@@ -16,38 +16,34 @@ import {
   destroySessionCookie,
 } from '@happyvertical/smrt-users/sveltekit';
 import { error, type RequestEvent, redirect } from '@sveltejs/kit';
+import {
+  getAppConfig,
+  getAuthConfiguration,
+  getConfiguredPublicOrigin,
+  isLoopbackHostname,
+} from './app-config.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 
-const oidcStateCookie = 'iolaus_oidc_state';
-const oidcVerifierCookie = 'iolaus_oidc_code_verifier';
-const oidcNonceCookie = 'iolaus_oidc_nonce';
+const appConfig = getAppConfig();
+const oidcStateCookie = appConfig.oidcStateCookieName;
+const oidcVerifierCookie = appConfig.oidcVerifierCookieName;
+const oidcNonceCookie = appConfig.oidcNonceCookieName;
 
-export const sessionCookieName = 'iolaus_session';
-export const singleTenantSlug = 'iolaus.localhost';
-export const singleTenantName = 'iolaus.localhost';
+export const sessionCookieName = appConfig.sessionCookieName;
+export const loginNextCookieName = appConfig.loginNextCookieName;
+export const singleTenantSlug = appConfig.tenantSlug;
+export const singleTenantName = appConfig.tenantName;
 
 function isLocalhost(event: RequestEvent): boolean {
-  return ['127.0.0.1', '::1', 'localhost'].includes(event.url.hostname);
+  return isLoopbackHostname(event.url.hostname);
 }
 
 export function canUseLocalDevLogin(event: RequestEvent): boolean {
-  return (
-    process.env.NODE_ENV !== 'production' &&
-    !process.env.IOLAUS_OIDC_CLIENT_ID &&
-    isLocalhost(event)
-  );
-}
-
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    error(500, `Missing required environment variable: ${name}`);
-  }
-  return value;
+  return getAuthConfiguration().kind === 'local' && isLocalhost(event);
 }
 
 function getBaseUrl(event: RequestEvent): string {
-  return event.url.origin;
+  return getConfiguredPublicOrigin() ?? event.url.origin;
 }
 
 function getRedirectUri(event: RequestEvent): string {
@@ -77,15 +73,21 @@ function deleteTemporaryCookie(event: RequestEvent, name: string): void {
 }
 
 export async function getOidcAuth(event: RequestEvent) {
+  const configuration = getAuthConfiguration();
+  if (configuration.kind !== 'self-hosted') {
+    const message =
+      configuration.kind === 'invalid'
+        ? configuration.message
+        : 'Iolaus local mode does not require OIDC authentication.';
+    error(503, message);
+  }
+
   return await getAuth({
     type: 'keycloak',
-    serverUrl:
-      process.env.IOLAUS_OIDC_SERVER_URL ?? 'https://identity.example.invalid',
-    // OIDC currently fronts OIDC with Dex at the issuer root. The
-    // @happyvertical/auth Keycloak provider normalizes /realms/.. to that root.
-    realm: process.env.IOLAUS_OIDC_REALM ?? '..',
-    clientId: getRequiredEnv('IOLAUS_OIDC_CLIENT_ID'),
-    clientSecret: process.env.IOLAUS_OIDC_CLIENT_SECRET,
+    serverUrl: configuration.oidc.serverUrl,
+    realm: configuration.oidc.realm,
+    clientId: configuration.oidc.clientId,
+    clientSecret: configuration.oidc.clientSecret,
     redirectUri: getRedirectUri(event),
     scopes: ['openid', 'profile', 'email'],
     usePKCE: true,
@@ -143,17 +145,24 @@ function normalizeLoginEmail(email: string | undefined): string {
 
 export function isAuthorizedOidcAdmin(
   claims: Pick<TokenClaims, 'email' | 'email_verified'>,
-  configuredEmails = process.env.IOLAUS_OIDC_ADMIN_EMAILS,
+  configuredEmails?: string,
 ): boolean {
   if (claims.email_verified !== true) return false;
 
   const email = normalizeLoginEmail(claims.email);
   if (!email) return false;
 
+  const authConfiguration = getAuthConfiguration();
+  const resolvedEmails =
+    configuredEmails ??
+    (authConfiguration.kind === 'self-hosted'
+      ? authConfiguration.oidc.adminEmails.join(',')
+      : undefined);
+
   const allowedEmails = new Set(
-    (configuredEmails ?? '')
+    (resolvedEmails ?? '')
       .split(',')
-      .map((value) => normalizeLoginEmail(value))
+      .map((value: string) => normalizeLoginEmail(value))
       .filter(Boolean),
   );
   return allowedEmails.has(email);

@@ -33,7 +33,7 @@ import '../src/lib/server/smrt.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(SITE_ROOT, '..', '..');
-const BACKUP_KIND = 'iolaus.localhost-data-backup';
+const BACKUP_KIND = 'iolaus-data-backup';
 const BACKUP_VERSION = 1;
 const DEFAULT_DUMP_FILE = 'database.dump';
 const DEFAULT_FILES_DIR = 'files';
@@ -142,7 +142,7 @@ export function timestampForBackup(date = new Date()): string {
 export function defaultBackupRoot(): string {
   return (
     process.env.IOLAUS_BACKUP_DIR ??
-    join(homedir(), '.local', 'share', 'iolaus.localhost', 'backups')
+    join(homedir(), '.local', 'share', 'iolaus', 'backups')
   );
 }
 

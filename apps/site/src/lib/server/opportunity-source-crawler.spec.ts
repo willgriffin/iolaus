@@ -1472,7 +1472,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'text/html,application/xhtml+xml',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1534,7 +1534,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1651,7 +1651,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1694,7 +1694,7 @@ describe('opportunity source crawler discovery', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://remoteok.com/api', {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'iolaus.localhost source crawler',
+        'User-Agent': 'Iolaus source crawler',
       },
     });
   });
@@ -2364,7 +2364,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2374,7 +2374,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2476,7 +2476,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2541,7 +2541,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2601,7 +2601,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );

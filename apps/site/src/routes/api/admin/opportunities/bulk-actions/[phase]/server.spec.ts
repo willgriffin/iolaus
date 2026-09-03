@@ -73,7 +73,7 @@ describe('opportunity bulk-actions route', () => {
     mocks.isDenial.mockReturnValue(false);
     mocks.createStore.mockResolvedValue({});
     mocks.principalOptions.mockResolvedValue({
-      agentClass: 'iolaus.localhost/owner',
+      agentClass: 'iolaus/owner',
       auditMetadata: { actionId: 'review', requestId: 'req-1' },
       onBehalfOfUserId: 'user-1',
       principal: { runAsUserId: 'user-1', tenantId: null },

@@ -1,6 +1,6 @@
 # @willgriffin/iolaus-cli
 
-Authenticated CLI and MCP bridge for the iolaus.localhost SMRT app.
+Authenticated CLI and MCP bridge for the Iolaus SMRT app.
 
 ## Local Checkout
 
@@ -60,7 +60,11 @@ iolaus opportunities list
 iolaus-mcp
 ```
 
-The CLI stores its bearer session in `~/.config/iolaus.localhost/config.json`.
+The CLI stores its bearer session in `~/.config/<SMRT_APP_ID>/config.json`
+(by default, `~/.config/iolaus/config.json`).
+Older development snapshots stored a token under
+`~/.config/iolaus.localhost/`; run `iolaus auth login` after upgrading rather
+than copying that credential into the new namespace.
 Agents can override configuration with `IOLAUS_SERVER_URL`,
 `IOLAUS_TOKEN`, or `IOLAUS_CLI_CONFIG`.
 

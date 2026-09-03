@@ -7,6 +7,7 @@ import {
   getPackageConfig,
   loadConfig,
 } from '@happyvertical/smrt-config';
+import { getAppConfig } from './app-config.js';
 
 export type AiProfileName = 'cheap' | 'good' | (string & {});
 
@@ -233,7 +234,7 @@ function usageTagsForProfile(
     ) ||
     'development';
   const values: Record<(typeof AI_USAGE_TAG_KEYS)[number], string> = {
-    app: 'iolaus.localhost',
+    app: getAppConfig().appId,
     environment,
     feature: sanitize(merged.feature) || 'unspecified',
     profile: sanitize(profile) || 'unknown',

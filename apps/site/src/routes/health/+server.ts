@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { getAppConfig } from '$lib/server/app-config';
 import { isPublishedResumePrimeSettled } from '$lib/server/resume-prime';
 import type { RequestHandler } from './$types';
 
@@ -14,7 +15,7 @@ export const GET: RequestHandler = () => {
     {
       ok: primed,
       resume: primed ? 'ready' : 'priming',
-      service: 'iolaus.localhost',
+      service: getAppConfig().appId,
     },
     { status: primed ? 200 : 503 },
   );

@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MCPGenerator } from '@happyvertical/smrt-core/generators/mcp';
 import '../src/lib/objects/index.js';
+import { getAppConfig } from '../src/lib/server/app-config.js';
 import { getDbConfig } from '../src/lib/server/db.js';
 
 const appDir = dirname(fileURLToPath(import.meta.url));
@@ -11,7 +12,7 @@ const generator = new MCPGenerator(
   {
     name: 'iolaus-employment-search',
     version: '0.1.0',
-    description: 'SMRT MCP server for iolaus.localhost employment-search data.',
+    description: `SMRT MCP server for ${getAppConfig().appName} employment-search data.`,
   },
   {
     db: getDbConfig(),

@@ -5,20 +5,23 @@ import {
   tokenClaimsToOidcClaims,
 } from './auth';
 
-const originalClientId = process.env.IOLAUS_OIDC_CLIENT_ID;
-const originalNodeEnv = process.env.NODE_ENV;
+const authEnvNames = [
+  'IOLAUS_OIDC_ADMIN_EMAILS',
+  'IOLAUS_OIDC_CLIENT_ID',
+  'IOLAUS_OIDC_REALM',
+  'IOLAUS_OIDC_SERVER_URL',
+  'IOLAUS_PUBLIC_URL',
+  'SMRT_RUNTIME_PROFILE',
+] as const;
+const originalEnvironment = Object.fromEntries(
+  authEnvNames.map((name) => [name, process.env[name]]),
+);
 
 afterEach(() => {
-  if (originalClientId === undefined) {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-  } else {
-    process.env.IOLAUS_OIDC_CLIENT_ID = originalClientId;
-  }
-
-  if (originalNodeEnv === undefined) {
-    delete process.env.NODE_ENV;
-  } else {
-    process.env.NODE_ENV = originalNodeEnv;
+  for (const name of authEnvNames) {
+    const original = originalEnvironment[name];
+    if (original === undefined) delete process.env[name];
+    else process.env[name] = original;
   }
 });
 
@@ -84,25 +87,21 @@ describe('isAuthorizedOidcAdmin', () => {
 });
 
 describe('canUseLocalDevLogin', () => {
-  it('allows localhost development login when OIDC is not configured', () => {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-    process.env.NODE_ENV = 'development';
+  it('allows loopback local login without OIDC, including a production build', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
 
     expect(
       canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
     ).toBe(true);
   });
 
-  it('does not allow the fallback outside local development', () => {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-    process.env.NODE_ENV = 'production';
-
-    expect(
-      canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
-    ).toBe(false);
-
-    process.env.NODE_ENV = 'development';
-    process.env.IOLAUS_OIDC_CLIENT_ID = 'client-id';
+  it('does not allow the fallback for a public deployment', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.IOLAUS_PUBLIC_URL = 'https://iolaus.example.com';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.com';
+    process.env.IOLAUS_OIDC_REALM = 'iolaus';
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'iolaus';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'owner@example.com';
 
     expect(
       canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),

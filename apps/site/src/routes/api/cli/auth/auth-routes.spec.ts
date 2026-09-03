@@ -28,9 +28,9 @@ describe('CLI auth API routes', () => {
       deviceCode: 'device-1',
       expiresAt: '2026-05-25T12:00:00.000Z',
       interval: 2,
-      userCode: 'WG-1234ABCD',
+      userCode: 'IOLAUS-1234ABCD',
       verificationUrl:
-        'https://iolaus.localhost/admin/terminal-login?code=WG-1234ABCD',
+        'https://iolaus.localhost/admin/terminal-login?code=IOLAUS-1234ABCD',
     });
 
     const response = await startPost({
@@ -39,7 +39,7 @@ describe('CLI auth API routes', () => {
 
     await expect(response.json()).resolves.toMatchObject({
       deviceCode: 'device-1',
-      userCode: 'WG-1234ABCD',
+      userCode: 'IOLAUS-1234ABCD',
     });
     expect(response.status).toBe(201);
     expect(createCliAuthRequestMock).toHaveBeenCalledWith(

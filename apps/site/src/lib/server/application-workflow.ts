@@ -2113,7 +2113,7 @@ function accountTaskDescription(
     stringValue(entity.accountNotes)
       ? `Notes: ${stringValue(entity.accountNotes)}`
       : '',
-    'Do not store passwords, tokens, cookies, recovery codes, or decrypted secret values in iolaus.localhost.',
+    'Do not store passwords, tokens, cookies, recovery codes, or decrypted secret values in Iolaus.',
   ]
     .filter(Boolean)
     .join('\n');

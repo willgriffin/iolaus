@@ -7,6 +7,7 @@ import {
   withSessionPermissionContext,
 } from '@happyvertical/smrt-users';
 import type { CliAuthRequest } from '$lib/objects';
+import { getAppConfig } from './app-config.js';
 import { sessionCookieName } from './auth.js';
 import { getSmrtOptions } from './db.js';
 import { getCollection } from './smrt.js';
@@ -45,7 +46,7 @@ function hashDeviceCode(deviceCode: string): string {
 
 function makeUserCode(): string {
   const raw = randomBytes(6).toString('hex').toUpperCase();
-  return `WG-${raw.slice(0, 8)}`;
+  return `${getAppConfig().cliUserCodePrefix}-${raw.slice(0, 8)}`;
 }
 
 async function getCliAuthCollection() {

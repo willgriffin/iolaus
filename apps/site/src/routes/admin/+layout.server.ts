@@ -1,8 +1,10 @@
 import { adminResources } from '$lib/admin/resources';
+import { getAppConfig } from '$lib/server/app-config';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
   return {
+    appName: getAppConfig().appName,
     permissions: locals.permissions,
     resources: adminResources,
     tenantId: locals.tenantId,

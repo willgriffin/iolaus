@@ -52,7 +52,7 @@ describe.runIf(enabled)('data surface action state store (postgres)', () => {
       tenantId: null,
       onBehalfOfUserId: null,
       actsAsProfileId: null,
-      agentClass: 'iolaus.localhost/owner',
+      agentClass: 'iolaus/owner',
       identityKey: 'admin-opportunities:table',
       actionId: 'review',
       actionFingerprint: `action-${randomUUID()}`,

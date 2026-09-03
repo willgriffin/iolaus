@@ -263,7 +263,7 @@ describe('db snapshot helpers', () => {
         storageConfig: {},
       },
       gitSha: null,
-      kind: 'iolaus.localhost-data-backup',
+      kind: 'iolaus-data-backup',
       recovery: {
         databaseName: 'iolaus',
         dumpSha256: digest,

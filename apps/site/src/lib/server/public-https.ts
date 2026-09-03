@@ -193,7 +193,7 @@ async function pinnedHttpsTransport(
         headers: {
           accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
           'accept-encoding': 'identity',
-          'user-agent': 'iolaus.localhost job-posting importer',
+          'user-agent': 'Iolaus job-posting importer',
         },
         lookup: createPinnedLookup(address),
         method: 'GET',
