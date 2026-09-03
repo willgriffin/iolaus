@@ -69,6 +69,12 @@ describe('Iolaus application configuration', () => {
     }
   });
 
+  it('uses the same explicit public-auth boundary for a hosted cloud profile', () => {
+    expect(
+      getAuthConfiguration({ SMRT_RUNTIME_PROFILE: 'cloud' }),
+    ).toMatchObject({ kind: 'invalid' });
+  });
+
   it('recognizes only loopback hosts for local-only paths', () => {
     expect(isLoopbackHostname('localhost')).toBe(true);
     expect(isLoopbackHostname('127.0.0.1')).toBe(true);

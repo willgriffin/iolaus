@@ -23,10 +23,10 @@ tenant, cookies, terminal authorization code prefix, audit agent class, and
 CLI configuration directory. The default `iolaus` therefore does not share
 session or tenant identifiers with another deployment.
 
-## Self-hosted installation
+## Public installation
 
-Set `SMRT_RUNTIME_PROFILE=self-hosted` and provide every non-secret setting
-below through private configuration:
+Set `SMRT_RUNTIME_PROFILE=self-hosted` (or `cloud` for a managed deployment)
+and provide every non-secret setting below through private configuration:
 
 ```sh
 SMRT_RUNTIME_PROFILE=self-hosted

@@ -7,7 +7,7 @@
  * must opt into a complete, explicit OIDC configuration.
  */
 
-export type RuntimeProfile = 'local' | 'self-hosted';
+export type RuntimeProfile = 'cloud' | 'local' | 'self-hosted';
 
 export type AppConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -42,8 +42,8 @@ export type AuthConfiguration =
 
 const DEFAULT_APP_ID = 'iolaus';
 const DEFAULT_APP_NAME = 'Iolaus';
-const SELF_HOSTED_CONFIGURATION_MESSAGE =
-  'Iolaus self-hosted authentication is incomplete. Configure the public URL, OIDC issuer, realm, client ID, and authorized administrator email addresses.';
+const PUBLIC_CONFIGURATION_MESSAGE =
+  'Iolaus public authentication is incomplete. Configure the public URL, OIDC issuer, realm, client ID, and authorized administrator email addresses.';
 
 function stringValue(value: string | undefined): string {
   return value?.trim() ?? '';
@@ -74,12 +74,14 @@ function appNameFrom(environment: AppConfigEnvironment): string {
 
 function runtimeProfileFrom(environment: AppConfigEnvironment): RuntimeProfile {
   const configured = stringValue(environment.SMRT_RUNTIME_PROFILE) || 'local';
-  if (configured === 'local' || configured === 'self-hosted') {
+  if (
+    configured === 'local' ||
+    configured === 'self-hosted' ||
+    configured === 'cloud'
+  ) {
     return configured;
   }
-  throw new Error(
-    'SMRT_RUNTIME_PROFILE must be either "local" or "self-hosted".',
-  );
+  throw new Error('SMRT_RUNTIME_PROFILE must be local, self-hosted, or cloud.');
 }
 
 function cookieSegment(appId: string): string {
@@ -191,7 +193,7 @@ export function getAuthConfiguration(
     !clientId ||
     adminEmails.length === 0
   ) {
-    return { kind: 'invalid', message: SELF_HOSTED_CONFIGURATION_MESSAGE };
+    return { kind: 'invalid', message: PUBLIC_CONFIGURATION_MESSAGE };
   }
 
   return {
