@@ -3,6 +3,7 @@ import {
   canUseLocalDevLogin,
   getRuntimeCookieName,
   isAuthorizedOidcAdmin,
+  tenantSlugsFor,
   tokenClaimsToOidcClaims,
 } from './auth';
 
@@ -94,6 +95,9 @@ describe('canUseLocalDevLogin', () => {
     expect(
       canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
     ).toBe(true);
+    expect(
+      canUseLocalDevLogin(requestEventFor('http://[::1]:5173/login', '::1')),
+    ).toBe(true);
   });
 
   it('does not allow the fallback for a public deployment', () => {
@@ -145,5 +149,12 @@ describe('getRuntimeCookieName', () => {
     expect(
       getRuntimeCookieName('career_hub_session', 'self-hosted', 'ignored'),
     ).toBe('career_hub_session');
+  });
+});
+
+describe('tenantSlugsFor', () => {
+  it('reads legacy local data without creating a legacy tenant for new installs', () => {
+    expect(tenantSlugsFor('iolaus')).toEqual(['iolaus', 'iolaus.localhost']);
+    expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
   });
 });

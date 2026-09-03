@@ -61,6 +61,15 @@ export const loginNextCookieName = getRuntimeCookieName(
 export const singleTenantSlug = appConfig.tenantSlug;
 export const singleTenantName = appConfig.tenantName;
 
+/**
+ * The first generic Iolaus release supersedes a local development snapshot.
+ * Keep the old tenant reachable during an in-place upgrade, but never create
+ * it for a new or custom application identity.
+ */
+export function tenantSlugsFor(appId: string): readonly string[] {
+  return appId === 'iolaus' ? [appId, 'iolaus.localhost'] : [appId];
+}
+
 function isLocalhost(event: RequestEvent): boolean {
   if (!isLoopbackHostname(event.url.hostname)) return false;
   try {
@@ -266,7 +275,14 @@ async function ensureSingleTenantAccess(user: User) {
 
   await roles.seedSystemRoles();
 
-  let tenant = await tenants.findBySlug(singleTenantSlug);
+  const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
+    appConfig.appId,
+  );
+  let tenant = await tenants.findBySlug(primaryTenantSlug ?? singleTenantSlug);
+  for (const slug of legacyTenantSlugs) {
+    if (tenant) break;
+    tenant = await tenants.findBySlug(slug);
+  }
   if (!tenant) {
     tenant = await tenants.create({
       name: singleTenantName,

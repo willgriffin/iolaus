@@ -18,6 +18,7 @@ import {
   isLocalDatabaseUrl,
   parseFlagArgs,
   postgresEnvFromUrl,
+  readBackupManifest,
   recordLocalRestoreEvidence,
   redactDatabaseUrl,
   redactFilesystemConfig,
@@ -32,12 +33,14 @@ const originalProductionDatabaseUrl = process.env.PRODUCTION_DATABASE_URL;
 const originalBackupDir = process.env.IOLAUS_BACKUP_DIR;
 const originalResumeFilesConfigJson = process.env.RESUME_FILES_CONFIG_JSON;
 const originalRuntimeProfile = process.env.SMRT_RUNTIME_PROFILE;
+const originalAppId = process.env.SMRT_APP_ID;
 
 afterEach(() => {
   restoreEnv('PRODUCTION_DATABASE_URL', originalProductionDatabaseUrl);
   restoreEnv('IOLAUS_BACKUP_DIR', originalBackupDir);
   restoreEnv('RESUME_FILES_CONFIG_JSON', originalResumeFilesConfigJson);
   restoreEnv('SMRT_RUNTIME_PROFILE', originalRuntimeProfile);
+  restoreEnv('SMRT_APP_ID', originalAppId);
 });
 
 describe('db snapshot helpers', () => {
@@ -226,6 +229,33 @@ describe('db snapshot helpers', () => {
       databaseNameFromUrl('postgresql://user:pass@localhost:5432/app_name'),
     ).toBe('app_name');
     expect(defaultBackupRoot()).toBe('/tmp/iolaus-backups');
+  });
+
+  it('names new backup roots after the configured application identity', () => {
+    delete process.env.IOLAUS_BACKUP_DIR;
+    process.env.SMRT_APP_ID = 'career-hub';
+
+    expect(defaultBackupRoot()).toMatch(/career-hub\/backups$/u);
+  });
+
+  it('accepts a version-one backup from the legacy local namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'legacy-iolaus-backup-'));
+    try {
+      await writeFile(
+        join(root, 'manifest.json'),
+        JSON.stringify({
+          kind: 'iolaus.localhost-data-backup',
+          version: 1,
+        }),
+      );
+
+      await expect(readBackupManifest(root)).resolves.toMatchObject({
+        kind: 'iolaus.localhost-data-backup',
+        version: 1,
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it('rejects an incomplete database archive before recording a backup', async () => {

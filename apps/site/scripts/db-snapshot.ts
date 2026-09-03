@@ -21,6 +21,7 @@ import type {
 } from '@happyvertical/files';
 import { getFilesystem } from '@happyvertical/files';
 import { ObjectRegistry, resolveDatabase } from '@happyvertical/smrt-core';
+import { getAppConfig } from '../src/lib/server/app-config.js';
 import { getDatabaseUrl } from '../src/lib/server/db.js';
 import {
   getResumeFilesConfig,
@@ -34,6 +35,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(SITE_ROOT, '..', '..');
 const BACKUP_KIND = 'iolaus-data-backup';
+const LEGACY_BACKUP_KIND = 'iolaus.localhost-data-backup';
+const SUPPORTED_BACKUP_KINDS = new Set([BACKUP_KIND, LEGACY_BACKUP_KIND]);
 const BACKUP_VERSION = 1;
 const DEFAULT_DUMP_FILE = 'database.dump';
 const DEFAULT_FILES_DIR = 'files';
@@ -59,7 +62,7 @@ export interface BackupManifest {
     storageConfig: unknown;
   };
   gitSha: string | null;
-  kind: typeof BACKUP_KIND;
+  kind: typeof BACKUP_KIND | typeof LEGACY_BACKUP_KIND;
   resume: ResumePublishStatus;
   recovery?: BackupRecoveryAttestation;
   source: 'current' | 'production';
@@ -142,7 +145,7 @@ export function timestampForBackup(date = new Date()): string {
 export function defaultBackupRoot(): string {
   return (
     process.env.IOLAUS_BACKUP_DIR ??
-    join(homedir(), '.local', 'share', 'iolaus', 'backups')
+    join(homedir(), '.local', 'share', getAppConfig().appId, 'backups')
   );
 }
 
@@ -459,7 +462,10 @@ export async function readBackupManifest(
   const manifest = JSON.parse(
     await readFile(manifestPath, 'utf8'),
   ) as BackupManifest;
-  if (manifest.kind !== BACKUP_KIND || manifest.version !== BACKUP_VERSION) {
+  if (
+    !SUPPORTED_BACKUP_KINDS.has(manifest.kind) ||
+    manifest.version !== BACKUP_VERSION
+  ) {
     throw new Error(`Unsupported backup manifest: ${manifestPath}`);
   }
   return manifest;

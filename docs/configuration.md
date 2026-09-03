@@ -54,3 +54,6 @@ that file, application data, or generated resumes into the source checkout.
 Earlier development snapshots used `~/.config/iolaus.localhost/`. Those
 credentials are deliberately not reused: authenticate the CLI again after
 upgrading so a generic Iolaus installation cannot inherit an old local token.
+Legacy database backups remain restorable when explicitly selected, but new
+backups live under the generic application identifier; set `IOLAUS_BACKUP_DIR`
+to the former backup directory when recovering an earlier snapshot.
