@@ -27,8 +27,16 @@ afterEach(() => {
   }
 });
 
-function requestEventFor(url: string, clientAddress = '127.0.0.1') {
-  return { getClientAddress: () => clientAddress, url: new URL(url) } as never;
+function requestEventFor(
+  url: string,
+  clientAddress = '127.0.0.1',
+  headers?: HeadersInit,
+) {
+  return {
+    getClientAddress: () => clientAddress,
+    request: new Request(url, { headers }),
+    url: new URL(url),
+  } as never;
 }
 
 describe('tokenClaimsToOidcClaims', () => {
@@ -122,6 +130,18 @@ describe('canUseLocalDevLogin', () => {
     expect(
       canUseLocalDevLogin(
         requestEventFor('http://localhost:5173/login', '203.0.113.8'),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a forwarded request even when a loopback proxy is the peer', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
+
+    expect(
+      canUseLocalDevLogin(
+        requestEventFor('http://localhost:5173/login', '127.0.0.1', {
+          'x-forwarded-for': '203.0.113.8',
+        }),
       ),
     ).toBe(false);
   });

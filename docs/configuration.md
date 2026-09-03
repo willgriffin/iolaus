@@ -18,6 +18,11 @@ Local Iolaus does not need an OIDC provider. Browser sign-in is available only
 from `localhost`, `127.0.0.1`, or `::1`; a remote host cannot turn the local
 owner path into a public login endpoint.
 
+Do not place a reverse proxy, tunnel, or public ingress in front of the local
+profile. Local owner sign-in rejects forwarded requests, and a proxy that hides
+its forwarding metadata cannot safely provide public authentication. Use the
+`self-hosted` or `cloud` profile with OIDC for any remotely reachable install.
+
 `SMRT_APP_ID` is a lowercase, hyphenated identifier. It namespaces the local
 tenant, cookies, terminal authorization code prefix, audit agent class, and
 CLI configuration directory. The default `iolaus` therefore does not share

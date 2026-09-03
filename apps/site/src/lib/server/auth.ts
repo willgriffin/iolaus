@@ -90,6 +90,18 @@ export function tenantSlugsFor(appId: string): readonly string[] {
 
 function isLocalhost(event: RequestEvent): boolean {
   if (!isLoopbackHostname(event.url.hostname)) return false;
+  // Local owner bootstrap never trusts reverse-proxy forwarding metadata. A
+  // proxied or tunneled installation must use the public OIDC profile instead.
+  if (
+    [
+      'forwarded',
+      'x-forwarded-for',
+      'x-forwarded-host',
+      'x-forwarded-proto',
+    ].some((header) => event.request.headers.has(header))
+  ) {
+    return false;
+  }
   try {
     return isLoopbackAddress(event.getClientAddress());
   } catch {
@@ -137,7 +149,7 @@ export async function getOidcAuth(event: RequestEvent) {
     const message =
       configuration.kind === 'invalid'
         ? configuration.message
-        : 'Iolaus local mode does not require OIDC authentication.';
+        : `${appConfig.appName} local mode does not require OIDC authentication.`;
     error(503, message);
   }
 
