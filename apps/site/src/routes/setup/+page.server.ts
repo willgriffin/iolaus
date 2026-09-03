@@ -44,7 +44,7 @@ export const actions: Actions = {
       });
     }
     const runtime = await getLocalApplicationRuntime();
-    let result;
+    let result: Awaited<ReturnType<typeof runtime.claimOwner>>;
     try {
       result = await runtime.claimOwner({
         token,
