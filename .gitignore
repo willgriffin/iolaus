@@ -21,6 +21,7 @@ apps/site/src/routes/api/**/+server.ts
 !apps/site/src/routes/api/cli/auth/**/+server.ts
 !apps/site/src/routes/api/job-search/**/+server.ts
 !apps/site/src/routes/api/_resources/**/+server.ts
+!apps/site/src/routes/api/_runtime/**/+server.ts
 apps/site/src/lib/server/smrt-register.ts
 apps/site/src/types/smrt-generated/
 apps/site/src/types/virtual-modules.d.ts

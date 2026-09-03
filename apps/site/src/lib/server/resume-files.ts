@@ -5,6 +5,7 @@ import {
   type GetFilesystemOptions,
   getFilesystem,
 } from '@happyvertical/files';
+import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const RESUME_FILES_PATH = ['var', 'profile-assets'] as const;
 
@@ -47,7 +48,11 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
   if (!raw) {
     return {
       type: 'local',
-      basePath: defaultResumeFilesBasePath(),
+      basePath:
+        process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+        !process.env.SMRT_RUNTIME_PROFILE
+          ? getIolausUserAssetsRoot()
+          : defaultResumeFilesBasePath(),
     };
   }
 

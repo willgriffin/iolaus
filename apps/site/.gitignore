@@ -9,6 +9,7 @@ src/routes/api/**/+server.ts
 !src/routes/api/cli/auth/**/+server.ts
 !src/routes/api/job-search/**/+server.ts
 !src/routes/api/_resources/**/+server.ts
+!src/routes/api/_runtime/**/+server.ts
 src/lib/server/smrt-register.ts
 src/types/smrt-generated/
 src/types/virtual-modules.d.ts

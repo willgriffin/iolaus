@@ -1,24 +1,21 @@
 import type { SmrtClassOptions } from '@happyvertical/smrt-core';
-
-export const defaultDatabaseUrl =
-  'postgresql://iolaus:iolaus@localhost:54329/iolaus_dev';
+import {
+  getApplicationDatabaseConfig,
+  type IolausDatabaseConfig,
+} from './application-runtime.js';
 
 export function getDatabaseUrl(): string {
-  const configuredUrl = process.env.DATABASE_URL?.trim();
-  if (configuredUrl) return configuredUrl;
-
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('DATABASE_URL is required in production.');
-  }
-
-  return defaultDatabaseUrl;
+  const config = getApplicationDatabaseConfig();
+  if (!config?.url)
+    throw new Error('The application database URL is unavailable.');
+  return config.url;
 }
 
-export function getDbConfig(): NonNullable<SmrtClassOptions['db']> {
-  return {
-    type: 'postgres',
-    url: getDatabaseUrl(),
-  };
+export function getDbConfig(): IolausDatabaseConfig {
+  const config = getApplicationDatabaseConfig();
+  if (!config)
+    throw new Error('The application database configuration is unavailable.');
+  return config;
 }
 
 export function getSmrtOptions(): SmrtClassOptions {

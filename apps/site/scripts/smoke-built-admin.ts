@@ -85,6 +85,7 @@ const server = spawn(process.execPath, ['build'], {
     ...process.env,
     HOST: '127.0.0.1',
     PORT: String(port),
+    IOLAUS_BUILD_SMOKE: 'true',
   },
 });
 const getOutput = collectOutput(server);

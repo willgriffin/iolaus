@@ -54,6 +54,7 @@ type OpportunityLifecycleSession = Awaited<
 
 const lifecycleDatabase = new AsyncLocalStorage<ResolvedDatabase>();
 const lifecycleLock = new AsyncLocalStorage<OpportunityLifecycleSession>();
+const localLifecycleLocks = new Map<string, Promise<void>>();
 const lifecycleDatabaseProxy = new Proxy({} as ResolvedDatabase, {
   get(_target, property) {
     const database = lifecycleDatabase.getStore();
@@ -1284,6 +1285,28 @@ async function withOpportunityLifecycleLock<T>(
 ): Promise<T> {
   const database =
     getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+  if (getDbConfig().type === 'sqlite') {
+    const previous =
+      localLifecycleLocks.get(opportunityId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+    localLifecycleLocks.set(opportunityId, queued);
+    await previous.catch(() => undefined);
+    const localSession = {
+      isActive: () => true,
+    } as OpportunityLifecycleSession;
+    try {
+      return await lifecycleLock.run(localSession, action);
+    } finally {
+      release();
+      if (localLifecycleLocks.get(opportunityId) === queued) {
+        localLifecycleLocks.delete(opportunityId);
+      }
+    }
+  }
   if (!database.acquireSession) {
     throw new Error(
       'Opportunity lifecycle changes require PostgreSQL session-lock support.',

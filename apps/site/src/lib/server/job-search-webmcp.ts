@@ -46,6 +46,7 @@ type Actor = Pick<User, 'id'>;
 type ResolvedDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 
 const opportunityImportDatabase = new AsyncLocalStorage<ResolvedDatabase>();
+const localOpportunityImportLocks = new Map<string, Promise<void>>();
 const opportunityImportDatabaseProxy = new Proxy({} as ResolvedDatabase, {
   get(_target, property) {
     const database = opportunityImportDatabase.getStore();
@@ -231,6 +232,7 @@ async function withOpportunityImportLock<T>(
   const lockKey = `job-opportunity-import:${createHash('sha256').update(url).digest('hex')}`;
   const activeTransaction = opportunityImportDatabase.getStore();
   if (activeTransaction) {
+    if (getDbConfig().type === 'sqlite') return await action();
     await activeTransaction.query("SET LOCAL lock_timeout = '15s'");
     await activeTransaction.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
       lockKey,
@@ -245,15 +247,39 @@ async function withOpportunityImportLock<T>(
       'Opportunity imports require transactional database support.',
     );
   }
-  return await database.transaction(async (transaction) =>
-    opportunityImportDatabase.run(transaction, async () => {
-      await transaction.query("SET LOCAL lock_timeout = '15s'");
-      await transaction.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
-        lockKey,
-      ]);
-      return await action();
-    }),
-  );
+  const transaction = database.transaction.bind(database);
+  const run = async () =>
+    await transaction(async (transactionDatabase) =>
+      opportunityImportDatabase.run(transactionDatabase, async () => {
+        if (getDbConfig().type !== 'sqlite') {
+          await transactionDatabase.query("SET LOCAL lock_timeout = '15s'");
+          await transactionDatabase.query(
+            'SELECT pg_advisory_xact_lock(hashtext(?))',
+            [lockKey],
+          );
+        }
+        return await action();
+      }),
+    );
+  if (getDbConfig().type !== 'sqlite') return await run();
+
+  const previous =
+    localOpportunityImportLocks.get(lockKey) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  localOpportunityImportLocks.set(lockKey, queued);
+  await previous.catch(() => undefined);
+  try {
+    return await run();
+  } finally {
+    release();
+    if (localOpportunityImportLocks.get(lockKey) === queued) {
+      localOpportunityImportLocks.delete(lockKey);
+    }
+  }
 }
 
 function opportunityAdminUrl(id: string): string {

@@ -117,6 +117,10 @@ vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: mocks.requestDatabase,
 }));
 
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://example/test' }),
+}));
+
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async (className: string) => {
     const value = mocks.collections.get(className);

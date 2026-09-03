@@ -171,6 +171,10 @@ vi.mock('@happyvertical/smrt-core', () => ({
 
 const bumpTaskChangeFeed = vi.hoisted(() => vi.fn(async () => 0));
 
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://example/test' }),
+}));
+
 vi.mock('./change-feed.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   bumpTaskChangeFeed,
