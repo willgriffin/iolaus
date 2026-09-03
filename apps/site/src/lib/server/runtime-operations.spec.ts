@@ -69,7 +69,7 @@ describe('local runtime operation boundaries', () => {
     });
   });
 
-  it('recovers an atomic lock whose owning process is gone', async () => {
+  it('fails closed with recovery guidance for a stale atomic lock', async () => {
     const stateRoot = temporaryRoot();
     const key = 'stale';
     const lockRoot = join(stateRoot, 'keyed-locks');
@@ -84,8 +84,8 @@ describe('local runtime operation boundaries', () => {
       { mode: 0o600 },
     );
     await expect(
-      withKeyedFileLock({ stateRoot, key }, async () => 'recovered'),
-    ).resolves.toBe('recovered');
+      withKeyedFileLock({ stateRoot, key }, async () => 'unsafe'),
+    ).rejects.toThrow(/verify no Iolaus process is running/u);
   });
 
   it('does not apply POSIX mode-bit custody rules to Windows state', () => {

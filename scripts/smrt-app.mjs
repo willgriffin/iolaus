@@ -375,8 +375,8 @@ async function setup(operationLock) {
     result = { ...report, onboardingUrl: retainedOnboardingUrl };
   } finally {
     operatorLease?.release();
-    if (wasRunning) await start(operationLock);
   }
+  if (wasRunning) await start(operationLock, { silent: true });
   const { onboardingUrl: _secretOnboardingUrl, ...publicReport } = result;
   console.log(JSON.stringify(publicReport, null, 2));
   return result;
@@ -444,7 +444,7 @@ async function waitForReady(url, pid, instance, configuration) {
   throw new Error(`The application did not become ready at ${url}.`);
 }
 
-async function start(operationLock) {
+async function start(operationLock, options = {}) {
   const runtime = await assertLocalOperation('app:start');
   const { env } = runtimeEnvironment(runtime);
   const url = `http://127.0.0.1:${env.PORT || '5173'}/`;
@@ -452,9 +452,11 @@ async function start(operationLock) {
   const existing = readProcess();
   if (existing) {
     await waitForReady(url, existing.pid, existing.instance, configuration);
-    console.log(
-      JSON.stringify({ schemaVersion: 1, status: 'running', pid: existing.pid }),
-    );
+    if (!options.silent) {
+      console.log(
+        JSON.stringify({ schemaVersion: 1, status: 'running', pid: existing.pid }),
+      );
+    }
     return existing.pid;
   }
   ensurePrivateDirectory(preparedStateRoot());
@@ -489,9 +491,11 @@ async function start(operationLock) {
     rmSync(pidPath(), { force: true });
     throw error;
   }
-  console.log(
-    JSON.stringify({ schemaVersion: 1, status: 'started', pid: child.pid }),
-  );
+  if (!options.silent) {
+    console.log(
+      JSON.stringify({ schemaVersion: 1, status: 'started', pid: child.pid }),
+    );
+  }
   return child.pid;
 }
 
