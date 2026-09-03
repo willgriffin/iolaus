@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   candidateAssetPath,
   candidateFactState,
+  resolveCandidateAssetPath,
   saveCandidateOnboarding,
 } from './candidate-onboarding.js';
 
@@ -38,6 +39,9 @@ describe('candidateAssetPath', () => {
     expect(() => candidateAssetPath('default', '../resume.pdf')).toThrow(
       /single filename/,
     );
+    expect(
+      resolveCandidateAssetPath('default', 'resume.pdf', '/tmp/iolaus-assets'),
+    ).toBe('/tmp/iolaus-assets/profiles/default/assets/resume.pdf');
   });
 });
 

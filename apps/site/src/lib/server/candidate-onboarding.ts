@@ -1,7 +1,9 @@
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   normalizeAnswerLabel,
   reusableAnswerLabelKey,
 } from './candidate-answers.js';
+import { getIolausUserAssetsRoot } from './runtime-paths.js';
 import { getCollection } from './smrt.js';
 
 export const candidateFactProvenance = [
@@ -99,6 +101,34 @@ export function candidateAssetPath(
     throw new Error('A candidate asset filename must be a single filename.');
   }
   return `profiles/${key}/assets/${name}`;
+}
+
+/**
+ * Resolve a profile-owned asset below the runtime-selected external asset
+ * root. The runtime rejects source-tree roots; this additional boundary check
+ * protects this caller if a custom filesystem root is ever supplied.
+ */
+export function resolveCandidateAssetPath(
+  candidateProfileKey: string,
+  fileName: string,
+  assetsRoot = getIolausUserAssetsRoot(),
+): string {
+  const root = resolve(assetsRoot);
+  const target = resolve(
+    root,
+    candidateAssetPath(candidateProfileKey, fileName),
+  );
+  const relativeTarget = relative(root, target);
+  if (
+    !relativeTarget || // files live below a profile directory, never at root
+    relativeTarget.startsWith('..') ||
+    isAbsolute(relativeTarget)
+  ) {
+    throw new Error(
+      'A candidate asset must remain below the local asset root.',
+    );
+  }
+  return target;
 }
 
 function stringValue(value: unknown, maximum = MAX_FACT_LENGTH): string {
