@@ -1,8 +1,13 @@
 import {
+  resolveDatabase,
+  type SmrtClassOptions,
+} from '@happyvertical/smrt-core';
+import {
   normalizeAnswerLabel,
   reusableAnswerLabelKey,
 } from './candidate-answers.js';
-import { getCollection } from './smrt.js';
+import { getDbConfig } from './db.js';
+import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
 export const candidateFactProvenance = [
   'user_verified',
@@ -59,9 +64,22 @@ type Collection = {
   list: (options?: Record<string, unknown>) => Promise<MutableRecord[]>;
 };
 
+type AtomicResumeAssetClaim = (
+  assetId: string,
+  profileId: string,
+) => Promise<boolean>;
+
+type OnboardingDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
+type TransactionalOnboardingDatabase = OnboardingDatabase & {
+  transaction?: <T>(
+    run: (transaction: OnboardingDatabase) => Promise<T>,
+  ) => Promise<T>;
+};
+
 export interface CandidateOnboardingCollections {
   candidateAnswers: Collection;
   candidateProfiles: Collection;
+  claimResumeAsset?: AtomicResumeAssetClaim;
   resumeAssets: Collection;
 }
 
@@ -181,17 +199,21 @@ export function candidateFactState(
   };
 }
 
-async function defaultCollections(): Promise<CandidateOnboardingCollections> {
+async function defaultCollections(
+  options: Pick<SmrtClassOptions, 'db'> = getRequestScopedSmrtOptions(),
+  claimResumeAsset?: AtomicResumeAssetClaim,
+): Promise<CandidateOnboardingCollections> {
   const [candidateProfiles, candidateAnswers, resumeAssets] = await Promise.all(
     [
-      getCollection('CandidateProfile'),
-      getCollection('CandidateAnswer'),
-      getCollection('ResumeAsset'),
+      getCollection('CandidateProfile', options),
+      getCollection('CandidateAnswer', options),
+      getCollection('ResumeAsset', options),
     ],
   );
   return {
     candidateAnswers: candidateAnswers as unknown as Collection,
     candidateProfiles: candidateProfiles as unknown as Collection,
+    claimResumeAsset,
     resumeAssets: resumeAssets as unknown as Collection,
   };
 }
@@ -263,11 +285,21 @@ async function saveExplicitReusableAnswer(options: {
 
 async function selectResumeAsset(options: {
   assetId: string;
+  claimResumeAsset?: AtomicResumeAssetClaim;
   collection: Collection;
   profile: MutableRecord;
 }): Promise<string> {
   const id = stringValue(options.assetId, 160);
   if (!id) return '';
+  const profileId = stringValue(options.profile.id, 160);
+  if (options.claimResumeAsset) {
+    if (!profileId || !(await options.claimResumeAsset(id, profileId))) {
+      throw new Error(
+        'Select an existing resume asset before saving onboarding.',
+      );
+    }
+    return id;
+  }
   const asset = await options.collection.get(id);
   if (!asset || stringValue(asset.assetType) !== 'resume') {
     throw new Error(
@@ -275,7 +307,6 @@ async function selectResumeAsset(options: {
     );
   }
   const owner = stringValue(asset.candidateProfileId, 160);
-  const profileId = stringValue(options.profile.id, 160);
   if (owner && profileId && owner !== profileId) {
     throw new Error('The selected resume asset belongs to another profile.');
   }
@@ -316,11 +347,10 @@ async function validateResumeAssetSelection(options: {
  * copied to the reusable library; all other onboarding facts remain private
  * profile context and are never silently promoted into later applications.
  */
-export async function saveCandidateOnboarding(
+async function persistCandidateOnboarding(
   input: CandidateOnboardingInput,
-  suppliedCollections?: CandidateOnboardingCollections,
+  collections: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
-  const collections = suppliedCollections ?? (await defaultCollections());
   const key = profileKey(input.profileKey);
   const facts = candidateFactState(input);
   const now = new Date();
@@ -358,24 +388,26 @@ export async function saveCandidateOnboarding(
   };
 
   const profile = await findDefaultProfile(collections.candidateProfiles);
-  await validateResumeAssetSelection({
-    assetId: selectedResumeAssetId,
-    collection: collections.resumeAssets,
-    profileId: profile?.id,
-  });
+  if (!collections.claimResumeAsset) {
+    await validateResumeAssetSelection({
+      assetId: selectedResumeAssetId,
+      collection: collections.resumeAssets,
+      profileId: profile?.id,
+    });
+  }
   const savedProfile = profile
     ? Object.assign(profile, profileValues)
     : await collections.candidateProfiles.create({
         active: true,
         ...profileValues,
       });
-  await savedProfile.save();
-
   const selectedAsset = await selectResumeAsset({
     assetId: selectedResumeAssetId,
+    claimResumeAsset: collections.claimResumeAsset,
     collection: collections.resumeAssets,
     profile: savedProfile,
   });
+  await savedProfile.save();
 
   const answers = (input.reusableAnswers ?? []).slice(0, MAX_REUSABLE_ANSWERS);
   let savedForReuse = 0;
@@ -398,4 +430,49 @@ export async function saveCandidateOnboarding(
     savedForReuse,
     selectedResumeAssetId: selectedAsset,
   };
+}
+
+/**
+ * Persist onboarding inside one database transaction. Resume ownership is a
+ * private relationship, so a failed competing claim must roll back the
+ * profile reference as well as the asset mutation.
+ */
+export async function saveCandidateOnboarding(
+  input: CandidateOnboardingInput,
+  suppliedCollections?: CandidateOnboardingCollections,
+): Promise<CandidateOnboardingResult> {
+  if (suppliedCollections) {
+    return await persistCandidateOnboarding(input, suppliedCollections);
+  }
+
+  const options = getRequestScopedSmrtOptions();
+  const database = (await resolveDatabase(
+    options.db ?? getDbConfig(),
+  )) as TransactionalOnboardingDatabase;
+  if (typeof database.transaction !== 'function') {
+    throw new Error('Transactional onboarding storage is required.');
+  }
+
+  return await database.transaction(async (transaction) => {
+    const collections = await defaultCollections(
+      { db: transaction },
+      async (assetId, profileId) => {
+        const result = await transaction.query(
+          `UPDATE resume_assets
+             SET candidate_profile_id = ?
+           WHERE id = ?
+             AND asset_type = 'resume'
+             AND (candidate_profile_id IS NULL
+               OR candidate_profile_id = ''
+               OR candidate_profile_id = ?)
+         RETURNING id`,
+          profileId,
+          assetId,
+          profileId,
+        );
+        return Array.isArray(result.rows) && result.rows.length === 1;
+      },
+    );
+    return await persistCandidateOnboarding(input, collections);
+  });
 }
