@@ -60,16 +60,27 @@ describe('synthetic demo fixture', () => {
     ) as unknown as NonNullable<Parameters<typeof seedSyntheticDemoFixture>[0]>;
   }
 
-  it('fails closed without explicit local-demo opt-in and always in production', () => {
+  it('fails closed without explicit local-demo opt-in and outside local runtime', () => {
     expect(() =>
       assertSyntheticDemoFixtureEnabled({ NODE_ENV: 'development' }),
     ).toThrow(/IOLAUS_ENABLE_DEMO_FIXTURES/);
     expect(() =>
-      assertSyntheticDemoFixtureEnabled({
-        IOLAUS_ENABLE_DEMO_FIXTURES: '1',
-        NODE_ENV: 'production',
-      }),
-    ).toThrow(/production/);
+      assertSyntheticDemoFixtureEnabled(
+        {
+          IOLAUS_ENABLE_DEMO_FIXTURES: '1',
+          NODE_ENV: 'production',
+        },
+        'deployed',
+      ),
+    ).toThrow(/outside the local runtime profile/);
+    // NODE_ENV does not decide where records are written. A deployed runtime
+    // must stay blocked even when a process is configured as development.
+    expect(() =>
+      assertSyntheticDemoFixtureEnabled(
+        { IOLAUS_ENABLE_DEMO_FIXTURES: '1', NODE_ENV: 'development' },
+        'deployed',
+      ),
+    ).toThrow(/outside the local runtime profile/);
   });
 
   it('creates a complete fictional workflow exactly once', async () => {

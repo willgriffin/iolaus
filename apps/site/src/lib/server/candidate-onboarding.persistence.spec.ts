@@ -72,6 +72,7 @@ describe('Candidate onboarding persistence', () => {
     const associate = async (
       handle: DatabaseInterface,
       profile: CandidateProfile,
+      beforeMutation?: () => Promise<void>,
     ) => {
       const transaction = handle.transaction;
       if (!transaction) {
@@ -79,6 +80,21 @@ describe('Candidate onboarding persistence', () => {
       }
       return await transaction.call(handle, async (transaction) => {
         const profileId = requiredId(profile);
+        // Both transactions are opened before either writes. Holding this
+        // contender before its first statement lets the other independent
+        // handle commit, then exercises the losing mutation + conditional
+        // claim in the first transaction without SQLite writer-lock retries.
+        await beforeMutation?.();
+        const transactionProfiles = await getCollection<CandidateProfile>(
+          'CandidateProfile',
+          { db: transaction },
+        );
+        const persisted = await transactionProfiles.get(profileId);
+        if (!persisted) throw new Error('Fixture profile is unavailable.');
+        // A losing attempt has already mutated this profile when its conditional
+        // claim returns false, so its transaction must roll it back.
+        persisted.summary = `attempt-${profileId}`;
+        await persisted.save();
         const claimed = await claimResumeAssetAtomically(
           transaction,
           assetId,
@@ -89,69 +105,63 @@ describe('Candidate onboarding persistence', () => {
             'Resume asset was already claimed by another profile.',
           );
         }
-        const transactionProfiles = await getCollection<CandidateProfile>(
-          'CandidateProfile',
-          { db: transaction },
-        );
-        const persisted = await transactionProfiles.get(profileId);
-        if (!persisted) throw new Error('Fixture profile is unavailable.');
         persisted.resumeAssetId = assetId;
         await persisted.save();
         return profileId;
       });
     };
 
-    const firstAttempt = associate(database, firstProfile);
-    // SQLite admits only one writer. Start the second independently submitted
-    // contender immediately after the first commit so it observes the durable
-    // conditional claim rather than an adapter-specific lock error.
-    const secondAttempt = firstAttempt.then(
-      async () => await associate(contenderDatabase, secondProfile),
-    );
-    const outcomes = await Promise.allSettled([firstAttempt, secondAttempt]);
-    const winner = outcomes.find(
-      (outcome): outcome is PromiseFulfilledResult<string> =>
-        outcome.status === 'fulfilled',
-    );
-
-    expect(
-      outcomes.filter((outcome) => outcome.status === 'fulfilled'),
-    ).toHaveLength(1);
-    expect(
-      outcomes.filter((outcome) => outcome.status === 'rejected'),
-    ).toHaveLength(1);
-    const rejected = outcomes.find(
-      (outcome): outcome is PromiseRejectedResult =>
-        outcome.status === 'rejected',
-    );
-    expect(rejected?.reason).toMatchObject({
-      message: 'Resume asset was already claimed by another profile.',
+    let releaseFirstContender: (() => void) | undefined;
+    const firstContenderReleased = new Promise<void>((resolve) => {
+      releaseFirstContender = resolve;
     });
-    expect(winner).toBeDefined();
-    if (!winner) throw new Error('Expected a successful resume claim.');
+    let markFirstContenderReady: (() => void) | undefined;
+    const firstContenderReady = new Promise<void>((resolve) => {
+      markFirstContenderReady = resolve;
+    });
+    const firstAttempt = associate(database, firstProfile, async () => {
+      markFirstContenderReady?.();
+      await firstContenderReleased;
+    });
+    await firstContenderReady;
+    // The first transaction is live on one adapter when the second adapter
+    // claims and commits. Releasing the first one afterwards verifies that its
+    // pre-claim profile mutation rolls back when the predicate rejects it.
+    await expect(associate(contenderDatabase, secondProfile)).resolves.toBe(
+      requiredId(secondProfile),
+    );
+    releaseFirstContender?.();
+    await expect(firstAttempt).rejects.toThrow(
+      'Resume asset was already claimed by another profile.',
+    );
 
     const persistedProfiles = await profiles.list({ limit: 10 });
-    const winnerProfile = persistedProfiles.find(
-      (profile) => profile.id === winner?.value,
+    const losingProfile = persistedProfiles.find(
+      (profile) => profile.id === firstProfile.id,
     );
-    const loserProfile = persistedProfiles.find(
-      (profile) => profile.id !== winner?.value,
+    const winningProfile = persistedProfiles.find(
+      (profile) => profile.id === secondProfile.id,
     );
-    expect(winnerProfile?.resumeAssetId).toBe(assetId);
-    expect(loserProfile?.resumeAssetId).toBe('');
-    expect((await assets.get(assetId))?.candidateProfileId).toBe(winner.value);
+    expect(losingProfile?.resumeAssetId).toBe('');
+    expect(losingProfile?.summary).toBe('');
+    expect(winningProfile?.resumeAssetId).toBe(assetId);
+    expect((await assets.get(assetId))?.candidateProfileId).toBe(
+      secondProfile.id,
+    );
 
-    const winnerDatabase =
-      winner.value === requiredId(firstProfile) ? database : contenderDatabase;
-    const winnerTransaction = winnerDatabase.transaction;
+    const winnerTransaction = database.transaction;
     if (!winnerTransaction) {
       throw new Error('Test database must support transactions.');
     }
     await expect(
       winnerTransaction.call(
-        winnerDatabase,
+        database,
         async (transaction) =>
-          await claimResumeAssetAtomically(transaction, assetId, winner.value),
+          await claimResumeAssetAtomically(
+            transaction,
+            assetId,
+            requiredId(secondProfile),
+          ),
       ),
     ).resolves.toBe(true);
   });

@@ -1,3 +1,4 @@
+import { applicationRuntime } from './application-runtime.js';
 import { getCollection } from './smrt.js';
 
 const FIXTURE_PREFIX = 'iolaus-demo-fictional';
@@ -41,9 +42,15 @@ function stringValue(value: unknown): string {
  */
 export function assertSyntheticDemoFixtureEnabled(
   environment: NodeJS.ProcessEnv = process.env,
+  runtimeProfile: typeof applicationRuntime.profile = applicationRuntime.profile,
 ): void {
-  if (environment.NODE_ENV === 'production') {
-    throw new Error('Synthetic demo fixtures are disabled in production.');
+  // NODE_ENV describes the process mode, not the persistence target. The
+  // resolved runtime profile is authoritative: every non-local profile uses a
+  // deployed database and must never receive synthetic records.
+  if (runtimeProfile !== 'local') {
+    throw new Error(
+      'Synthetic demo fixtures are disabled outside the local runtime profile.',
+    );
   }
   if (environment.IOLAUS_ENABLE_DEMO_FIXTURES !== '1') {
     throw new Error(
@@ -109,8 +116,9 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
 export async function seedSyntheticDemoFixture(
   suppliedCollections?: SyntheticDemoFixtureCollections,
   environment: NodeJS.ProcessEnv = process.env,
+  runtimeProfile: typeof applicationRuntime.profile = applicationRuntime.profile,
 ): Promise<SyntheticDemoFixtureResult> {
-  assertSyntheticDemoFixtureEnabled(environment);
+  assertSyntheticDemoFixtureEnabled(environment, runtimeProfile);
   const collections = suppliedCollections ?? (await defaultCollections());
   const profile = await findOrCreate(
     collections.candidateProfiles,
