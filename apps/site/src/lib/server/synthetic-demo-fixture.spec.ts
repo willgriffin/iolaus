@@ -70,7 +70,7 @@ describe('synthetic demo fixture', () => {
           IOLAUS_ENABLE_DEMO_FIXTURES: '1',
           NODE_ENV: 'production',
         },
-        'deployed',
+        'cloud',
       ),
     ).toThrow(/outside the local runtime profile/);
     // NODE_ENV does not decide where records are written. A deployed runtime
@@ -78,7 +78,7 @@ describe('synthetic demo fixture', () => {
     expect(() =>
       assertSyntheticDemoFixtureEnabled(
         { IOLAUS_ENABLE_DEMO_FIXTURES: '1', NODE_ENV: 'development' },
-        'deployed',
+        'cloud',
       ),
     ).toThrow(/outside the local runtime profile/);
   });
