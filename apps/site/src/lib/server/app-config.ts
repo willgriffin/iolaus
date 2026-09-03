@@ -217,12 +217,25 @@ export function getConfiguredPublicOrigin(
   return configuredPublicUrl(environment)?.origin ?? null;
 }
 
-/** A control-character-safe product label for fixed outbound client purposes. */
+function outboundHeaderLabel(value: string, fallback: string): string {
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7e]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return normalized || fallback;
+}
+
+/** An ASCII-only product label safe for fixed outbound HTTP client purposes. */
 export function getConfiguredUserAgent(
   purpose: string,
   environment: AppConfigEnvironment = process.env,
 ): string {
-  return `${getAppConfig(environment).appName} ${purpose}`;
+  const config = getAppConfig(environment);
+  return `${outboundHeaderLabel(config.appName, config.appId)} ${outboundHeaderLabel(
+    purpose,
+    'client',
+  )}`;
 }
 
 /** A stable MCP server name derived from the configured application identity. */

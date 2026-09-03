@@ -102,4 +102,14 @@ describe('Iolaus application configuration', () => {
       'career-hub-employment-search',
     );
   });
+
+  it('uses an ASCII-only header label while preserving a Unicode display name', () => {
+    const userAgent = getConfiguredUserAgent('source crawler', {
+      IOLAUS_APP_NAME: 'Career 🚀',
+      SMRT_APP_ID: 'career-hub',
+    });
+
+    expect(userAgent).toBe('Career source crawler');
+    expect(() => new Headers({ 'user-agent': userAgent })).not.toThrow();
+  });
 });
