@@ -1,0 +1,90 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Prevent first-party packages from retaining an older unguarded AI SDK copy.
+# Remove only after all dependents require a protected release directly.
+overrides:
+  '@happyvertical/ai': 0.79.0
+
+# pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
+# package.json (overrides, onlyBuiltDependencies) are no longer honored.
+#
+onlyBuiltDependencies:
+  - '@duckdb/node-api'
+  - esbuild
+  - lefthook
+  - sqlite-vss
+
+# pnpm 11 gates dependency build scripts via this allowBuilds map and fails
+# (ERR_PNPM_IGNORED_BUILDS) on no-op installs unless every build-script package
+# has an explicit decision. true = run install scripts (kept from the pnpm 10
+# onlyBuiltDependencies list); false = intentionally skip (were ignored before).
+allowBuilds:
+  esbuild: true
+  lefthook: true
+  msgpackr-extract: false
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false
+  # OCR engine pulled in transitively by @happyvertical/pdf; we only use its
+  # renderHtmlToPdf/extraction APIs, never OCR, so skip the build script.
+  tesseract.js: false
+
+# Allow freshly-published first-party @happyvertical packages through any
+# minimum-release-age policy (these are deliberately consumed at their newest
+# published version).
+minimumReleaseAgeExclude:
+  - '@happyvertical/ai'
+  - '@happyvertical/auth'
+  - '@happyvertical/cache'
+  - '@happyvertical/files'
+  - '@happyvertical/geo'
+  - '@happyvertical/jobs'
+  - '@happyvertical/json'
+  - '@happyvertical/logger'
+  - '@happyvertical/pdf'
+  - '@happyvertical/secrets'
+  - '@happyvertical/smrt-agents'
+  - '@happyvertical/smrt-app-cli'
+  - '@happyvertical/smrt-assets'
+  - '@happyvertical/smrt-cli'
+  - '@happyvertical/smrt-config'
+  - '@happyvertical/smrt-core'
+  - '@happyvertical/smrt-dev-mcp'
+  - '@happyvertical/smrt-facts'
+  - '@happyvertical/smrt-features'
+  - '@happyvertical/smrt-jobs'
+  - '@happyvertical/smrt-languages'
+  - '@happyvertical/smrt-mobile-contract'
+  - '@happyvertical/smrt-places'
+  - '@happyvertical/smrt-playground'
+  - '@happyvertical/smrt-profiles'
+  - '@happyvertical/smrt-prompts'
+  - '@happyvertical/smrt-scanner'
+  - '@happyvertical/smrt-secrets'
+  - '@happyvertical/smrt-svelte'
+  - '@happyvertical/smrt-tags'
+  - '@happyvertical/smrt-tenancy'
+  - '@happyvertical/smrt-types'
+  - '@happyvertical/smrt-ui'
+  - '@happyvertical/smrt-users'
+  - '@happyvertical/smrt-web'
+  - '@happyvertical/sql'
+  - '@happyvertical/spider'
+  - '@happyvertical/utils'
+  - '@happyvertical/smrt-reports@0.44.1'
+  - '@happyvertical/smrt-playbooks@0.44.1'
+
+catalog:
+  '@sveltejs/adapter-node': ^5.5.4
+  '@sveltejs/adapter-static': ^3.0.10
+  '@sveltejs/kit': 2.69.3
+  '@sveltejs/vite-plugin-svelte': 7.2.0
+  '@types/node': ^24.10.1
+  svelte: ^5.56.4
+  svelte-check: ^4.3.5
+  tsx: ^4.21.0
+  typescript: 5.9.3
+  vite: 8.1.4
+  vitest: 4.1.10

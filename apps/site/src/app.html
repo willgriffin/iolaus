@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Apply saved color scheme before paint to avoid flash.
+      // Mirrors @happyvertical/smrt-ui ThemeProvider (preset "studio",
+      // storageKey "smrt-theme", persisted as JSON { preset, colorScheme }).
+      try {
+        var scheme = 'system';
+        var raw = localStorage.getItem('smrt-theme');
+        if (raw) {
+          try {
+            scheme = JSON.parse(raw).colorScheme || 'system';
+          } catch (_) {
+            scheme = raw;
+          }
+        }
+        if (scheme === 'system') {
+          scheme = window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light';
+        }
+        var el = document.documentElement;
+        el.setAttribute('data-theme', 'studio');
+        el.setAttribute('data-color-scheme', scheme);
+      } catch (_) {}
+    </script>
+    %sveltekit.head%
+  </head>
+  <body>
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

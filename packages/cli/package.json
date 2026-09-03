@@ -1,0 +1,36 @@
+{
+  "name": "@willgriffin/iolaus-cli",
+  "version": "0.0.0",
+  "description": "Authenticated CLI and MCP bridge for iolaus.localhost.",
+  "type": "module",
+  "bin": {
+    "iolaus": "dist/data-cli.js",
+    "iolaus-mcp": "dist/mcp-server.js"
+  },
+  "files": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "data": "tsx src/data-cli.ts",
+    "mcp": "tsx src/mcp-server.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@happyvertical/smrt-app-cli": "0.42.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.18.0"
+  },
+  "license": "MIT"
+}
