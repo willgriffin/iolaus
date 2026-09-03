@@ -133,17 +133,18 @@ export function getLocalApplicationRuntime(): Promise<LocalApplicationRuntime> {
       'Local production startup requires an explicit loopback HOST; use pnpm app:start.',
     );
   }
+  const localPaths = resolveIolausLocalRuntimePaths();
   localWriterLease ??= acquireWriterLease(
     prepareApplicationStateRoot({
       appId,
-      dataDirectory: process.env.SMRT_DATA_DIR,
+      dataDirectory: localPaths.root,
       sourceRoot,
     }),
     { operationInstance: process.env.SMRT_OPERATION_INSTANCE },
   );
   localRuntimePromise ??= initializeLocalApplicationRuntime({
     appId,
-    dataDirectory: process.env.SMRT_DATA_DIR,
+    dataDirectory: localPaths.root,
     sourceRoot,
     bindHost,
     providers: {

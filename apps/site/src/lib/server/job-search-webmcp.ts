@@ -29,6 +29,10 @@ import {
 } from './public-https.js';
 import { getCollection } from './smrt.js';
 import { mergeOpportunityCrawlReferences } from './source-crawl-opportunity-integrity.js';
+import {
+  KeyedLockTimeoutError,
+  withSqliteOperationLock,
+} from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -46,7 +50,6 @@ type Actor = Pick<User, 'id'>;
 type ResolvedDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 
 const opportunityImportDatabase = new AsyncLocalStorage<ResolvedDatabase>();
-const localOpportunityImportLocks = new Map<string, Promise<void>>();
 const opportunityImportDatabaseProxy = new Proxy({} as ResolvedDatabase, {
   get(_target, property) {
     const database = opportunityImportDatabase.getStore();
@@ -263,22 +266,11 @@ async function withOpportunityImportLock<T>(
     );
   if (getDbConfig().type !== 'sqlite') return await run();
 
-  const previous =
-    localOpportunityImportLocks.get(lockKey) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  localOpportunityImportLocks.set(lockKey, queued);
-  await previous.catch(() => undefined);
   try {
-    return await run();
-  } finally {
-    release();
-    if (localOpportunityImportLocks.get(lockKey) === queued) {
-      localOpportunityImportLocks.delete(lockKey);
-    }
+    return await withSqliteOperationLock(lockKey, run);
+  } catch (cause) {
+    if (cause instanceof KeyedLockTimeoutError) error(409, cause.message);
+    throw cause;
   }
 }
 

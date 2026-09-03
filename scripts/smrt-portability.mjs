@@ -21,6 +21,7 @@ import {
   rollbackFilesystemAssets,
   stageFilesystemAssets,
   verifyFilesystemAssets,
+  verifyInstalledFilesystemAssets,
   verifyPublishedFilesystemAssets,
 } from './smrt-portability-assets.mjs';
 import { assertExternalArtifactPath } from './smrt-runtime-identity.mjs';
@@ -344,6 +345,35 @@ async function inspectImportTarget(db, plan, exportedByName) {
   return 'dirty';
 }
 
+function comparableRow(row, columns) {
+  return JSON.stringify(
+    columns.map((column) => row[column]),
+    (_key, value) => (typeof value === 'bigint' ? value.toString() : value),
+  );
+}
+
+async function verifyImportTargetMatches(db, plan, exportedByName) {
+  for (const table of plan) {
+    const exported = exportedByName.get(table.name);
+    const actualRows = (
+      await db.query(
+        `SELECT ${table.columns.map(quoteIdentifier).join(', ')} FROM ${quoteIdentifier(table.name)}`,
+      )
+    ).rows
+      .map((row) => comparableRow(row, table.columns))
+      .sort();
+    const expectedRows = exported.rows
+      .map((row) => comparableRow(row, table.columns))
+      .sort();
+    if (
+      actualRows.length !== expectedRows.length ||
+      actualRows.some((row, index) => row !== expectedRows[index])
+    ) {
+      throw new Error('Import target does not match this bundle.');
+    }
+  }
+}
+
 export async function importApplication(context) {
   if (!context.path) {
     throw new Error(
@@ -412,6 +442,8 @@ export async function importApplication(context) {
         targetState,
       });
       if (recovery === 'complete') {
+        await verifyImportTargetMatches(db, plan, exportedByName);
+        verifyInstalledFilesystemAssets(verifiedAssets);
         rowCount = bundle.tables.reduce(
           (count, table) => count + table.rows.length,
           0,
@@ -421,6 +453,15 @@ export async function importApplication(context) {
       if (recovery === 'retry') {
         targetState = await inspectImportTarget(db, plan, exportedByName);
       }
+    }
+    if (targetState === 'complete') {
+      await verifyImportTargetMatches(db, plan, exportedByName);
+      verifyInstalledFilesystemAssets(verifiedAssets);
+      rowCount = bundle.tables.reduce(
+        (count, table) => count + table.rows.length,
+        0,
+      );
+      return;
     }
     if (targetState !== 'empty') {
       throw new Error('Import target is not empty.');
@@ -448,6 +489,8 @@ export async function importApplication(context) {
         exportedByName,
       );
       if (stateAfterFailure === 'complete') {
+        await verifyImportTargetMatches(db, plan, exportedByName);
+        verifyPublishedFilesystemAssets(staged);
         finishFilesystemAssets(staged);
         rowCount = bundle.tables.reduce(
           (count, table) => count + table.rows.length,

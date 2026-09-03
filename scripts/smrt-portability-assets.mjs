@@ -548,6 +548,18 @@ export function verifyPublishedFilesystemAssets(staged) {
   if (staged) verifyPublishedTree(staged.journal);
 }
 
+/** Verify that an already-installed asset tree exactly matches this bundle. */
+export function verifyInstalledFilesystemAssets(verified) {
+  if (verified.entries.length === 0) return;
+  verifyPublishedTree({
+    assetRoot: verified.root,
+    entries: verified.entries.map(({ relativePath, contentDigest }) => ({
+      relativePath,
+      contentDigest,
+    })),
+  });
+}
+
 function removePublishedTree(journal) {
   const quarantine = `${journal.stageRoot}.rollback-${randomBytes(6).toString('hex')}`;
   renameSync(journal.assetRoot, quarantine);
@@ -596,7 +608,11 @@ export function recoverFilesystemAssets({
   const path = journalPath(stateRoot, appId);
   if (!existsSync(path)) return 'none';
   const details = lstatSync(path);
-  if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) {
+  if (
+    details.isSymbolicLink() ||
+    !details.isFile() ||
+    (process.platform !== 'win32' && (details.mode & 0o077) !== 0)
+  ) {
     throw fail('unsafe-asset-recovery-journal');
   }
   let journal;

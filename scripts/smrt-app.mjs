@@ -321,13 +321,17 @@ async function initializeLocal(runtime, env, options = {}) {
 
 async function setup(operationLock) {
   const runtime = await resolveRuntime();
-  const operatorLease =
-    runtime.profile === 'local'
-      ? acquireWriterLease(preparedStateRoot(), {
-          operationInstance: operationLock?.instance,
-        })
-      : null;
+  const wasRunning = runtime.profile === 'local' && Boolean(readProcess());
+  if (wasRunning) await stop();
+  let operatorLease = null;
+  let result;
   try {
+    operatorLease =
+      runtime.profile === 'local'
+        ? acquireWriterLease(preparedStateRoot(), {
+            operationInstance: operationLock?.instance,
+          })
+        : null;
     const { env } = runtimeEnvironment(runtime);
 
     runPackageManager(['build'], { env, label: 'pnpm build' });
@@ -368,11 +372,14 @@ async function setup(operationLock) {
       onboardingRecovery: onboardingAvailable ? 'pnpm app:open' : null,
       secretValuesIncluded: false,
     };
-    console.log(JSON.stringify(report, null, 2));
-    return { ...report, onboardingUrl: retainedOnboardingUrl };
+    result = { ...report, onboardingUrl: retainedOnboardingUrl };
   } finally {
     operatorLease?.release();
+    if (wasRunning) await start(operationLock);
   }
+  const { onboardingUrl: _secretOnboardingUrl, ...publicReport } = result;
+  console.log(JSON.stringify(publicReport, null, 2));
+  return result;
 }
 
 async function recoverOnboarding(operationLock) {
@@ -519,7 +526,7 @@ async function stop() {
 function openBrowser(url) {
   if (process.env.SMRT_OPEN_STUB) {
     writeFileSync(resolve(process.env.SMRT_OPEN_STUB), `${url}\n`);
-    return;
+    return true;
   }
   const [binary, args] =
     platform() === 'darwin'
@@ -527,7 +534,8 @@ function openBrowser(url) {
       : platform() === 'win32'
         ? ['cmd', ['/c', 'start', '', url]]
         : ['xdg-open', [url]];
-  run(binary, args);
+  const result = run(binary, args, { allowFailure: true, capture: true });
+  return !result.error && result.status === 0;
 }
 
 async function open() {
@@ -543,8 +551,20 @@ async function open() {
   const destination = onboardingUrl
     ? pathToFileURL(onboardingLaunchPath()).toString()
     : url;
-  openBrowser(destination);
-  console.log(JSON.stringify({ schemaVersion: 1, status: 'opened', url }));
+  const opened = openBrowser(destination);
+  console.log(
+    JSON.stringify({
+      schemaVersion: 1,
+      status: opened ? 'opened' : 'ready',
+      opened,
+      url,
+      recovery: opened
+        ? null
+        : onboardingUrl
+          ? `Open ${destination} in a browser.`
+          : `Open ${url} in a browser.`,
+    }),
+  );
 }
 
 async function doctor() {
@@ -849,11 +869,21 @@ try {
         if (report.onboardingUrl) {
           saveOnboardingLaunch(report.onboardingUrl);
         }
-        openBrowser(
+        const destination =
           report.onboardingUrl
             ? pathToFileURL(onboardingLaunchPath()).toString()
-            : baseUrl,
-        );
+            : baseUrl;
+        const opened = openBrowser(destination);
+        if (!opened) {
+          console.log(
+            JSON.stringify({
+              schemaVersion: 1,
+              status: 'ready',
+              opened: false,
+              recovery: `Open ${destination} in a browser.`,
+            }),
+          );
+        }
       });
       break;
     }

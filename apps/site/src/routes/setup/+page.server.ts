@@ -9,6 +9,7 @@ import { sessionCookieName } from '$lib/server/auth';
 import {
   getIolausSourceRoot,
   IOLAUS_APPLICATION_ID,
+  resolveIolausLocalRuntimePaths,
 } from '$lib/server/runtime-paths';
 import {
   resolveApplicationId,
@@ -71,11 +72,12 @@ export const actions: Actions = {
         sourceRoot: getIolausSourceRoot(),
         explicitId: process.env.SMRT_APP_ID || IOLAUS_APPLICATION_ID,
       });
+      const dataDirectory = resolveIolausLocalRuntimePaths().root;
       rmSync(
         join(
           resolveApplicationStateRoot({
             appId,
-            dataDirectory: process.env.SMRT_DATA_DIR,
+            dataDirectory,
             sourceRoot: getIolausSourceRoot(),
           }),
           'onboarding.json',
@@ -86,7 +88,7 @@ export const actions: Actions = {
         join(
           resolveApplicationStateRoot({
             appId,
-            dataDirectory: process.env.SMRT_DATA_DIR,
+            dataDirectory,
             sourceRoot: getIolausSourceRoot(),
           }),
           'onboarding-launch.html',

@@ -37,6 +37,10 @@ import {
 import { bumpTaskChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import { getCollection } from './smrt.js';
+import {
+  KeyedLockTimeoutError,
+  withSqliteOperationLock,
+} from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -54,7 +58,6 @@ type OpportunityLifecycleSession = Awaited<
 
 const lifecycleDatabase = new AsyncLocalStorage<ResolvedDatabase>();
 const lifecycleLock = new AsyncLocalStorage<OpportunityLifecycleSession>();
-const localLifecycleLocks = new Map<string, Promise<void>>();
 const lifecycleDatabaseProxy = new Proxy({} as ResolvedDatabase, {
   get(_target, property) {
     const database = lifecycleDatabase.getStore();
@@ -1286,25 +1289,20 @@ async function withOpportunityLifecycleLock<T>(
   const database =
     getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
   if (getDbConfig().type === 'sqlite') {
-    const previous =
-      localLifecycleLocks.get(opportunityId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queued = previous.catch(() => undefined).then(() => current);
-    localLifecycleLocks.set(opportunityId, queued);
-    await previous.catch(() => undefined);
+    let active = true;
     const localSession = {
-      isActive: () => true,
+      isActive: () => active,
     } as OpportunityLifecycleSession;
     try {
-      return await lifecycleLock.run(localSession, action);
+      return await withSqliteOperationLock(
+        `opportunity-lifecycle:${opportunityId}`,
+        async () => await lifecycleLock.run(localSession, action),
+      );
+    } catch (cause) {
+      if (cause instanceof KeyedLockTimeoutError) error(409, cause.message);
+      throw cause;
     } finally {
-      release();
-      if (localLifecycleLocks.get(opportunityId) === queued) {
-        localLifecycleLocks.delete(opportunityId);
-      }
+      active = false;
     }
   }
   if (!database.acquireSession) {

@@ -54,10 +54,7 @@ export default {
     cli: {
       database: {
         type: profile === 'local' ? 'sqlite' : 'postgres',
-        url:
-          profile === 'local'
-            ? process.env.DATABASE_URL || localDatabase
-            : process.env.DATABASE_URL,
+        url: profile === 'local' ? localDatabase : process.env.DATABASE_URL,
       },
       verbose: false,
     },

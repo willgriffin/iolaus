@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join, parse, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import {
@@ -180,6 +181,8 @@ function errorCode(error) {
  * @param {{appId: string, dataDirectory?: string, sourceRoot?: string, platformName?: string, homeDirectory?: string, environment?: Record<string, string | undefined>}} options
  */
 export function prepareApplicationStateRoot(options) {
+  const platformName = options.platformName || platform();
+  const enforcePosixCustody = platformName !== 'win32';
   const sourceRoot = realpathSync(resolve(options.sourceRoot || process.cwd()));
   const stateRoot = resolveApplicationStateRoot(options);
   if (isInside(sourceRoot, stateRoot) || isInside(stateRoot, sourceRoot)) {
@@ -196,6 +199,7 @@ export function prepareApplicationStateRoot(options) {
       }
       const sharedStickyRoot = details.uid === 0 && (details.mode & 0o1000) !== 0;
       if (
+        enforcePosixCustody &&
         currentUid !== undefined &&
         ((details.uid !== currentUid && details.uid !== 0) ||
           ((details.mode & 0o022) !== 0 && !sharedStickyRoot))
@@ -213,8 +217,10 @@ export function prepareApplicationStateRoot(options) {
       if (
         created.isSymbolicLink() ||
         !created.isDirectory() ||
-        (currentUid !== undefined && created.uid !== currentUid) ||
-        (created.mode & 0o777) !== 0o700
+        (enforcePosixCustody &&
+          currentUid !== undefined &&
+          created.uid !== currentUid) ||
+        (enforcePosixCustody && (created.mode & 0o777) !== 0o700)
       ) {
         throw new Error(`Application state path component is unsafe: ${component}`);
       }
@@ -224,8 +230,10 @@ export function prepareApplicationStateRoot(options) {
   if (
     rootDetails.isSymbolicLink() ||
     !rootDetails.isDirectory() ||
-    (currentUid !== undefined && rootDetails.uid !== currentUid) ||
-    (rootDetails.mode & 0o777) !== 0o700
+    (enforcePosixCustody &&
+      currentUid !== undefined &&
+      rootDetails.uid !== currentUid) ||
+    (enforcePosixCustody && (rootDetails.mode & 0o777) !== 0o700)
   ) {
     throw new Error('Application state root must be current-user-owned mode 0700.');
   }
@@ -244,8 +252,10 @@ export function prepareApplicationStateRoot(options) {
       marker.isSymbolicLink() ||
       !marker.isFile() ||
       marker.size !== 0 ||
-      (currentUid !== undefined && marker.uid !== currentUid) ||
-      (marker.mode & 0o777) !== 0o600
+      (enforcePosixCustody &&
+        currentUid !== undefined &&
+        marker.uid !== currentUid) ||
+      (enforcePosixCustody && (marker.mode & 0o777) !== 0o600)
     ) {
       throw new Error('Application state marker is unsafe.');
     }
@@ -254,4 +264,3 @@ export function prepareApplicationStateRoot(options) {
   }
   return stateRoot;
 }
-import { createHash } from 'node:crypto';
