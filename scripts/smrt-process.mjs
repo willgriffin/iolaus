@@ -52,13 +52,17 @@ export function readOwnedProcess(path) {
       !Number.isSafeInteger(record.pid) ||
       record.pid < 1 ||
       typeof record.instance !== 'string' ||
-      !/^[a-f0-9]{32}$/.test(record.instance)
+      !/^[a-f0-9]{32}$/.test(record.instance) ||
+      typeof record.stopNonce !== 'string' ||
+      !/^[a-f0-9]{32}$/.test(record.stopNonce)
     ) {
       throw new Error('Invalid process record.');
     }
-  } catch {
-    rmSync(path, { force: true });
-    return null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new Error(
+      'The application process record cannot be verified; inspect the private state directory.',
+    );
   }
   try {
     process.kill(record.pid, 0);

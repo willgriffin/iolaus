@@ -28,7 +28,6 @@ import {
 } from '@happyvertical/smrt-config';
 import {
   readOwnedProcess,
-  sendTerminationSignal,
   writeProcessRecord,
 } from './smrt-process.mjs';
 import {
@@ -100,6 +99,10 @@ function nearestExistingAncestor(path) {
 
 function pidPath() {
   return join(preparedStateRoot(), 'app.pid');
+}
+
+function stopRequestPath() {
+  return join(preparedStateRoot(), 'stop-request.json');
 }
 
 function onboardingPath() {
@@ -177,10 +180,6 @@ function readOnboardingUrl() {
 
 function readProcess() {
   return readOwnedProcess(pidPath());
-}
-
-function readPid() {
-  return readProcess()?.pid || null;
 }
 
 function run(binary, args, options = {}) {
@@ -461,6 +460,7 @@ async function start(operationLock, options = {}) {
   }
   ensurePrivateDirectory(preparedStateRoot());
   const instance = randomBytes(16).toString('hex');
+  const stopNonce = randomBytes(16).toString('hex');
   const child = spawn(
     process.execPath,
     [join(sourceRoot, 'scripts', 'smrt-web.mjs'), `--smrt-instance=${instance}`],
@@ -473,13 +473,24 @@ async function start(operationLock, options = {}) {
         PORT: env.PORT || '5173',
         SMRT_PROCESS_INSTANCE: instance,
         SMRT_OPERATION_INSTANCE: operationLock?.instance,
+        SMRT_STOP_NONCE: stopNonce,
+        SMRT_STOP_REQUEST: stopRequestPath(),
       },
       detached: true,
       stdio: 'ignore',
     },
   );
   child.unref();
-  writeProcessRecord(pidPath(), { pid: child.pid, instance });
+  try {
+    writeProcessRecord(pidPath(), { pid: child.pid, instance, stopNonce });
+  } catch (error) {
+    try {
+      process.kill(child.pid, 'SIGTERM');
+    } catch {
+      // The child already exited; preserve the process-record error.
+    }
+    throw error;
+  }
   try {
     await waitForReady(url, child.pid, instance, configuration);
   } catch (error) {
@@ -500,18 +511,18 @@ async function start(operationLock, options = {}) {
 }
 
 async function stop() {
-  const pid = readPid();
-  if (!pid) {
+  const record = readProcess();
+  if (!record) {
     rmSync(pidPath(), { force: true });
+    rmSync(stopRequestPath(), { force: true });
     console.log(JSON.stringify({ schemaVersion: 1, status: 'stopped' }));
     return;
   }
-  if (!sendTerminationSignal(pid)) {
-    // The process exited after its identity was verified but before SIGTERM.
-    rmSync(pidPath(), { force: true });
-    console.log(JSON.stringify({ schemaVersion: 1, status: 'stopped', pid }));
-    return;
-  }
+  const { pid, instance, stopNonce } = record;
+  writePrivateAtomic(
+    stopRequestPath(),
+    `${JSON.stringify({ schemaVersion: 1, instance, stopNonce })}\n`,
+  );
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
     try {
@@ -524,6 +535,7 @@ async function stop() {
     }
   }
   rmSync(pidPath(), { force: true });
+  rmSync(stopRequestPath(), { force: true });
   console.log(JSON.stringify({ schemaVersion: 1, status: 'stopped', pid }));
 }
 
@@ -827,13 +839,15 @@ async function portability(operation, operationLock) {
     runtime,
     ...environment,
   };
+  const wasRunning = runtime.profile === 'local' && Boolean(readProcess());
+  if (wasRunning) await stop();
   let operatorLease = null;
+  if (runtime.profile === 'local') {
+    operatorLease = acquireWriterLease(preparedStateRoot(), {
+      operationInstance: operationLock?.instance,
+    });
+  }
   if (operation === 'import') {
-    if (runtime.profile === 'local') {
-      operatorLease = acquireWriterLease(preparedStateRoot(), {
-        operationInstance: operationLock?.instance,
-      });
-    }
     if (
       runtime.profile !== 'local' &&
       process.env.SMRT_MAINTENANCE_MODE !== 'true'
@@ -842,6 +856,16 @@ async function portability(operation, operationLock) {
         'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before importing.',
       );
     }
+  }
+  if (
+    operation === 'export' &&
+    runtime.profile !== 'local' &&
+    runtime.providers.assets.provider === 'local-files' &&
+    process.env.SMRT_MAINTENANCE_MODE !== 'true'
+  ) {
+    throw new Error(
+      'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before exporting filesystem assets.',
+    );
   }
   try {
     const result = await adapter[
@@ -859,6 +883,7 @@ async function portability(operation, operationLock) {
     );
   } finally {
     operatorLease?.release();
+    if (wasRunning) await start(operationLock);
   }
 }
 
