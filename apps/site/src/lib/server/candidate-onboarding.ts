@@ -287,6 +287,31 @@ async function selectResumeAsset(options: {
 }
 
 /**
+ * Reject an unavailable or foreign asset before writing any profile state.
+ * A newly created profile has no durable ID yet, so claiming an unowned asset
+ * remains part of `selectResumeAsset` after that profile is saved.
+ */
+async function validateResumeAssetSelection(options: {
+  assetId: string;
+  collection: Collection;
+  profileId?: string;
+}): Promise<void> {
+  const id = stringValue(options.assetId, 160);
+  if (!id) return;
+  const asset = await options.collection.get(id);
+  if (!asset || stringValue(asset.assetType) !== 'resume') {
+    throw new Error(
+      'Select an existing resume asset before saving onboarding.',
+    );
+  }
+  const owner = stringValue(asset.candidateProfileId, 160);
+  const profileId = stringValue(options.profileId, 160);
+  if (owner && owner !== profileId) {
+    throw new Error('The selected resume asset belongs to another profile.');
+  }
+}
+
+/**
  * Persist first-run candidate data. Only a checked `saveForReuse` answer is
  * copied to the reusable library; all other onboarding facts remain private
  * profile context and are never silently promoted into later applications.
@@ -333,6 +358,11 @@ export async function saveCandidateOnboarding(
   };
 
   const profile = await findDefaultProfile(collections.candidateProfiles);
+  await validateResumeAssetSelection({
+    assetId: selectedResumeAssetId,
+    collection: collections.resumeAssets,
+    profileId: profile?.id,
+  });
   const savedProfile = profile
     ? Object.assign(profile, profileValues)
     : await collections.candidateProfiles.create({

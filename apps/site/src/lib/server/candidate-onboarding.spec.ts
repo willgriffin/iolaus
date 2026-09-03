@@ -146,4 +146,29 @@ describe('saveCandidateOnboarding', () => {
     expect(profileRows[0].demographicsJson).toBe('{}');
     expect(answerRows).toHaveLength(0);
   });
+
+  it('does not persist profile changes for an unavailable resume selection', async () => {
+    await expect(
+      saveCandidateOnboarding(
+        { email: 'ada@example.invalid', resumeAssetId: 'missing-resume' },
+        collections(),
+      ),
+    ).rejects.toThrow('Select an existing resume asset');
+
+    expect(profileRows).toEqual([]);
+  });
+
+  it('does not persist profile changes for a resume owned by another profile', async () => {
+    assetRows[0].candidateProfileId = 'other-profile';
+
+    await expect(
+      saveCandidateOnboarding(
+        { email: 'ada@example.invalid', resumeAssetId: 'resume-1' },
+        collections(),
+      ),
+    ).rejects.toThrow('belongs to another profile');
+
+    expect(profileRows).toEqual([]);
+    expect(assetRows[0].candidateProfileId).toBe('other-profile');
+  });
 });
