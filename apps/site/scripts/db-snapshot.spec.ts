@@ -34,6 +34,7 @@ const originalBackupDir = process.env.IOLAUS_BACKUP_DIR;
 const originalResumeFilesConfigJson = process.env.RESUME_FILES_CONFIG_JSON;
 const originalRuntimeProfile = process.env.SMRT_RUNTIME_PROFILE;
 const originalAppId = process.env.SMRT_APP_ID;
+const originalDataDir = process.env.SMRT_DATA_DIR;
 
 afterEach(() => {
   restoreEnv('PRODUCTION_DATABASE_URL', originalProductionDatabaseUrl);
@@ -41,6 +42,7 @@ afterEach(() => {
   restoreEnv('RESUME_FILES_CONFIG_JSON', originalResumeFilesConfigJson);
   restoreEnv('SMRT_RUNTIME_PROFILE', originalRuntimeProfile);
   restoreEnv('SMRT_APP_ID', originalAppId);
+  restoreEnv('SMRT_DATA_DIR', originalDataDir);
 });
 
 describe('db snapshot helpers', () => {
@@ -174,26 +176,22 @@ describe('db snapshot helpers', () => {
   it('exports and imports local resume file storage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'resume-files-'));
     try {
-      process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
-      const sourceDir = join(root, 'source');
+      const sourceDataDir = join(root, 'source');
+      const sourceDir = join(sourceDataDir, 'assets');
       const backupDir = join(root, 'backup');
-      const restoredDir = join(root, 'restored');
+      const restoredDataDir = join(root, 'restored');
+      const restoredDir = join(restoredDataDir, 'assets');
       await mkdir(join(sourceDir, 'published'), { recursive: true });
       await writeFile(join(sourceDir, 'published', 'resume.pdf'), 'pdf');
 
-      process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
-        type: 'local',
-        basePath: sourceDir,
-      });
+      delete process.env.RESUME_FILES_CONFIG_JSON;
+      process.env.SMRT_DATA_DIR = sourceDataDir;
       await expect(exportResumeFiles(backupDir)).resolves.toMatchObject({
         count: 1,
         exported: true,
       });
 
-      process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
-        type: 'local',
-        basePath: restoredDir,
-      });
+      process.env.SMRT_DATA_DIR = restoredDataDir;
       await expect(importResumeFiles(backupDir)).resolves.toMatchObject({
         count: 1,
         exported: true,
