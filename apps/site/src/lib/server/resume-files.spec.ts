@@ -48,6 +48,19 @@ describe('getResumeFilesConfig', () => {
       'Local resume asset storage must remain outside the source tree.',
     );
   });
+
+  it('accepts an explicit local filesystem root outside the source tree', () => {
+    const externalRoot = resolve(repoRoot, '..', 'iolaus-test-profile-assets');
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 'local',
+      basePath: externalRoot,
+    });
+
+    expect(getResumeFilesConfig()).toEqual({
+      type: 'local',
+      basePath: externalRoot,
+    });
+  });
 });
 
 function restoreEnv(name: string, value: string | undefined): void {
