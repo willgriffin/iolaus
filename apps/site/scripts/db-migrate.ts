@@ -9,6 +9,8 @@ import {
   recordSmrtNativeBackfillApplied,
   withSmrtDatabaseMigrationLock,
 } from './db-common.js';
+import { backfillProfileEmailKeys } from '@happyvertical/smrt-profiles';
+import { backfillUserEmailKeys } from '@happyvertical/smrt-users';
 import { backfillSmrtNative, formatBackfillSummary } from './backfill-smrt-native.js';
 import {
   backfillResumeAdmin,
@@ -103,6 +105,7 @@ const {
   sourceCrawlAccountingSchema,
   sourceCrawlJobDedupe,
   sourceCrawlOpportunityGuard,
+  oidcIdentityEmailKeys,
   tagIntegrityGuards,
 } = await withSmrtDatabaseMigrationLock(async (database) => {
   await repairExistingCandidateAnswerNaturalKeyIndex(database);
@@ -174,6 +177,12 @@ const {
   const sourceProviders = await backfillSourceProviders(migration.db);
   const opportunitySourceFingerprints =
     await backfillOpportunitySourceFingerprints(migration.db);
+  // OIDC provisioning fails closed until both durable, normalized email-key
+  // markers are present. Keep this in the migration lock and after application
+  // imports/backfills so a rerun prepares the complete logical dataset before
+  // any hosted OIDC callback is allowed to resolve an identity.
+  const profileEmailKeys = await backfillProfileEmailKeys(migration.db);
+  const userEmailKeys = await backfillUserEmailKeys(migration.db);
   // The change feed has to exist before anything appends to it. Raw writers
   // bump with `appendChange`, which issues no DDL on purpose (issue #458): the
   // framework's `bumpChangeFeed` would ensure the table on a per-handle basis,
@@ -209,6 +218,10 @@ const {
     initialized,
     lifecycleRemap,
     migration,
+    oidcIdentityEmailKeys: {
+      profilesUpdated: profileEmailKeys.updated,
+      usersUpdated: userEmailKeys.updated,
+    },
     opportunityQueryIndexes: true,
     opportunitySourceFingerprints,
     restoredResumeAssetFiles,
@@ -268,6 +281,9 @@ console.log(
   formatOpportunitySourceFingerprintBackfillSummary(
     opportunitySourceFingerprints,
   ),
+);
+console.log(
+  `OIDC identity readiness: ${oidcIdentityEmailKeys.profilesUpdated} profile email keys and ${oidcIdentityEmailKeys.usersUpdated} user email keys prepared.`,
 );
 console.log(
   `Source providers: ${sourceProviders.classified} roots classified from adapter declarations, ${sourceProviders.unknown} remain unknown${sourceProviders.truncated ? ', bounded backfill truncated' : ''}.`,
