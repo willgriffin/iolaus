@@ -109,9 +109,12 @@ function initialNavigationState(): 'collapsed' | 'expanded' {
 
 const adminShell = createShellState({
   config: ADMIN_SHELL_CONFIG,
-  settings: { panels: { left: initialNavigationState() } },
   storageKey: ADMIN_SHELL_STORAGE_KEY,
 });
+// Keep the responsive default out of the persisted settings delta. ShellState
+// persists the complete delta when any panel changes, so the left setting
+// must be added only by an explicit left-panel action.
+adminShell.panels.left = initialNavigationState();
 let shellReady = $state(false);
 
 const providerUser = $derived(data.user as unknown as SmrtUser | null);
@@ -404,10 +407,7 @@ onMount(() => {
     }
     if (stored) return;
 
-    adminShell.applySettings(
-      { panels: { left: navigationStateForViewport(mediaQuery.matches) } },
-      { persist: false },
-    );
+    adminShell.panels.left = navigationStateForViewport(mediaQuery.matches);
   };
 
   applyResponsiveDefault();
