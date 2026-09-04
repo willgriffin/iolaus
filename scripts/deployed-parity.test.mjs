@@ -155,7 +155,7 @@ test(
   },
 );
 
-test('does not mark host-only topology as image-executed release evidence', () => {
+test('uses a read-only filesystem for candidate-image scenarios', () => {
   const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;
   const result = candidateImageInvocation(imageRef, ['node', '--test', 'x']);
   assert.ok(result.args.includes('--read-only'));
