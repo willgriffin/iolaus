@@ -102,6 +102,24 @@ function assertCliServerSelection(): void {
     duplicateRejected = true;
   }
   assert(duplicateRejected, 'Duplicate CLI server selectors must fail closed.');
+  for (const invalid of [
+    'ftp://jobs.example.com',
+    'https://user@jobs.example.com',
+    'https://jobs.example.com/api',
+    'https://jobs.example.com?target=other',
+    'https://jobs.example.com#other',
+  ]) {
+    let invalidRejected = false;
+    try {
+      getCliServerUrl(['--server', invalid], environment);
+    } catch {
+      invalidRejected = true;
+    }
+    assert(
+      invalidRejected,
+      `Invalid CLI server selector must fail closed: ${invalid}`,
+    );
+  }
 }
 
 function parseOptions(argv: string[]): CliSmokeOptions {

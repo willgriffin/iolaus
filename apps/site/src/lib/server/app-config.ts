@@ -60,10 +60,9 @@ function appIdFrom(environment: AppConfigEnvironment): string {
 function appNameFrom(environment: AppConfigEnvironment): string {
   const configured =
     stringValue(environment.IOLAUS_APP_NAME) || DEFAULT_APP_NAME;
-  const containsControlCharacter = [...configured].some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code <= 0x1f || code === 0x7f;
-  });
+  const containsControlCharacter = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(
+    configured,
+  );
   if (configured.length > 80 || containsControlCharacter) {
     throw new Error('IOLAUS_APP_NAME must be a short display name.');
   }

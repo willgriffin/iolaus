@@ -155,6 +155,15 @@ describe('Iolaus application configuration', () => {
     ).toMatchObject({ kind: 'invalid' });
   });
 
+  it('rejects display names that can spoof or restructure operational text', () => {
+    expect(() => getAppConfig({ IOLAUS_APP_NAME: 'Career\u202EHub' })).toThrow(
+      /short display name/u,
+    );
+    expect(() => getAppConfig({ IOLAUS_APP_NAME: 'Career\u2028Hub' })).toThrow(
+      /short display name/u,
+    );
+  });
+
   it('recognizes only loopback hosts for local-only paths', () => {
     expect(isLoopbackHostname('localhost')).toBe(true);
     expect(isLoopbackHostname('127.0.0.1')).toBe(true);

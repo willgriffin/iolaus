@@ -37,7 +37,20 @@ export function getCliServerUrl(
   }
   const target = selectors[0] ?? environment.IOLAUS_SERVER_URL?.trim();
   if (!target) return DEFAULT_SERVER_URL;
-  return new URL(target).toString().replace(/\/$/u, '');
+  const url = new URL(target);
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== '' && url.pathname !== '/')
+  ) {
+    throw new Error(
+      '--server must be an HTTP(S) origin without credentials, a path, query, or fragment.',
+    );
+  }
+  return url.origin;
 }
 
 /**

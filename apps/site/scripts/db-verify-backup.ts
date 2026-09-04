@@ -20,6 +20,7 @@ import {
 const USAGE = `Usage:
   pnpm --filter @willgriffin/iolaus-site db:verify-backup -- \
     --from <backup-dir> --database-url <isolated-local-url> --allow-reset-local \
+    [--allow-installation-rebind] \
     [--source-crawl-limit <1..500>] \
     [--source-crawl-parent-recovery-id <exact-crawl-id>]
 
@@ -42,13 +43,15 @@ const sourceCrawlPlanOptions = sourceCrawlRecoveryPlanOptions(flags);
 const parentRecoveryCrawlId = optionalExactFlag(
   'sourceCrawlParentRecoveryId',
 );
+const allowInstallationRebind = flags.allowInstallationRebind === true;
 if (!flags.allowResetLocal) {
   throw new Error('Refusing to reset the verification database without --allow-reset-local.');
 }
 assertDisposableLocalDatabaseUrl(databaseUrl, 'Backup recovery verification');
 
-const before = await verifyBackup(backupPath);
+const before = await verifyBackup(backupPath, { allowInstallationRebind });
 await resetLocalDatabaseFromBackup({
+  allowInstallationRebind,
   backupPath,
   databaseUrl,
   skipDoctor: true,
@@ -88,7 +91,9 @@ await recordLocalRestoreEvidence(db, {
   sourceCrawlParentRecoveryPlans,
   verifiedAt: fullRestoreVerifiedAt,
 });
-const manifest = await readBackupManifest(backupPath);
+const manifest = await readBackupManifest(backupPath, {
+  allowInstallationRebind,
+});
 const sourceDatabaseName =
   manifest.database.name ?? databaseNameFromUrl(manifest.database.url);
 const verified = await recordBackupRecoveryAttestation(backupPath, {
