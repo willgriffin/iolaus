@@ -1,5 +1,4 @@
 <script lang="ts">
-import { onMount } from 'svelte';
 import {
   crawlElapsedLabel,
   crawlStateLabel,
@@ -25,7 +24,7 @@ let {
 
 let progress = $state<SourceCrawlStatus | null>(null);
 let feedback = $state('');
-let mounted = false;
+let retryStatusToken = $state(0);
 
 function statusUrl(id: string): string {
   const query = new URLSearchParams({ crawlId: id, limit: '1' });
@@ -43,7 +42,10 @@ async function loadStatus(): Promise<SourceCrawlStatus | null> {
 }
 
 $effect(() => {
-  if (!mounted || !crawlId || !sourceId) return;
+  if (!crawlId || !sourceId) return;
+  // A status retry intentionally keeps the crawl ID. It never requests a
+  // second pull while the original job may still be alive.
+  void retryStatusToken;
   progress = null;
   feedback = '';
   const poller = createCrawlStatusPoller({
@@ -64,12 +66,9 @@ $effect(() => {
   return () => poller.stop();
 });
 
-onMount(() => {
-  mounted = true;
-  return () => {
-    mounted = false;
-  };
-});
+function retryStatus(): void {
+  retryStatusToken += 1;
+}
 
 const terminal = $derived(
   progress ? isTerminalCrawlStatus(progress.status) : false,
@@ -119,9 +118,7 @@ const elapsed = $derived(
 
   {#if feedback}
     <p class="crawl-feedback" role="status">{feedback}</p>
-    <button type="button" class="secondary" onclick={() => onPullAgain(sourceId)}>
-      Pull again
-    </button>
+    <button type="button" class="secondary" onclick={retryStatus}>Retry status</button>
   {/if}
 </section>
 
