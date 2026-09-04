@@ -41,7 +41,7 @@ export const actions: Actions = {
     const email = String(form.get('email') || '');
     if (!token || !name.trim() || !email.includes('@')) {
       return fail(400, {
-        message: 'Name, email, and a valid setup token are required.',
+        message: 'Please enter your name and a valid email address.',
       });
     }
     const runtime = await getLocalApplicationRuntime();
@@ -57,7 +57,7 @@ export const actions: Actions = {
     } catch {
       return fail(400, {
         message:
-          'The setup invitation is invalid, expired, or already used. Run pnpm app:stop, pnpm app:recover, pnpm app:start, then pnpm app:open.',
+          'We could not finish setup. This setup page may have expired or already been used. Start the app again to try once more.',
       });
     }
     event.cookies.set(sessionCookieName, result.sessionId, {
