@@ -136,6 +136,51 @@ synthetic, explicitly approved provider-crawl fixture. Restart a web pod and
 verify a synthetic non-production asset remains readable from the same
 operator-owned object store.
 
+### Parity contract and evidence
+
+Before building an image, run the deterministic source contract under the
+pinned Node and pnpm versions:
+
+```sh
+pnpm parity:contract -- --evidence /private/evidence/iolaus-parity.json
+```
+
+The command runs the reviewed generated REST/MCP/WebMCP inventory, route
+authentication, field-projection, triage/bulk workflow, approval-boundary,
+provider-crawl, task/schedule worker, retry/fencing/recovery, heartbeat, and
+self-hosted topology scenarios. It writes only exact source and dependency
+digests, inventory counts, scenario names, binary observables, and pass/fail
+state. Test fixtures are synthetic; the report contains no record bodies,
+credentials, URLs, database targets, or asset paths. Inventory drift fails
+closed until `apps/site/scripts/deployed-parity-inventory.snapshot.json` is
+reviewed and explicitly regenerated with:
+
+```sh
+pnpm --filter @willgriffin/iolaus-site exec tsx \
+  scripts/deployed-parity-inventory.ts --update
+```
+
+For a released candidate, check out the exact source revision used to build it,
+run the same contract, and pass the immutable reference recorded by the
+cluster:
+
+```sh
+pnpm parity:contract -- \
+  --image-ref ghcr.io/willgriffin/iolaus/site@sha256:<64-hex-digest> \
+  --evidence /private/evidence/iolaus-parity.json
+```
+
+The image argument is validated and recorded, but it is not a substitute for
+checking Kubernetes `status.containerStatuses[].imageID`. The isolated
+rehearsal must prove every web/task/schedule pod reports that same digest,
+capture a successful aggregate monitor Job, and execute the synthetic browser
+smoke, provider crawl, schedule dispatch, active-job drain, and restart
+recovery against the deployed PostgreSQL instance. Record only IDs hashed for
+the rehearsal, counts, terminal states, timestamps, and digests. A green web
+health endpoint or source contract alone does not satisfy those deployed
+checks. Production remains read-only until its separate write checkpoint is
+approved.
+
 ## Operational safety
 
 Do not enable provider crawling, paid intelligence, or external submission as
