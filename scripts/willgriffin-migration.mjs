@@ -17,6 +17,12 @@ import {
   readSensitiveBundle,
 } from './smrt-portability-assets.mjs';
 import { assertExternalArtifactPath } from './smrt-runtime-identity.mjs';
+import {
+  finalizeReconciliationReport,
+  migrationReferenceRules,
+  reconcileMigrationRows,
+  recordStableIdCollision,
+} from './willgriffin-reconciliation.mjs';
 
 export const MIGRATION_BUNDLE_KIND =
   'iolaus/willgriffin.dev-logical-migration';
@@ -25,9 +31,9 @@ export const PREDECESSOR_CONTRACT_VERSION = 1;
 export const TARGET_SMRT_VERSION = '0.45.0';
 export const DEFAULT_MIGRATION_BATCH_SIZE = 100;
 export const SUPPORTED_SOURCE_SCHEMA_FINGERPRINT =
-  'd91fb2395dd94a7ccc56e784677fca9d40cb33695bf73ff7bb78f93c3a1a520f';
+  '86381010c2258a48ce6d36bfda9c70689031ebbdf6da81e4ea5bb4e233ece701';
 export const SUPPORTED_TARGET_SCHEMA_FINGERPRINT =
-  '7fa0f8411af7c33fc3d45aaddd91780f93bad3ef250938ed53549d0c718605ac';
+  '5d5f786a05b28784bf96c9a9f1bd3891960a5817fa0153b8a0920abbdb3855e1';
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
@@ -107,6 +113,28 @@ export const FRESH_TARGET_BASELINE_COUNTS = Object.freeze({
   role_permissions: 1448,
   roles: 4,
   tags: 8,
+});
+
+/** Canonical identities and contents produced by the pinned target migration. */
+export const FRESH_TARGET_BASELINE_CHECKSUMS = Object.freeze({
+  candidate_profiles: '8d315dde0adf9d70743c515a1f840b833488591c63d378143f33eb97d2e8899d',
+  opportunity_intelligence_controls:
+    '5058e3f9fb302bf301a690af52cc65c6d283b2f8adf7fe60ea08573d44363f1f',
+  permissions: '74c98a3166ccf1cff0e57780055f42f3070cbb6feb782440beba9e4ff089d709',
+  place_types: '9856d85a59614ab7ea3938c2b66039040d33b85595b9d3ed9cb82c1e0ea9ba80',
+  profile_relationship_types:
+    '73146f7278a27f2f10bb63c6b172fdf97fdfcec8894d137c397f5b0aa13c44bb',
+  profile_types: '681974757ca2261536b830422bd7415865a5f4c819f3c4c39824d0a5b475d46b',
+  resume_profiles: '1e34597ea9351b1638f60a8e57407bf13554f93c777a257ca6af95e665c89cef',
+  resume_tailoring_configs:
+    '6b53b75ad4a994a4282473f2f13301c2a7500ab6fa9d06a3904e348241a746c1',
+  role_permissions: '240ff29dfba143ab64a3aa117d46092f8aeb671e7a6ff1788e2f38ef64e161fd',
+  roles: '49c78f4a4b45bce714171dd7c36f47943ea11d9903ea4065ed629fbdc81185b6',
+  tags: 'e134e5b653d16f06195ecaa5ebe312cb410cdf74b15cab57f9d66e52b5f1b4d7',
+});
+
+const BOOTSTRAP_IDENTITY_KEYS = Object.freeze({
+  role_permissions: [['role_id', 'permission_id']],
 });
 
 export const REQUIRED_PREDECESSOR_MIGRATIONS = Object.freeze([
@@ -349,6 +377,9 @@ function normalizedTable(table) {
     columns: table.columns
       .map(normalizedColumn)
       .sort((left, right) => left.name.localeCompare(right.name)),
+    uniqueKeys: [...(table.uniqueKeys || [])]
+      .map((key) => [...key])
+      .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right))),
   };
 }
 
@@ -388,7 +419,13 @@ function addManifestTables(manifest, tables, options = {}) {
       }),
     );
     if (columns.length === 0) continue;
-    const next = normalizedTable({ name: schema.tableName, columns });
+    const next = normalizedTable({
+      name: schema.tableName,
+      columns,
+      uniqueKeys: (schema.indexes || [])
+        .filter((index) => index.unique === true)
+        .map((index) => index.columns),
+    });
     const previous = tables.get(next.name);
     if (
       previous &&
@@ -471,6 +508,9 @@ export function derivePredecessorContract(targetContract) {
       const targetOnlyColumns = new Set(TARGET_ONLY_COLUMNS[table.name] || []);
       return normalizedTable({
         name: table.name,
+        uniqueKeys: table.uniqueKeys?.filter((key) =>
+          key.every((column) => !targetOnlyColumns.has(column)),
+        ),
         columns: table.columns
           .filter((column) => !targetOnlyColumns.has(column.name))
           .map((column) => ({
@@ -661,7 +701,7 @@ function parentFirstSourceRows(table, rows) {
       const parentId = row.values[field.name];
       if (parentId == null) continue;
       if (typeof parentId !== 'string' || parentId === '' || !byId.has(parentId)) {
-        throw new Error(`Migration hierarchy is incomplete in ${table.name}.`);
+        continue;
       }
       dependencies.get(row.sourceId).add(parentId);
       children.get(parentId).add(row.sourceId);
@@ -685,7 +725,15 @@ function parentFirstSourceRows(table, rows) {
     }
   }
   if (ordered.length !== rows.length) {
-    throw new Error(`Migration hierarchy contains a cycle in ${table.name}.`);
+    // Reconciliation owns invalid relationship quarantine. Preserve every row
+    // in deterministic order here so missing parents and cycles are reportable
+    // rather than being silently lost or making bundle export impossible.
+    const orderedIds = new Set(ordered.map((row) => row.sourceId));
+    ordered.push(
+      ...rows
+        .filter((row) => !orderedIds.has(row.sourceId))
+        .sort((left, right) => left.sourceId.localeCompare(right.sourceId)),
+    );
   }
   return ordered;
 }
@@ -937,6 +985,184 @@ function canonicalTargetRowChecksum(row, columns) {
   );
 }
 
+function canonicalTargetTableChecksum(rows, columns) {
+  return sha256(
+    canonicalJson(
+      [...rows]
+        .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+        .map((row) => [
+          String(row.id),
+          canonicalTargetRowChecksum(row, columns),
+        ]),
+    ),
+  );
+}
+
+function includeBootstrapColumn(column) {
+  return !['created_at', 'updated_at'].includes(column.name);
+}
+
+function canonicalBootstrapValue(row, table, column) {
+  const value = row[column.name];
+  // The pristine control row is initialized at migration time. Its exact wall
+  // clock is deployment-specific, but whether initialization happened is not.
+  if (
+    table.name === 'opportunity_intelligence_controls' &&
+    column.name === 'window_started_at'
+  ) {
+    return value == null ? null : '__initialized__';
+  }
+  return value;
+}
+
+function bootstrapReferenceToken(row, table) {
+  if (!row) return null;
+  if (row.slug && row.slug !== row.id) {
+    return sha256(canonicalJson({ context: row.context || '', slug: row.slug }));
+  }
+  return sha256(
+    canonicalJson(
+      Object.fromEntries(
+        table.columns
+          .filter(
+            (column) =>
+              !column.primaryKey &&
+              !column.referencesTable &&
+              includeBootstrapColumn(column) &&
+              column.name !== 'slug',
+          )
+          .map((column) => [
+            column.name,
+            canonicalBootstrapValue(row, table, column),
+          ]),
+      ),
+    ),
+  );
+}
+
+export function canonicalBootstrapTableChecksum(
+  rows,
+  table,
+  rowsByTable,
+  tablesByName,
+) {
+  const canonicalRows = rows.map((row) =>
+    Object.fromEntries(
+      table.columns
+        .filter(
+          (column) =>
+            !column.primaryKey &&
+            includeBootstrapColumn(column) &&
+            !(column.name === 'slug' && row.slug === row.id),
+        )
+        .map((column) => {
+          if (!column.referencesTable || row[column.name] == null) {
+            return [
+              column.name,
+              canonicalBootstrapValue(row, table, column),
+            ];
+          }
+          const referencedTable = tablesByName.get(column.referencesTable);
+          const referencedRow = rowsByTable
+            .get(column.referencesTable)
+            ?.find((candidate) => candidate.id === row[column.name]);
+          return [
+            column.name,
+            referencedTable
+              ? bootstrapReferenceToken(referencedRow, referencedTable)
+              : null,
+          ];
+        }),
+    ),
+  );
+  return sha256(canonicalJson(canonicalRows.sort((left, right) =>
+    canonicalJson(left).localeCompare(canonicalJson(right)),
+  )));
+}
+
+function naturalKeyToken(row, columns) {
+  return canonicalJson(columns.map((column) => row[column] ?? null));
+}
+
+async function alignBootstrapIdentities({ bundle, sourceContract, store }) {
+  const aligned = structuredClone(bundle);
+  const tables = new Map(sourceContract.map((table) => [table.name, table]));
+  const idMaps = new Map();
+  const remappings = [];
+
+  for (const table of planMigrationTables(sourceContract)) {
+    if (!store.expectedBaselineCounts?.[table.name]) continue;
+    const tableBundle = aligned.tables.find((entry) => entry.name === table.name);
+    if (!tableBundle?.rows.length) continue;
+
+    for (const row of tableBundle.rows) {
+      for (const rule of migrationReferenceRules(table, tables)) {
+        if (rule.parentColumn !== 'id') continue;
+        const map = idMaps.get(rule.parentTable);
+        if (map?.has(String(row.values[rule.column]))) {
+          row.values[rule.column] = map.get(String(row.values[rule.column]));
+        }
+      }
+    }
+
+    const naturalKeys = [
+      ...(BOOTSTRAP_IDENTITY_KEYS[table.name] || []),
+      ...table.uniqueKeys,
+    ].filter(
+      (key) => key.length > 0 && !key.includes('id'),
+    );
+    if (naturalKeys.length === 0) continue;
+    const targetRows = await store.listTargetRows(table);
+    for (const row of tableBundle.rows) {
+      if (
+        targetRows.some(
+          (target) => String(target.id) === String(row.values.id),
+        )
+      ) {
+        continue;
+      }
+      const matches = targetRows.filter((target) =>
+        naturalKeys.some(
+          (key) =>
+            naturalKeyToken(row.values, key) === naturalKeyToken(target, key),
+        ),
+      );
+      if (matches.length > 1) {
+        throw new Error(
+          `Migration bootstrap identity is ambiguous in ${table.name}.`,
+        );
+      }
+      const targetId = matches[0]?.id;
+      if (targetId != null && String(targetId) !== String(row.values.id)) {
+        const sourceId = row.values.id;
+        const map = idMaps.get(table.name) || new Map();
+        map.set(String(sourceId), targetId);
+        idMaps.set(table.name, map);
+        remappings.push({ sourceId: row.sourceId, table: table.name });
+        row.values.id = targetId;
+        if (String(row.values.slug) === String(sourceId)) {
+          row.values.slug = targetId;
+        }
+      }
+    }
+  }
+
+  for (const tableBundle of aligned.tables) {
+    const table = tables.get(tableBundle.name);
+    if (!table) continue;
+    for (const row of tableBundle.rows) {
+      for (const rule of migrationReferenceRules(table, tables)) {
+        if (rule.parentColumn !== 'id') continue;
+        const map = idMaps.get(rule.parentTable);
+        if (map?.has(String(row.values[rule.column]))) {
+          row.values[rule.column] = map.get(String(row.values[rule.column]));
+        }
+      }
+    }
+  }
+  return { bundle: aligned, remappings };
+}
+
 /**
  * Import through a persistence adapter. The production adapter below commits
  * each batch and its checkpoint atomically; tests use the same contract in memory.
@@ -949,8 +1175,23 @@ export async function importMigrationBundle({
   dryRun = false,
   batchSize = DEFAULT_MIGRATION_BATCH_SIZE,
   onBatchCommitted,
+  _leaseHeld = false,
 }) {
   validateMigrationBundle(bundle, sourceContract, targetContract);
+  if (!dryRun && !_leaseHeld && store.withMigrationLease) {
+    return await store.withMigrationLease(bundle.runId, async () =>
+      importMigrationBundle({
+        bundle,
+        sourceContract,
+        targetContract,
+        store,
+        dryRun,
+        batchSize,
+        onBatchCommitted,
+        _leaseHeld: true,
+      }),
+    );
+  }
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
     throw new Error('Migration batch size must be between 1 and 1000.');
   }
@@ -976,8 +1217,55 @@ export async function importMigrationBundle({
   const hasCommittedRows = existingRun
     ? await store.hasCommittedRows(bundle.runId)
     : false;
-  if (!hasCommittedRows) await store.assertFreshTarget([...sourceNames]);
+  if (!hasCommittedRows) {
+    await store.assertFreshTarget(
+      targetContract.filter((table) => sourceNames.has(table.name)),
+    );
+  }
+  const bootstrapAlignment = await alignBootstrapIdentities({
+    bundle,
+    sourceContract,
+    store,
+  });
+  bundle = bootstrapAlignment.bundle;
+  const reconciliationPlan = reconcileMigrationRows({
+    bundle,
+    sourceContract,
+    strictNativeTypes:
+      bundle.sourceSchemaFingerprint === SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
+  });
+  for (const remapping of bootstrapAlignment.remappings) {
+    recordStableIdCollision(reconciliationPlan.report, {
+      runId: bundle.runId,
+      table: remapping.table,
+      sourceId: remapping.sourceId,
+    });
+  }
   if (!dryRun && !existingRun) await store.createRun(bundle);
+
+  const priorReconciliation = dryRun
+    ? null
+    : await store.getReconciliationReport?.(bundle.runId);
+  if (
+    priorReconciliation &&
+    priorReconciliation.sourceFingerprint !== bundle.sourceFingerprint
+  ) {
+    throw new Error('Stored migration reconciliation is incompatible.');
+  }
+  if (priorReconciliation?.collisions) {
+    reconciliationPlan.report.collisions = structuredClone(
+      priorReconciliation.collisions,
+    );
+  }
+  if (!dryRun) {
+    for (const collision of (await store.getUpdatedRows?.(bundle.runId)) || []) {
+      recordStableIdCollision(reconciliationPlan.report, {
+        runId: bundle.runId,
+        table: collision.table,
+        sourceId: collision.sourceId,
+      });
+    }
+  }
 
   const targetByName = new Map(targetContract.map((table) => [table.name, table]));
   const totals = emptyCounts();
@@ -986,19 +1274,19 @@ export async function importMigrationBundle({
   for (const table of bundle.tables) {
     const targetTable = targetByName.get(table.name);
     if (!targetTable) throw new Error('Migration target schema is incomplete.');
-    const desiredRows = table.rows.map((row) => ({
+    const acceptedTable = reconciliationPlan.acceptedTables.find(
+      (candidate) => candidate.name === table.name,
+    );
+    const desiredRows = (acceptedTable?.rows || []).map((row) => ({
       ...row,
       targetValues: transformMigrationRow(table.name, row.values, targetTable),
     }));
-    tableDigests.set(
-      table.name,
-      sha256(
-        canonicalJson(
-          desiredRows.map((row) => [
-            row.sourceId,
-            canonicalTargetRowChecksum(row.targetValues, targetTable.columns),
-          ]),
-        ),
+    const desiredTableChecksum = sha256(
+      canonicalJson(
+        desiredRows.map((row) => [
+          row.sourceId,
+          canonicalTargetRowChecksum(row.targetValues, targetTable.columns),
+        ]),
       ),
     );
     const checkpoint = dryRun
@@ -1019,10 +1307,8 @@ export async function importMigrationBundle({
       const operations = [];
       const batchCounts = emptyCounts();
       for (const row of batch) {
-        const actual = await store.getTargetRow(
-          targetTable,
-          row.sourceId,
-        );
+        const targetId = String(row.targetValues.id);
+        const actual = await store.getTargetRow(targetTable, targetId);
         const targetChecksum = canonicalTargetRowChecksum(
           row.targetValues,
           targetTable.columns,
@@ -1035,6 +1321,13 @@ export async function importMigrationBundle({
           : actualChecksum === targetChecksum
             ? 'skip'
             : 'update';
+        if (action === 'update') {
+          recordStableIdCollision(reconciliationPlan.report, {
+            runId: bundle.runId,
+            table: table.name,
+            sourceId: row.sourceId,
+          });
+        }
         batchCounts.attempted += 1;
         batchCounts[
           action === 'skip' ? 'skipped' : action === 'insert' ? 'inserted' : 'updated'
@@ -1044,6 +1337,7 @@ export async function importMigrationBundle({
           sourceId: row.sourceId,
           sourceChecksum: row.checksum,
           targetChecksum,
+          targetId,
           targetValues: row.targetValues,
         });
       }
@@ -1057,7 +1351,7 @@ export async function importMigrationBundle({
           cursor: batch.at(-1).sourceId,
           counts: addCounts({ ...prior }, report),
           complete: index + batchSize >= remaining.length,
-          tableChecksum: tableDigests.get(table.name),
+          tableChecksum: desiredTableChecksum,
         });
         await onBatchCommitted?.({ table: table.name });
       }
@@ -1070,12 +1364,15 @@ export async function importMigrationBundle({
         cursor: checkpoint?.cursor || '',
         counts: checkpoint?.counts || emptyCounts(),
         complete: true,
-        tableChecksum: tableDigests.get(table.name),
+        tableChecksum: desiredTableChecksum,
       });
     }
     if (!dryRun) {
       for (const row of desiredRows) {
-        const actual = await store.getTargetRow(targetTable, row.sourceId);
+        const actual = await store.getTargetRow(
+          targetTable,
+          String(row.targetValues.id),
+        );
         if (
           !actual ||
           canonicalTargetRowChecksum(actual, targetTable.columns) !==
@@ -1086,10 +1383,86 @@ export async function importMigrationBundle({
       }
     }
     addCounts(totals, report);
-    tableReports.push({ name: table.name, ...report });
+    const cumulative = addCounts(
+      { ...(checkpoint?.counts || emptyCounts()) },
+      report,
+    );
+    const persistedRows = await store.listTargetRows(targetTable);
+    const finalRows = dryRun
+      ? [
+          ...new Map([
+            ...persistedRows.map((row) => [String(row.id), row]),
+            ...desiredRows.map((row) => [
+              String(row.targetValues.id),
+              row.targetValues,
+            ]),
+          ]).values(),
+        ]
+      : persistedRows;
+    const desiredIds = new Set(
+      desiredRows.map((row) => String(row.targetValues.id)),
+    );
+    const retainedTargetRows = finalRows.filter(
+      (row) => !desiredIds.has(String(row.id)),
+    ).length;
+    const baselineCount = store.expectedBaselineCounts?.[table.name] || 0;
+    const expectedRetainedRows = Math.max(
+      0,
+      baselineCount - cumulative.updated - cumulative.skipped,
+    );
+    if (retainedTargetRows !== expectedRetainedRows) {
+      throw new Error(`Completed migration target has unexplained rows in ${table.name}.`);
+    }
+    const targetChecksum = canonicalTargetTableChecksum(
+      finalRows,
+      targetTable.columns,
+    );
+    tableDigests.set(table.name, targetChecksum);
+    tableReports.push({
+      name: table.name,
+      ...report,
+      cumulative,
+      retainedTargetRows,
+      targetRowCount: finalRows.length,
+      targetChecksum,
+    });
+  }
+  if (!dryRun) {
+    for (const collision of (await store.getUpdatedRows?.(bundle.runId)) || []) {
+      recordStableIdCollision(reconciliationPlan.report, {
+        runId: bundle.runId,
+        table: collision.table,
+        sourceId: collision.sourceId,
+      });
+    }
   }
   const digest = reconciliationDigest(tableDigests);
-  if (!dryRun) await store.completeRun(bundle.runId, digest);
+  const reconciliationReport = finalizeReconciliationReport(
+    reconciliationPlan.report,
+    tableReports.map((table) => ({
+      name: table.name,
+      ...table.cumulative,
+      retainedTargetRows: table.retainedTargetRows,
+      targetRowCount: table.targetRowCount,
+      targetChecksum: table.targetChecksum,
+    })),
+  );
+  if (!dryRun) {
+    if (store.finalizeRun) {
+      await store.finalizeRun({
+        runId: bundle.runId,
+        digest,
+        report: reconciliationReport,
+        tableContracts: bundle.tables.map((table) =>
+          targetByName.get(table.name),
+        ),
+        expectedChecksums: tableDigests,
+      });
+    } else {
+      await store.recordReconciliation?.(bundle.runId, reconciliationReport);
+      await store.completeRun(bundle.runId, digest);
+    }
+  }
   await store.assertTransientTablesEmpty(TRANSIENT_TARGET_TABLES);
   return {
     schemaVersion: 1,
@@ -1099,6 +1472,7 @@ export async function importMigrationBundle({
     reconciliationDigest: digest,
     counts: totals,
     tables: tableReports,
+    reconciliation: reconciliationReport,
     secretValuesIncluded: false,
   };
 }
@@ -1312,6 +1686,7 @@ function rowFromDatabase(row, columns) {
 export class PostgresMigrationStore {
   constructor(db) {
     this.db = db;
+    this.expectedBaselineCounts = FRESH_TARGET_BASELINE_COUNTS;
   }
 
   async assertCompatible(targetContract) {
@@ -1320,6 +1695,99 @@ export class PostgresMigrationStore {
       targetContract,
       'Iolaus target schema',
     );
+  }
+
+  async withMigrationLease(runId, operation) {
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_leases (
+        lease_name TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        acquired_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    if (typeof this.db.acquireSession !== 'function') {
+      throw new Error(
+        'Logical migration requires PostgreSQL pinned-session support.',
+      );
+    }
+    const session = await this.db.acquireSession();
+    const holder = randomBytes(32).toString('hex');
+    try {
+      const acquired = await session.query(
+        `SELECT pg_try_advisory_lock(hashtext(?)) AS acquired`,
+        ['willgriffin-logical-migration'],
+      );
+      if (acquired.rows[0]?.acquired !== true) {
+        throw new Error('Another logical migration owns the database lease.');
+      }
+      // The row is operator-visible state only. The session advisory lock is
+      // authoritative, so an abandoned row from a crashed process is safely
+      // replaced after PostgreSQL releases that process's session lock.
+      await session.query(
+        `INSERT INTO _iolaus_migration_leases (lease_name, holder, run_id)
+         VALUES ('willgriffin-logical-migration', ?, ?)
+         ON CONFLICT (lease_name) DO UPDATE SET
+           holder = EXCLUDED.holder,
+           run_id = EXCLUDED.run_id,
+           acquired_at = CURRENT_TIMESTAMP`,
+        [holder, runId],
+      );
+      this.migrationLease = { holder, runId, session };
+      return await operation();
+    } finally {
+      try {
+        await session.query(
+          `DELETE FROM _iolaus_migration_leases
+           WHERE lease_name = 'willgriffin-logical-migration' AND holder = ?`,
+          [holder],
+        );
+        await session.query(`SELECT pg_advisory_unlock(hashtext(?))`, [
+          'willgriffin-logical-migration',
+        ]);
+      } finally {
+        if (this.migrationLease?.holder === holder) {
+          this.migrationLease = null;
+        }
+        await session.release();
+      }
+    }
+  }
+
+  async assertMigrationLease(db, runId) {
+    const lease = this.migrationLease;
+    if (!lease || lease.runId !== runId) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
+    if (lease.session?.isActive && !lease.session.isActive()) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
+    // Locking the fencing row inside every write transaction prevents a former
+    // owner from committing after its advisory-lock session disappears. A new
+    // owner must replace this row first, and replacement waits for any active
+    // fenced transaction to finish.
+    const result = await db.query(
+      `SELECT holder FROM _iolaus_migration_leases
+       WHERE lease_name = 'willgriffin-logical-migration'
+         AND holder = ? AND run_id = ?
+       FOR UPDATE`,
+      [lease.holder, runId],
+    );
+    if (result.rows.length !== 1) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
+    this.assertMigrationSessionActive(runId);
+  }
+
+  assertMigrationSessionActive(runId) {
+    const lease = this.migrationLease;
+    if (
+      !lease ||
+      lease.runId !== runId ||
+      (lease.session?.isActive && !lease.session.isActive())
+    ) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
   }
 
   async assertTransientTablesEmpty(names) {
@@ -1333,14 +1801,39 @@ export class PostgresMigrationStore {
     }
   }
 
-  async assertFreshTarget(names) {
-    for (const name of names) {
+  async assertFreshTarget(tables) {
+    const rowsByTable = new Map();
+    const tablesByName = new Map(tables.map((table) => [table.name, table]));
+    for (const table of tables) {
+      const name = table.name;
       const result = await this.db.query(
-        `SELECT COUNT(*) AS count FROM ${quoteIdentifier(name)}`,
+        `SELECT ${table.columns.map((column) => quoteIdentifier(column.name)).join(', ')}
+         FROM ${quoteIdentifier(name)} ORDER BY ${quoteIdentifier('id')}`,
       );
+      const actualRows = result.rows.map((row) =>
+        rowFromDatabase(row, table.columns),
+      );
+      rowsByTable.set(name, actualRows);
+    }
+    for (const table of tables) {
+      const name = table.name;
+      const actualRows = rowsByTable.get(name);
       const expected = FRESH_TARGET_BASELINE_COUNTS[name] || 0;
-      if (Number(result.rows[0]?.count || 0) !== expected) {
-        throw new Error('Migration requires a freshly initialized target.');
+      const expectedChecksum = FRESH_TARGET_BASELINE_CHECKSUMS[name];
+      if (
+        actualRows.length !== expected ||
+        (expectedChecksum &&
+          canonicalBootstrapTableChecksum(
+            actualRows,
+            table,
+            rowsByTable,
+            tablesByName,
+          ) !==
+            expectedChecksum)
+      ) {
+        throw new Error(
+          `Migration requires a freshly initialized target; ${name} differs from its pinned bootstrap state.`,
+        );
       }
     }
   }
@@ -1386,6 +1879,27 @@ export class PostgresMigrationStore {
         PRIMARY KEY (run_id, table_name, source_id)
       )
     `);
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_quarantine (
+        run_id TEXT NOT NULL REFERENCES _iolaus_migration_runs(run_id),
+        table_name TEXT NOT NULL,
+        record_key_hash TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        field_name TEXT NOT NULL DEFAULT '',
+        parent_table TEXT NOT NULL DEFAULT '',
+        reference_key_hash TEXT,
+        PRIMARY KEY (run_id, table_name, record_key_hash, reason_code,
+                     field_name, parent_table)
+      )
+    `);
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_reconciliation (
+        run_id TEXT PRIMARY KEY REFERENCES _iolaus_migration_runs(run_id),
+        report_digest TEXT NOT NULL,
+        report_json JSONB NOT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   }
 
   async getRun(runId) {
@@ -1416,18 +1930,22 @@ export class PostgresMigrationStore {
   }
 
   async createRun(bundle) {
-    await this.db.query(
-      `INSERT INTO _iolaus_migration_runs
-       (run_id, source_fingerprint, source_schema_fingerprint,
-        target_schema_fingerprint, status)
-       VALUES (?, ?, ?, ?, 'running')`,
-      [
-        bundle.runId,
-        bundle.sourceFingerprint,
-        bundle.sourceSchemaFingerprint,
-        bundle.targetSchemaFingerprint,
-      ],
-    );
+    await this.db.transaction(async (tx) => {
+      await this.assertMigrationLease(tx, bundle.runId);
+      await tx.query(
+        `INSERT INTO _iolaus_migration_runs
+         (run_id, source_fingerprint, source_schema_fingerprint,
+          target_schema_fingerprint, status)
+         VALUES (?, ?, ?, ?, 'running')`,
+        [
+          bundle.runId,
+          bundle.sourceFingerprint,
+          bundle.sourceSchemaFingerprint,
+          bundle.targetSchemaFingerprint,
+        ],
+      );
+      this.assertMigrationSessionActive(bundle.runId);
+    });
   }
 
   async getCheckpoint(runId, tableName) {
@@ -1463,6 +1981,138 @@ export class PostgresMigrationStore {
       : null;
   }
 
+  async listTargetRows(table) {
+    const result = await this.db.query(
+      `SELECT ${table.columns.map((column) => quoteIdentifier(column.name)).join(', ')}
+       FROM ${quoteIdentifier(table.name)} ORDER BY ${quoteIdentifier('id')}`,
+    );
+    return result.rows.map((row) => rowFromDatabase(row, table.columns));
+  }
+
+  async getReconciliationReport(runId) {
+    const result = await this.db.query(
+      `SELECT report_json FROM _iolaus_migration_reconciliation WHERE run_id = ?`,
+      [runId],
+    );
+    const value = result.rows[0]?.report_json;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        throw new Error('Stored migration reconciliation is incompatible.');
+      }
+    }
+    return value || null;
+  }
+
+  async getUpdatedRows(runId) {
+    const result = await this.db.query(
+      `SELECT table_name, source_id
+       FROM _iolaus_migration_rows
+       WHERE run_id = ? AND action = 'update'
+       ORDER BY table_name, source_id`,
+      [runId],
+    );
+    return result.rows.map((row) => ({
+      sourceId: String(row.source_id),
+      table: String(row.table_name),
+    }));
+  }
+
+  async recordReconciliation(runId, report) {
+    try {
+      await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
+        await this.writeReconciliation(tx, runId, report);
+        this.assertMigrationSessionActive(runId);
+      });
+    } catch {
+      throw new Error('Migration reconciliation ledger write failed.');
+    }
+  }
+
+  async writeReconciliation(db, runId, report) {
+    await db.query(`DELETE FROM _iolaus_migration_quarantine WHERE run_id = ?`, [
+      runId,
+    ]);
+    for (const entry of report.quarantine) {
+      await db.query(
+        `INSERT INTO _iolaus_migration_quarantine
+         (run_id, table_name, record_key_hash, reason_code, field_name,
+          parent_table, reference_key_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runId,
+          entry.table,
+          entry.recordKeyHash,
+          entry.reasonCode,
+          entry.field || '',
+          entry.parentTable || '',
+          entry.referenceKeyHash,
+        ],
+      );
+    }
+    await db.query(
+      `INSERT INTO _iolaus_migration_reconciliation
+       (run_id, report_digest, report_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT (run_id) DO UPDATE SET
+         report_digest = EXCLUDED.report_digest,
+         report_json = EXCLUDED.report_json,
+         updated_at = CURRENT_TIMESTAMP`,
+      [runId, report.reportDigest, report],
+    );
+  }
+
+  async finalizeRun({
+    runId,
+    digest,
+    report,
+    tableContracts,
+    expectedChecksums,
+  }) {
+    try {
+      await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
+        const tables = [...tableContracts].sort((left, right) =>
+          left.name.localeCompare(right.name),
+        );
+        await tx.query(
+          `LOCK TABLE ${tables
+            .map((table) => quoteIdentifier(table.name))
+            .join(', ')} IN SHARE MODE`,
+        );
+        for (const table of tables) {
+          const result = await tx.query(
+            `SELECT ${table.columns
+              .map((column) => quoteIdentifier(column.name))
+              .join(', ')}
+             FROM ${quoteIdentifier(table.name)} ORDER BY ${quoteIdentifier('id')}`,
+          );
+          const actualChecksum = canonicalTargetTableChecksum(
+            result.rows.map((row) => rowFromDatabase(row, table.columns)),
+            table.columns,
+          );
+          if (actualChecksum !== expectedChecksums.get(table.name)) {
+            throw new Error('Target changed during final reconciliation.');
+          }
+        }
+        await this.writeReconciliation(tx, runId, report);
+        await tx.query(
+          `UPDATE _iolaus_migration_runs
+           SET status = 'complete', reconciliation_digest = ?,
+               completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE run_id = ?`,
+          [digest, runId],
+        );
+        this.assertMigrationSessionActive(runId);
+      });
+    } catch {
+      throw new Error('Migration final reconciliation failed.');
+    }
+  }
+
   async commitBatch({
     runId,
     table,
@@ -1474,6 +2124,7 @@ export class PostgresMigrationStore {
   }) {
     try {
       await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
         for (const operation of operations) {
           if (operation.action !== 'skip') {
             const columns = table.columns.map((column) => column.name);
@@ -1537,6 +2188,7 @@ export class PostgresMigrationStore {
             tableChecksum,
           ],
         );
+        this.assertMigrationSessionActive(runId);
       });
     } catch {
       throw new Error(`Migration batch write failed for ${table.name}.`);
@@ -1544,14 +2196,18 @@ export class PostgresMigrationStore {
   }
 
   async completeRun(runId, digest) {
-    await this.db.query(
-      `UPDATE _iolaus_migration_runs
-       SET status = 'complete', reconciliation_digest = ?,
-           completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE run_id = ?`,
-      [digest, runId],
-    );
+    await this.db.transaction(async (tx) => {
+      await this.assertMigrationLease(tx, runId);
+      await tx.query(
+        `UPDATE _iolaus_migration_runs
+         SET status = 'complete', reconciliation_digest = ?,
+             completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE run_id = ?`,
+        [digest, runId],
+      );
+      this.assertMigrationSessionActive(runId);
+    });
   }
 }
 

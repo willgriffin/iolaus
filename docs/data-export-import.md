@@ -69,6 +69,60 @@ committed table cursor. A second completed run verifies the imported rows,
 makes zero changes, and returns the same reconciliation digest. Output contains
 only counts and hashes, never row values or database endpoints.
 
+Before any row write, the importer performs deterministic reconciliation over
+the complete logical bundle. Missing or quarantined parents cascade to their
+children; duplicate natural keys, duplicate junction cardinality, malformed
+UUIDs, cross-tenant references, self-reference cycles, and unqualified
+or missing persisted SMRT `_meta_type` values are quarantined instead of being silently
+nulled or dropped. The sole automatic relationship repair converts an empty
+nullable reference sentinel to `null`; every such repair has the stable reason
+code `EMPTY_REFERENCE_TO_NULL`.
+
+Uniqueness and junction cardinality come from the exact pinned manifest unique
+indexes, including tenant, STI, relationship-role, and empty-string dimensions;
+the checked-in overrides cover only predecessor semantic relationships that
+the manifest cannot express.
+
+The command's `reconciliation` object is the secret-safe machine report. It
+contains per-table attempted/imported/updated/skipped/rejected/repaired counts,
+source/accepted/target SHA-256 checksums, full target row counts, explicitly
+classified retained bootstrap-row counts, hashed selectors for collisions and
+quarantine entries, deterministic reason codes, the exact excluded-table
+inventory, and an operator summary. Target checksums are recomputed from every
+row read back from PostgreSQL; unexplained target rows fail the import. It never
+contains source ids, natural keys, field values, file paths, URLs, credentials,
+or database details. The same
+report and quarantine records are persisted in
+`_iolaus_migration_reconciliation` and `_iolaus_migration_quarantine`; a retry
+reconstructs stable-ID collision evidence from the row ledger so its report
+digest remains deterministic after interruption.
+
+Fresh-target admission verifies both the exact count and canonical semantic
+checksum of every pinned bootstrap table. The checksum ignores generated row
+identifiers and `created_at`/`updated_at` audit clocks; the control row's
+deployment-time `window_started_at` is normalized only to initialized/uninitialized.
+All other business timestamps and stable field content are bound, and foreign
+keys resolve to the referenced row's stable semantic identity, so
+random UUID regeneration cannot mask a changed role/permission relationship.
+Source catalog rows that match those verified target rows by their manifest
+natural key (or the role-permission semantic edge) retain the fresh target ID;
+all imported references are deterministically remapped and the source-ID
+collision is recorded by hash.
+Import processes serialize through a PostgreSQL session advisory lock. The
+operator-visible lease row is replaced only after that lock is acquired, so a
+process crash releases authoritative ownership with its database session and
+the same checkpointed run can resume without manual lease deletion. Completion runs in one
+transaction that locks every migrated table against writers, re-reads and
+rechecks every target checksum, persists the reconciliation report, and marks
+the run complete.
+
+SMRT upgrade hazards are explicit in every report: the predecessor domain
+package qualifier rename is handled by table-bound import, persisted framework
+STI values remain package-qualified, `sources.id` uses the approved UUID-to-text
+adapter, application schedule ids retain their text form, and obsolete
+`smrt_classes`/`smrt_objects` registries are excluded. Reconciliation refuses
+invalid rows rather than guessing a replacement identifier.
+
 Iolaus-only DataSurface preview and idempotency tables must be empty before and
 after import. Historical schedules are imported disabled, and nonterminal job
 records are made terminal so rehearsal cannot replay work. It intentionally
@@ -80,7 +134,23 @@ including encrypted-at-rest identity fields, are preserved inside the private
 bundle; their values never appear in command output or reconciliation reports.
 
 Referenced file discovery, copying, checksums, and quarantine are a separate
-asset-migration phase. This logical importer preserves the database records but
-does not copy asset bytes. Expanded relationship repair and rejected-record
-reporting likewise run through the reconciliation phase; this importer fails
-closed rather than dropping an incompatible row.
+asset-migration phase. The reconciliation module exposes the common asset
+result contract used by that phase: each referenced asset is verified by
+source/target checksum and receives `ASSET_MISSING` or
+`ASSET_CHECKSUM_MISMATCH` when it cannot be admitted. This logical importer
+preserves database records but does not copy asset bytes. Its report marks the
+asset section `pending` rather than presenting an empty asset inventory as a
+successful verification. The asset phase replaces that section with a
+`complete` inventory and new report digest after it verifies every referenced
+object. That inventory binds hashed asset selectors to canonical source and
+target SHA-256 values without exposing paths or identifiers. Any quarantine
+changes its status to `complete-with-rejections`, and the operator summary
+includes verified and quarantined asset counts. A row-only report is not
+cutover evidence for assets.
+
+Intentional exclusions are always reported: sessions and authentication
+tokens, API/CLI credentials, deployment secrets, live worker/delivery leases,
+framework migration/change telemetry, transient DataSurface preview and
+idempotency rows, and unreferenced temporary artifacts. `approvedOmissions` is
+empty unless an owner-approved rehearsal decision explicitly changes it; never
+edit a report after generation to hide an omission.
