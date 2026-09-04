@@ -1303,6 +1303,10 @@ test('source bootstrap catalogs reconcile onto fresh target identities', async (
     store.rows.get('role_permissions').get('target-grant').role_id,
     'target-role',
   );
+  assert.equal(
+    store.rows.get('role_permissions').get('target-grant').slug,
+    'target-grant',
+  );
   assert.equal(result.reconciliation.collisions.length, 2);
   assert.doesNotMatch(JSON.stringify(result.reconciliation), /source-role|source-grant/);
 });

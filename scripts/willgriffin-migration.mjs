@@ -1134,11 +1134,15 @@ async function alignBootstrapIdentities({ bundle, sourceContract, store }) {
       }
       const targetId = matches[0]?.id;
       if (targetId != null && String(targetId) !== String(row.values.id)) {
+        const sourceId = row.values.id;
         const map = idMaps.get(table.name) || new Map();
-        map.set(String(row.values.id), targetId);
+        map.set(String(sourceId), targetId);
         idMaps.set(table.name, map);
         remappings.push({ sourceId: row.sourceId, table: table.name });
         row.values.id = targetId;
+        if (String(row.values.slug) === String(sourceId)) {
+          row.values.slug = targetId;
+        }
       }
     }
   }
