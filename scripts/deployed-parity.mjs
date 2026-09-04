@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -362,6 +363,14 @@ export function sourceFingerprint(root, paths) {
   return hash.digest('hex');
 }
 
+export function assertRegularSourceFile(path) {
+  if (!lstatSync(path).isFile()) {
+    throw new Error(
+      'The candidate image tracked source bytes could not be inspected safely.',
+    );
+  }
+}
+
 function trackedImageSourcePaths() {
   const result = spawnSync('git', ['ls-files', '-z'], {
     cwd: repositoryRoot,
@@ -393,17 +402,6 @@ function trackedImageSourcePaths() {
     });
 }
 
-function childExit(child) {
-  return new Promise((accept, reject) => {
-    child.once('error', reject);
-    child.once('close', (status) =>
-      status === 0
-        ? accept()
-        : reject(new Error(`Child process exited with status ${status ?? 1}.`)),
-    );
-  });
-}
-
 async function inspectCandidateImageFilesystem(
   candidateRef,
   paths,
@@ -413,7 +411,7 @@ async function inspectCandidateImageFilesystem(
   const extractionRoot = mkdtempSync(
     resolve(tmpdir(), 'iolaus-candidate-filesystem-'),
   );
-  const manifestPath = resolve(extractionRoot, 'source-paths');
+  const sourceRoot = resolve(extractionRoot, 'source');
   const created = spawnSync(
     'docker',
     ['create', '--network', 'none', '--entrypoint', '/bin/true', candidateRef],
@@ -429,35 +427,22 @@ async function inspectCandidateImageFilesystem(
     throw new Error('The immutable candidate filesystem could not be inspected.');
   }
   try {
-    writeFileSync(
-      manifestPath,
-      Buffer.from(`${paths.map((path) => `app/${path}`).join('\0')}\0`),
-      { mode: 0o600 },
-    );
-    const exporter = spawn('docker', ['export', containerId], {
-      cwd: repositoryRoot,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const extractor = spawn(
-      'tar',
-      [
-        '--null',
-        '-x',
-        '-f',
-        '-',
-        '-C',
-        extractionRoot,
-        '-T',
-        manifestPath,
-      ],
-      { cwd: repositoryRoot, stdio: ['pipe', 'ignore', 'ignore'] },
-    );
-    exporter.stdout.pipe(extractor.stdin);
-    await Promise.all([childExit(exporter), childExit(extractor)]);
-    const sourceTreeSha256 = sourceFingerprint(
-      resolve(extractionRoot, 'app'),
-      paths,
-    );
+    for (const path of paths) {
+      const destination = resolve(sourceRoot, path);
+      mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+      const copied = spawnSync(
+        'docker',
+        ['cp', '-L', `${containerId}:/app/${path}`, destination],
+        { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] },
+      );
+      if (copied.error || copied.status !== 0) {
+        throw new Error(
+          'The candidate image tracked source bytes could not be inspected safely.',
+        );
+      }
+      assertRegularSourceFile(destination);
+    }
+    const sourceTreeSha256 = sourceFingerprint(sourceRoot, paths);
     if (sourceTreeSha256 !== expectedSha256) {
       throw new Error(
         'The candidate image source content does not match the reviewed Git tree.',

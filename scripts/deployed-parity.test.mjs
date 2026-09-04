@@ -1,19 +1,26 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import {
+  assertRegularSourceFile,
   buildScenarioEnvironment,
   candidateImageInvocation,
   evidenceDigest,
   invalidateEvidence,
   isolatedInvocation,
   sourceFingerprint,
-  validateInstalledSmrtDependencies,
   validateCandidateImageMetadata,
   validateImageReference,
+  validateInstalledSmrtDependencies,
   validateLocalCandidateImageMetadata,
   validateLocalImageId,
 } from './deployed-parity.mjs';
@@ -32,6 +39,20 @@ test('fingerprints exact source bytes with path framing', () => {
       sourceFingerprint(root, ['ab']),
     );
     assert.throws(() => sourceFingerprint(root, ['../outside']), /within/u);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('refuses candidate-controlled links before host hashing', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-link-test-'));
+  try {
+    const target = resolve(root, 'target');
+    const link = resolve(root, 'link');
+    writeFileSync(target, 'reviewed bytes');
+    symlinkSync(target, link);
+    assert.doesNotThrow(() => assertRegularSourceFile(target));
+    assert.throws(() => assertRegularSourceFile(link), /safely/u);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

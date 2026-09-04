@@ -213,12 +213,13 @@ declarations. Only this mode writes `releaseEligible: true` and
 the runtime image deliberately contains no cluster administration tools.
 Before granting release eligibility, the runner also fingerprints every tracked
 source file included by the Docker context and requires the candidate's bytes
-to match the clean reviewed checkout exactly. The source bytes are exported by
-the Docker daemon and hashed by host-reviewed code; no candidate program is
-trusted to report its own hash. Installed s-m-r-t package metadata is likewise
-copied out without executing candidate code and matched to the reviewed pinned
-declarations. Its candidate inventory must match the independently executed
-host inventory.
+to match the clean reviewed checkout exactly. The Docker daemon resolves and
+copies each reviewed tracked path out of a stopped container, every result must
+be a regular file, and host-reviewed code hashes those bytes; no candidate
+program or candidate-controlled archive link is trusted to report its own
+hash. Installed s-m-r-t package metadata is likewise copied out without
+executing candidate code and matched to the reviewed pinned declarations. Its
+candidate inventory must match the independently executed host inventory.
 The report records only already-known digests, versions, and pass/fail facts.
 It is not a substitute for checking Kubernetes
 `status.containerStatuses[].imageID`. The isolated
