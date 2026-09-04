@@ -186,6 +186,21 @@ uploaded as a secret-free workflow artifact, but remains
 The `--local-image-id` option exists only for that non-release verification and
 rejects tags and mutable references.
 
+The Docker build sets `ROLLDOWN_MAX_BLOCKING_THREADS=64` only in its build
+stage. This is a targeted workaround for a silent low-CPU Vite 8 SSR hang with
+the pinned Rolldown 1.1.5; see the upstream context at
+<https://github.com/rolldown/rolldown/pull/10666>. The mitigation is not proven
+by local builds and does not establish that it resolves the authoritative
+45-minute CI timeout. A successful CI build and contract run for the exact
+candidate image remain required before relying on this mitigation; the setting
+is intentionally absent from the runtime image.
+
+For pull requests, candidate CI checks out the pull request head revision and
+uses that same revision for the image provenance label, evidence assertion, and
+artifact name. Pushes use `github.sha`. This exact revision binding is required
+because the default pull-request `github.sha` can identify GitHub's synthetic
+merge commit rather than the candidate source.
+
 Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
 40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
 `pnpm-lock.yaml`.

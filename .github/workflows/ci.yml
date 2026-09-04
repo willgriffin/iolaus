@@ -20,6 +20,10 @@ jobs:
   candidate-image:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CANDIDATE_REVISION: >-
+        ${{ github.event_name == 'pull_request' &&
+        github.event.pull_request.head.sha || github.sha }}
     services:
       postgres-image-cache:
         image: postgres:16-alpine
@@ -27,6 +31,8 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_REVISION }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24.18.0'
@@ -37,7 +43,7 @@ jobs:
           lock_sha256="$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)"
           docker build --progress=plain --load \
             --file apps/site/Dockerfile \
-            --build-arg "IOLAUS_SOURCE_REVISION=${GITHUB_SHA}" \
+            --build-arg "IOLAUS_SOURCE_REVISION=${CANDIDATE_REVISION}" \
             --build-arg "IOLAUS_LOCKFILE_SHA256=${lock_sha256}" \
             --tag iolaus-parity-candidate:ci .
       - name: Verify immutable candidate with synthetic data
@@ -76,7 +82,8 @@ jobs:
             rehearsal.assetMigration?.copiedOnIdempotentRerun !== 0 ||
             rehearsal.candidateParity?.candidateImageTested !== true ||
             rehearsal.candidateParity?.provenanceBinding !== 'local-image-id' ||
-            rehearsal.candidateParity?.revision !== process.env.GITHUB_SHA ||
+            rehearsal.candidateParity?.revision !==
+              process.env.CANDIDATE_REVISION ||
             rehearsal.secretValuesIncluded !== false ||
             candidate.status !== 'passed' ||
             candidate.candidateImageTested !== true ||
@@ -99,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: iolaus-candidate-parity-${{ github.sha }}
+          name: iolaus-candidate-parity-${{ env.CANDIDATE_REVISION }}
           path: |
             .omo/evidence/issue-32/ci-synthetic-rehearsal.json
             .omo/evidence/issue-32/ci-candidate-contract.json
