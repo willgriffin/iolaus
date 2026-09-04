@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   recordDecision: vi.fn(async () => ({ status: 'maybe' })),
   sourceHealth: vi.fn(async () => ({ items: [] })),
   sourceCrawlStatus: vi.fn(async () => ({ items: [] })),
+  createSource: vi.fn(async () => ({ id: 'source-1' })),
   setSourceActive: vi.fn(async () => ({ active: true })),
   crawlSource: vi.fn(async () => ({ jobId: 'job-1', crawlId: 'crawl-1' })),
   inspectApplication: vi.fn(async () => ({ application: { id: 'app-1' } })),
@@ -55,6 +56,7 @@ vi.mock('$lib/server/resume-webmcp', () => ({
 }));
 
 vi.mock('$lib/server/source-webmcp', () => ({
+  createRootSourceFromWebMcp: mocks.createSource,
   enqueueRootSourceCrawl: mocks.crawlSource,
   listRootSourceHealth: mocks.sourceHealth,
   listSourceCrawlStatus: mocks.sourceCrawlStatus,
@@ -414,6 +416,54 @@ describe('job-search WebMCP route', () => {
       { idempotencyKey: 'qa-run-2026-08-31', reason: 'QA', sourceId },
       actor,
     );
+  });
+
+  it('creates one validated root source as the owner without a crawl request', async () => {
+    const { POST } = await import('./+server');
+    const actor = { id: 'user-1' };
+
+    const response = await POST(
+      event({
+        action: 'create-source',
+        body: {
+          name: 'OpenAI Careers',
+          provider: 'ashby',
+          url: 'https://jobs.ashbyhq.com/openai',
+        },
+        method: 'POST',
+        user: actor,
+      }) as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.createSource).toHaveBeenCalledWith(
+      {
+        name: 'OpenAI Careers',
+        provider: 'ashby',
+        url: 'https://jobs.ashbyhq.com/openai',
+      },
+      actor,
+    );
+    expect(mocks.crawlSource).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source creation without source-create permission', async () => {
+    const { POST } = await import('./+server');
+    const response = await POST(
+      event({
+        action: 'create-source',
+        body: {
+          name: 'OpenAI Careers',
+          provider: 'ashby',
+          url: 'https://jobs.ashbyhq.com/openai',
+        },
+        method: 'POST',
+        permissions: without('sources.create'),
+      }) as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.createSource).not.toHaveBeenCalled();
   });
 
   it('refuses crawl enqueue when a downstream write permission is absent', async () => {

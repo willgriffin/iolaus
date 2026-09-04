@@ -62,7 +62,42 @@ let healthBySourceId = $state<Record<string, SourceHealth | undefined>>({});
 let healthError = $state('');
 let healthLoading = $state(true);
 
-const rootSources = $derived(records.filter(isRootSource));
+/**
+ * The generic admin collection is only an initial render hint for this
+ * curated page. Source health is the bounded, provenance-checked root-source
+ * projection used by the agent surface, so fold it back into the cards once
+ * it arrives. This prevents a valid local root from looking missing merely
+ * because a generic collection hydration raced or used a stale snapshot.
+ */
+const rootSources = $derived.by(() => {
+  const byId = new Map<string, AdminRecord>();
+
+  for (const record of records) {
+    if (!isRootSource(record)) continue;
+    const id = sourceId(record);
+    if (id) byId.set(id, record);
+  }
+
+  for (const item of Object.values(healthBySourceId)) {
+    if (!item?.id) continue;
+    const existing = byId.get(item.id) ?? {};
+    // Health only lists durable, operable roots. Keep the generic record's
+    // URL when available because health intentionally never exposes it.
+    byId.set(item.id, {
+      ...existing,
+      id: item.id,
+      isActive: item.active,
+      lastCheckedAt: item.lastCheckedAt,
+      name: item.name,
+      parentSourceId: null,
+      provider: item.provider,
+      sourceRole: 'root',
+      type: item.type,
+    });
+  }
+
+  return [...byId.values()];
+});
 
 function text(value: unknown): string {
   if (typeof value === 'string') return value.trim();

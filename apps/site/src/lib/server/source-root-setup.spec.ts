@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createRootSource, parseRootSourceSetup } from './source-root-setup.js';
+import {
+  createRootSource,
+  parseRootSourceInput,
+  parseRootSourceSetup,
+} from './source-root-setup.js';
 
 function form(values: Record<string, string> = {}): FormData {
   const data = new FormData();
@@ -8,6 +12,36 @@ function form(values: Record<string, string> = {}): FormData {
 }
 
 describe('root source setup', () => {
+  it('validates a browser-agent OpenAI Ashby root without contacting it', () => {
+    expect(
+      parseRootSourceInput({
+        name: 'OpenAI Careers',
+        provider: 'ashby',
+        url: 'https://jobs.ashbyhq.com/openai#openings',
+      }),
+    ).toEqual({
+      active: true,
+      name: 'OpenAI Careers',
+      provider: 'ashby',
+      type: 'company_careers',
+      url: 'https://jobs.ashbyhq.com/openai',
+    });
+  });
+
+  it.each([
+    [{ name: 'OpenAI', provider: 'ashby', url: 'https://example.com/openai' }],
+    [
+      {
+        active: 'true',
+        name: 'OpenAI',
+        provider: 'ashby',
+        url: 'https://jobs.ashbyhq.com/openai',
+      },
+    ],
+  ])('rejects unsafe browser-agent input %#', (input) => {
+    expect(() => parseRootSourceInput(input)).toThrow();
+  });
+
   it('normalizes a friendly OpenAI Ashby source into an explicit root', async () => {
     const input = parseRootSourceSetup(
       form({

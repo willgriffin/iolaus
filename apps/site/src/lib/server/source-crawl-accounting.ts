@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { resolveDatabase } from '@happyvertical/smrt-core';
+import { getDbConfig } from './db.js';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
@@ -100,6 +101,20 @@ const REQUIRED_ACCOUNTING_COLUMNS = [
   'outcome',
   'terminal_at',
 ] as const;
+
+function usesSqlite(): boolean {
+  return getDbConfig().type === 'sqlite';
+}
+
+function returnedId(column = 'id'): string {
+  return usesSqlite() ? `CAST(${column} AS TEXT)` : `${column}::text`;
+}
+
+function nonblank(expression: string): string {
+  return usesSqlite()
+    ? `NULLIF(TRIM(${expression}), '')`
+    : `NULLIF(BTRIM(${expression}), '')`;
+}
 
 /**
  * Add the database-level natural key and outcome guard after SMRT has added
@@ -216,6 +231,50 @@ export async function createSourceCrawlAttempt(
   const id = randomUUID();
   return await db.transaction(async (transaction) => {
     await lockRunningSourceCrawl(transaction, sourceCrawlId);
+    if (usesSqlite()) {
+      const existing = await selectAttempt(
+        transaction,
+        sourceCrawlId,
+        attemptKey,
+      );
+      if (existing) return existing;
+      await transaction.query(
+        `INSERT INTO source_crawl_items (
+         id, slug, context, source_crawl_id, attempt_key, outcome, terminal_at,
+         external_id, posting_url, canonical_url, title, company_name,
+         status, content_fingerprint, content_version,
+         intelligence_enqueue_status, reason, raw_json
+       ) VALUES (
+         ?, ?, '', ?, ?, 'pending', NULL,
+         ?, ?, ?, ?, ?, 'pending', ?, ?, 'ineligible', '', ?
+       )`,
+        [
+          id,
+          `crawl-attempt-${id}`,
+          sourceCrawlId,
+          attemptKey,
+          textValue(input.externalId),
+          textValue(input.postingUrl),
+          textValue(input.canonicalUrl),
+          textValue(input.title),
+          textValue(input.companyName),
+          textValue(input.contentFingerprint),
+          input.contentVersion ?? 0,
+          input.rawJson ?? '{}',
+        ],
+      );
+      const created = await selectAttempt(
+        transaction,
+        sourceCrawlId,
+        attemptKey,
+      );
+      if (!created) {
+        throw new Error(
+          `Source crawl attempt ${sourceCrawlId}/${attemptKey} was not persisted.`,
+        );
+      }
+      return created;
+    }
     const result = await transaction.query(
       `INSERT INTO source_crawl_items (
        id, slug, context, source_crawl_id, attempt_key, outcome, terminal_at,
@@ -227,10 +286,10 @@ export async function createSourceCrawlAttempt(
        ?, ?, ?, ?, ?, 'pending', ?, ?, 'ineligible', '', ?
      )
      ON CONFLICT (source_crawl_id, attempt_key)
-       WHERE NULLIF(BTRIM(attempt_key), '') IS NOT NULL
+       WHERE ${nonblank('attempt_key')} IS NOT NULL
      DO UPDATE SET source_crawl_id = EXCLUDED.source_crawl_id
      RETURNING
-       id::text AS id,
+       ${returnedId()} AS id,
        source_crawl_id AS "sourceCrawlId",
        attempt_key AS "attemptKey",
        outcome,
@@ -277,7 +336,7 @@ export async function prepareSourceCrawlAttempt(
            status = ?, updated_at = CURRENT_TIMESTAMP
        WHERE source_crawl_id = ? AND attempt_key = ? AND outcome = 'pending'
        RETURNING
-         id::text AS id,
+         ${returnedId()} AS id,
          source_crawl_id AS "sourceCrawlId",
          attempt_key AS "attemptKey",
          outcome,
@@ -359,7 +418,7 @@ export async function recordSourceCrawlAttemptTerminalIntent(
        WHERE source_crawl_id = ? AND attempt_key = ? AND outcome = 'pending'
          AND status IN ('pending', ?)
        RETURNING
-         id::text AS id,
+         ${returnedId()} AS id,
          source_crawl_id AS "sourceCrawlId",
          attempt_key AS "attemptKey",
          outcome,
@@ -389,31 +448,14 @@ export async function recoverPendingSourceCrawlAttempts(
   terminalAt = new Date(),
 ): Promise<number> {
   const id = requiredText(sourceCrawlId, 'sourceCrawlId');
-  const matches = await db.query(
-    `SELECT
-       item.id::text AS "itemId",
-       item.status AS "itemStatus",
-       opportunity.id::text AS "opportunityId"
-     FROM source_crawl_items AS item
-     JOIN source_crawls AS crawl
-       ON CAST(crawl.id AS TEXT) = item.source_crawl_id
-     LEFT JOIN opportunities AS opportunity
-       ON (
-        (NULLIF(BTRIM(item.external_id), '') IS NOT NULL
-          AND opportunity.source_id = crawl.source_id
-          AND opportunity.external_id = item.external_id)
-        OR
-        (NULLIF(RTRIM(LOWER(BTRIM(item.posting_url)), '/'), '') IS NOT NULL
-          AND RTRIM(LOWER(BTRIM(item.posting_url)), '/') IN (
-            RTRIM(LOWER(BTRIM(opportunity.posting_url)), '/'),
-            RTRIM(LOWER(BTRIM(opportunity.canonical_url)), '/')
-          ))
-        OR
-        (NULLIF(RTRIM(LOWER(BTRIM(item.canonical_url)), '/'), '') IS NOT NULL
-          AND RTRIM(LOWER(BTRIM(item.canonical_url)), '/') IN (
-            RTRIM(LOWER(BTRIM(opportunity.posting_url)), '/'),
-            RTRIM(LOWER(BTRIM(opportunity.canonical_url)), '/')
-          ))
+  const sqlite = usesSqlite();
+  const trimmed = (expression: string): string =>
+    sqlite ? `TRIM(${expression})` : `BTRIM(${expression})`;
+  const normalizedUrl = (expression: string): string =>
+    `RTRIM(LOWER(${trimmed(expression)}), '/')`;
+  const recoveryIdentityMatch = sqlite
+    ? ''
+    : `
         OR
         EXISTS (
           SELECT 1
@@ -439,7 +481,32 @@ export async function recoverPendingSourceCrawlAttempts(
                 RTRIM(LOWER(BTRIM(opportunity.posting_url)), '/'),
                 RTRIM(LOWER(BTRIM(opportunity.canonical_url)), '/')
               ))
-        )
+        )`;
+  const matches = await db.query(
+    `SELECT
+       ${returnedId('item.id')} AS "itemId",
+       item.status AS "itemStatus",
+       ${returnedId('opportunity.id')} AS "opportunityId"
+     FROM source_crawl_items AS item
+     JOIN source_crawls AS crawl
+       ON CAST(crawl.id AS TEXT) = item.source_crawl_id
+     LEFT JOIN opportunities AS opportunity
+       ON (
+        (NULLIF(${trimmed('item.external_id')}, '') IS NOT NULL
+          AND opportunity.source_id = crawl.source_id
+          AND opportunity.external_id = item.external_id)
+        OR
+        (NULLIF(${normalizedUrl('item.posting_url')}, '') IS NOT NULL
+          AND ${normalizedUrl('item.posting_url')} IN (
+            ${normalizedUrl('opportunity.posting_url')},
+            ${normalizedUrl('opportunity.canonical_url')}
+          ))
+        OR
+        (NULLIF(${normalizedUrl('item.canonical_url')}, '') IS NOT NULL
+          AND ${normalizedUrl('item.canonical_url')} IN (
+            ${normalizedUrl('opportunity.posting_url')},
+            ${normalizedUrl('opportunity.canonical_url')}
+          ))${recoveryIdentityMatch}
       )
      WHERE item.source_crawl_id = ? AND item.outcome = 'pending'
      ORDER BY item.id, opportunity.id`,
@@ -646,7 +713,7 @@ async function finalizeLockedSourceCrawlAttempt(
          AND attempt_key = ?
          AND outcome = 'pending'
        RETURNING
-         id::text AS id,
+         ${returnedId()} AS id,
          source_crawl_id AS "sourceCrawlId",
          attempt_key AS "attemptKey",
          outcome,
@@ -706,7 +773,7 @@ async function recordPersistenceIntentLocked(
      WHERE source_crawl_id = ? AND attempt_key = ? AND outcome = 'pending'
        AND status IN ('pending', ?)
      RETURNING
-       id::text AS id,
+       ${returnedId()} AS id,
        source_crawl_id AS "sourceCrawlId",
        attempt_key AS "attemptKey",
        outcome,
@@ -764,23 +831,31 @@ async function reconcileLockedSourceCrawlAccounting(
   db: QueryableDatabase,
   sourceCrawlId: string,
 ): Promise<SourceCrawlAccounting> {
+  const count = (predicate?: string): string => {
+    const expression = predicate
+      ? `COUNT(*) FILTER (WHERE ${predicate})`
+      : 'COUNT(*)';
+    return usesSqlite()
+      ? `CAST(${expression} AS INTEGER)`
+      : `${expression}::integer`;
+  };
   const result = await db.query(
     `SELECT
-       COUNT(*)::integer AS "attemptCount",
-       COUNT(*) FILTER (WHERE outcome = 'pending')::integer AS "pendingCount",
-       COUNT(*) FILTER (WHERE outcome IN (
+       ${count()} AS "attemptCount",
+       ${count("outcome = 'pending'")} AS "pendingCount",
+       ${count(`outcome IN (
          'created', 'reused', 'relisted', 'duplicate', 'skipped',
          'failed_persistence'
-       ))::integer AS "terminalCount",
-       COUNT(*) FILTER (WHERE outcome = 'created')::integer AS "createdCount",
-       COUNT(*) FILTER (WHERE outcome = 'reused')::integer AS "reusedCount",
-       COUNT(*) FILTER (WHERE outcome = 'relisted')::integer AS "relistedCount",
-       COUNT(*) FILTER (WHERE outcome = 'duplicate')::integer AS "duplicateCount",
-       COUNT(*) FILTER (WHERE outcome = 'skipped')::integer AS "skippedCount",
-       COUNT(*) FILTER (WHERE outcome = 'failed_persistence')::integer AS "failedPersistenceCount"
+       )`)} AS "terminalCount",
+       ${count("outcome = 'created'")} AS "createdCount",
+       ${count("outcome = 'reused'")} AS "reusedCount",
+       ${count("outcome = 'relisted'")} AS "relistedCount",
+       ${count("outcome = 'duplicate'")} AS "duplicateCount",
+       ${count("outcome = 'skipped'")} AS "skippedCount",
+       ${count("outcome = 'failed_persistence'")} AS "failedPersistenceCount"
      FROM source_crawl_items
      WHERE source_crawl_id = ?
-       AND NULLIF(BTRIM(attempt_key), '') IS NOT NULL`,
+       AND ${nonblank('attempt_key')} IS NOT NULL`,
     [sourceCrawlId],
   );
   const accounting = accountingRecord(result.rows[0]);
@@ -824,7 +899,7 @@ async function lockSourceCrawl(
   sourceCrawlId: string,
 ): Promise<void> {
   const result = await db.query(
-    'SELECT id FROM source_crawls WHERE id = ? FOR UPDATE',
+    `SELECT id FROM source_crawls WHERE id = ?${usesSqlite() ? '' : ' FOR UPDATE'}`,
     [sourceCrawlId],
   );
   if (result.rows.length !== 1) {
@@ -841,8 +916,7 @@ async function lockRunningSourceCrawl(
      FROM source_crawls
      WHERE id = ?
        AND status = 'running'
-       AND finished_at IS NULL
-     FOR UPDATE`,
+       AND finished_at IS NULL${usesSqlite() ? '' : '\n     FOR UPDATE'}`,
     [sourceCrawlId],
   );
   if (result.rows.length !== 1) {
@@ -857,7 +931,7 @@ async function selectAttempt(
 ): Promise<SourceCrawlAttemptRecord | null> {
   const result = await db.query(
     `SELECT
-       id::text AS id,
+       ${returnedId()} AS id,
        source_crawl_id AS "sourceCrawlId",
        attempt_key AS "attemptKey",
        outcome,

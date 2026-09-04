@@ -178,6 +178,51 @@ describe('application review materials', () => {
     expect(data.materials.map((item) => item.materialType)).not.toContain(
       'resume_variant',
     );
+    expect(data.preflight).toEqual({ requiresOverride: false });
+  });
+
+  it('projects an inconclusive posting check as an owner-override requirement', async () => {
+    const applications = collection([
+      record({
+        id: 'app-1',
+        opportunityId: 'opportunity-1',
+        resumeAssetId: 'resume-global',
+        status: 'awaiting_user',
+      }),
+    ]);
+    const assets = collection([
+      record({
+        applicationId: '',
+        assetType: 'resume',
+        id: 'resume-global',
+        markdownPath: 'published/resume.md',
+        title: 'Published resume',
+      }),
+    ]);
+    mocks.collections.set('Application', applications);
+    mocks.collections.set(
+      'Opportunity',
+      collection([record({ id: 'opportunity-1' })]),
+    );
+    mocks.collections.set('ResumeAsset', assets);
+    mocks.collections.set(
+      'AgentRun',
+      collection([
+        record({
+          id: 'preflight-run-1',
+          opportunityId: 'opportunity-1',
+          outputJson: JSON.stringify({
+            evidence: { checkedAt: '2026-09-04T12:00:00.000Z' },
+            outcome: 'inconclusive',
+          }),
+          runType: 'posting_preflight',
+        }),
+      ]),
+    );
+
+    const data = await loadApplicationReviewPageData('app-1');
+
+    expect(data.preflight).toEqual({ requiresOverride: true });
   });
 
   it('backfills missing pdf artifacts on existing application resume assets', async () => {

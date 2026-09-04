@@ -1,7 +1,46 @@
+import type { FilesystemInterface } from '@happyvertical/files';
 import { applicationRuntime } from './application-runtime.js';
+import { getResumeFilesystem } from './resume-files.js';
 import { getCollection } from './smrt.js';
 
 const FIXTURE_PREFIX = 'iolaus-demo-fictional';
+const FIXTURE_RESUME_BASE_PATH = `generated-resumes/${FIXTURE_PREFIX}/resume`;
+
+const FIXTURE_RESUME_MARKDOWN = `# Jordan Example
+
+**Fictional Staff Software Engineer**
+jordan.example@demo.invalid · Remote in Canada
+
+> This is generated fictional demo content for Iolaus local QA. It is not a
+> real person's resume and must never be submitted to an employer.
+
+## Summary
+
+Local-first product and platform engineer experienced in making complex
+workflows reliable, understandable, and reviewable. Enjoys building calm
+interfaces where people stay in control of agent-assisted work.
+
+## Selected experience
+
+### Example Orbit Labs — Fictional Staff Software Engineer
+
+- Designed an agent-assisted opportunity triage workflow with explicit human
+  review and no automatic external submissions.
+- Built resilient TypeScript and Svelte interfaces backed by Node.js and
+  PostgreSQL.
+- Made source provenance, crawl progress, and decision notes visible to the
+  person using the system.
+
+## Skills
+
+TypeScript · Svelte · Node.js · PostgreSQL · WebMCP · Accessible product design
+
+## Demo boundary
+
+All names, roles, contact details, and experience above are fictional. Review
+this local artifact only; do not reuse it for a real application.`;
+
+type FixtureFilesystem = Pick<FilesystemInterface, 'write'>;
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -39,8 +78,50 @@ export interface SyntheticDemoFixtureResult {
   triageOpportunityId: string;
 }
 
+export interface SyntheticDemoFixtureOptions {
+  /**
+   * Allows focused tests to capture the deterministic text artifacts without
+   * touching the local runtime asset store.
+   */
+  filesystem?: FixtureFilesystem;
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function syntheticResumeHtml(markdown: string): string {
+  const escaped = markdown
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fictional demo resume</title></head><body><pre>${escaped}</pre></body></html>`;
+}
+
+async function writeSyntheticResumeArtifacts(
+  filesystem: FixtureFilesystem,
+): Promise<void> {
+  await Promise.all([
+    filesystem.write(
+      `${FIXTURE_RESUME_BASE_PATH}.md`,
+      FIXTURE_RESUME_MARKDOWN,
+      {
+        createParents: true,
+      },
+    ),
+    filesystem.write(
+      `${FIXTURE_RESUME_BASE_PATH}.txt`,
+      FIXTURE_RESUME_MARKDOWN,
+      {
+        createParents: true,
+      },
+    ),
+    filesystem.write(
+      `${FIXTURE_RESUME_BASE_PATH}.html`,
+      syntheticResumeHtml(FIXTURE_RESUME_MARKDOWN),
+      { createParents: true },
+    ),
+  ]);
 }
 
 /**
@@ -136,6 +217,7 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
 export async function seedSyntheticDemoFixture(
   suppliedCollections?: SyntheticDemoFixtureCollections,
   environment: NodeJS.ProcessEnv = process.env,
+  options: SyntheticDemoFixtureOptions = {},
 ): Promise<SyntheticDemoFixtureResult> {
   assertSyntheticDemoFixtureEnabled(environment);
   const collections = suppliedCollections ?? (await defaultCollections());
@@ -165,8 +247,15 @@ export async function seedSyntheticDemoFixture(
     {
       companyKey: `${FIXTURE_PREFIX}-company`,
       name: 'Example Orbit Labs (fictional demo)',
-      productSummary: 'Fictional company for the Iolaus local demo.',
+      hqLocation: 'Distributed (fictional demo)',
+      productSummary:
+        'Fictional local-first employment workspace used only to demonstrate Iolaus opportunity triage.',
       researchStatus: 'complete',
+      remotePolicy: 'remote',
+      technicalSummary:
+        'Fictional product team working with TypeScript, Svelte, Node.js, and PostgreSQL.',
+      whyInteresting:
+        'Demo-only context: this record exists to make the local triage workflow legible.',
       websiteUrl: 'https://example.invalid/iolaus-demo-company',
     },
   );
@@ -177,7 +266,7 @@ export async function seedSyntheticDemoFixture(
     { url: 'https://example.invalid/iolaus-demo-ashby' },
     {
       isActive: true,
-      name: 'Example Ashby board (fictional Iolaus demo)',
+      name: 'Example Ashby board — fictional local demo (no live crawl)',
       provider: 'ashby',
       refreshCadence: 'manual',
       sourceRole: 'root',
@@ -193,12 +282,28 @@ export async function seedSyntheticDemoFixture(
       applyMethod: 'manual',
       applyUrl: 'https://example.invalid/iolaus-demo-apply',
       companyId: stringValue(company.record.id),
+      compNotes:
+        'Fictional CAD salary range for local triage only; it is not an offer or a real compensation signal.',
+      currency: 'CAD',
       descriptionRaw:
-        'Fictional Iolaus demo opportunity. No employer or external posting exists.',
+        'Fictional Iolaus demo opportunity. No employer or external posting exists.\n\nLead a small platform team building a local-first employment workspace that people and agents can use together. Shape reliable workflows for collecting opportunities, comparing fit, and preparing reviewed applications.\n\nYou would work closely with product and design to turn agent-assisted steps into calm, understandable screens. This is demo content only: no role is open and no external action is possible.',
+      descriptionSummary:
+        'Lead platform work for a fictional local-first employment workspace, making agent-assisted job search reliable and understandable.',
+      employmentType: 'full_time',
       externalId: `${FIXTURE_PREFIX}-opportunity`,
       humanReviewStatus: 'apply',
-      locationNotes: 'Remote (fictional demo)',
+      locationNotes: 'Remote within Canada (fictional local demo)',
+      locations: 'Canada',
       postingUrl: 'https://example.invalid/iolaus-demo-posting',
+      preferredSkills: 'WebMCP\nAccessibility\nProduct design collaboration',
+      qualifications:
+        'Experience owning production web systems\nClear written communication\nComfort working across product and platform concerns',
+      requiredSkills: 'TypeScript\nSvelte\nNode.js\nPostgreSQL',
+      responsibilities:
+        'Design durable agent-assisted workflows\nShip accessible Svelte interfaces\nImprove reliability and observability for local data',
+      salaryMax: 195000,
+      salaryMin: 165000,
+      seniority: 'principal',
       status: 'recommended',
       sourceId: stringValue(source.record.id),
       title: 'Fictional Principal Engineer — Iolaus Demo',
@@ -213,16 +318,33 @@ export async function seedSyntheticDemoFixture(
       applyMethod: 'manual',
       applyUrl: 'https://example.invalid/iolaus-demo-triage-apply',
       companyId: stringValue(company.record.id),
+      compNotes:
+        'Fictional CAD salary range for a safe, local triage demonstration only.',
+      currency: 'CAD',
       descriptionRaw:
-        'Fictional Iolaus triage opportunity. No employer or external posting exists.',
+        'Fictional Iolaus triage opportunity. No employer or external posting exists.\n\nBuild the daily decision-making experience for people using an agent to find work. Turn messy listing data into concise, reviewable cards and make every recommendation easy to inspect, annotate, accept, defer, or reject.\n\nThis listing intentionally exercises the triage queue. It is fictional, has no employer contact, and cannot be submitted.',
+      descriptionSummary:
+        'Build the reviewable job-triage experience that helps people make informed decisions with an agent.',
+      employmentType: 'full_time',
       externalId: `${FIXTURE_PREFIX}-triage-opportunity`,
       humanReviewStatus: 'needs_input',
       firstSeenAt: new Date('2026-09-03T00:02:00.000Z'),
       freshness: 'fresh',
       lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
-      locationNotes: 'Remote (fictional demo)',
+      locationNotes:
+        'Remote in Canada or the United States (fictional local demo)',
+      locations: 'Canada\nUnited States',
       organizationProfileId: stringValue(profile.record.id),
       postingUrl: 'https://example.invalid/iolaus-demo-triage-posting',
+      preferredSkills: 'WebMCP\nUX research\nData visualization',
+      qualifications:
+        'Experience delivering end-to-end product features\nStrong product judgment\nAbility to explain tradeoffs clearly',
+      requiredSkills: 'TypeScript\nSvelte\nSQL\nProduct discovery',
+      responsibilities:
+        'Improve triage clarity and pacing\nDesign agent-visible decision context\nPartner with users on workflow feedback',
+      salaryMax: 180000,
+      salaryMin: 145000,
+      seniority: 'staff',
       sourceId: stringValue(source.record.id),
       status: 'recommended',
       title: 'Fictional Staff Engineer — Iolaus Triage Demo',
@@ -240,16 +362,33 @@ export async function seedSyntheticDemoFixture(
       applyMethod: 'manual',
       applyUrl: 'https://example.invalid/iolaus-demo-triage-followup-apply',
       companyId: stringValue(company.record.id),
+      compNotes:
+        'Fictional CAD salary range for a safe, local triage demonstration only.',
+      currency: 'CAD',
       descriptionRaw:
-        'Second fictional Iolaus triage opportunity. No employer or external posting exists.',
+        "Second fictional Iolaus triage opportunity. No employer or external posting exists.\n\nBuild dependable integrations that turn public job-board content into a respectful, user-reviewed workflow. Focus on resilient ingestion, clear source provenance, and tools that let an agent assist without making decisions on a person's behalf.\n\nThis follow-up record exists to prove that a triage decision advances the queue. It is fictional and cannot contact or submit to an employer.",
+      descriptionSummary:
+        'Build reliable job-source integrations and transparent agent controls for a fictional local-first job-search workspace.',
+      employmentType: 'full_time',
       externalId: `${FIXTURE_PREFIX}-triage-followup-opportunity`,
       firstSeenAt: new Date('2026-09-03T00:00:00.000Z'),
       freshness: 'fresh',
       humanReviewStatus: 'needs_input',
       lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
-      locationNotes: 'Remote (fictional demo)',
+      locationNotes:
+        'Remote within North American time zones (fictional local demo)',
+      locations: 'Canada\nUnited States',
       organizationProfileId: stringValue(profile.record.id),
       postingUrl: 'https://example.invalid/iolaus-demo-triage-followup-posting',
+      preferredSkills: 'WebMCP\nObservability\nDistributed systems',
+      qualifications:
+        'Experience with public-web integrations\nPragmatic approach to reliability\nRespect for user consent and provenance',
+      requiredSkills: 'TypeScript\nNode.js\nPostgreSQL\nHTTP APIs',
+      responsibilities:
+        'Build resilient source connectors\nSurface crawl progress and provenance\nKeep agent actions user-reviewable',
+      salaryMax: 175000,
+      salaryMin: 140000,
+      seniority: 'staff',
       sourceId: stringValue(source.record.id),
       status: 'recommended',
       title: 'Fictional Staff Engineer — Iolaus Triage Follow-up',
@@ -341,19 +480,42 @@ export async function seedSyntheticDemoFixture(
       title: 'Fictional Staff Engineer — Iolaus Triage Follow-up',
     },
   );
+  const resumePayload = {
+    assetType: 'resume',
+    candidateProfileId: stringValue(profile.record.id),
+    generatedAt: new Date('2026-09-03T00:01:00.000Z'),
+    generatedPath: FIXTURE_RESUME_BASE_PATH,
+    htmlPath: `${FIXTURE_RESUME_BASE_PATH}.html`,
+    markdownPath: `${FIXTURE_RESUME_BASE_PATH}.md`,
+    notes:
+      'Generated fictional demo resume. Local review only; no real candidate data or submission use.',
+    // Keep the original stable key so prior local demos receive this safe
+    // upgrade rather than a second fixture asset.
+    outputSlug: `${FIXTURE_PREFIX}-resume-placeholder`,
+    pdfBasename: '',
+    pdfPath: '',
+    status: 'generated',
+    textPath: `${FIXTURE_RESUME_BASE_PATH}.txt`,
+    title: 'Fictional demo resume — generated text',
+  };
   const resume = await findOrCreate(
     collections.resumeAssets,
     { outputSlug: `${FIXTURE_PREFIX}-resume-placeholder` },
-    {
-      assetType: 'resume',
-      candidateProfileId: stringValue(profile.record.id),
-      notes: 'Fictional placeholder only. No personal resume file is stored.',
-      outputSlug: `${FIXTURE_PREFIX}-resume-placeholder`,
-      pdfBasename: 'fictional-demo-resume-placeholder.pdf',
-      status: 'placeholder',
-      title: 'Fictional demo resume placeholder',
-    },
+    resumePayload,
   );
+  // A previous demo version seeded a placeholder. This one static, visibly
+  // fictional asset may be refreshed in place: it never represents a user's
+  // resume and makes existing local demo installations immediately reviewable.
+  if (!resume.created) {
+    Object.assign(resume.record, resumePayload);
+    await resume.record.save();
+  }
+  const filesystem =
+    options.filesystem ??
+    (suppliedCollections ? undefined : await getResumeFilesystem());
+  if (filesystem) {
+    await writeSyntheticResumeArtifacts(filesystem);
+  }
   await findOrCreate(
     collections.candidateAnswers,
     {

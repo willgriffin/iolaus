@@ -10,10 +10,10 @@ import {
 const COMMAND_CENTER_PATH = '/admin';
 const COMMAND_CENTER_COLLECTIONS = new Set(['opportunities']);
 // Raised deliberately with each application-owned tool: the sweep (#427) took
-// this to 15, and the triage pair (#425) — the candidate read and the
-// dig-deeper mutation behind the right swipe — takes it to 17. Every increment
-// widens the browser-native surface, so it is never a silent bump.
-const COMMAND_CENTER_MAX_TOOLS = 17;
+// this to 15, the triage pair (#425) took it to 17, and the explicit
+// provider-root creation action (#23) takes it to 18. Every increment widens
+// the browser-native surface, so it is never a silent bump.
+const COMMAND_CENTER_MAX_TOOLS = 18;
 const COMMAND_CENTER_EFFECTS = ['read', 'write'] as const;
 const JOB_SEARCH_COLLECTION = 'job-search';
 const JOB_SEARCH_ENDPOINT = '/job-search';
@@ -70,6 +70,17 @@ function jobSearchTool(
  * generic writes.
  */
 export const jobSearchWebMcpToolDefinitions = [
+  jobSearchTool({
+    action: 'create-source',
+    name: 'job_search_create_source',
+    description:
+      'Create and configure one explicit local root source from a public HTTPS provider URL. The source may be marked active for a later crawl, but this action never schedules or contacts the provider.',
+    effect: 'write',
+    idempotent: false,
+    openWorld: true,
+    readOnly: false,
+    path: ['create-source'],
+  }),
   jobSearchTool({
     action: 'source-health',
     name: 'job_search_list_source_health',

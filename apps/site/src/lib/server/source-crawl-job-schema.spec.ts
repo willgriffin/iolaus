@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://test' }),
+}));
+
 import {
   ensureSourceCrawlJobDedupe,
   getSourceCrawlJobDedupeStatus,

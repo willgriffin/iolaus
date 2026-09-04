@@ -76,6 +76,7 @@ import {
   SOURCE_CRAWL_QUEUE,
   SOURCE_JOB_OBJECT_TYPE,
 } from './source-schedules.js';
+import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -7066,11 +7067,20 @@ async function withOpportunityIdentityLocks<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   if (dryRun) return await work();
+  const lockKeys = opportunityIdentityLockKeys(candidate, sourceId, detail);
+  if (getDbConfig().type === 'sqlite') {
+    // Local installs run one embedded source-crawl worker, but this lock also
+    // protects a direct operator retry in another process. PostgreSQL advisory
+    // SQL is deliberately confined to the hosted path below.
+    return await withSqliteOperationLock(
+      `opportunity-identities:${lockKeys.join('\n')}`,
+      work,
+    );
+  }
   const database = await resolveDatabase(getDbConfig());
   if (typeof database.acquireSession !== 'function') return await work();
 
   const session = await database.acquireSession();
-  const lockKeys = opportunityIdentityLockKeys(candidate, sourceId, detail);
   return await withOpportunityIdentityKeyLocks(session, lockKeys, work);
 }
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertSyntheticDemoFixtureEnabled,
   seedSyntheticDemoFixture,
@@ -34,8 +34,10 @@ describe('synthetic demo fixture', () => {
     NODE_ENV: 'development',
   };
   let rows: Record<string, Row[]>;
+  let fixtureFiles: Map<string, string | Buffer>;
 
   beforeEach(() => {
+    fixtureFiles = new Map();
     rows = Object.fromEntries(
       [
         'agentRuns',
@@ -64,6 +66,14 @@ describe('synthetic demo fixture', () => {
     ) as unknown as NonNullable<Parameters<typeof seedSyntheticDemoFixture>[0]>;
   }
 
+  function fixtureFilesystem() {
+    return {
+      write: vi.fn(async (path: string, content: string | Buffer) => {
+        fixtureFiles.set(path, content);
+      }),
+    };
+  }
+
   it('fails closed without explicit local-demo opt-in and outside local runtime', () => {
     expect(() =>
       assertSyntheticDemoFixtureEnabled({ NODE_ENV: 'development' }),
@@ -88,8 +98,13 @@ describe('synthetic demo fixture', () => {
   });
 
   it('creates a complete fictional workflow exactly once', async () => {
-    const first = await seedSyntheticDemoFixture(collections(), environment);
-    const second = await seedSyntheticDemoFixture(collections(), environment);
+    const filesystem = fixtureFilesystem();
+    const first = await seedSyntheticDemoFixture(collections(), environment, {
+      filesystem,
+    });
+    const second = await seedSyntheticDemoFixture(collections(), environment, {
+      filesystem,
+    });
 
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
@@ -129,7 +144,13 @@ describe('synthetic demo fixture', () => {
     );
     expect(rows.opportunities[0]).toMatchObject({
       descriptionRaw: expect.stringContaining('Fictional'),
+      descriptionSummary: expect.stringContaining('local-first employment'),
+      employmentType: 'full_time',
+      locations: 'Canada',
       postingUrl: expect.stringContaining('example.invalid'),
+      preferredSkills: expect.stringContaining('WebMCP'),
+      requiredSkills: expect.stringContaining('TypeScript'),
+      seniority: 'principal',
       sourceId: rows.sources[0].id,
     });
     expect(rows.opportunities.slice(1)).toEqual(
@@ -137,6 +158,20 @@ describe('synthetic demo fixture', () => {
         expect.objectContaining({
           freshness: 'fresh',
           humanReviewStatus: 'needs_input',
+          requiredSkills: expect.stringContaining('TypeScript'),
+          salaryMin: expect.any(Number),
+        }),
+      ]),
+    );
+    expect(rows.opportunities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          descriptionSummary: expect.stringContaining(
+            'transparent agent controls',
+          ),
+          employmentType: 'full_time',
+          locations: 'Canada\nUnited States',
+          responsibilities: expect.stringContaining('user-reviewable'),
         }),
       ]),
     );
@@ -150,7 +185,23 @@ describe('synthetic demo fixture', () => {
       profileKey: 'iolaus-demo-fictional-candidate',
       value: expect.stringContaining('Fictional demo answer'),
     });
-    expect(rows.resumeAssets[0].status).toBe('placeholder');
+    expect(rows.resumeAssets[0]).toMatchObject({
+      generatedPath: 'generated-resumes/iolaus-demo-fictional/resume',
+      markdownPath: 'generated-resumes/iolaus-demo-fictional/resume.md',
+      pdfPath: '',
+      status: 'generated',
+      textPath: 'generated-resumes/iolaus-demo-fictional/resume.txt',
+      title: 'Fictional demo resume — generated text',
+    });
+    expect(
+      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.md'),
+    ).toContain('Fictional Staff Software Engineer');
+    expect(
+      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.txt'),
+    ).toContain('must never be submitted to an employer');
+    expect(
+      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.html'),
+    ).toContain('<pre>');
     expect(rows.opportunities[0].organizationProfileId).toBeFalsy();
   });
 });
