@@ -163,6 +163,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2
+      playwright-core:
+        specifier: 1.61.1
+        version: 1.61.1
       svelte:
         specifier: 'catalog:'
         version: 5.56.4
