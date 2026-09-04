@@ -73,7 +73,7 @@ Before any row write, the importer performs deterministic reconciliation over
 the complete logical bundle. Missing or quarantined parents cascade to their
 children; duplicate natural keys, duplicate junction cardinality, malformed
 UUIDs, cross-tenant references, self-reference cycles, and unqualified
-persisted SMRT `_meta_type` values are quarantined instead of being silently
+or missing persisted SMRT `_meta_type` values are quarantined instead of being silently
 nulled or dropped. The sole automatic relationship repair converts an empty
 nullable reference sentinel to `null`; every such repair has the stable reason
 code `EMPTY_REFERENCE_TO_NULL`.
@@ -99,10 +99,19 @@ digest remains deterministic after interruption.
 
 Fresh-target admission verifies both the exact count and canonical semantic
 checksum of every pinned bootstrap table. The checksum ignores generated row
-identifiers and initialization timestamps, but binds all stable field content
-and resolves foreign keys to the referenced row's stable semantic identity, so
+identifiers and `created_at`/`updated_at` audit clocks; the control row's
+deployment-time `window_started_at` is normalized only to initialized/uninitialized.
+All other business timestamps and stable field content are bound, and foreign
+keys resolve to the referenced row's stable semantic identity, so
 random UUID regeneration cannot mask a changed role/permission relationship.
-Import processes serialize through a database lease. Completion runs in one
+Source catalog rows that match those verified target rows by their manifest
+natural key (or the role-permission semantic edge) retain the fresh target ID;
+all imported references are deterministically remapped and the source-ID
+collision is recorded by hash.
+Import processes serialize through a PostgreSQL session advisory lock. The
+operator-visible lease row is replaced only after that lock is acquired, so a
+process crash releases authoritative ownership with its database session and
+the same checkpointed run can resume without manual lease deletion. Completion runs in one
 transaction that locks every migrated table against writers, re-reads and
 rechecks every target checksum, persists the reconciliation report, and marks
 the run complete.

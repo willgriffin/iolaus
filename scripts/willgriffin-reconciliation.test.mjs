@@ -241,6 +241,26 @@ test('malformed UUIDs and unqualified persisted STI values are quarantined', () 
   assert.equal(report.counts.rejected, 1);
 });
 
+test('missing and empty persisted STI discriminators are quarantined', () => {
+  const contract = [
+    table('tags', [column('id', 'UUID'), column('_meta_type')]),
+  ];
+  const { acceptedTables, report } = reconcile(contract, {
+    tags: [
+      { id: IDS.a, _meta_type: '' },
+      { id: IDS.b, _meta_type: null },
+      { id: IDS.c },
+    ],
+  });
+
+  assert.equal(acceptedTables[0].rows.length, 0);
+  assert.equal(report.counts.rejected, 3);
+  assert.deepEqual(
+    new Set(report.quarantine.map((entry) => entry.reasonCode)),
+    new Set([RECONCILIATION_REASON_CODES.invalidQualifiedType]),
+  );
+});
+
 test('the full canonical PostgreSQL UUID domain is accepted', () => {
   const contract = [table('tenants', [column('id', 'UUID')])];
   const { acceptedTables, report } = reconcile(contract, {
@@ -281,6 +301,25 @@ test('cross-tenant relationships are quarantined', () => {
   const { report } = reconcile(contract, {
     profiles: [{ id: IDS.a, tenant_id: IDS.b }],
     audit_logs: [{ id: IDS.c, tenant_id: IDS.d, profile_id: IDS.a }],
+  });
+  assert.equal(
+    report.quarantine[0].reasonCode,
+    RECONCILIATION_REASON_CODES.tenantMismatch,
+  );
+});
+
+test('global children cannot reference tenant-private parents', () => {
+  const contract = [
+    table('profiles', [column('id', 'UUID'), column('tenant_id', 'UUID')]),
+    table('profile_assets', [
+      column('id', 'UUID'),
+      column('tenant_id', 'UUID'),
+      column('profile_id', 'UUID', { referencesTable: 'profiles' }),
+    ]),
+  ];
+  const { report } = reconcile(contract, {
+    profiles: [{ id: IDS.a, tenant_id: IDS.b }],
+    profile_assets: [{ id: IDS.c, tenant_id: null, profile_id: IDS.a }],
   });
   assert.equal(
     report.quarantine[0].reasonCode,

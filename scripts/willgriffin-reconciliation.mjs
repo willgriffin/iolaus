@@ -38,7 +38,7 @@ export const SMRT_UPGRADE_HAZARDS = Object.freeze([
     code: 'PERSISTED_QUALIFIED_STI',
     disposition: 'validated',
     status: 'verified',
-    verification: 'Every non-empty _meta_type value must be package-qualified.',
+    verification: 'Every persisted _meta_type value must be present and package-qualified.',
   },
   {
     code: 'SOURCE_UUID_TO_TEXT_ID',
@@ -557,11 +557,12 @@ export function reconcileMigrationRows({
           );
         }
       }
+      const hasStiDiscriminator = table.columns.some(
+        (column) => column.name === '_meta_type',
+      );
       if (
-        Object.hasOwn(row.values, '_meta_type') &&
-        row.values._meta_type != null &&
-        row.values._meta_type !== '' &&
-        !QUALIFIED_STI.test(String(row.values._meta_type))
+        hasStiDiscriminator &&
+        !QUALIFIED_STI.test(String(row.values._meta_type ?? ''))
       ) {
         addQuarantine(
           state,
@@ -650,7 +651,6 @@ export function reconcileMigrationRows({
           const tenantId = row.values.tenant_id;
           const parentTenantId = parent.values.tenant_id;
           if (
-            tenantId != null &&
             parentTenantId != null &&
             String(tenantId) !== String(parentTenantId)
           ) {

@@ -290,7 +290,7 @@ class MemoryMigrationStore {
     const tableRows = this.rows.get(input.table.name) || new Map();
     for (const operation of input.operations) {
       if (operation.action !== 'skip') {
-        tableRows.set(operation.sourceId, structuredClone(operation.targetValues));
+        tableRows.set(operation.targetId, structuredClone(operation.targetValues));
       }
       this.rowLedger.set(
         `${input.runId}:${input.table.name}:${operation.sourceId}`,
@@ -866,6 +866,40 @@ test('export refuses connection parameters that can override the isolated restor
   );
 });
 
+test('PostgreSQL migration lease recovers stale rows through a session lock', async () => {
+  const statements = [];
+  let released = false;
+  const session = {
+    async query(sql) {
+      statements.push(sql);
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ acquired: true }] };
+      }
+      return { rows: [] };
+    },
+    async release() {
+      released = true;
+    },
+  };
+  const store = new PostgresMigrationStore({
+    async query() {
+      return { rows: [] };
+    },
+    async acquireSession() {
+      return session;
+    },
+  });
+
+  assert.equal(await store.withMigrationLease('run-a', async () => 'done'), 'done');
+  assert.ok(
+    statements.some(
+      (sql) => sql.includes('ON CONFLICT (lease_name) DO UPDATE'),
+    ),
+  );
+  assert.ok(statements.some((sql) => sql.includes('pg_advisory_unlock')));
+  assert.equal(released, true);
+});
+
 test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async () => {
   const calls = [];
   const tx = {
@@ -1166,6 +1200,111 @@ test('bootstrap checksums ignore generated ids but bind semantic references', ()
     checksum('role-1', 'grant-1', 'owner'),
     checksum('role-2', 'grant-2', 'viewer'),
   );
+});
+
+test('bootstrap checksums ignore audit clocks but bind semantic timestamps', () => {
+  const controls = table('opportunity_intelligence_controls', [
+    column('id', 'UUID'),
+    column('created_at', 'TIMESTAMP'),
+    column('updated_at', 'TIMESTAMP'),
+    column('window_started_at', 'TIMESTAMP'),
+    column('last_request_at', 'TIMESTAMP', { notNull: false }),
+  ]);
+  const contracts = new Map([[controls.name, controls]]);
+  const checksum = (row) => {
+    const rows = new Map([[controls.name, [row]]]);
+    return canonicalBootstrapTableChecksum(
+      rows.get(controls.name),
+      controls,
+      rows,
+      contracts,
+    );
+  };
+  const pristine = {
+    id: 'generated-a',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    window_started_at: '2026-01-01T00:00:00.000Z',
+    last_request_at: null,
+  };
+  assert.equal(
+    checksum(pristine),
+    checksum({
+      ...pristine,
+      id: 'generated-b',
+      created_at: '2027-01-01T00:00:00.000Z',
+      updated_at: '2027-01-01T00:00:00.000Z',
+      window_started_at: '2027-01-01T00:00:00.000Z',
+    }),
+  );
+  assert.notEqual(
+    checksum(pristine),
+    checksum({
+      ...pristine,
+      last_request_at: '2026-01-01T00:01:00.000Z',
+    }),
+  );
+});
+
+test('source bootstrap catalogs reconcile onto fresh target identities', async () => {
+  const roles = table('roles', [column('id', 'UUID'), column('slug')]);
+  roles.uniqueKeys = [['slug']];
+  const grants = table('role_permissions', [
+    column('id', 'UUID'),
+    column('slug'),
+    column('role_id', 'UUID', { referencesTable: 'roles' }),
+    column('permission_id', 'UUID'),
+  ]);
+  grants.uniqueKeys = [['slug']];
+  const sourceContract = [roles, grants];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['roles', [{ id: 'source-role', slug: 'owner' }]],
+      [
+        'role_permissions',
+        [
+          {
+            id: 'source-grant',
+            slug: 'source-grant',
+            role_id: 'source-role',
+            permission_id: 'permission-a',
+          },
+        ],
+      ],
+    ]),
+  });
+  const store = new MemoryMigrationStore({
+    roles: [{ id: 'target-role', slug: 'owner' }],
+    role_permissions: [
+      {
+        id: 'target-grant',
+        slug: 'target-grant',
+        role_id: 'target-role',
+        permission_id: 'permission-a',
+      },
+    ],
+  });
+  store.expectedBaselineCounts = { role_permissions: 1, roles: 1 };
+  store.assertFreshTarget = async () => {};
+
+  const result = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+  });
+
+  assert.equal(store.rows.get('roles').size, 1);
+  assert.equal(store.rows.get('role_permissions').size, 1);
+  assert.equal(
+    store.rows.get('role_permissions').get('target-grant').role_id,
+    'target-role',
+  );
+  assert.equal(result.reconciliation.collisions.length, 2);
+  assert.doesNotMatch(JSON.stringify(result.reconciliation), /source-role|source-grant/);
 });
 
 test('PostgreSQL finalization locks and rechecks the complete target snapshot', async () => {

@@ -116,9 +116,9 @@ export const FRESH_TARGET_BASELINE_COUNTS = Object.freeze({
 
 /** Canonical identities and contents produced by the pinned target migration. */
 export const FRESH_TARGET_BASELINE_CHECKSUMS = Object.freeze({
-  candidate_profiles: '21b2b7037e4e0c5f6fae3b85872e17b4325117a43589ff3ddaf61095a6b5ad5e',
+  candidate_profiles: '8d315dde0adf9d70743c515a1f840b833488591c63d378143f33eb97d2e8899d',
   opportunity_intelligence_controls:
-    '71031a36317390bc6d9ea8f36dae07cdc3166657ec675e40b18d4f3341e25466',
+    '5058e3f9fb302bf301a690af52cc65c6d283b2f8adf7fe60ea08573d44363f1f',
   permissions: '74c98a3166ccf1cff0e57780055f42f3070cbb6feb782440beba9e4ff089d709',
   place_types: '9856d85a59614ab7ea3938c2b66039040d33b85595b9d3ed9cb82c1e0ea9ba80',
   profile_relationship_types:
@@ -130,6 +130,10 @@ export const FRESH_TARGET_BASELINE_CHECKSUMS = Object.freeze({
   role_permissions: '240ff29dfba143ab64a3aa117d46092f8aeb671e7a6ff1788e2f38ef64e161fd',
   roles: '49c78f4a4b45bce714171dd7c36f47943ea11d9903ea4065ed629fbdc81185b6',
   tags: 'e134e5b653d16f06195ecaa5ebe312cb410cdf74b15cab57f9d66e52b5f1b4d7',
+});
+
+const BOOTSTRAP_IDENTITY_KEYS = Object.freeze({
+  role_permissions: [['role_id', 'permission_id']],
 });
 
 export const REQUIRED_PREDECESSOR_MIGRATIONS = Object.freeze([
@@ -993,6 +997,23 @@ function canonicalTargetTableChecksum(rows, columns) {
   );
 }
 
+function includeBootstrapColumn(column) {
+  return !['created_at', 'updated_at'].includes(column.name);
+}
+
+function canonicalBootstrapValue(row, table, column) {
+  const value = row[column.name];
+  // The pristine control row is initialized at migration time. Its exact wall
+  // clock is deployment-specific, but whether initialization happened is not.
+  if (
+    table.name === 'opportunity_intelligence_controls' &&
+    column.name === 'window_started_at'
+  ) {
+    return value == null ? null : '__initialized__';
+  }
+  return value;
+}
+
 function bootstrapReferenceToken(row, table) {
   if (!row) return null;
   if (row.slug && row.slug !== row.id) {
@@ -1006,10 +1027,13 @@ function bootstrapReferenceToken(row, table) {
             (column) =>
               !column.primaryKey &&
               !column.referencesTable &&
-              column.type !== 'TIMESTAMP' &&
+              includeBootstrapColumn(column) &&
               column.name !== 'slug',
           )
-          .map((column) => [column.name, row[column.name]]),
+          .map((column) => [
+            column.name,
+            canonicalBootstrapValue(row, table, column),
+          ]),
       ),
     ),
   );
@@ -1027,12 +1051,15 @@ export function canonicalBootstrapTableChecksum(
         .filter(
           (column) =>
             !column.primaryKey &&
-            column.type !== 'TIMESTAMP' &&
+            includeBootstrapColumn(column) &&
             !(column.name === 'slug' && row.slug === row.id),
         )
         .map((column) => {
           if (!column.referencesTable || row[column.name] == null) {
-            return [column.name, row[column.name]];
+            return [
+              column.name,
+              canonicalBootstrapValue(row, table, column),
+            ];
           }
           const referencedTable = tablesByName.get(column.referencesTable);
           const referencedRow = rowsByTable
@@ -1050,6 +1077,87 @@ export function canonicalBootstrapTableChecksum(
   return sha256(canonicalJson(canonicalRows.sort((left, right) =>
     canonicalJson(left).localeCompare(canonicalJson(right)),
   )));
+}
+
+function naturalKeyToken(row, columns) {
+  return canonicalJson(columns.map((column) => row[column] ?? null));
+}
+
+async function alignBootstrapIdentities({ bundle, sourceContract, store }) {
+  const aligned = structuredClone(bundle);
+  const tables = new Map(sourceContract.map((table) => [table.name, table]));
+  const idMaps = new Map();
+  const remappings = [];
+
+  for (const table of planMigrationTables(sourceContract)) {
+    if (!store.expectedBaselineCounts?.[table.name]) continue;
+    const tableBundle = aligned.tables.find((entry) => entry.name === table.name);
+    if (!tableBundle?.rows.length) continue;
+
+    for (const row of tableBundle.rows) {
+      for (const column of table.columns) {
+        const map = column.referencesTable
+          ? idMaps.get(column.referencesTable)
+          : null;
+        if (map?.has(String(row.values[column.name]))) {
+          row.values[column.name] = map.get(String(row.values[column.name]));
+        }
+      }
+    }
+
+    const naturalKeys = [
+      ...(BOOTSTRAP_IDENTITY_KEYS[table.name] || []),
+      ...table.uniqueKeys,
+    ].filter(
+      (key) => key.length > 0 && !key.includes('id'),
+    );
+    if (naturalKeys.length === 0) continue;
+    const targetRows = await store.listTargetRows(table);
+    for (const row of tableBundle.rows) {
+      if (
+        targetRows.some(
+          (target) => String(target.id) === String(row.values.id),
+        )
+      ) {
+        continue;
+      }
+      const matches = targetRows.filter((target) =>
+        naturalKeys.some(
+          (key) =>
+            naturalKeyToken(row.values, key) === naturalKeyToken(target, key),
+        ),
+      );
+      if (matches.length > 1) {
+        throw new Error(
+          `Migration bootstrap identity is ambiguous in ${table.name}.`,
+        );
+      }
+      const targetId = matches[0]?.id;
+      if (targetId != null && String(targetId) !== String(row.values.id)) {
+        const map = idMaps.get(table.name) || new Map();
+        map.set(String(row.values.id), targetId);
+        idMaps.set(table.name, map);
+        remappings.push({ sourceId: row.sourceId, table: table.name });
+        row.values.id = targetId;
+      }
+    }
+  }
+
+  for (const tableBundle of aligned.tables) {
+    const table = tables.get(tableBundle.name);
+    if (!table) continue;
+    for (const row of tableBundle.rows) {
+      for (const column of table.columns) {
+        const map = column.referencesTable
+          ? idMaps.get(column.referencesTable)
+          : null;
+        if (map?.has(String(row.values[column.name]))) {
+          row.values[column.name] = map.get(String(row.values[column.name]));
+        }
+      }
+    }
+  }
+  return { bundle: aligned, remappings };
 }
 
 /**
@@ -1081,12 +1189,6 @@ export async function importMigrationBundle({
       }),
     );
   }
-  const reconciliationPlan = reconcileMigrationRows({
-    bundle,
-    sourceContract,
-    strictNativeTypes:
-      bundle.sourceSchemaFingerprint === SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
-  });
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
     throw new Error('Migration batch size must be between 1 and 1000.');
   }
@@ -1116,6 +1218,25 @@ export async function importMigrationBundle({
     await store.assertFreshTarget(
       targetContract.filter((table) => sourceNames.has(table.name)),
     );
+  }
+  const bootstrapAlignment = await alignBootstrapIdentities({
+    bundle,
+    sourceContract,
+    store,
+  });
+  bundle = bootstrapAlignment.bundle;
+  const reconciliationPlan = reconcileMigrationRows({
+    bundle,
+    sourceContract,
+    strictNativeTypes:
+      bundle.sourceSchemaFingerprint === SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
+  });
+  for (const remapping of bootstrapAlignment.remappings) {
+    recordStableIdCollision(reconciliationPlan.report, {
+      runId: bundle.runId,
+      table: remapping.table,
+      sourceId: remapping.sourceId,
+    });
   }
   if (!dryRun && !existingRun) await store.createRun(bundle);
 
@@ -1183,10 +1304,8 @@ export async function importMigrationBundle({
       const operations = [];
       const batchCounts = emptyCounts();
       for (const row of batch) {
-        const actual = await store.getTargetRow(
-          targetTable,
-          row.sourceId,
-        );
+        const targetId = String(row.targetValues.id);
+        const actual = await store.getTargetRow(targetTable, targetId);
         const targetChecksum = canonicalTargetRowChecksum(
           row.targetValues,
           targetTable.columns,
@@ -1215,6 +1334,7 @@ export async function importMigrationBundle({
           sourceId: row.sourceId,
           sourceChecksum: row.checksum,
           targetChecksum,
+          targetId,
           targetValues: row.targetValues,
         });
       }
@@ -1246,7 +1366,10 @@ export async function importMigrationBundle({
     }
     if (!dryRun) {
       for (const row of desiredRows) {
-        const actual = await store.getTargetRow(targetTable, row.sourceId);
+        const actual = await store.getTargetRow(
+          targetTable,
+          String(row.targetValues.id),
+        );
         if (
           !actual ||
           canonicalTargetRowChecksum(actual, targetTable.columns) !==
@@ -1273,7 +1396,9 @@ export async function importMigrationBundle({
           ]).values(),
         ]
       : persistedRows;
-    const desiredIds = new Set(desiredRows.map((row) => String(row.sourceId)));
+    const desiredIds = new Set(
+      desiredRows.map((row) => String(row.targetValues.id)),
+    );
     const retainedTargetRows = finalRows.filter(
       (row) => !desiredIds.has(String(row.id)),
     ).length;
@@ -1578,25 +1703,47 @@ export class PostgresMigrationStore {
         acquired_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    const holder = randomBytes(32).toString('hex');
-    const acquired = await this.db.query(
-      `INSERT INTO _iolaus_migration_leases (lease_name, holder, run_id)
-       VALUES ('willgriffin-logical-migration', ?, ?)
-       ON CONFLICT (lease_name) DO NOTHING
-       RETURNING lease_name`,
-      [holder, runId],
-    );
-    if (acquired.rows.length !== 1) {
-      throw new Error('Another logical migration owns the database lease.');
+    if (typeof this.db.acquireSession !== 'function') {
+      throw new Error(
+        'Logical migration requires PostgreSQL pinned-session support.',
+      );
     }
+    const session = await this.db.acquireSession();
+    const holder = randomBytes(32).toString('hex');
     try {
+      const acquired = await session.query(
+        `SELECT pg_try_advisory_lock(hashtext(?)) AS acquired`,
+        ['willgriffin-logical-migration'],
+      );
+      if (acquired.rows[0]?.acquired !== true) {
+        throw new Error('Another logical migration owns the database lease.');
+      }
+      // The row is operator-visible state only. The session advisory lock is
+      // authoritative, so an abandoned row from a crashed process is safely
+      // replaced after PostgreSQL releases that process's session lock.
+      await session.query(
+        `INSERT INTO _iolaus_migration_leases (lease_name, holder, run_id)
+         VALUES ('willgriffin-logical-migration', ?, ?)
+         ON CONFLICT (lease_name) DO UPDATE SET
+           holder = EXCLUDED.holder,
+           run_id = EXCLUDED.run_id,
+           acquired_at = CURRENT_TIMESTAMP`,
+        [holder, runId],
+      );
       return await operation();
     } finally {
-      await this.db.query(
-        `DELETE FROM _iolaus_migration_leases
-         WHERE lease_name = 'willgriffin-logical-migration' AND holder = ?`,
-        [holder],
-      );
+      try {
+        await session.query(
+          `DELETE FROM _iolaus_migration_leases
+           WHERE lease_name = 'willgriffin-logical-migration' AND holder = ?`,
+          [holder],
+        );
+        await session.query(`SELECT pg_advisory_unlock(hashtext(?))`, [
+          'willgriffin-logical-migration',
+        ]);
+      } finally {
+        await session.release();
+      }
     }
   }
 
