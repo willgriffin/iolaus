@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  existsSync,
   linkSync,
   mkdirSync,
   readFileSync,
@@ -9,8 +8,10 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { getDatabase } from '@happyvertical/sql';
+import { ManifestAdapter, OxcScanner } from '@happyvertical/smrt-scanner';
 import {
   MAX_BUNDLE_BYTES,
   readSensitiveBundle,
@@ -404,12 +405,45 @@ function addManifestTables(manifest, tables, options = {}) {
   }
 }
 
-/** Load only released, installed SMRT manifests plus this build's local manifest. */
-export function loadTargetContract(sourceRoot) {
-  const localManifestPath = join(sourceRoot, '.smrt', 'manifest.json');
-  if (!existsSync(localManifestPath)) {
-    throw new Error('Build Iolaus before preparing or importing migration data.');
+async function generateLocalSourceManifest(sourceRoot, appRequire) {
+  // Generate from checked-in sources on every invocation. Ignored .smrt output
+  // may be absent before a CI build or stale in a developer checkout; neither
+  // is authoritative for this fail-closed compatibility check.
+  const siteRoot = join(sourceRoot, 'apps', 'site');
+  const packageJson = JSON.parse(
+    readFileSync(join(siteRoot, 'package.json'), 'utf8'),
+  );
+  const { results, resolved } = await new OxcScanner({
+    cwd: siteRoot,
+    include: ['src/lib/objects/**/*.ts'],
+    exclude: ['**/*.test.ts', '**/*.spec.ts', '**/*.svelte'],
+  }).scanAndResolve();
+  if (results.errors.length > 0) {
+    throw new Error('Unable to generate the local migration schema contract.');
   }
+  const manifest = new ManifestAdapter().toManifest(resolved, {
+    packageName: packageJson.name,
+    packageVersion: packageJson.version,
+    typeAliases: results.typeAliases,
+  });
+  manifest.moduleType = 'smrt';
+  manifest.smrtDependencies = Object.keys(packageJson.dependencies || {})
+    .filter((name) => name.startsWith('@happyvertical/smrt-'))
+    .sort();
+
+  const scannerModulePath = appRequire.resolve('@happyvertical/smrt-core/scanner');
+  const { ManifestGenerator } = await import(
+    pathToFileURL(scannerModulePath).href
+  );
+  new ManifestGenerator().applyGenerationPasses(manifest, {
+    packageName: packageJson.name,
+    packageJson,
+  });
+  return manifest;
+}
+
+/** Load only released, installed SMRT manifests plus the local source manifest. */
+export async function loadTargetContract(sourceRoot) {
   const appRequire = createRequire(join(sourceRoot, 'apps', 'site', 'package.json'));
   const tables = new Map();
   for (const packageName of TARGET_MANIFEST_PACKAGES) {
@@ -421,7 +455,7 @@ export function loadTargetContract(sourceRoot) {
     });
   }
   addManifestTables(
-    JSON.parse(readFileSync(localManifestPath, 'utf8')),
+    await generateLocalSourceManifest(sourceRoot, appRequire),
     tables,
   );
   tables.set(
@@ -455,8 +489,8 @@ export function derivePredecessorContract(targetContract) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function loadSupportedMigrationContracts(sourceRoot) {
-  const targetContract = loadTargetContract(sourceRoot);
+export async function loadSupportedMigrationContracts(sourceRoot) {
+  const targetContract = await loadTargetContract(sourceRoot);
   const sourceContract = derivePredecessorContract(targetContract);
   const migratedNames = new Set(sourceContract.map((table) => table.name));
   const migratedTarget = targetContract.filter((table) =>
@@ -1296,7 +1330,7 @@ export async function exportPredecessorMigration(context) {
   ) {
     throw new Error('Source and target database endpoints must be distinct.');
   }
-  const { sourceContract, targetContract } = loadSupportedMigrationContracts(
+  const { sourceContract, targetContract } = await loadSupportedMigrationContracts(
     context.sourceRoot,
   );
   return await withSanitizedDatabaseFailure(
@@ -1704,7 +1738,7 @@ export async function importPredecessorMigration(context) {
   if (context.runtime.providers.database.engine !== 'postgres') {
     throw new Error('Predecessor migration targets PostgreSQL only.');
   }
-  const { sourceContract, targetContract } = loadSupportedMigrationContracts(
+  const { sourceContract, targetContract } = await loadSupportedMigrationContracts(
     context.sourceRoot,
   );
   const bundle = parseMigrationBundle(readSensitiveBundle(context.path));

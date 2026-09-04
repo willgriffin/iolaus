@@ -50,6 +50,9 @@ importers:
       '@happyvertical/smrt-config':
         specifier: 0.45.0
         version: 0.45.0(typescript@5.9.3)
+      '@happyvertical/smrt-scanner':
+        specifier: 0.45.0
+        version: 0.45.0
       '@happyvertical/sql':
         specifier: 0.89.4
         version: 0.89.4
