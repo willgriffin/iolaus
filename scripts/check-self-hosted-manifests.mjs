@@ -102,6 +102,12 @@ if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
   throw new Error('The released image must smoke its direct worker bootstrap without pnpm.');
 }
 if (
+  !/corepack install --global pnpm@11\.24\.0/u.test(runnerDockerfile) ||
+  !/USER 10001:10001[\s\S]*HOME=\/tmp pnpm --version/u.test(runnerDockerfile)
+) {
+  throw new Error('The released image must carry and smoke its pinned offline pnpm runtime.');
+}
+if (
   /scheduleRunner\.start\(\)/u.test(taskWorkerEntrypoint) ||
   !/startTaskWorker\(taskRunner\)/u.test(taskWorkerEntrypoint) ||
   !/startWorkerHeartbeat\(\{ kind: 'task' \}\)/u.test(taskWorkerEntrypoint) ||

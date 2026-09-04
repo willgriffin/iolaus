@@ -40,6 +40,7 @@ ENV SMRT_RUNTIME_PROFILE=self-hosted
 ENV HOST=0.0.0.0
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV COREPACK_HOME=/opt/corepack
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
@@ -48,11 +49,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && useradd --uid 10001 --gid iolaus --create-home --home-dir /home/iolaus \
     --shell /usr/sbin/nologin iolaus \
   && rm -rf /var/lib/apt/lists/*
+RUN corepack install --global pnpm@11.24.0 \
+  && pnpm --version | grep -Fx '11.24.0'
 COPY --from=build --chown=iolaus:iolaus /app /app
 # Runtime entrypoints use this lockfile-pinned loader directly. This build-time
 # smoke prevents a released image from falling back to Corepack/pnpm downloads.
 RUN test -x /app/node_modules/.bin/tsx \
   && node --import tsx --eval "import('./apps/site/scripts/jobs-worker-bootstrap.ts')"
 USER 10001:10001
+RUN HOME=/tmp pnpm --version | grep -Fx '11.24.0'
 EXPOSE 3000
 CMD ["node", "apps/site/build"]
