@@ -152,14 +152,7 @@ function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
 }
 
 function safeOidcIdentifier(value: string): string | null {
-  if (
-    !value ||
-    value.length > 200 ||
-    [...value].some((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code <= 0x1f || code === 0x7f;
-    })
-  ) {
+  if (!value || value.length > 200 || /\p{Cc}/u.test(value)) {
     return null;
   }
   return value;

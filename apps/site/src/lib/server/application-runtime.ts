@@ -87,6 +87,7 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
   if (!databaseUrl) {
     throw new Error(`${applicationRuntime.profile} requires DATABASE_URL.`);
   }
+  const validatedDatabaseUrl = validateHostedDatabaseUrl(databaseUrl);
   const authenticationProvider =
     applicationRuntime.providers.authentication.provider;
   if (authenticationProvider === 'owner-bootstrap') {
@@ -105,7 +106,8 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     },
     database: {
       engine: 'postgres',
-      connect: () => getDatabase({ type: 'postgres', url: databaseUrl }),
+      connect: () =>
+        getDatabase({ type: 'postgres', url: validatedDatabaseUrl }),
       close: async (db) => db.close?.(),
     },
     authentication: {
