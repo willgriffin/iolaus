@@ -17,7 +17,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { getDatabase } from '@happyvertical/sql';
 
@@ -537,7 +536,9 @@ function journalDigest(journal) {
 async function targetContents(targetAssets, logicalPath) {
   try {
     if (!(await targetAssets.exists(logicalPath))) return null;
-    return bytes(await targetAssets.read(logicalPath, { raw: true }));
+    const contents = bytes(await targetAssets.read(logicalPath, { raw: true }));
+    if (contents.byteLength > MAX_ASSET_BYTES) throw fail('target-asset-too-large');
+    return contents;
   } catch (error) {
     if (isFailure(error)) throw error;
     throw fail('target-read-failed');
@@ -844,6 +845,7 @@ export class LocalTargetAssets {
       if (details.isSymbolicLink() || !details.isFile()) {
         throw fail('unsafe-target-asset-path');
       }
+      if (details.size > MAX_ASSET_BYTES) throw fail('target-asset-too-large');
       return true;
     } catch (error) {
       if (isFailure(error)) throw error;
@@ -944,27 +946,14 @@ function parseFilesystemConfig(value, label, sourceRoot) {
   return config;
 }
 
-async function configuredTargetAssets({ sourceRoot, config }) {
+async function configuredTargetAssets({ config }) {
   // This root-level operational script intentionally resolves the same pinned,
   // released provider package that the site runtime already owns. It does not
   // depend on a framework checkout or add a second deployment dependency.
   if (config.type === 'local') return new LocalTargetAssets(config.basePath);
-  const modulePath = join(
-    sourceRoot,
-    'apps',
-    'site',
-    'node_modules',
-    '@happyvertical',
-    'files',
-    'dist',
-    'index.js',
-  );
-  try {
-    const { getFilesystem } = await import(pathToFileURL(modulePath).href);
-    return await getFilesystem(config);
-  } catch {
-    throw fail('target-assets-provider-unavailable');
-  }
+  // The released generic providers overwrite on write and expose no atomic
+  // create operation. Fail closed until the configured provider exposes one.
+  throw fail('target-assets-provider-no-atomic-create');
 }
 
 function quoteIdentifier(value) {
@@ -1070,7 +1059,6 @@ export async function importPredecessorAssetMigration(context) {
           root: context.sourceAssetsRoot,
         }),
         targetAssets: await configuredTargetAssets({
-          sourceRoot: context.sourceRoot,
           config: targetConfig,
         }),
         stateRoot: context.stateRoot,

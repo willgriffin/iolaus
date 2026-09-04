@@ -184,7 +184,11 @@ pnpm migration:willgriffin:assets:plan -- \
 Import only after the logical import has completed against the isolated target.
 It requires maintenance mode and the target's real self-hosted
 `RESUME_FILES_CONFIG_JSON`; that provider configuration may be S3-compatible
-and belongs solely in the scoped deployment secret. The importer verifies every
+and belongs solely in the scoped deployment secret. The migration currently
+fails closed for non-local providers because the released generic provider API
+does not offer atomic create-without-overwrite; configure local external
+storage for rehearsal or add a provider-level atomic-create capability first.
+The importer verifies every
 target metadata reference by stable ID before and after copying. It preserves
 safe relative paths, skips only checksum-identical existing objects, refuses to
 overwrite mismatched target objects, and persists a private, `0600` resumable
