@@ -804,6 +804,19 @@ test('export refuses connection parameters that can override the isolated restor
       !String(error.message).includes('production.example.invalid') &&
       /requires a local database/.test(error.message),
   );
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql:///willgriffin_restore',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    /requires a local database/,
+  );
 });
 
 test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async () => {

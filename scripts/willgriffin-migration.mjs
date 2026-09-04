@@ -1147,7 +1147,7 @@ function assertIsolatedRestoreDatabaseUrl(value) {
     !['postgres:', 'postgresql:'].includes(url.protocol) ||
     url.search ||
     url.hash ||
-    !['', 'localhost', '127.0.0.1', '::1'].includes(host) ||
+    !['localhost', '127.0.0.1', '::1'].includes(host) ||
     !databaseName ||
     databaseName === 'postgres' ||
     databaseName.startsWith('template') ||
