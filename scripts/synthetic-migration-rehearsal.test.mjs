@@ -29,10 +29,21 @@ test('parity skip cannot produce exit-eligible synthetic rehearsal evidence', ()
     },
   );
   assert.deepEqual(syntheticRehearsalDisposition({ status: 'passed' }), {
+    status: 'partial',
+    syntheticRehearsalExitEligible: false,
+    productionRehearsalExitEligible: false,
+  });
+  assert.deepEqual(
+    syntheticRehearsalDisposition({
+      status: 'passed',
+      candidateImageTested: true,
+    }),
+    {
     status: 'passed',
     syntheticRehearsalExitEligible: true,
     productionRehearsalExitEligible: false,
-  });
+    },
+  );
 });
 
 test('rehearsal database guard accepts only named loopback PostgreSQL databases', () => {

@@ -486,22 +486,39 @@ function runParity(argv, evidencePath) {
   const parsed = JSON.parse(evidenceBytes);
   if (
     parsed.status !== 'passed' ||
+    parsed.revision !== gitRevision() ||
     parsed.syntheticDataOnly !== true ||
     parsed.productionAccessPerformed !== false ||
     parsed.secretValuesIncluded !== false
   ) {
     throw new Error('Candidate parity evidence is not admissible.');
   }
+  if (
+    parsed.candidateImageTested === true &&
+    (!['local-image-id', 'immutable-release-ref'].includes(
+      parsed.candidateImageProvenance?.binding,
+    ) ||
+      !parsed.executionProvenance?.candidateImageScenarioIds?.includes(
+        'generated-surfaces',
+      ))
+  ) {
+    throw new Error('Candidate image parity evidence is not admissible.');
+  }
   return {
     status: 'passed',
     candidateImageTested: parsed.candidateImageTested,
+    revision: parsed.revision,
+    provenanceBinding: parsed.candidateImageProvenance?.binding ?? null,
+    candidateImageScenarioIds:
+      parsed.executionProvenance.candidateImageScenarioIds,
     evidenceSha256: sha256(evidenceBytes),
     inventorySha256: parsed.inventorySha256,
   };
 }
 
 export function syntheticRehearsalDisposition(parity) {
-  const eligible = parity?.status === 'passed';
+  const eligible =
+    parity?.status === 'passed' && parity?.candidateImageTested === true;
   return {
     status: eligible ? 'passed' : 'partial',
     syntheticRehearsalExitEligible: eligible,

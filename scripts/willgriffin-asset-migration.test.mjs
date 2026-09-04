@@ -21,10 +21,15 @@ import {
   buildAssetMigrationManifest,
   discoverReferencedAssets,
   importAssetMigrationManifest,
+  planPredecessorAssetMigration,
   readAssetMigrationManifest,
   validateAssetMigrationManifest,
   writeAssetMigrationManifest,
 } from './willgriffin-asset-migration.mjs';
+import {
+  buildMigrationBundle,
+  loadSupportedMigrationContracts,
+} from './willgriffin-migration.mjs';
 
 class MemoryAssets {
   constructor(entries = {}) {
@@ -145,6 +150,41 @@ function sourceFiles(overrides = {}) {
     ...overrides,
   });
 }
+
+test('asset planning loads the released logical contract before validation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'iolaus-asset-plan-'));
+  const assetsRoot = join(root, 'assets');
+  const bundlePath = join(root, 'bundle.json');
+  const manifestPath = join(root, 'manifest.json');
+  mkdirSync(assetsRoot, { recursive: true });
+  try {
+    const { sourceContract, targetContract } =
+      await loadSupportedMigrationContracts(process.cwd());
+    const migrationBundle = buildMigrationBundle({
+      sourceContract,
+      targetContract,
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      sourceRows: new Map(sourceContract.map((table) => [table.name, []])),
+    });
+    writeFileSync(bundlePath, `${JSON.stringify(migrationBundle)}\n`, {
+      mode: 0o600,
+    });
+    const result = await planPredecessorAssetMigration({
+      sourceRoot: process.cwd(),
+      bundlePath,
+      sourceAssetsRoot: assetsRoot,
+      manifestPath,
+    });
+    assert.equal(result.status, 'planned');
+    assert.deepEqual(result.counts, { assets: 0, rejected: 0 });
+    assert.equal(
+      readAssetMigrationManifest(manifestPath).sourceMigrationRunId,
+      migrationBundle.runId,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('discovers only referenced resume, packet, variant, and attachment objects', async () => {
   const discovered = discoverReferencedAssets(bundle());

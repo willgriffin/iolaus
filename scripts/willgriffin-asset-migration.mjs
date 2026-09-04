@@ -1003,9 +1003,8 @@ export async function planPredecessorAssetMigration(context) {
     throw fail('asset-migration-plan-usage');
   }
   const migration = await import('./willgriffin-migration.mjs');
-  const { sourceContract, targetContract } = migration.loadSupportedMigrationContracts(
-    context.sourceRoot,
-  );
+  const { sourceContract, targetContract } =
+    await migration.loadSupportedMigrationContracts(context.sourceRoot);
   const bundle = migration.parseMigrationBundle(readSensitiveBundle(context.bundlePath));
   migration.validateMigrationBundle(bundle, sourceContract, targetContract);
   const manifest = await buildAssetMigrationManifest({

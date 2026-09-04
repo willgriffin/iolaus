@@ -240,6 +240,9 @@ pnpm migration:willgriffin:rehearse:synthetic -- \
 ```
 
 `--local-image-id sha256:<docker-image-id>` is available for a local candidate.
+Source-only parity is useful for diagnosis but records `status: partial` and
+cannot set `syntheticRehearsalExitEligible`; exit-eligible evidence must bind
+the exact revision to an immutable candidate image and image-executed scenarios.
 `--skip-parity` exists only for narrow development of the migration portion;
 evidence from such a run records `status: partial` and
 `syntheticRehearsalExitEligible: false`. The runner writes secret-free JSON
