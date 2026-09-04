@@ -13,22 +13,25 @@ afterEach(() => {
 
 describe('SourceCrawlProgress', () => {
   it('starts its canonical status poll after mounting', async () => {
-    const fetchMock = vi.fn(async () => ({
-      json: async () => ({
-        items: [
-          {
-            counts: { candidates: 1, created: 1 },
-            errors: [],
-            finishedAt: '2026-09-04T05:00:01.000Z',
-            id: CRAWL_ID,
-            sourceId: SOURCE_ID,
-            startedAt: '2026-09-04T05:00:00.000Z',
-            status: 'completed',
-          },
-        ],
-      }),
-      ok: true,
-    }));
+    const fetchMock = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        ({
+          json: async () => ({
+            items: [
+              {
+                counts: { candidates: 1, created: 1 },
+                errors: [],
+                finishedAt: '2026-09-04T05:00:01.000Z',
+                id: CRAWL_ID,
+                sourceId: SOURCE_ID,
+                startedAt: '2026-09-04T05:00:00.000Z',
+                status: 'completed',
+              },
+            ],
+          }),
+          ok: true,
+        }) as Response,
+    );
     vi.stubGlobal('fetch', fetchMock);
     const target = document.createElement('div');
     document.body.append(target);
@@ -38,14 +41,18 @@ describe('SourceCrawlProgress', () => {
     });
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    expect(fetchMock.mock.calls[0][0]).toContain(`crawlId=${CRAWL_ID}`);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      `crawlId=${CRAWL_ID}`,
+    );
     expect(target.textContent).toContain('Pull complete.');
     unmount(component);
   });
 
   it('retries only the same crawl status after a transient status failure', async () => {
     const onPullAgain = vi.fn();
-    const fetchMock = vi.fn(async () => ({ ok: false }));
+    const fetchMock = vi.fn(
+      async (..._args: Parameters<typeof fetch>) => ({ ok: false }) as Response,
+    );
     vi.stubGlobal('fetch', fetchMock);
     const target = document.createElement('div');
     document.body.append(target);

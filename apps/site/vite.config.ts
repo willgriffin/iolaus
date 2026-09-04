@@ -4,7 +4,8 @@ import { smrtConsumer } from '@happyvertical/smrt-core/consumer-plugin';
 import { buildDomainKnowledgeManifest } from '@happyvertical/smrt-core/knowledge';
 import { smrtPlugin } from '@happyvertical/smrt-core/vite-plugin';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { assertLocalLoopbackHost } from './src/lib/server/runtime-host.js';
 
 function syncProjectSmrtKnowledge(): void {
@@ -86,6 +87,11 @@ function projectSmrtKnowledgePlugin(): Plugin {
 }
 
 export default defineConfig({
+  test: {
+    // Browser lifecycle specs run through `vitest.browser.config.ts`, which
+    // selects Svelte's browser export without changing the SSR test suite.
+    exclude: ['src/**/*.browser.spec.ts'],
+  },
   server: {
     host: '127.0.0.1',
     port: 5723,
