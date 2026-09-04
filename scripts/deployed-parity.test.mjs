@@ -4,18 +4,17 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import {
-  assertRegularSourceFile,
   buildScenarioEnvironment,
   candidateImageInvocation,
   evidenceDigest,
   invalidateEvidence,
+  inspectCandidateImageFilesystem,
   isolatedInvocation,
   sourceFingerprint,
   validateCandidateImageMetadata,
@@ -24,6 +23,47 @@ import {
   validateLocalCandidateImageMetadata,
   validateLocalImageId,
 } from './deployed-parity.mjs';
+
+const repositoryRoot = resolve(import.meta.dirname, '..');
+
+function writeTarString(header, start, length, value) {
+  Buffer.from(value, 'utf8').copy(header, start, 0, length);
+}
+
+function writeTarOctal(header, start, length, value) {
+  writeTarString(
+    header,
+    start,
+    length,
+    `${value.toString(8).padStart(length - 1, '0')}\0`,
+  );
+}
+
+function tarEntry(path, type, content = Buffer.alloc(0), linkname = '') {
+  const header = Buffer.alloc(512);
+  writeTarString(header, 0, 100, path);
+  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, content.length);
+  writeTarOctal(header, 136, 12, 0);
+  header.fill(0x20, 148, 156);
+  header[156] = type.charCodeAt(0);
+  writeTarString(header, 157, 100, linkname);
+  writeTarString(header, 257, 6, 'ustar');
+  writeTarString(header, 263, 2, '00');
+  const checksum = header.reduce((sum, value) => sum + value, 0);
+  writeTarString(header, 148, 8, `${checksum.toString(8).padStart(6, '0')}\0 `);
+  const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
+  return Buffer.concat([header, content, padding]);
+}
+
+function dockerAvailable() {
+  const result = spawnSync('docker', ['info'], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+  });
+  return !result.error && result.status === 0;
+}
 
 test('fingerprints exact source bytes with path framing', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-source-test-'));
@@ -44,18 +84,82 @@ test('fingerprints exact source bytes with path framing', () => {
   }
 });
 
-test('refuses candidate-controlled links before host hashing', () => {
-  const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-link-test-'));
-  try {
-    const target = resolve(root, 'target');
-    const link = resolve(root, 'link');
-    writeFileSync(target, 'reviewed bytes');
-    symlinkSync(target, link);
-    assert.doesNotThrow(() => assertRegularSourceFile(target));
-    assert.throws(() => assertRegularSourceFile(link), /safely/u);
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
+test(
+  'rejects a symlinked tracked path through the Docker export inspection boundary',
+  { skip: !dockerAvailable() },
+  async () => {
+    const image = `iolaus-parity-malicious-link-test:${process.pid}`;
+    const archive = Buffer.concat([
+      tarEntry('app', '5'),
+      tarEntry('outside', '0', Buffer.from('reviewed bytes')),
+      tarEntry('app/package.json', '2', Buffer.alloc(0), '../outside'),
+      Buffer.alloc(1024),
+    ]);
+    const imported = spawnSync('docker', ['import', '-', image], {
+      encoding: 'utf8',
+      input: archive,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    assert.equal(imported.status, 0, imported.stdout);
+    const imageId = imported.stdout.trim();
+    try {
+      await assert.rejects(
+        inspectCandidateImageFilesystem(
+          imageId,
+          ['package.json'],
+          sourceFingerprint(repositoryRoot, ['package.json']),
+        ),
+        /unsupported source entry type/u,
+      );
+    } finally {
+      spawnSync('docker', ['image', 'rm', '--force', imageId], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+    }
+  },
+);
+
+test(
+  'hashes raw regular-file bytes through the Docker export inspection boundary',
+  { skip: !dockerAvailable() },
+  async () => {
+    const image = `iolaus-parity-regular-file-test:${process.pid}`;
+    const content = readFileSync(resolve(repositoryRoot, 'package.json'));
+    const archive = Buffer.concat([
+      tarEntry('app', '5'),
+      tarEntry('app/package.json', '0', content),
+      Buffer.alloc(1024),
+    ]);
+    const imported = spawnSync('docker', ['import', '-', image], {
+      encoding: 'utf8',
+      input: archive,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    assert.equal(imported.status, 0, imported.stdout);
+    const imageId = imported.stdout.trim();
+    try {
+      const expectedSha256 = sourceFingerprint(repositoryRoot, ['package.json']);
+      assert.deepEqual(
+        await inspectCandidateImageFilesystem(
+          imageId,
+          ['package.json'],
+          expectedSha256,
+        ),
+        { sourceTreeSha256: expectedSha256 },
+      );
+    } finally {
+      spawnSync('docker', ['image', 'rm', '--force', imageId], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+    }
+  },
+);
+
+test('does not mark host-only topology as image-executed release evidence', () => {
+  const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;
+  const result = candidateImageInvocation(imageRef, ['node', '--test', 'x']);
+  assert.ok(result.args.includes('--read-only'));
+  assert.equal(result.args.includes('--env'), true);
 });
 
 test('runs candidate scenarios from the immutable image without networking', () => {
@@ -72,6 +176,7 @@ test('runs candidate scenarios from the immutable image without networking', () 
     'ALL',
   ]);
   assert.ok(result.args.includes('no-new-privileges'));
+  assert.ok(result.args.includes('--read-only'));
   assert.ok(result.args.includes('SMRT_RUNTIME_PROFILE=local'));
   assert.ok(result.args.includes(imageRef));
   assert.deepEqual(result.args.slice(-3), ['node', '--test', 'x']);

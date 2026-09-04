@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -318,6 +317,7 @@ export function candidateImageInvocation(candidateRef, invocation) {
       'ALL',
       '--security-opt',
       'no-new-privileges',
+      '--read-only',
       '--tmpfs',
       '/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001',
       '--env',
@@ -363,12 +363,289 @@ export function sourceFingerprint(root, paths) {
   return hash.digest('hex');
 }
 
-export function assertRegularSourceFile(path) {
-  if (!lstatSync(path).isFile()) {
-    throw new Error(
-      'The candidate image tracked source bytes could not be inspected safely.',
-    );
+function sourceFingerprintContents(contents, paths) {
+  const hash = createHash('sha256');
+  for (const path of [...paths].sort((left, right) => left.localeCompare(right))) {
+    const content = contents.get(path);
+    if (!content) {
+      throw new Error('The candidate image is missing reviewed tracked source bytes.');
+    }
+    hash.update(`${Buffer.byteLength(path)}:${path}:${content.length}:`);
+    hash.update(content);
   }
+  return hash.digest('hex');
+}
+
+function archivePath(path) {
+  const normalized = path.replace(/^\.\/?/u, '').replace(/\/+$/u, '');
+  if (!normalized && path === '.') return '.';
+  if (
+    !normalized ||
+    normalized.startsWith('/') ||
+    normalized.split('/').some((part) => part === '..' || part === '') ||
+    normalized.includes('\0')
+  ) {
+    throw new Error('The candidate image archive contains an unsafe path.');
+  }
+  return normalized;
+}
+
+function tarString(header, start, length) {
+  const end = header.indexOf(0, start);
+  return header
+    .subarray(start, end < 0 || end > start + length ? start + length : end)
+    .toString('utf8');
+}
+
+function tarSize(header) {
+  const raw = tarString(header, 124, 12).trim();
+  if (!/^[0-7]*$/u.test(raw)) {
+    throw new Error('The candidate image archive has an unsupported entry size.');
+  }
+  const size = Number.parseInt(raw || '0', 8);
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new Error('The candidate image archive has an unsafe entry size.');
+  }
+  return size;
+}
+
+function tarOctal(header, start, length, label) {
+  const raw = tarString(header, start, length).trim();
+  if (!/^[0-7]+$/u.test(raw)) {
+    throw new Error(`The candidate image archive has an invalid ${label}.`);
+  }
+  const value = Number.parseInt(raw, 8);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`The candidate image archive has an unsafe ${label}.`);
+  }
+  return value;
+}
+
+function assertTarChecksum(header) {
+  const expected = tarOctal(header, 148, 8, 'header checksum');
+  const actual = header.reduce(
+    (sum, value, index) => sum + (index >= 148 && index < 156 ? 0x20 : value),
+    0,
+  );
+  if (actual !== expected) {
+    throw new Error('The candidate image archive header checksum is invalid.');
+  }
+}
+
+function parsePaxRecords(content) {
+  const records = {};
+  let offset = 0;
+  while (offset < content.length) {
+    const space = content.indexOf(0x20, offset);
+    if (space < 0) {
+      throw new Error('The candidate image archive has malformed PAX metadata.');
+    }
+    const length = Number.parseInt(content.subarray(offset, space).toString('ascii'), 10);
+    if (!Number.isSafeInteger(length) || length <= space - offset + 1) {
+      throw new Error('The candidate image archive has malformed PAX metadata.');
+    }
+    const end = offset + length;
+    if (end > content.length || content[end - 1] !== 0x0a) {
+      throw new Error('The candidate image archive has malformed PAX metadata.');
+    }
+    const record = content.subarray(space + 1, end - 1).toString('utf8');
+    const equals = record.indexOf('=');
+    if (equals <= 0) {
+      throw new Error('The candidate image archive has malformed PAX metadata.');
+    }
+    const key = record.slice(0, equals);
+    if (Object.hasOwn(records, key)) {
+      throw new Error('The candidate image archive has ambiguous PAX metadata.');
+    }
+    records[key] = record.slice(equals + 1);
+    offset = end;
+  }
+  return records;
+}
+
+function tarHeader(header, pax) {
+  const prefix = tarString(header, 345, 155);
+  const name = tarString(header, 0, 100);
+  const pathname = pax.path ?? (prefix ? `${prefix}/${name}` : name);
+  return {
+    path: archivePath(pathname),
+    size: tarSize(header),
+    type: String.fromCharCode(header[156] || 0),
+  };
+}
+
+function isRegularTarEntry(type) {
+  return type === '\0' || type === '0';
+}
+
+function tarPadding(size) {
+  return (512 - (size % 512)) % 512;
+}
+
+async function inspectDockerExport(containerId, targets) {
+  const expected = new Map(
+    [...targets.entries()].map(([path, target]) => [archivePath(path), target]),
+  );
+  const sourceRelevantPaths = new Set();
+  for (const path of expected.keys()) {
+    const parts = path.split('/');
+    for (let index = 1; index <= parts.length; index += 1) {
+      sourceRelevantPaths.add(parts.slice(0, index).join('/'));
+    }
+  }
+  const seen = new Map();
+  const appEntries = new Set();
+  const linkPaths = new Set();
+  const contents = new Map();
+  const command = spawn('docker', ['export', containerId], {
+    cwd: repositoryRoot,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let buffered = Buffer.alloc(0);
+  let current = null;
+  let finished = false;
+  let nextPax = {};
+
+  const processEntry = (entry, content) => {
+    if (entry.type === 'g') {
+      throw new Error('The candidate image archive has ambiguous global PAX metadata.');
+    }
+    if (entry.type === 'x') {
+      if (Object.keys(nextPax).length > 0) {
+        throw new Error('The candidate image archive has ambiguous PAX metadata.');
+      }
+      const metadata = parsePaxRecords(content);
+      if (Object.keys(metadata).some((key) => key !== 'path')) {
+        throw new Error('The candidate image archive has unsupported PAX metadata.');
+      }
+      nextPax = metadata;
+      return;
+    }
+    const target = expected.get(entry.path);
+    const sourceRelevant = sourceRelevantPaths.has(entry.path);
+    if (entry.path === 'app' || entry.path.startsWith('app/')) {
+      if (appEntries.has(entry.path)) {
+        throw new Error('The candidate image archive repeats a normalized application path.');
+      }
+      appEntries.add(entry.path);
+    }
+    if (sourceRelevant && (entry.type === '1' || entry.type === '2')) {
+      linkPaths.add(entry.path);
+    }
+    if (
+      sourceRelevant &&
+      !isRegularTarEntry(entry.type) &&
+      entry.type !== '5'
+    ) {
+      throw new Error('The candidate image archive has an unsupported source entry type.');
+    }
+    if (!target) return;
+    if (seen.has(entry.path)) {
+      throw new Error('The candidate image archive repeats a reviewed tracked path.');
+    }
+    seen.set(entry.path, entry.type);
+    if (!isRegularTarEntry(entry.type) || content.length !== target.size) {
+      throw new Error('The candidate image tracked source bytes could not be inspected safely.');
+    }
+    contents.set(target.key, content);
+  };
+
+  const drain = () => {
+    while (true) {
+      if (!current) {
+        if (buffered.length < 512) return;
+        const header = buffered.subarray(0, 512);
+        buffered = buffered.subarray(512);
+        if (header.every((value) => value === 0)) {
+          finished = true;
+          return;
+        }
+        assertTarChecksum(header);
+        const pax = nextPax;
+        nextPax = {};
+        const entry = tarHeader(header, pax);
+        if (!['\0', '0', '1', '2', '5', 'x', 'g'].includes(entry.type)) {
+          throw new Error('The candidate image archive has an unsupported entry type.');
+        }
+        const target = expected.get(entry.path);
+        const capture = entry.type === 'g' || entry.type === 'x' || Boolean(target);
+        const limit =
+          entry.type === 'g' || entry.type === 'x'
+            ? 1024 * 1024
+            : target?.maxSize ?? target?.size;
+        if (capture && (limit === undefined || entry.size > limit)) {
+          throw new Error('The candidate image archive has an unsafe inspected entry size.');
+        }
+        current = {
+          entry,
+          content: capture ? Buffer.alloc(entry.size) : null,
+          offset: 0,
+          padding: tarPadding(entry.size),
+        };
+      }
+      const remaining = current.entry.size - current.offset;
+      if (remaining > 0) {
+        if (buffered.length === 0) return;
+        const length = Math.min(remaining, buffered.length);
+        if (current.content) buffered.copy(current.content, current.offset, 0, length);
+        current.offset += length;
+        buffered = buffered.subarray(length);
+        if (current.offset < current.entry.size) return;
+      }
+      if (current.padding > 0) {
+        if (buffered.length < current.padding) return;
+        buffered = buffered.subarray(current.padding);
+      }
+      processEntry(current.entry, current.content ?? Buffer.alloc(0));
+      current = null;
+    }
+  };
+
+  try {
+    await new Promise((resolvePromise, rejectPromise) => {
+      command.once('error', rejectPromise);
+      command.stdout.on('data', (chunk) => {
+        try {
+          buffered = Buffer.concat([buffered, chunk]);
+          drain();
+        } catch (error) {
+          command.kill('SIGKILL');
+          rejectPromise(error);
+        }
+      });
+      command.once('close', (status) => {
+        try {
+          if (
+            status !== 0 ||
+            current ||
+            !finished ||
+            buffered.length < 512 ||
+            buffered.some((value) => value !== 0)
+          ) {
+            throw new Error('The immutable candidate filesystem could not be inspected.');
+          }
+          resolvePromise();
+        } catch (error) {
+          rejectPromise(error);
+        }
+      });
+    });
+  } finally {
+    command.kill('SIGKILL');
+  }
+  for (const path of expected.keys()) {
+    const ancestor = path.split('/');
+    ancestor.pop();
+    for (let index = 1; index <= ancestor.length; index += 1) {
+      if (linkPaths.has(ancestor.slice(0, index).join('/'))) {
+        throw new Error('The candidate image tracked source bytes could not be inspected safely.');
+      }
+    }
+    if (!seen.has(path) || !contents.has(expected.get(path).key)) {
+      throw new Error('The candidate image is missing reviewed tracked source bytes.');
+    }
+  }
+  return contents;
 }
 
 function trackedImageSourcePaths() {
@@ -402,16 +679,11 @@ function trackedImageSourcePaths() {
     });
 }
 
-async function inspectCandidateImageFilesystem(
+export async function inspectCandidateImageFilesystem(
   candidateRef,
   paths,
   expectedSha256,
-  expectedDependencies,
 ) {
-  const extractionRoot = mkdtempSync(
-    resolve(tmpdir(), 'iolaus-candidate-filesystem-'),
-  );
-  const sourceRoot = resolve(extractionRoot, 'source');
   const created = spawnSync(
     'docker',
     ['create', '--network', 'none', '--entrypoint', '/bin/true', candidateRef],
@@ -423,69 +695,28 @@ async function inspectCandidateImageFilesystem(
   );
   const containerId = created.stdout.trim();
   if (created.error || created.status !== 0 || !/^[a-f0-9]{64}$/u.test(containerId)) {
-    rmSync(extractionRoot, { force: true, recursive: true });
     throw new Error('The immutable candidate filesystem could not be inspected.');
   }
   try {
+    const targets = new Map();
     for (const path of paths) {
-      const destination = resolve(sourceRoot, path);
-      mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
-      const copied = spawnSync(
-        'docker',
-        ['cp', '-L', `${containerId}:/app/${path}`, destination],
-        { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] },
-      );
-      if (copied.error || copied.status !== 0) {
-        throw new Error(
-          'The candidate image tracked source bytes could not be inspected safely.',
-        );
-      }
-      assertRegularSourceFile(destination);
+      const content = readFileSync(resolve(repositoryRoot, path));
+      targets.set(`app/${path}`, { key: path, size: content.length });
     }
-    const sourceTreeSha256 = sourceFingerprint(sourceRoot, paths);
+    const contents = await inspectDockerExport(containerId, targets);
+    const sourceTreeSha256 = sourceFingerprintContents(contents, paths);
     if (sourceTreeSha256 !== expectedSha256) {
       throw new Error(
         'The candidate image source content does not match the reviewed Git tree.',
       );
     }
 
-    const installedDependencies = {};
-    for (const name of Object.keys(expectedDependencies).sort()) {
-      const packagePath = resolve(
-        extractionRoot,
-        'dependencies',
-        name.replaceAll('/', '__'),
-      );
-      mkdirSync(dirname(packagePath), { recursive: true, mode: 0o700 });
-      const copied = spawnSync(
-        'docker',
-        [
-          'cp',
-          '-L',
-          `${containerId}:/app/node_modules/${name}/package.json`,
-          packagePath,
-        ],
-        { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] },
-      );
-      if (copied.error || copied.status !== 0) {
-        throw new Error(
-          'The candidate image installed dependency inventory could not be inspected.',
-        );
-      }
-      const metadata = JSON.parse(readFileSync(packagePath, 'utf8'));
-      installedDependencies[name] = metadata.version;
-    }
-    validateInstalledSmrtDependencies(
-      installedDependencies,
-      expectedDependencies,
-    );
-    return { installedDependencies, sourceTreeSha256 };
+    return { sourceTreeSha256 };
   } finally {
     spawnSync('docker', ['rm', '--force', containerId], {
       cwd: repositoryRoot,
       stdio: ['ignore', 'ignore', 'ignore'],
     });
-    rmSync(extractionRoot, { force: true, recursive: true });
   }
 }
 
@@ -575,7 +806,7 @@ function executeScenario(scenario, environment, imageRef) {
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: imageRef ? process.env : environment,
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
@@ -588,6 +819,19 @@ function executeScenario(scenario, environment, imageRef) {
     id: scenario.id,
     invocation: scenario.invocation.join(' '),
     observable: scenario.observable,
+    execution:
+      imageRef && scenario.id !== 'self-hosted-topology'
+        ? {
+            kind: 'candidate-image',
+            reference: imageRef,
+            sandbox: 'docker-network-none-read-only-cap-drop-all',
+          }
+        : {
+            kind: 'host',
+            reason:
+              'self-hosted topology requires the reviewed host-side kustomize verifier; immutable runtime images intentionally omit cluster administration tools',
+            sandbox: isolated.backend,
+          },
     status: 'passed',
   };
 }
@@ -662,7 +906,7 @@ function inventorySnapshot(environment, imageRef) {
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: imageRef ? process.env : environment,
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.status !== 0) {
@@ -719,7 +963,10 @@ async function main() {
     throw new Error('--image-ref and --local-image-id are mutually exclusive.');
   }
   const candidateRef = imageRef ?? localImageId;
-  const releaseEligible = Boolean(imageRef);
+  // The static self-hosted topology verifier deliberately runs on the host: the
+  // runtime image does not and must not contain kubectl. A candidate image report
+  // is therefore never deployment-release evidence by itself.
+  const releaseEligible = false;
   const startedAt = new Date().toISOString();
   const revision = gitRevision();
   const expectedLockfileSha256 = createHash('sha256')
@@ -732,7 +979,7 @@ async function main() {
         candidateRef,
         revision,
         expectedLockfileSha256,
-        releaseEligible,
+        Boolean(imageRef),
       )
     : null;
   const sandboxBase = resolve(
@@ -752,12 +999,10 @@ async function main() {
         candidateRef,
         sourcePaths,
         sourceTreeSha256,
-        reviewedInventory.smrtDependencies,
       );
       candidateImageProvenance = {
         ...candidateImageProvenance,
         sourceTreeSha256: inspectedFilesystem.sourceTreeSha256,
-        installedSmrtDependencies: inspectedFilesystem.installedDependencies,
       };
     }
     checks = scenarios.map((scenario) =>
@@ -773,6 +1018,16 @@ async function main() {
       throw new Error(
         'The candidate image inventory does not match the reviewed checkout inventory.',
       );
+    }
+    if (candidateImageProvenance) {
+      validateInstalledSmrtDependencies(
+        inventory.installedSmrtDependencies,
+        reviewedInventory.smrtDependencies,
+      );
+      candidateImageProvenance = {
+        ...candidateImageProvenance,
+        installedSmrtDependencies: inventory.installedSmrtDependencies,
+      };
     }
   } finally {
     rmSync(sandboxRoot, { force: true, recursive: true });
@@ -795,14 +1050,16 @@ async function main() {
       id: 'candidate-image-provenance',
       invocation: 'docker image inspect <candidate-image-ref>',
       observable:
-        'the immutable local image digest contains the exact reviewed tracked-source bytes and dependency installation, and every executable parity scenario ran from that image with networking disabled',
+        'the immutable image contains exact reviewed tracked-source bytes as raw regular TAR entries; image-executed scenarios run read-only with networking disabled, while the separately identified topology verifier remains host-executed',
       status: 'passed',
     });
   }
   const evidence = {
     schema: 'iolaus-deployed-parity-contract:v1',
     status: 'passed',
-    scope: candidateRef ? 'candidate-image-contract' : 'source-contract',
+    scope: candidateRef
+      ? 'candidate-image-and-host-topology-contract'
+      : 'source-contract',
     releaseEligible,
     candidateImageTested: Boolean(candidateRef),
     revision,
@@ -816,6 +1073,15 @@ async function main() {
     installedSmrtDependencies: inventory.installedSmrtDependencies,
     counts: inventory.counts,
     checks,
+    executionProvenance: {
+      candidateImageScenarioIds: checks
+        .filter((check) => check.execution?.kind === 'candidate-image')
+        .map((check) => check.id),
+      hostOnlyScenarioIds: checks
+        .filter((check) => check.execution?.kind === 'host')
+        .map((check) => check.id),
+      deploymentEvidenceRequiredForRelease: Boolean(candidateRef),
+    },
     startedAt,
     completedAt: new Date().toISOString(),
     isolation: {

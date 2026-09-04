@@ -201,25 +201,34 @@ pnpm parity:contract -- \
 
 The image argument is accepted only when `docker image inspect` proves that the
 local image has the requested repository digest and its two provenance labels
-match the current source revision and lockfile digest. All executable parity
-scenarios and the inventory then run from that immutable image with Docker
-networking disabled, dropped capabilities, no-new-privileges, and a synthetic
-local runtime environment. The disposable container layer allows the test
-runner to regenerate derived SMRT artifacts without mutating the image. The
-inventory resolves the installed
-s-m-r-t package versions and requires them to equal the released, pinned
-declarations. Only this mode writes `releaseEligible: true` and
-`candidateImageTested: true`; the topology check remains on the host because
-the runtime image deliberately contains no cluster administration tools.
-Before granting release eligibility, the runner also fingerprints every tracked
-source file included by the Docker context and requires the candidate's bytes
-to match the clean reviewed checkout exactly. The Docker daemon resolves and
-copies each reviewed tracked path out of a stopped container, every result must
-be a regular file, and host-reviewed code hashes those bytes; no candidate
-program or candidate-controlled archive link is trusted to report its own
-hash. Installed s-m-r-t package metadata is likewise copied out without
-executing candidate code and matched to the reviewed pinned declarations. Its
-candidate inventory must match the independently executed host inventory.
+match the current source revision and lockfile digest. Runtime parity scenarios
+and the inventory then run from that immutable image with Docker networking
+disabled, a read-only root filesystem, dropped capabilities, no-new-privileges,
+and a synthetic local runtime environment. The disposable `/tmp` mount allows
+the test runner to regenerate derived SMRT artifacts without mutating the
+image. The inventory resolves the installed s-m-r-t package versions and
+requires them to equal the released, pinned declarations.
+
+`candidateImageTested: true` proves only those explicitly image-executed
+scenarios. The topology check remains host-executed with the same sanitized
+environment and OS network boundary because the runtime image deliberately
+contains no cluster administration tools. Its check record says
+`execution.kind: "host"`; candidate-image records say
+`execution.kind: "candidate-image"`. Therefore every contract report remains
+`releaseEligible: false`: a distinct isolated deployment report must bind the
+same digest to actual web, task, schedule, and monitor workloads before any
+release or cutover decision.
+As a prerequisite for later deployment release evidence, the runner also
+fingerprints every tracked source file included by the Docker context and
+requires the candidate's bytes to match the clean reviewed checkout exactly.
+Host-reviewed code streams the Docker-export TAR archive, verifies every header
+checksum and terminating block,
+rejects unsafe/ambiguous PAX names, duplicate normalized application paths, and
+any link or non-regular entry at a reviewed source path or its ancestors, then
+hashes only the raw regular-file bodies. It never dereferences a
+candidate-controlled path on the host. The candidate inventory is executed
+only after those reviewed source bytes match and must match the independently
+executed host inventory, including installed pinned s-m-r-t versions.
 The report records only already-known digests, versions, and pass/fail facts.
 It is not a substitute for checking Kubernetes
 `status.containerStatuses[].imageID`. The isolated

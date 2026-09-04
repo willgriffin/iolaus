@@ -48,11 +48,23 @@ jobs:
           import { readFileSync } from 'node:fs';
           const path = '.omo/evidence/issue-31/ci-candidate-contract.json';
           const evidence = JSON.parse(readFileSync(path));
+          const provenance = evidence.executionProvenance;
+          const topology = evidence.checks?.find(
+            (check) => check.id === 'self-hosted-topology',
+          );
           if (
             evidence.status !== 'passed' ||
             evidence.candidateImageTested !== true ||
             evidence.releaseEligible !== false ||
             evidence.candidateImageProvenance?.binding !== 'local-image-id' ||
+            provenance?.deploymentEvidenceRequiredForRelease !== true ||
+            !provenance?.candidateImageScenarioIds?.includes(
+              'generated-surfaces',
+            ) ||
+            !provenance?.hostOnlyScenarioIds?.includes(
+              'self-hosted-topology',
+            ) ||
+            topology?.execution?.kind !== 'host' ||
             evidence.secretValuesIncluded !== false
           ) {
             throw new Error('Candidate evidence did not fail closed.');
