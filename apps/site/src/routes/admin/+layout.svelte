@@ -408,7 +408,17 @@ onMount(() => {
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    if (stored || adminShell.settings.panels?.left) return;
+    if (stored) {
+      // A mobile route transition may close the live panel without changing
+      // the user's explicit preference. Restore that preference when the
+      // viewport changes again.
+      adminShell.panels.left = stored;
+      return;
+    }
+    if (adminShell.settings.panels?.left) {
+      adminShell.panels.left = adminShell.settings.panels.left;
+      return;
+    }
 
     adminShell.panels.left = navigationStateForViewport(mediaQuery.matches);
   };
@@ -417,7 +427,12 @@ onMount(() => {
     // AdminShell also hydrates a provided state. Wait for that pass and one
     // macrotask so the responsive default is applied after persisted settings
     // have had their chance to win.
-    await adminShell.hydrate();
+    try {
+      await adminShell.hydrate();
+    } catch {
+      // A storage adapter failure must not strand the shell in its hidden
+      // hydration state; the responsive default below remains available.
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     if (disposed) return;
 
