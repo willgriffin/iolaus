@@ -83,6 +83,30 @@ test('candidate parity accepts both immutable image provenance modes', () => {
     ),
     false,
   );
+  assert.equal(
+    candidateParityIsAdmissible(
+      {
+        ...admissibleCandidate,
+        candidateImageProvenance: { binding: 'unknown-binding' },
+      },
+      'candidate-revision',
+    ),
+    false,
+  );
+  assert.equal(
+    candidateParityIsAdmissible(admissibleCandidate, 'different-revision'),
+    false,
+  );
+  assert.equal(
+    candidateParityIsAdmissible(
+      {
+        ...admissibleCandidate,
+        executionProvenance: { candidateImageScenarioIds: [] },
+      },
+      'candidate-revision',
+    ),
+    false,
+  );
 });
 
 test('rehearsal database guard accepts only named loopback PostgreSQL databases', () => {
