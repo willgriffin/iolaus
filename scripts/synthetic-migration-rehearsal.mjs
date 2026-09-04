@@ -468,6 +468,27 @@ function gitRevision() {
   return run('git', ['rev-parse', 'HEAD']).stdout.trim();
 }
 
+export function candidateParityIsAdmissible(parsed, revision) {
+  if (
+    parsed?.status !== 'passed' ||
+    parsed.revision !== revision ||
+    parsed.syntheticDataOnly !== true ||
+    parsed.productionAccessPerformed !== false ||
+    parsed.secretValuesIncluded !== false
+  ) {
+    return false;
+  }
+  return (
+    parsed.candidateImageTested !== true ||
+    (['local-image-id', 'released-repository-digest'].includes(
+      parsed.candidateImageProvenance?.binding,
+    ) &&
+      parsed.executionProvenance?.candidateImageScenarioIds?.includes(
+        'generated-surfaces',
+      ))
+  );
+}
+
 function runParity(argv, evidencePath) {
   if (argv.includes('--skip-parity')) {
     return { status: 'skipped-by-explicit-operator-option', evidenceSha256: null };
@@ -484,25 +505,8 @@ function runParity(argv, evidencePath) {
   run(process.execPath, args);
   const evidenceBytes = readFileSync(evidencePath);
   const parsed = JSON.parse(evidenceBytes);
-  if (
-    parsed.status !== 'passed' ||
-    parsed.revision !== gitRevision() ||
-    parsed.syntheticDataOnly !== true ||
-    parsed.productionAccessPerformed !== false ||
-    parsed.secretValuesIncluded !== false
-  ) {
+  if (!candidateParityIsAdmissible(parsed, gitRevision())) {
     throw new Error('Candidate parity evidence is not admissible.');
-  }
-  if (
-    parsed.candidateImageTested === true &&
-    (!['local-image-id', 'immutable-release-ref'].includes(
-      parsed.candidateImageProvenance?.binding,
-    ) ||
-      !parsed.executionProvenance?.candidateImageScenarioIds?.includes(
-        'generated-surfaces',
-      ))
-  ) {
-    throw new Error('Candidate image parity evidence is not admissible.');
   }
   return {
     status: 'passed',

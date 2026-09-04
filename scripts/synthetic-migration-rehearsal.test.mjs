@@ -2,11 +2,23 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  candidateParityIsAdmissible,
   syntheticBundle,
   syntheticContracts,
   syntheticRehearsalDisposition,
   validateRehearsalDatabaseUrl,
 } from './synthetic-migration-rehearsal.mjs';
+
+const admissibleCandidate = {
+  status: 'passed',
+  revision: 'candidate-revision',
+  candidateImageTested: true,
+  candidateImageProvenance: { binding: 'local-image-id' },
+  executionProvenance: { candidateImageScenarioIds: ['generated-surfaces'] },
+  syntheticDataOnly: true,
+  productionAccessPerformed: false,
+  secretValuesIncluded: false,
+};
 
 test('synthetic rehearsal fixture is deterministic and includes reconciliation cases', () => {
   const contracts = syntheticContracts();
@@ -43,6 +55,33 @@ test('parity skip cannot produce exit-eligible synthetic rehearsal evidence', ()
     syntheticRehearsalExitEligible: true,
     productionRehearsalExitEligible: false,
     },
+  );
+});
+
+test('candidate parity accepts both immutable image provenance modes', () => {
+  assert.equal(
+    candidateParityIsAdmissible(admissibleCandidate, 'candidate-revision'),
+    true,
+  );
+  assert.equal(
+    candidateParityIsAdmissible(
+      {
+        ...admissibleCandidate,
+        candidateImageProvenance: { binding: 'released-repository-digest' },
+      },
+      'candidate-revision',
+    ),
+    true,
+  );
+  assert.equal(
+    candidateParityIsAdmissible(
+      {
+        ...admissibleCandidate,
+        candidateImageProvenance: { binding: 'mutable-image-tag' },
+      },
+      'candidate-revision',
+    ),
+    false,
   );
 });
 
