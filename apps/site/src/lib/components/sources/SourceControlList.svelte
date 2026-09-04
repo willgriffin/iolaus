@@ -8,6 +8,7 @@ import Plus from '@lucide/svelte/icons/plus';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import { onMount } from 'svelte';
 import type { AdminRecord } from '$lib/admin/dock';
+import SourceCrawlProgress from './SourceCrawlProgress.svelte';
 
 type SourceHealth = {
   active: boolean;
@@ -91,6 +92,18 @@ function providerLabel(source: AdminRecord): string {
 
 function sourceUrl(source: AdminRecord): string {
   return text(source.url);
+}
+
+function safeSourceUrl(source: AdminRecord): string {
+  const value = sourceUrl(source);
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : '';
+  } catch {
+    return '';
+  }
 }
 
 function active(source: AdminRecord): boolean {
@@ -359,6 +372,7 @@ onMount(() => {
       {@const sourceActive = active(source)}
       {@const sourcePending = pending(source)}
       {@const queuedCrawl = crawlBySourceId[id]}
+      {@const sourceLink = safeSourceUrl(source)}
       <article
         class="source-card"
         class:inactive={!sourceActive}
@@ -375,10 +389,10 @@ onMount(() => {
           </span>
         </header>
 
-        {#if sourceUrl(source)}
-          <a class="source-url" href={sourceUrl(source)} target="_blank" rel="noreferrer">
+        {#if sourceLink}
+          <a class="source-url" href={sourceLink} target="_blank" rel="noreferrer">
             <ExternalLink size={14} strokeWidth={2.3} aria-hidden="true" />
-            <span>{sourceUrl(source)}</span>
+            <span>{sourceLink}</span>
           </a>
         {:else}
           <p class="source-url missing">No careers-board address saved yet.</p>
@@ -439,6 +453,21 @@ onMount(() => {
           <p class:source-feedback-error={feedbackToneBySourceId[id] === 'error'} class="source-feedback" role={feedbackToneBySourceId[id] === 'error' ? 'alert' : 'status'}>
             {feedbackBySourceId[id]}
           </p>
+        {/if}
+
+        {#if queuedCrawl?.crawlId}
+          <SourceCrawlProgress
+            sourceId={id}
+            crawlId={queuedCrawl.crawlId}
+            onPullAgain={() => void pullNow(source)}
+            onViewOpportunities={() => {
+              window.location.href = '/admin/opportunities';
+            }}
+            onTerminal={() => {
+              void refreshHealth();
+              onRefresh();
+            }}
+          />
         {/if}
       </article>
     {:else}

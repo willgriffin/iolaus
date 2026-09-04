@@ -52,4 +52,23 @@ describe('SourceControlList', () => {
     expect(body).toContain('Start with a job source');
     expect(body).toContain('Add a job source');
   });
+
+  it('only makes web addresses clickable', () => {
+    const { body } = render(SourceControlList, {
+      props: {
+        records: [
+          {
+            id: 'unsafe-root',
+            isActive: true,
+            name: 'Unsafe address',
+            sourceRole: 'root',
+            url: 'javascript:alert(1)',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('No careers-board address saved yet.');
+    expect(body).not.toContain('javascript:');
+  });
 });
