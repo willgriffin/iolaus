@@ -82,6 +82,21 @@ function rootSourceUrl(value: string): string {
   return parsed.toString();
 }
 
+function assertProviderRootUrl(provider: string, url: string): void {
+  const hostname = new URL(url).hostname;
+  const providerHosts: Record<string, readonly string[]> = {
+    ashby: ['jobs.ashbyhq.com'],
+    greenhouse: ['boards.greenhouse.io', 'job-boards.greenhouse.io'],
+    lever: ['jobs.lever.co'],
+  };
+  const allowedHosts = providerHosts[provider];
+  if (allowedHosts && !allowedHosts.includes(hostname)) {
+    throw new Error(
+      `The selected ${provider} provider needs a matching board URL.`,
+    );
+  }
+}
+
 function sourceType(value: string): RootSourceType {
   if (sourceTypes.includes(value as RootSourceType)) {
     return value as RootSourceType;
@@ -107,13 +122,15 @@ export function parseRootSourceSetup(form: FormData): RootSourceSetupInput {
   if (!isSourceProviderId(provider)) {
     throw new Error('Choose a supported provider.');
   }
+  const url = rootSourceUrl(stringValue(form.get('url')));
+  assertProviderRootUrl(provider, url);
 
   return {
     active: form.get('active') === 'on',
     name,
     provider,
     type: sourceType(stringValue(form.get('type')) || 'job_board'),
-    url: rootSourceUrl(stringValue(form.get('url'))),
+    url,
   };
 }
 

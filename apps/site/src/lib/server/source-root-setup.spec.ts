@@ -55,6 +55,14 @@ describe('root source setup', () => {
       {
         name: 'OpenAI Careers',
         provider: 'ashby',
+        url: 'https://example.com/openai',
+      },
+      'matching board URL',
+    ],
+    [
+      {
+        name: 'OpenAI Careers',
+        provider: 'ashby',
         url: 'http://jobs.ashbyhq.com/openai',
       },
       'public HTTPS root URL',
