@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import {
+  buildScenarioEnvironment,
   evidenceDigest,
+  invalidateEvidence,
   validateCandidateImageMetadata,
   validateImageReference,
 } from './deployed-parity.mjs';
@@ -73,4 +79,61 @@ test('creates a deterministic evidence digest without secret inputs', () => {
   };
   assert.match(evidenceDigest(evidence), /^[a-f0-9]{64}$/u);
   assert.equal(evidenceDigest(evidence), evidenceDigest({ ...evidence }));
+});
+
+test('sanitizes scenario environment and installs an outbound-network denial', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-env-test-'));
+  try {
+    const environment = buildScenarioEnvironment(root, {
+      PATH: '/safe/bin',
+      PNPM_HOME: '/runtime/pnpm',
+      HOME: '/runtime-home',
+      DATABASE_URL: 'postgres://production.invalid/private',
+      PROVIDER_API_KEY: 'must-not-pass-through',
+      NODE_OPTIONS: '--require=/untrusted/hook.cjs',
+    });
+    assert.equal(environment.PATH, '/safe/bin');
+    assert.equal(environment.PNPM_HOME, '/runtime/pnpm');
+    assert.equal(environment.DATABASE_URL, undefined);
+    assert.equal(environment.PROVIDER_API_KEY, undefined);
+    assert.match(environment.NODE_OPTIONS, /deny-outbound-network\.cjs$/u);
+    assert.equal(environment.SMRT_RUNTIME_PROFILE, 'local');
+    assert.equal(environment.SMRT_APP_ID, undefined);
+    assert.equal(environment.HOME, resolve(root, 'home'));
+    assert.equal(
+      environment.COREPACK_HOME,
+      '/runtime-home/.cache/node/corepack',
+    );
+    const denied = spawnSync(
+      process.execPath,
+      ['-e', "fetch('https://example.invalid')"],
+      { encoding: 'utf8', env: environment },
+    );
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stderr, /Outbound networking is disabled/u);
+    const localIpc = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        "require('node:net').createConnection('/tmp/iolaus-parity-missing.sock').on('error', error => process.exit(error.message.includes('Outbound networking') ? 2 : 0))",
+      ],
+      { encoding: 'utf8', env: environment },
+    );
+    assert.equal(localIpc.status, 0);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('invalidates previous evidence before a rerun', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-evidence-test-'));
+  const path = resolve(root, 'evidence.json');
+  try {
+    writeFileSync(path, '{"status":"passed"}\n', { mode: 0o600 });
+    invalidateEvidence(path);
+    assert.throws(() => readFileSync(path), /ENOENT/u);
+    assert.doesNotThrow(() => invalidateEvidence(path));
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 });

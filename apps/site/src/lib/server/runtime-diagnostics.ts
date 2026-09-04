@@ -11,7 +11,7 @@ import { getCollection } from './smrt.js';
 
 export const RUNTIME_DIAGNOSTICS_READ_PERMISSION = 'runtime_diagnostics.read';
 
-/** Exact browser-native inventory served by the command center plus this tool. */
+/** Exact browser-native inventory served by the command center. */
 export function runtimeDiagnosticsToolNames(): string[] {
   return [
     ...new Set([

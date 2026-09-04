@@ -160,6 +160,17 @@ pnpm --filter @willgriffin/iolaus-site exec tsx \
   scripts/deployed-parity-inventory.ts --update
 ```
 
+The runner discards the caller's database, provider, and credential
+environment, creates a temporary home/config/cache boundary, and installs a
+deny-by-default outbound network hook for every parity scenario. It removes any
+existing destination report before validation begins, so a failed rerun cannot
+leave stale passing evidence behind. The approval-boundary scenario directly
+exercises refusal behavior for every registered ATS submitter. The only reused
+caller cache is Corepack's already-installed, pinned pnpm distribution; network
+installation remains denied. Unit scenarios deliberately use the local runtime
+with a temporary home so no deployed database or provider can be selected; the
+separate topology scenario validates the self-hosted workload profile.
+
 Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
 40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
 `pnpm-lock.yaml`.

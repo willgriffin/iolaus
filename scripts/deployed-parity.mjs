@@ -2,7 +2,16 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,6 +80,9 @@ const scenarios = [
       'src/lib/server/application-package.spec.ts',
       'src/lib/server/auto-submit-application-job.spec.ts',
       'src/lib/server/auto-submit-eligibility.spec.ts',
+      'src/lib/server/ats/greenhouse.spec.ts',
+      'src/lib/server/ats/ashby.spec.ts',
+      'src/lib/server/ats/lever.spec.ts',
       'src/routes/api/admin/opportunities/bulk-actions/[phase]/server.spec.ts',
     ],
     observable:
@@ -225,12 +237,49 @@ function inspectCandidateImage(
   );
 }
 
-function executeScenario(scenario) {
+export function buildScenarioEnvironment(sandboxRoot, source = process.env) {
+  const networkDenyHook = resolve(
+    repositoryRoot,
+    'scripts/deny-outbound-network.cjs',
+  );
+  const home = resolve(sandboxRoot, 'home');
+  const temporary = resolve(sandboxRoot, 'tmp');
+  const config = resolve(sandboxRoot, 'config');
+  const cache = resolve(sandboxRoot, 'cache');
+  const corepackHome =
+    source.COREPACK_HOME ||
+    (source.HOME ? resolve(source.HOME, '.cache/node/corepack') : undefined);
+  for (const path of [home, temporary, config, cache]) {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+  }
+  return {
+    PATH: source.PATH ?? '',
+    ...(source.PNPM_HOME ? { PNPM_HOME: source.PNPM_HOME } : {}),
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    CI: 'true',
+    NODE_ENV: 'test',
+    NODE_OPTIONS: `--require=${networkDenyHook}`,
+    HOME: home,
+    TMPDIR: temporary,
+    XDG_CONFIG_HOME: config,
+    XDG_CACHE_HOME: cache,
+    ...(corepackHome ? { COREPACK_HOME: corepackHome } : {}),
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    HTTP_PROXY: 'http://127.0.0.1:9',
+    HTTPS_PROXY: 'http://127.0.0.1:9',
+    ALL_PROXY: 'http://127.0.0.1:9',
+    NO_PROXY: '',
+    SMRT_RUNTIME_PROFILE: 'local',
+  };
+}
+
+function executeScenario(scenario, environment) {
   const [binary, ...args] = scenario.invocation;
   const result = spawnSync(binary, args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: process.env,
+    env: environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
@@ -302,7 +351,7 @@ function runtimeVersions() {
   return { node: process.versions.node, pnpm: actualPnpm };
 }
 
-function inventorySnapshot() {
+function inventorySnapshot(environment) {
   const result = spawnSync(
     'pnpm',
     [
@@ -315,7 +364,7 @@ function inventorySnapshot() {
     {
       cwd: repositoryRoot,
       encoding: 'utf8',
-      env: process.env,
+      env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -345,6 +394,14 @@ function writeEvidence(path, evidence) {
   return absolute;
 }
 
+export function invalidateEvidence(path) {
+  try {
+    unlinkSync(resolve(path));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
 export function evidenceDigest(evidence) {
   return createHash('sha256')
     .update(`${JSON.stringify(evidence)}\n`)
@@ -353,14 +410,30 @@ export function evidenceDigest(evidence) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  const evidencePath = argumentValue('--evidence', argv) ?? defaultEvidencePath;
+  invalidateEvidence(evidencePath);
   assertCleanRevision();
   const runtime = runtimeVersions();
   const imageRef = validateImageReference(argumentValue('--image-ref', argv));
-  const evidencePath = argumentValue('--evidence', argv) ?? defaultEvidencePath;
   const startedAt = new Date().toISOString();
   const revision = gitRevision();
-  const checks = scenarios.map(executeScenario);
-  const inventory = inventorySnapshot();
+  const sandboxBase = resolve(
+    process.env.HOME || tmpdir(),
+    '.cache/iolaus-parity-contract',
+  );
+  mkdirSync(sandboxBase, { recursive: true, mode: 0o700 });
+  const sandboxRoot = mkdtempSync(resolve(sandboxBase, 'iolaus-parity-'));
+  let checks;
+  let inventory;
+  try {
+    const environment = buildScenarioEnvironment(sandboxRoot);
+    checks = scenarios.map((scenario) =>
+      executeScenario(scenario, environment),
+    );
+    inventory = inventorySnapshot(environment);
+  } finally {
+    rmSync(sandboxRoot, { force: true, recursive: true });
+  }
   const candidateImageProvenance = imageRef
     ? inspectCandidateImage(
         imageRef,
@@ -392,6 +465,12 @@ async function main() {
     checks,
     startedAt,
     completedAt: new Date().toISOString(),
+    isolation: {
+      callerEnvironmentInherited: false,
+      outboundNetworkDenied: true,
+      scenarioRuntimeProfile: 'local',
+      temporaryHome: true,
+    },
     syntheticDataOnly: true,
     productionAccessPerformed: false,
     externalTransmissionPerformed: false,
