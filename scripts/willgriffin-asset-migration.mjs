@@ -3,6 +3,7 @@ import {
   constants,
   closeSync,
   existsSync,
+  fsyncSync,
   fstatSync,
   linkSync,
   lstatSync,
@@ -12,6 +13,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  writeSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -22,6 +24,7 @@ import { getDatabase } from '@happyvertical/sql';
 import {
   MAX_ASSET_COUNT,
   MAX_ASSET_BYTES,
+  MAX_TOTAL_ASSET_BYTES,
   readSensitiveBundle,
 } from './smrt-portability-assets.mjs';
 import { assertExternalArtifactPath } from './smrt-runtime-identity.mjs';
@@ -241,6 +244,7 @@ export async function buildAssetMigrationManifest({ migrationBundle, sourceAsset
   const discovered = discoverReferencedAssets(migrationBundle);
   const rejected = [...discovered.rejected];
   const entries = [];
+  let totalByteLength = 0;
   const candidates = rejected.some(
     (item) => item.code === 'too-many-referenced-assets',
   )
@@ -249,6 +253,11 @@ export async function buildAssetMigrationManifest({ migrationBundle, sourceAsset
   for (const candidate of candidates) {
     try {
       const contents = await readSourceAsset(sourceAssets, candidate.logicalPath);
+      totalByteLength += contents.byteLength;
+      if (totalByteLength > MAX_TOTAL_ASSET_BYTES) {
+        rejected.push({ code: 'referenced-assets-too-large' });
+        break;
+      }
       entries.push({
         logicalPath: candidate.logicalPath,
         byteLength: contents.byteLength,
@@ -374,6 +383,7 @@ export function validateAssetMigrationManifest(manifest) {
     throw fail('asset-manifest-digest-mismatch');
   }
   const paths = new Set();
+  let totalByteLength = 0;
   for (const entry of manifest.entries) {
     if (
       !entry ||
@@ -387,6 +397,10 @@ export function validateAssetMigrationManifest(manifest) {
       entry.references.length === 0 ||
       entry.references.some((reference) => !validateReference(reference))
     ) {
+      throw fail('invalid-asset-migration-manifest');
+    }
+    totalByteLength += entry.byteLength;
+    if (totalByteLength > MAX_TOTAL_ASSET_BYTES) {
       throw fail('invalid-asset-migration-manifest');
     }
     paths.add(entry.logicalPath);
@@ -524,7 +538,8 @@ async function targetContents(targetAssets, logicalPath) {
   try {
     if (!(await targetAssets.exists(logicalPath))) return null;
     return bytes(await targetAssets.read(logicalPath, { raw: true }));
-  } catch {
+  } catch (error) {
+    if (isFailure(error)) throw error;
     throw fail('target-read-failed');
   }
 }
@@ -622,7 +637,7 @@ export async function importAssetMigrationManifest({
     }
     writeJournal(path, journal);
   }
-  if (manifest.publishedAlias && !journal.rejected[PUBLISHED_RESUME_ALIAS_PATH]) {
+  if (manifest.publishedAlias) {
     const alias = manifest.publishedAlias;
     try {
       const source = await readSourceAsset(sourceAssets, alias.sourcePath);
@@ -762,6 +777,149 @@ export class LocalSourceAssets {
   }
 }
 
+/**
+ * The released local provider follows host symlinks. Migration must not: a
+ * compromised target root must not turn a logical copy into a source write.
+ */
+export class LocalTargetAssets {
+  constructor(root) {
+    try {
+      const requestedRoot = resolve(root);
+      mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
+      const details = lstatSync(requestedRoot);
+      this.root = realpathSync(requestedRoot);
+      if (
+        details.isSymbolicLink() ||
+        !details.isDirectory()
+      ) {
+        throw fail('unsafe-target-asset-root');
+      }
+    } catch (error) {
+      if (isFailure(error)) throw error;
+      throw fail('unsafe-target-asset-root');
+    }
+  }
+
+  path(logicalPath, { createParents = false } = {}) {
+    const logical = normalizeAssetLogicalPath(logicalPath);
+    const parts = logical.split('/');
+    let parent = this.root;
+    for (const part of parts.slice(0, -1)) {
+      parent = join(parent, part);
+      try {
+        const details = lstatSync(parent);
+        if (
+          details.isSymbolicLink() ||
+          !details.isDirectory() ||
+          realpathSync(parent) !== parent
+        ) {
+          throw fail('unsafe-target-asset-path');
+        }
+      } catch (error) {
+        if (isFailure(error)) throw error;
+        if (!createParents && error?.code === 'ENOENT') {
+          return resolve(this.root, logical);
+        }
+        if (!createParents || error?.code !== 'ENOENT') {
+          throw fail('unsafe-target-asset-path');
+        }
+        try {
+          mkdirSync(parent, { mode: 0o700 });
+          if (realpathSync(parent) !== parent) throw fail('unsafe-target-asset-path');
+        } catch (mkdirError) {
+          if (isFailure(mkdirError)) throw mkdirError;
+          throw fail('unsafe-target-asset-path');
+        }
+      }
+    }
+    const destination = join(parent, parts.at(-1));
+    if (!isInside(this.root, destination)) throw fail('unsafe-logical-path');
+    return destination;
+  }
+
+  async exists(logicalPath) {
+    const destination = this.path(logicalPath);
+    try {
+      const details = lstatSync(destination);
+      if (details.isSymbolicLink() || !details.isFile()) {
+        throw fail('unsafe-target-asset-path');
+      }
+      return true;
+    } catch (error) {
+      if (isFailure(error)) throw error;
+      if (error?.code === 'ENOENT') return false;
+      throw fail('target-read-failed');
+    }
+  }
+
+  async read(logicalPath) {
+    const destination = this.path(logicalPath);
+    let descriptor;
+    try {
+      const details = lstatSync(destination);
+      if (details.isSymbolicLink() || !details.isFile()) {
+        throw fail('unsafe-target-asset-path');
+      }
+      descriptor = openSync(
+        destination,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      const opened = fstatSync(descriptor);
+      if (
+        !opened.isFile() ||
+        opened.dev !== details.dev ||
+        opened.ino !== details.ino ||
+        opened.size !== details.size
+      ) {
+        throw fail('target-asset-changed-during-read');
+      }
+      const contents = readFileSync(descriptor);
+      const after = fstatSync(descriptor);
+      if (
+        after.dev !== opened.dev ||
+        after.ino !== opened.ino ||
+        after.size !== opened.size ||
+        contents.byteLength !== opened.size
+      ) {
+        throw fail('target-asset-changed-during-read');
+      }
+      return contents;
+    } catch (error) {
+      if (isFailure(error)) throw error;
+      throw fail('target-read-failed');
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  }
+
+  async write(logicalPath, contents) {
+    const destination = this.path(logicalPath, { createParents: true });
+    let descriptor;
+    try {
+      descriptor = openSync(
+        destination,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          (constants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      const buffer = bytes(contents);
+      let offset = 0;
+      while (offset < buffer.byteLength) {
+        offset += writeSync(descriptor, buffer, offset, buffer.byteLength - offset);
+      }
+      fsyncSync(descriptor);
+    } catch (error) {
+      if (isFailure(error)) throw error;
+      if (error?.code === 'EEXIST') throw fail('target-asset-raced');
+      throw fail('target-write-failed');
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  }
+}
+
 function parseFilesystemConfig(value, label, sourceRoot) {
   let config;
   try {
@@ -790,6 +948,7 @@ async function configuredTargetAssets({ sourceRoot, config }) {
   // This root-level operational script intentionally resolves the same pinned,
   // released provider package that the site runtime already owns. It does not
   // depend on a framework checkout or add a second deployment dependency.
+  if (config.type === 'local') return new LocalTargetAssets(config.basePath);
   const modulePath = join(
     sourceRoot,
     'apps',

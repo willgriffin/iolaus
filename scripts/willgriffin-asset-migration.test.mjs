@@ -17,6 +17,7 @@ import test from 'node:test';
 import {
   PUBLISHED_RESUME_ALIAS_PATH,
   LocalSourceAssets,
+  LocalTargetAssets,
   buildAssetMigrationManifest,
   discoverReferencedAssets,
   importAssetMigrationManifest,
@@ -329,6 +330,73 @@ test('never overwrites a mismatched target object and records a deterministic qu
       'target-checksum-conflict',
     );
   } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test('retries a repaired published alias without changing the manifest or journal manually', async () => {
+  const source = sourceFiles();
+  const manifest = await buildAssetMigrationManifest({
+    migrationBundle: bundle(),
+    sourceAssets: source,
+  });
+  const target = new MemoryAssets({ [PUBLISHED_RESUME_ALIAS_PATH]: 'wrong alias' });
+  const stateRoot = mkdtempSync(join(tmpdir(), 'iolaus-assets-'));
+  try {
+    const first = await importAssetMigrationManifest({
+      manifest,
+      sourceAssets: source,
+      targetAssets: target,
+      stateRoot,
+      metadataStore: new MetadataStore(),
+    });
+    assert.equal(first.status, 'quarantined');
+    target.entries.set(
+      PUBLISHED_RESUME_ALIAS_PATH,
+      await source.read('generated/resume-global.pdf'),
+    );
+    const repaired = await importAssetMigrationManifest({
+      manifest,
+      sourceAssets: source,
+      targetAssets: target,
+      stateRoot,
+      metadataStore: new MetadataStore(),
+    });
+    assert.equal(repaired.status, 'complete');
+    assert.equal(repaired.quarantinePath, null);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects target storage symlinks without writing through them', async () => {
+  const source = sourceFiles();
+  const manifest = await buildAssetMigrationManifest({
+    migrationBundle: bundle(),
+    sourceAssets: source,
+  });
+  const targetRoot = mkdtempSync(join(tmpdir(), 'iolaus-target-assets-'));
+  const outsideRoot = mkdtempSync(join(tmpdir(), 'iolaus-outside-assets-'));
+  const stateRoot = mkdtempSync(join(tmpdir(), 'iolaus-assets-'));
+  try {
+    symlinkSync(outsideRoot, join(targetRoot, 'attachments'));
+    const result = await importAssetMigrationManifest({
+      manifest,
+      sourceAssets: source,
+      targetAssets: new LocalTargetAssets(targetRoot),
+      stateRoot,
+      metadataStore: new MetadataStore(),
+    });
+    assert.equal(result.status, 'quarantined');
+    assert.equal(
+      result.counts.rejected,
+      1,
+      readFileSync(result.quarantinePath, 'utf8'),
+    );
+    assert.throws(() => readFileSync(join(outsideRoot, 'portfolio.pdf')));
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
     rmSync(stateRoot, { recursive: true, force: true });
   }
 });

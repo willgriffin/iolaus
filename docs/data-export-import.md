@@ -170,7 +170,9 @@ unreferenced temporary or legacy file.
 The private manifest contains stable record IDs, logical asset paths, sizes,
 and SHA-256 digests. Keep it outside Git with the database bundle. Planning
 records deterministic quarantine reason codes for missing, corrupt, ambiguous,
-or unsafe paths; a quarantined plan is not eligible for import.
+unsafe, or over-limit paths; a quarantined plan is not eligible for import.
+It caps the referenced set at the shared 256 MiB portability limit rather than
+walking or copying an arbitrary storage tree.
 
 ```bash
 pnpm migration:willgriffin:assets:plan -- \
