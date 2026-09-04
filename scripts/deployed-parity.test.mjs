@@ -8,6 +8,7 @@ import {
   buildScenarioEnvironment,
   evidenceDigest,
   invalidateEvidence,
+  isolatedInvocation,
   validateCandidateImageMetadata,
   validateImageReference,
 } from './deployed-parity.mjs';
@@ -120,9 +121,43 @@ test('sanitizes scenario environment and installs an outbound-network denial', (
       { encoding: 'utf8', env: environment },
     );
     assert.equal(localIpc.status, 0);
+    if (process.platform === 'darwin') {
+      for (const script of [
+        "fetch('https://example.invalid')",
+        "require('node:dns').lookup('example.invalid', error => process.exit(error ? 0 : 2))",
+        "require('node:dgram').createSocket('udp4').send('x', 53, '127.0.0.1', error => process.exit(error ? 0 : 2))",
+        "require('node:child_process').spawnSync('/usr/bin/curl', ['https://example.invalid']).status === 0 && process.exit(2)",
+      ]) {
+        const isolated = isolatedInvocation(process.execPath, ['-e', script]);
+        const result = spawnSync(isolated.binary, isolated.args, {
+          encoding: 'utf8',
+          env: environment,
+        });
+        assert.notEqual(result.status, 2);
+      }
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+test('selects a fail-closed OS network-isolation backend', () => {
+  if (process.platform === 'darwin') {
+    assert.deepEqual(isolatedInvocation('node', ['script.mjs']), {
+      backend: 'darwin-sandbox-exec-deny-remote-ip',
+      binary: '/usr/bin/sandbox-exec',
+      args: [
+        '-p',
+        '(version 1) (allow default) (deny network-outbound (remote ip))',
+        'node',
+        'script.mjs',
+      ],
+    });
+  }
+  assert.throws(
+    () => isolatedInvocation('node', [], 'unsupported'),
+    /OS-enforced outbound-network isolation/u,
+  );
 });
 
 test('invalidates previous evidence before a rerun', () => {

@@ -170,6 +170,10 @@ caller cache is Corepack's already-installed, pinned pnpm distribution; network
 installation remains denied. Unit scenarios deliberately use the local runtime
 with a temporary home so no deployed database or provider can be selected; the
 separate topology scenario validates the self-hosted workload profile.
+Every scenario also runs beneath an inherited operating-system network
+boundary: macOS `sandbox-exec` denies remote IP sockets while retaining local
+Unix-domain IPC, and Linux uses an unshared network namespace. The command
+fails closed when neither isolation backend is available.
 
 Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
 40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of

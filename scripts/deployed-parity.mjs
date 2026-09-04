@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,6 +23,8 @@ const defaultEvidencePath = resolve(
 );
 const imagePattern =
   /^ghcr\.io\/willgriffin\/iolaus\/site@sha256:[a-f0-9]{64}$/u;
+const darwinNetworkSandboxProfile =
+  '(version 1) (allow default) (deny network-outbound (remote ip))';
 
 const scenarios = [
   {
@@ -237,6 +240,29 @@ function inspectCandidateImage(
   );
 }
 
+export function isolatedInvocation(binary, args, platform = process.platform) {
+  if (platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
+    return {
+      backend: 'darwin-sandbox-exec-deny-remote-ip',
+      binary: '/usr/bin/sandbox-exec',
+      args: ['-p', darwinNetworkSandboxProfile, binary, ...args],
+    };
+  }
+  if (platform === 'linux') {
+    const unshare = ['/usr/bin/unshare', '/bin/unshare'].find(existsSync);
+    if (unshare) {
+      return {
+        backend: 'linux-unshare-network-namespace',
+        binary: unshare,
+        args: ['--user', '--map-root-user', '--net', '--', binary, ...args],
+      };
+    }
+  }
+  throw new Error(
+    'The parity contract requires an OS-enforced outbound-network isolation backend.',
+  );
+}
+
 export function buildScenarioEnvironment(sandboxRoot, source = process.env) {
   const networkDenyHook = resolve(
     repositoryRoot,
@@ -276,7 +302,8 @@ export function buildScenarioEnvironment(sandboxRoot, source = process.env) {
 
 function executeScenario(scenario, environment) {
   const [binary, ...args] = scenario.invocation;
-  const result = spawnSync(binary, args, {
+  const isolated = isolatedInvocation(binary, args);
+  const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
     env: environment,
@@ -352,7 +379,7 @@ function runtimeVersions() {
 }
 
 function inventorySnapshot(environment) {
-  const result = spawnSync(
+  const isolated = isolatedInvocation(
     'pnpm',
     [
       '--filter',
@@ -361,13 +388,13 @@ function inventorySnapshot(environment) {
       'tsx',
       'scripts/deployed-parity-inventory.ts',
     ],
-    {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-      env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
   );
+  const result = spawnSync(isolated.binary, isolated.args, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   if (result.status !== 0) {
     throw new Error('The deployed parity inventory could not be verified.');
   }
@@ -423,6 +450,7 @@ async function main() {
   );
   mkdirSync(sandboxBase, { recursive: true, mode: 0o700 });
   const sandboxRoot = mkdtempSync(resolve(sandboxBase, 'iolaus-parity-'));
+  const isolationBackend = isolatedInvocation('true', []).backend;
   let checks;
   let inventory;
   try {
@@ -467,6 +495,7 @@ async function main() {
     completedAt: new Date().toISOString(),
     isolation: {
       callerEnvironmentInherited: false,
+      backend: isolationBackend,
       outboundNetworkDenied: true,
       scenarioRuntimeProfile: 'local',
       temporaryHome: true,
