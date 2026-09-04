@@ -19,6 +19,7 @@ import {
   runtimeConfigurationFingerprint,
 } from '../../../../../scripts/smrt-runtime-identity.mjs';
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
+import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
   getIolausSourceRoot,
   IOLAUS_APPLICATION_ID,
@@ -133,6 +134,7 @@ export function getLocalApplicationRuntime(): Promise<LocalApplicationRuntime> {
       'Local production startup requires an explicit loopback HOST; use pnpm app:start.',
     );
   }
+  assertLocalLoopbackHost(bindHost);
   const localPaths = resolveIolausLocalRuntimePaths();
   localWriterLease ??= acquireWriterLease(
     prepareApplicationStateRoot({
