@@ -19,6 +19,7 @@ import {
 import { assertExternalArtifactPath } from './smrt-runtime-identity.mjs';
 import {
   finalizeReconciliationReport,
+  migrationReferenceRules,
   reconcileMigrationRows,
   recordStableIdCollision,
 } from './willgriffin-reconciliation.mjs';
@@ -1095,12 +1096,11 @@ async function alignBootstrapIdentities({ bundle, sourceContract, store }) {
     if (!tableBundle?.rows.length) continue;
 
     for (const row of tableBundle.rows) {
-      for (const column of table.columns) {
-        const map = column.referencesTable
-          ? idMaps.get(column.referencesTable)
-          : null;
-        if (map?.has(String(row.values[column.name]))) {
-          row.values[column.name] = map.get(String(row.values[column.name]));
+      for (const rule of migrationReferenceRules(table, tables)) {
+        if (rule.parentColumn !== 'id') continue;
+        const map = idMaps.get(rule.parentTable);
+        if (map?.has(String(row.values[rule.column]))) {
+          row.values[rule.column] = map.get(String(row.values[rule.column]));
         }
       }
     }
@@ -1147,12 +1147,11 @@ async function alignBootstrapIdentities({ bundle, sourceContract, store }) {
     const table = tables.get(tableBundle.name);
     if (!table) continue;
     for (const row of tableBundle.rows) {
-      for (const column of table.columns) {
-        const map = column.referencesTable
-          ? idMaps.get(column.referencesTable)
-          : null;
-        if (map?.has(String(row.values[column.name]))) {
-          row.values[column.name] = map.get(String(row.values[column.name]));
+      for (const rule of migrationReferenceRules(table, tables)) {
+        if (rule.parentColumn !== 'id') continue;
+        const map = idMaps.get(rule.parentTable);
+        if (map?.has(String(row.values[rule.column]))) {
+          row.values[rule.column] = map.get(String(row.values[rule.column]));
         }
       }
     }
@@ -1390,7 +1389,7 @@ export async function importMigrationBundle({
           ...new Map([
             ...persistedRows.map((row) => [String(row.id), row]),
             ...desiredRows.map((row) => [
-              String(row.sourceId),
+              String(row.targetValues.id),
               row.targetValues,
             ]),
           ]).values(),

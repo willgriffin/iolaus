@@ -1307,6 +1307,86 @@ test('source bootstrap catalogs reconcile onto fresh target identities', async (
   assert.doesNotMatch(JSON.stringify(result.reconciliation), /source-role|source-grant/);
 });
 
+test('bootstrap remaps reach semantic relationships absent from manifest FKs', async () => {
+  const tags = table('tags', [column('id', 'UUID'), column('slug')]);
+  tags.uniqueKeys = [['slug']];
+  const achievements = table('achievements', [
+    column('id', 'UUID'),
+    column('slug'),
+  ]);
+  achievements.uniqueKeys = [['slug']];
+  const edges = table('achievement_tags', [
+    column('id', 'UUID'),
+    column('slug'),
+    column('achievement_id', 'UUID'),
+    column('tag_id', 'UUID'),
+  ]);
+  edges.uniqueKeys = [['slug']];
+  const sourceContract = [tags, achievements, edges];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['tags', [{ id: 'source-tag', slug: 'engineering' }]],
+      ['achievements', [{ id: 'achievement-a', slug: 'achievement-a' }]],
+      [
+        'achievement_tags',
+        [
+          {
+            id: 'edge-a',
+            slug: 'edge-a',
+            achievement_id: 'achievement-a',
+            tag_id: 'source-tag',
+          },
+        ],
+      ],
+    ]),
+  });
+  const baseline = {
+    tags: [{ id: 'target-tag', slug: 'engineering' }],
+  };
+  const dryStore = new MemoryMigrationStore(baseline);
+  dryStore.expectedBaselineCounts = { tags: 1 };
+  dryStore.assertFreshTarget = async () => {};
+  const store = new MemoryMigrationStore(baseline);
+  store.expectedBaselineCounts = { tags: 1 };
+  store.assertFreshTarget = async () => {};
+
+  const dryResult = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store: dryStore,
+    dryRun: true,
+  });
+  const result = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+  });
+
+  assert.equal(
+    store.rows.get('achievement_tags').get('edge-a').tag_id,
+    'target-tag',
+  );
+  const dryTags = dryResult.reconciliation.tables.find(
+    (entry) => entry.name === 'tags',
+  );
+  const tagsResult = result.reconciliation.tables.find(
+    (entry) => entry.name === 'tags',
+  );
+  assert.equal(dryTags.targetRowCount, 1);
+  assert.equal(dryTags.targetChecksum, tagsResult.targetChecksum);
+  assert.equal(
+    dryResult.reconciliationDigest,
+    result.reconciliationDigest,
+  );
+  assert.equal(dryStore.rows.get('tags').size, 1);
+  assert.equal(dryStore.rows.get('achievement_tags')?.size || 0, 0);
+});
+
 test('PostgreSQL finalization locks and rechecks the complete target snapshot', async () => {
   const statements = [];
   const store = new PostgresMigrationStore({
