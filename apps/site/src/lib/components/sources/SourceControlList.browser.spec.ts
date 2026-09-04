@@ -28,6 +28,50 @@ afterEach(() => {
 });
 
 describe('SourceControlList', () => {
+  it('projects persisted root sources from source health when generic hydration is empty', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('source-health')) {
+        return response({
+          items: [
+            {
+              active: true,
+              health: {
+                created: 3,
+                errors: 0,
+                failedRuns: 0,
+                runs: 1,
+              },
+              id: SOURCE_ID,
+              lastCheckedAt: '2026-09-04T12:00:00.000Z',
+              name: 'OpenAI careers',
+              provider: 'ashby',
+              type: 'company_careers',
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const target = document.createElement('div');
+    document.body.append(target);
+    const component = mount(SourceControlList, {
+      props: { records: [] },
+      target,
+    });
+
+    await vi.waitFor(() => {
+      expect(target.textContent).toContain('OpenAI careers');
+      expect(target.textContent).toContain('Healthy');
+      expect(target.textContent).toContain('3 new listings from 1 pull.');
+    });
+    expect(
+      target.querySelector(`[data-source-id="${SOURCE_ID}"]`),
+    ).not.toBeNull();
+    expect(target.textContent).not.toContain('Start with a job source');
+    unmount(component);
+  });
+
   it('keeps one new idempotency key after repeated terminal pull-again clicks', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {

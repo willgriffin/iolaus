@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  dbType: 'postgres' as 'postgres' | 'sqlite',
+}));
+
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: mocks.dbType, url: ':memory:' }),
+}));
+
 import {
   completeSourceCrawl,
   failSourceCrawl,

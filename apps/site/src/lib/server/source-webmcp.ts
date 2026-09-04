@@ -5,6 +5,7 @@ import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import { recordAgentAudit } from './application-workflow.js';
 import { getDbConfig } from './db.js';
+import { ensureLocalSourceCrawlWorker } from './local-source-crawl-worker.js';
 import { resolveOpportunityIntelligenceBudgetConfig } from './opportunity-intelligence-config.js';
 import { getCollection } from './smrt.js';
 import {
@@ -18,6 +19,11 @@ import {
 } from './source-provenance.js';
 import { persistedSourceProvider } from './source-provider.js';
 import {
+  createRootSource,
+  parseRootSourceInput,
+  type RootSourceSetupInput,
+} from './source-root-setup.js';
+import {
   SCHEDULED_SOURCE_QUEUE,
   SOURCE_CRAWL_METHOD,
   SOURCE_CRAWL_QUEUE,
@@ -25,6 +31,10 @@ import {
   SOURCE_JOB_OBJECT_TYPE,
   syncSourceSchedule,
 } from './source-schedules.js';
+import {
+  KeyedLockTimeoutError,
+  withSqliteOperationLock,
+} from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -47,6 +57,7 @@ export interface SourceWebMcpDependencies {
   jobDedupeStatus?: typeof getSourceCrawlJobDedupeStatus;
   jobCollectionFactory?: (database: SmrtDatabase) => Promise<RecordCollection>;
   jobCollection?: RecordCollection;
+  localCrawlWorker?: () => Promise<void>;
   now?: () => Date;
   sourceCollection?: RecordCollection;
   sourceLock?: SourceLock;
@@ -335,11 +346,21 @@ async function withDatabaseSourceLock<T>(
   sourceId: string,
   work: () => Promise<T>,
 ): Promise<T> {
+  const lockKey = `webmcp-source-crawl:${sourceId}`;
+  if (getDbConfig().type === 'sqlite') {
+    try {
+      return await withSqliteOperationLock(lockKey, work);
+    } catch (cause) {
+      if (cause instanceof KeyedLockTimeoutError) {
+        error(409, 'This source is already being updated. Try again shortly.');
+      }
+      throw cause;
+    }
+  }
   if (!database.acquireSession) {
     error(503, 'Database-backed source crawl locking is unavailable.');
   }
   const session = await database.acquireSession();
-  const lockKey = `webmcp-source-crawl:${sourceId}`;
   try {
     await session.query('SELECT pg_advisory_lock(hashtext(?))', [lockKey]);
     return await work();
@@ -549,6 +570,58 @@ export async function setRootSourceActive(
   };
 }
 
+/**
+ * Create one caller-selected root source without contacting its provider.
+ * Activation only marks it eligible for the separate, bounded crawl action.
+ */
+export async function createRootSourceFromWebMcp(
+  input: Record<string, unknown>,
+  user: Pick<User, 'id'>,
+  dependencies: SourceWebMcpDependencies = {},
+) {
+  let parsed: RootSourceSetupInput;
+  try {
+    parsed = parseRootSourceInput(input);
+  } catch (cause) {
+    error(
+      400,
+      cause instanceof Error
+        ? cause.message
+        : 'Source configuration is invalid.',
+    );
+  }
+
+  const database = await requestDatabase(dependencies);
+  const source = await createRootSource(parsed, {
+    sourceCollection: dependencies.sourceCollection,
+  });
+  const output = {
+    active: parsed.active,
+    id: source.id,
+    name: parsed.name,
+    provider: parsed.provider,
+    sourceRole: 'root' as const,
+    type: parsed.type,
+    url: parsed.url,
+  };
+  await (dependencies.audit ?? recordAgentAudit)({
+    database,
+    input: {
+      active: parsed.active,
+      name: parsed.name,
+      provider: parsed.provider,
+      type: parsed.type,
+      url: parsed.url,
+    },
+    output,
+    runType: 'webmcp_source_create',
+    sourceId: source.id,
+    status: 'completed',
+    user,
+  });
+  return output;
+}
+
 async function createCrawlIfMissing(
   crawlCollection: RecordCollection,
   input: {
@@ -614,7 +687,9 @@ export async function enqueueRootSourceCrawl(
   if (!transaction) {
     error(503, 'Transactional source crawl enqueue is unavailable.');
   }
-  if (!dependencies.jobCollection) {
+  // Local SQLite serializes the whole operation with the keyed file lock
+  // above; PostgreSQL alone needs the partial-index readiness probe.
+  if (!dependencies.jobCollection && getDbConfig().type !== 'sqlite') {
     const status = await (
       dependencies.jobDedupeStatus ?? getSourceCrawlJobDedupeStatus
     )(database);
@@ -815,6 +890,9 @@ export async function enqueueRootSourceCrawl(
     throw cause;
   });
   const { crawlId, jobId, reused, status } = operation;
+  if (getDbConfig().type === 'sqlite') {
+    await (dependencies.localCrawlWorker ?? ensureLocalSourceCrawlWorker)();
+  }
   return {
     crawlId,
     jobId,

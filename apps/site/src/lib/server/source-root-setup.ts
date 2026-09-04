@@ -59,7 +59,7 @@ interface SourceCollection {
   create: (payload: Record<string, unknown>) => Promise<MutableSource>;
 }
 
-function stringValue(value: FormDataEntryValue | null): string {
+function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
@@ -128,8 +128,14 @@ function sourceType(value: string): RootSourceType {
  * This is deliberately pure: form validation must not crawl, resolve DNS, or
  * otherwise contact the configured provider.
  */
-export function parseRootSourceSetup(form: FormData): RootSourceSetupInput {
-  const name = stringValue(form.get('name'));
+function parseRootSourceValues(values: {
+  active: boolean;
+  name: unknown;
+  provider: unknown;
+  type: unknown;
+  url: unknown;
+}): RootSourceSetupInput {
+  const name = stringValue(values.name);
   if (!name) throw new Error('Enter a name for this source.');
   if (name.length > MAX_NAME_LENGTH) {
     throw new Error(
@@ -138,18 +144,54 @@ export function parseRootSourceSetup(form: FormData): RootSourceSetupInput {
   }
 
   const provider = rootSourceProvider(
-    stringValue(form.get('provider')).toLowerCase(),
+    stringValue(values.provider).toLowerCase(),
   );
-  const url = rootSourceUrl(stringValue(form.get('url')));
+  const url = rootSourceUrl(stringValue(values.url));
   assertProviderRootUrl(provider, url);
 
   return {
-    active: form.get('active') === 'on',
+    active: values.active,
     name,
     provider,
-    type: sourceType(stringValue(form.get('type')) || 'job_board'),
+    type: sourceType(stringValue(values.type) || 'job_board'),
     url,
   };
+}
+
+/**
+ * Convert the small owner-facing form into the durable root-source contract.
+ * This is deliberately pure: form validation must not crawl, resolve DNS, or
+ * otherwise contact the configured provider.
+ */
+export function parseRootSourceSetup(form: FormData): RootSourceSetupInput {
+  return parseRootSourceValues({
+    active: form.get('active') === 'on',
+    name: form.get('name'),
+    provider: form.get('provider'),
+    type: form.get('type'),
+    url: form.get('url'),
+  });
+}
+
+/**
+ * Validate the explicit browser-agent root-source payload with the same
+ * no-network rules as the owner form. Callers choose whether the new source
+ * starts active; creating it never schedules or contacts a provider.
+ */
+export function parseRootSourceInput(
+  input: Record<string, unknown>,
+): RootSourceSetupInput {
+  const active = input.active === undefined ? true : input.active;
+  if (typeof active !== 'boolean') {
+    throw new Error('active must be true or false.');
+  }
+  return parseRootSourceValues({
+    active,
+    name: input.name,
+    provider: input.provider,
+    type: input.type ?? 'company_careers',
+    url: input.url,
+  });
 }
 
 /**

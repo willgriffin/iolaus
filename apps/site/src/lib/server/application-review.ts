@@ -29,6 +29,7 @@ import {
   describeApplicationAnswersBody,
   loadApplicationAnswersEditorState,
 } from './candidate-answers.js';
+import { latestPostingPreflightStatus } from './posting-preflight-status.js';
 import { getResumeFilesystem } from './resume-files.js';
 import { getCollection } from './smrt.js';
 
@@ -935,6 +936,18 @@ export async function loadApplicationReviewPageData(applicationId: string) {
     opportunity: reviewState.opportunity
       ? jsonRecord(reviewState.opportunity)
       : null,
+    // A fresh packet-generation preflight is authoritative, but a recorded
+    // inconclusive result tells the owner why the next generation needs their
+    // explicit confirmation. Keep the page contract intentionally narrow: the
+    // detail UI only needs to know whether to present that human-only field.
+    preflight: {
+      requiresOverride:
+        (
+          await latestPostingPreflightStatus(
+            stringValue(reviewState.application.opportunityId),
+          )
+        ).state === 'inconclusive',
+    },
     submissionOptions: {
       methods: submissionMethodDefinitions.map((definition) => ({
         ...definition,

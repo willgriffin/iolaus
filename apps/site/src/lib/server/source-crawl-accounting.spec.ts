@@ -1,5 +1,10 @@
 import { ObjectRegistry } from '@happyvertical/smrt-core';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://test' }),
+}));
+
 import '../objects/index.js';
 import {
   createSourceCrawlAttempt,

@@ -15,6 +15,10 @@ import {
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 
+function usesSqlite(): boolean {
+  return getDbConfig().type === 'sqlite';
+}
+
 export const SOURCE_CRAWL_TIMEOUT_STATUS = 'timed_out';
 export const SOURCE_CRAWL_TIMEOUT_ERROR =
   'Source crawl exceeded its configured execution timeout and was stopped by the watchdog.';
@@ -210,8 +214,7 @@ export async function completeSourceCrawl(
     const locked = await transaction.query(
       `SELECT id FROM source_crawls
        WHERE id = ? AND status = 'running' AND finished_at IS NULL
-         ${ownershipClause}
-       FOR UPDATE`,
+         ${ownershipClause}${usesSqlite() ? '' : '\n       FOR UPDATE'}`,
       [id, ...ownershipParameters],
     );
     if (locked.rows.length !== 1) return false;
@@ -302,8 +305,7 @@ export async function failSourceCrawl(
     const locked = await transaction.query(
       `SELECT id FROM source_crawls
        WHERE id = ? AND status = 'running' AND finished_at IS NULL
-         ${ownershipClause}
-       FOR UPDATE`,
+         ${ownershipClause}${usesSqlite() ? '' : '\n       FOR UPDATE'}`,
       [id, ...ownershipParameters],
     );
     if (locked.rows.length !== 1) return false;

@@ -56,17 +56,13 @@ const ADMIN_SHELL_CONFIG = {
   left: {
     collapsedSize: '4.25rem',
     expandedSize: '18rem',
-    initial: 'expanded',
+    initial: 'collapsed',
     label: 'Navigation',
     presentation: 'push',
   },
-  right: {
-    collapsedSize: '4rem',
-    expandedSize: 'min(420px, 32vw)',
-    initial: 'collapsed',
-    label: 'Tools',
-    presentation: 'push',
-  },
+  // Keep the demo focused on the primary workflow until the tool dock has
+  // completed its QA pass. The shell treats `false` as a fully hidden edge.
+  right: false,
   bottom: {
     collapsedSize: '2.75rem',
     expandedSize: 'min(360px, 42vh)',
@@ -356,10 +352,6 @@ function toggleTheme(): void {
   themeContext.toggleColorScheme();
 }
 
-function toggleTenantPanel(): void {
-  adminShell.togglePanel('left');
-}
-
 function handleTenantNavigate(): void {
   if (
     typeof window !== 'undefined' &&
@@ -499,20 +491,6 @@ function currentTenantHref(pathname: string): string {
 {#snippet appBar()}
   <div class="admin-app-bar">
     <div class="admin-app-bar-left">
-      <button
-        class="admin-icon-button"
-        type="button"
-        title={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
-        aria-label={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
-        aria-expanded={adminShell.panels.left === 'expanded'}
-        onclick={toggleTenantPanel}
-      >
-        {#if adminShell.panels.left === 'expanded'}
-          <PanelLeftClose size={16} strokeWidth={2.1} />
-        {:else}
-          <PanelLeftOpen size={16} strokeWidth={2.1} />
-        {/if}
-      </button>
       <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
         <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">

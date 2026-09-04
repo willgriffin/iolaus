@@ -23,6 +23,7 @@ import {
 } from '$lib/server/resume-read-plans';
 import { readJobSearchResume } from '$lib/server/resume-webmcp';
 import {
+  createRootSourceFromWebMcp,
   enqueueRootSourceCrawl,
   listRootSourceHealth,
   listSourceCrawlStatus,
@@ -267,6 +268,7 @@ const crawlSourceOperations = [
 /** Route action → the WebMCP tool name it executes. */
 const toolNames = {
   browse: 'job_search_browse_opportunities',
+  'create-source': 'job_search_create_source',
   'crawl-source': 'job_search_crawl_source',
   'dig-deeper': 'job_search_dig_deeper',
   import: 'job_search_import_opportunity',
@@ -443,6 +445,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   }
   const rejection = rejectInvalidArguments(action, input, 'body');
   if (rejection) return rejection;
+  if (action === 'create-source') {
+    return await executeAsOwnerTool(
+      locals,
+      action,
+      // Records a `webmcp_source_create` audit run after one validated root
+      // source is saved. It never schedules or contacts the provider.
+      [...agentRunAuditOperations, { action: 'create', collection: 'sources' }],
+      () => createRootSourceFromWebMcp(input, user),
+    );
+  }
   if (action === 'set-source-active') {
     return await executeAsOwnerTool(
       locals,

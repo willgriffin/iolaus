@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const dbConfig = vi.hoisted(() => ({
+  type: 'postgres' as 'postgres' | 'sqlite',
+}));
+
+vi.mock('./db.js', () => ({
+  getDbConfig: vi.fn(() => ({ type: dbConfig.type, url: ':memory:' })),
+}));
+
 import { SOURCE_CRAWL_ACTIVE_JOB_INDEX } from './source-crawl-job-schema';
 import {
   SOURCE_CRAWL_METHOD,
@@ -6,6 +15,7 @@ import {
   SOURCE_JOB_OBJECT_TYPE,
 } from './source-schedules';
 import {
+  createRootSourceFromWebMcp,
   enqueueRootSourceCrawl,
   listRootSourceHealth,
   listSourceCrawlStatus,
@@ -93,8 +103,68 @@ describe('source WebMCP service', () => {
     wardenReference: 'secret-item',
   });
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    dbConfig.type = 'postgres';
+    vi.clearAllMocks();
+  });
   afterEach(() => vi.unstubAllEnvs());
+
+  it('creates an active OpenAI Ashby root without scheduling or crawling it', async () => {
+    const sources = collection();
+    sources.create.mockImplementation(
+      async (payload: Record<string, unknown>) => {
+        const created = record({ ...payload, id: SOURCE_ID });
+        sources.records.push(created);
+        return created;
+      },
+    );
+    const crawls = collection();
+    const jobs = collection();
+    const audit = vi.fn(async () => ({}));
+
+    const result = await createRootSourceFromWebMcp(
+      {
+        name: 'OpenAI Careers',
+        provider: 'ashby',
+        url: 'https://jobs.ashbyhq.com/openai#openings',
+      },
+      { id: 'user-1' },
+      {
+        audit,
+        crawlCollection: crawls as never,
+        database: database() as never,
+        jobCollection: jobs as never,
+        sourceCollection: sources as never,
+      },
+    );
+
+    expect(result).toMatchObject({
+      active: true,
+      name: 'OpenAI Careers',
+      provider: 'ashby',
+      sourceRole: 'root',
+      type: 'company_careers',
+      url: 'https://jobs.ashbyhq.com/openai',
+    });
+    expect(sources.records).toHaveLength(1);
+    expect(sources.records[0]).toMatchObject({
+      isActive: true,
+      parentSourceId: null,
+      provider: 'ashby',
+      refreshCadence: 'ad_hoc',
+      sourceRole: 'root',
+      url: 'https://jobs.ashbyhq.com/openai',
+    });
+    expect(crawls.create).not.toHaveBeenCalled();
+    expect(jobs.create).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runType: 'webmcp_source_create',
+        sourceId: result.id,
+        user: { id: 'user-1' },
+      }),
+    );
+  });
 
   it('ranks provider health from terminal durable counts without sensitive fields', async () => {
     const sources = collection([
@@ -835,6 +905,49 @@ describe('source WebMCP service', () => {
       [`webmcp-source-crawl:${SOURCE_ID}`],
     );
     expect(requestDatabase.release).toHaveBeenCalledOnce();
+  });
+
+  it('uses the local serialization path without probing PostgreSQL indexes', async () => {
+    dbConfig.type = 'sqlite';
+    const jobs = collection();
+    const sourceLockCalls: string[] = [];
+    const sourceLock = async <T>(
+      id: string,
+      work: () => Promise<T>,
+    ): Promise<T> => {
+      sourceLockCalls.push(id);
+      return await work();
+    };
+    const localCrawlWorker = vi.fn(async () => {});
+    const jobDedupeStatus = vi.fn(async () => {
+      throw new Error('PostgreSQL index probes are unavailable locally.');
+    });
+
+    await expect(
+      enqueueRootSourceCrawl(
+        {
+          idempotencyKey: 'sqlite-openai-provider-run',
+          reason: 'Local OpenAI Ashby demo',
+          sourceId: SOURCE_ID,
+        },
+        { id: 'user-1' },
+        {
+          audit: vi.fn(async () => ({})),
+          crawlCollection: collection() as never,
+          database: database() as never,
+          jobCollectionFactory: vi.fn(async () => jobs as never),
+          jobDedupeStatus,
+          localCrawlWorker,
+          sourceCollection: collection([root]) as never,
+          sourceLock,
+        },
+      ),
+    ).resolves.toMatchObject({ sourceId: SOURCE_ID, status: 'pending' });
+
+    expect(jobDedupeStatus).not.toHaveBeenCalled();
+    expect(sourceLockCalls).toEqual([SOURCE_ID]);
+    expect(jobs.create).toHaveBeenCalledOnce();
+    expect(localCrawlWorker).toHaveBeenCalledOnce();
   });
 
   it('propagates one request database through job and schedule writes', async () => {

@@ -60,6 +60,54 @@ const sourceIdentifierSchema = {
 
 /** Tool name → HTTP method and argument schema. */
 export const jobSearchToolContracts = {
+  job_search_create_source: {
+    method: 'POST',
+    inputSchema: {
+      $schema: JSON_SCHEMA,
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        active: {
+          type: 'boolean',
+          default: true,
+          description:
+            'Whether the new root is eligible for a later explicit crawl. Creating it never contacts the provider.',
+        },
+        name: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 160,
+          description: 'A local label for this job source',
+        },
+        provider: {
+          type: 'string',
+          enum: ['ashby', 'greenhouse', 'lever', 'generic-careers'],
+          description: 'The provider that owns the public root URL',
+        },
+        type: {
+          type: 'string',
+          enum: [
+            'job_board',
+            'company_careers',
+            'contract_board',
+            'recruiter',
+            'search_query',
+            'manual',
+          ],
+          default: 'company_careers',
+        },
+        url: {
+          type: 'string',
+          format: 'uri',
+          minLength: 1,
+          maxLength: 2048,
+          description:
+            'Public HTTPS provider root, never an individual posting or credential-bearing URL',
+        },
+      },
+      required: ['name', 'provider', 'url'],
+    },
+  },
   job_search_list_source_health: {
     method: 'GET',
     inputSchema: {

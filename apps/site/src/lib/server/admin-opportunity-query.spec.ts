@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 
 const mocks = vi.hoisted(() => ({
+  dbConfig: vi.fn(() => ({})),
   query: vi.fn(),
   requestDatabase: vi.fn(),
   scopedQuery: vi.fn(),
@@ -16,11 +17,13 @@ vi.mock('@happyvertical/smrt-users', () => ({
 }));
 
 vi.mock('./db.js', () => ({
-  getDbConfig: vi.fn(() => ({})),
+  getDbConfig: mocks.dbConfig,
 }));
 
 describe('admin-opportunity-query', () => {
   beforeEach(() => {
+    mocks.dbConfig.mockReset();
+    mocks.dbConfig.mockReturnValue({});
     mocks.query.mockReset();
     mocks.query.mockResolvedValue({ rows: [] });
     mocks.requestDatabase.mockReset();
@@ -153,6 +156,31 @@ describe('admin-opportunity-query', () => {
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain('ORDER BY latest.score ASC NULLS LAST');
+  });
+
+  it('uses SQLite-compatible review normalization and score join locally', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    const { listOpportunityPageIds } = await import(
+      './admin-opportunity-query'
+    );
+
+    await listOpportunityPageIds({
+      candidateSkills: [],
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        sort: 'score',
+      },
+      limit: 25,
+      offset: 0,
+      reviewFilter: 'maybe',
+    });
+
+    const [sql, ...values] = mocks.query.mock.calls[0] ?? [];
+    expect(sql).toContain('lower(trim(o.human_review_status)) = $1');
+    expect(sql).toContain('LEFT JOIN evaluation_scores latest');
+    expect(sql).toContain('latest.id = (');
+    expect(sql).not.toContain('LEFT JOIN LATERAL');
+    expect(values).toContain('maybe');
   });
 
   it('creates query indexes concurrently on a timeout-bound pinned session', async () => {

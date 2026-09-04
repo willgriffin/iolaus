@@ -144,7 +144,7 @@ describe('command-center WebMCP registration', () => {
     if (!config) throw new Error('Expected admin WebMCP configuration');
     expect(config.basePath).toBe('/api');
     expect(config.effects).toEqual(['read', 'write']);
-    expect(config.maxTools).toBe(17);
+    expect(config.maxTools).toBe(18);
     expect(
       new Set(
         config.definitions.map((definition) =>
@@ -163,6 +163,7 @@ describe('command-center WebMCP registration', () => {
     expect(registered.map((tool) => tool.name).sort()).toEqual([
       'job_search_browse_opportunities',
       'job_search_crawl_source',
+      'job_search_create_source',
       'job_search_dig_deeper',
       'job_search_import_opportunity',
       'job_search_inspect_application',
@@ -195,6 +196,7 @@ describe('command-center WebMCP registration', () => {
     );
     expect(writes.map((tool) => tool.name).sort()).toEqual([
       'job_search_crawl_source',
+      'job_search_create_source',
       'job_search_dig_deeper',
       'job_search_import_opportunity',
       'job_search_open_application',
@@ -273,6 +275,13 @@ describe('command-center WebMCP registration', () => {
         sourceId: '11111111-1111-4111-8111-111111111111',
       });
     await registered
+      .find((tool) => tool.name === 'job_search_create_source')
+      ?.execute({
+        name: 'OpenAI Careers',
+        provider: 'ashby',
+        url: 'https://jobs.ashbyhq.com/openai',
+      });
+    await registered
       .find((tool) => tool.name === 'job_search_inspect_application')
       ?.execute({ applicationId: 'app-1' });
     await registered
@@ -309,6 +318,15 @@ describe('command-center WebMCP registration', () => {
         }),
         method: 'POST',
         url: '/api/job-search/crawl-source',
+      },
+      {
+        body: JSON.stringify({
+          name: 'OpenAI Careers',
+          provider: 'ashby',
+          url: 'https://jobs.ashbyhq.com/openai',
+        }),
+        method: 'POST',
+        url: '/api/job-search/create-source',
       },
       {
         body: '',
@@ -362,6 +380,16 @@ describe('command-center WebMCP registration', () => {
       inputSchema: {
         additionalProperties: false,
         required: ['sourceId', 'idempotencyKey', 'reason'],
+      },
+    });
+    expect(byName.get('job_search_create_source')).toMatchObject({
+      effect: 'write',
+      idempotent: false,
+      openWorld: true,
+      route: { method: 'POST', path: ['create-source'] },
+      inputSchema: {
+        additionalProperties: false,
+        required: ['name', 'provider', 'url'],
       },
     });
     expect(byName.get('job_search_set_source_active')).toMatchObject({

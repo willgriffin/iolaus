@@ -32,9 +32,19 @@ const OPPORTUNITY_QUERY_INDEXES = [
 export const OPPORTUNITY_TABLE_PAGE_SIZE = 100;
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
+type OpportunityQueryDialect = 'postgres' | 'sqlite';
 
 async function queryDatabase(): Promise<SmrtDatabase> {
   return getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+}
+
+/**
+ * The hosted list runs against PostgreSQL, while the packaged local app runs
+ * the same list against SQLite. Keep the dialect choice at this raw-query
+ * boundary: collection reads elsewhere stay engine-neutral.
+ */
+function opportunityQueryDialect(): OpportunityQueryDialect {
+  return getDbConfig().type === 'sqlite' ? 'sqlite' : 'postgres';
 }
 
 type QueryResult =
@@ -74,7 +84,22 @@ function sqlStringArray(value: unknown): string[] {
   );
 }
 
-function latestScoreJoinSql(): string {
+function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite') {
+    // SQLite has no LATERAL join. Its correlated subquery in the join
+    // condition expresses the same one-current-score relation without
+    // multiplying opportunity rows.
+    return `LEFT JOIN evaluation_scores latest
+      ON latest.id = (
+        SELECT es.id
+        FROM evaluation_scores es
+        WHERE es.opportunity_id = o.id
+          AND COALESCE(es.source_content_fingerprint, '') =
+            COALESCE(o.source_content_fingerprint, '')
+        ORDER BY es.updated_at DESC
+        LIMIT 1
+      )`;
+  }
   return `LEFT JOIN LATERAL (
     SELECT es.score
     FROM evaluation_scores es
@@ -86,7 +111,17 @@ function latestScoreJoinSql(): string {
   ) latest ON TRUE`;
 }
 
-function latestApplicationJoinSql(): string {
+function latestApplicationJoinSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite') {
+    return `LEFT JOIN applications latest_application
+      ON latest_application.id = (
+        SELECT a.id
+        FROM applications a
+        WHERE a.opportunity_id = o.id
+        ORDER BY a.updated_at DESC
+        LIMIT 1
+      )`;
+  }
   return `LEFT JOIN LATERAL (
     SELECT a.id, a.resume_mode, a.cover_letter_mode
     FROM applications a
@@ -96,13 +131,16 @@ function latestApplicationJoinSql(): string {
   ) latest_application ON TRUE`;
 }
 
-function normalizedReviewStatusSql(): string {
-  return 'lower(btrim(o.human_review_status))';
+function normalizedReviewStatusSql(dialect: OpportunityQueryDialect): string {
+  return dialect === 'sqlite'
+    ? 'lower(trim(o.human_review_status))'
+    : 'lower(btrim(o.human_review_status))';
 }
 
 function reviewWhereSql(
   reviewFilter: string,
   values: unknown[],
+  dialect: OpportunityQueryDialect,
 ): { needsApplication: boolean; where: string[] } {
   // Branch on the same value the fingerprint hashes: it trims, so `' all '`
   // must select no review filter rather than an equality that matches nothing.
@@ -114,7 +152,7 @@ function reviewWhereSql(
     return {
       needsApplication: true,
       where: [
-        `${normalizedReviewStatusSql()} = ${pushParam(values, 'apply')}`,
+        `${normalizedReviewStatusSql(dialect)} = ${pushParam(values, 'apply')}`,
         `(latest_application.id IS NULL
           OR COALESCE(latest_application.resume_mode, '') = ''
           OR COALESCE(latest_application.cover_letter_mode, '') = '')`,
@@ -128,14 +166,14 @@ function reviewWhereSql(
     return {
       needsApplication: false,
       where: [
-        `COALESCE(${normalizedReviewStatusSql()}, '') NOT IN (${placeholders})`,
+        `COALESCE(${normalizedReviewStatusSql(dialect)}, '') NOT IN (${placeholders})`,
       ],
     };
   }
   return {
     needsApplication: false,
     where: [
-      `${normalizedReviewStatusSql()} = ${pushParam(
+      `${normalizedReviewStatusSql(dialect)} = ${pushParam(
         values,
         review.toLowerCase(),
       )}`,
@@ -402,13 +440,16 @@ function orderBySql(
   }
 }
 
-export function createOpportunityWhereSql(query: OpportunityQuery): {
+export function createOpportunityWhereSql(
+  query: OpportunityQuery,
+  dialect: OpportunityQueryDialect = 'postgres',
+): {
   joins: string[];
   values: unknown[];
   whereSql: string;
 } {
   const values: unknown[] = [];
-  const review = reviewWhereSql(query.reviewFilter, values);
+  const review = reviewWhereSql(query.reviewFilter, values, dialect);
   const filters = filterWhereSql({
     candidateSkills: query.candidateSkills,
     filters: query.filters,
@@ -416,8 +457,8 @@ export function createOpportunityWhereSql(query: OpportunityQuery): {
     values,
   });
   const joins: string[] = [];
-  if (filters.needsScore) joins.push(latestScoreJoinSql());
-  if (review.needsApplication) joins.push(latestApplicationJoinSql());
+  if (filters.needsScore) joins.push(latestScoreJoinSql(dialect));
+  if (review.needsApplication) joins.push(latestApplicationJoinSql(dialect));
   const where = [...review.where, ...filters.where];
   return {
     joins,
@@ -561,7 +602,7 @@ export async function listOpportunityMatchingIds(
   { limit }: { limit: number },
 ): Promise<OpportunityMatchingRow[]> {
   const db = await queryDatabase();
-  const built = createOpportunityWhereSql(query);
+  const built = createOpportunityWhereSql(query, opportunityQueryDialect());
   const limitPlaceholder = pushParam(built.values, limit);
   const result = await db.query(
     `SELECT o.id, o.updated_at AS "updatedAt"
@@ -628,7 +669,10 @@ export async function countOpportunityRecords(
   query: OpportunityQuery,
 ): Promise<number> {
   const db = await queryDatabase();
-  const { joins, values, whereSql } = createOpportunityWhereSql(query);
+  const { joins, values, whereSql } = createOpportunityWhereSql(
+    query,
+    opportunityQueryDialect(),
+  );
   const result = await db.query(
     `SELECT COUNT(*) AS count
     FROM opportunities o
@@ -652,18 +696,21 @@ export async function listOpportunityPageIds({
   offset: number;
 }): Promise<string[]> {
   const db = await queryDatabase();
-  const query = createOpportunityWhereSql({
-    candidateSkills,
-    filters,
-    reviewFilter,
-    search,
-  });
+  const query = createOpportunityWhereSql(
+    {
+      candidateSkills,
+      filters,
+      reviewFilter,
+      search,
+    },
+    opportunityQueryDialect(),
+  );
   const needsScoreForSort = filters.sort === 'best' || filters.sort === 'score';
   if (
     needsScoreForSort &&
     !query.joins.some((join) => join.includes('evaluation_scores'))
   ) {
-    query.joins.unshift(latestScoreJoinSql());
+    query.joins.unshift(latestScoreJoinSql(opportunityQueryDialect()));
   }
   const limitPlaceholder = pushParam(query.values, limit);
   const offsetPlaceholder = pushParam(query.values, offset);
@@ -733,8 +780,11 @@ export async function listOpportunityFilterOptions(
 ): Promise<OpportunityFilterOptions> {
   const db = await queryDatabase();
   const values: unknown[] = [];
-  const review = reviewWhereSql(reviewFilter, values);
-  const joins = review.needsApplication ? [latestApplicationJoinSql()] : [];
+  const dialect = opportunityQueryDialect();
+  const review = reviewWhereSql(reviewFilter, values, dialect);
+  const joins = review.needsApplication
+    ? [latestApplicationJoinSql(dialect)]
+    : [];
   const whereSql =
     review.where.length > 0 ? `WHERE ${review.where.join('\n AND ')}` : '';
   const result = await db.query(

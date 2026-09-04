@@ -65,6 +65,9 @@ let { data } = $props<{
     finalApprovalMaterialsCurrent: boolean;
     materials: ReviewMaterial[];
     opportunity: RecordLike | null;
+    preflight: {
+      requiresOverride: boolean;
+    };
     submissionOptions: {
       methods: WorkflowOption[];
       roles: WorkflowOption[];
@@ -228,16 +231,8 @@ $effect(() => {
       <h1>{applicationTitle}</h1>
     </div>
     <div class="header-actions">
-      {#if canGeneratePacket}
+      {#if canGeneratePacket && !data.preflight.requiresOverride}
         <form method="POST" action="?/generatePacket">
-          <label class="sr-only" for="preflight-override-reason">
-            Reason to override an inconclusive posting check
-          </label>
-          <input
-            id="preflight-override-reason"
-            name="preflightOverrideReason"
-            placeholder="Reason only if the posting cannot be verified"
-          />
           <button class="secondary-action" type="submit">
             <Package size={16} strokeWidth={2.2} />
             <span>{value(data.application, 'packetAssetId') ? 'Regenerate packet' : 'Generate packet'}</span>
@@ -519,6 +514,33 @@ $effect(() => {
 	        <span>Material review and comments stay scoped to the selected artifact. Only final submission approval authorizes submission.</span>
 	      </p>
 	    </form>
+
+      {#if canGeneratePacket && data.preflight.requiresOverride}
+        <section class="preflight-review" aria-label="Posting check review">
+          <h2>Posting needs your confirmation</h2>
+          <p>
+            We could not confirm that this posting is still open. Check it
+            yourself, then explain what you verified before generating the
+            packet.
+          </p>
+          <form method="POST" action="?/generatePacket">
+            <label for="preflight-override-reason">
+              <span>Reason to override the posting check</span>
+              <textarea
+                id="preflight-override-reason"
+                name="preflightOverrideReason"
+                rows="3"
+                required
+                placeholder="I verified the employer posting is still open."
+              ></textarea>
+            </label>
+            <button class="secondary-button" type="submit">
+              <Package size={16} strokeWidth={2.2} />
+              <span>{value(data.application, 'packetAssetId') ? 'Regenerate packet' : 'Generate packet'}</span>
+            </button>
+          </form>
+        </section>
+      {/if}
 
 	    <div class="review-summary">
 	      <dl class="review-facts">
@@ -804,6 +826,40 @@ $effect(() => {
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 10px;
     background: var(--smrt-color-surface-container-low);
+  }
+
+  .preflight-review {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--smrt-color-warning);
+    border-radius: 10px;
+    background: var(--smrt-color-warning-container);
+    color: var(--smrt-color-on-warning-container);
+  }
+
+  .preflight-review h2,
+  .preflight-review p {
+    margin: 0;
+  }
+
+  .preflight-review h2 {
+    font: var(--smrt-typography-title-medium-font);
+  }
+
+  .preflight-review p {
+    font: var(--smrt-typography-body-small-font);
+  }
+
+  .preflight-review form,
+  .preflight-review label {
+    display: grid;
+    gap: 7px;
+  }
+
+  .preflight-review textarea {
+    width: 100%;
+    resize: vertical;
   }
 
   .review-facts {
