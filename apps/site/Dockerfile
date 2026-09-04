@@ -26,7 +26,7 @@ ENV SMRT_RUNTIME_PROFILE=self-hosted
 # the Docker build, so the in-container vite build OOMs on Node's ~2GB default
 # heap. Keep the cap below the self-hosted builder's memory ceiling so the
 # build cannot consume the whole VM and stall its BuildKit control process.
-ENV NODE_OPTIONS=--max-old-space-size=4096
+ENV NODE_OPTIONS=--max-old-space-size=2048
 COPY . .
 RUN pnpm --filter @willgriffin/iolaus-site build
 
