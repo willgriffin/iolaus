@@ -2,10 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   contextActive: false,
+  ensureApplicationRuntimeReady: vi.fn(),
   withBearerSessionContext: vi.fn(),
 }));
 
-vi.mock('$app/environment', () => ({ building: true }));
+vi.mock('$app/environment', () => ({ building: false }));
+
+vi.mock('$lib/server/application-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/application-runtime')>()),
+  ensureApplicationRuntimeReady: mocks.ensureApplicationRuntimeReady,
+}));
 
 vi.mock('@happyvertical/smrt-users/sveltekit', () => ({
   createSessionHandler: vi.fn(
@@ -86,6 +92,28 @@ describe('server bearer-session handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.contextActive = false;
+    mocks.ensureApplicationRuntimeReady.mockResolvedValue(undefined);
+  });
+
+  it('does not block process startup on a pending provider readiness check', async () => {
+    let resolveRuntime: (() => void) | undefined;
+    mocks.ensureApplicationRuntimeReady.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveRuntime = resolve;
+      }),
+    );
+    const { init } = await import('./hooks.server');
+
+    await expect(init()).resolves.toBeUndefined();
+    expect(mocks.ensureApplicationRuntimeReady).toHaveBeenCalledOnce();
+
+    const { startPublishedResumePrime } = await import(
+      '$lib/server/resume-prime'
+    );
+    expect(startPublishedResumePrime).not.toHaveBeenCalled();
+    resolveRuntime?.();
+    await Promise.resolve();
+    expect(startPublishedResumePrime).toHaveBeenCalledOnce();
   });
 
   it('resolves protected APIs inside the bearer tenant and database context', async () => {

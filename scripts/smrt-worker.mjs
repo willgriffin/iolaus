@@ -7,6 +7,7 @@ import {
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
 import { getDatabase } from '@happyvertical/sql';
+import { startWorkerHeartbeat } from './smrt-worker-heartbeat.mjs';
 import { createProviderReadinessProbe } from './smrt-provider-readiness.mjs';
 
 process.chdir(join(process.cwd(), 'apps', 'site'));
@@ -70,6 +71,7 @@ const runner =
       });
 
 await runner.start();
+const stopHeartbeat = await startWorkerHeartbeat({ kind });
 console.log(
   JSON.stringify({
     schemaVersion: 1,
@@ -83,6 +85,7 @@ let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
+  stopHeartbeat();
   await runtime.close();
 }
 process.once('SIGINT', () => void stop());

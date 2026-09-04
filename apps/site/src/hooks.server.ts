@@ -13,8 +13,12 @@ import { withBearerSessionContext } from '$lib/server/terminal-auth';
 // build, which imports this module without a database.
 export const init: ServerInit = async () => {
   if (building) return;
-  await ensureApplicationRuntimeReady();
-  startPublishedResumePrime();
+  // Do not block the server's request loop on an external provider. /health
+  // owns its bounded readiness budget and /live must remain process-only.
+  void ensureApplicationRuntimeReady().then(
+    () => startPublishedResumePrime(),
+    () => {},
+  );
 };
 
 const sessionHandler = createSessionHandler({
@@ -23,7 +27,7 @@ const sessionHandler = createSessionHandler({
   cookieName: sessionCookieName,
   cookieSameSite: 'lax',
   enterTenantContext: true,
-  skipPaths: ['/health'],
+  skipPaths: ['/health', '/live'],
 });
 
 const authGuard: Handle = async ({ event, resolve }) => {

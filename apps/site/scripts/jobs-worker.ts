@@ -1,14 +1,19 @@
-import '../src/lib/server/smrt.js';
+import './jobs-worker-bootstrap.js';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { ScheduleRunner, TaskRunner, type SmrtJob } from '@happyvertical/smrt-jobs';
 import { getDbConfig } from '../src/lib/server/db.js';
-import { AUTO_SUBMIT_APPLICATION_QUEUE } from '../src/lib/server/auto-submit-application-job-schema.js';
-import { OPPORTUNITY_INTELLIGENCE_QUEUE } from '../src/lib/server/opportunity-intelligence-job-schema.js';
 import { ensureSourceScheduleTable, SCHEDULED_SOURCE_QUEUE, SOURCE_CRAWL_QUEUE } from '../src/lib/server/source-schedules.js';
 import {
   reapStaleSourceCrawls,
   reconcileFailedSourceCrawlJob,
 } from '../src/lib/server/source-crawl-watchdog.js';
+import {
+  TASK_WORKER_SHUTDOWN_TIMEOUT_MS,
+  taskWorkerQueues,
+} from './jobs-worker-config.js';
+import { drainJobWorkerRunners } from './jobs-worker-lifecycle.js';
+import { startTaskWorker } from './jobs-worker-runtime.js';
+import { startWorkerHeartbeat } from '../../../scripts/smrt-worker-heartbeat.mjs';
 
 process.env.TZ ||= 'UTC';
 
@@ -36,13 +41,11 @@ const taskRunner = new TaskRunner({
   concurrency: numberFromEnv('SMRT_JOBS_WORKER_CONCURRENCY', 2),
   heartbeatInterval: taskHeartbeatInterval,
   pollInterval: numberFromEnv('SMRT_JOBS_WORKER_POLL_MS', 1_000),
-  queues: [
-    SOURCE_CRAWL_QUEUE,
-    SCHEDULED_SOURCE_QUEUE,
-    OPPORTUNITY_INTELLIGENCE_QUEUE,
-    AUTO_SUBMIT_APPLICATION_QUEUE,
-  ],
-  shutdownTimeout: numberFromEnv('SMRT_JOBS_WORKER_SHUTDOWN_MS', 60_000),
+  queues: taskWorkerQueues,
+  shutdownTimeout: numberFromEnv(
+    'SMRT_JOBS_WORKER_SHUTDOWN_MS',
+    TASK_WORKER_SHUTDOWN_TIMEOUT_MS,
+  ),
   staleJobThresholdMs,
 });
 const scheduleRunner = new ScheduleRunner({
@@ -84,8 +87,8 @@ scheduleRunner.on('runner:error', (error) => {
 
 await taskRunner.initialize(db);
 await scheduleRunner.initialize(db);
-await taskRunner.start();
-await scheduleRunner.start();
+await startTaskWorker(taskRunner);
+const stopHeartbeat = await startWorkerHeartbeat({ kind: 'task' });
 
 const sourceCrawlWatchdog = setInterval(() => {
   void reapStaleSourceCrawls(db).catch((error) => {
@@ -94,7 +97,7 @@ const sourceCrawlWatchdog = setInterval(() => {
 }, sourceCrawlWatchdogIntervalMs);
 
 console.log(
-  `SMRT jobs worker started for queues ${SOURCE_CRAWL_QUEUE}, ${SCHEDULED_SOURCE_QUEUE}, ${OPPORTUNITY_INTELLIGENCE_QUEUE}, ${AUTO_SUBMIT_APPLICATION_QUEUE}.`,
+  `SMRT jobs worker started for queues ${taskWorkerQueues.join(', ')}.`,
 );
 
 let shuttingDown = false;
@@ -104,7 +107,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`Received ${signal}; stopping SMRT jobs worker.`);
 
   clearInterval(sourceCrawlWatchdog);
-  await Promise.allSettled([scheduleRunner.stop(), taskRunner.stop()]);
+  await drainJobWorkerRunners({ scheduleRunner, stopHeartbeat, taskRunner });
   process.exit(0);
 }
 

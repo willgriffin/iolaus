@@ -89,6 +89,26 @@ let deployedRuntimePromise:
   | ReturnType<typeof initializeDeployedApplicationRuntime>
   | undefined;
 
+async function withinReadinessBudget<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('runtime_readiness_timed_out')),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Fail-closed startup gate for every deployed web process. */
 export async function ensureApplicationRuntimeReady(): Promise<void> {
   if (applicationRuntime.profile === 'local') {
@@ -145,6 +165,31 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     },
   });
   await deployedRuntimePromise;
+}
+
+/**
+ * Bounded deployed dependency probe for the readiness endpoint. Liveness must
+ * not call this: a temporary provider outage should drain a replica, not kill
+ * it and amplify the failure with a restart loop.
+ */
+export async function checkApplicationRuntimeReadiness(
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  try {
+    await withinReadinessBudget(ensureApplicationRuntimeReady(), timeoutMs);
+    if (applicationRuntime.profile === 'local') return true;
+    const runtime = deployedRuntimePromise
+      ? await deployedRuntimePromise
+      : undefined;
+    if (!runtime) return false;
+    const readiness = await withinReadinessBudget(
+      runtime.readiness(),
+      timeoutMs,
+    );
+    return readiness.status === 'ready';
+  } catch {
+    return false;
+  }
 }
 
 /** Local onboarding runtime. Deployed authentication belongs to its provider. */

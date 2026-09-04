@@ -1,5 +1,6 @@
+---
 name: Validate
-on: [push, pull_request]
+'on': [push, pull_request]
 permissions:
   contents: read
 jobs:
@@ -10,6 +11,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.18.0'
+      - uses: azure/setup-kubectl@v4
       - run: npm install --global pnpm@11.24.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm format-check && pnpm lint && pnpm check && pnpm test && pnpm build && pnpm knowledge:check
+      - run: >-
+          pnpm format-check && pnpm lint && pnpm check && pnpm test && pnpm
+          build && pnpm knowledge:check
