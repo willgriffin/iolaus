@@ -13,6 +13,7 @@ import {
 } from './jobs-worker-config.js';
 import { drainJobWorkerRunners } from './jobs-worker-lifecycle.js';
 import { startTaskWorker } from './jobs-worker-runtime.js';
+import { startWorkerHeartbeat } from '../../../scripts/smrt-worker-heartbeat.mjs';
 
 process.env.TZ ||= 'UTC';
 
@@ -87,6 +88,7 @@ scheduleRunner.on('runner:error', (error) => {
 await taskRunner.initialize(db);
 await scheduleRunner.initialize(db);
 await startTaskWorker(taskRunner);
+const stopHeartbeat = await startWorkerHeartbeat({ kind: 'task' });
 
 const sourceCrawlWatchdog = setInterval(() => {
   void reapStaleSourceCrawls(db).catch((error) => {
@@ -105,7 +107,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`Received ${signal}; stopping SMRT jobs worker.`);
 
   clearInterval(sourceCrawlWatchdog);
-  await drainJobWorkerRunners({ scheduleRunner, taskRunner });
+  await drainJobWorkerRunners({ scheduleRunner, stopHeartbeat, taskRunner });
   process.exit(0);
 }
 

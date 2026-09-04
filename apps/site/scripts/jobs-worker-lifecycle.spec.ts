@@ -9,6 +9,7 @@ describe('SIGTERM worker drain', () => {
     });
     let taskStopCalled = false;
     let scheduleStopCalled = false;
+    let heartbeatStopped = false;
     const draining = drainJobWorkerRunners({
       taskRunner: {
         stop: async () => {
@@ -21,6 +22,9 @@ describe('SIGTERM worker drain', () => {
           scheduleStopCalled = true;
         },
       },
+      stopHeartbeat: () => {
+        heartbeatStopped = true;
+      },
     });
 
     await Promise.resolve();
@@ -32,9 +36,11 @@ describe('SIGTERM worker drain', () => {
     });
     await Promise.resolve();
     expect(drained).toBe(false);
+    expect(heartbeatStopped).toBe(false);
 
     finishActiveTask?.();
     await expect(draining).resolves.toBeUndefined();
     expect(drained).toBe(true);
+    expect(heartbeatStopped).toBe(true);
   });
 });

@@ -102,9 +102,11 @@ if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
 }
 if (
   /scheduleRunner\.start\(\)/u.test(taskWorkerEntrypoint) ||
-  !/startTaskWorker\(taskRunner\)/u.test(taskWorkerEntrypoint)
+  !/startTaskWorker\(taskRunner\)/u.test(taskWorkerEntrypoint) ||
+  !/startWorkerHeartbeat\(\{ kind: 'task' \}\)/u.test(taskWorkerEntrypoint) ||
+  !/stopHeartbeat, taskRunner/u.test(taskWorkerEntrypoint)
 ) {
-  throw new Error('The task worker must claim tasks only; schedule polling belongs to the separate schedule workload.');
+  throw new Error('The task worker must claim tasks only and retain its required heartbeat through task drain.');
 }
 if (
   !/initContainers:[\s\S]*name: migrate[\s\S]*name: iolaus-migration-runtime[\s\S]*containers:[\s\S]*name: monitor[\s\S]*name: iolaus-monitor-runtime/u.test(
