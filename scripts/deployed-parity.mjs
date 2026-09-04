@@ -789,6 +789,7 @@ export function buildScenarioEnvironment(sandboxRoot, source = process.env) {
     XDG_CACHE_HOME: cache,
     ...(corepackHome ? { COREPACK_HOME: corepackHome } : {}),
     COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    pnpm_config_verify_deps_before_run: 'false',
     HTTP_PROXY: 'http://127.0.0.1:9',
     HTTPS_PROXY: 'http://127.0.0.1:9',
     ALL_PROXY: 'http://127.0.0.1:9',

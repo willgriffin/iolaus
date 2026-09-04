@@ -325,6 +325,7 @@ test('sanitizes scenario environment and installs an outbound-network denial', (
       environment.COREPACK_HOME,
       '/runtime-home/.cache/node/corepack',
     );
+    assert.equal(environment.pnpm_config_verify_deps_before_run, 'false');
     const denied = spawnSync(
       process.execPath,
       ['-e', "fetch('https://example.invalid')"],
