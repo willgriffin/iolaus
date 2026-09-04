@@ -15,6 +15,7 @@
     "test:opportunity-llm-repro": "vitest run src/lib/server/opportunity-llm-live.integration.spec.ts",
     "test:opportunities-perf": "OPPORTUNITY_LIST_PERF=1 vitest run src/lib/server/admin-opportunity-query.integration.spec.ts",
     "data": "tsx scripts/data-cli.ts",
+    "demo:fixture": "tsx scripts/demo-fixture.ts",
     "db:doctor": "tsx scripts/db-doctor.ts",
     "db:export": "tsx scripts/db-export.ts",
     "db:export-prod": "tsx scripts/db-export.ts --prod",

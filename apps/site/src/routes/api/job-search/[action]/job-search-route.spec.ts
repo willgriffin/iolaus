@@ -78,8 +78,6 @@ const resumeReadCollections = [
   'achievementattachments',
   'achievementtags',
   'attachments',
-  'candidateprofilelinks',
-  'candidateprofiles',
   'companyattachments',
   'duties',
   'dutytags',
@@ -934,7 +932,6 @@ describe('job-search WebMCP route', () => {
     expect(mocks.readResume).toHaveBeenCalledWith({ tailoring: 'canonical' });
 
     for (const denied of [
-      'candidateprofiles.read',
       'experiences.read',
       'resumetailoringconfigs.read',
       'resumeprofiles.read',

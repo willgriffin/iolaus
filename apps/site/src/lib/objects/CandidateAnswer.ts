@@ -20,13 +20,20 @@ export class CandidateAnswer extends SmrtObject {
   @field({ type: 'text' })
   profileKey = 'default';
   /** The question label exactly as supplied when the answer was saved. */
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   label = '';
   /** Normalized label (see normalizeAnswerLabel) used for conservative matching. */
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   labelKey = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   value = '';
+  /** Explicit consent is required before an answer enters this library. */
+  @field({ type: 'text' })
+  provenance = 'explicit_reusable_answer';
   @field({ type: 'boolean' })
   active = true;
+  @field({ type: 'datetime', nullable: true, sensitive: true })
+  savedForReuseAt: Date | null = null;
+  @field({ type: 'datetime', nullable: true, sensitive: true })
+  revokedForReuseAt: Date | null = null;
 }

@@ -531,6 +531,9 @@ async function saveReusableCandidateAnswers(options: {
         matching[0].active = true;
         matching[0].label = label;
         matching[0].labelKey = labelKey;
+        matching[0].provenance = 'explicit_reusable_answer';
+        matching[0].revokedForReuseAt = null;
+        matching[0].savedForReuseAt = new Date();
         matching[0].value = value;
         await matching[0].save();
       }
@@ -540,6 +543,9 @@ async function saveReusableCandidateAnswers(options: {
         label,
         labelKey,
         profileKey,
+        provenance: 'explicit_reusable_answer',
+        revokedForReuseAt: null,
+        savedForReuseAt: new Date(),
         value,
       });
       await record.save();
@@ -595,6 +601,7 @@ async function deactivateReusableRows(
     if (reusableAnswerLabelKey(record) !== key.labelKey) continue;
     if (record.active === false) continue;
     record.active = false;
+    record.revokedForReuseAt = new Date();
     await record.save();
     revoked += 1;
   }
