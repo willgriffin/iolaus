@@ -49,7 +49,15 @@ describe('root source setup', () => {
         provider: 'not-a-provider',
         url: 'https://jobs.ashbyhq.com/openai',
       },
-      'supported provider',
+      'provider available in this form',
+    ],
+    [
+      {
+        name: 'OpenAI Careers',
+        provider: 'workday',
+        url: 'https://www.workday.com/openai',
+      },
+      'provider available in this form',
     ],
     [
       {
@@ -80,6 +88,14 @@ describe('root source setup', () => {
         name: 'OpenAI Careers',
         provider: 'ashby',
         url: 'https://localhost/openai',
+      },
+      'public HTTPS root URL',
+    ],
+    [
+      {
+        name: 'OpenAI Careers',
+        provider: 'generic-careers',
+        url: 'https://[::1]/openai',
       },
       'public HTTPS root URL',
     ],

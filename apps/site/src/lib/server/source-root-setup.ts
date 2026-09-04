@@ -1,8 +1,13 @@
 import { isIP } from 'node:net';
-import { isSourceProviderId } from '../source-provider-ids.js';
 import { getCollection } from './smrt.js';
 
 const MAX_NAME_LENGTH = 160;
+const rootSourceProviders = [
+  'ashby',
+  'generic-careers',
+  'greenhouse',
+  'lever',
+] as const;
 const sourceTypes = [
   'job_board',
   'company_careers',
@@ -13,6 +18,7 @@ const sourceTypes = [
 ] as const;
 
 export type RootSourceType = (typeof sourceTypes)[number];
+type RootSourceProvider = (typeof rootSourceProviders)[number];
 
 function sourceTypeLabel(value: RootSourceType): string {
   switch (value) {
@@ -64,7 +70,10 @@ function rootSourceUrl(value: string): string {
   } catch {
     throw new Error('Enter a valid HTTPS root URL.');
   }
-  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/u, '');
+  const hostname = parsed.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, '')
+    .replace(/\.+$/u, '');
   if (
     parsed.protocol !== 'https:' ||
     !hostname ||
@@ -82,7 +91,10 @@ function rootSourceUrl(value: string): string {
   return parsed.toString();
 }
 
-function assertProviderRootUrl(provider: string, url: string): void {
+function assertProviderRootUrl(
+  provider: RootSourceProvider,
+  url: string,
+): void {
   const hostname = new URL(url).hostname;
   const providerHosts: Record<string, readonly string[]> = {
     ashby: ['jobs.ashbyhq.com'],
@@ -95,6 +107,13 @@ function assertProviderRootUrl(provider: string, url: string): void {
       `The selected ${provider} provider needs a matching board URL.`,
     );
   }
+}
+
+function rootSourceProvider(value: string): RootSourceProvider {
+  if (rootSourceProviders.includes(value as RootSourceProvider)) {
+    return value as RootSourceProvider;
+  }
+  throw new Error('Choose a provider available in this form.');
 }
 
 function sourceType(value: string): RootSourceType {
@@ -118,10 +137,9 @@ export function parseRootSourceSetup(form: FormData): RootSourceSetupInput {
     );
   }
 
-  const provider = stringValue(form.get('provider')).toLowerCase();
-  if (!isSourceProviderId(provider)) {
-    throw new Error('Choose a supported provider.');
-  }
+  const provider = rootSourceProvider(
+    stringValue(form.get('provider')).toLowerCase(),
+  );
   const url = rootSourceUrl(stringValue(form.get('url')));
   assertProviderRootUrl(provider, url);
 
