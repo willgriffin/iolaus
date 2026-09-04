@@ -309,7 +309,7 @@ function tableIndex(bundle) {
   return new Map(
     bundle.tables.map((table) => [
       table.name,
-      new Map(table.rows.map((row) => [String(row.sourceId), row])),
+      new Map(table.rows.map((row) => [String(row.values.id), row])),
     ]),
   );
 }
@@ -318,7 +318,7 @@ function contractIndex(contract) {
   return new Map(contract.map((table) => [table.name, table]));
 }
 
-function referenceRules(table, availableTables) {
+export function migrationReferenceRules(table, availableTables) {
   const rules = new Map();
   for (const column of table.columns) {
     if (column.referencesTable) {
@@ -471,7 +471,7 @@ function quarantineCycles({ bundle, contracts, index, state }) {
   for (const tableBundle of bundle.tables) {
     const table = contracts.get(tableBundle.name);
     if (!table) continue;
-    const selfRules = referenceRules(table, contracts).filter(
+    const selfRules = migrationReferenceRules(table, contracts).filter(
       (rule) => rule.parentTable === table.name && rule.parentColumn === 'id',
     );
     for (const rule of selfRules) {
@@ -534,7 +534,7 @@ export function reconcileMigrationRows({
   for (const tableBundle of bundle.tables) {
     const table = contracts.get(tableBundle.name);
     if (!table) continue;
-    const rules = referenceRules(table, contracts);
+    const rules = migrationReferenceRules(table, contracts);
     for (const row of tableBundle.rows) {
       for (const column of table.columns) {
         const value = row.values[column.name];
@@ -603,7 +603,7 @@ export function reconcileMigrationRows({
       if (!table) continue;
       for (const row of tableBundle.rows) {
         if (rowRejected(state, bundle.runId, table.name, row)) continue;
-        for (const rule of referenceRules(table, contracts)) {
+        for (const rule of migrationReferenceRules(table, contracts)) {
           const value = row.values[rule.column];
           if (value == null || value === '') {
             if (rule.required) {
