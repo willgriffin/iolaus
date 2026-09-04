@@ -80,10 +80,13 @@ code `EMPTY_REFERENCE_TO_NULL`.
 
 The command's `reconciliation` object is the secret-safe machine report. It
 contains per-table attempted/imported/updated/skipped/rejected/repaired counts,
-source/accepted/target SHA-256 checksums, hashed selectors for collisions and
+source/accepted/target SHA-256 checksums, full target row counts, explicitly
+classified retained bootstrap-row counts, hashed selectors for collisions and
 quarantine entries, deterministic reason codes, the exact excluded-table
-inventory, and an operator summary. It never contains source ids, natural keys,
-field values, file paths, URLs, credentials, or database details. The same
+inventory, and an operator summary. Target checksums are recomputed from every
+row read back from PostgreSQL; unexplained target rows fail the import. It never
+contains source ids, natural keys, field values, file paths, URLs, credentials,
+or database details. The same
 report and quarantine records are persisted in
 `_iolaus_migration_reconciliation` and `_iolaus_migration_quarantine`; a retry
 reconstructs stable-ID collision evidence from the row ledger so its report
@@ -115,7 +118,9 @@ preserves database records but does not copy asset bytes. Its report marks the
 asset section `pending` rather than presenting an empty asset inventory as a
 successful verification. The asset phase replaces that section with a
 `complete` inventory and new report digest after it verifies every referenced
-object; a row-only report is not cutover evidence for assets.
+object. That inventory binds hashed asset selectors to canonical source and
+target SHA-256 values without exposing paths or identifiers; a row-only report
+is not cutover evidence for assets.
 
 Intentional exclusions are always reported: sessions and authentication
 tokens, API/CLI credentials, deployment secrets, live worker/delivery leases,
