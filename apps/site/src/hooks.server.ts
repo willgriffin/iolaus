@@ -1,7 +1,8 @@
 import { createSessionHandler } from '@happyvertical/smrt-users/sveltekit';
-import { type Handle, redirect } from '@sveltejs/kit';
+import { type Handle, redirect, type ServerInit } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { building } from '$app/environment';
+import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
@@ -10,7 +11,11 @@ import { withBearerSessionContext } from '$lib/server/terminal-auth';
 // Warm the published resume before the readiness probe passes, so a fresh
 // replica never serves a public request from a cold cache. Skipped during the
 // build, which imports this module without a database.
-if (!building) startPublishedResumePrime();
+export const init: ServerInit = async () => {
+  if (building) return;
+  await ensureApplicationRuntimeReady();
+  startPublishedResumePrime();
+};
 
 const sessionHandler = createSessionHandler({
   ...getSmrtOptions(),
@@ -28,6 +33,7 @@ const authGuard: Handle = async ({ event, resolve }) => {
   const publicApi =
     pathname === '/api/cli/auth/start' ||
     pathname === '/api/cli/auth/token' ||
+    pathname === '/api/_runtime/health' ||
     pathname === '/api/mcp' ||
     pathname === '/api/mcp/tools' ||
     pathname === '/api/mcp/call';

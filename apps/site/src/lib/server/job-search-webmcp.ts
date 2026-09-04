@@ -29,6 +29,10 @@ import {
 } from './public-https.js';
 import { getCollection } from './smrt.js';
 import { mergeOpportunityCrawlReferences } from './source-crawl-opportunity-integrity.js';
+import {
+  KeyedLockTimeoutError,
+  withSqliteOperationLock,
+} from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -231,6 +235,7 @@ async function withOpportunityImportLock<T>(
   const lockKey = `job-opportunity-import:${createHash('sha256').update(url).digest('hex')}`;
   const activeTransaction = opportunityImportDatabase.getStore();
   if (activeTransaction) {
+    if (getDbConfig().type === 'sqlite') return await action();
     await activeTransaction.query("SET LOCAL lock_timeout = '15s'");
     await activeTransaction.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
       lockKey,
@@ -245,15 +250,28 @@ async function withOpportunityImportLock<T>(
       'Opportunity imports require transactional database support.',
     );
   }
-  return await database.transaction(async (transaction) =>
-    opportunityImportDatabase.run(transaction, async () => {
-      await transaction.query("SET LOCAL lock_timeout = '15s'");
-      await transaction.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
-        lockKey,
-      ]);
-      return await action();
-    }),
-  );
+  const transaction = database.transaction.bind(database);
+  const run = async () =>
+    await transaction(async (transactionDatabase) =>
+      opportunityImportDatabase.run(transactionDatabase, async () => {
+        if (getDbConfig().type !== 'sqlite') {
+          await transactionDatabase.query("SET LOCAL lock_timeout = '15s'");
+          await transactionDatabase.query(
+            'SELECT pg_advisory_xact_lock(hashtext(?))',
+            [lockKey],
+          );
+        }
+        return await action();
+      }),
+    );
+  if (getDbConfig().type !== 'sqlite') return await run();
+
+  try {
+    return await withSqliteOperationLock(lockKey, run);
+  } catch (cause) {
+    if (cause instanceof KeyedLockTimeoutError) error(409, cause.message);
+    throw cause;
+  }
 }
 
 function opportunityAdminUrl(id: string): string {

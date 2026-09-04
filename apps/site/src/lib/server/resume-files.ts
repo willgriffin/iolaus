@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import {
   type FilesystemInterface,
   type GetFilesystemOptions,
   getFilesystem,
 } from '@happyvertical/files';
+import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const RESUME_FILES_PATH = ['var', 'profile-assets'] as const;
 
@@ -47,17 +48,39 @@ export function getResumeFilesConfig(): GetFilesystemOptions {
   if (!raw) {
     return {
       type: 'local',
-      basePath: defaultResumeFilesBasePath(),
+      basePath:
+        process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+        !process.env.SMRT_RUNTIME_PROFILE
+          ? getIolausUserAssetsRoot()
+          : defaultResumeFilesBasePath(),
     };
   }
 
   const parsed = JSON.parse(raw) as GetFilesystemOptions;
-  if (
-    parsed.type === 'local' &&
-    parsed.basePath &&
-    !parsed.basePath.startsWith('/')
-  ) {
-    return { ...parsed, basePath: resolve(process.cwd(), parsed.basePath) };
+  const localRuntime =
+    process.env.SMRT_RUNTIME_PROFILE === 'local' ||
+    !process.env.SMRT_RUNTIME_PROFILE;
+  if (localRuntime && parsed.type !== 'local') {
+    throw new Error(
+      'The local runtime requires canonical local resume asset storage.',
+    );
+  }
+  if (parsed.type === 'local') {
+    const runtimeAssetRoot = getIolausUserAssetsRoot();
+    const basePath = parsed.basePath
+      ? isAbsolute(parsed.basePath)
+        ? resolve(parsed.basePath)
+        : resolve(process.cwd(), parsed.basePath)
+      : runtimeAssetRoot;
+    if (localRuntime && basePath !== runtimeAssetRoot) {
+      throw new Error(
+        'Local resume asset storage must use the canonical runtime asset root.',
+      );
+    }
+    return {
+      ...parsed,
+      basePath,
+    };
   }
   return parsed;
 }

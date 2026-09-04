@@ -37,6 +37,10 @@ import {
 import { bumpTaskChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import { getCollection } from './smrt.js';
+import {
+  KeyedLockTimeoutError,
+  withSqliteOperationLock,
+} from './sqlite-operation-lock.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -1284,6 +1288,23 @@ async function withOpportunityLifecycleLock<T>(
 ): Promise<T> {
   const database =
     getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+  if (getDbConfig().type === 'sqlite') {
+    let active = true;
+    const localSession = {
+      isActive: () => active,
+    } as OpportunityLifecycleSession;
+    try {
+      return await withSqliteOperationLock(
+        `opportunity-lifecycle:${opportunityId}`,
+        async () => await lifecycleLock.run(localSession, action),
+      );
+    } catch (cause) {
+      if (cause instanceof KeyedLockTimeoutError) error(409, cause.message);
+      throw cause;
+    } finally {
+      active = false;
+    }
+  }
   if (!database.acquireSession) {
     throw new Error(
       'Opportunity lifecycle changes require PostgreSQL session-lock support.',

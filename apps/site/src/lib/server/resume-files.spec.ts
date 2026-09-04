@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getResumeFilesConfig } from './resume-files';
+import { getIolausUserAssetsRoot } from './runtime-paths';
 
 const repoRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -25,27 +26,61 @@ afterEach(() => {
 });
 
 describe('getResumeFilesConfig', () => {
-  it('uses a package-local private directory when no asset directory exists', () => {
+  it('uses the external local-runtime asset directory by default', () => {
     delete process.env.RESUME_FILES_CONFIG_JSON;
     process.env.INIT_CWD = repoRoot;
     process.chdir(resolve(repoRoot, 'apps', 'site'));
 
     expect(getResumeFilesConfig()).toEqual({
       type: 'local',
-      basePath: resolve(repoRoot, 'apps', 'site', 'var', 'profile-assets'),
+      basePath: getIolausUserAssetsRoot(),
     });
   });
 
-  it('keeps explicit relative filesystem config relative to the current process', () => {
+  it('rejects a local filesystem root inside the source tree', () => {
     process.chdir(resolve(repoRoot, 'apps', 'site'));
     process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
       type: 'local',
       basePath: 'tmp/profile-assets',
     });
 
+    expect(() => getResumeFilesConfig()).toThrow(
+      'Local resume asset storage must use the canonical runtime asset root.',
+    );
+  });
+
+  it('rejects an arbitrary external local filesystem root', () => {
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 'local',
+      basePath: resolve(repoRoot, '..', 'iolaus-other-profile-assets'),
+    });
+
+    expect(() => getResumeFilesConfig()).toThrow(
+      'Local resume asset storage must use the canonical runtime asset root.',
+    );
+  });
+
+  it('rejects non-filesystem resume storage in the local runtime', () => {
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 's3',
+      bucket: 'example',
+    });
+
+    expect(() => getResumeFilesConfig()).toThrow(
+      'The local runtime requires canonical local resume asset storage.',
+    );
+  });
+
+  it('accepts an explicit local filesystem root matching the runtime assets', () => {
+    const runtimeAssetRoot = getIolausUserAssetsRoot();
+    process.env.RESUME_FILES_CONFIG_JSON = JSON.stringify({
+      type: 'local',
+      basePath: runtimeAssetRoot,
+    });
+
     expect(getResumeFilesConfig()).toEqual({
       type: 'local',
-      basePath: resolve(repoRoot, 'apps', 'site', 'tmp', 'profile-assets'),
+      basePath: runtimeAssetRoot,
     });
   });
 });

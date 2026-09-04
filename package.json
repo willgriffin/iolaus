@@ -13,6 +13,18 @@
     "pnpm": ">=11.24.0"
   },
   "scripts": {
+    "app:install": "node scripts/smrt-app.mjs install",
+    "app:setup": "node scripts/smrt-app.mjs setup",
+    "app:recover": "node scripts/smrt-app.mjs recover",
+    "app:start": "node scripts/smrt-app.mjs start",
+    "app:doctor": "node scripts/smrt-app.mjs doctor",
+    "app:open": "node scripts/smrt-app.mjs open",
+    "app:stop": "node scripts/smrt-app.mjs stop",
+    "app:backup": "node scripts/smrt-app.mjs backup",
+    "app:export": "node scripts/smrt-app.mjs export",
+    "app:import": "node scripts/smrt-app.mjs import",
+    "worker": "node scripts/smrt-worker.mjs task",
+    "worker:schedule": "node scripts/smrt-worker.mjs schedule",
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || echo 'Skipping lefthook install (not in git repository)'",
     "build": "turbo run build",
     "check": "turbo run check",
@@ -37,11 +49,16 @@
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/smrt-cli": "0.44.1",
-    "@happyvertical/smrt-dev-mcp": "0.44.1",
+    "@happyvertical/smrt-cli": "0.45.0",
+    "@happyvertical/smrt-dev-mcp": "0.45.0",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@happyvertical/smrt-app-runtime": "0.45.0",
+    "@happyvertical/smrt-config": "0.45.0",
+    "@happyvertical/sql": "0.89.4"
   },
   "license": "MIT"
 }

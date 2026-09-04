@@ -31,11 +31,13 @@ import {
 const originalProductionDatabaseUrl = process.env.PRODUCTION_DATABASE_URL;
 const originalBackupDir = process.env.IOLAUS_BACKUP_DIR;
 const originalResumeFilesConfigJson = process.env.RESUME_FILES_CONFIG_JSON;
+const originalRuntimeProfile = process.env.SMRT_RUNTIME_PROFILE;
 
 afterEach(() => {
   restoreEnv('PRODUCTION_DATABASE_URL', originalProductionDatabaseUrl);
   restoreEnv('IOLAUS_BACKUP_DIR', originalBackupDir);
   restoreEnv('RESUME_FILES_CONFIG_JSON', originalResumeFilesConfigJson);
+  restoreEnv('SMRT_RUNTIME_PROFILE', originalRuntimeProfile);
 });
 
 describe('db snapshot helpers', () => {
@@ -169,6 +171,7 @@ describe('db snapshot helpers', () => {
   it('exports and imports local resume file storage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'resume-files-'));
     try {
+      process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
       const sourceDir = join(root, 'source');
       const backupDir = join(root, 'backup');
       const restoredDir = join(root, 'restored');

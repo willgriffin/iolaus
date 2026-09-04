@@ -73,8 +73,9 @@ minimumReleaseAgeExclude:
   - '@happyvertical/sql'
   - '@happyvertical/spider'
   - '@happyvertical/utils'
-  - '@happyvertical/smrt-reports@0.44.1'
-  - '@happyvertical/smrt-playbooks@0.44.1'
+  - '@happyvertical/smrt-reports@0.44.1 || 0.45.0'
+  - '@happyvertical/smrt-playbooks@0.44.1 || 0.45.0'
+  - '@happyvertical/smrt-app-runtime@0.45.0'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4

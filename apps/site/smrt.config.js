@@ -1,8 +1,26 @@
-const databaseUrl =
-  process.env.DATABASE_URL ??
-  'postgresql://iolaus:iolaus@localhost:54329/iolaus_dev';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
+import { canonicalizeDataDirectory } from '../../scripts/smrt-runtime-identity.mjs';
+
+const sourceRoot = existsSync(resolve(process.cwd(), 'apps/site/package.json'))
+  ? process.cwd()
+  : resolve(process.cwd(), '../..');
+const profile = process.env.SMRT_RUNTIME_PROFILE || 'local';
+const appId = process.env.SMRT_APP_ID || 'iolaus';
+const localDatabase =
+  profile === 'local'
+    ? resolveLocalRuntimePaths({
+        appId,
+        dataDirectory: canonicalizeDataDirectory(process.env.SMRT_DATA_DIR),
+        sourceRoot,
+      }).database
+    : undefined;
 
 export default {
+  runtime: {
+    profile,
+  },
   smrt: {
     logLevel: 'info',
     schemaMigration: {
@@ -35,8 +53,8 @@ export default {
     },
     cli: {
       database: {
-        type: 'postgres',
-        url: databaseUrl,
+        type: profile === 'local' ? 'sqlite' : 'postgres',
+        url: profile === 'local' ? localDatabase : process.env.DATABASE_URL,
       },
       verbose: false,
     },

@@ -5,6 +5,7 @@ import { buildDomainKnowledgeManifest } from '@happyvertical/smrt-core/knowledge
 import { smrtPlugin } from '@happyvertical/smrt-core/vite-plugin';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, type Plugin } from 'vite';
+import { assertLocalLoopbackHost } from './src/lib/server/runtime-host.js';
 
 function syncProjectSmrtKnowledge(): void {
   const siteRoot = process.cwd();
@@ -60,6 +61,12 @@ function projectSmrtKnowledgePlugin(): Plugin {
   return {
     name: 'iolaus-project-smrt-knowledge',
     enforce: 'post',
+    configResolved(config) {
+      if ((process.env.SMRT_RUNTIME_PROFILE || 'local') === 'local') {
+        assertLocalLoopbackHost(config.server.host);
+        assertLocalLoopbackHost(config.preview.host ?? config.server.host);
+      }
+    },
     buildStart: sync,
     closeBundle: sync,
     configureServer(server) {
@@ -80,6 +87,7 @@ function projectSmrtKnowledgePlugin(): Plugin {
 
 export default defineConfig({
   server: {
+    host: '127.0.0.1',
     port: 5723,
     strictPort: true,
   },
