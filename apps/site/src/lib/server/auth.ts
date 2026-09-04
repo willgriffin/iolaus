@@ -10,12 +10,14 @@ import {
   TenantCollection,
   TenantStatus,
   type User,
+  UserCollection,
 } from '@happyvertical/smrt-users';
 import {
   createSessionCookie,
   destroySessionCookie,
 } from '@happyvertical/smrt-users/sveltekit';
 import { error, type RequestEvent, redirect } from '@sveltejs/kit';
+import { isConfiguredOidcAdminEmail } from './administrative-auth.js';
 import {
   getAppConfig,
   getAuthConfiguration,
@@ -29,6 +31,7 @@ import {
   applicationRuntimeConfiguration,
 } from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
+import { provisionHostedOidcUser } from './hosted-oidc-provisioning.js';
 
 const appConfig = getAppConfig();
 
@@ -241,15 +244,12 @@ export function isAuthorizedOidcAdmin(
   const email = normalizeLoginEmail(claims.email);
   if (!email) return false;
 
-  const authConfiguration = getAuthConfiguration();
-  const resolvedEmails =
-    configuredEmails ??
-    (authConfiguration.kind === 'self-hosted'
-      ? authConfiguration.oidc.adminEmails.join(',')
-      : undefined);
+  if (configuredEmails === undefined) {
+    return isConfiguredOidcAdminEmail(email);
+  }
 
   const allowedEmails = new Set(
-    (resolvedEmails ?? '')
+    configuredEmails
       .split(',')
       .map((value: string) => normalizeLoginEmail(value))
       .filter(Boolean),
@@ -313,6 +313,29 @@ async function getOrCreateLoginUserFromClaims(
     profileId: '',
     status: 'active',
   } as User;
+}
+
+/**
+ * Hosted login must use SMRT's owner-aware provisioning path. It retains an
+ * exact issuer/subject link when present and only uses a verified, canonical
+ * email fallback under SMRT's transaction and ownership checks. In particular,
+ * it never imports a predecessor browser session or device token.
+ */
+export async function getOrCreateHostedOidcLoginUser(
+  claims: OidcClaims,
+): Promise<User> {
+  const configuration = getAuthConfiguration();
+  if (configuration.kind !== 'self-hosted') {
+    throw new Error(
+      'Hosted OIDC provisioning requires a valid OIDC configuration.',
+    );
+  }
+  const users = await UserCollection.create(getSmrtOptions());
+  return await provisionHostedOidcUser(
+    claims,
+    users,
+    configuration.oidc.importedOwnerBindings,
+  );
 }
 
 async function ensureSingleTenantAccess(user: User) {
@@ -453,7 +476,7 @@ export async function completeOidcLogin(event: RequestEvent): Promise<void> {
     error(403, 'This account is not authorized to administer this site.');
   }
 
-  const user = await getOrCreateLoginUserFromClaims(
+  const user = await getOrCreateHostedOidcLoginUser(
     tokenClaimsToOidcClaims(claims),
   );
 

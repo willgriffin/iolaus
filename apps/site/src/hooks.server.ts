@@ -2,6 +2,7 @@ import { createSessionHandler } from '@happyvertical/smrt-users/sveltekit';
 import { type Handle, redirect, type ServerInit } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { building } from '$app/environment';
+import { administrativeSessionFailure } from '$lib/server/administrative-auth';
 import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
@@ -42,13 +43,22 @@ const authGuard: Handle = async ({ event, resolve }) => {
     pathname === '/api/mcp/tools' ||
     pathname === '/api/mcp/call';
 
-  if ((protectedAdmin || (protectedApi && !publicApi)) && !event.locals.user) {
-    if (protectedApi) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+  if (protectedAdmin || (protectedApi && !publicApi)) {
+    const failure = administrativeSessionFailure(event.locals);
+    if (failure) {
+      if (protectedApi) {
+        return new Response(
+          failure === 'unauthenticated' ? 'Unauthorized' : 'Forbidden',
+          { status: failure === 'unauthenticated' ? 401 : 403 },
+        );
+      }
 
-    const next = `${event.url.pathname}${event.url.search}`;
-    redirect(303, `/login?next=${encodeURIComponent(next)}`);
+      if (failure === 'unauthenticated') {
+        const next = `${event.url.pathname}${event.url.search}`;
+        redirect(303, `/login?next=${encodeURIComponent(next)}`);
+      }
+      return new Response('Forbidden', { status: 403 });
+    }
   }
 
   return resolve(event);

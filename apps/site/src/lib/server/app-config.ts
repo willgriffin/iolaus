@@ -32,8 +32,20 @@ export interface OidcConfiguration {
   adminEmails: string[];
   clientId: string;
   clientSecret?: string;
+  /**
+   * Explicit migration-approved first bindings for existing owner Users.
+   * These values are identity selectors, not credentials, and must remain in
+   * protected deployment configuration rather than source control.
+   */
+  importedOwnerBindings: OidcOwnerBinding[];
   realm: string;
   serverUrl: string;
+}
+
+export interface OidcOwnerBinding {
+  issuer: string;
+  subject: string;
+  userId: string;
 }
 
 export type AuthConfiguration =
@@ -209,6 +221,58 @@ function configuredAdminEmails(environment: AppConfigEnvironment): string[] {
   return [...new Set(emails)];
 }
 
+function configuredImportedOwnerBindings(
+  environment: AppConfigEnvironment,
+): OidcOwnerBinding[] | null {
+  const raw = stringValue(environment.IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS);
+  if (!raw) return [];
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length > 32) return null;
+
+    const bindings = parsed.map((value): OidcOwnerBinding | null => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+      }
+      const record = value as Record<string, unknown>;
+      const issuer = typeof record.issuer === 'string' ? record.issuer : '';
+      const subject = typeof record.subject === 'string' ? record.subject : '';
+      const userId = typeof record.userId === 'string' ? record.userId : '';
+      if (
+        !issuer ||
+        issuer !== issuer.trim() ||
+        issuer.length > 2_000 ||
+        !subject ||
+        subject !== subject.trim() ||
+        subject.length > 1_000 ||
+        !userId ||
+        userId !== userId.trim() ||
+        userId.length > 200 ||
+        /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(issuer) ||
+        /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(subject) ||
+        /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(userId)
+      ) {
+        return null;
+      }
+      return { issuer, subject, userId };
+    });
+    if (bindings.some((binding) => binding === null)) return null;
+
+    const resolved = bindings as OidcOwnerBinding[];
+    const identityKeys = new Set(
+      resolved.map(({ issuer, subject }) => `${issuer}\u0000${subject}`),
+    );
+    const userIds = new Set(resolved.map(({ userId }) => userId));
+    return identityKeys.size === resolved.length &&
+      userIds.size === resolved.length
+      ? resolved
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve local or public authentication without exposing configuration values.
  * Callers present `message` verbatim only as an operational recovery hint; it
@@ -227,13 +291,15 @@ export function getAuthConfiguration(
     stringValue(environment.IOLAUS_OIDC_CLIENT_ID),
   );
   const adminEmails = configuredAdminEmails(environment);
+  const importedOwnerBindings = configuredImportedOwnerBindings(environment);
 
   if (
     !publicUrl ||
     !serverUrl ||
     !realm ||
     !clientId ||
-    adminEmails.length === 0
+    adminEmails.length === 0 ||
+    !importedOwnerBindings
   ) {
     return {
       kind: 'invalid',
@@ -248,6 +314,7 @@ export function getAuthConfiguration(
       clientId,
       clientSecret:
         stringValue(environment.IOLAUS_OIDC_CLIENT_SECRET) || undefined,
+      importedOwnerBindings,
       realm,
       serverUrl,
     },
