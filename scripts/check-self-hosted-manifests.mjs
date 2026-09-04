@@ -52,11 +52,16 @@ for (const rendered of [baseRendered, productionRendered]) {
   requireText(rendered, 'name: iolaus-monitor-runtime');
   requireText(rendered, 'value: self-hosted');
   requireText(rendered, 'name: migrate');
-  requireText(rendered, 'pnpm --filter @willgriffin/iolaus-site db:migrate');
+  requireText(rendered, 'node --import tsx apps/site/scripts/db-migrate.ts');
   requireText(rendered, 'name: iolaus-task-worker');
   requireText(rendered, 'name: iolaus-schedule-worker');
   requireText(rendered, 'scripts/smrt-worker-heartbeat.mjs');
   requireText(rendered, 'name: iolaus-queue-provider-monitor');
+  requireText(rendered, 'automountServiceAccountToken: false');
+  if (count(rendered, 'automountServiceAccountToken: false') !== 4) {
+    throw new Error('Every self-hosted workload must disable service-account token automounting.');
+  }
+  requireText(rendered, 'path: /live');
   if (count(rendered, 'runAsNonRoot: true') < 4 || count(rendered, 'runAsUser: 10001') < 4) {
     throw new Error('Every self-hosted workload must run as the fixed non-root image user.');
   }
@@ -74,6 +79,9 @@ for (const rendered of [baseRendered, productionRendered]) {
   if (count(rendered, '@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST') < 7) {
     throw new Error('Every executable workload must require an immutable release digest.');
   }
+  if (rendered.includes('command:\n      - pnpm')) {
+    throw new Error('Self-hosted runtime commands must use image-contained direct executables.');
+  }
 }
 
 if (!/USER 10001:10001/u.test(runnerDockerfile)) {
@@ -81,6 +89,12 @@ if (!/USER 10001:10001/u.test(runnerDockerfile)) {
 }
 if (!/COPY --from=build --chown=iolaus:iolaus \/app \/app/u.test(runnerDockerfile)) {
   throw new Error('The released application image must be readable by its non-root user.');
+}
+if (!/test -x \/app\/node_modules\/.bin\/tsx/u.test(runnerDockerfile)) {
+  throw new Error('The released image must contain its pinned direct TypeScript loader.');
+}
+if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
+  throw new Error('The released image must smoke its direct worker bootstrap without pnpm.');
 }
 if (
   !/initContainers:[\s\S]*name: migrate[\s\S]*name: iolaus-migration-runtime[\s\S]*containers:[\s\S]*name: monitor[\s\S]*name: iolaus-monitor-runtime/u.test(

@@ -44,6 +44,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     --shell /usr/sbin/nologin iolaus \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chown=iolaus:iolaus /app /app
+# Runtime entrypoints use this lockfile-pinned loader directly. This build-time
+# smoke prevents a released image from falling back to Corepack/pnpm downloads.
+RUN test -x /app/node_modules/.bin/tsx \
+  && node --import tsx --eval "import('./apps/site/scripts/jobs-worker-bootstrap.ts')"
 USER 10001:10001
 EXPOSE 3000
 CMD ["node", "apps/site/build"]

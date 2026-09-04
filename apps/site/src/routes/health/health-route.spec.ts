@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  checkApplicationRuntimeReadiness: vi.fn(),
   isPublishedResumePrimeSettled: vi.fn(),
+}));
+
+vi.mock('$lib/server/application-runtime', () => ({
+  checkApplicationRuntimeReadiness: mocks.checkApplicationRuntimeReadiness,
 }));
 
 vi.mock('$lib/server/resume-prime', () => ({
@@ -10,19 +15,21 @@ vi.mock('$lib/server/resume-prime', () => ({
 
 import { GET } from './+server';
 
-function health() {
-  return GET({} as unknown as Parameters<typeof GET>[0]) as Response;
+async function health() {
+  return await GET({} as unknown as Parameters<typeof GET>[0]);
 }
 
 beforeEach(() => {
   mocks.isPublishedResumePrimeSettled.mockReset();
+  mocks.checkApplicationRuntimeReadiness.mockReset();
+  mocks.checkApplicationRuntimeReadiness.mockResolvedValue(true);
 });
 
 describe('health route', () => {
   it('reports not ready while the resume prime is still running', async () => {
     mocks.isPublishedResumePrimeSettled.mockReturnValue(false);
 
-    const response = health();
+    const response = await health();
 
     // Kubernetes takes the replica out of the load balancer, so no public
     // request pays the cold read plan.
@@ -37,12 +44,25 @@ describe('health route', () => {
   it('reports ready once the prime has settled', async () => {
     mocks.isPublishedResumePrimeSettled.mockReturnValue(true);
 
-    const response = health();
+    const response = await health();
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       resume: 'ready',
+    });
+  });
+
+  it('drains on a bounded deployed dependency readiness failure', async () => {
+    mocks.isPublishedResumePrimeSettled.mockReturnValue(true);
+    mocks.checkApplicationRuntimeReadiness.mockResolvedValue(false);
+
+    const response = await health();
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      runtime: 'unavailable',
     });
   });
 });

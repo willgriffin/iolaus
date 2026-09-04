@@ -31,13 +31,14 @@ spec:
           type: RuntimeDefault
       imagePullSecrets:
         - name: iolaus-registry
+      automountServiceAccountToken: false
       initContainers:
         - name: migrate
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
           command:
             - /bin/sh
             - -ec
-            - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+            - cd /app && node --import tsx apps/site/scripts/db-migrate.ts
           envFrom:
             - secretRef:
                 name: iolaus-migration-runtime
@@ -68,7 +69,7 @@ spec:
         # task jobs, so the task worker is independently drainable and visible.
         - name: schedule-worker
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
-          command: ["pnpm", "worker:schedule"]
+          command: ["node", "scripts/smrt-worker.mjs", "schedule"]
           envFrom:
             - secretRef:
                 name: iolaus-runtime

@@ -33,6 +33,7 @@ spec:
               type: RuntimeDefault
           imagePullSecrets:
             - name: iolaus-registry
+          automountServiceAccountToken: false
           # The monitor must never race a schema rollout. Its database reader
           # remains separate from this migration writer identity.
           initContainers:
@@ -41,7 +42,7 @@ spec:
               command:
                 - /bin/sh
                 - -ec
-                - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+                - cd /app && node --import tsx apps/site/scripts/db-migrate.ts
               envFrom:
                 - secretRef:
                     name: iolaus-migration-runtime
@@ -70,7 +71,7 @@ spec:
           containers:
             - name: monitor
               image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
-              command: ["pnpm", "--filter", "@willgriffin/iolaus-site", "deployment:monitor"]
+              command: ["node", "--import", "tsx", "apps/site/scripts/deployment-monitor.ts"]
               envFrom:
                 - secretRef:
                     name: iolaus-monitor-runtime

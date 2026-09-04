@@ -23,7 +23,7 @@ const sessionHandler = createSessionHandler({
   cookieName: sessionCookieName,
   cookieSameSite: 'lax',
   enterTenantContext: true,
-  skipPaths: ['/health'],
+  skipPaths: ['/health', '/live'],
 });
 
 const authGuard: Handle = async ({ event, resolve }) => {

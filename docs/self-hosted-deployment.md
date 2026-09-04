@@ -34,8 +34,10 @@ Create these resources outside this repository, in the target namespace:
   `DATABASE_URL`; it must not contain OIDC, S3, model, crawler, or submission
   configuration. The monitor only projects aggregate `_smrt_jobs` and
   `source_crawls` state, so its role receives `CONNECT`, schema `USAGE`, and
-  `SELECT` on exactly those tables (and required sequence/catalog metadata),
-  with no DDL, DML, ownership, or role-management privilege.
+  column-level `SELECT` only: `_smrt_jobs(queue, status)` and
+  `source_crawls(status, started_at, finished_at)` (or protected views that
+  expose only the documented aggregates). It receives no DDL, DML, ownership,
+  role-management, OIDC, asset, crawler, model, or submission privilege.
 - `Secret/iolaus-registry`: only when the selected immutable registry image
   requires it.
 
@@ -66,8 +68,8 @@ context before enabling a provider fixture.
 
 | Workload | Responsibility | Availability signal |
 | --- | --- | --- |
-| `iolaus-web` | Authenticated web/API/WebMCP surface | `/health` startup, readiness, and liveness probes; two rolling replicas |
-| `iolaus-task-worker` | Task execution, including provider crawl jobs | Process-local heartbeat probe and 90-second graceful drain |
+| `iolaus-web` | Authenticated web/API/WebMCP surface | `/health` startup/readiness checks bounded deployed providers; `/live` is process liveness; two rolling replicas |
+| `iolaus-task-worker` | Task execution, including provider crawl jobs | TaskRunner imports local classes and claims source-crawl, scheduled-source, intelligence, and approved-submit queues; heartbeat probe and four-minute drain |
 | `iolaus-schedule-worker` | Due schedule dispatch; it creates provider-crawl task jobs but does not execute them | Process-local heartbeat probe and 90-second graceful drain |
 | `iolaus-queue-provider-monitor` | Read-only aggregate queue and crawl-watchdog check | CronJob failure plus count-only JSON; independent of web health |
 
@@ -83,8 +85,11 @@ worker kind, time, and a ready state. They are not durable application data.
 The liveness probe rejects a process whose event loop can no longer refresh its
 own heartbeat; pod running status alone is not accepted as worker health.
 
-The monitor emits only queue/status counts and source-crawl aggregates. It
-fails on stale or timed-out provider work. Alert from the cluster's job-failure
+The monitor emits only queue/status counts and source-crawl aggregates. Its SQL
+never selects crawl identifiers, URLs, errors, or payloads; bind its reader role
+to protected aggregate-only views where supported, otherwise grant the exact
+column-level `SELECT` contract above. It fails on stale or timed-out
+provider work. Alert from the cluster's job-failure
 metric and retain its logs under the deployment's normal restricted log policy.
 Establish queue-depth and provider-error alert thresholds from the isolated
 rehearsal; they are intentionally not guessed in the generic manifest.
@@ -140,7 +145,11 @@ approval boundary.
 
 For a drain, first stop creating new source work with the application control
 described in `docs/employment-workflows.md`, then allow task jobs to reach zero
-before scaling the task worker down. Do not scale down both worker deployments
+before scaling the task worker down. The task pod has a 270-second grace period:
+its three-minute crawl ceiling and four-minute TaskRunner drain budget ensure a
+SIGTERM stops claiming new jobs before Kubernetes can kill active work. Rehearse
+that SIGTERM path with a bounded non-production job before rollout. Do not scale
+down both worker deployments
 as a substitute for a migration or a rollback. Rollback is a traffic and
 worker-fleet decision owned by the cutover runbook; this topology neither
 changes DNS/TLS nor decommissions a predecessor deployment.

@@ -23,7 +23,9 @@ spec:
     spec:
       # The runner drains work for up to 60 seconds after SIGTERM; leave margin
       # for provider cancellation and the process shutdown sequence.
-      terminationGracePeriodSeconds: 90
+      # A crawl may run for three minutes; let TaskRunner drain for four, with
+      # thirty seconds left for its shutdown bookkeeping.
+      terminationGracePeriodSeconds: 270
       securityContext:
         fsGroup: 10001
         runAsGroup: 10001
@@ -33,13 +35,14 @@ spec:
           type: RuntimeDefault
       imagePullSecrets:
         - name: iolaus-registry
+      automountServiceAccountToken: false
       initContainers:
         - name: migrate
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
           command:
             - /bin/sh
             - -ec
-            - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+            - cd /app && node --import tsx apps/site/scripts/db-migrate.ts
           envFrom:
             - secretRef:
                 name: iolaus-migration-runtime
@@ -68,7 +71,9 @@ spec:
       containers:
         - name: task-worker
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
-          command: ["pnpm", "worker"]
+          # This entrypoint imports the local class registry before TaskRunner
+          # claims and dispatches all application queues.
+          command: ["node", "--import", "tsx", "apps/site/scripts/jobs-worker.ts"]
           envFrom:
             - secretRef:
                 name: iolaus-runtime
@@ -79,6 +84,10 @@ spec:
               value: self-hosted
             - name: SMRT_WORKER_CONCURRENCY
               value: "4"
+            - name: SMRT_JOBS_WORKER_CONCURRENCY
+              value: "4"
+            - name: SMRT_JOBS_WORKER_SHUTDOWN_MS
+              value: "240000"
             - name: SMRT_WORKER_HEARTBEAT_FILE
               value: /var/run/iolaus/worker-heartbeat.json
             - name: SMRT_WORKER_HEARTBEAT_MAX_AGE_MS
