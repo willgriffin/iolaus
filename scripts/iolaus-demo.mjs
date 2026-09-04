@@ -217,6 +217,7 @@ function authenticatedBrowserWebMcp(
   environment,
   cookie,
   applicationId,
+  opportunityId,
   screenshotPath,
 ) {
   const result = pnpm(
@@ -232,6 +233,7 @@ function authenticatedBrowserWebMcp(
       env: {
         ...environment,
         IOLAUS_DEMO_APPLICATION_ID: applicationId,
+        IOLAUS_DEMO_OPPORTUNITY_ID: opportunityId,
         IOLAUS_DEMO_ORIGIN: `http://127.0.0.1:${environment.PORT}`,
         IOLAUS_DEMO_SCREENSHOT: screenshotPath,
         IOLAUS_DEMO_SESSION_COOKIE: cookie,
@@ -307,6 +309,7 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
     environment,
     cookie,
     fixture.applicationId,
+    fixture.opportunityId,
     screenshotPath,
   );
   const names = Array.isArray(webmcp.toolNames)
@@ -327,6 +330,16 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
   }
   const inspect = webmcp.application;
   const serializedInspect = JSON.stringify(inspect);
+  const preparation = webmcp.preparation;
+  const serializedPreparation = JSON.stringify(preparation);
+  if (
+    preparation?.application?.id !== fixture.applicationId ||
+    preparation?.application?.status !== 'awaiting_user'
+  ) {
+    throw new Error(
+      'Browser WebMCP did not prepare the synthetic application at the approval boundary.',
+    );
+  }
   if (!serializedInspect.includes(fixture.applicationId)) {
     throw new Error('The deterministic application was not returned by inspect.');
   }
@@ -341,7 +354,8 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
   ]) {
     if (
       serializedBrowse.includes(privateValue) ||
-      serializedInspect.includes(privateValue)
+      serializedInspect.includes(privateValue) ||
+      serializedPreparation.includes(privateValue)
     ) {
       throw new Error(`Browser WebMCP exposed private fixture data: ${privateValue}.`);
     }

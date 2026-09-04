@@ -5,8 +5,9 @@ import { chromium } from 'playwright-core';
 const origin = process.env.IOLAUS_DEMO_ORIGIN;
 const cookie = process.env.IOLAUS_DEMO_SESSION_COOKIE;
 const applicationId = process.env.IOLAUS_DEMO_APPLICATION_ID;
+const opportunityId = process.env.IOLAUS_DEMO_OPPORTUNITY_ID;
 const screenshotPath = process.env.IOLAUS_DEMO_SCREENSHOT;
-if (!origin || !cookie || !applicationId || !screenshotPath) {
+if (!origin || !cookie || !applicationId || !opportunityId || !screenshotPath) {
   throw new Error('The authenticated demo WebMCP inputs are incomplete.');
 }
 
@@ -73,7 +74,7 @@ try {
         }
       ).__iolausRegisteredWebMcpTools?.length,
   );
-  const result = await page.evaluate(async ({ applicationId }) => {
+  const result = await page.evaluate(async ({ applicationId, opportunityId }) => {
     const tools = (
       globalThis as typeof globalThis & {
         __iolausRegisteredWebMcpTools: Array<{
@@ -88,23 +89,35 @@ try {
     const applicationTool = tools.find(
       (tool) => tool.name === 'job_search_inspect_application',
     );
-    if (!browseTool || !applicationTool) {
+    const prepareTool = tools.find(
+      (tool) => tool.name === 'job_search_open_application',
+    );
+    if (!browseTool || !applicationTool || !prepareTool) {
       throw new Error('The rendered page omitted required job-search tools.');
     }
+    const browse = JSON.parse(
+      await browseTool.execute({
+        limit: 5,
+        query: 'Fictional Principal Engineer',
+      }),
+    ) as Record<string, unknown>;
+    const preparation = JSON.parse(
+      await prepareTool.execute({
+        opportunityId,
+        reason: 'Synthetic demo preparation; no external transmission.',
+      }),
+    ) as Record<string, unknown>;
+    const application = JSON.parse(
+      await applicationTool.execute({ applicationId }),
+    ) as Record<string, unknown>;
     return {
-      application: JSON.parse(
-        await applicationTool.execute({ applicationId }),
-      ) as Record<string, unknown>,
-      browse: JSON.parse(
-        await browseTool.execute({
-          limit: 5,
-          query: 'Fictional Principal Engineer',
-        }),
-      ) as Record<string, unknown>,
+      application,
+      browse,
+      preparation,
       schema: 'iolaus-demo-live-webmcp:v1',
       toolNames: tools.map((tool) => tool.name),
     };
-  }, { applicationId });
+  }, { applicationId, opportunityId });
   mkdirSync(dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath });
   console.log(JSON.stringify({ ...result, screenshotPath }));
