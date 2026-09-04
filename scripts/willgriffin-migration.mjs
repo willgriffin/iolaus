@@ -324,6 +324,14 @@ export function parseMigrationBundle(value) {
   }
 }
 
+export async function withSanitizedDatabaseFailure(message, operation) {
+  try {
+    return await operation();
+  } catch {
+    throw new Error(message);
+  }
+}
+
 function normalizedColumn(column) {
   return {
     name: column.name,
@@ -931,7 +939,10 @@ export async function importMigrationBundle({
   ) {
     throw new Error('Migration run identity conflicts with the stored ledger.');
   }
-  if (!existingRun) await store.assertFreshTarget([...sourceNames]);
+  const hasCommittedRows = existingRun
+    ? await store.hasCommittedRows(bundle.runId)
+    : false;
+  if (!hasCommittedRows) await store.assertFreshTarget([...sourceNames]);
   if (!dryRun && !existingRun) await store.createRun(bundle);
 
   const targetByName = new Map(targetContract.map((table) => [table.name, table]));
@@ -1205,25 +1216,33 @@ export async function exportPredecessorMigration(context) {
   const { sourceContract, targetContract } = loadSupportedMigrationContracts(
     context.sourceRoot,
   );
-  const db = await getDatabase({ type: 'postgres', url: sourceUrl });
-  try {
-    const sourceRows = await readSourceSnapshot(db, sourceContract);
-    const bundle = buildMigrationBundle({
-      sourceRows,
-      sourceContract,
-      targetContract,
-    });
-    writePrivateBundle(context.sourceRoot, context.path, bundle);
-    return {
-      runId: bundle.runId,
-      sourceFingerprint: bundle.sourceFingerprint,
-      tableCount: bundle.tables.length,
-      rowCount: bundle.tables.reduce((count, table) => count + table.rowCount, 0),
-      secretValuesIncluded: false,
-    };
-  } finally {
-    await db.close?.();
-  }
+  return await withSanitizedDatabaseFailure(
+    'Predecessor database export failed.',
+    async () => {
+      const db = await getDatabase({ type: 'postgres', url: sourceUrl });
+      try {
+        const sourceRows = await readSourceSnapshot(db, sourceContract);
+        const bundle = buildMigrationBundle({
+          sourceRows,
+          sourceContract,
+          targetContract,
+        });
+        writePrivateBundle(context.sourceRoot, context.path, bundle);
+        return {
+          runId: bundle.runId,
+          sourceFingerprint: bundle.sourceFingerprint,
+          tableCount: bundle.tables.length,
+          rowCount: bundle.tables.reduce(
+            (count, table) => count + table.rowCount,
+            0,
+          ),
+          secretValuesIncluded: false,
+        };
+      } finally {
+        await db.close?.();
+      }
+    },
+  );
 }
 
 function logicalValueFromDatabase(value, type) {
@@ -1352,6 +1371,14 @@ export class PostgresMigrationStore {
           reconciliationDigest: row.reconciliation_digest,
         }
       : null;
+  }
+
+  async hasCommittedRows(runId) {
+    const result = await this.db.query(
+      `SELECT COUNT(*) AS count FROM _iolaus_migration_rows WHERE run_id = ?`,
+      [runId],
+    );
+    return Number(result.rows[0]?.count || 0) > 0;
   }
 
   async createRun(bundle) {
@@ -1507,19 +1534,24 @@ export async function importPredecessorMigration(context) {
     context.sourceRoot,
   );
   const bundle = parseMigrationBundle(readSensitiveBundle(context.path));
-  const db = await getDatabase({
-    type: 'postgres',
-    url: context.env.DATABASE_URL,
-  });
-  try {
-    return await importMigrationBundle({
-      bundle,
-      sourceContract,
-      targetContract,
-      store: new PostgresMigrationStore(db),
-      dryRun: context.dryRun === true,
-    });
-  } finally {
-    await db.close?.();
-  }
+  return await withSanitizedDatabaseFailure(
+    'Predecessor database import failed.',
+    async () => {
+      const db = await getDatabase({
+        type: 'postgres',
+        url: context.env.DATABASE_URL,
+      });
+      try {
+        return await importMigrationBundle({
+          bundle,
+          sourceContract,
+          targetContract,
+          store: new PostgresMigrationStore(db),
+          dryRun: context.dryRun === true,
+        });
+      } finally {
+        await db.close?.();
+      }
+    },
+  );
 }

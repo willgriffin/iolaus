@@ -17,6 +17,7 @@ import {
   validateDatabaseSchema,
   validateMigrationBundle,
   validateSourceTableInventory,
+  withSanitizedDatabaseFailure,
 } from './willgriffin-migration.mjs';
 
 function column(name, type = 'TEXT', options = {}) {
@@ -228,6 +229,10 @@ class MemoryMigrationStore {
 
   async getRun(id) {
     return this.runs.get(id) || null;
+  }
+
+  async hasCommittedRows(runId) {
+    return [...this.rowLedger.keys()].some((key) => key.startsWith(`${runId}:`));
   }
 
   async createRun(bundle) {
@@ -534,21 +539,28 @@ test('dry-run reports changes without creating a ledger or mutating target rows'
   assert.equal(store.ledgerInitialized, false);
 });
 
-test('a new migration run refuses a populated migrated target', async () => {
+test('a new or ledger-empty migration run refuses a populated migrated target', async () => {
   const { sourceContract, targetContract } = fixtureContracts();
   const bundle = buildMigrationBundle({
     sourceRows: restoredBackupShapedRows(),
     sourceContract,
     targetContract,
   });
+  const store = new MemoryMigrationStore({
+    tenants: [{ id: 'unrelated-target-row', name: 'Existing target' }],
+  });
+  store.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
   await assert.rejects(
     importMigrationBundle({
       bundle,
       sourceContract,
       targetContract,
-      store: new MemoryMigrationStore({
-        tenants: [{ id: 'unrelated-target-row', name: 'Existing target' }],
-      }),
+      store,
     }),
     /requires a freshly initialized target/,
   );
@@ -690,6 +702,18 @@ test('malformed private bundles fail without echoing their contents', () => {
     (error) =>
       !String(error.message).includes('private-marker') &&
       /not valid JSON/.test(error.message),
+  );
+});
+
+test('database boundary failures do not expose driver details', async () => {
+  await assert.rejects(
+    withSanitizedDatabaseFailure('Migration database operation failed.', async () => {
+      throw new Error('private-marker at postgresql://private-host/private-db');
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      !String(error.message).includes('private-host') &&
+      /database operation failed/.test(error.message),
   );
 });
 
@@ -879,6 +903,7 @@ test('logical target checksums normalize database scalar representations', async
     targetSchemaFingerprint: bundle.targetSchemaFingerprint,
     status: 'running',
   });
+  store.rowLedger.set(`${bundle.runId}:achievements:score-1`, {});
   const result = await importMigrationBundle({
     bundle,
     sourceContract,
