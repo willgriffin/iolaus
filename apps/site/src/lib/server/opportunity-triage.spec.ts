@@ -7,7 +7,9 @@ import {
 const mocks = vi.hoisted(() => ({
   attachOpportunityContext: vi.fn(async (records: unknown[]) => records),
   count: vi.fn(async () => 0),
+  dbConfig: vi.fn(() => ({ type: 'postgres' })),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
+  opportunities: vi.fn(async () => [] as Record<string, unknown>[]),
   pageIds: vi.fn(async () => [] as string[]),
   requireAdminResource: vi.fn(() => ({ slug: 'opportunities' })),
 }));
@@ -26,6 +28,14 @@ vi.mock('./admin-resource-route', () => ({
   attachOpportunityContext: mocks.attachOpportunityContext,
 }));
 
+vi.mock('./db', () => ({
+  getDbConfig: mocks.dbConfig,
+}));
+
+vi.mock('./smrt', () => ({
+  getCollection: async () => ({ list: mocks.opportunities }),
+}));
+
 async function triage() {
   return await import('./opportunity-triage');
 }
@@ -36,6 +46,8 @@ describe('opportunity triage preset', () => {
     mocks.count.mockResolvedValue(0);
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
+    mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.opportunities.mockResolvedValue([]);
   });
 
   it('forces the undecided, unarchived, unexpired, unstale, score-ordered queue', async () => {
@@ -115,9 +127,13 @@ describe('loadTriageQueue', () => {
     mocks.count.mockResolvedValue(0);
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
+    mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.opportunities.mockResolvedValue([]);
     mocks.attachOpportunityContext.mockImplementation(
       async (records: unknown[]) => records,
     );
+    mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.opportunities.mockResolvedValue([]);
   });
 
   it('prefetches a bounded window and preserves the query order', async () => {
@@ -325,5 +341,35 @@ describe('nextTriageCandidate', () => {
       remaining: 0,
       total: 0,
     });
+  });
+
+  it('uses the bounded local queue on SQLite instead of Postgres-only query helpers', async () => {
+    const { nextTriageCandidate } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'already-decided',
+        humanReviewStatus: 'apply',
+        status: 'recommended',
+        title: 'Fictional Staff Engineer',
+      },
+      {
+        freshness: 'fresh',
+        humanReviewStatus: 'needs_input',
+        id: 'triageable',
+        status: 'recommended',
+        title: 'Fictional Staff Engineer',
+      },
+    ]);
+
+    const result = await nextTriageCandidate({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      search: 'staff engineer',
+    });
+
+    expect(result.candidate?.id).toBe('triageable');
+    expect(result.total).toBe(1);
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.pageIds).not.toHaveBeenCalled();
   });
 });

@@ -1676,6 +1676,12 @@ async function recordExplicitOpportunityDecisionUnlocked(
 
   Object.assign(opportunity, {
     humanReviewStatus: options.decision,
+    humanReviewNotes: [
+      stringValue(opportunity.humanReviewNotes),
+      stringValue(options.reason),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     reviewedAt: now,
     reviewedByProfileId: stringValue(options.deciderProfileId),
     reviewedByUserId: stringValue(options.user?.id),

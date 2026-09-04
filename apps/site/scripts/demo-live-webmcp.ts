@@ -5,9 +5,24 @@ import { chromium } from 'playwright-core';
 const origin = process.env.IOLAUS_DEMO_ORIGIN;
 const cookie = process.env.IOLAUS_DEMO_SESSION_COOKIE;
 const applicationId = process.env.IOLAUS_DEMO_APPLICATION_ID;
+const crawlId = process.env.IOLAUS_DEMO_CRAWL_ID;
 const opportunityId = process.env.IOLAUS_DEMO_OPPORTUNITY_ID;
 const screenshotPath = process.env.IOLAUS_DEMO_SCREENSHOT;
-if (!origin || !cookie || !applicationId || !opportunityId || !screenshotPath) {
+const sourceId = process.env.IOLAUS_DEMO_SOURCE_ID;
+const triageFollowupOpportunityId =
+  process.env.IOLAUS_DEMO_TRIAGE_FOLLOWUP_OPPORTUNITY_ID;
+const triageOpportunityId = process.env.IOLAUS_DEMO_TRIAGE_OPPORTUNITY_ID;
+if (
+  !origin ||
+  !cookie ||
+  !applicationId ||
+  !crawlId ||
+  !opportunityId ||
+  !screenshotPath ||
+  !sourceId ||
+  !triageFollowupOpportunityId ||
+  !triageOpportunityId
+) {
   throw new Error('The authenticated demo WebMCP inputs are incomplete.');
 }
 
@@ -74,7 +89,14 @@ try {
         }
       ).__iolausRegisteredWebMcpTools?.length,
   );
-  const result = await page.evaluate(async ({ applicationId, opportunityId }) => {
+  const result = await page.evaluate(async ({
+    applicationId,
+    crawlId,
+    opportunityId,
+    sourceId,
+    triageFollowupOpportunityId,
+    triageOpportunityId,
+  }) => {
     const tools = (
       globalThis as typeof globalThis & {
         __iolausRegisteredWebMcpTools: Array<{
@@ -92,35 +114,127 @@ try {
     const prepareTool = tools.find(
       (tool) => tool.name === 'job_search_open_application',
     );
-    if (!browseTool || !applicationTool || !prepareTool) {
+    const sourceHealthTool = tools.find(
+      (tool) => tool.name === 'job_search_list_source_health',
+    );
+    const crawlStatusTool = tools.find(
+      (tool) => tool.name === 'job_search_source_crawl_status',
+    );
+    const nextTriageTool = tools.find(
+      (tool) => tool.name === 'job_search_next_triage_candidate',
+    );
+    const inspectTool = tools.find(
+      (tool) => tool.name === 'job_search_inspect_opportunity',
+    );
+    const decisionTool = tools.find(
+      (tool) => tool.name === 'job_search_record_decision',
+    );
+    if (
+      !browseTool ||
+      !applicationTool ||
+      !prepareTool ||
+      !sourceHealthTool ||
+      !crawlStatusTool ||
+      !nextTriageTool ||
+      !inspectTool ||
+      !decisionTool
+    ) {
       throw new Error('The rendered page omitted required job-search tools.');
     }
-    const browse = JSON.parse(
-      await browseTool.execute({
+    let currentTool = 'source health';
+    try {
+      const sourceHealth = JSON.parse(
+        await sourceHealthTool.execute({ limit: 5, query: 'fictional' }),
+      ) as Record<string, unknown>;
+      currentTool = 'crawl status';
+      const crawlStatus = JSON.parse(
+        await crawlStatusTool.execute({ crawlId, sourceId }),
+      ) as Record<string, unknown>;
+      currentTool = 'browse opportunities';
+      const browse = JSON.parse(await browseTool.execute({
         limit: 5,
         query: 'Fictional Principal Engineer',
-      }),
-    ) as Record<string, unknown>;
-    const preparation = JSON.parse(
-      await prepareTool.execute({
+      })) as Record<string, unknown>;
+      currentTool = 'open application';
+      const preparation = JSON.parse(await prepareTool.execute({
         opportunityId,
         reason: 'Synthetic demo preparation; no external transmission.',
-      }),
-    ) as Record<string, unknown>;
-    const application = JSON.parse(
-      await applicationTool.execute({ applicationId }),
-    ) as Record<string, unknown>;
-    return {
-      application,
-      browse,
-      preparation,
-      schema: 'iolaus-demo-live-webmcp:v1',
-      toolNames: tools.map((tool) => tool.name),
-    };
-  }, { applicationId, opportunityId });
+      })) as Record<string, unknown>;
+      currentTool = 'inspect application';
+      const application = JSON.parse(
+        await applicationTool.execute({ applicationId }),
+      ) as Record<string, unknown>;
+      currentTool = 'next triage candidate';
+      const triage = JSON.parse(
+        await nextTriageTool.execute({
+          query: 'Fictional Staff Engineer',
+          sort: 'newest',
+        }),
+      ) as Record<string, unknown>;
+      currentTool = 'inspect triage candidate';
+      const triageInspection = JSON.parse(
+        await inspectTool.execute({ opportunityId: triageOpportunityId }),
+      ) as Record<string, unknown>;
+      const reviewNote =
+        'Fictional demo review note: keep this local and ask the user before applying.';
+      currentTool = 'record decision';
+      const decision = JSON.parse(await decisionTool.execute({
+        decision: 'maybe',
+        opportunityId: triageOpportunityId,
+        reason: reviewNote,
+      })) as Record<string, unknown>;
+      currentTool = 'inspect persisted decision';
+      const persistedTriage = JSON.parse(
+        await inspectTool.execute({ opportunityId: triageOpportunityId }),
+      ) as Record<string, unknown>;
+      currentTool = 'advance triage queue';
+      const advancedTriage = JSON.parse(
+        await nextTriageTool.execute({
+          query: 'Fictional Staff Engineer',
+          sort: 'newest',
+        }),
+      ) as Record<string, unknown>;
+      return {
+        application,
+        browse,
+        crawlStatus,
+        decision,
+        preparation,
+        persistedTriage,
+        schema: 'iolaus-demo-live-webmcp:v1',
+        sourceHealth,
+        toolNames: tools.map((tool) => tool.name),
+        triage,
+        triageInspection,
+        advancedTriage,
+      };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(`${currentTool} failed: ${message}`, { cause });
+    }
+  }, {
+    applicationId,
+    crawlId,
+    opportunityId,
+    sourceId,
+    triageFollowupOpportunityId,
+    triageOpportunityId,
+  });
+  await page.goto(new URL('/admin/opportunities?triage=1', origin).toString(), {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.waitForSelector('dialog[aria-label="Triage opportunities"][open]');
+  await page.getByText('Fictional Staff Engineer — Iolaus Triage Follow-up').waitFor();
   mkdirSync(dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath });
-  console.log(JSON.stringify({ ...result, screenshotPath }));
+  console.log(
+    JSON.stringify({
+      ...result,
+      screenshotPath,
+      triageFollowupVisible: true,
+      triageModalVisible: true,
+    }),
+  );
 } finally {
   await browser.close();
 }

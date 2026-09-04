@@ -23,13 +23,20 @@ export interface SyntheticDemoFixtureCollections {
   decisions: Collection;
   opportunities: Collection;
   resumeAssets: Collection;
+  sourceCrawlItems: Collection;
+  sourceCrawls: Collection;
+  sources: Collection;
   tasks: Collection;
 }
 
 export interface SyntheticDemoFixtureResult {
   applicationId: string;
+  crawlId: string;
   created: boolean;
   opportunityId: string;
+  sourceId: string;
+  triageFollowupOpportunityId: string;
+  triageOpportunityId: string;
 }
 
 function stringValue(value: unknown): string {
@@ -76,6 +83,9 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
   const [
     candidateProfiles,
     companies,
+    sources,
+    sourceCrawls,
+    sourceCrawlItems,
     opportunities,
     decisions,
     applications,
@@ -87,6 +97,9 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
   ] = await Promise.all([
     getCollection('CandidateProfile'),
     getCollection('Company'),
+    getCollection('Source'),
+    getCollection('SourceCrawl'),
+    getCollection('SourceCrawlItem'),
     getCollection('Opportunity'),
     getCollection('Decision'),
     getCollection('Application'),
@@ -107,6 +120,9 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
     decisions: decisions as unknown as Collection,
     opportunities: opportunities as unknown as Collection,
     resumeAssets: resumeAssets as unknown as Collection,
+    sourceCrawlItems: sourceCrawlItems as unknown as Collection,
+    sourceCrawls: sourceCrawls as unknown as Collection,
+    sources: sources as unknown as Collection,
     tasks: tasks as unknown as Collection,
   };
 }
@@ -154,6 +170,21 @@ export async function seedSyntheticDemoFixture(
       websiteUrl: 'https://example.invalid/iolaus-demo-company',
     },
   );
+  // This is a visibly fictional Ashby-shaped root. It demonstrates the
+  // provider/crawl contract without ever contacting Ashby or another service.
+  const source = await findOrCreate(
+    collections.sources,
+    { url: 'https://example.invalid/iolaus-demo-ashby' },
+    {
+      isActive: true,
+      name: 'Example Ashby board (fictional Iolaus demo)',
+      provider: 'ashby',
+      refreshCadence: 'manual',
+      sourceRole: 'root',
+      type: 'ashby',
+      url: 'https://example.invalid/iolaus-demo-ashby',
+    },
+  );
   const opportunity = await findOrCreate(
     collections.opportunities,
     { externalId: `${FIXTURE_PREFIX}-opportunity` },
@@ -165,12 +196,149 @@ export async function seedSyntheticDemoFixture(
       descriptionRaw:
         'Fictional Iolaus demo opportunity. No employer or external posting exists.',
       externalId: `${FIXTURE_PREFIX}-opportunity`,
-      humanReviewStatus: 'reviewed',
+      humanReviewStatus: 'apply',
       locationNotes: 'Remote (fictional demo)',
       postingUrl: 'https://example.invalid/iolaus-demo-posting',
       status: 'recommended',
+      sourceId: stringValue(source.record.id),
       title: 'Fictional Principal Engineer — Iolaus Demo',
       workMode: 'remote',
+    },
+  );
+  const triageOpportunity = await findOrCreate(
+    collections.opportunities,
+    { externalId: `${FIXTURE_PREFIX}-triage-opportunity` },
+    {
+      applyInstructions: 'Fictional demo only. Never submit externally.',
+      applyMethod: 'manual',
+      applyUrl: 'https://example.invalid/iolaus-demo-triage-apply',
+      companyId: stringValue(company.record.id),
+      descriptionRaw:
+        'Fictional Iolaus triage opportunity. No employer or external posting exists.',
+      externalId: `${FIXTURE_PREFIX}-triage-opportunity`,
+      humanReviewStatus: 'needs_input',
+      firstSeenAt: new Date('2026-09-03T00:02:00.000Z'),
+      freshness: 'fresh',
+      lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
+      locationNotes: 'Remote (fictional demo)',
+      organizationProfileId: stringValue(profile.record.id),
+      postingUrl: 'https://example.invalid/iolaus-demo-triage-posting',
+      sourceId: stringValue(source.record.id),
+      status: 'recommended',
+      title: 'Fictional Staff Engineer — Iolaus Triage Demo',
+      workMode: 'remote',
+    },
+  );
+  // Keep a second undecided row behind the reviewed one. It proves that the
+  // agent's recorded decision advances a real queue, while the browser can
+  // still visibly render the existing triage modal afterwards.
+  const triageFollowupOpportunity = await findOrCreate(
+    collections.opportunities,
+    { externalId: `${FIXTURE_PREFIX}-triage-followup-opportunity` },
+    {
+      applyInstructions: 'Fictional demo only. Never submit externally.',
+      applyMethod: 'manual',
+      applyUrl: 'https://example.invalid/iolaus-demo-triage-followup-apply',
+      companyId: stringValue(company.record.id),
+      descriptionRaw:
+        'Second fictional Iolaus triage opportunity. No employer or external posting exists.',
+      externalId: `${FIXTURE_PREFIX}-triage-followup-opportunity`,
+      firstSeenAt: new Date('2026-09-03T00:00:00.000Z'),
+      freshness: 'fresh',
+      humanReviewStatus: 'needs_input',
+      lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
+      locationNotes: 'Remote (fictional demo)',
+      organizationProfileId: stringValue(profile.record.id),
+      postingUrl: 'https://example.invalid/iolaus-demo-triage-followup-posting',
+      sourceId: stringValue(source.record.id),
+      status: 'recommended',
+      title: 'Fictional Staff Engineer — Iolaus Triage Follow-up',
+      workMode: 'remote',
+    },
+  );
+  const crawl = await findOrCreate(
+    collections.sourceCrawls,
+    { requestKey: `${FIXTURE_PREFIX}-crawl` },
+    {
+      attemptCount: 2,
+      crawlType: 'demo_fixture',
+      finishedAt: new Date('2026-09-03T00:01:00.000Z'),
+      integrationMethod: 'fictional_local_fixture',
+      newOpportunityCount: 3,
+      pendingCount: 0,
+      requestKey: `${FIXTURE_PREFIX}-crawl`,
+      resultCount: 3,
+      sourceId: stringValue(source.record.id),
+      startedAt: new Date('2026-09-03T00:00:00.000Z'),
+      status: 'completed',
+      terminalCount: 3,
+    },
+  );
+  const crawlItem = await findOrCreate(
+    collections.sourceCrawlItems,
+    { attemptKey: `${FIXTURE_PREFIX}-opportunity-item` },
+    {
+      attemptKey: `${FIXTURE_PREFIX}-opportunity-item`,
+      canonicalUrl: 'https://example.invalid/iolaus-demo-posting',
+      companyName: 'Example Orbit Labs (fictional demo)',
+      contentFingerprint: `${FIXTURE_PREFIX}-opportunity-v1`,
+      contentVersion: 1,
+      externalId: `${FIXTURE_PREFIX}-opportunity`,
+      matchStrategy: 'fixture_exact',
+      opportunityId: stringValue(opportunity.record.id),
+      outcome: 'created',
+      postingUrl: 'https://example.invalid/iolaus-demo-posting',
+      reconciliationKey: `${FIXTURE_PREFIX}-opportunity`,
+      reconciliationStatus: 'matched',
+      sourceCrawlId: stringValue(crawl.record.id),
+      status: 'seen',
+      terminalAt: new Date('2026-09-03T00:01:00.000Z'),
+      title: 'Fictional Principal Engineer — Iolaus Demo',
+    },
+  );
+  await findOrCreate(
+    collections.sourceCrawlItems,
+    { attemptKey: `${FIXTURE_PREFIX}-triage-opportunity-item` },
+    {
+      attemptKey: `${FIXTURE_PREFIX}-triage-opportunity-item`,
+      canonicalUrl: 'https://example.invalid/iolaus-demo-triage-posting',
+      companyName: 'Example Orbit Labs (fictional demo)',
+      contentFingerprint: `${FIXTURE_PREFIX}-triage-opportunity-v1`,
+      contentVersion: 1,
+      externalId: `${FIXTURE_PREFIX}-triage-opportunity`,
+      matchStrategy: 'fixture_exact',
+      opportunityId: stringValue(triageOpportunity.record.id),
+      outcome: 'created',
+      postingUrl: 'https://example.invalid/iolaus-demo-triage-posting',
+      reconciliationKey: `${FIXTURE_PREFIX}-triage-opportunity`,
+      reconciliationStatus: 'matched',
+      sourceCrawlId: stringValue(crawl.record.id),
+      status: 'seen',
+      terminalAt: new Date('2026-09-03T00:01:00.000Z'),
+      title: 'Fictional Staff Engineer — Iolaus Triage Demo',
+    },
+  );
+  await findOrCreate(
+    collections.sourceCrawlItems,
+    { attemptKey: `${FIXTURE_PREFIX}-triage-followup-opportunity-item` },
+    {
+      attemptKey: `${FIXTURE_PREFIX}-triage-followup-opportunity-item`,
+      canonicalUrl:
+        'https://example.invalid/iolaus-demo-triage-followup-posting',
+      companyName: 'Example Orbit Labs (fictional demo)',
+      contentFingerprint: `${FIXTURE_PREFIX}-triage-followup-opportunity-v1`,
+      contentVersion: 1,
+      externalId: `${FIXTURE_PREFIX}-triage-followup-opportunity`,
+      matchStrategy: 'fixture_exact',
+      opportunityId: stringValue(triageFollowupOpportunity.record.id),
+      outcome: 'created',
+      postingUrl: 'https://example.invalid/iolaus-demo-triage-followup-posting',
+      reconciliationKey: `${FIXTURE_PREFIX}-triage-followup-opportunity`,
+      reconciliationStatus: 'matched',
+      sourceCrawlId: stringValue(crawl.record.id),
+      status: 'seen',
+      terminalAt: new Date('2026-09-03T00:01:00.000Z'),
+      title: 'Fictional Staff Engineer — Iolaus Triage Follow-up',
     },
   );
   const resume = await findOrCreate(
@@ -204,7 +372,7 @@ export async function seedSyntheticDemoFixture(
   );
   const application = await findOrCreate(
     collections.applications,
-    { sourceCrawlItemId: `${FIXTURE_PREFIX}-application` },
+    { sourceCrawlItemId: stringValue(crawlItem.record.id) },
     {
       applicationInstructions:
         'Fictional demo application. Human review is required; no submission is possible.',
@@ -214,13 +382,14 @@ export async function seedSyntheticDemoFixture(
       requiredAnswersJson: '{}',
       requiredQuestionsJson: '{}',
       resumeAssetId: stringValue(resume.record.id),
-      sourceCrawlItemId: `${FIXTURE_PREFIX}-application`,
+      sourceCrawlId: stringValue(crawl.record.id),
+      sourceCrawlItemId: stringValue(crawlItem.record.id),
       status: 'awaiting_user',
     },
   );
   await findOrCreate(
     collections.decisions,
-    { sourceCrawlItemId: `${FIXTURE_PREFIX}-decision` },
+    { sourceCrawlItemId: stringValue(crawlItem.record.id) },
     {
       applicationId: stringValue(application.record.id),
       decision: 'accept_to_apply',
@@ -228,7 +397,8 @@ export async function seedSyntheticDemoFixture(
       newStatus: 'application_drafting',
       opportunityId: stringValue(opportunity.record.id),
       reason: 'Fictional demo decision. No external action was taken.',
-      sourceCrawlItemId: `${FIXTURE_PREFIX}-decision`,
+      sourceCrawlId: stringValue(crawl.record.id),
+      sourceCrawlItemId: stringValue(crawlItem.record.id),
     },
   );
   await findOrCreate(
@@ -277,8 +447,18 @@ export async function seedSyntheticDemoFixture(
       profile.created ||
       company.created ||
       opportunity.created ||
+      triageOpportunity.created ||
+      triageFollowupOpportunity.created ||
+      source.created ||
+      crawl.created ||
       resume.created ||
       application.created,
     opportunityId: stringValue(opportunity.record.id),
+    crawlId: stringValue(crawl.record.id),
+    sourceId: stringValue(source.record.id),
+    triageFollowupOpportunityId: stringValue(
+      triageFollowupOpportunity.record.id,
+    ),
+    triageOpportunityId: stringValue(triageOpportunity.record.id),
   };
 }

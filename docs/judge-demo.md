@@ -51,14 +51,39 @@ into a shared judging machine.
    `job_search_browse_opportunities`, `job_search_inspect_opportunity`, and
    `job_search_inspect_application`. It must not include an approval or submit
    tool.
-3. Ask it to browse for “Fictional Principal Engineer” and inspect the result.
-   The returned posting is visibly synthetic and uses `example.invalid` URLs.
-4. Ask it to inspect the associated application packet. It should report an
+3. Ask it to run `job_search_list_source_health` with `query: "fictional"`.
+   It returns the active **Example Ashby board (fictional Iolaus demo)** root
+   and durable health from a completed local crawl. Then run
+   `job_search_source_crawl_status` with that source or its crawl id. The
+   result has three terminal fictional listings and no network activity occurred.
+4. Ask it to browse for “Fictional Principal Engineer” and inspect the result.
+   The returned posting is visibly synthetic, uses `example.invalid` URLs, and
+   is durably linked to the fictional root source and its completed crawl.
+5. Ask it to inspect the associated application packet. It should report an
    `awaiting_user` application and its review blockers without returning the
    private candidate email or profile.
-5. Stop at the approval boundary. The agent cannot approve or submit through
+6. Ask it for `job_search_next_triage_candidate` with “Fictional Staff
+   Engineer”, inspect that candidate, and record a `maybe` decision with a
+   review note. Inspect it again to see the persisted note, then ask for the
+   next candidate to confirm the queue advanced. Navigate the authenticated
+   browser to `/admin/opportunities?triage=1` to show Iolaus’s existing triage
+   modal in the resulting state.
+7. Stop at the approval boundary. The agent cannot approve or submit through
    WebMCP. A human must review the application page and use its dedicated final
    approval action; this demo intentionally does not do that.
+
+### Optional bounded live-provider path
+
+The judged baseline above is wholly fictional and deterministic. An advanced
+self-hosted operator may separately configure the public OpenAI Ashby root
+`https://jobs.ashbyhq.com/openai` with provider `ashby`, after checking its
+own network, rate-limit, and permission policy. General provider creation and
+credentials are intentionally not WebMCP features. If that root already exists
+and its local preflight/health data is acceptable, an agent may identify it via
+`job_search_list_source_health`, ask the operator before enabling or crawling
+it, then use the bounded single-source crawl tool. This optional path is never
+run by `demo:smoke`, is not required for judging, and never authorizes an
+application submission.
 
 The browser's WebMCP inventory is page-native (`document.modelContext`). The
 automated smoke command loads the authenticated command center in a real local
@@ -78,10 +103,12 @@ pnpm demo:smoke
 It creates a temporary data root, migrates SQLite, creates and claims a private
 owner handoff with fictional identity data, seeds the deterministic fixture,
 starts the loopback application, authenticates, discovers the job-search tool
-inventory, browses and inspects the fictional application, and asserts there
-is no approval/submission tool. It always stops the process and removes the
+inventory, verifies fictional provider health and terminal crawl provenance,
+browses and inspects the fictional application, records and re-reads one local
+triage decision, opens the existing triage modal, and asserts there is no
+approval/submission tool. It always stops the process and removes the
 temporary data root. A compact, secret-free result is written to
-`.omo/evidence/issue-7/demo-smoke.json` unless `IOLAUS_DEMO_EVIDENCE` selects a
+`.omo/evidence/issue-12/demo-smoke.json` unless `IOLAUS_DEMO_EVIDENCE` selects a
 different artifact path; `browser-command-center.png` beside it captures the
 rendered authenticated page. Set `IOLAUS_DEMO_BROWSER_EXECUTABLE` if Chrome or
 Chromium is installed outside the common platform paths.
