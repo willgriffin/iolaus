@@ -4,20 +4,21 @@ import type { PageProps } from './$types';
 let { data, form }: PageProps = $props();
 </script>
 
-<svelte:head><title>Set up your local application</title></svelte:head>
+<svelte:head><title>Welcome to Iolaus</title></svelte:head>
 
 <main>
-  <h1>Set up your local application</h1>
+  <h1>Welcome to Iolaus</h1>
   {#if !data.available}
-    <p>Local owner setup is unavailable or has already been completed.</p>
+    <p>This app is already set up.</p>
   {:else}
-    <p>Create the real local owner account. This invitation works once and stays on this device.</p>
+    <p>Enter your name and email to get started.</p>
+    <p>Your information stays in your private workspace on this computer.</p>
     {#if form?.message}<p role="alert">{form.message}</p>{/if}
     <form method="POST">
       <input type="hidden" name="token" value={data.token} />
       <label>Name <input name="name" autocomplete="name" required /></label>
-      <label>Email <input name="email" type="email" autocomplete="email" required /></label>
-      <button type="submit">Create owner</button>
+      <label>Email address <input name="email" type="email" autocomplete="email" required /></label>
+      <button type="submit">Get started</button>
     </form>
   {/if}
 </main>
