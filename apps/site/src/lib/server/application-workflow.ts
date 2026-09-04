@@ -22,6 +22,7 @@ import {
   submissionMethods,
   submittedByRoles,
 } from '../objects/workflow.js';
+import { getAppConfig } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import {
@@ -2113,7 +2114,7 @@ function accountTaskDescription(
     stringValue(entity.accountNotes)
       ? `Notes: ${stringValue(entity.accountNotes)}`
       : '',
-    'Do not store passwords, tokens, cookies, recovery codes, or decrypted secret values in Iolaus.',
+    `Do not store passwords, tokens, cookies, recovery codes, or decrypted secret values in ${getAppConfig().appName}.`,
   ]
     .filter(Boolean)
     .join('\n');

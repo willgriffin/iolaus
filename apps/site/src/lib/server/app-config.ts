@@ -14,6 +14,7 @@ export type AppConfigEnvironment = Readonly<Record<string, string | undefined>>;
 export interface IolausAppConfig {
   agentClass: string;
   appId: string;
+  appMark: string;
   appName: string;
   cliConfigDirectory: string;
   cliUserCodePrefix: string;
@@ -69,6 +70,17 @@ function appNameFrom(environment: AppConfigEnvironment): string {
   return configured;
 }
 
+function appMarkFrom(appName: string): string {
+  const words = appName.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return (
+    words
+      .slice(0, 2)
+      .map((word) => [...word][0])
+      .join('')
+      .toLocaleUpperCase() || 'APP'
+  );
+}
+
 function runtimeProfileFrom(environment: AppConfigEnvironment): RuntimeProfile {
   const configured = stringValue(environment.SMRT_RUNTIME_PROFILE) || 'local';
   if (
@@ -90,21 +102,29 @@ export function getAppConfig(
   environment: AppConfigEnvironment = process.env,
 ): IolausAppConfig {
   const appId = appIdFrom(environment);
+  const appName = appNameFrom(environment);
+  const runtimeProfile = runtimeProfileFrom(environment);
+  if (runtimeProfile !== 'local' && appId === DEFAULT_APP_ID) {
+    throw new Error(
+      'Public deployments must set SMRT_APP_ID to a unique non-default identifier.',
+    );
+  }
   const cookiePrefix = cookieSegment(appId);
 
   return {
     agentClass: `${appId}/owner`,
     appId,
-    appName: appNameFrom(environment),
+    appMark: appMarkFrom(appName),
+    appName,
     cliConfigDirectory: appId,
     cliUserCodePrefix: appId.slice(0, 8).toUpperCase(),
     loginNextCookieName: `${cookiePrefix}_login_next`,
     oidcNonceCookieName: `${cookiePrefix}_oidc_nonce`,
     oidcStateCookieName: `${cookiePrefix}_oidc_state`,
     oidcVerifierCookieName: `${cookiePrefix}_oidc_code_verifier`,
-    runtimeProfile: runtimeProfileFrom(environment),
+    runtimeProfile,
     sessionCookieName: `${cookiePrefix}_session`,
-    tenantName: appNameFrom(environment),
+    tenantName: appName,
     tenantSlug: appId,
   };
 }
@@ -119,7 +139,9 @@ function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
       url.protocol !== 'https:' ||
       !url.hostname ||
       url.username ||
-      url.password
+      url.password ||
+      url.search ||
+      url.hash
     ) {
       return null;
     }
@@ -127,6 +149,20 @@ function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
   } catch {
     return null;
   }
+}
+
+function safeOidcIdentifier(value: string): string | null {
+  if (
+    !value ||
+    value.length > 200 ||
+    [...value].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 0x1f || code === 0x7f;
+    })
+  ) {
+    return null;
+  }
+  return value;
 }
 
 function configuredOidcServerUrl(
@@ -141,7 +177,9 @@ function configuredOidcServerUrl(
       url.protocol !== 'https:' ||
       !url.hostname ||
       url.username ||
-      url.password
+      url.password ||
+      url.search ||
+      url.hash
     ) {
       return null;
     }
@@ -179,8 +217,10 @@ export function getAuthConfiguration(
 
   const publicUrl = configuredPublicUrl(environment);
   const serverUrl = configuredOidcServerUrl(environment);
-  const realm = stringValue(environment.IOLAUS_OIDC_REALM);
-  const clientId = stringValue(environment.IOLAUS_OIDC_CLIENT_ID);
+  const realm = safeOidcIdentifier(stringValue(environment.IOLAUS_OIDC_REALM));
+  const clientId = safeOidcIdentifier(
+    stringValue(environment.IOLAUS_OIDC_CLIENT_ID),
+  );
   const adminEmails = configuredAdminEmails(environment);
 
   if (
@@ -245,7 +285,7 @@ export function getConfiguredUserAgent(
 export function getConfiguredMcpServerName(
   environment: AppConfigEnvironment = process.env,
 ): string {
-  return `${getAppConfig(environment).appId}-employment-search`;
+  return `${getAppConfig(environment).appId}-agent-employment-search`;
 }
 
 export function isLoopbackHostname(hostname: string): boolean {

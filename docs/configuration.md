@@ -25,8 +25,8 @@ its forwarding metadata cannot safely provide public authentication. Use the
 
 `SMRT_APP_ID` is a lowercase, hyphenated identifier. It namespaces the local
 tenant, cookies, terminal authorization code prefix, audit agent class, and
-CLI configuration directory. The default `iolaus` therefore does not share
-session or tenant identifiers with another deployment.
+CLI configuration directory. The `iolaus` default is reserved for the local
+profile; every public deployment must choose a unique non-default identifier.
 
 ## Public installation
 
@@ -42,7 +42,12 @@ IOLAUS_OIDC_SERVER_URL=https://identity.example.com
 IOLAUS_OIDC_REALM=career
 IOLAUS_OIDC_CLIENT_ID=career-hub
 IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
+DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
+
+Use a dedicated PostgreSQL user and database name for every public deployment.
+The legacy/default `iolaus` and `iolaus_dev` database names are refused so a
+new installation cannot silently attach to predecessor or example data.
 
 `IOLAUS_OIDC_CLIENT_SECRET` is optional for a public OIDC client. When your
 provider issues a confidential client, set it only in the deployment secret

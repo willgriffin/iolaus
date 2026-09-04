@@ -2229,17 +2229,24 @@ describe('syncSourceAccountTasks', () => {
     expect(() => normalizeAccountStatus('needs_magic')).toThrow();
   });
 
-  it('creates a Will-owned account handoff task without secret fields', async () => {
-    await expect(
-      syncSourceAccountTasks({
-        accountNotes: '2FA blocks crawler',
-        accountStatus: 'needs_2fa',
-        id: 'source-1',
-        loginIdentity: 'jobs@example.com',
-        name: 'Greenhouse',
-        wardenReference: 'Employment Search/Greenhouse',
-      }),
-    ).resolves.toMatchObject({ created: 1 });
+  it('creates an owner account handoff task using the configured identity', async () => {
+    const originalAppName = process.env.IOLAUS_APP_NAME;
+    process.env.IOLAUS_APP_NAME = 'Career Hub';
+    try {
+      await expect(
+        syncSourceAccountTasks({
+          accountNotes: '2FA blocks crawler',
+          accountStatus: 'needs_2fa',
+          id: 'source-1',
+          loginIdentity: 'jobs@example.com',
+          name: 'Greenhouse',
+          wardenReference: 'Employment Search/Greenhouse',
+        }),
+      ).resolves.toMatchObject({ created: 1 });
+    } finally {
+      if (originalAppName === undefined) delete process.env.IOLAUS_APP_NAME;
+      else process.env.IOLAUS_APP_NAME = originalAppName;
+    }
 
     expect(mocks.collections.get('Task')?.records[0]).toMatchObject({
       assigneeRole: 'owner',
@@ -2249,7 +2256,9 @@ describe('syncSourceAccountTasks', () => {
     });
     expect(
       String(mocks.collections.get('Task')?.records[0]?.description),
-    ).toContain('Do not store passwords');
+    ).toContain(
+      'Do not store passwords, tokens, cookies, recovery codes, or decrypted secret values in Career Hub.',
+    );
   });
 
   it('closes stale source account handoff tasks when the account is resolved', async () => {

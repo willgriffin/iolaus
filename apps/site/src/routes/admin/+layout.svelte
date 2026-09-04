@@ -514,7 +514,7 @@ function currentTenantHref(pathname: string): string {
         {/if}
       </button>
       <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
-        <span class="admin-brand-mark">IO</span>
+        <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">
           <span class="admin-brand-eyebrow">{data.appName}</span>
           <strong>Employment Search</strong>

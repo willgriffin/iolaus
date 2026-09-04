@@ -13,6 +13,7 @@ const authEnvNames = [
   'IOLAUS_OIDC_REALM',
   'IOLAUS_OIDC_SERVER_URL',
   'IOLAUS_PUBLIC_URL',
+  'SMRT_APP_ID',
   'SMRT_RUNTIME_PROFILE',
 ] as const;
 const originalEnvironment = Object.fromEntries(
@@ -110,6 +111,7 @@ describe('canUseLocalDevLogin', () => {
 
   it('does not allow the fallback for a public deployment', () => {
     process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
     process.env.IOLAUS_PUBLIC_URL = 'https://iolaus.example.com';
     process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.com';
     process.env.IOLAUS_OIDC_REALM = 'iolaus';
@@ -139,10 +141,18 @@ describe('canUseLocalDevLogin', () => {
 
     for (const header of [
       'cf-connecting-ip',
+      'fastly-client-ip',
       'forwarded',
       'via',
+      'x-appengine-user-ip',
+      'x-azure-clientip',
+      'x-cluster-client-ip',
       'x-envoy-external-address',
       'x-forwarded-for',
+      'x-forwarded-port',
+      'x-forwarded-vendor-extension',
+      'x-original-forwarded-for',
+      'x-original-vendor-extension',
       'x-real-ip',
     ]) {
       expect(
@@ -179,6 +189,8 @@ describe('getRuntimeCookieName', () => {
 describe('tenantSlugsFor', () => {
   it('reads legacy local data without creating a legacy tenant for new installs', () => {
     expect(tenantSlugsFor('iolaus')).toEqual(['iolaus', 'iolaus.localhost']);
+    expect(tenantSlugsFor('iolaus', 'self-hosted')).toEqual(['iolaus']);
+    expect(tenantSlugsFor('iolaus', 'cloud')).toEqual(['iolaus']);
     expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
   });
 });

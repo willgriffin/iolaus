@@ -47,6 +47,18 @@ export type IolausDatabaseConfig = {
   url: string;
 };
 
+export function validateHostedDatabaseUrl(databaseUrl: string): string {
+  const databaseName = decodeURIComponent(
+    new URL(databaseUrl).pathname.replace(/^\/+|\/+$/gu, ''),
+  );
+  if (databaseName === 'iolaus' || databaseName === 'iolaus_dev') {
+    throw new Error(
+      'Public deployments must use an operator-unique PostgreSQL database name.',
+    );
+  }
+  return databaseUrl;
+}
+
 export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (applicationRuntime.profile === 'local') {
     const paths = resolveIolausLocalRuntimePaths();
@@ -56,7 +68,7 @@ export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (!databaseUrl) {
     throw new Error(`${applicationRuntime.profile} requires DATABASE_URL.`);
   }
-  return { type: 'postgres', url: databaseUrl };
+  return { type: 'postgres', url: validateHostedDatabaseUrl(databaseUrl) };
 }
 
 let localRuntimePromise: Promise<LocalApplicationRuntime> | undefined;

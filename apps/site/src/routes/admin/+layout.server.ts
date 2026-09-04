@@ -4,6 +4,7 @@ import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
   return {
+    appMark: getAppConfig().appMark,
     appName: getAppConfig().appName,
     permissions: locals.permissions,
     resources: adminResources,

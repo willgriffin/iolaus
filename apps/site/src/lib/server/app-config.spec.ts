@@ -14,6 +14,7 @@ describe('Iolaus application configuration', () => {
     expect(getAppConfig({})).toMatchObject({
       agentClass: 'iolaus/owner',
       appId: 'iolaus',
+      appMark: 'I',
       appName: 'Iolaus',
       cliConfigDirectory: 'iolaus',
       loginNextCookieName: 'iolaus_login_next',
@@ -38,6 +39,7 @@ describe('Iolaus application configuration', () => {
 
     expect(getAppConfig(environment)).toMatchObject({
       appId: 'career-hub',
+      appMark: 'MC',
       appName: 'My Career Hub',
       sessionCookieName: 'career_hub_session',
       tenantSlug: 'career-hub',
@@ -62,6 +64,7 @@ describe('Iolaus application configuration', () => {
       IOLAUS_APP_NAME: 'My Career Hub',
       IOLAUS_OIDC_CLIENT_SECRET: 'never-report-this',
       IOLAUS_PUBLIC_URL: 'https://career.example.com',
+      SMRT_APP_ID: 'career-hub',
       SMRT_RUNTIME_PROFILE: 'self-hosted',
     });
 
@@ -76,15 +79,56 @@ describe('Iolaus application configuration', () => {
 
   it('uses the same explicit public-auth boundary for a hosted cloud profile', () => {
     expect(
-      getAuthConfiguration({ SMRT_RUNTIME_PROFILE: 'cloud' }),
+      getAuthConfiguration({
+        SMRT_APP_ID: 'career-cloud',
+        SMRT_RUNTIME_PROFILE: 'cloud',
+      }),
     ).toMatchObject({ kind: 'invalid' });
 
     expect(
       getConfiguredPublicOrigin({
         IOLAUS_PUBLIC_URL: 'https://cloud.example.com',
+        SMRT_APP_ID: 'career-cloud',
         SMRT_RUNTIME_PROFILE: 'cloud',
       }),
     ).toBe('https://cloud.example.com');
+  });
+
+  it('requires a unique non-default identity for public deployments', () => {
+    expect(() => getAppConfig({ SMRT_RUNTIME_PROFILE: 'self-hosted' })).toThrow(
+      /unique non-default identifier/u,
+    );
+    expect(() =>
+      getAppConfig({
+        SMRT_APP_ID: 'iolaus',
+        SMRT_RUNTIME_PROFILE: 'cloud',
+      }),
+    ).toThrow(/unique non-default identifier/u);
+  });
+
+  it('rejects ambiguous or control-bearing OIDC settings', () => {
+    const base = {
+      IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.com',
+      IOLAUS_OIDC_CLIENT_ID: 'career-hub',
+      IOLAUS_OIDC_REALM: 'career',
+      IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com',
+      IOLAUS_PUBLIC_URL: 'https://career.example.com',
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+    };
+
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com?issuer=other',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_REALM: 'career\nother',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
   });
 
   it('recognizes only loopback hosts for local-only paths', () => {
@@ -102,8 +146,9 @@ describe('Iolaus application configuration', () => {
       }),
     ).toBe('My Career Hub source crawler');
     expect(getConfiguredMcpServerName({ SMRT_APP_ID: 'career-hub' })).toBe(
-      'career-hub-employment-search',
+      'career-hub-agent-employment-search',
     );
+    expect(getConfiguredMcpServerName({})).not.toBe('iolaus-employment-search');
   });
 
   it('uses an ASCII-only header label while preserving a Unicode display name', () => {

@@ -11,7 +11,7 @@ const backupPath =
 
 if (!backupPath) {
   throw new Error(
-    'Usage: pnpm --filter @willgriffin/iolaus-site db:reset-local -- --from <backup-dir>',
+    'Usage: pnpm --filter @willgriffin/iolaus-site db:reset-local -- --from <backup-dir> [--allow-installation-rebind]',
   );
 }
 
@@ -19,6 +19,7 @@ const databaseUrl =
   typeof flags.databaseUrl === 'string' ? flags.databaseUrl : getDatabaseUrl();
 
 await resetLocalDatabaseFromBackup({
+  allowInstallationRebind: Boolean(flags.allowInstallationRebind),
   backupPath,
   databaseUrl,
   skipDoctor: Boolean(flags.skipDoctor),

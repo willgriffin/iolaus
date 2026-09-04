@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RequestJsonResult } from '@happyvertical/smrt-app-cli';
+import { getCliConfigDirectory, getCliServerUrl } from '../src/app-config.js';
 
 interface CliSmokeOptions {
   server?: string;
@@ -67,6 +68,40 @@ const packageRoot = resolve(scriptDir, '..');
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function assertCliServerSelection(): void {
+  const environment = {} as NodeJS.ProcessEnv;
+  const selected = getCliServerUrl(
+    ['auth', 'login', '--server=https://jobs.example.com/'],
+    environment,
+  );
+  assert(
+    selected === 'https://jobs.example.com',
+    'CLI server selection must be canonical.',
+  );
+  assert(
+    getCliConfigDirectory(['--server', selected], environment) !==
+      getCliConfigDirectory(
+        ['--server', 'https://other.example.com'],
+        environment,
+      ),
+    'CLI credential namespaces must follow the selected server.',
+  );
+  let duplicateRejected = false;
+  try {
+    getCliServerUrl(
+      [
+        '--server',
+        'https://one.example.com',
+        '--server=https://two.example.com',
+      ],
+      environment,
+    );
+  } catch {
+    duplicateRejected = true;
+  }
+  assert(duplicateRejected, 'Duplicate CLI server selectors must fail closed.');
 }
 
 function parseOptions(argv: string[]): CliSmokeOptions {
@@ -660,4 +695,5 @@ async function runSmoke(options: CliSmokeOptions) {
   console.log(successMessage);
 }
 
+assertCliServerSelection();
 await runSmoke(parseOptions(process.argv.slice(2)));

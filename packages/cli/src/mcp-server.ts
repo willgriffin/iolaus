@@ -16,6 +16,6 @@ await createAppCli({
   envPrefix: 'IOLAUS',
   name: appId,
 }).startMcpBridge({
-  name: `${appId}-employment-search`,
+  name: `${appId}-agent-employment-search`,
   version: '0.1.0',
 });

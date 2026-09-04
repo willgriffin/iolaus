@@ -40,10 +40,12 @@ describe('generate-mcp', () => {
     await import('./generate-mcp.js');
 
     expect(mcpMocks.options).toMatchObject({
-      name: 'career-hub-employment-search',
+      name: 'career-hub-agent-employment-search',
     });
     expect(mcpMocks.generateServer).toHaveBeenCalledWith(
-      expect.objectContaining({ serverName: 'career-hub-employment-search' }),
+      expect.objectContaining({
+        serverName: 'career-hub-agent-employment-search',
+      }),
     );
   });
 });

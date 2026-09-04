@@ -11,7 +11,7 @@ const backupPath =
 
 if (!backupPath) {
   throw new Error(
-    'Usage: pnpm --filter @willgriffin/iolaus-site db:import -- --from <backup-dir>',
+    'Usage: pnpm --filter @willgriffin/iolaus-site db:import -- --from <backup-dir> [--allow-installation-rebind]',
   );
 }
 
@@ -19,6 +19,7 @@ const databaseUrl =
   typeof flags.databaseUrl === 'string' ? flags.databaseUrl : getDatabaseUrl();
 
 await restoreBackup({
+  allowInstallationRebind: Boolean(flags.allowInstallationRebind),
   allowProduction: Boolean(flags.allowProduction),
   backupPath,
   databaseUrl,

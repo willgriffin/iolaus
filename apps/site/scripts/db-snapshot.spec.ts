@@ -14,6 +14,7 @@ import {
   databaseNameFromUrl,
   defaultBackupRoot,
   exportResumeFiles,
+  getBackupInstallationId,
   importResumeFiles,
   isLocalDatabaseUrl,
   parseFlagArgs,
@@ -35,6 +36,7 @@ const originalResumeFilesConfigJson = process.env.RESUME_FILES_CONFIG_JSON;
 const originalRuntimeProfile = process.env.SMRT_RUNTIME_PROFILE;
 const originalAppId = process.env.SMRT_APP_ID;
 const originalDataDir = process.env.SMRT_DATA_DIR;
+const originalPublicUrl = process.env.IOLAUS_PUBLIC_URL;
 
 afterEach(() => {
   restoreEnv('PRODUCTION_DATABASE_URL', originalProductionDatabaseUrl);
@@ -43,6 +45,7 @@ afterEach(() => {
   restoreEnv('SMRT_RUNTIME_PROFILE', originalRuntimeProfile);
   restoreEnv('SMRT_APP_ID', originalAppId);
   restoreEnv('SMRT_DATA_DIR', originalDataDir);
+  restoreEnv('IOLAUS_PUBLIC_URL', originalPublicUrl);
 });
 
 describe('db snapshot helpers', () => {
@@ -234,6 +237,92 @@ describe('db snapshot helpers', () => {
     process.env.SMRT_APP_ID = 'career-hub';
 
     expect(defaultBackupRoot()).toMatch(/career-hub\/backups$/u);
+  });
+
+  it('isolates default backup roots between local data directories', () => {
+    delete process.env.IOLAUS_BACKUP_DIR;
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
+    process.env.SMRT_DATA_DIR = '/tmp/iolaus-one';
+    const first = defaultBackupRoot();
+    process.env.SMRT_DATA_DIR = '/tmp/iolaus-two';
+
+    expect(defaultBackupRoot()).not.toBe(first);
+    expect(defaultBackupRoot()).toMatch(/\/iolaus-two\/backups$/u);
+  });
+
+  it('persists a random identity for each installation data root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'iolaus-installations-'));
+    try {
+      process.env.SMRT_RUNTIME_PROFILE = 'local';
+      process.env.SMRT_DATA_DIR = join(root, 'one');
+      const first = getBackupInstallationId();
+      expect(getBackupInstallationId()).toBe(first);
+
+      process.env.SMRT_DATA_DIR = join(root, 'two');
+      expect(getBackupInstallationId()).not.toBe(first);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects a generic backup from a different local installation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'foreign-iolaus-backup-'));
+    try {
+      process.env.SMRT_RUNTIME_PROFILE = 'local';
+      process.env.SMRT_DATA_DIR = join(root, 'current-installation');
+      await writeFile(
+        join(root, 'manifest.json'),
+        JSON.stringify({
+          installationId: 'iolaus:different-installation',
+          kind: 'iolaus-data-backup',
+          version: 1,
+        }),
+      );
+
+      await expect(readBackupManifest(root)).rejects.toThrow(
+        /different installation/u,
+      );
+      await expect(
+        readBackupManifest(root, { allowInstallationRebind: true }),
+      ).resolves.toMatchObject({
+        installationId: 'iolaus:different-installation',
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects a new-format manifest without installation identity unless rebinding', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'unbound-iolaus-backup-'));
+    try {
+      process.env.SMRT_RUNTIME_PROFILE = 'local';
+      process.env.SMRT_DATA_DIR = join(root, 'current-installation');
+      await writeFile(
+        join(root, 'manifest.json'),
+        JSON.stringify({ kind: 'iolaus-data-backup', version: 1 }),
+      );
+
+      await expect(readBackupManifest(root)).rejects.toThrow(
+        /different installation/u,
+      );
+      await expect(
+        readBackupManifest(root, { allowInstallationRebind: true }),
+      ).resolves.toMatchObject({ kind: 'iolaus-data-backup' });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('isolates hosted backup roots by public origin', () => {
+    delete process.env.IOLAUS_BACKUP_DIR;
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://one.example.com';
+    const first = defaultBackupRoot();
+    process.env.IOLAUS_PUBLIC_URL = 'https://two.example.com';
+
+    expect(defaultBackupRoot()).not.toBe(first);
+    expect(defaultBackupRoot()).toMatch(/career-hub-[a-f0-9]{16}\/backups$/u);
   });
 
   it('accepts a version-one backup from the legacy local namespace', async () => {

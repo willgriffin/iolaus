@@ -22,6 +22,7 @@ import {
   getConfiguredPublicOrigin,
   isLoopbackAddress,
   isLoopbackHostname,
+  type RuntimeProfile,
 } from './app-config.js';
 import {
   applicationRuntime,
@@ -84,30 +85,33 @@ export const singleTenantName = appConfig.tenantName;
  * Keep the old tenant reachable during an in-place upgrade, but never create
  * it for a new or custom application identity.
  */
-export function tenantSlugsFor(appId: string): readonly string[] {
-  return appId === 'iolaus' ? [appId, 'iolaus.localhost'] : [appId];
+export function tenantSlugsFor(
+  appId: string,
+  runtimeProfile: RuntimeProfile = appConfig.runtimeProfile,
+): readonly string[] {
+  return appId === 'iolaus' && runtimeProfile === 'local'
+    ? [appId, 'iolaus.localhost']
+    : [appId];
 }
 
 function isLocalhost(event: RequestEvent): boolean {
   if (!isLoopbackHostname(event.url.hostname)) return false;
   // Local owner bootstrap never trusts reverse-proxy forwarding metadata. A
   // proxied or tunneled installation must use the public OIDC profile instead.
-  if (
-    [
-      'forwarded',
-      'cf-connecting-ip',
-      'fly-client-ip',
-      'true-client-ip',
-      'via',
-      'x-client-ip',
-      'x-envoy-external-address',
-      'x-forwarded-for',
-      'x-forwarded-host',
-      'x-forwarded-proto',
-      'x-real-ip',
-    ].some((header) => event.request.headers.has(header))
-  ) {
-    return false;
+  for (const [header] of event.request.headers) {
+    if (
+      header === 'forwarded' ||
+      header === 'via' ||
+      header === 'x-envoy-external-address' ||
+      header === 'x-real-ip' ||
+      header === 'x-rewrite-url' ||
+      header.startsWith('x-forwarded-') ||
+      header.startsWith('x-original-') ||
+      /(?:^|-)(?:client|connecting|user)-?ip$/u.test(header) ||
+      /(?:^|-)remote-(?:addr|ip)$/u.test(header)
+    ) {
+      return false;
+    }
   }
   try {
     return isLoopbackAddress(event.getClientAddress());
@@ -314,6 +318,7 @@ async function ensureSingleTenantAccess(user: User) {
 
   const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
     appConfig.appId,
+    appConfig.runtimeProfile,
   );
   let tenant = await tenants.findBySlug(primaryTenantSlug ?? singleTenantSlug);
   for (const slug of legacyTenantSlugs) {
