@@ -16,6 +16,11 @@ import {
   readSensitiveBundle,
 } from './smrt-portability-assets.mjs';
 import { assertExternalArtifactPath } from './smrt-runtime-identity.mjs';
+import {
+  finalizeReconciliationReport,
+  reconcileMigrationRows,
+  recordStableIdCollision,
+} from './willgriffin-reconciliation.mjs';
 
 export const MIGRATION_BUNDLE_KIND =
   'iolaus/willgriffin.dev-logical-migration';
@@ -627,7 +632,7 @@ function parentFirstSourceRows(table, rows) {
       const parentId = row.values[field.name];
       if (parentId == null) continue;
       if (typeof parentId !== 'string' || parentId === '' || !byId.has(parentId)) {
-        throw new Error(`Migration hierarchy is incomplete in ${table.name}.`);
+        continue;
       }
       dependencies.get(row.sourceId).add(parentId);
       children.get(parentId).add(row.sourceId);
@@ -651,7 +656,15 @@ function parentFirstSourceRows(table, rows) {
     }
   }
   if (ordered.length !== rows.length) {
-    throw new Error(`Migration hierarchy contains a cycle in ${table.name}.`);
+    // Reconciliation owns invalid relationship quarantine. Preserve every row
+    // in deterministic order here so missing parents and cycles are reportable
+    // rather than being silently lost or making bundle export impossible.
+    const orderedIds = new Set(ordered.map((row) => row.sourceId));
+    ordered.push(
+      ...rows
+        .filter((row) => !orderedIds.has(row.sourceId))
+        .sort((left, right) => left.sourceId.localeCompare(right.sourceId)),
+    );
   }
   return ordered;
 }
@@ -917,6 +930,12 @@ export async function importMigrationBundle({
   onBatchCommitted,
 }) {
   validateMigrationBundle(bundle, sourceContract, targetContract);
+  const reconciliationPlan = reconcileMigrationRows({
+    bundle,
+    sourceContract,
+    strictNativeTypes:
+      bundle.sourceSchemaFingerprint === SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
+  });
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
     throw new Error('Migration batch size must be between 1 and 1000.');
   }
@@ -945,6 +964,30 @@ export async function importMigrationBundle({
   if (!hasCommittedRows) await store.assertFreshTarget([...sourceNames]);
   if (!dryRun && !existingRun) await store.createRun(bundle);
 
+  const priorReconciliation = dryRun
+    ? null
+    : await store.getReconciliationReport?.(bundle.runId);
+  if (
+    priorReconciliation &&
+    priorReconciliation.sourceFingerprint !== bundle.sourceFingerprint
+  ) {
+    throw new Error('Stored migration reconciliation is incompatible.');
+  }
+  if (priorReconciliation?.collisions) {
+    reconciliationPlan.report.collisions = structuredClone(
+      priorReconciliation.collisions,
+    );
+  }
+  if (!dryRun) {
+    for (const collision of (await store.getUpdatedRows?.(bundle.runId)) || []) {
+      recordStableIdCollision(reconciliationPlan.report, {
+        runId: bundle.runId,
+        table: collision.table,
+        sourceId: collision.sourceId,
+      });
+    }
+  }
+
   const targetByName = new Map(targetContract.map((table) => [table.name, table]));
   const totals = emptyCounts();
   const tableDigests = new Map();
@@ -952,7 +995,10 @@ export async function importMigrationBundle({
   for (const table of bundle.tables) {
     const targetTable = targetByName.get(table.name);
     if (!targetTable) throw new Error('Migration target schema is incomplete.');
-    const desiredRows = table.rows.map((row) => ({
+    const acceptedTable = reconciliationPlan.acceptedTables.find(
+      (candidate) => candidate.name === table.name,
+    );
+    const desiredRows = (acceptedTable?.rows || []).map((row) => ({
       ...row,
       targetValues: transformMigrationRow(table.name, row.values, targetTable),
     }));
@@ -1001,6 +1047,13 @@ export async function importMigrationBundle({
           : actualChecksum === targetChecksum
             ? 'skip'
             : 'update';
+        if (action === 'update') {
+          recordStableIdCollision(reconciliationPlan.report, {
+            runId: bundle.runId,
+            table: table.name,
+            sourceId: row.sourceId,
+          });
+        }
         batchCounts.attempted += 1;
         batchCounts[
           action === 'skip' ? 'skipped' : action === 'insert' ? 'inserted' : 'updated'
@@ -1052,10 +1105,39 @@ export async function importMigrationBundle({
       }
     }
     addCounts(totals, report);
-    tableReports.push({ name: table.name, ...report });
+    const cumulative = addCounts(
+      { ...(checkpoint?.counts || emptyCounts()) },
+      report,
+    );
+    tableReports.push({
+      name: table.name,
+      ...report,
+      cumulative,
+      targetChecksum: tableDigests.get(table.name),
+    });
+  }
+  if (!dryRun) {
+    for (const collision of (await store.getUpdatedRows?.(bundle.runId)) || []) {
+      recordStableIdCollision(reconciliationPlan.report, {
+        runId: bundle.runId,
+        table: collision.table,
+        sourceId: collision.sourceId,
+      });
+    }
   }
   const digest = reconciliationDigest(tableDigests);
-  if (!dryRun) await store.completeRun(bundle.runId, digest);
+  const reconciliationReport = finalizeReconciliationReport(
+    reconciliationPlan.report,
+    tableReports.map((table) => ({
+      name: table.name,
+      ...table.cumulative,
+      targetChecksum: table.targetChecksum,
+    })),
+  );
+  if (!dryRun) {
+    await store.recordReconciliation?.(bundle.runId, reconciliationReport);
+    await store.completeRun(bundle.runId, digest);
+  }
   await store.assertTransientTablesEmpty(TRANSIENT_TARGET_TABLES);
   return {
     schemaVersion: 1,
@@ -1065,6 +1147,7 @@ export async function importMigrationBundle({
     reconciliationDigest: digest,
     counts: totals,
     tables: tableReports,
+    reconciliation: reconciliationReport,
     secretValuesIncluded: false,
   };
 }
@@ -1352,6 +1435,27 @@ export class PostgresMigrationStore {
         PRIMARY KEY (run_id, table_name, source_id)
       )
     `);
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_quarantine (
+        run_id TEXT NOT NULL REFERENCES _iolaus_migration_runs(run_id),
+        table_name TEXT NOT NULL,
+        record_key_hash TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        field_name TEXT NOT NULL DEFAULT '',
+        parent_table TEXT NOT NULL DEFAULT '',
+        reference_key_hash TEXT,
+        PRIMARY KEY (run_id, table_name, record_key_hash, reason_code,
+                     field_name, parent_table)
+      )
+    `);
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_reconciliation (
+        run_id TEXT PRIMARY KEY REFERENCES _iolaus_migration_runs(run_id),
+        report_digest TEXT NOT NULL,
+        report_json JSONB NOT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   }
 
   async getRun(runId) {
@@ -1427,6 +1531,76 @@ export class PostgresMigrationStore {
     return result.rows[0]
       ? rowFromDatabase(result.rows[0], table.columns)
       : null;
+  }
+
+  async getReconciliationReport(runId) {
+    const result = await this.db.query(
+      `SELECT report_json FROM _iolaus_migration_reconciliation WHERE run_id = ?`,
+      [runId],
+    );
+    const value = result.rows[0]?.report_json;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        throw new Error('Stored migration reconciliation is incompatible.');
+      }
+    }
+    return value || null;
+  }
+
+  async getUpdatedRows(runId) {
+    const result = await this.db.query(
+      `SELECT table_name, source_id
+       FROM _iolaus_migration_rows
+       WHERE run_id = ? AND action = 'update'
+       ORDER BY table_name, source_id`,
+      [runId],
+    );
+    return result.rows.map((row) => ({
+      sourceId: String(row.source_id),
+      table: String(row.table_name),
+    }));
+  }
+
+  async recordReconciliation(runId, report) {
+    try {
+      await this.db.transaction(async (tx) => {
+        await tx.query(
+          `DELETE FROM _iolaus_migration_quarantine WHERE run_id = ?`,
+          [runId],
+        );
+        for (const entry of report.quarantine) {
+          await tx.query(
+            `INSERT INTO _iolaus_migration_quarantine
+             (run_id, table_name, record_key_hash, reason_code, field_name,
+              parent_table, reference_key_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              runId,
+              entry.table,
+              entry.recordKeyHash,
+              entry.reasonCode,
+              entry.field || '',
+              entry.parentTable || '',
+              entry.referenceKeyHash,
+            ],
+          );
+        }
+        await tx.query(
+          `INSERT INTO _iolaus_migration_reconciliation
+           (run_id, report_digest, report_json)
+           VALUES (?, ?, ?)
+           ON CONFLICT (run_id) DO UPDATE SET
+             report_digest = EXCLUDED.report_digest,
+             report_json = EXCLUDED.report_json,
+             updated_at = CURRENT_TIMESTAMP`,
+          [runId, report.reportDigest, report],
+        );
+      });
+    } catch {
+      throw new Error('Migration reconciliation ledger write failed.');
+    }
   }
 
   async commitBatch({
