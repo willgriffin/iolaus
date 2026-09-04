@@ -95,9 +95,16 @@ function isLocalhost(event: RequestEvent): boolean {
   if (
     [
       'forwarded',
+      'cf-connecting-ip',
+      'fly-client-ip',
+      'true-client-ip',
+      'via',
+      'x-client-ip',
+      'x-envoy-external-address',
       'x-forwarded-for',
       'x-forwarded-host',
       'x-forwarded-proto',
+      'x-real-ip',
     ].some((header) => event.request.headers.has(header))
   ) {
     return false;

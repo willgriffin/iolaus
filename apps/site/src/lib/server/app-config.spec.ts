@@ -59,6 +59,7 @@ describe('Iolaus application configuration', () => {
 
   it('fails closed with a secret-safe recovery message for incomplete public auth', () => {
     const configuration = getAuthConfiguration({
+      IOLAUS_APP_NAME: 'My Career Hub',
       IOLAUS_OIDC_CLIENT_SECRET: 'never-report-this',
       IOLAUS_PUBLIC_URL: 'https://career.example.com',
       SMRT_RUNTIME_PROFILE: 'self-hosted',
@@ -66,6 +67,8 @@ describe('Iolaus application configuration', () => {
 
     expect(configuration).toMatchObject({ kind: 'invalid' });
     if (configuration.kind === 'invalid') {
+      expect(configuration.message).toContain('My Career Hub');
+      expect(configuration.message).not.toContain('Iolaus');
       expect(configuration.message).not.toContain('never-report-this');
       expect(configuration.message).not.toContain('career.example.com');
     }

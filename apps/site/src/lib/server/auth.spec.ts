@@ -137,13 +137,22 @@ describe('canUseLocalDevLogin', () => {
   it('refuses a forwarded request even when a loopback proxy is the peer', () => {
     process.env.SMRT_RUNTIME_PROFILE = 'local';
 
-    expect(
-      canUseLocalDevLogin(
-        requestEventFor('http://localhost:5173/login', '127.0.0.1', {
-          'x-forwarded-for': '203.0.113.8',
-        }),
-      ),
-    ).toBe(false);
+    for (const header of [
+      'cf-connecting-ip',
+      'forwarded',
+      'via',
+      'x-envoy-external-address',
+      'x-forwarded-for',
+      'x-real-ip',
+    ]) {
+      expect(
+        canUseLocalDevLogin(
+          requestEventFor('http://localhost:5173/login', '127.0.0.1', {
+            [header]: '203.0.113.8',
+          }),
+        ),
+      ).toBe(false);
+    }
   });
 });
 

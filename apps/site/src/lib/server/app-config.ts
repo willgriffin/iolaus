@@ -42,9 +42,6 @@ export type AuthConfiguration =
 
 const DEFAULT_APP_ID = 'iolaus';
 const DEFAULT_APP_NAME = 'Iolaus';
-const PUBLIC_CONFIGURATION_MESSAGE =
-  'Iolaus public authentication is incomplete. Configure the public URL, OIDC issuer, realm, client ID, and authorized administrator email addresses.';
-
 function stringValue(value: string | undefined): string {
   return value?.trim() ?? '';
 }
@@ -193,7 +190,10 @@ export function getAuthConfiguration(
     !clientId ||
     adminEmails.length === 0
   ) {
-    return { kind: 'invalid', message: PUBLIC_CONFIGURATION_MESSAGE };
+    return {
+      kind: 'invalid',
+      message: `${app.appName} public authentication is incomplete. Configure the public URL, OIDC issuer, realm, client ID, and authorized administrator email addresses.`,
+    };
   }
 
   return {
