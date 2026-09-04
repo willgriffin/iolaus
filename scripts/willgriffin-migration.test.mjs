@@ -289,8 +289,8 @@ class MemoryMigrationStore {
   }
 }
 
-test('pinned manifests produce the explicitly approved predecessor contract', () => {
-  const { sourceContract, targetContract } = loadSupportedMigrationContracts(
+test('pinned manifests produce the explicitly approved predecessor contract', async () => {
+  const { sourceContract, targetContract } = await loadSupportedMigrationContracts(
     process.cwd(),
   );
   const migratedNames = new Set(sourceContract.map((entry) => entry.name));
