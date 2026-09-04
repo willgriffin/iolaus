@@ -351,7 +351,12 @@ async function pullNow(source: AdminRecord): Promise<void> {
 }
 
 async function pullAgain(source: AdminRecord): Promise<void> {
-  forgetCrawlRequest(sourceId(source));
+  const id = sourceId(source);
+  // A terminal progress card can receive two queued clicks before its parent
+  // re-renders. Do not let the second click erase the freshly-created request
+  // key that the first click is about to use for an active crawl.
+  if (!id || pending(source)) return;
+  forgetCrawlRequest(id);
   await pullNow(source);
 }
 

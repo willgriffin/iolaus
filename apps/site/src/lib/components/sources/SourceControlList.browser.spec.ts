@@ -28,23 +28,31 @@ afterEach(() => {
 });
 
 describe('SourceControlList', () => {
-  it('posts a bounded, retry-stable canonical crawl request', async () => {
+  it('keeps one new idempotency key after repeated terminal pull-again clicks', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.includes('source-health')) return response({ items: [] });
       if (url === '/api/job-search/crawl-source') {
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return response({ crawlId: 'crawl-1', status: 'queued' });
+        const crawlId = bodies.length === 1 ? 'crawl-1' : 'crawl-2';
+        return response({
+          crawlId,
+          reused: bodies.length > 2,
+          status: 'queued',
+        });
       }
       if (url.includes('source-crawl-status')) {
+        const crawlId = new URL(url, 'http://localhost').searchParams.get(
+          'crawlId',
+        );
         return response({
           items: [
             {
               counts: {},
               errors: [],
-              id: 'crawl-1',
+              id: crawlId,
               sourceId: SOURCE_ID,
-              status: 'running',
+              status: crawlId === 'crawl-1' ? 'failed' : 'running',
             },
           ],
         });
@@ -80,6 +88,32 @@ describe('SourceControlList', () => {
     expect(bodies[0].idempotencyKey).toMatch(
       new RegExp(`^source-ui:${SOURCE_ID}:`),
     );
+
+    const pullAgain = await vi.waitFor(() => {
+      const button = Array.from(target.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent?.includes('Pull again'),
+      );
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+      return button as HTMLButtonElement;
+    });
+    pullAgain.click();
+    pullAgain.click();
+    flushSync();
+    await vi.waitFor(() => expect(bodies).toHaveLength(2));
+
+    const retryKey = bodies[1].idempotencyKey;
+    const pullNow = await vi.waitFor(() => {
+      const button = Array.from(target.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent?.includes('Pull now'),
+      );
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      return button as HTMLButtonElement;
+    });
+    pullNow.click();
+    flushSync();
+    await vi.waitFor(() => expect(bodies).toHaveLength(3));
+    expect(bodies[2].idempotencyKey).toBe(retryKey);
     unmount(component);
   });
 
