@@ -2,6 +2,8 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SourceCrawlProgress from './SourceCrawlProgress.svelte';
+import SourceCrawlProgressHarness from './SourceCrawlProgressHarness.svelte';
+import type { SourceCrawlStatus } from './source-crawl-progress.js';
 
 const CRAWL_ID = '11111111-1111-4111-8111-111111111111';
 const SOURCE_ID = '22222222-2222-4222-8222-222222222222';
@@ -70,6 +72,51 @@ describe('SourceCrawlProgress', () => {
     flushSync();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(onPullAgain).not.toHaveBeenCalled();
+    unmount(component);
+  });
+
+  it('notifies a terminal crawl once when the parent replaces its callback', async () => {
+    const firstCallback = vi.fn();
+    const replacementCallback = vi.fn();
+    const fetchMock = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        ({
+          json: async () => ({
+            items: [
+              {
+                counts: {},
+                errors: [],
+                finishedAt: '2026-09-04T05:00:01.000Z',
+                id: CRAWL_ID,
+                sourceId: SOURCE_ID,
+                status: 'completed',
+              },
+            ],
+          }),
+          ok: true,
+        }) as Response,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const target = document.createElement('div');
+    document.body.append(target);
+    const component = mount(SourceCrawlProgressHarness, {
+      props: {
+        crawlId: CRAWL_ID,
+        onTerminal: firstCallback,
+        sourceId: SOURCE_ID,
+      },
+      target,
+    });
+
+    await vi.waitFor(() => expect(firstCallback).toHaveBeenCalledOnce());
+    component.replaceTerminalCallback(
+      replacementCallback as (status: SourceCrawlStatus) => void,
+    );
+    flushSync();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(replacementCallback).not.toHaveBeenCalled();
     unmount(component);
   });
 });

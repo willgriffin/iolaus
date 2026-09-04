@@ -25,6 +25,16 @@ let {
 let progress = $state<SourceCrawlStatus | null>(null);
 let feedback = $state('');
 let retryStatusToken = $state(0);
+// Keep callback identity changes from restarting a completed crawl's polling
+// effect. The parent may replace this callback while refreshing its list.
+const callbacks: {
+  onTerminal: (status: SourceCrawlStatus) => void;
+} = { onTerminal: () => undefined };
+const terminalNotification = { crawlId: '' };
+
+$effect(() => {
+  callbacks.onTerminal = onTerminal;
+});
 
 function statusUrl(id: string): string {
   const query = new URLSearchParams({ crawlId: id, limit: '1' });
@@ -41,11 +51,20 @@ async function loadStatus(): Promise<SourceCrawlStatus | null> {
   return status?.sourceId === sourceId ? status : null;
 }
 
+function notifyTerminal(status: SourceCrawlStatus): void {
+  if (terminalNotification.crawlId === status.id) return;
+  terminalNotification.crawlId = status.id;
+  callbacks.onTerminal(status);
+}
+
 $effect(() => {
   if (!crawlId || !sourceId) return;
   // A status retry intentionally keeps the crawl ID. It never requests a
   // second pull while the original job may still be alive.
   void retryStatusToken;
+  if (terminalNotification.crawlId !== crawlId) {
+    terminalNotification.crawlId = '';
+  }
   progress = null;
   feedback = '';
   const poller = createCrawlStatusPoller({
@@ -57,7 +76,7 @@ $effect(() => {
     onStatus: (status) => {
       progress = status;
     },
-    onTerminal,
+    onTerminal: notifyTerminal,
     onUnavailable: () => {
       feedback = 'We could not refresh pull progress. Try again in a moment.';
     },
