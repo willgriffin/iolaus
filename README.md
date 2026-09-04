@@ -52,3 +52,17 @@ credentials, generated resumes, application history or deployment secrets.
 See [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) and
 [provenance](PROVENANCE.md). See [configuration](docs/configuration.md) for
 local and self-hosted identity/authentication setup. License: [MIT](LICENSE).
+
+## Contest demo
+
+For the synthetic, resettable WebMCP demonstration, see the
+[judge demo guide](docs/judge-demo.md). The shortest local path is:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm demo:prepare
+```
+
+This uses an isolated demo profile and never transmits an application. Run
+`pnpm demo:smoke` for the repeatable authenticated proof and `pnpm demo:reset`
+to remove only the marked synthetic profile.

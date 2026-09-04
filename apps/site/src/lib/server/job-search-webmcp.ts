@@ -4,7 +4,12 @@ import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import { DEFAULT_TRIAGE_SORT, TRIAGE_SORTS } from '$lib/admin/triage-session';
-import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
+import {
+  DEFAULT_OPPORTUNITY_FILTERS,
+  matchesOpportunity,
+  type OpportunityFilterState,
+  sortOpportunities,
+} from '$lib/opportunity-filters';
 import {
   countOpportunityRecords,
   listLatestOpportunityRelatedContext,
@@ -92,6 +97,8 @@ const TEXT_LIST_MAX_ENTRIES = 40;
 const TEXT_LIST_MAX_ENTRY_LENGTH = 240;
 const TEXT_LIST_MAX_TOTAL_LENGTH = 4_000;
 const TEXT_LIST_MAX_SOURCE_LENGTH = 12_000;
+const LOCAL_BROWSE_RECORD_LIMIT = 1_001;
+const LOCAL_RELATED_HISTORY_PER_OPPORTUNITY = 25;
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -304,7 +311,9 @@ async function relatedContext(opportunities: MutableRecord[]) {
   }
 
   const [relatedRows, companies] = await Promise.all([
-    listLatestOpportunityRelatedContext(ids),
+    getDbConfig().type === 'sqlite'
+      ? localLatestOpportunityRelatedContext(opportunities, ids)
+      : listLatestOpportunityRelatedContext(ids),
     companyIds.length > 0
       ? (await collection('Company')).list({
           limit: companyIds.length,
@@ -349,6 +358,156 @@ async function relatedContext(opportunities: MutableRecord[]) {
     applications,
     companies: companyById,
     scores,
+  };
+}
+
+async function localLatestOpportunityRelatedContext(
+  opportunities: MutableRecord[],
+  opportunityIds: string[],
+) {
+  const historyLimit =
+    opportunityIds.length * LOCAL_RELATED_HISTORY_PER_OPPORTUNITY;
+  const [applications, scores] = await Promise.all([
+    (await collection('Application')).list({
+      limit: historyLimit,
+      orderBy: 'updated_at DESC',
+      where: { 'opportunityId in': opportunityIds },
+    }),
+    (await collection('EvaluationScore')).list({
+      limit: historyLimit,
+      orderBy: 'updated_at DESC',
+      where: { 'opportunityId in': opportunityIds },
+    }),
+  ]);
+  const opportunityById = new Map(
+    opportunities.map((opportunity) => [
+      stringValue(opportunity.id),
+      opportunity,
+    ]),
+  );
+  const applicationByOpportunity = new Map<string, MutableRecord>();
+  for (const application of applications) {
+    const opportunityId = stringValue(application.opportunityId);
+    if (opportunityId && !applicationByOpportunity.has(opportunityId)) {
+      applicationByOpportunity.set(opportunityId, application);
+    }
+  }
+  const scoreByOpportunity = new Map<string, MutableRecord>();
+  for (const score of scores) {
+    const opportunityId = stringValue(score.opportunityId);
+    const opportunity = opportunityById.get(opportunityId);
+    if (
+      opportunityId &&
+      opportunity &&
+      !scoreByOpportunity.has(opportunityId) &&
+      stringValue(score.sourceContentFingerprint) ===
+        stringValue(opportunity.sourceContentFingerprint)
+    ) {
+      scoreByOpportunity.set(opportunityId, score);
+    }
+  }
+  return opportunityIds.map((opportunityId) => {
+    const application = applicationByOpportunity.get(opportunityId);
+    const score = scoreByOpportunity.get(opportunityId);
+    return {
+      applicationId: stringValue(application?.id),
+      applicationStatus: stringValue(application?.status),
+      opportunityId,
+      recommendation: stringValue(score?.recommendation),
+      score: typeof score?.score === 'number' ? score.score : null,
+      scoreId: stringValue(score?.id),
+      scoreSummary: stringValue(score?.summary),
+    };
+  });
+}
+
+function localReviewMatches(
+  record: MutableRecord,
+  reviewFilter: string,
+): boolean {
+  const review = stringValue(record.humanReviewStatus).toLowerCase();
+  if (!reviewFilter || reviewFilter === 'all') return true;
+  if (reviewFilter === 'unsorted') {
+    return !DECISIONS.includes(review as (typeof DECISIONS)[number]);
+  }
+  return review === reviewFilter;
+}
+
+function localSearchMatches(
+  record: MutableRecord,
+  companyName: string,
+  search: string | undefined,
+): boolean {
+  const needle = stringValue(search).toLowerCase();
+  if (!needle) return true;
+  return [
+    record.title,
+    record.descriptionSummary,
+    record.requiredSkills,
+    record.preferredSkills,
+    record.locations,
+    record.postingUrl,
+    companyName,
+  ].some((value) => stringValue(value).toLowerCase().includes(needle));
+}
+
+async function browseLocalJobOpportunities({
+  decision,
+  filters,
+  limit,
+  offset,
+  search,
+}: {
+  decision: string;
+  filters: OpportunityFilterState;
+  limit: number;
+  offset: number;
+  search: string | undefined;
+}) {
+  const opportunityCollection = await collection('Opportunity');
+  const rawRecords = await opportunityCollection.list({
+    limit: LOCAL_BROWSE_RECORD_LIMIT,
+    orderBy: 'updated_at DESC',
+  });
+  if (rawRecords.length >= LOCAL_BROWSE_RECORD_LIMIT) {
+    throw new Error(
+      `Local opportunity browsing is bounded to ${LOCAL_BROWSE_RECORD_LIMIT - 1} records; archive or deploy this data set before continuing.`,
+    );
+  }
+  const context = await relatedContext(rawRecords);
+  const enriched = rawRecords.map((record) => {
+    const id = stringValue(record.id);
+    const score = context.scores.get(id);
+    return {
+      ...jsonRecord(record),
+      latestScore: score?.score ?? null,
+      save: record.save,
+    } as MutableRecord;
+  });
+  const matches = enriched.filter((record) => {
+    const company = context.companies.get(stringValue(record.companyId));
+    if (filters.status === 'all' && stringValue(record.status) === 'archived') {
+      return false;
+    }
+    return (
+      localReviewMatches(record, decision) &&
+      localSearchMatches(record, stringValue(company?.name), search) &&
+      matchesOpportunity(record, filters, { hasSkill: () => false })
+    );
+  });
+  const ordered = sortOpportunities(
+    matches,
+    filters.sort,
+    filters.sortDirection,
+  );
+  const page = ordered.slice(offset, offset + limit) as MutableRecord[];
+  return {
+    items: page.map((record) => opportunitySummary(record, context)),
+    limit,
+    offset,
+    total: ordered.length,
+    nextOffset:
+      offset + page.length < ordered.length ? offset + page.length : null,
   };
 }
 
@@ -441,6 +600,15 @@ export async function browseJobOpportunities(input: Record<string, unknown>) {
   };
 
   const search = query || undefined;
+  if (getDbConfig().type === 'sqlite') {
+    return browseLocalJobOpportunities({
+      decision,
+      filters,
+      limit,
+      offset,
+      search,
+    });
+  }
   const [total, ids] = await Promise.all([
     countOpportunityRecords({
       candidateSkills: [],

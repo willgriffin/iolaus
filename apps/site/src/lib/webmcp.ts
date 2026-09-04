@@ -5,7 +5,7 @@ import type {
 import {
   type JobSearchToolName,
   jobSearchToolContracts,
-} from '$lib/job-search-tool-schemas';
+} from './job-search-tool-schemas';
 
 const COMMAND_CENTER_PATH = '/admin';
 const COMMAND_CENTER_COLLECTIONS = new Set(['opportunities']);

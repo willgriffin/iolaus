@@ -17,6 +17,7 @@ export interface SyntheticDemoFixtureCollections {
   agentRuns: Collection;
   applicationMaterialComments: Collection;
   applications: Collection;
+  candidateAnswers: Collection;
   candidateProfiles: Collection;
   companies: Collection;
   decisions: Collection;
@@ -78,6 +79,7 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
     opportunities,
     decisions,
     applications,
+    candidateAnswers,
     resumeAssets,
     applicationMaterialComments,
     tasks,
@@ -88,6 +90,7 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
     getCollection('Opportunity'),
     getCollection('Decision'),
     getCollection('Application'),
+    getCollection('CandidateAnswer'),
     getCollection('ResumeAsset'),
     getCollection('ApplicationMaterialComment'),
     getCollection('Task'),
@@ -98,6 +101,7 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
     applicationMaterialComments:
       applicationMaterialComments as unknown as Collection,
     applications: applications as unknown as Collection,
+    candidateAnswers: candidateAnswers as unknown as Collection,
     candidateProfiles: candidateProfiles as unknown as Collection,
     companies: companies as unknown as Collection,
     decisions: decisions as unknown as Collection,
@@ -180,6 +184,22 @@ export async function seedSyntheticDemoFixture(
       pdfBasename: 'fictional-demo-resume-placeholder.pdf',
       status: 'placeholder',
       title: 'Fictional demo resume placeholder',
+    },
+  );
+  await findOrCreate(
+    collections.candidateAnswers,
+    {
+      profileKey: `${FIXTURE_PREFIX}-candidate`,
+    },
+    {
+      active: true,
+      answerType: 'text',
+      label: 'Fictional demo work authorization',
+      labelKey: `${FIXTURE_PREFIX}-work-authorization`,
+      profileKey: `${FIXTURE_PREFIX}-candidate`,
+      source: 'user',
+      value:
+        'Fictional demo answer only. Confirm the real answer with the user before applying.',
     },
   );
   const application = await findOrCreate(

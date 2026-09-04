@@ -66,6 +66,7 @@ const mocks = vi.hoisted(() => ({
   collections: new Map<string, ReturnType<typeof collection>>(),
   count: vi.fn(async () => 0),
   createFetch: vi.fn(),
+  dbType: 'postgres',
   decision: vi.fn(async () => ({
     applicationId: '',
     decision: { id: 'decision-1' },
@@ -118,7 +119,13 @@ vi.mock('@happyvertical/smrt-users', () => ({
 }));
 
 vi.mock('./db.js', () => ({
-  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://example/test' }),
+  getDbConfig: () => ({
+    type: mocks.dbType,
+    url:
+      mocks.dbType === 'sqlite'
+        ? '/tmp/iolaus-job-search-test.sqlite'
+        : 'postgresql://example/test',
+  }),
 }));
 
 vi.mock('./smrt.js', () => ({
@@ -156,6 +163,7 @@ vi.mock('./public-https.js', () => ({
 
 describe('job-search WebMCP service', () => {
   beforeEach(() => {
+    mocks.dbType = 'postgres';
     mocks.transaction.mockReset();
     mocks.transaction.mockImplementation(
       async (
@@ -423,6 +431,75 @@ describe('job-search WebMCP service', () => {
     expect(JSON.stringify(result)).not.toContain('sourceContentFingerprint');
     expect(mocks.relatedContext).toHaveBeenCalledOnce();
     expect(mocks.relatedContext).toHaveBeenCalledWith(['opp-1']);
+  });
+
+  it('browses a bounded local SQLite data set without PostgreSQL query helpers', async () => {
+    mocks.dbType = 'sqlite';
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          companyId: 'company-1',
+          descriptionSummary: 'Build a fictional developer platform.',
+          humanReviewStatus: '',
+          id: 'opp-1',
+          sourceContentFingerprint: 'fixture-v1',
+          status: 'found',
+          title: 'Fictional Principal Engineer',
+        }),
+        record({
+          id: 'opp-archived',
+          status: 'archived',
+          title: 'Archived Principal Engineer',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-1',
+          opportunityId: 'opp-1',
+          status: 'awaiting_user',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'EvaluationScore',
+      collection([
+        record({
+          id: 'score-1',
+          opportunityId: 'opp-1',
+          score: 91,
+          sourceContentFingerprint: 'fixture-v1',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Company',
+      collection([record({ id: 'company-1', name: 'Fictional Systems' })]),
+    );
+    const { browseJobOpportunities } = await import('./job-search-webmcp');
+
+    const result = await browseJobOpportunities({
+      limit: 5,
+      query: 'fictional principal',
+    });
+
+    expect(result).toMatchObject({
+      items: [
+        {
+          application: { id: 'app-1', status: 'awaiting_user' },
+          company: 'Fictional Systems',
+          id: 'opp-1',
+          score: 91,
+        },
+      ],
+      total: 1,
+    });
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.ids).not.toHaveBeenCalled();
+    expect(mocks.relatedContext).not.toHaveBeenCalled();
   });
 
   it('never returns private candidate contact or reusable-answer data', async () => {

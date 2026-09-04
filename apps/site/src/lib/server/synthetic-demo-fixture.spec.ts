@@ -41,6 +41,7 @@ describe('synthetic demo fixture', () => {
         'agentRuns',
         'applicationMaterialComments',
         'applications',
+        'candidateAnswers',
         'candidateProfiles',
         'companies',
         'decisions',
@@ -97,6 +98,11 @@ describe('synthetic demo fixture', () => {
       postingUrl: expect.stringContaining('example.invalid'),
     });
     expect(rows.applications[0].applicationUrl).toContain('example.invalid');
+    expect(rows.candidateAnswers[0]).toMatchObject({
+      active: true,
+      profileKey: 'iolaus-demo-fictional-candidate',
+      value: expect.stringContaining('Fictional demo answer'),
+    });
     expect(rows.resumeAssets[0].status).toBe('placeholder');
     expect(rows.opportunities[0].organizationProfileId).toBeFalsy();
   });
