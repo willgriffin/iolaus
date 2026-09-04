@@ -2,11 +2,26 @@ import type { RuntimeDiagnostics } from '@happyvertical/smrt-app-runtime';
 import type { Role } from '@happyvertical/smrt-users';
 import { webMcpToolDefinitions } from '@happyvertical/smrt-virt-web';
 import { json } from '@sveltejs/kit';
-import { RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME } from '../runtime-diagnostics-webmcp.js';
+import {
+  commandCenterWebMcpDefinitions,
+  jobSearchWebMcpToolDefinitions,
+} from '../webmcp.js';
 import { readApplicationRuntimeDiagnostics } from './application-runtime.js';
 import { getCollection } from './smrt.js';
 
 export const RUNTIME_DIAGNOSTICS_READ_PERMISSION = 'runtime_diagnostics.read';
+
+/** Exact browser-native inventory served by the command center. */
+export function runtimeDiagnosticsToolNames(): string[] {
+  return [
+    ...new Set([
+      ...commandCenterWebMcpDefinitions([
+        ...webMcpToolDefinitions,
+        ...jobSearchWebMcpToolDefinitions,
+      ]).map((definition) => definition.name),
+    ]),
+  ].sort((left, right) => left.localeCompare(right));
+}
 
 interface DiagnosticsLocals {
   readonly user?: { readonly id?: unknown } | null;
@@ -64,10 +79,7 @@ export const runtimeDiagnosticsGet = createRuntimeDiagnosticsGet({
   },
   readDiagnostics: () =>
     readApplicationRuntimeDiagnostics({
-      toolNames: [
-        ...webMcpToolDefinitions.map((definition) => definition.name),
-        RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME,
-      ],
+      toolNames: runtimeDiagnosticsToolNames(),
       observedAt: new Date(),
       // Install application migration/schema verifiers here. Process/database
       // liveness alone intentionally leaves both values `unknown`.

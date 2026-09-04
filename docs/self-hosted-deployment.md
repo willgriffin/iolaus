@@ -136,6 +136,111 @@ synthetic, explicitly approved provider-crawl fixture. Restart a web pod and
 verify a synthetic non-production asset remains readable from the same
 operator-owned object store.
 
+### Parity contract and evidence
+
+Before building an image, run the deterministic source contract under the
+pinned Node and pnpm versions:
+
+```sh
+pnpm parity:contract -- --evidence /private/evidence/iolaus-parity.json
+```
+
+The command runs the reviewed generated REST/MCP/WebMCP inventory, route
+authentication, field-projection, triage/bulk workflow, approval-boundary,
+provider-crawl, task/schedule worker, retry/fencing/recovery, heartbeat, and
+self-hosted topology scenarios. It writes only exact source and dependency
+digests, inventory counts, scenario names, binary observables, and pass/fail
+state. Test fixtures are synthetic; the report contains no record bodies,
+credentials, URLs, database targets, or asset paths. Inventory drift fails
+closed until `apps/site/scripts/deployed-parity-inventory.snapshot.json` is
+reviewed and explicitly regenerated with:
+
+```sh
+pnpm --filter @willgriffin/iolaus-site exec tsx \
+  scripts/deployed-parity-inventory.ts --update
+```
+
+The runner discards the caller's database, provider, and credential
+environment, creates a temporary home/config/cache boundary, and installs a
+deny-by-default outbound network hook for every parity scenario. It removes any
+existing destination report before validation begins, so a failed rerun cannot
+leave stale passing evidence behind. The approval-boundary scenario directly
+exercises refusal behavior for every registered ATS submitter. The only reused
+caller cache is Corepack's already-installed, pinned pnpm distribution; network
+installation remains denied. Unit scenarios deliberately use the local runtime
+with a temporary home so no deployed database or provider can be selected; the
+separate topology scenario validates the self-hosted workload profile.
+Every scenario also runs beneath an inherited operating-system network
+boundary: macOS `sandbox-exec` denies remote IP sockets while retaining local
+Unix-domain IPC, and Linux uses an unshared network namespace. The command
+fails closed when neither isolation backend is available.
+
+This source-only report is explicitly marked `releaseEligible: false` and
+`candidateImageTested: false`. It is a pre-build check, never release evidence.
+
+Pull-request CI also builds the exact checked-out revision without publishing
+it and runs the contract against Docker's immutable local `sha256` image ID.
+That report proves the built image passed the containerized scenarios and is
+uploaded as a secret-free workflow artifact, but remains
+`releaseEligible: false`: a local image ID is not a released repository digest.
+The `--local-image-id` option exists only for that non-release verification and
+rejects tags and mutable references.
+
+Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
+40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
+`pnpm-lock.yaml`.
+The Dockerfile stores both as OCI labels. For a released candidate, check out
+that exact source revision, pull the immutable digest locally without retagging
+it, run the same contract, and pass that digest:
+
+```sh
+pnpm parity:contract -- \
+  --image-ref ghcr.io/willgriffin/iolaus/site@sha256:<64-hex-digest> \
+  --evidence /private/evidence/iolaus-parity.json
+```
+
+The image argument is accepted only when `docker image inspect` proves that the
+local image has the requested repository digest and its two provenance labels
+match the current source revision and lockfile digest. Runtime parity scenarios
+and the inventory then run from that immutable image with Docker networking
+disabled, a read-only root filesystem, dropped capabilities, no-new-privileges,
+and a synthetic local runtime environment. The disposable `/tmp` mount allows
+the test runner to regenerate derived SMRT artifacts without mutating the
+image. The inventory resolves the installed s-m-r-t package versions and
+requires them to equal the released, pinned declarations.
+
+`candidateImageTested: true` proves only those explicitly image-executed
+scenarios. The topology check remains host-executed with the same sanitized
+environment and OS network boundary because the runtime image deliberately
+contains no cluster administration tools. Its check record says
+`execution.kind: "host"`; candidate-image records say
+`execution.kind: "candidate-image"`. Therefore every contract report remains
+`releaseEligible: false`: a distinct isolated deployment report must bind the
+same digest to actual web, task, schedule, and monitor workloads before any
+release or cutover decision.
+As a prerequisite for later deployment release evidence, the runner also
+fingerprints every tracked source file included by the Docker context and
+requires the candidate's bytes to match the clean reviewed checkout exactly.
+Host-reviewed code streams the Docker-export TAR archive, verifies every header
+checksum and terminating block,
+rejects unsafe/ambiguous PAX names, duplicate normalized application paths, and
+any link or non-regular entry at a reviewed source path or its ancestors, then
+hashes only the raw regular-file bodies. It never dereferences a
+candidate-controlled path on the host. The candidate inventory is executed
+only after those reviewed source bytes match and must match the independently
+executed host inventory, including installed pinned s-m-r-t versions.
+The report records only already-known digests, versions, and pass/fail facts.
+It is not a substitute for checking Kubernetes
+`status.containerStatuses[].imageID`. The isolated
+rehearsal must prove every web/task/schedule pod reports that same digest,
+capture a successful aggregate monitor Job, and execute the synthetic browser
+smoke, provider crawl, schedule dispatch, active-job drain, and restart
+recovery against the deployed PostgreSQL instance. Record only IDs hashed for
+the rehearsal, counts, terminal states, timestamps, and digests. A green web
+health endpoint or source contract alone does not satisfy those deployed
+checks. Production remains read-only until its separate write checkpoint is
+approved.
+
 ## Operational safety
 
 Do not enable provider crawling, paid intelligence, or external submission as

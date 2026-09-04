@@ -17,3 +17,63 @@ jobs:
       - run: >-
           pnpm format-check && pnpm lint && pnpm check && pnpm test && pnpm
           build && pnpm knowledge:check
+  candidate-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - run: npm install --global pnpm@11.24.0
+      - run: pnpm install --frozen-lockfile
+      - name: Build exact candidate image without publishing
+        run: |
+          lock_sha256="$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)"
+          docker build --progress=plain --load \
+            --file apps/site/Dockerfile \
+            --build-arg "IOLAUS_SOURCE_REVISION=${GITHUB_SHA}" \
+            --build-arg "IOLAUS_LOCKFILE_SHA256=${lock_sha256}" \
+            --tag iolaus-parity-candidate:ci .
+      - name: Verify immutable candidate with synthetic data
+        run: |
+          image_id="$(
+            docker image inspect --format '{{.Id}}' \
+              iolaus-parity-candidate:ci
+          )"
+          pnpm parity:contract -- \
+            --local-image-id "${image_id}" \
+            --evidence .omo/evidence/issue-31/ci-candidate-contract.json
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          const path = '.omo/evidence/issue-31/ci-candidate-contract.json';
+          const evidence = JSON.parse(readFileSync(path));
+          const provenance = evidence.executionProvenance;
+          const topology = evidence.checks?.find(
+            (check) => check.id === 'self-hosted-topology',
+          );
+          if (
+            evidence.status !== 'passed' ||
+            evidence.candidateImageTested !== true ||
+            evidence.releaseEligible !== false ||
+            evidence.candidateImageProvenance?.binding !== 'local-image-id' ||
+            provenance?.deploymentEvidenceRequiredForRelease !== true ||
+            !provenance?.candidateImageScenarioIds?.includes(
+              'generated-surfaces',
+            ) ||
+            !provenance?.hostOnlyScenarioIds?.includes(
+              'self-hosted-topology',
+            ) ||
+            topology?.execution?.kind !== 'host' ||
+            evidence.secretValuesIncluded !== false
+          ) {
+            throw new Error('Candidate evidence did not fail closed.');
+          }
+          EOF
+      - name: Upload secret-free candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iolaus-candidate-parity-${{ github.sha }}
+          path: .omo/evidence/issue-31/ci-candidate-contract.json
+          if-no-files-found: error

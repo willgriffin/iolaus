@@ -1,7 +1,7 @@
 # WebMCP Discovery Audit
 
 This is the M1 registration and safety baseline for the private job-seeker
-command center. It covers the generated read surface from M0 and fifteen
+command center. It covers the generated read surface from M0 and sixteen
 bounded, task-oriented job-search operations, including the preflight,
 application-review, and resume reads added for the epic's agent workflow
 (#413, #414, #415) and the triage candidate read and dig-deeper mutation added
@@ -52,7 +52,7 @@ available there deliberately, while `CandidateAnswer` is registered on neither
 has no generic CRUD surface anywhere; (3) the application review UI reaches
 the library only through server-side workflow writers.
 
-Fifteen application-owned definitions provide the curated workflow surface:
+Sixteen application-owned definitions provide the curated workflow surface:
 
 - `job_search_browse_opportunities` searches and filters up to 25 local results.
   Its results and totals exclude `archived` rows unless the `status` filter names
@@ -163,10 +163,10 @@ Fifteen application-owned definitions provide the curated workflow surface:
   idempotency key, a maximum candidate limit of 100, and stable job/crawl IDs.
 
 Together with the two generated opportunity reads, the expected inventory
-contains seventeen tools, and `COMMAND_CENTER_MAX_TOOLS` is raised to match. Each
+contains eighteen tools, and `COMMAND_CENTER_MAX_TOOLS` is raised to match. Each
 increment is deliberate: it widens the browser-native surface the command center
 publishes, so the cap is never bumped as a side effect of adding a tool. The page policy permits read and write effects, but
-only the eight named mutation tools can write; `job_search_verify_posting`
+only the nine named mutation tools can write; `job_search_verify_posting`
 writes nothing except its own audit record, and `job_search_sweep_opportunities`
 writes nothing at all unless it is called with `dryRun: false`. No destructive operation, generic
 source writer, crawl-all operation, approval writer, or mounted UI-control tool
@@ -430,7 +430,7 @@ route above.
    tool-inventory action; do not interact with page controls.
 4. Record the browser and harness versions, URL, authenticated role (never a
    credential), and returned tool inventory. It must contain the two generated
-   opportunity reads plus the twelve `job_search_*` operations listed above,
+   opportunity reads plus the sixteen `job_search_*` operations listed above,
    and no generic application/task/candidate reads, create, update, delete,
    destructive, or UI-control tools.
 5. For a non-mutating functional check, call browse with `limit: 1`, then inspect
@@ -459,7 +459,7 @@ are discoverable.
 3. Save the exact URL, deployment revision, browser/harness versions, tool
    inventory, and an idle-page screenshot. Do not record cookies, tokens, or
    personal profile data.
-4. The expected result is the same fifteen-tool surface as local. If the harness
+4. The expected result is the same eighteen-tool surface as local. If the harness
    reports no tools, capture that exact response and stop; diagnose the
    browser/runtime prerequisite before changing app policy.
 
