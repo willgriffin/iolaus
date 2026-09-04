@@ -10,6 +10,10 @@ const monitorManifest = readFileSync(
   'utf8',
 );
 const runnerDockerfile = readFileSync(resolve(root, 'apps/site/Dockerfile'), 'utf8');
+const taskWorkerEntrypoint = readFileSync(
+  resolve(root, 'apps/site/scripts/jobs-worker.ts'),
+  'utf8',
+);
 
 function render(path) {
   return execFileSync('kubectl', ['kustomize', path], {
@@ -95,6 +99,12 @@ if (!/test -x \/app\/node_modules\/.bin\/tsx/u.test(runnerDockerfile)) {
 }
 if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
   throw new Error('The released image must smoke its direct worker bootstrap without pnpm.');
+}
+if (
+  /scheduleRunner\.start\(\)/u.test(taskWorkerEntrypoint) ||
+  !/startTaskWorker\(taskRunner\)/u.test(taskWorkerEntrypoint)
+) {
+  throw new Error('The task worker must claim tasks only; schedule polling belongs to the separate schedule workload.');
 }
 if (
   !/initContainers:[\s\S]*name: migrate[\s\S]*name: iolaus-migration-runtime[\s\S]*containers:[\s\S]*name: monitor[\s\S]*name: iolaus-monitor-runtime/u.test(

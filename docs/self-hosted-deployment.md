@@ -69,7 +69,7 @@ context before enabling a provider fixture.
 | Workload | Responsibility | Availability signal |
 | --- | --- | --- |
 | `iolaus-web` | Authenticated web/API/WebMCP surface | `/health` startup/readiness checks bounded deployed providers; `/live` is process liveness; two rolling replicas |
-| `iolaus-task-worker` | Task execution, including provider crawl jobs | TaskRunner imports local classes and claims source-crawl, scheduled-source, intelligence, and approved-submit queues; heartbeat probe and four-minute drain |
+| `iolaus-task-worker` | Task execution, including provider crawl jobs | TaskRunner imports local classes and claims source-crawl, scheduled-source, intelligence, and approved-submit queues; it never polls schedules; heartbeat probe and four-minute drain |
 | `iolaus-schedule-worker` | Due schedule dispatch; it creates provider-crawl task jobs but does not execute them | Process-local heartbeat probe and 90-second graceful drain |
 | `iolaus-queue-provider-monitor` | Read-only aggregate queue and crawl-watchdog check | CronJob failure plus count-only JSON; independent of web health |
 

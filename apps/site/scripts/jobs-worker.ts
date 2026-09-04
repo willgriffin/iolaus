@@ -12,6 +12,7 @@ import {
   taskWorkerQueues,
 } from './jobs-worker-config.js';
 import { drainJobWorkerRunners } from './jobs-worker-lifecycle.js';
+import { startTaskWorker } from './jobs-worker-runtime.js';
 
 process.env.TZ ||= 'UTC';
 
@@ -85,8 +86,7 @@ scheduleRunner.on('runner:error', (error) => {
 
 await taskRunner.initialize(db);
 await scheduleRunner.initialize(db);
-await taskRunner.start();
-await scheduleRunner.start();
+await startTaskWorker(taskRunner);
 
 const sourceCrawlWatchdog = setInterval(() => {
   void reapStaleSourceCrawls(db).catch((error) => {
