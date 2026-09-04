@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   candidateFactState,
+  isCandidateResumeAssetSelectable,
   saveCandidateOnboarding,
 } from './candidate-onboarding.js';
 
@@ -51,6 +52,29 @@ describe('candidateFactState', () => {
         'Current location',
       ]),
     );
+  });
+});
+
+describe('isCandidateResumeAssetSelectable', () => {
+  it('hides resume metadata owned by another candidate profile', () => {
+    expect(
+      isCandidateResumeAssetSelectable(
+        { assetType: 'resume', candidateProfileId: '' },
+        'profile-1',
+      ),
+    ).toBe(true);
+    expect(
+      isCandidateResumeAssetSelectable(
+        { assetType: 'resume', candidateProfileId: 'profile-1' },
+        'profile-1',
+      ),
+    ).toBe(true);
+    expect(
+      isCandidateResumeAssetSelectable(
+        { assetType: 'resume', candidateProfileId: 'profile-2' },
+        'profile-1',
+      ),
+    ).toBe(false);
   });
 });
 

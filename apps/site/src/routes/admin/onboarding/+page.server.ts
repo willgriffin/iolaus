@@ -2,6 +2,7 @@ import { type Actions, fail } from '@sveltejs/kit';
 import { revokeReusableAnswerByLabelKey } from '$lib/server/application-workflow.js';
 import {
   type CandidateOnboardingInput,
+  isCandidateResumeAssetSelectable,
   saveCandidateOnboarding,
 } from '$lib/server/candidate-onboarding.js';
 import { getCollection } from '$lib/server/smrt.js';
@@ -109,6 +110,7 @@ export const load: PageServerLoad = async () => {
       where: { assetType: 'resume' },
     }),
   ]);
+  const activeProfileId = String(profileRows[0]?.id ?? '');
   return {
     profile: publicProfile(profileRows[0] ? recordValue(profileRows[0]) : null),
     reusableAnswers: answerRows.map((item) => {
@@ -120,15 +122,15 @@ export const load: PageServerLoad = async () => {
         value: String(row.value ?? ''),
       };
     }),
-    resumeAssets: assetRows.map((item) => {
-      const row = recordValue(item);
-      return {
+    resumeAssets: assetRows
+      .map(recordValue)
+      .filter((row) => isCandidateResumeAssetSelectable(row, activeProfileId))
+      .map((row) => ({
         id: String(row.id ?? ''),
         pdfBasename: String(row.pdfBasename ?? ''),
         status: String(row.status ?? ''),
         title: String(row.title ?? ''),
-      };
-    }),
+      })),
   };
 };
 

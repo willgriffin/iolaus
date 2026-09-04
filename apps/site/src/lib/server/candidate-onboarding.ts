@@ -115,6 +115,21 @@ export interface CandidateOnboardingResult {
   selectedResumeAssetId: string;
 }
 
+/**
+ * Limit onboarding resume choices to unclaimed assets and assets already
+ * owned by the active candidate profile. Foreign profile metadata must not be
+ * projected into the owner-facing form merely because it shares a database.
+ */
+export function isCandidateResumeAssetSelectable(
+  asset: Record<string, unknown>,
+  candidateProfileId?: string,
+): boolean {
+  if (stringValue(asset.assetType) !== 'resume') return false;
+  const owner = stringValue(asset.candidateProfileId, 160);
+  const profileId = stringValue(candidateProfileId, 160);
+  return !owner || Boolean(profileId && owner === profileId);
+}
+
 const MAX_FACT_LENGTH = 2_000;
 const MAX_REUSABLE_ANSWERS = 20;
 const MAX_REUSABLE_ANSWER_LENGTH = 4_000;
