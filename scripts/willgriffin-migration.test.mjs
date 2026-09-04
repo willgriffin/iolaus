@@ -206,6 +206,7 @@ class MemoryMigrationStore {
     this.ledgerInitialized = false;
     this.commits = 0;
     this.reconciliationReports = new Map();
+    this.expectedBaselineCounts = {};
   }
 
   async assertCompatible() {}
@@ -254,6 +255,14 @@ class MemoryMigrationStore {
     if (!row) return null;
     return Object.fromEntries(
       tableDefinition.columns.map((field) => [field.name, row[field.name]]),
+    );
+  }
+
+  async listTargetRows(tableDefinition) {
+    return [...(this.rows.get(tableDefinition.name)?.values() || [])].map((row) =>
+      Object.fromEntries(
+        tableDefinition.columns.map((field) => [field.name, row[field.name]]),
+      ),
     );
   }
 
@@ -999,6 +1008,71 @@ test('stable-ID updates remain reconciled across retries', async () => {
     JSON.stringify(retry.reconciliation.collisions),
     /achievement-1/,
   );
+});
+
+test('target checksums include classified bootstrap rows and reject unexplained extras', async () => {
+  const achievements = table('achievements', [column('id'), column('title')]);
+  const sourceContract = [achievements];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['achievements', [{ id: 'source-row', title: 'Source' }]],
+    ]),
+  });
+  const unexpected = new MemoryMigrationStore({
+    achievements: [
+      { id: 'source-row', title: 'Source' },
+      { id: 'unexpected-row', title: 'Unexpected' },
+    ],
+  });
+  unexpected.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
+  unexpected.rowLedger.set(`${bundle.runId}:bootstrap:sentinel`, {
+    action: 'insert',
+  });
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store: unexpected,
+    }),
+    /unexplained rows/,
+  );
+
+  const bootstrapBundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([['achievements', []]]),
+  });
+  const classified = new MemoryMigrationStore({
+    achievements: [{ id: 'bootstrap-row', title: 'Bootstrap' }],
+  });
+  classified.expectedBaselineCounts = { achievements: 1 };
+  classified.runs.set(bootstrapBundle.runId, {
+    sourceFingerprint: bootstrapBundle.sourceFingerprint,
+    sourceSchemaFingerprint: bootstrapBundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bootstrapBundle.targetSchemaFingerprint,
+    status: 'running',
+  });
+  classified.rowLedger.set(`${bootstrapBundle.runId}:bootstrap:sentinel`, {
+    action: 'insert',
+  });
+  const report = await importMigrationBundle({
+    bundle: bootstrapBundle,
+    sourceContract,
+    targetContract,
+    store: classified,
+  });
+  assert.equal(report.reconciliation.tables[0].retainedTargetRows, 1);
+  assert.equal(report.reconciliation.tables[0].targetRowCount, 1);
+  assert.equal(report.reconciliation.tables[0].targetChecksum.length, 64);
 });
 
 test('PostgreSQL batch failures do not expose bound private values', async () => {

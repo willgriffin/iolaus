@@ -291,10 +291,13 @@ test('stable-ID collisions use hashed selectors and remain deterministic', () =>
 });
 
 test('asset reconciliation distinguishes missing bytes and checksum mismatch', () => {
+  const a = 'a'.repeat(64);
+  const b = 'b'.repeat(64);
+  const c = 'c'.repeat(64);
   const assets = [
-    { id: 'asset-b', sourceChecksum: 'a', targetChecksum: 'b' },
-    { id: 'asset-a', sourceChecksum: 'a', targetChecksum: null },
-    { id: 'asset-c', sourceChecksum: 'c', targetChecksum: 'c' },
+    { id: 'asset-b', sourceChecksum: a, targetChecksum: b },
+    { id: 'asset-a', sourceChecksum: a, targetChecksum: null },
+    { id: 'asset-c', sourceChecksum: c, targetChecksum: c },
   ];
   const first = reconcileAssetInventory({ runId: 'run', assets });
   const second = reconcileAssetInventory({
@@ -312,6 +315,89 @@ test('asset reconciliation distinguishes missing bytes and checksum mismatch', (
     ],
   );
   assert.doesNotMatch(JSON.stringify(first), /asset-[abc]/);
+});
+
+test('asset digests bind hashed identity and canonical content checksums', () => {
+  const first = reconcileAssetInventory({
+    runId: 'run',
+    assets: [
+      {
+        id: 'private-asset',
+        sourceChecksum: 'a'.repeat(64),
+        targetChecksum: 'a'.repeat(64),
+      },
+    ],
+  });
+  const changed = reconcileAssetInventory({
+    runId: 'run',
+    assets: [
+      {
+        id: 'private-asset',
+        sourceChecksum: 'b'.repeat(64),
+        targetChecksum: 'b'.repeat(64),
+      },
+    ],
+  });
+  const invalid = reconcileAssetInventory({
+    runId: 'run',
+    assets: [
+      {
+        id: 'private-asset',
+        sourceChecksum: 'not-a-checksum',
+        targetChecksum: 'b'.repeat(64),
+      },
+    ],
+  });
+
+  assert.notEqual(first.digest, changed.digest);
+  assert.equal(first.inventory[0].sourceChecksum, 'a'.repeat(64));
+  assert.equal(
+    invalid.quarantine[0].reasonCode,
+    RECONCILIATION_REASON_CODES.assetInvalidChecksum,
+  );
+  assert.doesNotMatch(JSON.stringify(invalid), /private-asset|not-a-checksum/);
+});
+
+test('semantic audit principals and tenant ownership are reconciled', () => {
+  const contract = [
+    table('tenants', [column('id', 'UUID')]),
+    table('profiles', [column('id', 'UUID'), column('tenant_id', 'UUID')]),
+    table('users', [column('id', 'UUID'), column('profile_id', 'UUID')]),
+    table('agent_runs', [
+      column('id', 'UUID'),
+      column('actor_profile_id', 'TEXT', { notNull: false }),
+      column('initiated_by_user_id', 'TEXT', { notNull: false }),
+      column('organization_profile_id', 'TEXT', { notNull: false }),
+    ]),
+  ];
+  const { report } = reconcile(contract, {
+    tenants: [],
+    profiles: [{ id: IDS.a, tenant_id: IDS.d }],
+    users: [{ id: IDS.b, profile_id: IDS.a }],
+    agent_runs: [
+      {
+        id: IDS.c,
+        actor_profile_id: IDS.a,
+        initiated_by_user_id: IDS.b,
+        organization_profile_id: IDS.d,
+      },
+    ],
+  });
+
+  assert.ok(
+    report.quarantine.some(
+      (entry) =>
+        entry.table === 'profiles' &&
+        entry.reasonCode === RECONCILIATION_REASON_CODES.missingParent,
+    ),
+  );
+  assert.ok(
+    report.quarantine.some(
+      (entry) =>
+        entry.table === 'agent_runs' &&
+        entry.reasonCode === RECONCILIATION_REASON_CODES.missingParent,
+    ),
+  );
 });
 
 test('reports inventory intentional exclusions and known SMRT upgrade hazards', () => {

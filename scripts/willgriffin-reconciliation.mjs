@@ -4,6 +4,7 @@ export const MIGRATION_RECONCILIATION_SCHEMA_VERSION = 1;
 
 export const RECONCILIATION_REASON_CODES = Object.freeze({
   assetChecksumMismatch: 'ASSET_CHECKSUM_MISMATCH',
+  assetInvalidChecksum: 'ASSET_INVALID_CHECKSUM',
   assetMissing: 'ASSET_MISSING',
   duplicateNaturalKey: 'DUPLICATE_NATURAL_KEY',
   invalidQualifiedType: 'INVALID_QUALIFIED_STI',
@@ -71,7 +72,10 @@ const REFERENCE_OVERRIDES = Object.freeze({
   achievements: { experience_id: 'experiences', project_id: 'projects' },
   agent_runs: {
     application_id: 'applications',
+    actor_profile_id: 'profiles',
+    initiated_by_user_id: 'users',
     opportunity_id: 'opportunities',
+    organization_profile_id: 'profiles',
     source_id: 'sources',
     task_id: 'tasks',
   },
@@ -174,6 +178,7 @@ const REFERENCE_OVERRIDES = Object.freeze({
     reviewed_by_profile_id: 'profiles',
     reviewed_by_user_id: 'users',
     source_id: 'sources',
+    source_intelligence_job_id: '_smrt_jobs',
   },
   people: { company_id: 'companies' },
   project_attachments: { attachment_id: 'attachments', project_id: 'projects' },
@@ -324,6 +329,17 @@ function referenceRules(table, availableTables) {
         required: column.notNull === true,
       });
     }
+  }
+  const tenantColumn = table.columns.find(
+    (column) => column.name === 'tenant_id',
+  );
+  if (table.name !== 'tenants' && tenantColumn && availableTables.has('tenants')) {
+    rules.set('tenant_id', {
+      column: 'tenant_id',
+      parentColumn: 'id',
+      parentTable: 'tenants',
+      required: tenantColumn.notNull === true,
+    });
   }
   for (const [column, target] of Object.entries(
     REFERENCE_OVERRIDES[table.name] || {},
@@ -726,19 +742,33 @@ export function reconcileMigrationRows({
 
 export function reconcileAssetInventory({ runId, assets, status = 'complete' }) {
   const counts = { attempted: 0, verified: 0, rejected: 0 };
+  const inventory = [];
   const quarantine = [];
   for (const asset of [...assets].sort((left, right) =>
     String(left.id).localeCompare(String(right.id)),
   )) {
     counts.attempted += 1;
     const selector = selectorHash(runId, 'assets', asset.id);
-    if (!asset.targetChecksum) {
+    const sourceChecksum = canonicalAssetChecksum(asset.sourceChecksum);
+    const targetChecksum = canonicalAssetChecksum(asset.targetChecksum);
+    inventory.push({
+      recordKeyHash: selector,
+      sourceChecksum,
+      targetChecksum,
+    });
+    if (!sourceChecksum || (asset.targetChecksum && !targetChecksum)) {
+      counts.rejected += 1;
+      quarantine.push({
+        reasonCode: RECONCILIATION_REASON_CODES.assetInvalidChecksum,
+        recordKeyHash: selector,
+      });
+    } else if (!asset.targetChecksum) {
       counts.rejected += 1;
       quarantine.push({
         reasonCode: RECONCILIATION_REASON_CODES.assetMissing,
         recordKeyHash: selector,
       });
-    } else if (asset.sourceChecksum !== asset.targetChecksum) {
+    } else if (sourceChecksum !== targetChecksum) {
       counts.rejected += 1;
       quarantine.push({
         reasonCode: RECONCILIATION_REASON_CODES.assetChecksumMismatch,
@@ -748,8 +778,20 @@ export function reconcileAssetInventory({ runId, assets, status = 'complete' }) 
       counts.verified += 1;
     }
   }
-  const core = { status, counts, quarantine, secretValuesIncluded: false };
+  const core = {
+    status,
+    counts,
+    inventory,
+    quarantine,
+    secretValuesIncluded: false,
+  };
   return { ...core, digest: sha256(stableJson(core)) };
+}
+
+function canonicalAssetChecksum(value) {
+  return /^[0-9a-f]{64}$/iu.test(String(value || ''))
+    ? String(value).toLowerCase()
+    : null;
 }
 
 export function recordStableIdCollision(report, { runId, table, sourceId }) {
@@ -777,6 +819,8 @@ export function finalizeReconciliationReport(report, tableResults, assetReport) 
     return {
       ...table,
       counts,
+      retainedTargetRows: result.retainedTargetRows || 0,
+      targetRowCount: result.targetRowCount ?? counts.imported + counts.updated + counts.skipped,
       targetChecksum: result.targetChecksum || table.acceptedChecksum,
     };
   });

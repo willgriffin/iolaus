@@ -950,6 +950,19 @@ function canonicalTargetRowChecksum(row, columns) {
   );
 }
 
+function canonicalTargetTableChecksum(rows, columns) {
+  return sha256(
+    canonicalJson(
+      [...rows]
+        .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+        .map((row) => [
+          String(row.id),
+          canonicalTargetRowChecksum(row, columns),
+        ]),
+    ),
+  );
+}
+
 /**
  * Import through a persistence adapter. The production adapter below commits
  * each batch and its checkpoint atomically; tests use the same contract in memory.
@@ -1036,15 +1049,12 @@ export async function importMigrationBundle({
       ...row,
       targetValues: transformMigrationRow(table.name, row.values, targetTable),
     }));
-    tableDigests.set(
-      table.name,
-      sha256(
-        canonicalJson(
-          desiredRows.map((row) => [
-            row.sourceId,
-            canonicalTargetRowChecksum(row.targetValues, targetTable.columns),
-          ]),
-        ),
+    const desiredTableChecksum = sha256(
+      canonicalJson(
+        desiredRows.map((row) => [
+          row.sourceId,
+          canonicalTargetRowChecksum(row.targetValues, targetTable.columns),
+        ]),
       ),
     );
     const checkpoint = dryRun
@@ -1110,7 +1120,7 @@ export async function importMigrationBundle({
           cursor: batch.at(-1).sourceId,
           counts: addCounts({ ...prior }, report),
           complete: index + batchSize >= remaining.length,
-          tableChecksum: tableDigests.get(table.name),
+          tableChecksum: desiredTableChecksum,
         });
         await onBatchCommitted?.({ table: table.name });
       }
@@ -1123,7 +1133,7 @@ export async function importMigrationBundle({
         cursor: checkpoint?.cursor || '',
         counts: checkpoint?.counts || emptyCounts(),
         complete: true,
-        tableChecksum: tableDigests.get(table.name),
+        tableChecksum: desiredTableChecksum,
       });
     }
     if (!dryRun) {
@@ -1143,11 +1153,42 @@ export async function importMigrationBundle({
       { ...(checkpoint?.counts || emptyCounts()) },
       report,
     );
+    const persistedRows = await store.listTargetRows(targetTable);
+    const finalRows = dryRun
+      ? [
+          ...new Map([
+            ...persistedRows.map((row) => [String(row.id), row]),
+            ...desiredRows.map((row) => [
+              String(row.sourceId),
+              row.targetValues,
+            ]),
+          ]).values(),
+        ]
+      : persistedRows;
+    const desiredIds = new Set(desiredRows.map((row) => String(row.sourceId)));
+    const retainedTargetRows = finalRows.filter(
+      (row) => !desiredIds.has(String(row.id)),
+    ).length;
+    const baselineCount = store.expectedBaselineCounts?.[table.name] || 0;
+    const expectedRetainedRows = Math.max(
+      0,
+      baselineCount - cumulative.updated - cumulative.skipped,
+    );
+    if (retainedTargetRows !== expectedRetainedRows) {
+      throw new Error(`Completed migration target has unexplained rows in ${table.name}.`);
+    }
+    const targetChecksum = canonicalTargetTableChecksum(
+      finalRows,
+      targetTable.columns,
+    );
+    tableDigests.set(table.name, targetChecksum);
     tableReports.push({
       name: table.name,
       ...report,
       cumulative,
-      targetChecksum: tableDigests.get(table.name),
+      retainedTargetRows,
+      targetRowCount: finalRows.length,
+      targetChecksum,
     });
   }
   if (!dryRun) {
@@ -1165,6 +1206,8 @@ export async function importMigrationBundle({
     tableReports.map((table) => ({
       name: table.name,
       ...table.cumulative,
+      retainedTargetRows: table.retainedTargetRows,
+      targetRowCount: table.targetRowCount,
       targetChecksum: table.targetChecksum,
     })),
   );
@@ -1395,6 +1438,7 @@ function rowFromDatabase(row, columns) {
 export class PostgresMigrationStore {
   constructor(db) {
     this.db = db;
+    this.expectedBaselineCounts = FRESH_TARGET_BASELINE_COUNTS;
   }
 
   async assertCompatible(targetContract) {
@@ -1565,6 +1609,14 @@ export class PostgresMigrationStore {
     return result.rows[0]
       ? rowFromDatabase(result.rows[0], table.columns)
       : null;
+  }
+
+  async listTargetRows(table) {
+    const result = await this.db.query(
+      `SELECT ${table.columns.map((column) => quoteIdentifier(column.name)).join(', ')}
+       FROM ${quoteIdentifier(table.name)} ORDER BY ${quoteIdentifier('id')}`,
+    );
+    return result.rows.map((row) => rowFromDatabase(row, table.columns));
   }
 
   async getReconciliationReport(runId) {
