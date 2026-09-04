@@ -98,5 +98,6 @@ describe('synthetic demo fixture', () => {
     });
     expect(rows.applications[0].applicationUrl).toContain('example.invalid');
     expect(rows.resumeAssets[0].status).toBe('placeholder');
+    expect(rows.opportunities[0].organizationProfileId).toBeFalsy();
   });
 });

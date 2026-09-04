@@ -4,9 +4,15 @@ import { join } from 'node:path';
 import { getTestDatabase } from '@happyvertical/smrt-core';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { CandidateAnswer } from '../objects/CandidateAnswer.js';
 import type { CandidateProfile } from '../objects/CandidateProfile.js';
 import type { ResumeAsset } from '../objects/ResumeAsset.js';
-import { claimResumeAssetAtomically } from './candidate-onboarding.js';
+import {
+  type CandidateOnboardingCollections,
+  claimResumeAssetAtomically,
+  DEFAULT_CANDIDATE_PROFILE_ID,
+  persistCandidateOnboarding,
+} from './candidate-onboarding.js';
 import { getCollection } from './smrt.js';
 
 function requiredId(value: { id?: string | null }): string {
@@ -24,6 +30,17 @@ function isSqliteBusyError(error: unknown): boolean {
   );
 }
 
+function isConcurrentWriteConflict(error: unknown): boolean {
+  return (
+    isSqliteBusyError(error) ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'message' in error &&
+      typeof error.message === 'string' &&
+      /Revision conflict/.test(error.message))
+  );
+}
+
 describe('Candidate onboarding persistence', () => {
   const databases: DatabaseInterface[] = [];
   let directory: string | undefined;
@@ -35,6 +52,101 @@ describe('Candidate onboarding persistence', () => {
     databases.length = 0;
     if (directory) await rm(directory, { recursive: true, force: true });
     directory = undefined;
+  });
+
+  it('converges concurrent first saves on one canonical profile', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'iolaus-onboarding-profile-'));
+    const databasePath = join(directory, 'candidate-onboarding.sqlite');
+    const first = await getDatabase({
+      type: 'sqlite',
+      url: databasePath,
+      cache: false,
+    });
+    databases.push(first);
+    await getTestDatabase({
+      db: first,
+      type: 'sqlite',
+      classes: ['CandidateAnswer', 'CandidateProfile', 'ResumeAsset'],
+    });
+    const second = await getDatabase({
+      type: 'sqlite',
+      url: databasePath,
+      cache: false,
+    });
+    databases.push(second);
+
+    // Initialize SMRT's system tables on both independent handles before the
+    // race. The scenario below is about the application-level profile upsert,
+    // not concurrent framework migration bootstrap.
+    for (const database of [first, second]) {
+      await getCollection<CandidateProfile>('CandidateProfile', {
+        db: database,
+      });
+    }
+
+    const save = async (database: DatabaseInterface, firstName: string) => {
+      return await persistCandidateOnboarding({ firstName }, {
+        candidateAnswers: await getCollection<CandidateAnswer>(
+          'CandidateAnswer',
+          { db: database },
+        ),
+        candidateProfiles: await getCollection<CandidateProfile>(
+          'CandidateProfile',
+          { db: database },
+        ),
+        resumeAssets: await getCollection<ResumeAsset>('ResumeAsset', {
+          db: database,
+        }),
+      } as unknown as CandidateOnboardingCollections);
+    };
+    const retryBusySave = async (
+      database: DatabaseInterface,
+      firstName: string,
+    ) => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          return await save(database, firstName);
+        } catch (error) {
+          if (!isConcurrentWriteConflict(error)) throw error;
+          lastError = error;
+          await new Promise((resolve) =>
+            setTimeout(resolve, 25 * (attempt + 1)),
+          );
+        }
+      }
+      throw lastError;
+    };
+
+    const attempts = await Promise.allSettled([
+      save(first, 'Fictional A'),
+      save(second, 'Fictional B'),
+    ]);
+    const rejected = attempts.filter(
+      (attempt): attempt is PromiseRejectedResult =>
+        attempt.status === 'rejected',
+    );
+    expect(
+      rejected.every((attempt) => isConcurrentWriteConflict(attempt.reason)),
+    ).toBe(true);
+
+    // SQLite may reject simultaneous writers. Retrying those ordinary busy
+    // result must still converge on the same canonical row rather than create
+    // the duplicate that the stable ID and conflict target are preventing.
+    for (const [index, attempt] of attempts.entries()) {
+      if (attempt.status === 'rejected') {
+        await retryBusySave(index === 0 ? first : second, 'Fictional retry');
+      }
+    }
+    const profiles = await getCollection<CandidateProfile>('CandidateProfile', {
+      db: first,
+    });
+    const rows = await profiles.list({
+      limit: 10,
+      where: { profileKey: 'default' },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(DEFAULT_CANDIDATE_PROFILE_ID);
   });
 
   it('atomically assigns a resume across independent SQLite handles, rolls back the loser, and permits owner replay', async () => {

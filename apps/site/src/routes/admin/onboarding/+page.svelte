@@ -43,6 +43,7 @@ const stringList = (value: string | string[] | undefined) =>
     <section>
       <h2>Contact and location</h2>
       <div class="grid two">
+        <label>Display name <input name="name" value={data.profile?.name ?? ''} autocomplete="name" /></label>
         <label>First name <input name="firstName" value={data.profile?.firstName ?? ''} autocomplete="given-name" /></label>
         <label>Last name <input name="lastName" value={data.profile?.lastName ?? ''} autocomplete="family-name" /></label>
         <label>Email <input name="email" type="email" value={data.profile?.email ?? ''} autocomplete="email" /></label>
@@ -98,12 +99,12 @@ const stringList = (value: string | string[] | undefined) =>
       <h2>Voluntary demographics</h2>
       <p>Optional. These answers stay private and are not exposed through general agent reads.</p>
       <div class="grid two">
-        <label>Race or ethnicity <input name="demographicRaceOrEthnicity" /></label>
-        <label>Gender <input name="demographicGender" /></label>
-        <label>Veteran status <input name="demographicVeteranStatus" /></label>
-        <label>Disability status <input name="demographicDisability" /></label>
+        <label>Race or ethnicity <input name="demographicRaceOrEthnicity" value={data.profile?.demographics?.raceOrEthnicity ?? ''} /></label>
+        <label>Gender <input name="demographicGender" value={data.profile?.demographics?.gender ?? ''} /></label>
+        <label>Veteran status <input name="demographicVeteranStatus" value={data.profile?.demographics?.veteranStatus ?? ''} /></label>
+        <label>Disability status <input name="demographicDisability" value={data.profile?.demographics?.disability ?? ''} /></label>
       </div>
-      <label class="checkbox"><input type="checkbox" name="saveVoluntaryDemographics" /> I choose to save these voluntary demographics locally</label>
+      <label class="checkbox"><input type="checkbox" name="saveVoluntaryDemographics" checked={data.profile?.demographicsConsent ?? false} /> I choose to save these voluntary demographics locally</label>
     </section>
 
     <button type="submit">Save private setup</button>

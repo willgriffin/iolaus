@@ -5,6 +5,11 @@ import {
   isCandidateResumeAssetSelectable,
   saveCandidateOnboarding,
 } from '$lib/server/candidate-onboarding.js';
+import {
+  mergeCandidateOnboardingResumeAssets,
+  projectCandidateOnboardingAnswer,
+  projectCandidateOnboardingProfile,
+} from '$lib/server/candidate-onboarding-profile.js';
 import { getCollection } from '$lib/server/smrt.js';
 import type { PageServerLoad } from './$types';
 
@@ -63,26 +68,6 @@ function onboardingInput(form: FormData): CandidateOnboardingInput {
   };
 }
 
-function publicProfile(record: Record<string, unknown> | null) {
-  if (!record) return null;
-  return {
-    email: String(record.email ?? ''),
-    firstName: String(record.firstName ?? ''),
-    githubUrl: String(record.githubUrl ?? ''),
-    lastName: String(record.lastName ?? ''),
-    linkedinUrl: String(record.linkedinUrl ?? ''),
-    location: String(record.location ?? ''),
-    name: String(record.name ?? ''),
-    phone: String(record.phone ?? ''),
-    preferencesJson: String(record.preferencesJson ?? '{}'),
-    resumeAssetId: String(record.resumeAssetId ?? ''),
-    resumeSource: String(record.resumeSource ?? 'not_selected'),
-    summary: String(record.summary ?? ''),
-    title: String(record.title ?? ''),
-    workAuthorization: String(record.workAuthorization ?? ''),
-  };
-}
-
 function recordValue(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
 }
@@ -110,27 +95,31 @@ export const load: PageServerLoad = async () => {
       where: { assetType: 'resume' },
     }),
   ]);
-  const activeProfileId = String(profileRows[0]?.id ?? '');
+  const activeProfile = profileRows[0] ? recordValue(profileRows[0]) : null;
+  const activeProfileId = String(activeProfile?.id ?? '');
+  const selectedResumeAssetId = String(activeProfile?.resumeAssetId ?? '');
+  const selectedResumeAsset = selectedResumeAssetId
+    ? (assetRows.find(
+        (asset) =>
+          String(recordValue(asset).id ?? '') === selectedResumeAssetId,
+      ) ?? (await assets.get(selectedResumeAssetId)))
+    : null;
   return {
-    profile: publicProfile(profileRows[0] ? recordValue(profileRows[0]) : null),
-    reusableAnswers: answerRows.map((item) => {
-      const row = recordValue(item);
-      return {
-        id: String(row.id ?? ''),
-        label: String(row.label ?? ''),
-        labelKey: String(row.labelKey ?? ''),
-        value: String(row.value ?? ''),
-      };
-    }),
-    resumeAssets: assetRows
-      .map(recordValue)
-      .filter((row) => isCandidateResumeAssetSelectable(row, activeProfileId))
-      .map((row) => ({
-        id: String(row.id ?? ''),
-        pdfBasename: String(row.pdfBasename ?? ''),
-        status: String(row.status ?? ''),
-        title: String(row.title ?? ''),
-      })),
+    profile: projectCandidateOnboardingProfile(activeProfile),
+    reusableAnswers: answerRows.map((item) =>
+      projectCandidateOnboardingAnswer(recordValue(item)),
+    ),
+    resumeAssets: mergeCandidateOnboardingResumeAssets(
+      assetRows.map(recordValue),
+      selectedResumeAsset ? recordValue(selectedResumeAsset) : null,
+      activeProfileId,
+      isCandidateResumeAssetSelectable,
+    ).map((row) => ({
+      id: String(row.id ?? ''),
+      pdfBasename: String(row.pdfBasename ?? ''),
+      status: String(row.status ?? ''),
+      title: String(row.title ?? ''),
+    })),
   };
 };
 

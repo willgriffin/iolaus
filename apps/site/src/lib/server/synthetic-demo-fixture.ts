@@ -163,7 +163,6 @@ export async function seedSyntheticDemoFixture(
       externalId: `${FIXTURE_PREFIX}-opportunity`,
       humanReviewStatus: 'reviewed',
       locationNotes: 'Remote (fictional demo)',
-      organizationProfileId: stringValue(profile.record.id),
       postingUrl: 'https://example.invalid/iolaus-demo-posting',
       status: 'recommended',
       title: 'Fictional Principal Engineer — Iolaus Demo',

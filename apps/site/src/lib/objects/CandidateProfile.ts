@@ -2,6 +2,9 @@ import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
 
 @smrt({
   tableName: 'candidate_profiles',
+  // Iolaus is a single-owner application. The canonical onboarding profile is
+  // a singleton even when two first-save requests race.
+  conflictColumns: ['profile_key'],
   // Profile fields are private candidate context. The authenticated onboarding
   // and application services access them directly; broad generated APIs, CLI,
   // MCP, and WebMCP must not expose even a partial profile record.

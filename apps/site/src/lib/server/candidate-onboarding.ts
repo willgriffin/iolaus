@@ -15,6 +15,10 @@ export const candidateFactProvenance = [
   'unresolved_question',
 ] as const;
 
+/** Stable identity makes concurrent first-save upserts converge on one profile. */
+export const DEFAULT_CANDIDATE_PROFILE_ID =
+  '01991a7d-8f74-7c36-a4f9-6d7ac583a39b';
+
 export type CandidateFactProvenance = (typeof candidateFactProvenance)[number];
 
 export interface CandidateFact {
@@ -388,7 +392,7 @@ async function validateResumeAssetSelection(options: {
  * copied to the reusable library; all other onboarding facts remain private
  * profile context and are never silently promoted into later applications.
  */
-async function persistCandidateOnboarding(
+export async function persistCandidateOnboarding(
   input: CandidateOnboardingInput,
   collections: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
@@ -440,6 +444,7 @@ async function persistCandidateOnboarding(
     ? Object.assign(profile, profileValues)
     : await collections.candidateProfiles.create({
         active: true,
+        id: DEFAULT_CANDIDATE_PROFILE_ID,
         ...profileValues,
       });
   const selectedAsset = await selectResumeAsset({

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   candidateFactState,
+  DEFAULT_CANDIDATE_PROFILE_ID,
   isCandidateResumeAssetSelectable,
   saveCandidateOnboarding,
 } from './candidate-onboarding.js';
@@ -12,7 +13,7 @@ function collection(rows: Row[]) {
     create: async (values: Record<string, unknown>) => {
       const row: Row = {
         ...values,
-        id: `row-${rows.length + 1}`,
+        id: String(values.id ?? `row-${rows.length + 1}`),
         save: async () => undefined,
       };
       rows.push(row);
@@ -153,6 +154,11 @@ describe('saveCandidateOnboarding', () => {
       }),
     ]);
     expect(assetRows[0].candidateProfileId).toBe(profileRows[0].id);
+  });
+
+  it('uses one stable identity for the canonical first-run profile', async () => {
+    await saveCandidateOnboarding({ firstName: 'Ada' }, collections());
+    expect(profileRows[0]?.id).toBe(DEFAULT_CANDIDATE_PROFILE_ID);
   });
 
   it('does not store voluntary demographics without explicit consent and is restart-idempotent', async () => {
