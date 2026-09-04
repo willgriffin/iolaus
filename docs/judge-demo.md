@@ -55,7 +55,7 @@ into a shared judging machine.
    It returns the active **Example Ashby board (fictional Iolaus demo)** root
    and durable health from a completed local crawl. Then run
    `job_search_source_crawl_status` with that source or its crawl id. The
-   result has two terminal fictional listings and no network activity occurred.
+   result has three terminal fictional listings and no network activity occurred.
 4. Ask it to browse for “Fictional Principal Engineer” and inspect the result.
    The returned posting is visibly synthetic, uses `example.invalid` URLs, and
    is durably linked to the fictional root source and its completed crawl.
