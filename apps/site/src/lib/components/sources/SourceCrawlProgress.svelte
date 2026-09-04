@@ -12,11 +12,13 @@ import {
 let {
   crawlId,
   onPullAgain = () => undefined,
+  onTerminal = () => undefined,
   onViewOpportunities = () => undefined,
   sourceId,
 }: {
   crawlId: string;
   onPullAgain?: (sourceId: string) => void;
+  onTerminal?: (status: SourceCrawlStatus) => void;
   onViewOpportunities?: (sourceId: string) => void;
   sourceId: string;
 } = $props();
@@ -36,7 +38,8 @@ async function loadStatus(): Promise<SourceCrawlStatus | null> {
   });
   if (!response.ok) throw new Error('status unavailable');
   const payload: unknown = await response.json().catch(() => null);
-  return readCrawlStatusResponse(payload, crawlId);
+  const status = readCrawlStatusResponse(payload, crawlId);
+  return status?.sourceId === sourceId ? status : null;
 }
 
 $effect(() => {
@@ -52,6 +55,7 @@ $effect(() => {
     onStatus: (status) => {
       progress = status;
     },
+    onTerminal,
     onUnavailable: () => {
       feedback = 'We could not refresh pull progress. Try again in a moment.';
     },

@@ -91,6 +91,7 @@ describe('source crawl progress', () => {
 
   it('stops polling on a terminal failure and retains only canonical bounded errors', async () => {
     const onStatus = vi.fn();
+    const onTerminal = vi.fn();
     const schedule = vi.fn();
     const poller = createCrawlStatusPoller({
       load: async () =>
@@ -101,6 +102,7 @@ describe('source crawl progress', () => {
         }),
       onMissing: vi.fn(),
       onStatus,
+      onTerminal,
       onUnavailable: vi.fn(),
       schedule,
     });
@@ -110,6 +112,10 @@ describe('source crawl progress', () => {
     expect(onStatus.mock.calls[0][0].errors).toEqual([
       'A source could not be reached.',
     ]);
+    expect(onTerminal).toHaveBeenCalledOnce();
+    expect(onTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed' }),
+    );
     expect(schedule).not.toHaveBeenCalled();
   });
 

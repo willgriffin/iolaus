@@ -118,6 +118,7 @@ export interface CrawlStatusPollerOptions {
   load: () => Promise<SourceCrawlStatus | null>;
   onMissing: () => void;
   onStatus: (status: SourceCrawlStatus) => void;
+  onTerminal?: (status: SourceCrawlStatus) => void;
   onUnavailable: () => void;
   schedule?: (
     callback: () => void,
@@ -161,6 +162,7 @@ export function createCrawlStatusPoller(options: CrawlStatusPollerOptions) {
       }
       options.onStatus(status);
       if (isTerminalCrawlStatus(status.status)) {
+        options.onTerminal?.(status);
         stop();
         return;
       }
