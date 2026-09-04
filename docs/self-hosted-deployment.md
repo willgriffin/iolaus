@@ -178,6 +178,14 @@ fails closed when neither isolation backend is available.
 This source-only report is explicitly marked `releaseEligible: false` and
 `candidateImageTested: false`. It is a pre-build check, never release evidence.
 
+Pull-request CI also builds the exact checked-out revision without publishing
+it and runs the contract against Docker's immutable local `sha256` image ID.
+That report proves the built image passed the containerized scenarios and is
+uploaded as a secret-free workflow artifact, but remains
+`releaseEligible: false`: a local image ID is not a released repository digest.
+The `--local-image-id` option exists only for that non-release verification and
+rejects tags and mutable references.
+
 Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
 40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
 `pnpm-lock.yaml`.

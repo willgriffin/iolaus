@@ -23,6 +23,7 @@ const defaultEvidencePath = resolve(
 );
 const imagePattern =
   /^ghcr\.io\/willgriffin\/iolaus\/site@sha256:[a-f0-9]{64}$/u;
+const localImageIdPattern = /^sha256:[a-f0-9]{64}$/u;
 const darwinNetworkSandboxProfile =
   '(version 1) (allow default) (deny network-outbound (remote ip))';
 
@@ -167,6 +168,19 @@ export function validateImageReference(value) {
   return value;
 }
 
+export function validateLocalImageId(value) {
+  if (value === undefined) return null;
+  if (!localImageIdPattern.test(value)) {
+    throw new Error('--local-image-id must be an exact sha256 Docker image ID.');
+  }
+  return value;
+}
+
+function validateCandidateReference(value) {
+  if (imagePattern.test(value) || localImageIdPattern.test(value)) return value;
+  throw new Error('Candidate execution requires an immutable image reference.');
+}
+
 export function validateCandidateImageMetadata(
   metadata,
   expectedRevision,
@@ -204,14 +218,15 @@ export function validateCandidateImageMetadata(
 }
 
 function inspectCandidateImage(
-  imageRef,
+  candidateRef,
   expectedRevision,
   expectedLockfileSha256,
+  releaseEligible,
 ) {
   const inspect = (format) => {
     const result = spawnSync(
       'docker',
-      ['image', 'inspect', '--format', format, imageRef],
+      ['image', 'inspect', '--format', format, candidateRef],
       {
         cwd: repositoryRoot,
         encoding: 'utf8',
@@ -229,19 +244,67 @@ function inspectCandidateImage(
       throw new Error('The candidate image returned invalid provenance metadata.');
     }
   };
-  return validateCandidateImageMetadata(
-    {
-      imageRef,
-      labels: inspect('{{json .Config.Labels}}'),
-      repoDigests: inspect('{{json .RepoDigests}}'),
-    },
-    expectedRevision,
-    expectedLockfileSha256,
-  );
+  const labels = inspect('{{json .Config.Labels}}');
+  const provenance = releaseEligible
+    ? validateCandidateImageMetadata(
+        {
+          imageRef: candidateRef,
+          labels,
+          repoDigests: inspect('{{json .RepoDigests}}'),
+        },
+        expectedRevision,
+        expectedLockfileSha256,
+      )
+    : validateLocalCandidateImageMetadata(
+        {
+          actualImageId: inspect('{{json .Id}}'),
+          imageId: candidateRef,
+          labels,
+        },
+        expectedRevision,
+        expectedLockfileSha256,
+      );
+  return {
+    ...provenance,
+    binding: releaseEligible ? 'released-repository-digest' : 'local-image-id',
+  };
 }
 
-export function candidateImageInvocation(imageRef, invocation) {
-  validateImageReference(imageRef);
+export function validateLocalCandidateImageMetadata(
+  metadata,
+  expectedRevision,
+  expectedLockfileSha256,
+) {
+  const imageId = validateLocalImageId(metadata.imageId);
+  if (metadata.actualImageId !== imageId) {
+    throw new Error(
+      'The locally inspected image is not bound to the requested immutable image ID.',
+    );
+  }
+  const labels = metadata.labels;
+  if (!labels || typeof labels !== 'object' || Array.isArray(labels)) {
+    throw new Error(
+      'The local candidate image has no verifiable build provenance labels.',
+    );
+  }
+  const sourceRevision = labels['org.opencontainers.image.revision'];
+  const dependencyLockSha256 =
+    labels['dev.happyvertical.iolaus.pnpm-lock.sha256'];
+  if (sourceRevision !== expectedRevision) {
+    throw new Error(
+      'The local candidate image source revision does not match this checkout.',
+    );
+  }
+  if (dependencyLockSha256 !== expectedLockfileSha256) {
+    throw new Error(
+      'The local candidate image dependency lock digest does not match this checkout.',
+    );
+  }
+  return { dependencyLockSha256, sourceRevision };
+}
+
+export function candidateImageInvocation(candidateRef, invocation) {
+  validateCandidateReference(candidateRef);
   return {
     backend: 'docker-network-none',
     binary: 'docker',
@@ -276,7 +339,7 @@ export function candidateImageInvocation(imageRef, invocation) {
       'NODE_OPTIONS=--require=/app/scripts/deny-outbound-network.cjs',
       '--entrypoint',
       '/usr/bin/env',
-      imageRef,
+      candidateRef,
       ...invocation,
     ],
   };
@@ -569,6 +632,14 @@ async function main() {
   assertCleanRevision();
   const runtime = runtimeVersions();
   const imageRef = validateImageReference(argumentValue('--image-ref', argv));
+  const localImageId = validateLocalImageId(
+    argumentValue('--local-image-id', argv),
+  );
+  if (imageRef && localImageId) {
+    throw new Error('--image-ref and --local-image-id are mutually exclusive.');
+  }
+  const candidateRef = imageRef ?? localImageId;
+  const releaseEligible = Boolean(imageRef);
   const startedAt = new Date().toISOString();
   const revision = gitRevision();
   const expectedLockfileSha256 = createHash('sha256')
@@ -576,12 +647,17 @@ async function main() {
     .digest('hex');
   const sourcePaths = trackedImageSourcePaths();
   const sourceTreeSha256 = sourceFingerprint(repositoryRoot, sourcePaths);
-  let candidateImageProvenance = imageRef
-    ? inspectCandidateImage(imageRef, revision, expectedLockfileSha256)
+  let candidateImageProvenance = candidateRef
+    ? inspectCandidateImage(
+        candidateRef,
+        revision,
+        expectedLockfileSha256,
+        releaseEligible,
+      )
     : null;
-  if (imageRef && candidateImageProvenance) {
+  if (candidateRef && candidateImageProvenance) {
     const imageSourceTreeSha256 = inspectCandidateImageSource(
-      imageRef,
+      candidateRef,
       sourcePaths,
       sourceTreeSha256,
     );
@@ -603,13 +679,13 @@ async function main() {
     const environment = buildScenarioEnvironment(sandboxRoot);
     const reviewedInventory = inventorySnapshot(environment, null);
     checks = scenarios.map((scenario) =>
-      executeScenario(scenario, environment, imageRef),
+      executeScenario(scenario, environment, candidateRef),
     );
-    inventory = imageRef
-      ? inventorySnapshot(environment, imageRef)
+    inventory = candidateRef
+      ? inventorySnapshot(environment, candidateRef)
       : reviewedInventory;
     if (
-      imageRef &&
+      candidateRef &&
       inventory.inventorySha256 !== reviewedInventory.inventorySha256
     ) {
       throw new Error(
@@ -644,13 +720,13 @@ async function main() {
   const evidence = {
     schema: 'iolaus-deployed-parity-contract:v1',
     status: 'passed',
-    scope: imageRef ? 'candidate-image-contract' : 'source-contract',
-    releaseEligible: Boolean(imageRef),
-    candidateImageTested: Boolean(imageRef),
+    scope: candidateRef ? 'candidate-image-contract' : 'source-contract',
+    releaseEligible,
+    candidateImageTested: Boolean(candidateRef),
     revision,
     sourceTreeSha256,
     runtime,
-    candidateImageRef: imageRef,
+    candidateImageRef: candidateRef,
     candidateImageProvenance,
     inventorySha256: inventory.inventorySha256,
     dependencyLockSha256: inventory.dependencyLockSha256,
@@ -663,7 +739,7 @@ async function main() {
     isolation: {
       callerEnvironmentInherited: false,
       backend: isolationBackend,
-      candidateBackend: imageRef ? 'docker-network-none' : null,
+      candidateBackend: candidateRef ? 'docker-network-none' : null,
       outboundNetworkDenied: true,
       scenarioRuntimeProfile: 'local',
       temporaryHome: true,

@@ -13,6 +13,8 @@ import {
   sourceFingerprint,
   validateCandidateImageMetadata,
   validateImageReference,
+  validateLocalCandidateImageMetadata,
+  validateLocalImageId,
 } from './deployed-parity.mjs';
 
 test('fingerprints exact source bytes with path framing', () => {
@@ -51,6 +53,14 @@ test('runs candidate scenarios from the immutable image without networking', () 
   assert.ok(result.args.includes('SMRT_RUNTIME_PROFILE=local'));
   assert.ok(result.args.includes(imageRef));
   assert.deepEqual(result.args.slice(-3), ['node', '--test', 'x']);
+});
+
+test('runs CI candidate scenarios from an immutable local image ID', () => {
+  const imageId = `sha256:${'d'.repeat(64)}`;
+  const result = candidateImageInvocation(imageId, ['node', '--test', 'x']);
+  assert.ok(result.args.includes(imageId));
+  assert.equal(validateLocalImageId(imageId), imageId);
+  assert.throws(() => validateLocalImageId('iolaus:latest'), /exact sha256/u);
 });
 
 test('accepts only the exact released Iolaus image reference', () => {
@@ -109,6 +119,33 @@ test('binds a candidate image digest to source and dependency provenance', () =>
   assert.throws(
     () => validateCandidateImageMetadata(metadata, revision, 'd'.repeat(64)),
     /dependency lock/u,
+  );
+});
+
+test('binds a local candidate image ID to source and dependency provenance', () => {
+  const imageId = `sha256:${'a'.repeat(64)}`;
+  const revision = 'b'.repeat(40);
+  const lockfileSha256 = 'c'.repeat(64);
+  const metadata = {
+    actualImageId: imageId,
+    imageId,
+    labels: {
+      'dev.happyvertical.iolaus.pnpm-lock.sha256': lockfileSha256,
+      'org.opencontainers.image.revision': revision,
+    },
+  };
+  assert.deepEqual(
+    validateLocalCandidateImageMetadata(metadata, revision, lockfileSha256),
+    { dependencyLockSha256: lockfileSha256, sourceRevision: revision },
+  );
+  assert.throws(
+    () =>
+      validateLocalCandidateImageMetadata(
+        { ...metadata, actualImageId: `sha256:${'d'.repeat(64)}` },
+        revision,
+        lockfileSha256,
+      ),
+    /not bound/u,
   );
 });
 
