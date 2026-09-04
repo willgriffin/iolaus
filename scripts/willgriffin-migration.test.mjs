@@ -774,6 +774,70 @@ test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async 
   assert.deepEqual(calls[2].parameters.slice(3, 7), [1, 1, 0, 0]);
 });
 
+test('PostgreSQL target reads normalize values by their logical schema types', async () => {
+  const store = new PostgresMigrationStore({
+    async query() {
+      return {
+        rows: [
+          {
+            id: 'stable-id',
+            count: '9007199254740993',
+            score: '1.5',
+            enabled: 't',
+            metadata: '{"synthetic":true}',
+          },
+        ],
+      };
+    },
+  });
+  assert.deepEqual(
+    await store.getTargetRow(
+      table('typed_rows', [
+        column('id'),
+        column('count', 'INTEGER'),
+        column('score', 'REAL'),
+        column('enabled', 'BOOLEAN'),
+        column('metadata', 'JSON'),
+      ]),
+      'stable-id',
+    ),
+    {
+      id: 'stable-id',
+      count: '9007199254740993',
+      score: 1.5,
+      enabled: true,
+      metadata: { synthetic: true },
+    },
+  );
+});
+
+test('logical target checksums normalize database scalar representations', async () => {
+  const scores = table('achievements', [column('id'), column('score', 'REAL')]);
+  const sourceContract = [scores];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['achievements', [{ id: 'score-1', score: '1.5' }]],
+    ]),
+  });
+  const result = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store: new MemoryMigrationStore({
+      achievements: [{ id: 'score-1', score: 1.5 }],
+    }),
+  });
+  assert.deepEqual(result.counts, {
+    attempted: 1,
+    inserted: 0,
+    updated: 0,
+    skipped: 1,
+  });
+});
+
 test('PostgreSQL batch failures do not expose bound private values', async () => {
   const store = new PostgresMigrationStore({
     async transaction(callback) {

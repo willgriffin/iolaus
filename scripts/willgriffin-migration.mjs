@@ -835,6 +835,17 @@ function reconciliationDigest(tableDigests) {
   );
 }
 
+function canonicalTargetRowChecksum(row, columns) {
+  return canonicalRowChecksum(
+    Object.fromEntries(
+      columns.map((column) => {
+        const value = row[column.name];
+        return [column.name, logicalValueFromDatabase(value, column.type)];
+      }),
+    ),
+  );
+}
+
 /**
  * Import through a persistence adapter. The production adapter below commits
  * each batch and its checkpoint atomically; tests use the same contract in memory.
@@ -890,7 +901,7 @@ export async function importMigrationBundle({
         canonicalJson(
           desiredRows.map((row) => [
             row.sourceId,
-            canonicalRowChecksum(row.targetValues),
+            canonicalTargetRowChecksum(row.targetValues, targetTable.columns),
           ]),
         ),
       ),
@@ -917,8 +928,13 @@ export async function importMigrationBundle({
           targetTable,
           row.sourceId,
         );
-        const targetChecksum = canonicalRowChecksum(row.targetValues);
-        const actualChecksum = actual ? canonicalRowChecksum(actual) : null;
+        const targetChecksum = canonicalTargetRowChecksum(
+          row.targetValues,
+          targetTable.columns,
+        );
+        const actualChecksum = actual
+          ? canonicalTargetRowChecksum(actual, targetTable.columns)
+          : null;
         const action = !actual
           ? 'insert'
           : actualChecksum === targetChecksum
@@ -967,7 +983,8 @@ export async function importMigrationBundle({
         const actual = await store.getTargetRow(targetTable, row.sourceId);
         if (
           !actual ||
-          canonicalRowChecksum(actual) !== canonicalRowChecksum(row.targetValues)
+          canonicalTargetRowChecksum(actual, targetTable.columns) !==
+            canonicalTargetRowChecksum(row.targetValues, targetTable.columns)
         ) {
           throw new Error(`Completed migration target drifted in ${table.name}.`);
         }
@@ -1150,8 +1167,34 @@ export async function exportPredecessorMigration(context) {
   }
 }
 
+function logicalValueFromDatabase(value, type) {
+  if (value == null) return value;
+  if (type === 'INTEGER') return String(value);
+  if (type === 'REAL') {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : value;
+  }
+  if (type === 'BOOLEAN' && typeof value !== 'boolean') {
+    if (['true', 't', '1'].includes(String(value).toLowerCase())) return true;
+    if (['false', 'f', '0'].includes(String(value).toLowerCase())) return false;
+  }
+  if (type === 'JSON' && typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
 function rowFromDatabase(row, columns) {
-  return Object.fromEntries(columns.map((column) => [column.name, row[column.name]]));
+  return Object.fromEntries(
+    columns.map((column) => [
+      column.name,
+      logicalValueFromDatabase(row[column.name], column.type),
+    ]),
+  );
 }
 
 export class PostgresMigrationStore {
