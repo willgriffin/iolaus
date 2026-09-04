@@ -203,6 +203,14 @@ function crawlStorageKey(id: string): string {
   return `iolaus.source-crawl-request.${id}`;
 }
 
+function forgetCrawlRequest(id: string): void {
+  try {
+    sessionStorage.removeItem(crawlStorageKey(id));
+  } catch {
+    // Storage is only a retry convenience.
+  }
+}
+
 function crawlRequest(id: string): CrawlRequest {
   const key = crawlStorageKey(id);
   try {
@@ -342,6 +350,11 @@ async function pullNow(source: AdminRecord): Promise<void> {
   }
 }
 
+async function pullAgain(source: AdminRecord): Promise<void> {
+  forgetCrawlRequest(sourceId(source));
+  await pullNow(source);
+}
+
 onMount(() => {
   void refreshHealth();
 });
@@ -459,7 +472,7 @@ onMount(() => {
           <SourceCrawlProgress
             sourceId={id}
             crawlId={queuedCrawl.crawlId}
-            onPullAgain={() => void pullNow(source)}
+            onPullAgain={() => void pullAgain(source)}
             onViewOpportunities={() => {
               window.location.href = '/admin/opportunities';
             }}
