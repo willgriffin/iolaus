@@ -213,13 +213,7 @@ function browserWebMcpRegistration(environment) {
   );
 }
 
-function authenticatedBrowserWebMcp(
-  environment,
-  cookie,
-  applicationId,
-  opportunityId,
-  screenshotPath,
-) {
+function authenticatedBrowserWebMcp(environment, cookie, fixture, screenshotPath) {
   const result = pnpm(
     [
       '--filter',
@@ -232,8 +226,11 @@ function authenticatedBrowserWebMcp(
       capture: true,
       env: {
         ...environment,
-        IOLAUS_DEMO_APPLICATION_ID: applicationId,
-        IOLAUS_DEMO_OPPORTUNITY_ID: opportunityId,
+        IOLAUS_DEMO_APPLICATION_ID: fixture.applicationId,
+        IOLAUS_DEMO_CRAWL_ID: fixture.crawlId,
+        IOLAUS_DEMO_OPPORTUNITY_ID: fixture.opportunityId,
+        IOLAUS_DEMO_SOURCE_ID: fixture.sourceId,
+        IOLAUS_DEMO_TRIAGE_OPPORTUNITY_ID: fixture.triageOpportunityId,
         IOLAUS_DEMO_ORIGIN: `http://127.0.0.1:${environment.PORT}`,
         IOLAUS_DEMO_SCREENSHOT: screenshotPath,
         IOLAUS_DEMO_SESSION_COOKIE: cookie,
@@ -308,8 +305,7 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
   const webmcp = authenticatedBrowserWebMcp(
     environment,
     cookie,
-    fixture.applicationId,
-    fixture.opportunityId,
+    fixture,
     screenshotPath,
   );
   const names = Array.isArray(webmcp.toolNames)
@@ -317,6 +313,10 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
     : [];
   for (const required of [
     'job_search_browse_opportunities',
+    'job_search_list_source_health',
+    'job_search_source_crawl_status',
+    'job_search_next_triage_candidate',
+    'job_search_record_decision',
     'job_search_inspect_opportunity',
     'job_search_inspect_application',
   ]) {
@@ -342,6 +342,35 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
   }
   if (!serializedInspect.includes(fixture.applicationId)) {
     throw new Error('The deterministic application was not returned by inspect.');
+  }
+  const sourceHealth = JSON.stringify(webmcp.sourceHealth);
+  const crawlStatus = JSON.stringify(webmcp.crawlStatus);
+  if (!sourceHealth.includes(fixture.sourceId) || !sourceHealth.includes('ashby')) {
+    throw new Error('Browser WebMCP did not expose the fictional provider health.');
+  }
+  if (
+    !crawlStatus.includes(fixture.crawlId) ||
+    !crawlStatus.includes(fixture.sourceId) ||
+    !crawlStatus.includes('completed')
+  ) {
+    throw new Error('Browser WebMCP did not expose the terminal fictional crawl.');
+  }
+  if (webmcp.triage?.candidate?.id !== fixture.triageOpportunityId) {
+    throw new Error('Browser WebMCP did not return the fictional triage candidate.');
+  }
+  if (!JSON.stringify(webmcp.triageInspection).includes(fixture.triageOpportunityId)) {
+    throw new Error('Browser WebMCP did not inspect the triage candidate.');
+  }
+  const persistedTriage = JSON.stringify(webmcp.persistedTriage);
+  if (
+    !persistedTriage.includes('Fictional demo review note') ||
+    !JSON.stringify(webmcp.decision).includes('maybe') ||
+    webmcp.advancedTriage?.candidate !== null
+  ) {
+    throw new Error('Browser WebMCP did not persist and advance the local triage decision.');
+  }
+  if (webmcp.triageModalVisible !== true) {
+    throw new Error('The authenticated browser did not open the existing triage modal.');
   }
   if (inspect?.application?.status !== 'awaiting_user') {
     throw new Error('Application inspection did not expose the human approval boundary.');
@@ -370,9 +399,13 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
     approvalBoundary: 'awaiting_user; no approval or submission tool exposed',
     authenticatedCommandCenter: true,
     browserToolNames,
+    crawlId: fixture.crawlId,
     opportunityId: fixture.opportunityId,
     privateCandidateDataExposed: false,
     screenshotPath: webmcp.screenshotPath,
+    sourceId: fixture.sourceId,
+    triageDecisionPersisted: true,
+    triageModalVisible: true,
   };
 }
 

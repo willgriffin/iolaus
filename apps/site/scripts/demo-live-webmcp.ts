@@ -5,9 +5,21 @@ import { chromium } from 'playwright-core';
 const origin = process.env.IOLAUS_DEMO_ORIGIN;
 const cookie = process.env.IOLAUS_DEMO_SESSION_COOKIE;
 const applicationId = process.env.IOLAUS_DEMO_APPLICATION_ID;
+const crawlId = process.env.IOLAUS_DEMO_CRAWL_ID;
 const opportunityId = process.env.IOLAUS_DEMO_OPPORTUNITY_ID;
 const screenshotPath = process.env.IOLAUS_DEMO_SCREENSHOT;
-if (!origin || !cookie || !applicationId || !opportunityId || !screenshotPath) {
+const sourceId = process.env.IOLAUS_DEMO_SOURCE_ID;
+const triageOpportunityId = process.env.IOLAUS_DEMO_TRIAGE_OPPORTUNITY_ID;
+if (
+  !origin ||
+  !cookie ||
+  !applicationId ||
+  !crawlId ||
+  !opportunityId ||
+  !screenshotPath ||
+  !sourceId ||
+  !triageOpportunityId
+) {
   throw new Error('The authenticated demo WebMCP inputs are incomplete.');
 }
 
@@ -74,7 +86,13 @@ try {
         }
       ).__iolausRegisteredWebMcpTools?.length,
   );
-  const result = await page.evaluate(async ({ applicationId, opportunityId }) => {
+  const result = await page.evaluate(async ({
+    applicationId,
+    crawlId,
+    opportunityId,
+    sourceId,
+    triageOpportunityId,
+  }) => {
     const tools = (
       globalThis as typeof globalThis & {
         __iolausRegisteredWebMcpTools: Array<{
@@ -92,9 +110,39 @@ try {
     const prepareTool = tools.find(
       (tool) => tool.name === 'job_search_open_application',
     );
-    if (!browseTool || !applicationTool || !prepareTool) {
+    const sourceHealthTool = tools.find(
+      (tool) => tool.name === 'job_search_list_source_health',
+    );
+    const crawlStatusTool = tools.find(
+      (tool) => tool.name === 'job_search_source_crawl_status',
+    );
+    const nextTriageTool = tools.find(
+      (tool) => tool.name === 'job_search_next_triage_candidate',
+    );
+    const inspectTool = tools.find(
+      (tool) => tool.name === 'job_search_inspect_opportunity',
+    );
+    const decisionTool = tools.find(
+      (tool) => tool.name === 'job_search_record_decision',
+    );
+    if (
+      !browseTool ||
+      !applicationTool ||
+      !prepareTool ||
+      !sourceHealthTool ||
+      !crawlStatusTool ||
+      !nextTriageTool ||
+      !inspectTool ||
+      !decisionTool
+    ) {
       throw new Error('The rendered page omitted required job-search tools.');
     }
+    const sourceHealth = JSON.parse(
+      await sourceHealthTool.execute({ limit: 5, query: 'fictional' }),
+    ) as Record<string, unknown>;
+    const crawlStatus = JSON.parse(
+      await crawlStatusTool.execute({ crawlId, sourceId }),
+    ) as Record<string, unknown>;
     const browse = JSON.parse(
       await browseTool.execute({
         limit: 5,
@@ -110,17 +158,55 @@ try {
     const application = JSON.parse(
       await applicationTool.execute({ applicationId }),
     ) as Record<string, unknown>;
+    const triage = JSON.parse(
+      await nextTriageTool.execute({ query: 'Fictional Staff Engineer' }),
+    ) as Record<string, unknown>;
+    const triageInspection = JSON.parse(
+      await inspectTool.execute({ opportunityId: triageOpportunityId }),
+    ) as Record<string, unknown>;
+    const reviewNote =
+      'Fictional demo review note: keep this local and ask the user before applying.';
+    const decision = JSON.parse(
+      await decisionTool.execute({
+        decision: 'maybe',
+        opportunityId: triageOpportunityId,
+        reason: reviewNote,
+      }),
+    ) as Record<string, unknown>;
+    const persistedTriage = JSON.parse(
+      await inspectTool.execute({ opportunityId: triageOpportunityId }),
+    ) as Record<string, unknown>;
+    const advancedTriage = JSON.parse(
+      await nextTriageTool.execute({ query: 'Fictional Staff Engineer' }),
+    ) as Record<string, unknown>;
     return {
       application,
       browse,
+      crawlStatus,
+      decision,
       preparation,
+      persistedTriage,
       schema: 'iolaus-demo-live-webmcp:v1',
+      sourceHealth,
       toolNames: tools.map((tool) => tool.name),
+      triage,
+      triageInspection,
+      advancedTriage,
     };
-  }, { applicationId, opportunityId });
+  }, {
+    applicationId,
+    crawlId,
+    opportunityId,
+    sourceId,
+    triageOpportunityId,
+  });
+  await page.goto(new URL('/admin/opportunities?triage=1', origin).toString(), {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.waitForSelector('dialog[aria-label="Triage opportunities"][open]');
   mkdirSync(dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath });
-  console.log(JSON.stringify({ ...result, screenshotPath }));
+  console.log(JSON.stringify({ ...result, screenshotPath, triageModalVisible: true }));
 } finally {
   await browser.close();
 }

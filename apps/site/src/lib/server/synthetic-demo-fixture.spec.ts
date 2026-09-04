@@ -47,6 +47,9 @@ describe('synthetic demo fixture', () => {
         'decisions',
         'opportunities',
         'resumeAssets',
+        'sourceCrawlItems',
+        'sourceCrawls',
+        'sources',
         'tasks',
       ].map((name) => [name, []]),
     );
@@ -91,13 +94,45 @@ describe('synthetic demo fixture', () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     for (const [name, records] of Object.entries(rows)) {
-      expect(records, name).toHaveLength(1);
+      expect(records, name).toHaveLength(
+        ['opportunities', 'sourceCrawlItems'].includes(name) ? 2 : 1,
+      );
     }
+    expect(rows.sources[0]).toMatchObject({
+      isActive: true,
+      name: expect.stringContaining('fictional'),
+      provider: 'ashby',
+      sourceRole: 'root',
+      url: 'https://example.invalid/iolaus-demo-ashby',
+    });
+    expect(rows.sourceCrawls[0]).toMatchObject({
+      sourceId: rows.sources[0].id,
+      status: 'completed',
+      terminalCount: 2,
+    });
+    expect(rows.sourceCrawlItems).toHaveLength(2);
+    expect(rows.sourceCrawlItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          opportunityId: rows.opportunities[0].id,
+          sourceCrawlId: rows.sourceCrawls[0].id,
+        }),
+        expect.objectContaining({
+          opportunityId: rows.opportunities[1].id,
+          sourceCrawlId: rows.sourceCrawls[0].id,
+        }),
+      ]),
+    );
     expect(rows.opportunities[0]).toMatchObject({
       descriptionRaw: expect.stringContaining('Fictional'),
       postingUrl: expect.stringContaining('example.invalid'),
+      sourceId: rows.sources[0].id,
     });
-    expect(rows.applications[0].applicationUrl).toContain('example.invalid');
+    expect(rows.applications[0]).toMatchObject({
+      applicationUrl: expect.stringContaining('example.invalid'),
+      sourceCrawlId: rows.sourceCrawls[0].id,
+      sourceCrawlItemId: rows.sourceCrawlItems[0].id,
+    });
     expect(rows.candidateAnswers[0]).toMatchObject({
       active: true,
       profileKey: 'iolaus-demo-fictional-candidate',
