@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -393,37 +393,132 @@ function trackedImageSourcePaths() {
     });
 }
 
-function inspectCandidateImageSource(imageRef, paths, expectedSha256) {
-  const program = [
-    "import { sourceFingerprint } from './scripts/deployed-parity.mjs';",
-    "let input = '';",
-    "for await (const chunk of process.stdin) input += chunk;",
-    "console.log(sourceFingerprint('/app', JSON.parse(input)));",
-  ].join(' ');
-  const invocation = candidateImageInvocation(imageRef, [
-    'node',
-    '--input-type=module',
-    '--eval',
-    program,
-  ]);
-  const result = spawnSync(invocation.binary, invocation.args, {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    env: process.env,
-    input: JSON.stringify(paths),
-    stdio: ['pipe', 'pipe', 'ignore'],
+function childExit(child) {
+  return new Promise((accept, reject) => {
+    child.once('error', reject);
+    child.once('close', (status) =>
+      status === 0
+        ? accept()
+        : reject(new Error(`Child process exited with status ${status ?? 1}.`)),
+    );
   });
-  const actualSha256 = result.stdout.trim();
+}
+
+async function inspectCandidateImageFilesystem(
+  candidateRef,
+  paths,
+  expectedSha256,
+  expectedDependencies,
+) {
+  const extractionRoot = mkdtempSync(
+    resolve(tmpdir(), 'iolaus-candidate-filesystem-'),
+  );
+  const manifestPath = resolve(extractionRoot, 'source-paths');
+  const created = spawnSync(
+    'docker',
+    ['create', '--network', 'none', '--entrypoint', '/bin/true', candidateRef],
+    {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    },
+  );
+  const containerId = created.stdout.trim();
+  if (created.error || created.status !== 0 || !/^[a-f0-9]{64}$/u.test(containerId)) {
+    rmSync(extractionRoot, { force: true, recursive: true });
+    throw new Error('The immutable candidate filesystem could not be inspected.');
+  }
+  try {
+    writeFileSync(
+      manifestPath,
+      Buffer.from(`${paths.map((path) => `app/${path}`).join('\0')}\0`),
+      { mode: 0o600 },
+    );
+    const exporter = spawn('docker', ['export', containerId], {
+      cwd: repositoryRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const extractor = spawn(
+      'tar',
+      [
+        '--null',
+        '-x',
+        '-f',
+        '-',
+        '-C',
+        extractionRoot,
+        '-T',
+        manifestPath,
+      ],
+      { cwd: repositoryRoot, stdio: ['pipe', 'ignore', 'ignore'] },
+    );
+    exporter.stdout.pipe(extractor.stdin);
+    await Promise.all([childExit(exporter), childExit(extractor)]);
+    const sourceTreeSha256 = sourceFingerprint(
+      resolve(extractionRoot, 'app'),
+      paths,
+    );
+    if (sourceTreeSha256 !== expectedSha256) {
+      throw new Error(
+        'The candidate image source content does not match the reviewed Git tree.',
+      );
+    }
+
+    const installedDependencies = {};
+    for (const name of Object.keys(expectedDependencies).sort()) {
+      const packagePath = resolve(
+        extractionRoot,
+        'dependencies',
+        name.replaceAll('/', '__'),
+      );
+      mkdirSync(dirname(packagePath), { recursive: true, mode: 0o700 });
+      const copied = spawnSync(
+        'docker',
+        [
+          'cp',
+          '-L',
+          `${containerId}:/app/node_modules/${name}/package.json`,
+          packagePath,
+        ],
+        { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] },
+      );
+      if (copied.error || copied.status !== 0) {
+        throw new Error(
+          'The candidate image installed dependency inventory could not be inspected.',
+        );
+      }
+      const metadata = JSON.parse(readFileSync(packagePath, 'utf8'));
+      installedDependencies[name] = metadata.version;
+    }
+    validateInstalledSmrtDependencies(
+      installedDependencies,
+      expectedDependencies,
+    );
+    return { installedDependencies, sourceTreeSha256 };
+  } finally {
+    spawnSync('docker', ['rm', '--force', containerId], {
+      cwd: repositoryRoot,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    rmSync(extractionRoot, { force: true, recursive: true });
+  }
+}
+
+export function validateInstalledSmrtDependencies(actual, expected) {
+  const normalize = (dependencies) =>
+    Object.fromEntries(
+      Object.entries(dependencies).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
   if (
-    result.error ||
-    result.status !== 0 ||
-    actualSha256 !== expectedSha256
+    JSON.stringify(normalize(actual)) !== JSON.stringify(normalize(expected))
   ) {
     throw new Error(
-      'The candidate image source content does not match the reviewed Git tree.',
+      'The candidate image installed s-m-r-t dependencies do not match the reviewed declarations.',
     );
   }
-  return actualSha256;
+  return actual;
 }
 
 export function isolatedInvocation(binary, args, platform = process.platform) {
@@ -655,17 +750,6 @@ async function main() {
         releaseEligible,
       )
     : null;
-  if (candidateRef && candidateImageProvenance) {
-    const imageSourceTreeSha256 = inspectCandidateImageSource(
-      candidateRef,
-      sourcePaths,
-      sourceTreeSha256,
-    );
-    candidateImageProvenance = {
-      ...candidateImageProvenance,
-      sourceTreeSha256: imageSourceTreeSha256,
-    };
-  }
   const sandboxBase = resolve(
     process.env.HOME || tmpdir(),
     '.cache/iolaus-parity-contract',
@@ -678,6 +762,19 @@ async function main() {
   try {
     const environment = buildScenarioEnvironment(sandboxRoot);
     const reviewedInventory = inventorySnapshot(environment, null);
+    if (candidateRef && candidateImageProvenance) {
+      const inspectedFilesystem = await inspectCandidateImageFilesystem(
+        candidateRef,
+        sourcePaths,
+        sourceTreeSha256,
+        reviewedInventory.smrtDependencies,
+      );
+      candidateImageProvenance = {
+        ...candidateImageProvenance,
+        sourceTreeSha256: inspectedFilesystem.sourceTreeSha256,
+        installedSmrtDependencies: inspectedFilesystem.installedDependencies,
+      };
+    }
     checks = scenarios.map((scenario) =>
       executeScenario(scenario, environment, candidateRef),
     );

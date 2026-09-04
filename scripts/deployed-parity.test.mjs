@@ -11,6 +11,7 @@ import {
   invalidateEvidence,
   isolatedInvocation,
   sourceFingerprint,
+  validateInstalledSmrtDependencies,
   validateCandidateImageMetadata,
   validateImageReference,
   validateLocalCandidateImageMetadata,
@@ -146,6 +147,22 @@ test('binds a local candidate image ID to source and dependency provenance', () 
         lockfileSha256,
       ),
     /not bound/u,
+  );
+});
+
+test('compares independently inspected installed s-m-r-t dependencies', () => {
+  const expected = {
+    '@happyvertical/smrt-core': '0.45.0',
+    '@happyvertical/smrt-web': '0.45.0',
+  };
+  assert.deepEqual(validateInstalledSmrtDependencies(expected, expected), expected);
+  assert.throws(
+    () =>
+      validateInstalledSmrtDependencies(
+        { ...expected, '@happyvertical/smrt-web': '0.44.0' },
+        expected,
+      ),
+    /do not match/u,
   );
 });
 
