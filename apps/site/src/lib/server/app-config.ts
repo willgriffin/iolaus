@@ -141,7 +141,8 @@ function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
       url.username ||
       url.password ||
       url.search ||
-      url.hash
+      url.hash ||
+      (url.pathname !== '' && url.pathname !== '/')
     ) {
       return null;
     }

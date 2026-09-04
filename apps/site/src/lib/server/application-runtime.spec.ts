@@ -19,7 +19,10 @@ describe('validateHostedDatabaseUrl', () => {
       /require a PostgreSQL DATABASE_URL/u,
     );
     expect(
-      validateHostedDatabaseUrl('postgresql://db.example.com/career_hub'),
-    ).toBe('postgresql://db.example.com/career_hub');
+      validateHostedDatabaseUrl('postgresql://db.example.com/iolaus_release'),
+    ).toBe('postgresql://db.example.com/iolaus_release');
+    expect(() =>
+      validateHostedDatabaseUrl('postgresql://db.example.com/shared_career'),
+    ).toThrow(/operator-unique PostgreSQL database name/u);
   });
 });

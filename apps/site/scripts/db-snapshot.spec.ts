@@ -319,9 +319,12 @@ describe('db snapshot helpers', () => {
     process.env.SMRT_APP_ID = 'career-hub';
     process.env.IOLAUS_PUBLIC_URL = 'https://one.example.com';
     const first = defaultBackupRoot();
+    const firstInstallationId = getBackupInstallationId();
+    expect(getBackupInstallationId()).toBe(firstInstallationId);
     process.env.IOLAUS_PUBLIC_URL = 'https://two.example.com';
 
     expect(defaultBackupRoot()).not.toBe(first);
+    expect(getBackupInstallationId()).not.toBe(firstInstallationId);
     expect(defaultBackupRoot()).toMatch(/career-hub-[a-f0-9]{16}\/backups$/u);
   });
 

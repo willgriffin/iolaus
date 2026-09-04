@@ -179,6 +179,18 @@ function installationStateRoot(): string {
 
 export function getBackupInstallationId(): string {
   const config = getAppConfig();
+  if (config.runtimeProfile !== 'local') {
+    const publicOrigin = getConfiguredPublicOrigin();
+    if (!publicOrigin) {
+      throw new Error(
+        'Hosted backup identity requires a valid IOLAUS_PUBLIC_URL.',
+      );
+    }
+    const deploymentIdentity = createHash('sha256')
+      .update(`${config.appId}\0${publicOrigin}`)
+      .digest('hex');
+    return `${config.appId}:${config.runtimeProfile}:${deploymentIdentity}`;
+  }
   const stateRoot = installationStateRoot();
   const identityPath = join(stateRoot, INSTALLATION_ID_FILE);
   mkdirSync(stateRoot, { mode: 0o700, recursive: true });

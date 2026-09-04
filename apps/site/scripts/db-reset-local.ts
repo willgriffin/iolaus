@@ -19,7 +19,7 @@ const databaseUrl =
   typeof flags.databaseUrl === 'string' ? flags.databaseUrl : getDatabaseUrl();
 
 await resetLocalDatabaseFromBackup({
-  allowInstallationRebind: Boolean(flags.allowInstallationRebind),
+  allowInstallationRebind: flags.allowInstallationRebind === true,
   backupPath,
   databaseUrl,
   skipDoctor: Boolean(flags.skipDoctor),

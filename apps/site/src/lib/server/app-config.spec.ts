@@ -32,7 +32,7 @@ describe('Iolaus application configuration', () => {
       IOLAUS_OIDC_CLIENT_ID: 'career-hub',
       IOLAUS_OIDC_REALM: 'career',
       IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com/',
-      IOLAUS_PUBLIC_URL: 'https://career.example.com/path',
+      IOLAUS_PUBLIC_URL: 'https://career.example.com',
       SMRT_APP_ID: 'career-hub',
       SMRT_RUNTIME_PROFILE: 'self-hosted',
     };
@@ -117,6 +117,12 @@ describe('Iolaus application configuration', () => {
       SMRT_RUNTIME_PROFILE: 'self-hosted',
     };
 
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_PUBLIC_URL: 'https://career.example.com/path',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
     expect(
       getAuthConfiguration({
         ...base,

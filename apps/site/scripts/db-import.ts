@@ -19,7 +19,7 @@ const databaseUrl =
   typeof flags.databaseUrl === 'string' ? flags.databaseUrl : getDatabaseUrl();
 
 await restoreBackup({
-  allowInstallationRebind: Boolean(flags.allowInstallationRebind),
+  allowInstallationRebind: flags.allowInstallationRebind === true,
   allowProduction: Boolean(flags.allowProduction),
   backupPath,
   databaseUrl,

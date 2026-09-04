@@ -55,11 +55,14 @@ export function validateHostedDatabaseUrl(databaseUrl: string): string {
   const databaseName = decodeURIComponent(
     url.pathname.replace(/^\/+|\/+$/gu, ''),
   );
+  const expectedNamespace = appId.replaceAll('-', '_');
   if (
     !databaseName ||
     ['iolaus', 'iolaus_dev', 'postgres', 'template0', 'template1'].includes(
       databaseName,
-    )
+    ) ||
+    (databaseName !== expectedNamespace &&
+      !databaseName.startsWith(`${expectedNamespace}_`))
   ) {
     throw new Error(
       'Public deployments must use an operator-unique PostgreSQL database name.',
