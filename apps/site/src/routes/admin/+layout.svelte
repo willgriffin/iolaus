@@ -24,7 +24,7 @@ import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
 import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
 import Sun from '@lucide/svelte/icons/sun';
 import UserRound from '@lucide/svelte/icons/user-round';
-import { setContext, untrack } from 'svelte';
+import { onMount, setContext, untrack } from 'svelte';
 import { page } from '$app/state';
 import {
   ADMIN_DOCK_CONTEXT,
@@ -34,6 +34,11 @@ import {
   buildAdminDockTools,
   routeContextForAdminResource,
 } from '$lib/admin/dock';
+import {
+  ADMIN_NAVIGATION_MEDIA_QUERY,
+  navigationStateForViewport,
+  readStoredNavigationState,
+} from '$lib/admin/shell-navigation';
 import AdminResourceDockPanel from '$lib/components/admin/AdminResourceDockPanel.svelte';
 import AdminTenantNav from '$lib/components/admin/AdminTenantNav.svelte';
 import NavIcon from '$lib/components/admin/NavIcon.svelte';
@@ -56,7 +61,7 @@ const ADMIN_SHELL_CONFIG = {
   left: {
     collapsedSize: '4.25rem',
     expandedSize: '18rem',
-    initial: 'expanded',
+    initial: 'collapsed',
     label: 'Navigation',
     presentation: 'push',
   },
@@ -86,10 +91,31 @@ const themeContext = getThemeContext();
 const theme = $derived<'light' | 'dark'>(
   themeContext.state.isDark ? 'dark' : 'light',
 );
+function initialNavigationState(): 'collapsed' | 'expanded' {
+  if (typeof window === 'undefined') return 'collapsed';
+
+  try {
+    const stored = readStoredNavigationState(
+      window.localStorage.getItem(ADMIN_SHELL_STORAGE_KEY),
+    );
+    if (stored) return stored;
+    return navigationStateForViewport(
+      window.matchMedia(ADMIN_NAVIGATION_MEDIA_QUERY).matches,
+    );
+  } catch {
+    return 'collapsed';
+  }
+}
+
 const adminShell = createShellState({
   config: ADMIN_SHELL_CONFIG,
   storageKey: ADMIN_SHELL_STORAGE_KEY,
 });
+// Keep the responsive default out of the persisted settings delta. ShellState
+// persists the complete delta when any panel changes, so the left setting
+// must be added only by an explicit left-panel action.
+adminShell.panels.left = initialNavigationState();
+let shellReady = $state(false);
 
 const providerUser = $derived(data.user as unknown as SmrtUser | null);
 const routeAdminDockContext = $derived(
@@ -356,18 +382,72 @@ function toggleTheme(): void {
   themeContext.toggleColorScheme();
 }
 
-function toggleTenantPanel(): void {
-  adminShell.togglePanel('left');
-}
-
 function handleTenantNavigate(): void {
   if (
     typeof window !== 'undefined' &&
     window.matchMedia('(max-width: 48rem)').matches
   ) {
-    adminShell.collapsePanel('left');
+    // Closing after mobile navigation is automatic; do not turn it into a
+    // persisted preference that overrides the responsive default later.
+    adminShell.panels.left = 'collapsed';
   }
 }
+
+onMount(() => {
+  const mediaQuery = window.matchMedia(ADMIN_NAVIGATION_MEDIA_QUERY);
+  let disposed = false;
+
+  const applyResponsiveDefault = (): void => {
+    // A setting appears in localStorage only after an explicit user action.
+    // Automatic breakpoint changes stay ephemeral and can follow resizing.
+    let stored = null;
+    try {
+      stored = readStoredNavigationState(
+        window.localStorage.getItem(ADMIN_SHELL_STORAGE_KEY),
+      );
+    } catch {
+      // Storage can be unavailable in privacy-restricted browser contexts.
+    }
+    if (stored) {
+      // A mobile route transition may close the live panel without changing
+      // the user's explicit preference. Restore that preference when the
+      // viewport changes again.
+      adminShell.panels.left = stored;
+      return;
+    }
+    if (adminShell.settings.panels?.left) {
+      adminShell.panels.left = adminShell.settings.panels.left;
+      return;
+    }
+
+    adminShell.panels.left = navigationStateForViewport(mediaQuery.matches);
+  };
+
+  const initializeShell = async (): Promise<void> => {
+    // AdminShell also hydrates a provided state. Wait for that pass and one
+    // macrotask so the responsive default is applied after persisted settings
+    // have had their chance to win.
+    try {
+      await adminShell.hydrate();
+    } catch {
+      // A storage adapter failure must not strand the shell in its hidden
+      // hydration state; the responsive default below remains available.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (disposed) return;
+
+    applyResponsiveDefault();
+    mediaQuery.addEventListener('change', applyResponsiveDefault);
+    shellReady = true;
+  };
+
+  void initializeShell();
+
+  return () => {
+    disposed = true;
+    mediaQuery.removeEventListener('change', applyResponsiveDefault);
+  };
+});
 
 function resourceItem(
   slug: string,
@@ -499,20 +579,6 @@ function currentTenantHref(pathname: string): string {
 {#snippet appBar()}
   <div class="admin-app-bar">
     <div class="admin-app-bar-left">
-      <button
-        class="admin-icon-button"
-        type="button"
-        title={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
-        aria-label={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
-        aria-expanded={adminShell.panels.left === 'expanded'}
-        onclick={toggleTenantPanel}
-      >
-        {#if adminShell.panels.left === 'expanded'}
-          <PanelLeftClose size={16} strokeWidth={2.1} />
-        {:else}
-          <PanelLeftOpen size={16} strokeWidth={2.1} />
-        {/if}
-      </button>
       <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
         <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">
@@ -704,46 +770,52 @@ function currentTenantHref(pathname: string): string {
   </section>
 {/snippet}
 
-<SmrtProvider mode="default" autoEnableSmrt={false} user={providerUser} permissions={data.permissions}>
-  <AdminShell
-    title="Employment Search"
-    subtitle={data.appName}
-    state={adminShell}
-    {appBar}
-    {appPanel}
-    {tenantRail}
-    {tenantPanel}
-    {focusRail}
-    {focusPanel}
-    {systemBar}
-    {systemPanel}
-  >
-    <div class="admin-content">
-      {#if showAdminBreadcrumbs}
-        <nav class="smrt-breadcrumbs" aria-label="Admin breadcrumbs">
-          {#each adminBreadcrumbs as crumb, index}
-            {@const isCurrent = index === adminBreadcrumbs.length - 1}
-            <span class="crumb-item" class:current={isCurrent}>
-              {#if crumb.href && !isCurrent}
-                <a class="crumb-link" href={crumb.href}>{crumb.label}</a>
-              {:else}
-                {crumb.label}
+<div class="admin-shell-visibility" class:admin-shell-hydrating={!shellReady}>
+  <SmrtProvider mode="default" autoEnableSmrt={false} user={providerUser} permissions={data.permissions}>
+    <AdminShell
+      title="Employment Search"
+      subtitle={data.appName}
+      state={adminShell}
+      {appBar}
+      {appPanel}
+      {tenantRail}
+      {tenantPanel}
+      {focusRail}
+      {focusPanel}
+      {systemBar}
+      {systemPanel}
+    >
+      <div class="admin-content">
+        {#if showAdminBreadcrumbs}
+          <nav class="smrt-breadcrumbs" aria-label="Admin breadcrumbs">
+            {#each adminBreadcrumbs as crumb, index}
+              {@const isCurrent = index === adminBreadcrumbs.length - 1}
+              <span class="crumb-item" class:current={isCurrent}>
+                {#if crumb.href && !isCurrent}
+                  <a class="crumb-link" href={crumb.href}>{crumb.label}</a>
+                {:else}
+                  {crumb.label}
+                {/if}
+              </span>
+              {#if !isCurrent}
+                <span class="separator">/</span>
               {/if}
-            </span>
-            {#if !isCurrent}
-              <span class="separator">/</span>
-            {/if}
-          {/each}
-        </nav>
-      {/if}
-      {@render children()}
-    </div>
-  </AdminShell>
-</SmrtProvider>
+            {/each}
+          </nav>
+        {/if}
+        {@render children()}
+      </div>
+    </AdminShell>
+  </SmrtProvider>
+</div>
 
 <style>
   :global(body) {
     background: var(--smrt-color-surface);
+  }
+
+  .admin-shell-hydrating :global(.smrt-admin-shell__edge--left) {
+    visibility: hidden;
   }
 
   :global(.smrt-admin-shell) {
