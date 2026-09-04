@@ -288,6 +288,14 @@ export function canonicalRowChecksum(row) {
   return sha256(canonicalJson(row));
 }
 
+export function parseMigrationBundle(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error('Migration bundle is not valid JSON.');
+  }
+}
+
 function normalizedColumn(column) {
   return {
     name: column.name,
@@ -1435,7 +1443,7 @@ export async function importPredecessorMigration(context) {
   const { sourceContract, targetContract } = loadSupportedMigrationContracts(
     context.sourceRoot,
   );
-  const bundle = JSON.parse(readSensitiveBundle(context.path));
+  const bundle = parseMigrationBundle(readSensitiveBundle(context.path));
   const db = await getDatabase({
     type: 'postgres',
     url: context.env.DATABASE_URL,

@@ -12,6 +12,7 @@ import {
   exportPredecessorMigration,
   importMigrationBundle,
   loadSupportedMigrationContracts,
+  parseMigrationBundle,
   planMigrationTables,
   validateDatabaseSchema,
   validateMigrationBundle,
@@ -642,6 +643,15 @@ test('schema and bundle compatibility fail closed without exposing private value
       [table('tenants', [column('id', 'UUID')])],
       'Iolaus target schema',
     ),
+  );
+});
+
+test('malformed private bundles fail without echoing their contents', () => {
+  assert.throws(
+    () => parseMigrationBundle('{"candidate":"private-marker",broken}'),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      /not valid JSON/.test(error.message),
   );
 });
 
