@@ -49,15 +49,15 @@
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/smrt-cli": "0.44.1",
-    "@happyvertical/smrt-dev-mcp": "0.44.1",
+    "@happyvertical/smrt-cli": "0.45.0",
+    "@happyvertical/smrt-dev-mcp": "0.45.0",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-runtime": "0.44.1",
-    "@happyvertical/smrt-config": "0.44.1",
+    "@happyvertical/smrt-app-runtime": "0.45.0",
+    "@happyvertical/smrt-config": "0.45.0",
     "@happyvertical/sql": "0.89.4"
   },
   "license": "MIT"
