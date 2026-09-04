@@ -16,29 +16,51 @@ mutable/unreleased image rollout from source control.
 
 Create these resources outside this repository, in the target namespace:
 
-- `Secret/iolaus-runtime`: runtime configuration only. It must include a
-  unique, non-default `SMRT_APP_ID`, its matching dedicated PostgreSQL
-  `DATABASE_URL`, `IOLAUS_PUBLIC_URL`, OIDC configuration, S3-compatible asset
-  provider configuration (including `RESUME_FILES_CONFIG_JSON`), and the
-  installed authentication/assets/secrets readiness module selectors required
-  by the selected s-m-r-t providers. Add optional crawler, model, or
-  submit-provider settings only after their independent approval and budgeting
-  checks.
+- `Secret/iolaus-runtime`: runtime configuration only, mounted by web and
+  worker processes. It must include a unique, non-default `SMRT_APP_ID`, its
+  matching dedicated PostgreSQL `DATABASE_URL`, `IOLAUS_PUBLIC_URL`, OIDC
+  configuration, S3-compatible asset provider configuration (including
+  `RESUME_FILES_CONFIG_JSON`), and the installed authentication/assets/secrets
+  readiness module selectors required by the selected s-m-r-t providers. Add
+  optional crawler, model, or submit-provider settings only after their
+  independent approval and budgeting checks.
+- `Secret/iolaus-migration-runtime`: migration-init configuration only. It
+  contains the unique `SMRT_APP_ID`, a migration-owner PostgreSQL
+  `DATABASE_URL`, and only the S3-compatible configuration required by the
+  idempotent resume-asset backfill. It is not mounted by the monitor process
+  and must not contain OIDC, crawler, model, or employer-submission values.
+- `Secret/iolaus-monitor-runtime`: monitor-process configuration only. It
+  contains the same `SMRT_APP_ID` and a distinct, read-only PostgreSQL
+  `DATABASE_URL`; it must not contain OIDC, S3, model, crawler, or submission
+  configuration. The monitor only projects aggregate `_smrt_jobs` and
+  `source_crawls` state, so its role receives `CONNECT`, schema `USAGE`, and
+  `SELECT` on exactly those tables (and required sequence/catalog metadata),
+  with no DDL, DML, ownership, or role-management privilege.
 - `Secret/iolaus-registry`: only when the selected immutable registry image
   requires it.
 
 The self-hosted profile intentionally uses its released default
-`s3-compatible` asset provider. Web, migrations, workers, and monitoring read
-the same operator-owned external object storage configuration from the runtime
-secret. Configure bucket/versioning/encryption/retention and independently
-verify object backup and restore before importing any production asset. Do not
-substitute an `emptyDir`, an image layer, or source-checkout path.
+`s3-compatible` asset provider. Web, migrations, and workers read their
+operator-owned external object storage configuration from their scoped runtime
+secret; the monitor does not receive asset access. Configure
+bucket/versioning/encryption/retention and independently verify object backup
+and restore before importing any production asset. Do not substitute an
+`emptyDir`, an image layer, or source-checkout path.
 
 The secret is consumed with Kubernetes `secretRef` only. Do not add a
 `Secret` manifest, sample token, endpoint, email address, or base64 value to
 this repository. `SMRT_APP_ID` and the PostgreSQL database name must satisfy
 Iolaus's hosted-database guard: the database must be named after that unique
 application identity, not `iolaus`, `iolaus_dev`, or a predecessor database.
+
+The released image runs as UID/GID `10001`; every workload applies
+`runAsNonRoot`, drops Linux capabilities, uses the `RuntimeDefault` seccomp
+profile, and has a read-only root filesystem. Each process receives only an
+ephemeral `/tmp` volume (including Chromium cache paths); workers separately
+receive their heartbeat `emptyDir`. No durable data or assets are writable in
+the image filesystem. Verify these mounts in the isolated rehearsal by running
+the web, a task worker, and the schedule worker under the rendered pod security
+context before enabling a provider fixture.
 
 ## Workload topology
 
@@ -49,10 +71,12 @@ application identity, not `iolaus`, `iolaus_dev`, or a predecessor database.
 | `iolaus-schedule-worker` | Due schedule dispatch; it creates provider-crawl task jobs but does not execute them | Process-local heartbeat probe and 90-second graceful drain |
 | `iolaus-queue-provider-monitor` | Read-only aggregate queue and crawl-watchdog check | CronJob failure plus count-only JSON; independent of web health |
 
-Every web and worker workload runs `db:migrate` in an init container. The
+Every web and worker workload, including the queue/provider monitor, runs
+`db:migrate` in an init container using only `iolaus-migration-runtime`. The
 application's PostgreSQL advisory lock serializes that idempotent migration,
 so parallel rollout cannot create concurrent schema writers. A failed
-migration blocks that workload before it serves traffic or executes jobs.
+migration blocks that workload before it serves traffic, executes jobs, or lets
+the read-only monitor query an incompatible schema.
 
 Worker heartbeat files are held in per-pod `emptyDir` volumes and contain only
 worker kind, time, and a ready state. They are not durable application data.

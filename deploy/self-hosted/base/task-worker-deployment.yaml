@@ -24,6 +24,13 @@ spec:
       # The runner drains work for up to 60 seconds after SIGTERM; leave margin
       # for provider cancellation and the process shutdown sequence.
       terminationGracePeriodSeconds: 90
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       imagePullSecrets:
         - name: iolaus-registry
       initContainers:
@@ -35,10 +42,14 @@ spec:
             - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
           envFrom:
             - secretRef:
-                name: iolaus-runtime
+                name: iolaus-migration-runtime
           env:
             - name: SMRT_RUNTIME_PROFILE
               value: self-hosted
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
           resources:
             requests:
               cpu: 100m
@@ -48,6 +59,12 @@ spec:
               memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: runtime-tmp
+              mountPath: /tmp
       containers:
         - name: task-worker
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
@@ -66,9 +83,15 @@ spec:
               value: /var/run/iolaus/worker-heartbeat.json
             - name: SMRT_WORKER_HEARTBEAT_MAX_AGE_MS
               value: "45000"
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
           volumeMounts:
             - name: worker-health
               mountPath: /var/run/iolaus
+            - name: runtime-tmp
+              mountPath: /tmp
           startupProbe:
             exec:
               command: ["node", "scripts/smrt-worker-heartbeat.mjs", "--check"]
@@ -90,6 +113,11 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
       volumes:
         - name: worker-health
+          emptyDir: {}
+        - name: runtime-tmp
           emptyDir: {}

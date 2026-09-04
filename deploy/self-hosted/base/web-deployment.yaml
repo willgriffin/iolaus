@@ -28,6 +28,13 @@ spec:
       # The migration command is serialized by PostgreSQL's advisory lock. Each
       # independently rolling workload still runs it before its own process.
       terminationGracePeriodSeconds: 90
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       imagePullSecrets:
         - name: iolaus-registry
       initContainers:
@@ -39,10 +46,14 @@ spec:
             - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
           envFrom:
             - secretRef:
-                name: iolaus-runtime
+                name: iolaus-migration-runtime
           env:
             - name: SMRT_RUNTIME_PROFILE
               value: self-hosted
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
           resources:
             requests:
               cpu: 100m
@@ -52,6 +63,12 @@ spec:
               memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: runtime-tmp
+              mountPath: /tmp
       containers:
         - name: web
           image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
@@ -71,6 +88,10 @@ spec:
               value: 0.0.0.0
             - name: PORT
               value: "3000"
+            - name: HOME
+              value: /tmp
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
           lifecycle:
             preStop:
               exec:
@@ -106,3 +127,14 @@ spec:
               memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: runtime-tmp
+              mountPath: /tmp
+      volumes:
+        # Node and Chromium only receive this disposable writable surface;
+        # application assets remain in the configured external object store.
+        - name: runtime-tmp
+          emptyDir: {}

@@ -24,20 +24,65 @@ spec:
             app.kubernetes.io/component: queue-provider-monitor
         spec:
           restartPolicy: Never
+          securityContext:
+            fsGroup: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
           imagePullSecrets:
             - name: iolaus-registry
+          # The monitor must never race a schema rollout. Its database reader
+          # remains separate from this migration writer identity.
+          initContainers:
+            - name: migrate
+              image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
+              command:
+                - /bin/sh
+                - -ec
+                - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+              envFrom:
+                - secretRef:
+                    name: iolaus-migration-runtime
+              env:
+                - name: SMRT_RUNTIME_PROFILE
+                  value: self-hosted
+                - name: HOME
+                  value: /tmp
+                - name: XDG_CACHE_HOME
+                  value: /tmp/.cache
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+              volumeMounts:
+                - name: runtime-tmp
+                  mountPath: /tmp
           containers:
             - name: monitor
               image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
               command: ["pnpm", "--filter", "@willgriffin/iolaus-site", "deployment:monitor"]
               envFrom:
                 - secretRef:
-                    name: iolaus-runtime
+                    name: iolaus-monitor-runtime
               env:
                 - name: NODE_ENV
                   value: production
                 - name: SMRT_RUNTIME_PROFILE
                   value: self-hosted
+                - name: HOME
+                  value: /tmp
+                - name: XDG_CACHE_HOME
+                  value: /tmp/.cache
               resources:
                 requests:
                   cpu: 50m
@@ -47,3 +92,12 @@ spec:
                   memory: 256Mi
               securityContext:
                 allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+              volumeMounts:
+                - name: runtime-tmp
+                  mountPath: /tmp
+          volumes:
+            - name: runtime-tmp
+              emptyDir: {}
