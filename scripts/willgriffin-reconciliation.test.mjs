@@ -252,6 +252,7 @@ test('reports are deterministic, secret-safe, and preserve source/target checksu
   const first = reconcile(contract, input, { strictNativeTypes: true }).report;
   const second = reconcile(contract, input, { strictNativeTypes: true }).report;
   assert.equal(first.reportDigest, second.reportDigest);
+  assert.equal(first.assets.status, 'pending');
   const final = finalizeReconciliationReport(first, [
     {
       name: 'candidate_answers',
@@ -301,6 +302,7 @@ test('asset reconciliation distinguishes missing bytes and checksum mismatch', (
     assets: [...assets].reverse(),
   });
   assert.equal(first.digest, second.digest);
+  assert.equal(first.status, 'complete');
   assert.deepEqual(first.counts, { attempted: 3, verified: 1, rejected: 2 });
   assert.deepEqual(
     first.quarantine.map((entry) => entry.reasonCode),
