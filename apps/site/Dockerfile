@@ -24,8 +24,9 @@ ENV DATABASE_URL=postgresql://iolaus:iolaus@localhost:5432/iolaus_build
 ENV SMRT_RUNTIME_PROFILE=self-hosted
 # The CI workflow sets NODE_OPTIONS for the runner, but that does not cross into
 # the Docker build, so the in-container vite build OOMs on Node's ~2GB default
-# heap. Raise it here to match the workflow.
-ENV NODE_OPTIONS=--max-old-space-size=8192
+# heap. Keep the cap below the self-hosted builder's memory ceiling so the
+# build cannot consume the whole VM and stall its BuildKit control process.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 COPY . .
 RUN pnpm --filter @willgriffin/iolaus-site build
 
