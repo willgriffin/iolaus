@@ -154,3 +154,54 @@ framework migration/change telemetry, transient DataSurface preview and
 idempotency rows, and unreferenced temporary artifacts. `approvedOmissions` is
 empty unless an owner-approved rehearsal decision explicitly changes it; never
 edit a report after generation to hide an omission.
+
+## willgriffin.dev referenced asset migration
+
+After the logical bundle is exported from the verified isolated database
+restore, make a **read-only local copy** of the predecessor asset backup. Do
+not pass a deployment checkout, a database dump directory, a credentials
+directory, or a live storage mount as `--source-assets`. The asset planner
+never scans that directory: it follows only persisted `ResumeAsset`,
+`ResumeVariant`, and `Attachment` file references in the validated logical
+bundle. It deliberately excludes source/provenance fields, crawler raw output,
+credentials, database dumps, source checkouts, dependencies, and every
+unreferenced temporary or legacy file.
+
+The private manifest contains stable record IDs, logical asset paths, sizes,
+and SHA-256 digests. Keep it outside Git with the database bundle. Planning
+records deterministic quarantine reason codes for missing, corrupt, ambiguous,
+or unsafe paths; a quarantined plan is not eligible for import.
+
+```bash
+pnpm migration:willgriffin:assets:plan -- \
+  --bundle /absolute/private/path/migration.json \
+  --source-assets /absolute/private/path/restored-assets \
+  --manifest /absolute/private/path/assets-manifest.json
+```
+
+Import only after the logical import has completed against the isolated target.
+It requires maintenance mode and the target's real self-hosted
+`RESUME_FILES_CONFIG_JSON`; that provider configuration may be S3-compatible
+and belongs solely in the scoped deployment secret. The importer verifies every
+target metadata reference by stable ID before and after copying. It preserves
+safe relative paths, skips only checksum-identical existing objects, refuses to
+overwrite mismatched target objects, and persists a private, `0600` resumable
+journal with deterministic quarantine codes.
+
+```bash
+export SMRT_RUNTIME_PROFILE=self-hosted
+export SMRT_MAINTENANCE_MODE=true
+pnpm migration:willgriffin:assets:import -- \
+  --source-assets /absolute/private/path/restored-assets \
+  --manifest /absolute/private/path/assets-manifest.json
+```
+
+For the selected non-application published resume, the importer copies the
+same verified immutable PDF to `published/resume.pdf` and requires its target
+metadata selection to match. If a legacy source alias exists, it must already
+match that selected PDF. A missing legacy alias is repaired from the selected
+PDF; an ambiguous selection, checksum mismatch, missing file, unsafe path, or
+preexisting mismatched target alias is quarantined and returns a nonzero exit.
+Run the import again after a process restart: it verifies the same manifest,
+makes no writes for checksum-identical assets, rechecks metadata and the alias,
+and emits the same reconciliation digest.
