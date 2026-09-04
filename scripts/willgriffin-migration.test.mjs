@@ -6,6 +6,7 @@ import {
   SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
   SUPPORTED_TARGET_SCHEMA_FINGERPRINT,
   buildMigrationBundle,
+  canonicalBootstrapTableChecksum,
   canonicalRowChecksum,
   contractFingerprint,
   derivePredecessorContract,
@@ -219,8 +220,8 @@ class MemoryMigrationStore {
     }
   }
 
-  async assertFreshTarget(names) {
-    if (names.some((name) => (this.rows.get(name)?.size || 0) > 0)) {
+  async assertFreshTarget(tables) {
+    if (tables.some((table) => (this.rows.get(table.name)?.size || 0) > 0)) {
       throw new Error('Migration requires a freshly initialized target.');
     }
   }
@@ -337,6 +338,14 @@ test('pinned manifests produce the explicitly approved predecessor contract', as
   assert.deepEqual(
     derivePredecessorContract(targetContract).map((entry) => entry.name),
     sourceContract.map((entry) => entry.name),
+  );
+  assert.deepEqual(
+    sourceContract.find((entry) => entry.name === 'profiles').uniqueKeys,
+    [['tenant_id', 'slug', 'context', '_meta_type']],
+  );
+  assert.deepEqual(
+    sourceContract.find((entry) => entry.name === 'fact_contents').uniqueKeys,
+    [['fact_id', 'content_id', 'relationship']],
   );
   const plan = planMigrationTables(sourceContract);
   const position = new Map(plan.map((entry, index) => [entry.name, index]));
@@ -561,6 +570,9 @@ test('dry-run reports changes without creating a ledger or mutating target rows'
     targetContract,
   });
   const store = new MemoryMigrationStore();
+  store.withMigrationLease = async () => {
+    throw new Error('dry-run must not acquire a database lease');
+  };
   const report = await importMigrationBundle({
     bundle,
     sourceContract,
@@ -1107,4 +1119,78 @@ test('PostgreSQL batch failures do not expose bound private values', async () =>
       !String(error.message).includes('private-marker') &&
       /candidate_answers/.test(error.message),
   );
+});
+
+test('PostgreSQL fresh-target validation binds bootstrap identity and contents', async () => {
+  const store = new PostgresMigrationStore({
+    async query() {
+      return { rows: [{ id: 'arbitrary-row' }] };
+    },
+  });
+  await assert.rejects(
+    store.assertFreshTarget([
+      table('candidate_profiles', [column('id')]),
+    ]),
+    /freshly initialized target/,
+  );
+});
+
+test('bootstrap checksums ignore generated ids but bind semantic references', () => {
+  const roles = table('roles', [column('id', 'UUID'), column('slug')]);
+  const grants = table('role_permissions', [
+    column('id', 'UUID'),
+    column('slug'),
+    column('role_id', 'UUID', { referencesTable: 'roles' }),
+  ]);
+  const contracts = new Map([
+    ['roles', roles],
+    ['role_permissions', grants],
+  ]);
+  const checksum = (roleId, grantId, roleSlug) => {
+    const rows = new Map([
+      ['roles', [{ id: roleId, slug: roleSlug }]],
+      [
+        'role_permissions',
+        [{ id: grantId, slug: grantId, role_id: roleId }],
+      ],
+    ]);
+    return canonicalBootstrapTableChecksum(
+      rows.get('role_permissions'),
+      grants,
+      rows,
+      contracts,
+    );
+  };
+  assert.equal(checksum('role-1', 'grant-1', 'owner'), checksum('role-2', 'grant-2', 'owner'));
+  assert.notEqual(
+    checksum('role-1', 'grant-1', 'owner'),
+    checksum('role-2', 'grant-2', 'viewer'),
+  );
+});
+
+test('PostgreSQL finalization locks and rechecks the complete target snapshot', async () => {
+  const statements = [];
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback({
+        async query(sql) {
+          statements.push(sql);
+          if (sql.includes('SELECT')) return { rows: [{ id: 'changed-row' }] };
+          return { rows: [] };
+        },
+      });
+    },
+  });
+  await assert.rejects(
+    store.finalizeRun({
+      runId: 'run',
+      digest: 'a'.repeat(64),
+      report: { quarantine: [], reportDigest: 'b'.repeat(64) },
+      tableContracts: [table('achievements', [column('id')])],
+      expectedChecksums: new Map([['achievements', 'c'.repeat(64)]]),
+    }),
+    /final reconciliation failed/,
+  );
+  assert.ok(statements[0].includes('LOCK TABLE'));
+  assert.ok(!statements.some((sql) => sql.includes("SET status = 'complete'")));
 });

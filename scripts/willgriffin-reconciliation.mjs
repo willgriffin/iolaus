@@ -364,8 +364,12 @@ function referenceRules(table, availableTables) {
 
 function naturalKeys(table) {
   const columnNames = new Set(table.columns.map((column) => column.name));
-  const keys = [];
-  if (columnNames.has('slug') && columnNames.has('context')) {
+  const keys = [...(table.uniqueKeys || [])];
+  if (
+    keys.length === 0 &&
+    columnNames.has('slug') &&
+    columnNames.has('context')
+  ) {
     keys.push(['slug', 'context']);
   }
   for (const key of NATURAL_KEYS[table.name] || []) {
@@ -436,7 +440,7 @@ function quarantineDuplicateKeys({ bundle, contracts, state }) {
       const groups = new Map();
       for (const row of tableBundle.rows) {
         const values = keyColumns.map((column) => row.values[column]);
-        if (values.some((value) => value == null || value === '')) continue;
+        if (values.some((value) => value == null)) continue;
         const key = stableJson(values);
         const rows = groups.get(key) || [];
         rows.push(row);
@@ -444,7 +448,10 @@ function quarantineDuplicateKeys({ bundle, contracts, state }) {
       }
       for (const rows of groups.values()) {
         if (rows.length < 2) continue;
-        const reasonCode = JUNCTION_KEYS[table.name]
+        const junctionKey =
+          JUNCTION_KEYS[table.name] ||
+          keyColumns.filter((column) => column.endsWith('_id')).length >= 2;
+        const reasonCode = junctionKey
           ? RECONCILIATION_REASON_CODES.junctionCardinality
           : RECONCILIATION_REASON_CODES.duplicateNaturalKey;
         for (const row of rows) {
@@ -778,8 +785,12 @@ export function reconcileAssetInventory({ runId, assets, status = 'complete' }) 
       counts.verified += 1;
     }
   }
+  const effectiveStatus =
+    status === 'complete' && counts.rejected > 0
+      ? 'complete-with-rejections'
+      : status;
   const core = {
-    status,
+    status: effectiveStatus,
     counts,
     inventory,
     quarantine,
@@ -840,6 +851,6 @@ export function finalizeReconciliationReport(report, tableResults, assetReport) 
   return {
     ...core,
     reportDigest,
-    operatorSummary: `Migration reconciliation ${reportDigest.slice(0, 12)}: ${counts.attempted} attempted, ${counts.imported} imported, ${counts.updated} updated, ${counts.skipped} skipped, ${counts.rejected} quarantined, ${counts.repaired} repaired; assets ${core.assets.status}.`,
+    operatorSummary: `Migration reconciliation ${reportDigest.slice(0, 12)}: ${counts.attempted} attempted, ${counts.imported} imported, ${counts.updated} updated, ${counts.skipped} skipped, ${counts.rejected} quarantined, ${counts.repaired} repaired; assets ${core.assets.status} (${core.assets.counts.verified} verified, ${core.assets.counts.rejected} quarantined).`,
   };
 }
