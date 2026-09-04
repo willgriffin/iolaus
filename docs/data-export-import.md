@@ -78,6 +78,11 @@ nulled or dropped. The sole automatic relationship repair converts an empty
 nullable reference sentinel to `null`; every such repair has the stable reason
 code `EMPTY_REFERENCE_TO_NULL`.
 
+Uniqueness and junction cardinality come from the exact pinned manifest unique
+indexes, including tenant, STI, relationship-role, and empty-string dimensions;
+the checked-in overrides cover only predecessor semantic relationships that
+the manifest cannot express.
+
 The command's `reconciliation` object is the secret-safe machine report. It
 contains per-table attempted/imported/updated/skipped/rejected/repaired counts,
 source/accepted/target SHA-256 checksums, full target row counts, explicitly
@@ -91,6 +96,16 @@ report and quarantine records are persisted in
 `_iolaus_migration_reconciliation` and `_iolaus_migration_quarantine`; a retry
 reconstructs stable-ID collision evidence from the row ledger so its report
 digest remains deterministic after interruption.
+
+Fresh-target admission verifies both the exact count and canonical semantic
+checksum of every pinned bootstrap table. The checksum ignores generated row
+identifiers and initialization timestamps, but binds all stable field content
+and resolves foreign keys to the referenced row's stable semantic identity, so
+random UUID regeneration cannot mask a changed role/permission relationship.
+Import processes serialize through a database lease. Completion runs in one
+transaction that locks every migrated table against writers, re-reads and
+rechecks every target checksum, persists the reconciliation report, and marks
+the run complete.
 
 SMRT upgrade hazards are explicit in every report: the predecessor domain
 package qualifier rename is handled by table-bound import, persisted framework
@@ -119,8 +134,10 @@ asset section `pending` rather than presenting an empty asset inventory as a
 successful verification. The asset phase replaces that section with a
 `complete` inventory and new report digest after it verifies every referenced
 object. That inventory binds hashed asset selectors to canonical source and
-target SHA-256 values without exposing paths or identifiers; a row-only report
-is not cutover evidence for assets.
+target SHA-256 values without exposing paths or identifiers. Any quarantine
+changes its status to `complete-with-rejections`, and the operator summary
+includes verified and quarantined asset counts. A row-only report is not
+cutover evidence for assets.
 
 Intentional exclusions are always reported: sessions and authentication
 tokens, API/CLI credentials, deployment secrets, live worker/delivery leases,

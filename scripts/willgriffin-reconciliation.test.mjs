@@ -17,6 +17,7 @@ const IDS = Object.freeze({
   b: '00000000-0000-4000-8000-000000000002',
   c: '00000000-0000-4000-8000-000000000003',
   d: '00000000-0000-4000-8000-000000000004',
+  e: '00000000-0000-4000-8000-000000000005',
 });
 
 function column(name, type = 'TEXT', options = {}) {
@@ -117,6 +118,91 @@ test('duplicate natural keys and duplicate junction cardinality quarantine every
     report.quarantine.filter(
       (entry) =>
         entry.reasonCode === RECONCILIATION_REASON_CODES.duplicateNaturalKey,
+    ).length,
+    2,
+  );
+  assert.equal(
+    report.quarantine.filter(
+      (entry) =>
+        entry.reasonCode === RECONCILIATION_REASON_CODES.junctionCardinality,
+    ).length,
+    2,
+  );
+});
+
+test('manifest uniqueness preserves tenant/STI dimensions, empty keys, and package junctions', () => {
+  const profiles = {
+    ...table('profiles', [
+      column('id', 'UUID'),
+      column('tenant_id', 'UUID'),
+      column('slug'),
+      column('context'),
+      column('_meta_type'),
+    ]),
+    uniqueKeys: [['tenant_id', 'slug', 'context', '_meta_type']],
+  };
+  const factContents = {
+    ...table('fact_contents', [
+      column('id', 'UUID'),
+      column('fact_id', 'UUID'),
+      column('content_id', 'UUID'),
+      column('relationship'),
+    ]),
+    uniqueKeys: [['fact_id', 'content_id', 'relationship']],
+  };
+  const contract = [
+    table('tenants', [column('id', 'UUID')]),
+    table('facts', [column('id', 'UUID')]),
+    profiles,
+    factContents,
+  ];
+  const qualified = '@happyvertical/smrt-profiles:Profile';
+  const { acceptedTables, report } = reconcile(contract, {
+    tenants: [{ id: IDS.a }, { id: IDS.b }],
+    facts: [{ id: IDS.a }],
+    profiles: [
+      {
+        id: IDS.c,
+        tenant_id: IDS.a,
+        slug: 'owner',
+        context: '',
+        _meta_type: qualified,
+      },
+      {
+        id: IDS.d,
+        tenant_id: IDS.b,
+        slug: 'owner',
+        context: '',
+        _meta_type: qualified,
+      },
+      {
+        id: IDS.e,
+        tenant_id: IDS.a,
+        slug: 'owner',
+        context: '',
+        _meta_type: qualified,
+      },
+    ],
+    fact_contents: [
+      {
+        id: IDS.b,
+        fact_id: IDS.a,
+        content_id: IDS.c,
+        relationship: 'supports',
+      },
+      {
+        id: IDS.d,
+        fact_id: IDS.a,
+        content_id: IDS.c,
+        relationship: 'supports',
+      },
+    ],
+  });
+
+  assert.equal(acceptedTables.find((entry) => entry.name === 'profiles').rows.length, 1);
+  assert.equal(
+    report.quarantine.filter(
+      (entry) => entry.reasonCode === RECONCILIATION_REASON_CODES.duplicateNaturalKey,
     ).length,
     2,
   );
@@ -305,7 +391,7 @@ test('asset reconciliation distinguishes missing bytes and checksum mismatch', (
     assets: [...assets].reverse(),
   });
   assert.equal(first.digest, second.digest);
-  assert.equal(first.status, 'complete');
+  assert.equal(first.status, 'complete-with-rejections');
   assert.deepEqual(first.counts, { attempted: 3, verified: 1, rejected: 2 });
   assert.deepEqual(
     first.quarantine.map((entry) => entry.reasonCode),

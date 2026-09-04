@@ -30,9 +30,9 @@ export const PREDECESSOR_CONTRACT_VERSION = 1;
 export const TARGET_SMRT_VERSION = '0.45.0';
 export const DEFAULT_MIGRATION_BATCH_SIZE = 100;
 export const SUPPORTED_SOURCE_SCHEMA_FINGERPRINT =
-  'd91fb2395dd94a7ccc56e784677fca9d40cb33695bf73ff7bb78f93c3a1a520f';
+  '86381010c2258a48ce6d36bfda9c70689031ebbdf6da81e4ea5bb4e233ece701';
 export const SUPPORTED_TARGET_SCHEMA_FINGERPRINT =
-  '7fa0f8411af7c33fc3d45aaddd91780f93bad3ef250938ed53549d0c718605ac';
+  '5d5f786a05b28784bf96c9a9f1bd3891960a5817fa0153b8a0920abbdb3855e1';
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
@@ -112,6 +112,24 @@ export const FRESH_TARGET_BASELINE_COUNTS = Object.freeze({
   role_permissions: 1448,
   roles: 4,
   tags: 8,
+});
+
+/** Canonical identities and contents produced by the pinned target migration. */
+export const FRESH_TARGET_BASELINE_CHECKSUMS = Object.freeze({
+  candidate_profiles: '21b2b7037e4e0c5f6fae3b85872e17b4325117a43589ff3ddaf61095a6b5ad5e',
+  opportunity_intelligence_controls:
+    '71031a36317390bc6d9ea8f36dae07cdc3166657ec675e40b18d4f3341e25466',
+  permissions: '74c98a3166ccf1cff0e57780055f42f3070cbb6feb782440beba9e4ff089d709',
+  place_types: '9856d85a59614ab7ea3938c2b66039040d33b85595b9d3ed9cb82c1e0ea9ba80',
+  profile_relationship_types:
+    '73146f7278a27f2f10bb63c6b172fdf97fdfcec8894d137c397f5b0aa13c44bb',
+  profile_types: '681974757ca2261536b830422bd7415865a5f4c819f3c4c39824d0a5b475d46b',
+  resume_profiles: '1e34597ea9351b1638f60a8e57407bf13554f93c777a257ca6af95e665c89cef',
+  resume_tailoring_configs:
+    '6b53b75ad4a994a4282473f2f13301c2a7500ab6fa9d06a3904e348241a746c1',
+  role_permissions: '240ff29dfba143ab64a3aa117d46092f8aeb671e7a6ff1788e2f38ef64e161fd',
+  roles: '49c78f4a4b45bce714171dd7c36f47943ea11d9903ea4065ed629fbdc81185b6',
+  tags: 'e134e5b653d16f06195ecaa5ebe312cb410cdf74b15cab57f9d66e52b5f1b4d7',
 });
 
 export const REQUIRED_PREDECESSOR_MIGRATIONS = Object.freeze([
@@ -354,6 +372,9 @@ function normalizedTable(table) {
     columns: table.columns
       .map(normalizedColumn)
       .sort((left, right) => left.name.localeCompare(right.name)),
+    uniqueKeys: [...(table.uniqueKeys || [])]
+      .map((key) => [...key])
+      .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right))),
   };
 }
 
@@ -393,7 +414,13 @@ function addManifestTables(manifest, tables, options = {}) {
       }),
     );
     if (columns.length === 0) continue;
-    const next = normalizedTable({ name: schema.tableName, columns });
+    const next = normalizedTable({
+      name: schema.tableName,
+      columns,
+      uniqueKeys: (schema.indexes || [])
+        .filter((index) => index.unique === true)
+        .map((index) => index.columns),
+    });
     const previous = tables.get(next.name);
     if (
       previous &&
@@ -476,6 +503,9 @@ export function derivePredecessorContract(targetContract) {
       const targetOnlyColumns = new Set(TARGET_ONLY_COLUMNS[table.name] || []);
       return normalizedTable({
         name: table.name,
+        uniqueKeys: table.uniqueKeys?.filter((key) =>
+          key.every((column) => !targetOnlyColumns.has(column)),
+        ),
         columns: table.columns
           .filter((column) => !targetOnlyColumns.has(column.name))
           .map((column) => ({
@@ -963,6 +993,65 @@ function canonicalTargetTableChecksum(rows, columns) {
   );
 }
 
+function bootstrapReferenceToken(row, table) {
+  if (!row) return null;
+  if (row.slug && row.slug !== row.id) {
+    return sha256(canonicalJson({ context: row.context || '', slug: row.slug }));
+  }
+  return sha256(
+    canonicalJson(
+      Object.fromEntries(
+        table.columns
+          .filter(
+            (column) =>
+              !column.primaryKey &&
+              !column.referencesTable &&
+              column.type !== 'TIMESTAMP' &&
+              column.name !== 'slug',
+          )
+          .map((column) => [column.name, row[column.name]]),
+      ),
+    ),
+  );
+}
+
+export function canonicalBootstrapTableChecksum(
+  rows,
+  table,
+  rowsByTable,
+  tablesByName,
+) {
+  const canonicalRows = rows.map((row) =>
+    Object.fromEntries(
+      table.columns
+        .filter(
+          (column) =>
+            !column.primaryKey &&
+            column.type !== 'TIMESTAMP' &&
+            !(column.name === 'slug' && row.slug === row.id),
+        )
+        .map((column) => {
+          if (!column.referencesTable || row[column.name] == null) {
+            return [column.name, row[column.name]];
+          }
+          const referencedTable = tablesByName.get(column.referencesTable);
+          const referencedRow = rowsByTable
+            .get(column.referencesTable)
+            ?.find((candidate) => candidate.id === row[column.name]);
+          return [
+            column.name,
+            referencedTable
+              ? bootstrapReferenceToken(referencedRow, referencedTable)
+              : null,
+          ];
+        }),
+    ),
+  );
+  return sha256(canonicalJson(canonicalRows.sort((left, right) =>
+    canonicalJson(left).localeCompare(canonicalJson(right)),
+  )));
+}
+
 /**
  * Import through a persistence adapter. The production adapter below commits
  * each batch and its checkpoint atomically; tests use the same contract in memory.
@@ -975,8 +1064,23 @@ export async function importMigrationBundle({
   dryRun = false,
   batchSize = DEFAULT_MIGRATION_BATCH_SIZE,
   onBatchCommitted,
+  _leaseHeld = false,
 }) {
   validateMigrationBundle(bundle, sourceContract, targetContract);
+  if (!dryRun && !_leaseHeld && store.withMigrationLease) {
+    return await store.withMigrationLease(bundle.runId, async () =>
+      importMigrationBundle({
+        bundle,
+        sourceContract,
+        targetContract,
+        store,
+        dryRun,
+        batchSize,
+        onBatchCommitted,
+        _leaseHeld: true,
+      }),
+    );
+  }
   const reconciliationPlan = reconcileMigrationRows({
     bundle,
     sourceContract,
@@ -1008,7 +1112,11 @@ export async function importMigrationBundle({
   const hasCommittedRows = existingRun
     ? await store.hasCommittedRows(bundle.runId)
     : false;
-  if (!hasCommittedRows) await store.assertFreshTarget([...sourceNames]);
+  if (!hasCommittedRows) {
+    await store.assertFreshTarget(
+      targetContract.filter((table) => sourceNames.has(table.name)),
+    );
+  }
   if (!dryRun && !existingRun) await store.createRun(bundle);
 
   const priorReconciliation = dryRun
@@ -1212,8 +1320,20 @@ export async function importMigrationBundle({
     })),
   );
   if (!dryRun) {
-    await store.recordReconciliation?.(bundle.runId, reconciliationReport);
-    await store.completeRun(bundle.runId, digest);
+    if (store.finalizeRun) {
+      await store.finalizeRun({
+        runId: bundle.runId,
+        digest,
+        report: reconciliationReport,
+        tableContracts: bundle.tables.map((table) =>
+          targetByName.get(table.name),
+        ),
+        expectedChecksums: tableDigests,
+      });
+    } else {
+      await store.recordReconciliation?.(bundle.runId, reconciliationReport);
+      await store.completeRun(bundle.runId, digest);
+    }
   }
   await store.assertTransientTablesEmpty(TRANSIENT_TARGET_TABLES);
   return {
@@ -1449,6 +1569,37 @@ export class PostgresMigrationStore {
     );
   }
 
+  async withMigrationLease(runId, operation) {
+    await this.db.query(`
+      CREATE TABLE IF NOT EXISTS _iolaus_migration_leases (
+        lease_name TEXT PRIMARY KEY,
+        holder TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        acquired_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    const holder = randomBytes(32).toString('hex');
+    const acquired = await this.db.query(
+      `INSERT INTO _iolaus_migration_leases (lease_name, holder, run_id)
+       VALUES ('willgriffin-logical-migration', ?, ?)
+       ON CONFLICT (lease_name) DO NOTHING
+       RETURNING lease_name`,
+      [holder, runId],
+    );
+    if (acquired.rows.length !== 1) {
+      throw new Error('Another logical migration owns the database lease.');
+    }
+    try {
+      return await operation();
+    } finally {
+      await this.db.query(
+        `DELETE FROM _iolaus_migration_leases
+         WHERE lease_name = 'willgriffin-logical-migration' AND holder = ?`,
+        [holder],
+      );
+    }
+  }
+
   async assertTransientTablesEmpty(names) {
     for (const name of names) {
       const result = await this.db.query(
@@ -1460,14 +1611,39 @@ export class PostgresMigrationStore {
     }
   }
 
-  async assertFreshTarget(names) {
-    for (const name of names) {
+  async assertFreshTarget(tables) {
+    const rowsByTable = new Map();
+    const tablesByName = new Map(tables.map((table) => [table.name, table]));
+    for (const table of tables) {
+      const name = table.name;
       const result = await this.db.query(
-        `SELECT COUNT(*) AS count FROM ${quoteIdentifier(name)}`,
+        `SELECT ${table.columns.map((column) => quoteIdentifier(column.name)).join(', ')}
+         FROM ${quoteIdentifier(name)} ORDER BY ${quoteIdentifier('id')}`,
       );
+      const actualRows = result.rows.map((row) =>
+        rowFromDatabase(row, table.columns),
+      );
+      rowsByTable.set(name, actualRows);
+    }
+    for (const table of tables) {
+      const name = table.name;
+      const actualRows = rowsByTable.get(name);
       const expected = FRESH_TARGET_BASELINE_COUNTS[name] || 0;
-      if (Number(result.rows[0]?.count || 0) !== expected) {
-        throw new Error('Migration requires a freshly initialized target.');
+      const expectedChecksum = FRESH_TARGET_BASELINE_CHECKSUMS[name];
+      if (
+        actualRows.length !== expected ||
+        (expectedChecksum &&
+          canonicalBootstrapTableChecksum(
+            actualRows,
+            table,
+            rowsByTable,
+            tablesByName,
+          ) !==
+            expectedChecksum)
+      ) {
+        throw new Error(
+          `Migration requires a freshly initialized target; ${name} differs from its pinned bootstrap state.`,
+        );
       }
     }
   }
@@ -1652,40 +1828,90 @@ export class PostgresMigrationStore {
   async recordReconciliation(runId, report) {
     try {
       await this.db.transaction(async (tx) => {
-        await tx.query(
-          `DELETE FROM _iolaus_migration_quarantine WHERE run_id = ?`,
-          [runId],
-        );
-        for (const entry of report.quarantine) {
-          await tx.query(
-            `INSERT INTO _iolaus_migration_quarantine
-             (run_id, table_name, record_key_hash, reason_code, field_name,
-              parent_table, reference_key_hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [
-              runId,
-              entry.table,
-              entry.recordKeyHash,
-              entry.reasonCode,
-              entry.field || '',
-              entry.parentTable || '',
-              entry.referenceKeyHash,
-            ],
-          );
-        }
-        await tx.query(
-          `INSERT INTO _iolaus_migration_reconciliation
-           (run_id, report_digest, report_json)
-           VALUES (?, ?, ?)
-           ON CONFLICT (run_id) DO UPDATE SET
-             report_digest = EXCLUDED.report_digest,
-             report_json = EXCLUDED.report_json,
-             updated_at = CURRENT_TIMESTAMP`,
-          [runId, report.reportDigest, report],
-        );
+        await this.writeReconciliation(tx, runId, report);
       });
     } catch {
       throw new Error('Migration reconciliation ledger write failed.');
+    }
+  }
+
+  async writeReconciliation(db, runId, report) {
+    await db.query(`DELETE FROM _iolaus_migration_quarantine WHERE run_id = ?`, [
+      runId,
+    ]);
+    for (const entry of report.quarantine) {
+      await db.query(
+        `INSERT INTO _iolaus_migration_quarantine
+         (run_id, table_name, record_key_hash, reason_code, field_name,
+          parent_table, reference_key_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runId,
+          entry.table,
+          entry.recordKeyHash,
+          entry.reasonCode,
+          entry.field || '',
+          entry.parentTable || '',
+          entry.referenceKeyHash,
+        ],
+      );
+    }
+    await db.query(
+      `INSERT INTO _iolaus_migration_reconciliation
+       (run_id, report_digest, report_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT (run_id) DO UPDATE SET
+         report_digest = EXCLUDED.report_digest,
+         report_json = EXCLUDED.report_json,
+         updated_at = CURRENT_TIMESTAMP`,
+      [runId, report.reportDigest, report],
+    );
+  }
+
+  async finalizeRun({
+    runId,
+    digest,
+    report,
+    tableContracts,
+    expectedChecksums,
+  }) {
+    try {
+      await this.db.transaction(async (tx) => {
+        const tables = [...tableContracts].sort((left, right) =>
+          left.name.localeCompare(right.name),
+        );
+        await tx.query(
+          `LOCK TABLE ${tables
+            .map((table) => quoteIdentifier(table.name))
+            .join(', ')} IN SHARE MODE`,
+        );
+        for (const table of tables) {
+          const result = await tx.query(
+            `SELECT ${table.columns
+              .map((column) => quoteIdentifier(column.name))
+              .join(', ')}
+             FROM ${quoteIdentifier(table.name)} ORDER BY ${quoteIdentifier('id')}`,
+          );
+          const actualChecksum = canonicalTargetTableChecksum(
+            result.rows.map((row) => rowFromDatabase(row, table.columns)),
+            table.columns,
+          );
+          if (actualChecksum !== expectedChecksums.get(table.name)) {
+            throw new Error('Target changed during final reconciliation.');
+          }
+        }
+        await this.writeReconciliation(tx, runId, report);
+        await tx.query(
+          `UPDATE _iolaus_migration_runs
+           SET status = 'complete', reconciliation_digest = ?,
+               completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE run_id = ?`,
+          [digest, runId],
+        );
+      });
+    } catch {
+      throw new Error('Migration final reconciliation failed.');
     }
   }
 
