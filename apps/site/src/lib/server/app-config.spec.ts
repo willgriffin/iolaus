@@ -53,6 +53,7 @@ describe('Iolaus application configuration', () => {
         adminEmails: ['owner@example.com', 'second@example.com'],
         clientId: 'career-hub',
         clientSecret: undefined,
+        importedOwnerBindings: [],
         realm: 'career',
         serverUrl: 'https://identity.example.com',
       },
@@ -151,6 +152,60 @@ describe('Iolaus application configuration', () => {
       getAuthConfiguration({
         ...base,
         IOLAUS_OIDC_CLIENT_ID: 'career\u202Eother',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS: JSON.stringify([
+          {
+            issuer: 'https://identity.example.invalid/realms/career',
+            subject: ' immutable-subject-1',
+            userId: '11111111-1111-4111-8111-111111111111',
+          },
+        ]),
+      }),
+    ).toMatchObject({ kind: 'invalid' });
+  });
+
+  it('accepts only unique, explicit imported owner identity bindings', () => {
+    const base = {
+      IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.com',
+      IOLAUS_OIDC_CLIENT_ID: 'career-hub',
+      IOLAUS_OIDC_REALM: 'career',
+      IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com',
+      IOLAUS_PUBLIC_URL: 'https://career.example.com',
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+    };
+    const binding = {
+      issuer: 'https://identity.example.invalid/realms/career',
+      subject: 'immutable-subject-1',
+      userId: '11111111-1111-4111-8111-111111111111',
+    };
+
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS: JSON.stringify([binding]),
+      }),
+    ).toMatchObject({
+      kind: 'self-hosted',
+      oidc: { importedOwnerBindings: [binding] },
+    });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS: JSON.stringify([
+          binding,
+          { ...binding, userId: '22222222-2222-4222-8222-222222222222' },
+        ]),
+      }),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS: '{not json}',
       }),
     ).toMatchObject({ kind: 'invalid' });
   });
