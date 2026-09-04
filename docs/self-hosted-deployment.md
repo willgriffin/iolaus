@@ -203,6 +203,10 @@ s-m-r-t package versions and requires them to equal the released, pinned
 declarations. Only this mode writes `releaseEligible: true` and
 `candidateImageTested: true`; the topology check remains on the host because
 the runtime image deliberately contains no cluster administration tools.
+Before granting release eligibility, the runner also fingerprints every tracked
+source file included by the Docker context and requires the candidate's bytes
+to match the clean reviewed checkout exactly. Its candidate inventory must
+match the independently executed host inventory.
 The report records only already-known digests, versions, and pass/fail facts.
 It is not a substitute for checking Kubernetes
 `status.containerStatuses[].imageID`. The isolated

@@ -10,9 +10,29 @@ import {
   evidenceDigest,
   invalidateEvidence,
   isolatedInvocation,
+  sourceFingerprint,
   validateCandidateImageMetadata,
   validateImageReference,
 } from './deployed-parity.mjs';
+
+test('fingerprints exact source bytes with path framing', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'iolaus-parity-source-test-'));
+  try {
+    writeFileSync(resolve(root, 'a'), 'bc');
+    writeFileSync(resolve(root, 'ab'), 'c');
+    assert.equal(
+      sourceFingerprint(root, ['ab', 'a']),
+      sourceFingerprint(root, ['a', 'ab']),
+    );
+    assert.notEqual(
+      sourceFingerprint(root, ['a']),
+      sourceFingerprint(root, ['ab']),
+    );
+    assert.throws(() => sourceFingerprint(root, ['../outside']), /within/u);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 test('runs candidate scenarios from the immutable image without networking', () => {
   const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;

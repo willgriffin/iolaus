@@ -282,6 +282,87 @@ export function candidateImageInvocation(imageRef, invocation) {
   };
 }
 
+export function sourceFingerprint(root, paths) {
+  const hash = createHash('sha256');
+  for (const path of [...paths].sort((left, right) => left.localeCompare(right))) {
+    if (
+      path.startsWith('/') ||
+      path.split('/').includes('..') ||
+      path.includes('\0')
+    ) {
+      throw new Error('Source fingerprint paths must stay within the repository.');
+    }
+    const content = readFileSync(resolve(root, path));
+    hash.update(`${Buffer.byteLength(path)}:${path}:${content.length}:`);
+    hash.update(content);
+  }
+  return hash.digest('hex');
+}
+
+function trackedImageSourcePaths() {
+  const result = spawnSync('git', ['ls-files', '-z'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (result.status !== 0) {
+    throw new Error('The tracked source manifest could not be resolved.');
+  }
+  return result.stdout
+    .split('\0')
+    .filter(Boolean)
+    .filter((path) => {
+      const parts = path.split('/');
+      const basename = parts.at(-1) ?? '';
+      return !(
+        path.startsWith('.github/') ||
+        path === '.env' ||
+        path.startsWith('.env.') ||
+        path === 'docker-compose.yml' ||
+        basename === '.DS_Store' ||
+        basename.endsWith('.log') ||
+        parts.some((part) =>
+          ['.smrt', '.svelte-kit', '.turbo', 'build', 'dist', 'node_modules'].includes(
+            part,
+          ),
+        )
+      );
+    });
+}
+
+function inspectCandidateImageSource(imageRef, paths, expectedSha256) {
+  const program = [
+    "import { sourceFingerprint } from './scripts/deployed-parity.mjs';",
+    "let input = '';",
+    "for await (const chunk of process.stdin) input += chunk;",
+    "console.log(sourceFingerprint('/app', JSON.parse(input)));",
+  ].join(' ');
+  const invocation = candidateImageInvocation(imageRef, [
+    'node',
+    '--input-type=module',
+    '--eval',
+    program,
+  ]);
+  const result = spawnSync(invocation.binary, invocation.args, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: process.env,
+    input: JSON.stringify(paths),
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  const actualSha256 = result.stdout.trim();
+  if (
+    result.error ||
+    result.status !== 0 ||
+    actualSha256 !== expectedSha256
+  ) {
+    throw new Error(
+      'The candidate image source content does not match the reviewed Git tree.',
+    );
+  }
+  return actualSha256;
+}
+
 export function isolatedInvocation(binary, args, platform = process.platform) {
   if (platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
     return {
@@ -351,7 +432,7 @@ function executeScenario(scenario, environment, imageRef) {
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: environment,
+    env: imageRef ? process.env : environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.error || result.status !== 0) {
@@ -438,7 +519,7 @@ function inventorySnapshot(environment, imageRef) {
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
-    env: environment,
+    env: imageRef ? process.env : environment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.status !== 0) {
@@ -493,9 +574,22 @@ async function main() {
   const expectedLockfileSha256 = createHash('sha256')
     .update(readFileSync(resolve(repositoryRoot, 'pnpm-lock.yaml'), 'utf8'))
     .digest('hex');
-  const candidateImageProvenance = imageRef
+  const sourcePaths = trackedImageSourcePaths();
+  const sourceTreeSha256 = sourceFingerprint(repositoryRoot, sourcePaths);
+  let candidateImageProvenance = imageRef
     ? inspectCandidateImage(imageRef, revision, expectedLockfileSha256)
     : null;
+  if (imageRef && candidateImageProvenance) {
+    const imageSourceTreeSha256 = inspectCandidateImageSource(
+      imageRef,
+      sourcePaths,
+      sourceTreeSha256,
+    );
+    candidateImageProvenance = {
+      ...candidateImageProvenance,
+      sourceTreeSha256: imageSourceTreeSha256,
+    };
+  }
   const sandboxBase = resolve(
     process.env.HOME || tmpdir(),
     '.cache/iolaus-parity-contract',
@@ -507,10 +601,21 @@ async function main() {
   let inventory;
   try {
     const environment = buildScenarioEnvironment(sandboxRoot);
+    const reviewedInventory = inventorySnapshot(environment, null);
     checks = scenarios.map((scenario) =>
       executeScenario(scenario, environment, imageRef),
     );
-    inventory = inventorySnapshot(environment, imageRef);
+    inventory = imageRef
+      ? inventorySnapshot(environment, imageRef)
+      : reviewedInventory;
+    if (
+      imageRef &&
+      inventory.inventorySha256 !== reviewedInventory.inventorySha256
+    ) {
+      throw new Error(
+        'The candidate image inventory does not match the reviewed checkout inventory.',
+      );
+    }
   } finally {
     rmSync(sandboxRoot, { force: true, recursive: true });
   }
@@ -532,7 +637,7 @@ async function main() {
       id: 'candidate-image-provenance',
       invocation: 'docker image inspect <candidate-image-ref>',
       observable:
-        'the immutable local image digest embeds this exact source revision and dependency lock digest, and every executable parity scenario ran from that image with networking disabled',
+        'the immutable local image digest contains the exact reviewed tracked-source bytes and dependency installation, and every executable parity scenario ran from that image with networking disabled',
       status: 'passed',
     });
   }
@@ -543,6 +648,7 @@ async function main() {
     releaseEligible: Boolean(imageRef),
     candidateImageTested: Boolean(imageRef),
     revision,
+    sourceTreeSha256,
     runtime,
     candidateImageRef: imageRef,
     candidateImageProvenance,
