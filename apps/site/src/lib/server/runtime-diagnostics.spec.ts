@@ -1,6 +1,5 @@
 import { webMcpToolDefinitions } from '@happyvertical/smrt-virt-web';
 import { describe, expect, it, vi } from 'vitest';
-import { RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME } from '../runtime-diagnostics-webmcp.js';
 import {
   commandCenterWebMcpDefinitions,
   jobSearchWebMcpToolDefinitions,
@@ -31,14 +30,16 @@ describe('deployed runtime diagnostics', () => {
           ...webMcpToolDefinitions,
           ...jobSearchWebMcpToolDefinitions,
         ]).map((definition) => definition.name),
-        RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME,
       ]),
     ].sort((left, right) => left.localeCompare(right));
 
     expect(runtimeDiagnosticsToolNames()).toEqual(expected);
-    expect(runtimeDiagnosticsToolNames()).toHaveLength(19);
+    expect(runtimeDiagnosticsToolNames()).toHaveLength(18);
     expect(runtimeDiagnosticsToolNames()).toContain(
       'job_search_next_triage_candidate',
+    );
+    expect(runtimeDiagnosticsToolNames()).not.toContain(
+      'smrt.runtime.diagnostics.read',
     );
     expect(runtimeDiagnosticsToolNames()).not.toEqual(
       expect.arrayContaining([

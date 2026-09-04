@@ -152,6 +152,79 @@ export function validateImageReference(value) {
   return value;
 }
 
+export function validateCandidateImageMetadata(
+  metadata,
+  expectedRevision,
+  expectedLockfileSha256,
+) {
+  const imageRef = validateImageReference(metadata.imageRef);
+  if (
+    !Array.isArray(metadata.repoDigests) ||
+    !metadata.repoDigests.includes(imageRef)
+  ) {
+    throw new Error(
+      'The locally inspected image is not bound to the requested immutable digest.',
+    );
+  }
+  const labels = metadata.labels;
+  if (!labels || typeof labels !== 'object' || Array.isArray(labels)) {
+    throw new Error(
+      'The candidate image has no verifiable build provenance labels.',
+    );
+  }
+  const sourceRevision = labels['org.opencontainers.image.revision'];
+  const dependencyLockSha256 =
+    labels['dev.happyvertical.iolaus.pnpm-lock.sha256'];
+  if (sourceRevision !== expectedRevision) {
+    throw new Error(
+      'The candidate image source revision does not match this checkout.',
+    );
+  }
+  if (dependencyLockSha256 !== expectedLockfileSha256) {
+    throw new Error(
+      'The candidate image dependency lock digest does not match this checkout.',
+    );
+  }
+  return { dependencyLockSha256, sourceRevision };
+}
+
+function inspectCandidateImage(
+  imageRef,
+  expectedRevision,
+  expectedLockfileSha256,
+) {
+  const inspect = (format) => {
+    const result = spawnSync(
+      'docker',
+      ['image', 'inspect', '--format', format, imageRef],
+      {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        'The exact candidate image must be present locally for provenance verification.',
+      );
+    }
+    try {
+      return JSON.parse(result.stdout.trim());
+    } catch {
+      throw new Error('The candidate image returned invalid provenance metadata.');
+    }
+  };
+  return validateCandidateImageMetadata(
+    {
+      imageRef,
+      labels: inspect('{{json .Config.Labels}}'),
+      repoDigests: inspect('{{json .RepoDigests}}'),
+    },
+    expectedRevision,
+    expectedLockfileSha256,
+  );
+}
+
 function executeScenario(scenario) {
   const [binary, ...args] = scenario.invocation;
   const result = spawnSync(binary, args, {
@@ -285,15 +358,33 @@ async function main() {
   const imageRef = validateImageReference(argumentValue('--image-ref', argv));
   const evidencePath = argumentValue('--evidence', argv) ?? defaultEvidencePath;
   const startedAt = new Date().toISOString();
+  const revision = gitRevision();
   const checks = scenarios.map(executeScenario);
   const inventory = inventorySnapshot();
+  const candidateImageProvenance = imageRef
+    ? inspectCandidateImage(
+        imageRef,
+        revision,
+        inventory.dependencyLockSha256,
+      )
+    : null;
+  if (candidateImageProvenance) {
+    checks.push({
+      id: 'candidate-image-provenance',
+      invocation: 'docker image inspect <candidate-image-ref>',
+      observable:
+        'the immutable local image digest embeds this exact source revision and dependency lock digest',
+      status: 'passed',
+    });
+  }
   const evidence = {
     schema: 'iolaus-deployed-parity-contract:v1',
     status: 'passed',
     scope: imageRef ? 'candidate-image-source-contract' : 'source-contract',
-    revision: gitRevision(),
+    revision,
     runtime,
     candidateImageRef: imageRef,
+    candidateImageProvenance,
     inventorySha256: inventory.inventorySha256,
     dependencyLockSha256: inventory.dependencyLockSha256,
     smrtDependencies: inventory.smrtDependencies,

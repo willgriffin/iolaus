@@ -30,6 +30,10 @@ COPY . .
 RUN pnpm --filter @willgriffin/iolaus-site build
 
 FROM base AS runner
+ARG IOLAUS_SOURCE_REVISION=unknown
+ARG IOLAUS_LOCKFILE_SHA256=unknown
+LABEL org.opencontainers.image.revision="${IOLAUS_SOURCE_REVISION}"
+LABEL dev.happyvertical.iolaus.pnpm-lock.sha256="${IOLAUS_LOCKFILE_SHA256}"
 ENV NODE_ENV=production
 ENV SMRT_RUNTIME_PROFILE=self-hosted
 ENV HOST=0.0.0.0

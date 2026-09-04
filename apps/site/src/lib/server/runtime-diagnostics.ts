@@ -2,7 +2,6 @@ import type { RuntimeDiagnostics } from '@happyvertical/smrt-app-runtime';
 import type { Role } from '@happyvertical/smrt-users';
 import { webMcpToolDefinitions } from '@happyvertical/smrt-virt-web';
 import { json } from '@sveltejs/kit';
-import { RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME } from '../runtime-diagnostics-webmcp.js';
 import {
   commandCenterWebMcpDefinitions,
   jobSearchWebMcpToolDefinitions,
@@ -20,7 +19,6 @@ export function runtimeDiagnosticsToolNames(): string[] {
         ...webMcpToolDefinitions,
         ...jobSearchWebMcpToolDefinitions,
       ]).map((definition) => definition.name),
-      RUNTIME_DIAGNOSTICS_WEBMCP_TOOL_NAME,
     ]),
   ].sort((left, right) => left.localeCompare(right));
 }

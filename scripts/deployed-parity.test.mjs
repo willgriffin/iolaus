@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   evidenceDigest,
+  validateCandidateImageMetadata,
   validateImageReference,
 } from './deployed-parity.mjs';
 
@@ -21,6 +22,47 @@ test('accepts only the exact released Iolaus image reference', () => {
   ]) {
     assert.throws(() => validateImageReference(invalid), /exact released/u);
   }
+});
+
+test('binds a candidate image digest to source and dependency provenance', () => {
+  const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;
+  const revision = 'b'.repeat(40);
+  const lockfileSha256 = 'c'.repeat(64);
+  const metadata = {
+    imageRef,
+    labels: {
+      'dev.happyvertical.iolaus.pnpm-lock.sha256': lockfileSha256,
+      'org.opencontainers.image.revision': revision,
+    },
+    repoDigests: [imageRef],
+  };
+
+  assert.deepEqual(
+    validateCandidateImageMetadata(metadata, revision, lockfileSha256),
+    { dependencyLockSha256: lockfileSha256, sourceRevision: revision },
+  );
+  assert.throws(
+    () =>
+      validateCandidateImageMetadata(
+        { ...metadata, repoDigests: [] },
+        revision,
+        lockfileSha256,
+      ),
+    /not bound/u,
+  );
+  assert.throws(
+    () =>
+      validateCandidateImageMetadata(
+        metadata,
+        'd'.repeat(40),
+        lockfileSha256,
+      ),
+    /source revision/u,
+  );
+  assert.throws(
+    () => validateCandidateImageMetadata(metadata, revision, 'd'.repeat(64)),
+    /dependency lock/u,
+  );
 });
 
 test('creates a deterministic evidence digest without secret inputs', () => {

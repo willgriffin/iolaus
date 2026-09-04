@@ -160,9 +160,12 @@ pnpm --filter @willgriffin/iolaus-site exec tsx \
   scripts/deployed-parity-inventory.ts --update
 ```
 
-For a released candidate, check out the exact source revision used to build it,
-run the same contract, and pass the immutable reference recorded by the
-cluster:
+Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
+40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
+`pnpm-lock.yaml`.
+The Dockerfile stores both as OCI labels. For a released candidate, check out
+that exact source revision, pull the immutable digest locally without retagging
+it, run the same contract, and pass that digest:
 
 ```sh
 pnpm parity:contract -- \
@@ -170,8 +173,12 @@ pnpm parity:contract -- \
   --evidence /private/evidence/iolaus-parity.json
 ```
 
-The image argument is validated and recorded, but it is not a substitute for
-checking Kubernetes `status.containerStatuses[].imageID`. The isolated
+The image argument is accepted only when `docker image inspect` proves that the
+local image has the requested repository digest and its two provenance labels
+match the current source revision and lockfile digest. The check reads no image
+environment or filesystem content and records only those already-known values.
+It is not a substitute for checking Kubernetes
+`status.containerStatuses[].imageID`. The isolated
 rehearsal must prove every web/task/schedule pod reports that same digest,
 capture a successful aggregate monitor Job, and execute the synthetic browser
 smoke, provider crawl, schedule dispatch, active-job drain, and restart
