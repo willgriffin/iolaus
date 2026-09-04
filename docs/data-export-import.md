@@ -111,7 +111,11 @@ asset-migration phase. The reconciliation module exposes the common asset
 result contract used by that phase: each referenced asset is verified by
 source/target checksum and receives `ASSET_MISSING` or
 `ASSET_CHECKSUM_MISMATCH` when it cannot be admitted. This logical importer
-preserves database records but does not copy asset bytes.
+preserves database records but does not copy asset bytes. Its report marks the
+asset section `pending` rather than presenting an empty asset inventory as a
+successful verification. The asset phase replaces that section with a
+`complete` inventory and new report digest after it verifies every referenced
+object; a row-only report is not cutover evidence for assets.
 
 Intentional exclusions are always reported: sessions and authentication
 tokens, API/CLI credentials, deployment secrets, live worker/delivery leases,

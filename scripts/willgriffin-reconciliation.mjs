@@ -704,7 +704,11 @@ export function reconcileMigrationRows({
     unresolvedReferences: state.quarantine.filter(
       (entry) => entry.reasonCode === RECONCILIATION_REASON_CODES.missingParent,
     ),
-    assets: reconcileAssetInventory({ runId: bundle.runId, assets: [] }),
+    assets: reconcileAssetInventory({
+      runId: bundle.runId,
+      assets: [],
+      status: 'pending',
+    }),
     exclusions: INTENTIONAL_MIGRATION_EXCLUSIONS,
     excludedTables: [...bundle.excludedTables].sort(),
     approvedOmissions: [],
@@ -720,7 +724,7 @@ export function reconcileMigrationRows({
   return { acceptedTables, report };
 }
 
-export function reconcileAssetInventory({ runId, assets }) {
+export function reconcileAssetInventory({ runId, assets, status = 'complete' }) {
   const counts = { attempted: 0, verified: 0, rejected: 0 };
   const quarantine = [];
   for (const asset of [...assets].sort((left, right) =>
@@ -744,7 +748,7 @@ export function reconcileAssetInventory({ runId, assets }) {
       counts.verified += 1;
     }
   }
-  const core = { counts, quarantine, secretValuesIncluded: false };
+  const core = { status, counts, quarantine, secretValuesIncluded: false };
   return { ...core, digest: sha256(stableJson(core)) };
 }
 
@@ -792,6 +796,6 @@ export function finalizeReconciliationReport(report, tableResults, assetReport) 
   return {
     ...core,
     reportDigest,
-    operatorSummary: `Migration reconciliation ${reportDigest.slice(0, 12)}: ${counts.attempted} attempted, ${counts.imported} imported, ${counts.updated} updated, ${counts.skipped} skipped, ${counts.rejected} quarantined, ${counts.repaired} repaired.`,
+    operatorSummary: `Migration reconciliation ${reportDigest.slice(0, 12)}: ${counts.attempted} attempted, ${counts.imported} imported, ${counts.updated} updated, ${counts.skipped} skipped, ${counts.rejected} quarantined, ${counts.repaired} repaired; assets ${core.assets.status}.`,
   };
 }
