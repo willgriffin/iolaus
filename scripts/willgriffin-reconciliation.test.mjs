@@ -155,6 +155,16 @@ test('malformed UUIDs and unqualified persisted STI values are quarantined', () 
   assert.equal(report.counts.rejected, 1);
 });
 
+test('the full canonical PostgreSQL UUID domain is accepted', () => {
+  const contract = [table('tenants', [column('id', 'UUID')])];
+  const { acceptedTables, report } = reconcile(contract, {
+    tenants: [{ id: '00000000-0000-0000-0000-000000000000' }],
+  });
+
+  assert.equal(acceptedTables[0].rows.length, 1);
+  assert.equal(report.counts.rejected, 0);
+});
+
 test('nullable empty references are deterministically repaired to null', () => {
   const contract = [
     table('places', [
@@ -325,4 +335,3 @@ test('reports inventory intentional exclusions and known SMRT upgrade hazards', 
     ],
   );
 });
-

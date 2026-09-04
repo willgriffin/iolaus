@@ -53,8 +53,11 @@ export const SMRT_UPGRADE_HAZARDS = Object.freeze([
   },
 ]);
 
+// PostgreSQL's UUID input type accepts the complete 128-bit UUID domain, not
+// only RFC-generated values with a version/variant nibble. Reconciliation must
+// therefore validate canonical storage compatibility rather than provenance.
 const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const QUALIFIED_STI = /^@[a-z0-9][a-z0-9._/-]*:[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
 const REFERENCE_OVERRIDES = Object.freeze({
@@ -159,7 +162,6 @@ const REFERENCE_OVERRIDES = Object.freeze({
     agent_run_id: 'agent_runs',
     opportunity_id: 'opportunities',
     owner_request_id: 'opportunity_intelligence_requests',
-    request_id: 'opportunity_intelligence_requests',
     source_crawl_id: 'source_crawls',
     source_crawl_item_id: 'source_crawl_items',
   },
@@ -177,7 +179,9 @@ const REFERENCE_OVERRIDES = Object.freeze({
   project_attachments: { attachment_id: 'attachments', project_id: 'projects' },
   project_tags: { project_id: 'projects', tag_id: 'tags' },
   projects: { experience_id: 'experiences' },
-  resume_achievements: { position_id: 'resume_positions' },
+  resume_achievements: {
+    position_id: ['resume_positions', 'position_id'],
+  },
   resume_assets: {
     application_id: 'applications',
     candidate_profile_id: 'candidate_profiles',
