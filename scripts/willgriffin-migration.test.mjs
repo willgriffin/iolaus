@@ -430,6 +430,70 @@ test('restored-backup-shaped fixture resumes from a committed cursor and stays i
   assert.equal(verification.counts.attempted, 0);
 });
 
+test('self-referential rows are parent-first and resume by ordered cursor', async () => {
+  const nodes = table('tenants', [
+    column('id', 'UUID'),
+    column('parent_tenant_id', 'UUID', {
+      notNull: false,
+      referencesTable: 'tenants',
+    }),
+  ]);
+  const sourceContract = [nodes];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      [
+        'tenants',
+        [
+          { id: 'child-a', parent_tenant_id: 'parent-z' },
+          { id: 'parent-z', parent_tenant_id: null },
+        ],
+      ],
+    ]),
+  });
+  assert.deepEqual(
+    bundle.tables[0].rows.map((row) => row.sourceId),
+    ['parent-z', 'child-a'],
+  );
+  const store = new MemoryMigrationStore();
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store,
+      batchSize: 1,
+      onBatchCommitted() {
+        throw new Error('synthetic interruption');
+      },
+    }),
+    /synthetic interruption/,
+  );
+  const resumed = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 1,
+  });
+  assert.equal(resumed.counts.inserted, 1);
+  assert.equal(store.rows.get('tenants').size, 2);
+
+  assert.throws(
+    () =>
+      buildMigrationBundle({
+        sourceContract,
+        targetContract,
+        sourceRows: new Map([
+          ['tenants', [{ id: 'orphan', parent_tenant_id: 'missing' }]],
+        ]),
+      }),
+    /hierarchy is incomplete/,
+  );
+});
+
 test('dry-run reports changes without creating a ledger or mutating target rows', async () => {
   const { sourceContract, targetContract } = fixtureContracts();
   const bundle = buildMigrationBundle({
@@ -633,6 +697,21 @@ test('export refuses any source that is not explicitly attested as an isolated r
       sourceRoot: process.cwd(),
     }),
     /verified isolated restore/,
+  );
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql://user:private-marker@production.example.invalid/willgriffin',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      /requires a local database/.test(error.message),
   );
 });
 

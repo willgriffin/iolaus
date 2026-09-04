@@ -24,9 +24,11 @@ deployment belong to that deployment's private operational documentation.
 
 The predecessor migration is deliberately separate from generic Iolaus
 portability. It reads a verified, isolated PostgreSQL restore and writes a
-private logical bundle; it never connects to live mutable production by
-design. Set the source URL through the environment so credentials do not enter
-shell history, then attest that the endpoint is the isolated restore:
+private logical bundle. The exporter requires a loopback PostgreSQL endpoint
+whose database name visibly contains `backup`, `issue`, `restore`, `test`, or
+`verify`, matching the repository's disposable restore guard. Set the source
+URL through the environment so credentials do not enter shell history, then
+attest that the endpoint is the isolated restore:
 
 ```bash
 export WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL='<isolated restore URL>'

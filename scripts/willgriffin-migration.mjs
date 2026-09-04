@@ -555,6 +555,50 @@ function requireStableId(table, row) {
   return id;
 }
 
+function parentFirstSourceRows(table, rows) {
+  const parentFields = table.columns.filter(
+    (column) => column.referencesTable === table.name,
+  );
+  if (parentFields.length === 0) {
+    return rows.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  }
+  const byId = new Map(rows.map((row) => [row.sourceId, row]));
+  const dependencies = new Map(rows.map((row) => [row.sourceId, new Set()]));
+  const children = new Map(rows.map((row) => [row.sourceId, new Set()]));
+  for (const row of rows) {
+    for (const field of parentFields) {
+      const parentId = row.values[field.name];
+      if (parentId == null) continue;
+      if (typeof parentId !== 'string' || parentId === '' || !byId.has(parentId)) {
+        throw new Error(`Migration hierarchy is incomplete in ${table.name}.`);
+      }
+      dependencies.get(row.sourceId).add(parentId);
+      children.get(parentId).add(row.sourceId);
+    }
+  }
+  const ready = rows
+    .filter((row) => dependencies.get(row.sourceId).size === 0)
+    .map((row) => row.sourceId)
+    .sort();
+  const ordered = [];
+  while (ready.length > 0) {
+    const id = ready.shift();
+    ordered.push(byId.get(id));
+    for (const childId of children.get(id)) {
+      const remaining = dependencies.get(childId);
+      remaining.delete(id);
+      if (remaining.size === 0) {
+        ready.push(childId);
+        ready.sort();
+      }
+    }
+  }
+  if (ordered.length !== rows.length) {
+    throw new Error(`Migration hierarchy contains a cycle in ${table.name}.`);
+  }
+  return ordered;
+}
+
 export function buildMigrationBundle({
   sourceRows,
   sourceContract,
@@ -569,7 +613,9 @@ export function buildMigrationBundle({
   }
   const tables = plan.map((table) => {
     const seen = new Set();
-    const rows = sourceRows
+    const rows = parentFirstSourceRows(
+      table,
+      sourceRows
       .get(table.name)
       .map((row) => {
         const values = normalizedSourceRow(table.name, row);
@@ -583,8 +629,8 @@ export function buildMigrationBundle({
           checksum: canonicalRowChecksum(values),
           values,
         };
-      })
-      .sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+      }),
+    );
     return {
       name: table.name,
       columns: table.columns.map((column) => column.name),
@@ -670,7 +716,7 @@ export function validateMigrationBundle(bundle, sourceContract, targetContract) 
     if (canonicalJson(table.columns) !== canonicalJson(expectedColumns)) {
       throw new Error(`Migration bundle columns are incompatible for ${table.name}.`);
     }
-    let previousId = '';
+    const seenIds = new Set();
     for (const row of table.rows) {
       const keys = Object.keys(row.values || {}).sort();
       if (
@@ -680,11 +726,11 @@ export function validateMigrationBundle(bundle, sourceContract, targetContract) 
         canonicalJson(keys) !== canonicalJson([...expectedColumns].sort()) ||
         canonicalRowChecksum(row.values) !== row.checksum ||
         String(row.values.id) !== row.sourceId ||
-        (previousId && previousId.localeCompare(row.sourceId) >= 0)
+        seenIds.has(row.sourceId)
       ) {
         throw new Error(`Migration bundle row validation failed for ${table.name}.`);
       }
-      previousId = row.sourceId;
+      seenIds.add(row.sourceId);
     }
     const tableChecksum = sha256(
       canonicalJson(table.rows.map((row) => [row.sourceId, row.checksum])),
@@ -853,11 +899,15 @@ export async function importMigrationBundle({
       ? null
       : await store.getCheckpoint(bundle.runId, table.name);
     const report = emptyCounts();
+    const checkpointIndex = checkpoint?.cursor
+      ? desiredRows.findIndex((row) => row.sourceId === checkpoint.cursor)
+      : -1;
+    if (checkpoint?.cursor && checkpointIndex < 0) {
+      throw new Error(`Migration checkpoint is incompatible for ${table.name}.`);
+    }
     const remaining = checkpoint?.complete
       ? []
-      : desiredRows.filter(
-          (row) => !checkpoint?.cursor || row.sourceId > checkpoint.cursor,
-        );
+      : desiredRows.slice(checkpointIndex + 1);
     for (let index = 0; index < remaining.length; index += batchSize) {
       const batch = remaining.slice(index, index + batchSize);
       const operations = [];
@@ -997,6 +1047,29 @@ function databaseTargetFingerprint(value) {
   }
 }
 
+function assertIsolatedRestoreDatabaseUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('The isolated predecessor database URL is invalid.');
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+  const databaseName = decodeURIComponent(url.pathname.replace(/^\/+|\/+$/gu, ''));
+  if (
+    !['postgres:', 'postgresql:'].includes(url.protocol) ||
+    !['', 'localhost', '127.0.0.1', '::1'].includes(host) ||
+    !databaseName ||
+    databaseName === 'postgres' ||
+    databaseName.startsWith('template') ||
+    !/(?:backup|issue|restore|test|verify)/u.test(databaseName)
+  ) {
+    throw new Error(
+      'Predecessor export requires a local database whose name identifies disposable backup, issue, restore, test, or verify work.',
+    );
+  }
+}
+
 function writePrivateBundle(sourceRoot, outputPath, bundle) {
   const resolved = assertExternalArtifactPath({
     sourceRoot,
@@ -1043,6 +1116,7 @@ export async function exportPredecessorMigration(context) {
   if (!sourceUrl) {
     throw new Error('The isolated predecessor database URL is unavailable.');
   }
+  assertIsolatedRestoreDatabaseUrl(sourceUrl);
   if (
     context.env.DATABASE_URL &&
     databaseTargetFingerprint(sourceUrl) ===
