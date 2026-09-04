@@ -493,7 +493,7 @@ function currentTenantHref(pathname: string): string {
 </script>
 
 <svelte:head>
-  <title>Employment Search Admin - iolaus.localhost</title>
+  <title>{data.appName} — Employment Search</title>
 </svelte:head>
 
 {#snippet appBar()}
@@ -513,10 +513,10 @@ function currentTenantHref(pathname: string): string {
           <PanelLeftOpen size={16} strokeWidth={2.1} />
         {/if}
       </button>
-      <a class="admin-brand" href="/admin" aria-label="Employment Search admin">
-        <span class="admin-brand-mark">WG</span>
+      <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
+        <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">
-          <span class="admin-brand-eyebrow">iolaus.localhost</span>
+          <span class="admin-brand-eyebrow">{data.appName}</span>
           <strong>Employment Search</strong>
         </span>
       </a>
@@ -561,7 +561,7 @@ function currentTenantHref(pathname: string): string {
 
 {#snippet appPanel()}
   <AppScopePanel
-    appName="Employment Search"
+    appName={data.appName}
     tenantName={data.user?.email ?? undefined}
     environment={data.tenantId ? `Tenant ${data.tenantId}` : 'Admin'}
   />
@@ -707,7 +707,7 @@ function currentTenantHref(pathname: string): string {
 <SmrtProvider mode="default" autoEnableSmrt={false} user={providerUser} permissions={data.permissions}>
   <AdminShell
     title="Employment Search"
-    subtitle="iolaus.localhost"
+    subtitle={data.appName}
     state={adminShell}
     {appBar}
     {appPanel}

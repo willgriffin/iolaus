@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RequestJsonResult } from '@happyvertical/smrt-app-cli';
+import { getCliConfigDirectory, getCliServerUrl } from '../src/app-config.js';
 
 interface CliSmokeOptions {
   server?: string;
@@ -67,6 +68,58 @@ const packageRoot = resolve(scriptDir, '..');
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function assertCliServerSelection(): void {
+  const environment = {} as NodeJS.ProcessEnv;
+  const selected = getCliServerUrl(
+    ['auth', 'login', '--server=https://jobs.example.com/'],
+    environment,
+  );
+  assert(
+    selected === 'https://jobs.example.com',
+    'CLI server selection must be canonical.',
+  );
+  assert(
+    getCliConfigDirectory(['--server', selected], environment) !==
+      getCliConfigDirectory(
+        ['--server', 'https://other.example.com'],
+        environment,
+      ),
+    'CLI credential namespaces must follow the selected server.',
+  );
+  let duplicateRejected = false;
+  try {
+    getCliServerUrl(
+      [
+        '--server',
+        'https://one.example.com',
+        '--server=https://two.example.com',
+      ],
+      environment,
+    );
+  } catch {
+    duplicateRejected = true;
+  }
+  assert(duplicateRejected, 'Duplicate CLI server selectors must fail closed.');
+  for (const invalid of [
+    'ftp://jobs.example.com',
+    'https://user@jobs.example.com',
+    'https://jobs.example.com/api',
+    'https://jobs.example.com?target=other',
+    'https://jobs.example.com#other',
+  ]) {
+    let invalidRejected = false;
+    try {
+      getCliServerUrl(['--server', invalid], environment);
+    } catch {
+      invalidRejected = true;
+    }
+    assert(
+      invalidRejected,
+      `Invalid CLI server selector must fail closed: ${invalid}`,
+    );
+  }
 }
 
 function parseOptions(argv: string[]): CliSmokeOptions {
@@ -445,6 +498,8 @@ async function runSmoke(options: CliSmokeOptions) {
         ['IOLAUS_CLI_CONFIG', join(configDir, 'config.json')],
         ['IOLAUS_SERVER_URL', server],
         ['IOLAUS_TOKEN', token],
+        // Prove IOLAUS_* credentials and destination survive generic identity.
+        ['SMRT_APP_ID', 'career-hub'],
       ]);
 
       const status = parseJson<{ authenticated: boolean }>(
@@ -658,4 +713,5 @@ async function runSmoke(options: CliSmokeOptions) {
   console.log(successMessage);
 }
 
+assertCliServerSelection();
 await runSmoke(parseOptions(process.argv.slice(2)));

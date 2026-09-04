@@ -3,7 +3,7 @@ let { data, form } = $props();
 </script>
 
 <svelte:head>
-  <title>Terminal Login — iolaus.localhost</title>
+  <title>Terminal Login — {data.appName}</title>
 </svelte:head>
 
 <section class="terminal-login">

@@ -39,7 +39,7 @@ function syncProjectSmrtKnowledge(): void {
         config: {
           includeDocs: true,
           includePrompts: true,
-          summary: 'iolaus.localhost SvelteKit site domain model.',
+          summary: 'Iolaus SvelteKit site domain model.',
         },
       }),
       null,

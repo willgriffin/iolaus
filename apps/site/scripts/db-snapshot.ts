@@ -1,6 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import {
+  createReadStream,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import {
   access,
   chmod,
@@ -21,11 +26,16 @@ import type {
 } from '@happyvertical/files';
 import { getFilesystem } from '@happyvertical/files';
 import { ObjectRegistry, resolveDatabase } from '@happyvertical/smrt-core';
+import {
+  getAppConfig,
+  getConfiguredPublicOrigin,
+} from '../src/lib/server/app-config.js';
 import { getDatabaseUrl } from '../src/lib/server/db.js';
 import {
   getResumeFilesConfig,
   PUBLISHED_RESUME_PDF_PATH,
 } from '../src/lib/server/resume-files.js';
+import { getIolausUserDataRoot } from '../src/lib/server/runtime-paths.js';
 import type { SourceCrawlOpportunityPlanAttestation } from '../src/lib/server/source-crawl-opportunity-integrity.js';
 import type { SourceCrawlParentRecoveryAttestation } from '../src/lib/server/source-crawl-parent-recovery.js';
 import '../src/lib/server/smrt.js';
@@ -33,11 +43,14 @@ import '../src/lib/server/smrt.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(SITE_ROOT, '..', '..');
-const BACKUP_KIND = 'iolaus.localhost-data-backup';
+const BACKUP_KIND = 'iolaus-data-backup';
+const LEGACY_BACKUP_KIND = 'iolaus.localhost-data-backup';
+const SUPPORTED_BACKUP_KINDS = new Set([BACKUP_KIND, LEGACY_BACKUP_KIND]);
 const BACKUP_VERSION = 1;
 const DEFAULT_DUMP_FILE = 'database.dump';
 const DEFAULT_FILES_DIR = 'files';
 const DEFAULT_MANIFEST_FILE = 'manifest.json';
+const INSTALLATION_ID_FILE = '.installation-id';
 
 export interface BackupManifest {
   database: {
@@ -59,7 +72,8 @@ export interface BackupManifest {
     storageConfig: unknown;
   };
   gitSha: string | null;
-  kind: typeof BACKUP_KIND;
+  installationId?: string;
+  kind: typeof BACKUP_KIND | typeof LEGACY_BACKUP_KIND;
   resume: ResumePublishStatus;
   recovery?: BackupRecoveryAttestation;
   source: 'current' | 'production';
@@ -103,6 +117,7 @@ export interface ExportBackupOptions {
 }
 
 export interface RestoreBackupOptions {
+  allowInstallationRebind?: boolean;
   allowProduction?: boolean;
   backupPath: string;
   databaseUrl: string;
@@ -140,10 +155,72 @@ export function timestampForBackup(date = new Date()): string {
 }
 
 export function defaultBackupRoot(): string {
-  return (
-    process.env.IOLAUS_BACKUP_DIR ??
-    join(homedir(), '.local', 'share', 'iolaus.localhost', 'backups')
-  );
+  if (process.env.IOLAUS_BACKUP_DIR) return process.env.IOLAUS_BACKUP_DIR;
+  return join(installationStateRoot(), 'backups');
+}
+
+function installationStateRoot(): string {
+  const config = getAppConfig();
+  if (config.runtimeProfile === 'local') {
+    return getIolausUserDataRoot();
+  }
+  const publicOrigin = getConfiguredPublicOrigin();
+  if (!publicOrigin) {
+    throw new Error(
+      'Hosted backup identity requires a valid IOLAUS_PUBLIC_URL.',
+    );
+  }
+  const originDigest = createHash('sha256')
+    .update(publicOrigin)
+    .digest('hex')
+    .slice(0, 16);
+  return join(homedir(), '.local', 'share', `${config.appId}-${originDigest}`);
+}
+
+export function getBackupInstallationId(): string {
+  const config = getAppConfig();
+  if (config.runtimeProfile !== 'local') {
+    const publicOrigin = getConfiguredPublicOrigin();
+    if (!publicOrigin) {
+      throw new Error(
+        'Hosted backup identity requires a valid IOLAUS_PUBLIC_URL.',
+      );
+    }
+    const deploymentIdentity = createHash('sha256')
+      .update(`${config.appId}\0${publicOrigin}`)
+      .digest('hex');
+    return `${config.appId}:${config.runtimeProfile}:${deploymentIdentity}`;
+  }
+  const stateRoot = installationStateRoot();
+  const identityPath = join(stateRoot, INSTALLATION_ID_FILE);
+  mkdirSync(stateRoot, { mode: 0o700, recursive: true });
+
+  let identity: string;
+  try {
+    identity = readFileSync(identityPath, 'utf8').trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    identity = randomUUID();
+    try {
+      writeFileSync(identityPath, `${identity}\n`, {
+        flag: 'wx',
+        mode: 0o600,
+      });
+    } catch (writeError) {
+      if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw writeError;
+      }
+      identity = readFileSync(identityPath, 'utf8').trim();
+    }
+  }
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      identity,
+    )
+  ) {
+    throw new Error(`Invalid installation identity: ${identityPath}`);
+  }
+  return `${config.appId}:${config.runtimeProfile}:${identity}`;
 }
 
 export function databaseNameFromUrl(databaseUrl: string): string {
@@ -397,6 +474,7 @@ export async function exportBackup(
       storageConfig: redactFilesystemConfig(getResumeFilesConfig()),
     },
     gitSha,
+    installationId: getBackupInstallationId(),
     kind: BACKUP_KIND,
     resume,
     source: options.prod ? 'production' : 'current',
@@ -417,7 +495,9 @@ export async function restoreBackup(
   options: RestoreBackupOptions,
 ): Promise<void> {
   const backupPath = resolve(options.backupPath);
-  const manifest = await verifyBackup(backupPath);
+  const manifest = await verifyBackup(backupPath, {
+    allowInstallationRebind: options.allowInstallationRebind,
+  });
   assertCanImportDatabase(options.databaseUrl, options);
 
   await runPgRestore(
@@ -442,6 +522,9 @@ export async function resetLocalDatabaseFromBackup(
   options: ResetLocalOptions,
 ): Promise<void> {
   assertCanImportDatabase(options.databaseUrl, { allowProduction: false });
+  await verifyBackup(options.backupPath, {
+    allowInstallationRebind: options.allowInstallationRebind,
+  });
 
   const databaseName = databaseNameFromUrl(options.databaseUrl);
   const maintenanceEnv = postgresEnvFromUrl(options.databaseUrl, 'postgres');
@@ -454,22 +537,37 @@ export async function resetLocalDatabaseFromBackup(
 
 export async function readBackupManifest(
   backupPath: string,
+  options: { allowInstallationRebind?: boolean } = {},
 ): Promise<BackupManifest> {
   const manifestPath = join(resolve(backupPath), DEFAULT_MANIFEST_FILE);
   const manifest = JSON.parse(
     await readFile(manifestPath, 'utf8'),
   ) as BackupManifest;
-  if (manifest.kind !== BACKUP_KIND || manifest.version !== BACKUP_VERSION) {
+  if (
+    !SUPPORTED_BACKUP_KINDS.has(manifest.kind) ||
+    manifest.version !== BACKUP_VERSION
+  ) {
     throw new Error(`Unsupported backup manifest: ${manifestPath}`);
+  }
+  if (
+    manifest.kind === BACKUP_KIND &&
+    !options.allowInstallationRebind &&
+    (!manifest.installationId ||
+      manifest.installationId !== getBackupInstallationId())
+  ) {
+    throw new Error(
+      'Backup belongs to a different installation. Use its original runtime location or pass --allow-installation-rebind for deliberate disaster recovery.',
+    );
   }
   return manifest;
 }
 
 export async function verifyBackup(
   backupPath: string,
+  options: { allowInstallationRebind?: boolean } = {},
 ): Promise<VerifiedBackupManifest> {
   const resolvedPath = resolve(backupPath);
-  const manifest = await readBackupManifest(resolvedPath);
+  const manifest = await readBackupManifest(resolvedPath, options);
   const verified = await verifyDatabaseDump(
     join(resolvedPath, manifest.database.dumpFile),
   );

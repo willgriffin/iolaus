@@ -286,7 +286,7 @@ describe('admin-resource-route', () => {
       expect.objectContaining({
         action: 'admin.processRecommendationTask',
         actorUserId: 'user-1',
-        agentClass: 'iolaus.localhost/owner',
+        agentClass: 'iolaus/owner',
         onBehalfOfUserId: 'user-1',
         tenantId: 'tenant-1',
       }),

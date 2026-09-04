@@ -26,7 +26,7 @@ Approve ─► canAutoSubmit?
 
 Known-ATS submission is an **HTTP API call, not browser automation** — Greenhouse
 and Ashby accept applications via documented POST endpoints. So the
-iolaus.localhost **worker** performs the submit for supported ATSes; the browser
+Iolaus **worker** performs the submit for supported ATSes; the browser
 path (Hermes) is only the fallback for unsupported flows.
 
 ## Authorization & safety (normative)

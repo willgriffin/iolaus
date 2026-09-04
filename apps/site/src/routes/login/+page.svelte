@@ -5,7 +5,7 @@ let { data } = $props();
 </script>
 
 <svelte:head>
-  <title>Sign in — iolaus.localhost</title>
+  <title>Sign in — {data.appName}</title>
 </svelte:head>
 
 <main class="login-shell">
@@ -14,16 +14,16 @@ let { data } = $props();
     <h1>Sign in</h1>
     <p class="copy">
       {#if data.localDevLogin}
-        Use the local development admin session for this localhost workspace.
+        Continue with the private local workspace on this computer.
       {:else}
-        Use OIDC to manage employment-search data.
+        Sign in with your configured identity provider to continue.
       {/if}
     </p>
     <form method="POST">
       <input type="hidden" name="next" value={data.next} />
       <button type="submit">
         <LogIn size={17} strokeWidth={2.2} />
-        <span>{data.localDevLogin ? 'Continue locally' : 'Continue with OIDC'}</span>
+        <span>{data.localDevLogin ? 'Continue locally' : 'Continue securely'}</span>
       </button>
     </form>
   </section>

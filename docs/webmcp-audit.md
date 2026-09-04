@@ -293,7 +293,7 @@ read/update plus the application task sync; resume-asset updates and deletes
 add the `resumeassets` read that refuses application-owned materials. A
 principal holding `applications.update` but no `tasks.*` permission is refused
 before the write and no task is created. Every execution emits one structured JSON audit
-line (`event: owner_principal.audit`, `agentClass: iolaus.localhost/owner`)
+line (`event: owner_principal.audit`, `agentClass: <SMRT_APP_ID>/owner`)
 recording the actor, the on-behalf-of user, tenant, action label, and tool.
 Browser-cookie and terminal Bearer sessions both execute inside the SMRT
 request database and tenant context. The public read-only server-MCP path
@@ -450,8 +450,8 @@ Use this procedure only after the reviewed deployment containing this change is
 live. Keep the production audit read-only even though bounded write operations
 are discoverable.
 
-1. Have Will provide an already-authenticated `https://iolaus.localhost/admin/`
-   tab. Do not create a new production login/session as part of this audit.
+1. Have the deployment owner provide an already-authenticated admin tab. Do
+   not create a new production login/session as part of this audit.
 2. Attach a fresh external WebMCP harness to that existing tab and request its
    tool inventory. Optionally call only the bounded browse and inspect tools.
    Do not invoke a write tool, click a control, navigate to an employer site,

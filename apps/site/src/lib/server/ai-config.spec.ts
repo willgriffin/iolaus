@@ -282,7 +282,7 @@ describe('AI config profiles', () => {
         timeout: 105_000,
         type: 'bifrost',
         usageTags: {
-          app: 'iolaus.localhost',
+          app: 'iolaus',
           environment: 'test',
           feature: 'unspecified',
           profile: 'cheap',
@@ -323,7 +323,7 @@ describe('AI config profiles', () => {
       expect.objectContaining({
         timeout: 105_000,
         usageTags: {
-          app: 'iolaus.localhost',
+          app: 'iolaus',
           environment: 'prod-secret',
           feature: 'source-crawl',
           profile: 'cheap',

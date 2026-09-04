@@ -47,6 +47,30 @@ export type IolausDatabaseConfig = {
   url: string;
 };
 
+export function validateHostedDatabaseUrl(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
+    throw new Error('Public deployments require a PostgreSQL DATABASE_URL.');
+  }
+  const databaseName = decodeURIComponent(
+    url.pathname.replace(/^\/+|\/+$/gu, ''),
+  );
+  const expectedNamespace = appId.replaceAll('-', '_');
+  if (
+    !databaseName ||
+    ['iolaus', 'iolaus_dev', 'postgres', 'template0', 'template1'].includes(
+      databaseName,
+    ) ||
+    (databaseName !== expectedNamespace &&
+      !databaseName.startsWith(`${expectedNamespace}_`))
+  ) {
+    throw new Error(
+      'Public deployments must use an operator-unique PostgreSQL database name.',
+    );
+  }
+  return databaseUrl;
+}
+
 export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (applicationRuntime.profile === 'local') {
     const paths = resolveIolausLocalRuntimePaths();
@@ -56,7 +80,7 @@ export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (!databaseUrl) {
     throw new Error(`${applicationRuntime.profile} requires DATABASE_URL.`);
   }
-  return { type: 'postgres', url: databaseUrl };
+  return { type: 'postgres', url: validateHostedDatabaseUrl(databaseUrl) };
 }
 
 let localRuntimePromise: Promise<LocalApplicationRuntime> | undefined;
@@ -75,6 +99,7 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
   if (!databaseUrl) {
     throw new Error(`${applicationRuntime.profile} requires DATABASE_URL.`);
   }
+  const validatedDatabaseUrl = validateHostedDatabaseUrl(databaseUrl);
   const authenticationProvider =
     applicationRuntime.providers.authentication.provider;
   if (authenticationProvider === 'owner-bootstrap') {
@@ -93,7 +118,8 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     },
     database: {
       engine: 'postgres',
-      connect: () => getDatabase({ type: 'postgres', url: databaseUrl }),
+      connect: () =>
+        getDatabase({ type: 'postgres', url: validatedDatabaseUrl }),
       close: async (db) => db.close?.(),
     },
     authentication: {

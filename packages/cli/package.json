@@ -1,7 +1,7 @@
 {
   "name": "@willgriffin/iolaus-cli",
   "version": "0.0.0",
-  "description": "Authenticated CLI and MCP bridge for iolaus.localhost.",
+  "description": "Authenticated CLI and MCP bridge for Iolaus.",
   "type": "module",
   "bin": {
     "iolaus": "dist/data-cli.js",

@@ -50,4 +50,5 @@ features stay disabled and can be diagnosed with `pnpm app:doctor`.
 The checked-in candidate data is empty. Never commit candidate information,
 credentials, generated resumes, application history or deployment secrets.
 See [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) and
-[provenance](PROVENANCE.md). License: [MIT](LICENSE).
+[provenance](PROVENANCE.md). See [configuration](docs/configuration.md) for
+local and self-hosted identity/authentication setup. License: [MIT](LICENSE).

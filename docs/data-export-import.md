@@ -10,6 +10,12 @@ configured current database. `db:verify-backup` verifies its contents before
 and keep backups outside Git. Local-only and explicit-production confirmation
 guards remain enforced by the maintenance tooling.
 
+Backups are bound to the local data directory or hosted public origin that
+created them. When deliberately moving a verified backup to a replacement
+machine, data directory, or public origin, pass `--allow-installation-rebind`
+to `db:import` or `db:reset-local`. Without that explicit recovery flag,
+cross-installation restores fail closed.
+
 The predecessor application's cluster-specific production pull command is
 intentionally not distributed. Restore and backup procedures for a hosted
 deployment belong to that deployment's private operational documentation.

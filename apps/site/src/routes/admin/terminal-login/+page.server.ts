@@ -1,4 +1,5 @@
 import { fail } from '@sveltejs/kit';
+import { getAppConfig } from '$lib/server/app-config';
 import {
   approveCliAuthRequest,
   getCliAuthRequestForUserCode,
@@ -12,6 +13,7 @@ export const load: PageServerLoad = async ({ url }) => {
     : null;
 
   return {
+    appName: getAppConfig().appName,
     requestStatus: request?.status ?? null,
     userCode,
   };

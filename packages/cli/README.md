@@ -1,6 +1,6 @@
 # @willgriffin/iolaus-cli
 
-Authenticated CLI and MCP bridge for the iolaus.localhost SMRT app.
+Authenticated CLI and MCP bridge for the Iolaus SMRT app.
 
 ## Local Checkout
 
@@ -55,14 +55,26 @@ Example source-crawl status text content:
 pnpm --filter @willgriffin/iolaus-cli build
 pnpm --filter @willgriffin/iolaus-cli pack
 pnpm add -g ./packages/cli/iolaus-cli-0.0.0.tgz
-iolaus auth login --server https://your-app-host
+export IOLAUS_SERVER_URL=https://your-app-host
+iolaus auth login
 iolaus opportunities list
 iolaus-mcp
 ```
 
-The CLI stores its bearer session in `~/.config/iolaus.localhost/config.json`.
+The CLI stores its bearer session in a target-specific
+`~/.config/<SMRT_APP_ID>-<server-fingerprint>/config.json`; the `--server`
+option (or `IOLAUS_SERVER_URL`) selects that namespace. Keep the selector set
+for every command targeting a non-default server; the CLI deliberately never
+guesses a target from credentials stored for another installation.
+Older development snapshots stored a token under
+`~/.config/iolaus.localhost/`; run `iolaus auth login` after upgrading rather
+than copying that credential into the new namespace.
 Agents can override configuration with `IOLAUS_SERVER_URL`,
 `IOLAUS_TOKEN`, or `IOLAUS_CLI_CONFIG`.
+Those credential variables intentionally remain `IOLAUS_*` even when
+`SMRT_APP_ID` names a custom installation; the app ID changes storage and MCP
+identity, while the stable credential prefix keeps the configured target and
+its bearer token together.
 
 `pnpm --filter @willgriffin/iolaus-cli smoke` runs a deterministic contract check
 against a fake local SMRT API. It verifies auth status, resource discovery,

@@ -1472,7 +1472,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'text/html,application/xhtml+xml',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1534,7 +1534,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1651,7 +1651,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -1694,7 +1694,7 @@ describe('opportunity source crawler discovery', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://remoteok.com/api', {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'iolaus.localhost source crawler',
+        'User-Agent': 'Iolaus source crawler',
       },
     });
   });
@@ -2364,7 +2364,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2374,7 +2374,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2476,7 +2476,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2541,7 +2541,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -2601,7 +2601,7 @@ describe('opportunity source crawler discovery', () => {
       {
         headers: {
           Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8',
-          'User-Agent': 'iolaus.localhost source crawler',
+          'User-Agent': 'Iolaus source crawler',
         },
       },
     );
@@ -5524,6 +5524,32 @@ it('uses crawl4ai spider defaults from environment when configured', () => {
       delete process.env.KUBERNETES_SERVICE_HOST;
     else process.env.KUBERNETES_SERVICE_HOST = previous.kubernetes;
   }
+});
+
+it('uses the configured product identity for its crawl4ai user agent', () => {
+  vi.stubEnv('HAVE_SPIDER_CRAWL4AI_URL', 'http://127.0.0.1:11235');
+  vi.stubEnv('IOLAUS_APP_NAME', 'My Career Hub');
+
+  expect(defaultOpportunitySpiderOptions()).toMatchObject({
+    userAgent: 'Mozilla/5.0 (compatible; My Career Hub source crawler; )',
+  });
+});
+
+it('sanitizes an explicit crawl4ai user-agent override', () => {
+  vi.stubEnv('HAVE_SPIDER_CRAWL4AI_URL', 'http://127.0.0.1:11235');
+  vi.stubEnv('HAVE_SPIDER_USER_AGENT', 'Career Hub\r\nInjected: yes');
+
+  const options = defaultOpportunitySpiderOptions();
+  expect(options).toMatchObject({
+    adapter: 'crawl4ai',
+    userAgent: 'Career HubInjected: yes',
+  });
+  if (options.adapter !== 'crawl4ai') {
+    throw new Error('Expected configured crawl4ai adapter.');
+  }
+  const userAgent = options.userAgent;
+  if (!userAgent) throw new Error('Expected a crawl4ai user agent.');
+  expect(() => new Headers({ 'user-agent': userAgent })).not.toThrow();
 });
 
 it('records PeoplePerHour fetch body-shape diagnostics when production returns no cards', async () => {

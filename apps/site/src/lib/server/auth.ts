@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getAuth, type TokenClaims } from '@happyvertical/auth';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import {
@@ -16,46 +16,131 @@ import {
   destroySessionCookie,
 } from '@happyvertical/smrt-users/sveltekit';
 import { error, type RequestEvent, redirect } from '@sveltejs/kit';
+import {
+  getAppConfig,
+  getAuthConfiguration,
+  getConfiguredPublicOrigin,
+  isLoopbackAddress,
+  isLoopbackHostname,
+  type RuntimeProfile,
+} from './app-config.js';
+import {
+  applicationRuntime,
+  applicationRuntimeConfiguration,
+} from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 
-const oidcStateCookie = 'iolaus_oidc_state';
-const oidcVerifierCookie = 'iolaus_oidc_code_verifier';
-const oidcNonceCookie = 'iolaus_oidc_nonce';
+const appConfig = getAppConfig();
 
-export const sessionCookieName = 'iolaus_session';
-export const singleTenantSlug = 'iolaus.localhost';
-export const singleTenantName = 'iolaus.localhost';
+/**
+ * Browser storage scopes itself by origin (including a local port), while
+ * cookies do not. Every auth cookie uses a configuration fingerprint so
+ * separate loopback or public-origin installations never share a login.
+ */
+export function getRuntimeCookieName(
+  baseCookieName: string,
+  runtimeConfiguration: string,
+): string {
+  return `${baseCookieName}_${runtimeConfiguration.slice(0, 12)}`;
+}
+
+function authCookieConfiguration(): string {
+  if (applicationRuntime.profile === 'local') {
+    return applicationRuntimeConfiguration;
+  }
+
+  const publicOrigin = getConfiguredPublicOrigin();
+  return createHash('sha256')
+    .update(publicOrigin ?? applicationRuntimeConfiguration)
+    .digest('hex');
+}
+
+const cookieConfiguration = authCookieConfiguration();
+const oidcStateCookie = getRuntimeCookieName(
+  appConfig.oidcStateCookieName,
+  cookieConfiguration,
+);
+const oidcVerifierCookie = getRuntimeCookieName(
+  appConfig.oidcVerifierCookieName,
+  cookieConfiguration,
+);
+const oidcNonceCookie = getRuntimeCookieName(
+  appConfig.oidcNonceCookieName,
+  cookieConfiguration,
+);
+
+export const sessionCookieName = getRuntimeCookieName(
+  appConfig.sessionCookieName,
+  cookieConfiguration,
+);
+export const loginNextCookieName = getRuntimeCookieName(
+  appConfig.loginNextCookieName,
+  cookieConfiguration,
+);
+export const singleTenantSlug = appConfig.tenantSlug;
+export const singleTenantName = appConfig.tenantName;
+
+/**
+ * The first generic Iolaus release supersedes a local development snapshot.
+ * Keep the old tenant reachable during an in-place upgrade, but never create
+ * it for a new or custom application identity.
+ */
+export function tenantSlugsFor(
+  appId: string,
+  runtimeProfile: RuntimeProfile = appConfig.runtimeProfile,
+): readonly string[] {
+  return appId === 'iolaus' && runtimeProfile === 'local'
+    ? [appId, 'iolaus.localhost']
+    : [appId];
+}
 
 function isLocalhost(event: RequestEvent): boolean {
-  return ['127.0.0.1', '::1', 'localhost'].includes(event.url.hostname);
+  if (!isLoopbackHostname(event.url.hostname)) return false;
+  // Local owner bootstrap never trusts reverse-proxy forwarding metadata. A
+  // proxied or tunneled installation must use the public OIDC profile instead.
+  for (const [header] of event.request.headers) {
+    if (
+      header === 'forwarded' ||
+      header === 'via' ||
+      header === 'x-envoy-external-address' ||
+      header === 'x-real-ip' ||
+      header === 'x-rewrite-url' ||
+      header.startsWith('x-forwarded-') ||
+      header.startsWith('x-original-') ||
+      /(?:^|-)(?:client|connecting|user)-?ip$/u.test(header) ||
+      /(?:^|-)remote-(?:addr|ip)$/u.test(header)
+    ) {
+      return false;
+    }
+  }
+  try {
+    return isLoopbackAddress(event.getClientAddress());
+  } catch {
+    return false;
+  }
 }
 
 export function canUseLocalDevLogin(event: RequestEvent): boolean {
-  return (
-    process.env.NODE_ENV !== 'production' &&
-    !process.env.IOLAUS_OIDC_CLIENT_ID &&
-    isLocalhost(event)
-  );
-}
-
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    error(500, `Missing required environment variable: ${name}`);
-  }
-  return value;
+  return getAuthConfiguration().kind === 'local' && isLocalhost(event);
 }
 
 function getBaseUrl(event: RequestEvent): string {
-  return event.url.origin;
+  return getConfiguredPublicOrigin() ?? event.url.origin;
 }
 
 function getRedirectUri(event: RequestEvent): string {
   return `${getBaseUrl(event)}/auth/oidc/callback`;
 }
 
+export function shouldUseSecureCookies(
+  runtimeProfile: RuntimeProfile,
+  requestProtocol: string,
+): boolean {
+  return runtimeProfile !== 'local' || requestProtocol === 'https:';
+}
+
 function secureCookie(event: RequestEvent): boolean {
-  return event.url.protocol === 'https:';
+  return shouldUseSecureCookies(applicationRuntime.profile, event.url.protocol);
 }
 
 function setTemporaryCookie(
@@ -77,15 +162,21 @@ function deleteTemporaryCookie(event: RequestEvent, name: string): void {
 }
 
 export async function getOidcAuth(event: RequestEvent) {
+  const configuration = getAuthConfiguration();
+  if (configuration.kind !== 'self-hosted') {
+    const message =
+      configuration.kind === 'invalid'
+        ? configuration.message
+        : `${appConfig.appName} local mode does not require OIDC authentication.`;
+    error(503, message);
+  }
+
   return await getAuth({
     type: 'keycloak',
-    serverUrl:
-      process.env.IOLAUS_OIDC_SERVER_URL ?? 'https://identity.example.invalid',
-    // OIDC currently fronts OIDC with Dex at the issuer root. The
-    // @happyvertical/auth Keycloak provider normalizes /realms/.. to that root.
-    realm: process.env.IOLAUS_OIDC_REALM ?? '..',
-    clientId: getRequiredEnv('IOLAUS_OIDC_CLIENT_ID'),
-    clientSecret: process.env.IOLAUS_OIDC_CLIENT_SECRET,
+    serverUrl: configuration.oidc.serverUrl,
+    realm: configuration.oidc.realm,
+    clientId: configuration.oidc.clientId,
+    clientSecret: configuration.oidc.clientSecret,
     redirectUri: getRedirectUri(event),
     scopes: ['openid', 'profile', 'email'],
     usePKCE: true,
@@ -143,17 +234,24 @@ function normalizeLoginEmail(email: string | undefined): string {
 
 export function isAuthorizedOidcAdmin(
   claims: Pick<TokenClaims, 'email' | 'email_verified'>,
-  configuredEmails = process.env.IOLAUS_OIDC_ADMIN_EMAILS,
+  configuredEmails?: string,
 ): boolean {
   if (claims.email_verified !== true) return false;
 
   const email = normalizeLoginEmail(claims.email);
   if (!email) return false;
 
+  const authConfiguration = getAuthConfiguration();
+  const resolvedEmails =
+    configuredEmails ??
+    (authConfiguration.kind === 'self-hosted'
+      ? authConfiguration.oidc.adminEmails.join(',')
+      : undefined);
+
   const allowedEmails = new Set(
-    (configuredEmails ?? '')
+    (resolvedEmails ?? '')
       .split(',')
-      .map((value) => normalizeLoginEmail(value))
+      .map((value: string) => normalizeLoginEmail(value))
       .filter(Boolean),
   );
   return allowedEmails.has(email);
@@ -225,7 +323,15 @@ async function ensureSingleTenantAccess(user: User) {
 
   await roles.seedSystemRoles();
 
-  let tenant = await tenants.findBySlug(singleTenantSlug);
+  const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
+    appConfig.appId,
+    appConfig.runtimeProfile,
+  );
+  let tenant = await tenants.findBySlug(primaryTenantSlug ?? singleTenantSlug);
+  for (const slug of legacyTenantSlugs) {
+    if (tenant) break;
+    tenant = await tenants.findBySlug(slug);
+  }
   if (!tenant) {
     tenant = await tenants.create({
       name: singleTenantName,

@@ -13,6 +13,7 @@ import {
   mcpToolPrefix,
   resolveMcpToolClass,
 } from './api-exposure.js';
+import { getAppConfig, getConfiguredMcpServerName } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
   applicationWorkflowSyncOperations,
@@ -147,9 +148,8 @@ export const sourceReadMcpTools = [
 export function createGenerator(user?: Pick<User, 'id'> | null): MCPGenerator {
   return new MCPGenerator(
     {
-      description:
-        'SMRT MCP server for iolaus.localhost employment-search data.',
-      name: 'iolaus-employment-search',
+      description: `SMRT MCP server for ${getAppConfig().appName} employment-search data.`,
+      name: getConfiguredMcpServerName(),
       version: '0.1.0',
     },
     {

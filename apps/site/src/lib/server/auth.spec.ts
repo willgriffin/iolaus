@@ -1,29 +1,53 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   canUseLocalDevLogin,
+  getRuntimeCookieName,
   isAuthorizedOidcAdmin,
+  shouldUseSecureCookies,
+  tenantSlugsFor,
   tokenClaimsToOidcClaims,
 } from './auth';
 
-const originalClientId = process.env.IOLAUS_OIDC_CLIENT_ID;
-const originalNodeEnv = process.env.NODE_ENV;
+describe('shouldUseSecureCookies', () => {
+  it('keeps deployed cookies secure behind TLS termination', () => {
+    expect(shouldUseSecureCookies('self-hosted', 'http:')).toBe(true);
+    expect(shouldUseSecureCookies('cloud', 'http:')).toBe(true);
+    expect(shouldUseSecureCookies('local', 'http:')).toBe(false);
+    expect(shouldUseSecureCookies('local', 'https:')).toBe(true);
+  });
+});
+
+const authEnvNames = [
+  'IOLAUS_OIDC_ADMIN_EMAILS',
+  'IOLAUS_OIDC_CLIENT_ID',
+  'IOLAUS_OIDC_REALM',
+  'IOLAUS_OIDC_SERVER_URL',
+  'IOLAUS_PUBLIC_URL',
+  'SMRT_APP_ID',
+  'SMRT_RUNTIME_PROFILE',
+] as const;
+const originalEnvironment = Object.fromEntries(
+  authEnvNames.map((name) => [name, process.env[name]]),
+);
 
 afterEach(() => {
-  if (originalClientId === undefined) {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-  } else {
-    process.env.IOLAUS_OIDC_CLIENT_ID = originalClientId;
-  }
-
-  if (originalNodeEnv === undefined) {
-    delete process.env.NODE_ENV;
-  } else {
-    process.env.NODE_ENV = originalNodeEnv;
+  for (const name of authEnvNames) {
+    const original = originalEnvironment[name];
+    if (original === undefined) delete process.env[name];
+    else process.env[name] = original;
   }
 });
 
-function requestEventFor(url: string) {
-  return { url: new URL(url) } as never;
+function requestEventFor(
+  url: string,
+  clientAddress = '127.0.0.1',
+  headers?: HeadersInit,
+) {
+  return {
+    getClientAddress: () => clientAddress,
+    request: new Request(url, { headers }),
+    url: new URL(url),
+  } as never;
 }
 
 describe('tokenClaimsToOidcClaims', () => {
@@ -84,25 +108,25 @@ describe('isAuthorizedOidcAdmin', () => {
 });
 
 describe('canUseLocalDevLogin', () => {
-  it('allows localhost development login when OIDC is not configured', () => {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-    process.env.NODE_ENV = 'development';
+  it('allows loopback local login without OIDC, including a production build', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
 
     expect(
       canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
     ).toBe(true);
+    expect(
+      canUseLocalDevLogin(requestEventFor('http://[::1]:5173/login', '::1')),
+    ).toBe(true);
   });
 
-  it('does not allow the fallback outside local development', () => {
-    delete process.env.IOLAUS_OIDC_CLIENT_ID;
-    process.env.NODE_ENV = 'production';
-
-    expect(
-      canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
-    ).toBe(false);
-
-    process.env.NODE_ENV = 'development';
-    process.env.IOLAUS_OIDC_CLIENT_ID = 'client-id';
+  it('does not allow the fallback for a public deployment', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://iolaus.example.com';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.com';
+    process.env.IOLAUS_OIDC_REALM = 'iolaus';
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'iolaus';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'owner@example.com';
 
     expect(
       canUseLocalDevLogin(requestEventFor('http://localhost:5173/login')),
@@ -110,5 +134,73 @@ describe('canUseLocalDevLogin', () => {
     expect(
       canUseLocalDevLogin(requestEventFor('https://iolaus.localhost/login')),
     ).toBe(false);
+  });
+
+  it('refuses a forged loopback host header from a remote peer', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
+
+    expect(
+      canUseLocalDevLogin(
+        requestEventFor('http://localhost:5173/login', '203.0.113.8'),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a forwarded request even when a loopback proxy is the peer', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'local';
+
+    for (const header of [
+      'cf-connecting-ip',
+      'fastly-client-ip',
+      'forwarded',
+      'via',
+      'x-appengine-user-ip',
+      'x-azure-clientip',
+      'x-cluster-client-ip',
+      'x-envoy-external-address',
+      'x-forwarded-for',
+      'x-forwarded-port',
+      'x-forwarded-vendor-extension',
+      'x-original-forwarded-for',
+      'x-original-vendor-extension',
+      'x-real-ip',
+    ]) {
+      expect(
+        canUseLocalDevLogin(
+          requestEventFor('http://localhost:5173/login', '127.0.0.1', {
+            [header]: '203.0.113.8',
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+});
+
+describe('getRuntimeCookieName', () => {
+  it('isolates local browser cookies by runtime configuration', () => {
+    expect(
+      getRuntimeCookieName('iolaus_session', '4e90ec8f9d9b0123456789abcdef'),
+    ).toBe('iolaus_session_4e90ec8f9d9b');
+    expect(
+      getRuntimeCookieName('iolaus_session', '6709d982e1890123456789abcdef'),
+    ).toBe('iolaus_session_6709d982e189');
+  });
+
+  it('isolates public cookies with their configured-origin fingerprint', () => {
+    expect(
+      getRuntimeCookieName(
+        'career_hub_session',
+        '8c2a194fe2150123456789abcdef',
+      ),
+    ).toBe('career_hub_session_8c2a194fe215');
+  });
+});
+
+describe('tenantSlugsFor', () => {
+  it('reads legacy local data without creating a legacy tenant for new installs', () => {
+    expect(tenantSlugsFor('iolaus')).toEqual(['iolaus', 'iolaus.localhost']);
+    expect(tenantSlugsFor('iolaus', 'self-hosted')).toEqual(['iolaus']);
+    expect(tenantSlugsFor('iolaus', 'cloud')).toEqual(['iolaus']);
+    expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
   });
 });

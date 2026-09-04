@@ -331,7 +331,7 @@ describe('job-search WebMCP route', () => {
       expect.objectContaining({
         action: 'webmcp.job_search_browse_opportunities',
         actorUserId: 'user-1',
-        agentClass: 'iolaus.localhost/owner',
+        agentClass: 'iolaus/owner',
         event: 'owner_principal.audit',
         metadata: { tool: 'job_search_browse_opportunities' },
         onBehalfOfUserId: 'user-1',
