@@ -51,11 +51,24 @@ const INCLUDED_INTERNAL_TABLES = new Set([
 
 /** Security/transient state is deliberately absent from every bundle. */
 export const EXCLUDED_SOURCE_TABLES = Object.freeze([
+  '_smrt_ai_usage',
+  '_smrt_changes',
+  '_smrt_changes_pending',
+  '_smrt_contexts',
+  '_smrt_dispatch',
+  '_smrt_dispatch_subscriptions',
+  '_smrt_embeddings',
   '_smrt_forge_deliveries',
   '_smrt_forge_projection_checkpoints',
+  '_smrt_migrations',
+  '_smrt_schema_migrations',
   '_smrt_workers',
   'api_keys',
   'cli_auth_requests',
+  'data_repair_audit',
+  'data_repair_runs',
+  'local_backup_restore_evidence',
+  'local_source_crawl_restore_evidence',
   'magic_link_tokens',
   'oidc_profile_email_reservations',
   'sessions',
@@ -79,6 +92,21 @@ export const TRANSIENT_TARGET_TABLES = Object.freeze([
   'data_surface_idempotency',
   'data_surface_preview_tokens',
 ]);
+
+/** Exact framework bootstrap rows created by the pinned target migration. */
+export const FRESH_TARGET_BASELINE_COUNTS = Object.freeze({
+  candidate_profiles: 1,
+  opportunity_intelligence_controls: 1,
+  permissions: 580,
+  place_types: 5,
+  profile_relationship_types: 5,
+  profile_types: 3,
+  resume_profiles: 1,
+  resume_tailoring_configs: 1,
+  role_permissions: 1448,
+  roles: 4,
+  tags: 8,
+});
 
 export const REQUIRED_PREDECESSOR_MIGRATIONS = Object.freeze([
   '20260525_smrt_native_employment_backfill',
@@ -528,6 +556,19 @@ export function validateDatabaseSchema(actualColumns, contract, label) {
   }
 }
 
+export function validateSourceTableInventory(actualNames, sourceContract) {
+  const allowed = new Set([
+    ...sourceContract.map((table) => table.name),
+    ...EXCLUDED_SOURCE_TABLES,
+  ]);
+  if (
+    actualNames.some((name) => typeof name !== 'string' || !allowed.has(name)) ||
+    sourceContract.some((table) => !actualNames.includes(table.name))
+  ) {
+    throw new Error('Predecessor table inventory is incompatible.');
+  }
+}
+
 async function inspectDatabaseSchema(db, contract) {
   const names = contract.map((table) => table.name);
   if (names.length === 0) return [];
@@ -890,6 +931,7 @@ export async function importMigrationBundle({
   ) {
     throw new Error('Migration run identity conflicts with the stored ledger.');
   }
+  if (!existingRun) await store.assertFreshTarget([...sourceNames]);
   if (!dryRun && !existingRun) await store.createRun(bundle);
 
   const targetByName = new Map(targetContract.map((table) => [table.name, table]));
@@ -1028,6 +1070,15 @@ async function readSourceSnapshot(db, sourceContract) {
     if (!['on', 'true'].includes(String(readOnly.rows[0]?.readOnly))) {
       throw new Error('Predecessor snapshot transaction is not read-only.');
     }
+    const sourceTables = await tx.query(
+      `SELECT table_name AS "tableName"
+       FROM information_schema.tables
+       WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`,
+    );
+    validateSourceTableInventory(
+      sourceTables.rows.map((row) => row.tableName),
+      sourceContract,
+    );
     validateDatabaseSchema(
       await inspectDatabaseSchema(tx, sourceContract),
       sourceContract,
@@ -1225,6 +1276,18 @@ export class PostgresMigrationStore {
       );
       if (Number(result.rows[0]?.count || 0) !== 0) {
         throw new Error(`Iolaus-only state table ${name} must be empty.`);
+      }
+    }
+  }
+
+  async assertFreshTarget(names) {
+    for (const name of names) {
+      const result = await this.db.query(
+        `SELECT COUNT(*) AS count FROM ${quoteIdentifier(name)}`,
+      );
+      const expected = FRESH_TARGET_BASELINE_COUNTS[name] || 0;
+      if (Number(result.rows[0]?.count || 0) !== expected) {
+        throw new Error('Migration requires a freshly initialized target.');
       }
     }
   }

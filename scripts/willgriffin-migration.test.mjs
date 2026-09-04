@@ -16,6 +16,7 @@ import {
   planMigrationTables,
   validateDatabaseSchema,
   validateMigrationBundle,
+  validateSourceTableInventory,
 } from './willgriffin-migration.mjs';
 
 function column(name, type = 'TEXT', options = {}) {
@@ -215,6 +216,12 @@ class MemoryMigrationStore {
     }
   }
 
+  async assertFreshTarget(names) {
+    if (names.some((name) => (this.rows.get(name)?.size || 0) > 0)) {
+      throw new Error('Migration requires a freshly initialized target.');
+    }
+  }
+
   async ensureLedger() {
     this.ledgerInitialized = true;
   }
@@ -315,6 +322,21 @@ test('pinned manifests produce the explicitly approved predecessor contract', ()
   }
 });
 
+test('predecessor table inventory permits only migrated or explicitly excluded tables', () => {
+  const contract = [table('tenants', [column('id', 'UUID')])];
+  assert.doesNotThrow(() =>
+    validateSourceTableInventory(['tenants', '_smrt_migrations'], contract),
+  );
+  assert.throws(
+    () => validateSourceTableInventory(['tenants', 'unexpected_private_table'], contract),
+    /table inventory is incompatible/,
+  );
+  assert.throws(
+    () => validateSourceTableInventory(['_smrt_migrations'], contract),
+    /table inventory is incompatible/,
+  );
+});
+
 test('synthetic migration is deterministic, preserves ids, and reruns without changes', async () => {
   const { sourceContract, targetContract } = fixtureContracts();
   const sourceRows = restoredBackupShapedRows();
@@ -333,9 +355,7 @@ test('synthetic migration is deterministic, preserves ids, and reruns without ch
   assert.equal(firstBundle.sourceFingerprint, secondBundle.sourceFingerprint);
   assert.equal(firstBundle.runId, secondBundle.runId);
 
-  const store = new MemoryMigrationStore({
-    tenants: [{ id: 'tenant-1', name: 'Owner tenant' }],
-  });
+  const store = new MemoryMigrationStore();
   const first = await importMigrationBundle({
     bundle: firstBundle,
     sourceContract,
@@ -351,8 +371,8 @@ test('synthetic migration is deterministic, preserves ids, and reruns without ch
     batchSize: 2,
   });
 
-  assert.equal(first.counts.inserted, 11);
-  assert.equal(first.counts.skipped, 1);
+  assert.equal(first.counts.inserted, 12);
+  assert.equal(first.counts.skipped, 0);
   assert.deepEqual(second.counts, {
     attempted: 0,
     inserted: 0,
@@ -386,9 +406,7 @@ test('restored-backup-shaped fixture resumes from a committed cursor and stays i
     sourceContract,
     targetContract,
   });
-  const store = new MemoryMigrationStore({
-    users: [{ id: 'user-1', email: 'stale@example.invalid' }],
-  });
+  const store = new MemoryMigrationStore();
   let committed = 0;
   await assert.rejects(
     importMigrationBundle({
@@ -514,6 +532,26 @@ test('dry-run reports changes without creating a ledger or mutating target rows'
   assert.equal(report.counts.inserted, 12);
   assert.equal(store.rows.size, 0);
   assert.equal(store.ledgerInitialized, false);
+});
+
+test('a new migration run refuses a populated migrated target', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const bundle = buildMigrationBundle({
+    sourceRows: restoredBackupShapedRows(),
+    sourceContract,
+    targetContract,
+  });
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store: new MemoryMigrationStore({
+        tenants: [{ id: 'unrelated-target-row', name: 'Existing target' }],
+      }),
+    }),
+    /requires a freshly initialized target/,
+  );
 });
 
 test('migration refuses populated target-only DataSurface state', async () => {
@@ -832,13 +870,20 @@ test('logical target checksums normalize database scalar representations', async
       ['achievements', [{ id: 'score-1', score: '1.5' }]],
     ]),
   });
+  const store = new MemoryMigrationStore({
+    achievements: [{ id: 'score-1', score: 1.5 }],
+  });
+  store.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
   const result = await importMigrationBundle({
     bundle,
     sourceContract,
     targetContract,
-    store: new MemoryMigrationStore({
-      achievements: [{ id: 'score-1', score: 1.5 }],
-    }),
+    store,
   });
   assert.deepEqual(result.counts, {
     attempted: 1,

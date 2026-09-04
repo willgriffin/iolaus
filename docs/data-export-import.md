@@ -40,15 +40,19 @@ pnpm migration:willgriffin:export -- /absolute/private/path/migration.json
 
 The export transaction is repeatable-read and read-only. The command verifies
 the predecessor migration markers and compatible logical schema before reading
-any rows: table names, logical columns, types, and required nullability must
-match, while database integrity guards may strengthen nullable manifest fields
+any rows: every table must be migrated or explicitly excluded, and logical
+columns, types, and required nullability must match, while database integrity
+guards may strengthen nullable manifest fields
 or add derived PostgreSQL-generated bridge columns. Its deterministic source
 fingerprint and run ID exclude timestamps. The bundle is created atomically
 with mode `0600` outside the checkout; it contains private candidate and
 application data and must be handled like a database backup. Never commit it,
 attach it to an issue or pull request, or paste it into logs.
 
-Build and migrate a fresh PostgreSQL Iolaus target before import. Stop web and
+Build and migrate a fresh PostgreSQL Iolaus target before import. A new run
+requires the exact pinned framework bootstrap row counts and refuses any other
+pre-existing migrated data; only a ledger-backed resume may continue after
+committed batches. Stop web and
 both worker processes, enable maintenance mode, and preview the exact bundle:
 
 ```bash
@@ -69,8 +73,9 @@ Iolaus-only DataSurface preview and idempotency tables must be empty before and
 after import. Historical schedules are imported disabled, and nonterminal job
 records are made terminal so rehearsal cannot replay work. It intentionally
 excludes sessions, API keys, magic-link and CLI authentication tokens/limits,
-transient OIDC email reservations, live worker leases, Forge delivery leases,
-and obsolete SMRT class/object metadata. OIDC and Nostr identity rows,
+transient OIDC email reservations, live worker and Forge delivery leases,
+framework migration/change/dispatch/embedding telemetry, local restore
+evidence, repair audit state, and obsolete SMRT class/object metadata. OIDC and Nostr identity rows,
 including encrypted-at-rest identity fields, are preserved inside the private
 bundle; their values never appear in command output or reconciliation reports.
 
