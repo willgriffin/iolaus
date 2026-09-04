@@ -69,6 +69,33 @@ committed table cursor. A second completed run verifies the imported rows,
 makes zero changes, and returns the same reconciliation digest. Output contains
 only counts and hashes, never row values or database endpoints.
 
+Before any row write, the importer performs deterministic reconciliation over
+the complete logical bundle. Missing or quarantined parents cascade to their
+children; duplicate natural keys, duplicate junction cardinality, malformed
+UUIDs, cross-tenant references, self-reference cycles, and unqualified
+persisted SMRT `_meta_type` values are quarantined instead of being silently
+nulled or dropped. The sole automatic relationship repair converts an empty
+nullable reference sentinel to `null`; every such repair has the stable reason
+code `EMPTY_REFERENCE_TO_NULL`.
+
+The command's `reconciliation` object is the secret-safe machine report. It
+contains per-table attempted/imported/updated/skipped/rejected/repaired counts,
+source/accepted/target SHA-256 checksums, hashed selectors for collisions and
+quarantine entries, deterministic reason codes, the exact excluded-table
+inventory, and an operator summary. It never contains source ids, natural keys,
+field values, file paths, URLs, credentials, or database details. The same
+report and quarantine records are persisted in
+`_iolaus_migration_reconciliation` and `_iolaus_migration_quarantine`; a retry
+reconstructs stable-ID collision evidence from the row ledger so its report
+digest remains deterministic after interruption.
+
+SMRT upgrade hazards are explicit in every report: the predecessor domain
+package qualifier rename is handled by table-bound import, persisted framework
+STI values remain package-qualified, `sources.id` uses the approved UUID-to-text
+adapter, application schedule ids retain their text form, and obsolete
+`smrt_classes`/`smrt_objects` registries are excluded. Reconciliation refuses
+invalid rows rather than guessing a replacement identifier.
+
 Iolaus-only DataSurface preview and idempotency tables must be empty before and
 after import. Historical schedules are imported disabled, and nonterminal job
 records are made terminal so rehearsal cannot replay work. It intentionally
@@ -80,7 +107,15 @@ including encrypted-at-rest identity fields, are preserved inside the private
 bundle; their values never appear in command output or reconciliation reports.
 
 Referenced file discovery, copying, checksums, and quarantine are a separate
-asset-migration phase. This logical importer preserves the database records but
-does not copy asset bytes. Expanded relationship repair and rejected-record
-reporting likewise run through the reconciliation phase; this importer fails
-closed rather than dropping an incompatible row.
+asset-migration phase. The reconciliation module exposes the common asset
+result contract used by that phase: each referenced asset is verified by
+source/target checksum and receives `ASSET_MISSING` or
+`ASSET_CHECKSUM_MISMATCH` when it cannot be admitted. This logical importer
+preserves database records but does not copy asset bytes.
+
+Intentional exclusions are always reported: sessions and authentication
+tokens, API/CLI credentials, deployment secrets, live worker/delivery leases,
+framework migration/change telemetry, transient DataSurface preview and
+idempotency rows, and unreferenced temporary artifacts. `approvedOmissions` is
+empty unless an owner-approved rehearsal decision explicitly changes it; never
+edit a report after generation to hide an omission.

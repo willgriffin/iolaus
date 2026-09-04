@@ -205,6 +205,7 @@ class MemoryMigrationStore {
     this.transientCounts = new Map();
     this.ledgerInitialized = false;
     this.commits = 0;
+    this.reconciliationReports = new Map();
   }
 
   async assertCompatible() {}
@@ -254,6 +255,25 @@ class MemoryMigrationStore {
     return Object.fromEntries(
       tableDefinition.columns.map((field) => [field.name, row[field.name]]),
     );
+  }
+
+  async getReconciliationReport(runId) {
+    return structuredClone(this.reconciliationReports.get(runId) || null);
+  }
+
+  async getUpdatedRows(runId) {
+    return [...this.rowLedger.entries()]
+      .filter(
+        ([key, value]) => key.startsWith(`${runId}:`) && value.action === 'update',
+      )
+      .map(([key]) => {
+        const [, tableName, ...sourceId] = key.split(':');
+        return { table: tableName, sourceId: sourceId.join(':') };
+      });
+  }
+
+  async recordReconciliation(runId, report) {
+    this.reconciliationReports.set(runId, structuredClone(report));
   }
 
   async commitBatch(input) {
@@ -385,6 +405,10 @@ test('synthetic migration is deterministic, preserves ids, and reruns without ch
     skipped: 0,
   });
   assert.equal(first.reconciliationDigest, second.reconciliationDigest);
+  assert.equal(
+    first.reconciliation.reportDigest,
+    second.reconciliation.reportDigest,
+  );
   assert.equal(store.rows.get('sources').get('source-1').id, 'source-1');
   assert.deepEqual(store.rows.get('sources').get('source-1'), {
     id: 'source-1',
@@ -451,6 +475,10 @@ test('restored-backup-shaped fixture resumes from a committed cursor and stays i
     batchSize: 1,
   });
   assert.equal(resumed.reconciliationDigest, verification.reconciliationDigest);
+  assert.equal(
+    resumed.reconciliation.reportDigest,
+    verification.reconciliation.reportDigest,
+  );
   assert.equal(verification.counts.attempted, 0);
 });
 
@@ -505,16 +533,14 @@ test('self-referential rows are parent-first and resume by ordered cursor', asyn
   assert.equal(resumed.counts.inserted, 1);
   assert.equal(store.rows.get('tenants').size, 2);
 
-  assert.throws(
-    () =>
-      buildMigrationBundle({
-        sourceContract,
-        targetContract,
-        sourceRows: new Map([
-          ['tenants', [{ id: 'orphan', parent_tenant_id: 'missing' }]],
-        ]),
-      }),
-    /hierarchy is incomplete/,
+  assert.doesNotThrow(() =>
+    buildMigrationBundle({
+      sourceContract,
+      targetContract,
+      sourceRows: new Map([
+        ['tenants', [{ id: 'orphan', parent_tenant_id: 'missing' }]],
+      ]),
+    }),
   );
 });
 
@@ -929,6 +955,50 @@ test('logical target checksums normalize database scalar representations', async
     updated: 0,
     skipped: 1,
   });
+});
+
+test('stable-ID updates remain reconciled across retries', async () => {
+  const achievements = table('achievements', [column('id'), column('title')]);
+  const sourceContract = [achievements];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['achievements', [{ id: 'achievement-1', title: 'Source title' }]],
+    ]),
+  });
+  const store = new MemoryMigrationStore({
+    achievements: [{ id: 'achievement-1', title: 'Target title' }],
+  });
+  store.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
+  store.rowLedger.set(`${bundle.runId}:bootstrap:sentinel`, { action: 'insert' });
+  const first = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+  });
+  const retry = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+  });
+  assert.equal(first.reconciliation.collisions.length, 1);
+  assert.equal(
+    first.reconciliation.reportDigest,
+    retry.reconciliation.reportDigest,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(retry.reconciliation.collisions),
+    /achievement-1/,
+  );
 });
 
 test('PostgreSQL batch failures do not expose bound private values', async () => {
