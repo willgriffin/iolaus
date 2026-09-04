@@ -17,7 +17,11 @@ import {
   KeyedLockTimeoutError,
   withKeyedFileLock,
 } from '../../../../../scripts/smrt-keyed-lock.mjs';
-import { prepareApplicationStateRoot } from '../../../../../scripts/smrt-runtime-identity.mjs';
+import {
+  isLocalLoopbackHost,
+  isSupportedNodeVersion,
+  prepareApplicationStateRoot,
+} from '../../../../../scripts/smrt-runtime-identity.mjs';
 
 const temporaryRoots: string[] = [];
 
@@ -36,6 +40,14 @@ afterEach(() => {
 });
 
 describe('local runtime operation boundaries', () => {
+  it('enforces the complete minimum Node version and shared loopback set', () => {
+    expect(isSupportedNodeVersion('24.17.99')).toBe(false);
+    expect(isSupportedNodeVersion('24.18.0')).toBe(true);
+    expect(isSupportedNodeVersion('25.0.0')).toBe(true);
+    expect(isLocalLoopbackHost('localhost')).toBe(true);
+    expect(isLocalLoopbackHost('0.0.0.0')).toBe(false);
+  });
+
   it('serializes a key across processes and fails on a bounded deadline', async () => {
     const stateRoot = temporaryRoot();
     const signal = join(stateRoot, 'held');

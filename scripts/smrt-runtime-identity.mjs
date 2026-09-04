@@ -17,6 +17,30 @@ import {
   validateApplicationId,
 } from '@happyvertical/smrt-app-runtime';
 
+const LOCAL_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const MINIMUM_NODE_VERSION = [24, 18, 0];
+
+/** @param {string} host */
+export function isLocalLoopbackHost(host) {
+  return LOCAL_LOOPBACK_HOSTS.has(host);
+}
+
+/** @param {string} version */
+export function isSupportedNodeVersion(version) {
+  const actual = version.split('.').map((part) => Number(part));
+  if (
+    actual.length < MINIMUM_NODE_VERSION.length ||
+    actual.some((part) => !Number.isInteger(part) || part < 0)
+  ) {
+    return false;
+  }
+  for (let index = 0; index < MINIMUM_NODE_VERSION.length; index += 1) {
+    if (actual[index] > MINIMUM_NODE_VERSION[index]) return true;
+    if (actual[index] < MINIMUM_NODE_VERSION[index]) return false;
+  }
+  return true;
+}
+
 /**
  * Resolve one stable identity for CLI, development, and app operations.
  * @param {{sourceRoot?: string, packageName?: string, explicitId?: string}} [options]

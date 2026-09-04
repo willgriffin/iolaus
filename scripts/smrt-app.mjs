@@ -32,6 +32,8 @@ import {
 import {
   assertExternalArtifactPath,
   canonicalizeDataDirectory,
+  isLocalLoopbackHost,
+  isSupportedNodeVersion,
   prepareApplicationStateRoot,
   resolveApplicationId,
   resolveApplicationStateRoot,
@@ -640,7 +642,7 @@ async function doctor() {
     });
   }
 
-  if (Number(process.versions.node.split('.')[0]) < 24) {
+  if (!isSupportedNodeVersion(process.versions.node)) {
     findings.push({
       code: 'unsupported-node',
       severity: 'error',
@@ -691,11 +693,7 @@ async function doctor() {
       const host =
         process.env.HOST ||
         (runtime.profile === 'local' ? '127.0.0.1' : '0.0.0.0');
-      if (
-        runtime.profile === 'local' &&
-        host !== '127.0.0.1' &&
-        host !== '::1'
-      ) {
+      if (runtime.profile === 'local' && !isLocalLoopbackHost(host)) {
         findings.push({
           code: 'unsafe-local-bind',
           severity: 'error',

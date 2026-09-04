@@ -300,7 +300,7 @@ export async function executeImportPlan(tx, plan, exportedByName) {
       const columns = Object.keys(row);
       await tx.query(
         `INSERT INTO ${quoteIdentifier(table.name)} (${columns.map(quoteIdentifier).join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
-        ...columns.map((column) =>
+        columns.map((column) =>
           table.deferredColumns.has(column) ? null : row[column],
         ),
       );
@@ -321,8 +321,7 @@ export async function executeImportPlan(tx, plan, exportedByName) {
   for (const update of deferredUpdates) {
     await tx.query(
       `UPDATE ${quoteIdentifier(update.table.name)} SET ${quoteIdentifier(update.column)} = ? WHERE ${quoteIdentifier(update.primaryKey)} = ?`,
-      update.value,
-      update.primaryValue,
+      [update.value, update.primaryValue],
     );
   }
   return rowCount;
