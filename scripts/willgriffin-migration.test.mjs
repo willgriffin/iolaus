@@ -1008,6 +1008,53 @@ test('PostgreSQL batches reject a lost advisory-lock session', async () => {
   assert.equal(statements.length, 0);
 });
 
+test('PostgreSQL batches recheck session liveness after fencing the row', async () => {
+  const statements = [];
+  let active = true;
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback({
+        async query(sql) {
+          statements.push(sql);
+          if (sql.includes('FROM _iolaus_migration_leases')) {
+            active = false;
+            return { rows: [{ holder: 'former-holder' }] };
+          }
+          return { rows: [] };
+        },
+      });
+    },
+  });
+  store.migrationLease = {
+    holder: 'former-holder',
+    runId: 'run-1',
+    session: { isActive: () => active },
+  };
+
+  await assert.rejects(
+    store.commitBatch({
+      runId: 'run-1',
+      table: table('users', [column('id', 'UUID'), column('email')]),
+      operations: [
+        {
+          action: 'insert',
+          sourceId: 'user-1',
+          sourceChecksum: 'a'.repeat(64),
+          targetChecksum: 'b'.repeat(64),
+          targetValues: { id: 'user-1', email: 'owner@example.invalid' },
+        },
+      ],
+      cursor: 'user-1',
+      counts: { attempted: 1, inserted: 1, updated: 0, skipped: 0 },
+      complete: true,
+      tableChecksum: 'c'.repeat(64),
+    }),
+    /batch write failed/,
+  );
+  assert.equal(statements.length, 1);
+  assert.match(statements[0], /FOR UPDATE/);
+});
+
 test('PostgreSQL target reads normalize values by their logical schema types', async () => {
   const store = new PostgresMigrationStore({
     async query() {
