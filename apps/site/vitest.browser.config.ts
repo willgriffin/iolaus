@@ -13,6 +13,6 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['src/lib/components/sources/SourceCrawlProgress.browser.spec.ts'],
+    include: ['src/lib/components/sources/*.browser.spec.ts'],
   },
 });
