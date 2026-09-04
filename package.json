@@ -27,6 +27,7 @@
     "migration:willgriffin:import": "node scripts/smrt-app.mjs migration-import",
     "migration:willgriffin:assets:plan": "node scripts/smrt-app.mjs migration-assets-plan",
     "migration:willgriffin:assets:import": "node scripts/smrt-app.mjs migration-assets-import",
+    "migration:willgriffin:rehearse:synthetic": "node scripts/synthetic-migration-rehearsal.mjs",
     "demo:prepare": "node scripts/iolaus-demo.mjs prepare",
     "demo:smoke": "node scripts/iolaus-demo.mjs smoke",
     "demo:status": "node scripts/iolaus-demo.mjs status",

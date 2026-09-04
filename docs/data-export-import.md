@@ -211,3 +211,42 @@ preexisting mismatched target alias is quarantined and returns a nonzero exit.
 Run the import again after a process restart: it verifies the same manifest,
 makes no writes for checksum-identical assets, rechecks metadata and the alias,
 and emits the same reconciliation digest.
+
+## Synthetic rehearsal
+
+Before requesting access to any production backup, run the repository-owned
+synthetic rehearsal. It provisions a disposable loopback PostgreSQL cluster,
+creates isolated local asset roots, and tears both down after the run:
+
+```bash
+pnpm migration:willgriffin:rehearse:synthetic
+```
+
+The runner prefers an installed PostgreSQL server. When only the `libpq`
+clients are present, it uses an already-present `postgres:16-alpine` image and
+does not pull or publish images.
+
+The runner exercises a logical dry-run, an injected interruption after the
+first committed database batch, checkpoint resume, an idempotent rerun,
+deterministic reconciliation with one synthetic rejected relationship, asset
+journal recovery after a failed write, asset checksum verification, and a
+second zero-copy asset rerun. It then runs the deployed parity contract in its
+network-denied synthetic environment. To exercise an already-built candidate,
+pass exactly one immutable candidate selector:
+
+```bash
+pnpm migration:willgriffin:rehearse:synthetic -- \
+  --image-ref ghcr.io/willgriffin/iolaus/site@sha256:<released-digest>
+```
+
+`--local-image-id sha256:<docker-image-id>` is available for a local candidate.
+`--skip-parity` exists only for narrow development of the migration portion;
+evidence from such a run records the explicit skip and is not rehearsal exit
+evidence. The runner writes secret-free JSON under `.omo/evidence/issue-32/`.
+It never reads a production endpoint, accepts an external database URL, scans
+unreferenced assets, publishes an image, or changes infrastructure.
+
+This synthetic run does not satisfy the production-backup rehearsal checkpoint.
+That later operation still requires explicit owner approval, verified restorable
+database and asset backups, an isolated restore, and separate evidence from the
+real logical bundle.
