@@ -23,6 +23,8 @@
     "app:backup": "node scripts/smrt-app.mjs backup",
     "app:export": "node scripts/smrt-app.mjs export",
     "app:import": "node scripts/smrt-app.mjs import",
+    "migration:willgriffin:export": "node scripts/smrt-app.mjs migration-export",
+    "migration:willgriffin:import": "node scripts/smrt-app.mjs migration-import",
     "demo:prepare": "node scripts/iolaus-demo.mjs prepare",
     "demo:smoke": "node scripts/iolaus-demo.mjs smoke",
     "demo:status": "node scripts/iolaus-demo.mjs status",
@@ -38,7 +40,7 @@
     "dev": "turbo run dev",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "turbo run test && node --test scripts/smrt-worker-heartbeat.test.mjs scripts/deployed-parity.test.mjs && pnpm deploy:self-hosted:check",
+    "test": "node --test scripts/*.test.mjs && turbo run test && pnpm deploy:self-hosted:check",
     "format": "biome check --write .",
     "format-check": "biome ci --diagnostic-level=error .",
     "format:check": "pnpm format-check",
@@ -65,6 +67,7 @@
   "dependencies": {
     "@happyvertical/smrt-app-runtime": "0.45.0",
     "@happyvertical/smrt-config": "0.45.0",
+    "@happyvertical/smrt-scanner": "0.45.0",
     "@happyvertical/sql": "0.89.4"
   },
   "license": "MIT"

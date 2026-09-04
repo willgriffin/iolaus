@@ -1,0 +1,966 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  PostgresMigrationStore,
+  SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
+  SUPPORTED_TARGET_SCHEMA_FINGERPRINT,
+  buildMigrationBundle,
+  canonicalRowChecksum,
+  contractFingerprint,
+  derivePredecessorContract,
+  exportPredecessorMigration,
+  importMigrationBundle,
+  loadSupportedMigrationContracts,
+  parseMigrationBundle,
+  planMigrationTables,
+  validateDatabaseSchema,
+  validateMigrationBundle,
+  validateSourceTableInventory,
+  withSanitizedDatabaseFailure,
+} from './willgriffin-migration.mjs';
+
+function column(name, type = 'TEXT', options = {}) {
+  return {
+    name,
+    type,
+    notNull: options.notNull ?? true,
+    primaryKey: options.primaryKey ?? name === 'id',
+    referencesTable: options.referencesTable ?? null,
+  };
+}
+
+function table(name, columns) {
+  return { name, columns };
+}
+
+function fixtureContracts() {
+  const sourceContract = [
+    table('tenants', [column('id', 'UUID'), column('name')]),
+    table('users', [column('id', 'UUID'), column('email')]),
+    table('candidate_answers', [
+      column('id', 'UUID'),
+      column('label'),
+      column('value'),
+    ]),
+    table('candidate_profiles', [
+      column('id', 'UUID'),
+      column('user_id', 'UUID'),
+    ]),
+    table('sources', [
+      column('id', 'UUID'),
+      column('name'),
+      column('is_active', 'BOOLEAN'),
+    ]),
+    table('source_crawls', [column('id', 'UUID'), column('source_id')]),
+    table('opportunities', [
+      column('id', 'UUID'),
+      column('source_id'),
+      column('title'),
+    ]),
+    table('applications', [
+      column('id', 'UUID'),
+      column('opportunity_id'),
+      column('status'),
+    ]),
+    table('tasks', [
+      column('id', 'UUID'),
+      column('application_id'),
+      column('status'),
+    ]),
+    table('_smrt_agent_schedules', [
+      column('id', 'UUID'),
+      column('enabled', 'BOOLEAN'),
+      column('running_count', 'INTEGER'),
+      column('next_run', 'TIMESTAMP', { notNull: false }),
+    ]),
+    table('_smrt_jobs', [
+      column('id', 'UUID'),
+      column('status'),
+      column('updated_at', 'TIMESTAMP'),
+      column('completed_at', 'TIMESTAMP', { notNull: false }),
+      column('worker_id'),
+      column('worker_heartbeat', 'TIMESTAMP', { notNull: false }),
+    ]),
+    table('_smrt_job_events', [
+      column('id', 'UUID'),
+      column('job_id', 'UUID'),
+      column('message'),
+    ]),
+  ];
+  const targetAdditions = {
+    candidate_answers: [
+      column('provenance', 'TEXT', { notNull: false }),
+      column('saved_for_reuse_at', 'TIMESTAMP', { notNull: false }),
+      column('revoked_for_reuse_at', 'TIMESTAMP', { notNull: false }),
+    ],
+    candidate_profiles: [
+      column('facts_json'),
+      column('preferences_json'),
+      column('demographics_json'),
+      column('resume_asset_id'),
+      column('resume_source'),
+      column('onboarding_completed_at', 'TIMESTAMP', { notNull: false }),
+      column('demographics_consent_at', 'TIMESTAMP', { notNull: false }),
+    ],
+    opportunities: [
+      column('missed_crawls', 'INTEGER', { notNull: false }),
+      column('last_missed_at', 'TIMESTAMP', { notNull: false }),
+      column('archive_reason', 'TEXT', { notNull: false }),
+    ],
+    source_crawls: [
+      column('job_attempt', 'INTEGER', { notNull: false }),
+      column('request_key', 'TEXT', { notNull: false }),
+    ],
+    sources: [
+      column('source_role', 'TEXT', { notNull: false }),
+      column('parent_source_id', 'TEXT', { notNull: false }),
+      column('provider', 'TEXT', { notNull: false }),
+    ],
+  };
+  const targetContract = sourceContract.map((source) =>
+    table(source.name, [
+      ...source.columns.map((field) =>
+        source.name === 'sources' && field.name === 'id'
+          ? { ...field, type: 'TEXT' }
+          : field,
+      ),
+      ...(targetAdditions[source.name] || []),
+    ]),
+  );
+  return { sourceContract, targetContract };
+}
+
+function restoredBackupShapedRows() {
+  return new Map([
+    ['tenants', [{ id: 'tenant-1', name: 'Owner tenant' }]],
+    ['users', [{ id: 'user-1', email: 'owner@example.invalid' }]],
+    [
+      'candidate_answers',
+      [{ id: 'answer-1', label: 'Reusable question', value: 'private-answer' }],
+    ],
+    ['candidate_profiles', [{ id: 'candidate-1', user_id: 'user-1' }]],
+    ['sources', [{ id: 'source-1', name: 'Board', is_active: true }]],
+    ['source_crawls', [{ id: 'crawl-1', source_id: 'source-1' }]],
+    [
+      'opportunities',
+      [{ id: 'opportunity-1', source_id: 'source-1', title: 'Example role' }],
+    ],
+    [
+      'applications',
+      [
+        {
+          id: 'application-1',
+          opportunity_id: 'opportunity-1',
+          status: 'awaiting_user',
+        },
+      ],
+    ],
+    [
+      'tasks',
+      [{ id: 'task-1', application_id: 'application-1', status: 'done' }],
+    ],
+    [
+      '_smrt_agent_schedules',
+      [
+        {
+          id: 'schedule-1',
+          enabled: true,
+          running_count: 1,
+          next_run: '2026-09-04T00:00:00.000Z',
+        },
+      ],
+    ],
+    [
+      '_smrt_jobs',
+      [
+        {
+          id: 'job-1',
+          status: 'running',
+          updated_at: '2026-09-04T00:00:00.000Z',
+          completed_at: null,
+          worker_id: 'old-worker',
+          worker_heartbeat: '2026-09-04T00:00:00.000Z',
+        },
+      ],
+    ],
+    [
+      '_smrt_job_events',
+      [{ id: 'event-1', job_id: 'job-1', message: 'Historical event' }],
+    ],
+  ]);
+}
+
+class MemoryMigrationStore {
+  constructor(initial = {}) {
+    this.rows = new Map(
+      Object.entries(initial).map(([name, rows]) => [
+        name,
+        new Map(rows.map((row) => [row.id, structuredClone(row)])),
+      ]),
+    );
+    this.runs = new Map();
+    this.checkpoints = new Map();
+    this.rowLedger = new Map();
+    this.transientCounts = new Map();
+    this.ledgerInitialized = false;
+    this.commits = 0;
+  }
+
+  async assertCompatible() {}
+
+  async assertTransientTablesEmpty(names) {
+    for (const name of names) {
+      if ((this.transientCounts.get(name) || 0) !== 0) {
+        throw new Error(`Iolaus-only state table ${name} must be empty.`);
+      }
+    }
+  }
+
+  async assertFreshTarget(names) {
+    if (names.some((name) => (this.rows.get(name)?.size || 0) > 0)) {
+      throw new Error('Migration requires a freshly initialized target.');
+    }
+  }
+
+  async ensureLedger() {
+    this.ledgerInitialized = true;
+  }
+
+  async getRun(id) {
+    return this.runs.get(id) || null;
+  }
+
+  async hasCommittedRows(runId) {
+    return [...this.rowLedger.keys()].some((key) => key.startsWith(`${runId}:`));
+  }
+
+  async createRun(bundle) {
+    this.runs.set(bundle.runId, {
+      sourceFingerprint: bundle.sourceFingerprint,
+      sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+      targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+      status: 'running',
+    });
+  }
+
+  async getCheckpoint(runId, tableName) {
+    return structuredClone(this.checkpoints.get(`${runId}:${tableName}`) || null);
+  }
+
+  async getTargetRow(tableDefinition, id) {
+    const row = this.rows.get(tableDefinition.name)?.get(id);
+    if (!row) return null;
+    return Object.fromEntries(
+      tableDefinition.columns.map((field) => [field.name, row[field.name]]),
+    );
+  }
+
+  async commitBatch(input) {
+    const tableRows = this.rows.get(input.table.name) || new Map();
+    for (const operation of input.operations) {
+      if (operation.action !== 'skip') {
+        tableRows.set(operation.sourceId, structuredClone(operation.targetValues));
+      }
+      this.rowLedger.set(
+        `${input.runId}:${input.table.name}:${operation.sourceId}`,
+        {
+          sourceChecksum: operation.sourceChecksum,
+          targetChecksum: operation.targetChecksum,
+          action: operation.action,
+        },
+      );
+    }
+    this.rows.set(input.table.name, tableRows);
+    this.checkpoints.set(`${input.runId}:${input.table.name}`, {
+      cursor: input.cursor,
+      counts: structuredClone(input.counts),
+      complete: input.complete,
+    });
+    this.commits += 1;
+  }
+
+  async completeRun(runId, digest) {
+    this.runs.set(runId, {
+      ...this.runs.get(runId),
+      status: 'complete',
+      reconciliationDigest: digest,
+    });
+  }
+}
+
+test('pinned manifests produce the explicitly approved predecessor contract', async () => {
+  const { sourceContract, targetContract } = await loadSupportedMigrationContracts(
+    process.cwd(),
+  );
+  const migratedNames = new Set(sourceContract.map((entry) => entry.name));
+  assert.equal(sourceContract.length, 101);
+  assert.equal(
+    contractFingerprint(sourceContract),
+    SUPPORTED_SOURCE_SCHEMA_FINGERPRINT,
+  );
+  assert.equal(
+    contractFingerprint(
+      targetContract.filter((entry) => migratedNames.has(entry.name)),
+    ),
+    SUPPORTED_TARGET_SCHEMA_FINGERPRINT,
+  );
+  assert.deepEqual(
+    derivePredecessorContract(targetContract).map((entry) => entry.name),
+    sourceContract.map((entry) => entry.name),
+  );
+  const plan = planMigrationTables(sourceContract);
+  const position = new Map(plan.map((entry, index) => [entry.name, index]));
+  for (const entry of plan) {
+    for (const field of entry.columns) {
+      if (
+        field.referencesTable &&
+        field.referencesTable !== entry.name &&
+        position.has(field.referencesTable)
+      ) {
+        assert.ok(
+          position.get(field.referencesTable) < position.get(entry.name),
+          `${field.referencesTable} must precede ${entry.name}`,
+        );
+      }
+    }
+  }
+});
+
+test('predecessor table inventory permits only migrated or explicitly excluded tables', () => {
+  const contract = [table('tenants', [column('id', 'UUID')])];
+  assert.doesNotThrow(() =>
+    validateSourceTableInventory(['tenants', '_smrt_migrations'], contract),
+  );
+  assert.throws(
+    () => validateSourceTableInventory(['tenants', 'unexpected_private_table'], contract),
+    /table inventory is incompatible/,
+  );
+  assert.throws(
+    () => validateSourceTableInventory(['_smrt_migrations'], contract),
+    /table inventory is incompatible/,
+  );
+});
+
+test('synthetic migration is deterministic, preserves ids, and reruns without changes', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const sourceRows = restoredBackupShapedRows();
+  const firstBundle = buildMigrationBundle({
+    sourceRows,
+    sourceContract,
+    targetContract,
+    exportedAt: '2026-09-04T00:00:00.000Z',
+  });
+  const secondBundle = buildMigrationBundle({
+    sourceRows,
+    sourceContract,
+    targetContract,
+    exportedAt: '2026-09-05T00:00:00.000Z',
+  });
+  assert.equal(firstBundle.sourceFingerprint, secondBundle.sourceFingerprint);
+  assert.equal(firstBundle.runId, secondBundle.runId);
+
+  const store = new MemoryMigrationStore();
+  const first = await importMigrationBundle({
+    bundle: firstBundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 2,
+  });
+  const second = await importMigrationBundle({
+    bundle: secondBundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 2,
+  });
+
+  assert.equal(first.counts.inserted, 12);
+  assert.equal(first.counts.skipped, 0);
+  assert.deepEqual(second.counts, {
+    attempted: 0,
+    inserted: 0,
+    updated: 0,
+    skipped: 0,
+  });
+  assert.equal(first.reconciliationDigest, second.reconciliationDigest);
+  assert.equal(store.rows.get('sources').get('source-1').id, 'source-1');
+  assert.deepEqual(store.rows.get('sources').get('source-1'), {
+    id: 'source-1',
+    name: 'Board',
+    is_active: true,
+    source_role: 'root',
+    parent_source_id: null,
+    provider: 'unknown',
+  });
+  assert.equal(
+    store.rows.get('candidate_answers').get('answer-1').provenance,
+    'legacy_reusable_answer',
+  );
+  assert.equal(
+    store.rows.get('candidate_profiles').get('candidate-1').resume_source,
+    'not_selected',
+  );
+});
+
+test('restored-backup-shaped fixture resumes from a committed cursor and stays inert', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const bundle = buildMigrationBundle({
+    sourceRows: restoredBackupShapedRows(),
+    sourceContract,
+    targetContract,
+  });
+  const store = new MemoryMigrationStore();
+  let committed = 0;
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store,
+      batchSize: 1,
+      onBatchCommitted() {
+        committed += 1;
+        if (committed === 3) throw new Error('synthetic interruption');
+      },
+    }),
+    /synthetic interruption/,
+  );
+  const beforeResumeCommits = store.commits;
+  const resumed = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 1,
+  });
+  assert.ok(store.commits > beforeResumeCommits);
+  assert.equal(store.rows.get('users').get('user-1').email, 'owner@example.invalid');
+  assert.equal(store.rows.get('_smrt_jobs').get('job-1').status, 'cancelled');
+  assert.equal(store.rows.get('_smrt_jobs').get('job-1').worker_id, '');
+  assert.equal(
+    store.rows.get('_smrt_agent_schedules').get('schedule-1').enabled,
+    false,
+  );
+  const verification = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 1,
+  });
+  assert.equal(resumed.reconciliationDigest, verification.reconciliationDigest);
+  assert.equal(verification.counts.attempted, 0);
+});
+
+test('self-referential rows are parent-first and resume by ordered cursor', async () => {
+  const nodes = table('tenants', [
+    column('id', 'UUID'),
+    column('parent_tenant_id', 'UUID', {
+      notNull: false,
+      referencesTable: 'tenants',
+    }),
+  ]);
+  const sourceContract = [nodes];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      [
+        'tenants',
+        [
+          { id: 'child-a', parent_tenant_id: 'parent-z' },
+          { id: 'parent-z', parent_tenant_id: null },
+        ],
+      ],
+    ]),
+  });
+  assert.deepEqual(
+    bundle.tables[0].rows.map((row) => row.sourceId),
+    ['parent-z', 'child-a'],
+  );
+  const store = new MemoryMigrationStore();
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store,
+      batchSize: 1,
+      onBatchCommitted() {
+        throw new Error('synthetic interruption');
+      },
+    }),
+    /synthetic interruption/,
+  );
+  const resumed = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+    batchSize: 1,
+  });
+  assert.equal(resumed.counts.inserted, 1);
+  assert.equal(store.rows.get('tenants').size, 2);
+
+  assert.throws(
+    () =>
+      buildMigrationBundle({
+        sourceContract,
+        targetContract,
+        sourceRows: new Map([
+          ['tenants', [{ id: 'orphan', parent_tenant_id: 'missing' }]],
+        ]),
+      }),
+    /hierarchy is incomplete/,
+  );
+});
+
+test('dry-run reports changes without creating a ledger or mutating target rows', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const bundle = buildMigrationBundle({
+    sourceRows: restoredBackupShapedRows(),
+    sourceContract,
+    targetContract,
+  });
+  const store = new MemoryMigrationStore();
+  const report = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+    dryRun: true,
+  });
+  assert.equal(report.status, 'dry-run');
+  assert.equal(report.counts.inserted, 12);
+  assert.equal(store.rows.size, 0);
+  assert.equal(store.ledgerInitialized, false);
+});
+
+test('a new or ledger-empty migration run refuses a populated migrated target', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const bundle = buildMigrationBundle({
+    sourceRows: restoredBackupShapedRows(),
+    sourceContract,
+    targetContract,
+  });
+  const store = new MemoryMigrationStore({
+    tenants: [{ id: 'unrelated-target-row', name: 'Existing target' }],
+  });
+  store.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
+  await assert.rejects(
+    importMigrationBundle({
+      bundle,
+      sourceContract,
+      targetContract,
+      store,
+    }),
+    /requires a freshly initialized target/,
+  );
+});
+
+test('migration refuses populated target-only DataSurface state', async () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const bundle = buildMigrationBundle({
+    sourceRows: restoredBackupShapedRows(),
+    sourceContract,
+    targetContract,
+  });
+  const store = new MemoryMigrationStore();
+  store.transientCounts.set('data_surface_idempotency', 1);
+  await assert.rejects(
+    importMigrationBundle({ bundle, sourceContract, targetContract, store }),
+    /must be empty/,
+  );
+  assert.equal(store.ledgerInitialized, false);
+});
+
+test('schema and bundle compatibility fail closed without exposing private values', () => {
+  const { sourceContract, targetContract } = fixtureContracts();
+  const sourceRows = restoredBackupShapedRows();
+  const bundle = buildMigrationBundle({
+    sourceRows,
+    sourceContract,
+    targetContract,
+  });
+  const tampered = structuredClone(bundle);
+  tampered.tables.find((entry) => entry.name === 'candidate_answers').rows[0].values.value =
+    'do-not-print-this-value';
+  assert.throws(
+    () => validateMigrationBundle(tampered, sourceContract, targetContract),
+    (error) =>
+      !String(error.message).includes('do-not-print-this-value') &&
+      /validation failed/.test(error.message),
+  );
+
+  const alteredInventory = structuredClone(bundle);
+  alteredInventory.excludedTables = [];
+  assert.throws(
+    () =>
+      validateMigrationBundle(
+        alteredInventory,
+        sourceContract,
+        targetContract,
+      ),
+    /exclusion inventory is incompatible/,
+  );
+
+  assert.throws(
+    () =>
+      validateDatabaseSchema(
+        [
+          {
+            tableName: 'tenants',
+            columnName: 'id',
+            dataType: 'uuid',
+            isNullable: 'NO',
+          },
+        ],
+        [table('tenants', [column('id', 'UUID'), column('private_field')])],
+        'Predecessor schema',
+      ),
+    /columns are incompatible/,
+  );
+
+  assert.doesNotThrow(() =>
+    validateDatabaseSchema(
+      [
+        {
+          tableName: 'tenants',
+          columnName: 'id',
+          dataType: 'uuid',
+          isNullable: 'NO',
+        },
+        {
+          tableName: 'tenants',
+          columnName: 'optional_label',
+          dataType: 'text',
+          isNullable: 'NO',
+        },
+      ],
+      [
+        table('tenants', [
+          column('id', 'UUID'),
+          column('optional_label', 'TEXT', { notNull: false }),
+        ]),
+      ],
+      'Iolaus target schema',
+    ),
+  );
+
+  assert.throws(
+    () =>
+      validateDatabaseSchema(
+        [
+          {
+            tableName: 'tenants',
+            columnName: 'id',
+            dataType: 'uuid',
+            isNullable: 'YES',
+          },
+        ],
+        [table('tenants', [column('id', 'UUID')])],
+        'Iolaus target schema',
+      ),
+    /column type is incompatible/,
+  );
+
+  assert.doesNotThrow(() =>
+    validateDatabaseSchema(
+      [
+        {
+          tableName: 'tenants',
+          columnName: 'id',
+          dataType: 'uuid',
+          isNullable: 'NO',
+          isGenerated: 'NEVER',
+        },
+        {
+          tableName: 'tenants',
+          columnName: '_integrity_id_text',
+          dataType: 'text',
+          isNullable: 'YES',
+          isGenerated: 'ALWAYS',
+        },
+      ],
+      [table('tenants', [column('id', 'UUID')])],
+      'Iolaus target schema',
+    ),
+  );
+});
+
+test('malformed private bundles fail without echoing their contents', () => {
+  assert.throws(
+    () => parseMigrationBundle('{"candidate":"private-marker",broken}'),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      /not valid JSON/.test(error.message),
+  );
+});
+
+test('database boundary failures do not expose driver details', async () => {
+  await assert.rejects(
+    withSanitizedDatabaseFailure('Migration database operation failed.', async () => {
+      throw new Error('private-marker at postgresql://private-host/private-db');
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      !String(error.message).includes('private-host') &&
+      /database operation failed/.test(error.message),
+  );
+});
+
+test('source bundle preserves encrypted Nostr identity fields without logging values', () => {
+  const sourceContract = [
+    table('nostr_identities', [
+      column('id', 'UUID'),
+      column('pubkey'),
+      column('encrypted_privkey'),
+      column('encryption_iv'),
+      column('encryption_tag'),
+    ]),
+  ];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      [
+        'nostr_identities',
+        [
+          {
+            id: 'identity-1',
+            pubkey: 'public-key',
+            encrypted_privkey: 'private-marker',
+            encryption_iv: 'iv-marker',
+            encryption_tag: 'tag-marker',
+          },
+        ],
+      ],
+    ]),
+  });
+  const values = bundle.tables[0].rows[0].values;
+  assert.equal(values.encrypted_privkey, 'private-marker');
+  assert.equal(values.encryption_iv, 'iv-marker');
+  assert.equal(values.encryption_tag, 'tag-marker');
+  assert.equal(bundle.tables[0].rows[0].checksum, canonicalRowChecksum(values));
+  const tampered = structuredClone(bundle);
+  tampered.tables[0].rows[0].values.encrypted_privkey = 'changed-private-marker';
+  assert.throws(
+    () => validateMigrationBundle(tampered, sourceContract, targetContract),
+    (error) =>
+      !String(error.message).includes('changed-private-marker') &&
+      /validation failed/.test(error.message),
+  );
+});
+
+test('export refuses any source that is not explicitly attested as an isolated restore', async () => {
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {},
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    /verified isolated restore/,
+  );
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql://user:private-marker@production.example.invalid/willgriffin',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      /requires a local database/.test(error.message),
+  );
+});
+
+test('export refuses connection parameters that can override the isolated restore endpoint', async () => {
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql://user:private-marker@localhost/willgriffin_restore?host=production.example.invalid',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      !String(error.message).includes('production.example.invalid') &&
+      /requires a local database/.test(error.message),
+  );
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql:///willgriffin_restore',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    /requires a local database/,
+  );
+});
+
+test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async () => {
+  const calls = [];
+  const tx = {
+    async query(sql, parameters) {
+      calls.push({ sql, parameters });
+      return { rows: [] };
+    },
+  };
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback(tx);
+    },
+  });
+  await store.commitBatch({
+    runId: 'run-1',
+    table: table('users', [column('id', 'UUID'), column('email')]),
+    operations: [
+      {
+        action: 'insert',
+        sourceId: 'user-1',
+        sourceChecksum: 'a'.repeat(64),
+        targetChecksum: 'b'.repeat(64),
+        targetValues: { id: 'user-1', email: 'owner@example.invalid' },
+      },
+    ],
+    cursor: 'user-1',
+    counts: { attempted: 1, inserted: 1, updated: 0, skipped: 0 },
+    complete: true,
+    tableChecksum: 'c'.repeat(64),
+  });
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].sql, /ON CONFLICT \("id"\) DO UPDATE/);
+  assert.deepEqual(calls[0].parameters, [
+    'user-1',
+    'owner@example.invalid',
+  ]);
+  assert.equal(calls[1].parameters[2], 'user-1');
+  assert.deepEqual(calls[2].parameters.slice(3, 7), [1, 1, 0, 0]);
+});
+
+test('PostgreSQL target reads normalize values by their logical schema types', async () => {
+  const store = new PostgresMigrationStore({
+    async query() {
+      return {
+        rows: [
+          {
+            id: 'stable-id',
+            count: '9007199254740993',
+            score: '1.5',
+            enabled: 't',
+            metadata: '{"synthetic":true}',
+          },
+        ],
+      };
+    },
+  });
+  assert.deepEqual(
+    await store.getTargetRow(
+      table('typed_rows', [
+        column('id'),
+        column('count', 'INTEGER'),
+        column('score', 'REAL'),
+        column('enabled', 'BOOLEAN'),
+        column('metadata', 'JSON'),
+      ]),
+      'stable-id',
+    ),
+    {
+      id: 'stable-id',
+      count: '9007199254740993',
+      score: 1.5,
+      enabled: true,
+      metadata: { synthetic: true },
+    },
+  );
+});
+
+test('logical target checksums normalize database scalar representations', async () => {
+  const scores = table('achievements', [column('id'), column('score', 'REAL')]);
+  const sourceContract = [scores];
+  const targetContract = structuredClone(sourceContract);
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map([
+      ['achievements', [{ id: 'score-1', score: '1.5' }]],
+    ]),
+  });
+  const store = new MemoryMigrationStore({
+    achievements: [{ id: 'score-1', score: 1.5 }],
+  });
+  store.runs.set(bundle.runId, {
+    sourceFingerprint: bundle.sourceFingerprint,
+    sourceSchemaFingerprint: bundle.sourceSchemaFingerprint,
+    targetSchemaFingerprint: bundle.targetSchemaFingerprint,
+    status: 'running',
+  });
+  store.rowLedger.set(`${bundle.runId}:achievements:score-1`, {});
+  const result = await importMigrationBundle({
+    bundle,
+    sourceContract,
+    targetContract,
+    store,
+  });
+  assert.deepEqual(result.counts, {
+    attempted: 1,
+    inserted: 0,
+    updated: 0,
+    skipped: 1,
+  });
+});
+
+test('PostgreSQL batch failures do not expose bound private values', async () => {
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback({
+        async query() {
+          throw new Error('driver echoed private-marker');
+        },
+      });
+    },
+  });
+  await assert.rejects(
+    store.commitBatch({
+      runId: 'run-1',
+      table: table('candidate_answers', [column('id'), column('value')]),
+      operations: [
+        {
+          action: 'insert',
+          sourceId: 'answer-1',
+          sourceChecksum: 'a'.repeat(64),
+          targetChecksum: 'b'.repeat(64),
+          targetValues: { id: 'answer-1', value: 'private-marker' },
+        },
+      ],
+      cursor: 'answer-1',
+      counts: { attempted: 1, inserted: 1, updated: 0, skipped: 0 },
+      complete: true,
+      tableChecksum: 'c'.repeat(64),
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      /candidate_answers/.test(error.message),
+  );
+});

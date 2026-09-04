@@ -19,3 +19,68 @@ cross-installation restores fail closed.
 The predecessor application's cluster-specific production pull command is
 intentionally not distributed. Restore and backup procedures for a hosted
 deployment belong to that deployment's private operational documentation.
+
+## willgriffin.dev logical migration
+
+The predecessor migration is deliberately separate from generic Iolaus
+portability. It reads a verified, isolated PostgreSQL restore and writes a
+private logical bundle. The exporter requires a loopback PostgreSQL endpoint
+whose database name visibly contains `backup`, `issue`, `restore`, `test`, or
+`verify`, matching the repository's disposable restore guard. Connection URL
+query parameters and fragments are rejected so they cannot override that
+validated endpoint. Set the source
+URL through the environment so credentials do not enter shell history, then
+attest that the endpoint is the isolated restore:
+
+```bash
+export WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL='<isolated restore URL>'
+export WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE=true
+pnpm migration:willgriffin:export -- /absolute/private/path/migration.json
+```
+
+The export transaction is repeatable-read and read-only. The command verifies
+the predecessor migration markers and compatible logical schema before reading
+any rows: every table must be migrated or explicitly excluded, and logical
+columns, types, and required nullability must match, while database integrity
+guards may strengthen nullable manifest fields
+or add derived PostgreSQL-generated bridge columns. Its deterministic source
+fingerprint and run ID exclude timestamps. The bundle is created atomically
+with mode `0600` outside the checkout; it contains private candidate and
+application data and must be handled like a database backup. Never commit it,
+attach it to an issue or pull request, or paste it into logs.
+
+Build and migrate a fresh PostgreSQL Iolaus target before import. A new run
+requires the exact pinned framework bootstrap row counts and refuses any other
+pre-existing migrated data; only a ledger-backed resume may continue after
+committed batches. Stop web and
+both worker processes, enable maintenance mode, and preview the exact bundle:
+
+```bash
+export SMRT_RUNTIME_PROFILE=self-hosted
+export SMRT_MAINTENANCE_MODE=true
+pnpm migration:willgriffin:import -- /absolute/private/path/migration.json --dry-run
+pnpm migration:willgriffin:import -- /absolute/private/path/migration.json
+```
+
+Import is parent-first and preserves each stable source ID. Each bounded batch
+commits its target upserts and `_iolaus_migration_*` checkpoint/row ledger in
+one transaction. Restarting the same deterministic run resumes after the last
+committed table cursor. A second completed run verifies the imported rows,
+makes zero changes, and returns the same reconciliation digest. Output contains
+only counts and hashes, never row values or database endpoints.
+
+Iolaus-only DataSurface preview and idempotency tables must be empty before and
+after import. Historical schedules are imported disabled, and nonterminal job
+records are made terminal so rehearsal cannot replay work. It intentionally
+excludes sessions, API keys, magic-link and CLI authentication tokens/limits,
+transient OIDC email reservations, live worker and Forge delivery leases,
+framework migration/change/dispatch/embedding telemetry, local restore
+evidence, repair audit state, and obsolete SMRT class/object metadata. OIDC and Nostr identity rows,
+including encrypted-at-rest identity fields, are preserved inside the private
+bundle; their values never appear in command output or reconciliation reports.
+
+Referenced file discovery, copying, checksums, and quarantine are a separate
+asset-migration phase. This logical importer preserves the database records but
+does not copy asset bytes. Expanded relationship repair and rejected-record
+reporting likewise run through the reconciliation phase; this importer fails
+closed rather than dropping an incompatible row.
