@@ -452,7 +452,8 @@ async function stopAndReset(root) {
 async function smoke() {
   const root = initializeDemoRoot(mkdtempSync(join(tmpdir(), 'iolaus-demo-smoke-')));
   const evidencePath = resolve(
-    process.env.IOLAUS_DEMO_EVIDENCE || join(sourceRoot, '.omo', 'evidence', 'issue-7', 'demo-smoke.json'),
+    process.env.IOLAUS_DEMO_EVIDENCE ||
+      join(sourceRoot, '.omo', 'evidence', 'issue-12', 'demo-smoke.json'),
   );
   const environment = demoEnvironment(root, {
     PORT: process.env.IOLAUS_DEMO_SMOKE_PORT || '5797',

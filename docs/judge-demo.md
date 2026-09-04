@@ -108,7 +108,7 @@ browses and inspects the fictional application, records and re-reads one local
 triage decision, opens the existing triage modal, and asserts there is no
 approval/submission tool. It always stops the process and removes the
 temporary data root. A compact, secret-free result is written to
-`.omo/evidence/issue-7/demo-smoke.json` unless `IOLAUS_DEMO_EVIDENCE` selects a
+`.omo/evidence/issue-12/demo-smoke.json` unless `IOLAUS_DEMO_EVIDENCE` selects a
 different artifact path; `browser-command-center.png` beside it captures the
 rendered authenticated page. Set `IOLAUS_DEMO_BROWSER_EXECUTABLE` if Chrome or
 Chromium is installed outside the common platform paths.
