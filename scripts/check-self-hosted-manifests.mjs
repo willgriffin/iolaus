@@ -14,6 +14,7 @@ const taskWorkerEntrypoint = readFileSync(
   resolve(root, 'apps/site/scripts/jobs-worker.ts'),
   'utf8',
 );
+const serverHooks = readFileSync(resolve(root, 'apps/site/src/hooks.server.ts'), 'utf8');
 
 function render(path) {
   return execFileSync('kubectl', ['kustomize', path], {
@@ -107,6 +108,9 @@ if (
   !/stopHeartbeat, taskRunner/u.test(taskWorkerEntrypoint)
 ) {
   throw new Error('The task worker must claim tasks only and retain its required heartbeat through task drain.');
+}
+if (/await ensureApplicationRuntimeReady\(\)/u.test(serverHooks)) {
+  throw new Error('Server initialization must not block liveness on provider readiness.');
 }
 if (
   !/initContainers:[\s\S]*name: migrate[\s\S]*name: iolaus-migration-runtime[\s\S]*containers:[\s\S]*name: monitor[\s\S]*name: iolaus-monitor-runtime/u.test(
