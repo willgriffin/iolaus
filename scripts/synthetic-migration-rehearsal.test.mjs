@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   syntheticBundle,
   syntheticContracts,
+  syntheticRehearsalDisposition,
   validateRehearsalDatabaseUrl,
 } from './synthetic-migration-rehearsal.mjs';
 
@@ -16,6 +17,22 @@ test('synthetic rehearsal fixture is deterministic and includes reconciliation c
   assert.equal(first.tables.find((entry) => entry.name === 'tenants').rowCount, 2);
   assert.equal(first.tables.find((entry) => entry.name === 'users').rowCount, 2);
   assert.equal(first.tables.find((entry) => entry.name === 'resume_assets').rowCount, 1);
+});
+
+test('parity skip cannot produce exit-eligible synthetic rehearsal evidence', () => {
+  assert.deepEqual(
+    syntheticRehearsalDisposition({ status: 'skipped-by-explicit-operator-option' }),
+    {
+      status: 'partial',
+      syntheticRehearsalExitEligible: false,
+      productionRehearsalExitEligible: false,
+    },
+  );
+  assert.deepEqual(syntheticRehearsalDisposition({ status: 'passed' }), {
+    status: 'passed',
+    syntheticRehearsalExitEligible: true,
+    productionRehearsalExitEligible: false,
+  });
 });
 
 test('rehearsal database guard accepts only named loopback PostgreSQL databases', () => {

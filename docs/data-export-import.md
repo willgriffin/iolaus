@@ -241,8 +241,10 @@ pnpm migration:willgriffin:rehearse:synthetic -- \
 
 `--local-image-id sha256:<docker-image-id>` is available for a local candidate.
 `--skip-parity` exists only for narrow development of the migration portion;
-evidence from such a run records the explicit skip and is not rehearsal exit
-evidence. The runner writes secret-free JSON under `.omo/evidence/issue-32/`.
+evidence from such a run records `status: partial` and
+`syntheticRehearsalExitEligible: false`. The runner writes secret-free JSON
+under `.omo/evidence/issue-32/`. Every synthetic run records
+`productionRehearsalExitEligible: false`.
 It never reads a production endpoint, accepts an external database URL, scans
 unreferenced assets, publishes an image, or changes infrastructure.
 

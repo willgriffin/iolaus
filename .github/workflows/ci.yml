@@ -17,6 +17,61 @@ jobs:
       - run: >-
           pnpm format-check && pnpm lint && pnpm check && pnpm test && pnpm
           build && pnpm knowledge:check
+  synthetic-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres-image-cache:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - run: npm install --global pnpm@11.24.0
+      - run: pnpm install --frozen-lockfile
+      - name: Rehearse migration with disposable PostgreSQL
+        run: >-
+          pnpm migration:willgriffin:rehearse:synthetic -- --evidence
+          .omo/evidence/issue-32/ci-synthetic-rehearsal.json
+          --parity-evidence
+          .omo/evidence/issue-32/ci-deployed-parity-contract.json
+      - name: Verify synthetic rehearsal evidence
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          const evidence = JSON.parse(
+            readFileSync('.omo/evidence/issue-32/ci-synthetic-rehearsal.json'),
+          );
+          if (
+            evidence.status !== 'passed' ||
+            evidence.syntheticRehearsalExitEligible !== true ||
+            evidence.productionRehearsalExitEligible !== false ||
+            evidence.syntheticDataOnly !== true ||
+            evidence.productionAccessPerformed !== false ||
+            evidence.logicalMigration?.interruptionObserved !== true ||
+            evidence.logicalMigration
+              ?.reconciliationStableAcrossDryRunResumeRerun !== true ||
+            evidence.assetMigration?.reconciliationStableAcrossResumeRerun !==
+              true ||
+            evidence.assetMigration?.copiedOnIdempotentRerun !== 0 ||
+            evidence.candidateParity?.status !== 'passed' ||
+            evidence.secretValuesIncluded !== false
+          ) {
+            throw new Error('Synthetic rehearsal evidence is not admissible.');
+          }
+          EOF
+      - name: Upload secret-free rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iolaus-synthetic-rehearsal-${{ github.sha }}
+          path: |
+            .omo/evidence/issue-32/ci-synthetic-rehearsal.json
+            .omo/evidence/issue-32/ci-deployed-parity-contract.json
+          if-no-files-found: error
   candidate-image:
     runs-on: ubuntu-latest
     timeout-minutes: 45

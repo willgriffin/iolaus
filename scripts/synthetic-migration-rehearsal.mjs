@@ -500,6 +500,15 @@ function runParity(argv, evidencePath) {
   };
 }
 
+export function syntheticRehearsalDisposition(parity) {
+  const eligible = parity?.status === 'passed';
+  return {
+    status: eligible ? 'passed' : 'partial',
+    syntheticRehearsalExitEligible: eligible,
+    productionRehearsalExitEligible: false,
+  };
+}
+
 function writeEvidence(path, evidence) {
   const absolute = resolve(path);
   mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
@@ -524,9 +533,10 @@ export async function runSyntheticMigrationRehearsal({
     root,
   });
   const parity = runParity(argv, parityEvidencePath);
+  const disposition = syntheticRehearsalDisposition(parity);
   const evidence = {
     schema: 'iolaus-synthetic-migration-rehearsal:v1',
-    status: 'passed',
+    ...disposition,
     revision: gitRevision(),
     syntheticDataOnly: true,
     productionAccessPerformed: false,
