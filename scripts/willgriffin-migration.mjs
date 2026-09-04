@@ -1733,6 +1733,7 @@ export class PostgresMigrationStore {
            acquired_at = CURRENT_TIMESTAMP`,
         [holder, runId],
       );
+      this.migrationLease = { holder, runId, session };
       return await operation();
     } finally {
       try {
@@ -1745,8 +1746,35 @@ export class PostgresMigrationStore {
           'willgriffin-logical-migration',
         ]);
       } finally {
+        if (this.migrationLease?.holder === holder) {
+          this.migrationLease = null;
+        }
         await session.release();
       }
+    }
+  }
+
+  async assertMigrationLease(db, runId) {
+    const lease = this.migrationLease;
+    if (!lease || lease.runId !== runId) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
+    if (lease.session?.isActive && !lease.session.isActive()) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
+    // Locking the fencing row inside every write transaction prevents a former
+    // owner from committing after its advisory-lock session disappears. A new
+    // owner must replace this row first, and replacement waits for any active
+    // fenced transaction to finish.
+    const result = await db.query(
+      `SELECT holder FROM _iolaus_migration_leases
+       WHERE lease_name = 'willgriffin-logical-migration'
+         AND holder = ? AND run_id = ?
+       FOR UPDATE`,
+      [lease.holder, runId],
+    );
+    if (result.rows.length !== 1) {
+      throw new Error('Logical migration lease ownership was lost.');
     }
   }
 
@@ -1890,18 +1918,21 @@ export class PostgresMigrationStore {
   }
 
   async createRun(bundle) {
-    await this.db.query(
-      `INSERT INTO _iolaus_migration_runs
-       (run_id, source_fingerprint, source_schema_fingerprint,
-        target_schema_fingerprint, status)
-       VALUES (?, ?, ?, ?, 'running')`,
-      [
-        bundle.runId,
-        bundle.sourceFingerprint,
-        bundle.sourceSchemaFingerprint,
-        bundle.targetSchemaFingerprint,
-      ],
-    );
+    await this.db.transaction(async (tx) => {
+      await this.assertMigrationLease(tx, bundle.runId);
+      await tx.query(
+        `INSERT INTO _iolaus_migration_runs
+         (run_id, source_fingerprint, source_schema_fingerprint,
+          target_schema_fingerprint, status)
+         VALUES (?, ?, ?, ?, 'running')`,
+        [
+          bundle.runId,
+          bundle.sourceFingerprint,
+          bundle.sourceSchemaFingerprint,
+          bundle.targetSchemaFingerprint,
+        ],
+      );
+    });
   }
 
   async getCheckpoint(runId, tableName) {
@@ -1978,6 +2009,7 @@ export class PostgresMigrationStore {
   async recordReconciliation(runId, report) {
     try {
       await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
         await this.writeReconciliation(tx, runId, report);
       });
     } catch {
@@ -2027,6 +2059,7 @@ export class PostgresMigrationStore {
   }) {
     try {
       await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
         const tables = [...tableContracts].sort((left, right) =>
           left.name.localeCompare(right.name),
         );
@@ -2076,6 +2109,7 @@ export class PostgresMigrationStore {
   }) {
     try {
       await this.db.transaction(async (tx) => {
+        await this.assertMigrationLease(tx, runId);
         for (const operation of operations) {
           if (operation.action !== 'skip') {
             const columns = table.columns.map((column) => column.name);
@@ -2146,14 +2180,17 @@ export class PostgresMigrationStore {
   }
 
   async completeRun(runId, digest) {
-    await this.db.query(
-      `UPDATE _iolaus_migration_runs
-       SET status = 'complete', reconciliation_digest = ?,
-           completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE run_id = ?`,
-      [digest, runId],
-    );
+    await this.db.transaction(async (tx) => {
+      await this.assertMigrationLease(tx, runId);
+      await tx.query(
+        `UPDATE _iolaus_migration_runs
+         SET status = 'complete', reconciliation_digest = ?,
+             completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE run_id = ?`,
+        [digest, runId],
+      );
+    });
   }
 }
 

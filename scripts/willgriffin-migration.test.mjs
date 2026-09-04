@@ -905,6 +905,9 @@ test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async 
   const tx = {
     async query(sql, parameters) {
       calls.push({ sql, parameters });
+      if (sql.includes('FROM _iolaus_migration_leases')) {
+        return { rows: [{ holder: 'holder-1' }] };
+      }
       return { rows: [] };
     },
   };
@@ -913,6 +916,7 @@ test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async 
       return await callback(tx);
     },
   });
+  store.migrationLease = { holder: 'holder-1', runId: 'run-1' };
   await store.commitBatch({
     runId: 'run-1',
     table: table('users', [column('id', 'UUID'), column('email')]),
@@ -930,14 +934,78 @@ test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async 
     complete: true,
     tableChecksum: 'c'.repeat(64),
   });
-  assert.equal(calls.length, 3);
-  assert.match(calls[0].sql, /ON CONFLICT \("id"\) DO UPDATE/);
-  assert.deepEqual(calls[0].parameters, [
+  assert.equal(calls.length, 4);
+  assert.match(calls[0].sql, /FOR UPDATE/);
+  assert.match(calls[1].sql, /ON CONFLICT \("id"\) DO UPDATE/);
+  assert.deepEqual(calls[1].parameters, [
     'user-1',
     'owner@example.invalid',
   ]);
-  assert.equal(calls[1].parameters[2], 'user-1');
-  assert.deepEqual(calls[2].parameters.slice(3, 7), [1, 1, 0, 0]);
+  assert.equal(calls[2].parameters[2], 'user-1');
+  assert.deepEqual(calls[3].parameters.slice(3, 7), [1, 1, 0, 0]);
+});
+
+test('PostgreSQL batches reject a replaced lease before target writes', async () => {
+  const statements = [];
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback({
+        async query(sql) {
+          statements.push(sql);
+          return { rows: [] };
+        },
+      });
+    },
+  });
+  store.migrationLease = { holder: 'former-holder', runId: 'run-1' };
+
+  await assert.rejects(
+    store.commitBatch({
+      runId: 'run-1',
+      table: table('users', [column('id', 'UUID'), column('email')]),
+      operations: [],
+      cursor: '',
+      counts: { attempted: 0, inserted: 0, updated: 0, skipped: 0 },
+      complete: true,
+      tableChecksum: 'c'.repeat(64),
+    }),
+    /batch write failed/,
+  );
+  assert.equal(statements.length, 1);
+  assert.match(statements[0], /FOR UPDATE/);
+});
+
+test('PostgreSQL batches reject a lost advisory-lock session', async () => {
+  const statements = [];
+  const store = new PostgresMigrationStore({
+    async transaction(callback) {
+      return await callback({
+        async query(sql) {
+          statements.push(sql);
+          return { rows: [{ holder: 'former-holder' }] };
+        },
+      });
+    },
+  });
+  store.migrationLease = {
+    holder: 'former-holder',
+    runId: 'run-1',
+    session: { isActive: () => false },
+  };
+
+  await assert.rejects(
+    store.commitBatch({
+      runId: 'run-1',
+      table: table('users', [column('id', 'UUID'), column('email')]),
+      operations: [],
+      cursor: '',
+      counts: { attempted: 0, inserted: 0, updated: 0, skipped: 0 },
+      complete: true,
+      tableChecksum: 'c'.repeat(64),
+    }),
+    /batch write failed/,
+  );
+  assert.equal(statements.length, 0);
 });
 
 test('PostgreSQL target reads normalize values by their logical schema types', async () => {
@@ -1398,12 +1466,16 @@ test('PostgreSQL finalization locks and rechecks the complete target snapshot', 
       return await callback({
         async query(sql) {
           statements.push(sql);
+          if (sql.includes('FROM _iolaus_migration_leases')) {
+            return { rows: [{ holder: 'holder-1' }] };
+          }
           if (sql.includes('SELECT')) return { rows: [{ id: 'changed-row' }] };
           return { rows: [] };
         },
       });
     },
   });
+  store.migrationLease = { holder: 'holder-1', runId: 'run' };
   await assert.rejects(
     store.finalizeRun({
       runId: 'run',
@@ -1414,6 +1486,7 @@ test('PostgreSQL finalization locks and rechecks the complete target snapshot', 
     }),
     /final reconciliation failed/,
   );
-  assert.ok(statements[0].includes('LOCK TABLE'));
+  assert.ok(statements[0].includes('FOR UPDATE'));
+  assert.ok(statements[1].includes('LOCK TABLE'));
   assert.ok(!statements.some((sql) => sql.includes("SET status = 'complete'")));
 });
