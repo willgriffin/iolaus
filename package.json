@@ -30,6 +30,7 @@
     "demo:test": "node --test scripts/iolaus-demo.spec.mjs",
     "worker": "node scripts/smrt-worker.mjs task",
     "worker:schedule": "node scripts/smrt-worker.mjs schedule",
+    "deploy:self-hosted:check": "node scripts/check-self-hosted-manifests.mjs",
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || echo 'Skipping lefthook install (not in git repository)'",
     "build": "turbo run build",
     "check": "turbo run check",

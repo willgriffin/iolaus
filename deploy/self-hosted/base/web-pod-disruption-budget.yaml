@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: iolaus-web
+  labels:
+    app.kubernetes.io/name: iolaus
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: iolaus
+      app.kubernetes.io/component: web

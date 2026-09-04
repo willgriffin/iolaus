@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iolaus-web
+  labels:
+    app.kubernetes.io/name: iolaus
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: iolaus
+spec:
+  replicas: 2
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: iolaus
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iolaus
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: iolaus
+    spec:
+      # The migration command is serialized by PostgreSQL's advisory lock. Each
+      # independently rolling workload still runs it before its own process.
+      terminationGracePeriodSeconds: 90
+      imagePullSecrets:
+        - name: iolaus-registry
+      initContainers:
+        - name: migrate
+          image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
+          command:
+            - /bin/sh
+            - -ec
+            - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+          envFrom:
+            - secretRef:
+                name: iolaus-runtime
+          env:
+            - name: SMRT_RUNTIME_PROFILE
+              value: self-hosted
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+      containers:
+        - name: web
+          image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: iolaus-runtime
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: SMRT_RUNTIME_PROFILE
+              value: self-hosted
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+          lifecycle:
+            preStop:
+              exec:
+                # Give EndpointSlice propagation time before Node receives SIGTERM.
+                command: ["/bin/sh", "-ec", "sleep 10"]
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false

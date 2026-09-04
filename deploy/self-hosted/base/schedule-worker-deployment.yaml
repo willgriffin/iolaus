@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iolaus-schedule-worker
+  labels:
+    app.kubernetes.io/name: iolaus
+    app.kubernetes.io/component: schedule-worker
+    app.kubernetes.io/part-of: iolaus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: iolaus
+      app.kubernetes.io/component: schedule-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iolaus
+        app.kubernetes.io/component: schedule-worker
+        app.kubernetes.io/part-of: iolaus
+    spec:
+      terminationGracePeriodSeconds: 90
+      imagePullSecrets:
+        - name: iolaus-registry
+      initContainers:
+        - name: migrate
+          image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
+          command:
+            - /bin/sh
+            - -ec
+            - cd /app && pnpm --filter @willgriffin/iolaus-site db:migrate
+          envFrom:
+            - secretRef:
+                name: iolaus-runtime
+          env:
+            - name: SMRT_RUNTIME_PROFILE
+              value: self-hosted
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+      containers:
+        # Only this deployment creates due schedules. Provider crawls remain
+        # task jobs, so the task worker is independently drainable and visible.
+        - name: schedule-worker
+          image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
+          command: ["pnpm", "worker:schedule"]
+          envFrom:
+            - secretRef:
+                name: iolaus-runtime
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: SMRT_RUNTIME_PROFILE
+              value: self-hosted
+            - name: SMRT_WORKER_HEARTBEAT_FILE
+              value: /var/run/iolaus/worker-heartbeat.json
+            - name: SMRT_WORKER_HEARTBEAT_MAX_AGE_MS
+              value: "45000"
+          volumeMounts:
+            - name: worker-health
+              mountPath: /var/run/iolaus
+          startupProbe:
+            exec:
+              command: ["node", "scripts/smrt-worker-heartbeat.mjs", "--check"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          livenessProbe:
+            exec:
+              command: ["node", "scripts/smrt-worker-heartbeat.mjs", "--check"]
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: worker-health
+          emptyDir: {}

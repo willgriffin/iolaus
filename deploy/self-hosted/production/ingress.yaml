@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iolaus-web
+  annotations:
+    # Replace this cluster-scoped issuer reference only in the private
+    # operator overlay. This repository never owns a live DNS zone or issuer.
+    cert-manager.io/cluster-issuer: iolaus-self-hosted-cluster-issuer
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - iolaus.example.invalid
+      secretName: iolaus-web-tls
+  rules:
+    - host: iolaus.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: iolaus-web
+                port:
+                  name: http
