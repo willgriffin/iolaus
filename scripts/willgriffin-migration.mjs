@@ -1776,6 +1776,18 @@ export class PostgresMigrationStore {
     if (result.rows.length !== 1) {
       throw new Error('Logical migration lease ownership was lost.');
     }
+    this.assertMigrationSessionActive(runId);
+  }
+
+  assertMigrationSessionActive(runId) {
+    const lease = this.migrationLease;
+    if (
+      !lease ||
+      lease.runId !== runId ||
+      (lease.session?.isActive && !lease.session.isActive())
+    ) {
+      throw new Error('Logical migration lease ownership was lost.');
+    }
   }
 
   async assertTransientTablesEmpty(names) {
@@ -1932,6 +1944,7 @@ export class PostgresMigrationStore {
           bundle.targetSchemaFingerprint,
         ],
       );
+      this.assertMigrationSessionActive(bundle.runId);
     });
   }
 
@@ -2011,6 +2024,7 @@ export class PostgresMigrationStore {
       await this.db.transaction(async (tx) => {
         await this.assertMigrationLease(tx, runId);
         await this.writeReconciliation(tx, runId, report);
+        this.assertMigrationSessionActive(runId);
       });
     } catch {
       throw new Error('Migration reconciliation ledger write failed.');
@@ -2092,6 +2106,7 @@ export class PostgresMigrationStore {
            WHERE run_id = ?`,
           [digest, runId],
         );
+        this.assertMigrationSessionActive(runId);
       });
     } catch {
       throw new Error('Migration final reconciliation failed.');
@@ -2173,6 +2188,7 @@ export class PostgresMigrationStore {
             tableChecksum,
           ],
         );
+        this.assertMigrationSessionActive(runId);
       });
     } catch {
       throw new Error(`Migration batch write failed for ${table.name}.`);
@@ -2190,6 +2206,7 @@ export class PostgresMigrationStore {
          WHERE run_id = ?`,
         [digest, runId],
       );
+      this.assertMigrationSessionActive(runId);
     });
   }
 }
