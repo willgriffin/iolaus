@@ -393,6 +393,7 @@ function handleTenantNavigate(): void {
 
 onMount(() => {
   const mediaQuery = window.matchMedia(ADMIN_NAVIGATION_MEDIA_QUERY);
+  let disposed = false;
 
   const applyResponsiveDefault = (): void => {
     // A setting appears in localStorage only after an explicit user action.
@@ -405,16 +406,30 @@ onMount(() => {
     } catch {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
-    if (stored) return;
+    if (stored || adminShell.settings.panels?.left) return;
 
     adminShell.panels.left = navigationStateForViewport(mediaQuery.matches);
   };
 
-  applyResponsiveDefault();
-  mediaQuery.addEventListener('change', applyResponsiveDefault);
-  shellReady = true;
+  const initializeShell = async (): Promise<void> => {
+    // AdminShell also hydrates a provided state. Wait for that pass and one
+    // macrotask so the responsive default is applied after persisted settings
+    // have had their chance to win.
+    await adminShell.hydrate();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (disposed) return;
 
-  return () => mediaQuery.removeEventListener('change', applyResponsiveDefault);
+    applyResponsiveDefault();
+    mediaQuery.addEventListener('change', applyResponsiveDefault);
+    shellReady = true;
+  };
+
+  void initializeShell();
+
+  return () => {
+    disposed = true;
+    mediaQuery.removeEventListener('change', applyResponsiveDefault);
+  };
 });
 
 function resourceItem(
