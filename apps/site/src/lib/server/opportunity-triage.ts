@@ -5,7 +5,10 @@ import {
 } from '$lib/admin/triage-session';
 import {
   filterStateFromSearchParams,
+  getString,
+  matchesOpportunity,
   type OpportunityFilterState,
+  sortOpportunities,
 } from '$lib/opportunity-filters';
 import { listAdminRecords, requireAdminResource } from './admin-data';
 import {
@@ -13,6 +16,8 @@ import {
   listOpportunityPageIds,
 } from './admin-opportunity-query';
 import { attachOpportunityContext } from './admin-resource-route';
+import { getDbConfig } from './db.js';
+import { getCollection } from './smrt.js';
 
 /**
  * One-at-a-time opportunity triage (issue #425).
@@ -52,6 +57,10 @@ export const TRIAGE_QUEUE_SIZE = 3;
 
 /** Refill once fewer than this many undecided cards remain in hand. */
 export const TRIAGE_QUEUE_REFILL_THRESHOLD = 2;
+
+/** SQLite has no Postgres lateral joins; keep the local demo bounded in memory. */
+const LOCAL_TRIAGE_RECORD_LIMIT = 1_001;
+const DECISION_STATUSES = new Set(['apply', 'maybe', 'reject']);
 
 /** Bounded undo history; only the most recent entry is ever offered. */
 export const TRIAGE_UNDO_STACK_LIMIT = 10;
@@ -119,6 +128,67 @@ function clampOffset(offset: number | undefined, total: number): number {
   return total > 0 ? Math.min(value, Math.max(0, total - 1)) : 0;
 }
 
+function matchesTriageSearch(record: AdminRecord, search: string | undefined) {
+  const needle = search?.trim().toLowerCase();
+  if (!needle) return true;
+  return [
+    getString(record, 'title'),
+    getString(record, 'descriptionRaw'),
+    getString(record, 'descriptionSummary'),
+    getString(record, 'postingUrl'),
+    getString(record, 'requiredSkills'),
+    getString(record, 'preferredSkills'),
+  ].some((value) => value.toLowerCase().includes(needle));
+}
+
+async function loadSqliteTriageQueue({
+  filters,
+  hydrateContext,
+  limit,
+  offset,
+  search,
+}: TriageQueueRequest & { hydrateContext: boolean; limit: number }) {
+  const opportunities = (await getCollection('Opportunity')) as unknown as {
+    list: (options?: Record<string, unknown>) => Promise<unknown[]>;
+  };
+  const rows = await opportunities.list({
+    limit: LOCAL_TRIAGE_RECORD_LIMIT,
+    orderBy: 'updated_at DESC',
+  });
+  if (rows.length >= LOCAL_TRIAGE_RECORD_LIMIT) {
+    throw new Error(
+      `Local triage is bounded to ${LOCAL_TRIAGE_RECORD_LIMIT - 1} opportunities; archive or deploy this data set before continuing.`,
+    );
+  }
+  const candidates = rows
+    .map((row) => JSON.parse(JSON.stringify(row)) as AdminRecord)
+    .filter((record) => {
+      const review = getString(record, 'humanReviewStatus').toLowerCase();
+      return (
+        getString(record, 'status') !== 'archived' &&
+        !DECISION_STATUSES.has(review) &&
+        matchesTriageSearch(record, search) &&
+        matchesOpportunity(record, filters, { hasSkill: () => false })
+      );
+    });
+  const ordered = sortOpportunities(
+    candidates,
+    filters.sort,
+    filters.sortDirection,
+  );
+  const total = ordered.length;
+  const resolvedOffset = clampOffset(offset, total);
+  const page = ordered.slice(resolvedOffset, resolvedOffset + limit);
+  return {
+    candidates: hydrateContext
+      ? await attachOpportunityContext(page, { includeActivity: false })
+      : page,
+    limit,
+    offset: resolvedOffset,
+    total,
+  };
+}
+
 /**
  * Load one window of the triage queue.
  *
@@ -136,6 +206,16 @@ export async function loadTriageQueue({
   search,
 }: TriageQueueRequest): Promise<TriageQueue> {
   const preset = applyTriagePreset(filters);
+  if (getDbConfig().type === 'sqlite') {
+    return await loadSqliteTriageQueue({
+      candidateSkills,
+      filters: preset,
+      hydrateContext,
+      limit,
+      offset,
+      search,
+    });
+  }
   const query = {
     candidateSkills,
     filters: preset,

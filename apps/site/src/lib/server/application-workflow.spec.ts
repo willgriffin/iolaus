@@ -1348,6 +1348,7 @@ describe('recordExplicitOpportunityDecision', () => {
     });
     expect(mocks.collections.get('Opportunity')?.records[0]).toMatchObject({
       humanReviewStatus: 'maybe',
+      humanReviewNotes: 'Need compensation details',
       status: 'found',
     });
   });

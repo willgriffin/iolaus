@@ -230,6 +230,8 @@ function authenticatedBrowserWebMcp(environment, cookie, fixture, screenshotPath
         IOLAUS_DEMO_CRAWL_ID: fixture.crawlId,
         IOLAUS_DEMO_OPPORTUNITY_ID: fixture.opportunityId,
         IOLAUS_DEMO_SOURCE_ID: fixture.sourceId,
+        IOLAUS_DEMO_TRIAGE_FOLLOWUP_OPPORTUNITY_ID:
+          fixture.triageFollowupOpportunityId,
         IOLAUS_DEMO_TRIAGE_OPPORTUNITY_ID: fixture.triageOpportunityId,
         IOLAUS_DEMO_ORIGIN: `http://127.0.0.1:${environment.PORT}`,
         IOLAUS_DEMO_SCREENSHOT: screenshotPath,
@@ -308,6 +310,11 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
     fixture,
     screenshotPath,
   );
+  const webmcpProofPath = join(
+    dirname(screenshotPath),
+    'browser-webmcp-proof.json',
+  );
+  writeFileSync(webmcpProofPath, `${JSON.stringify(webmcp, null, 2)}\n`);
   const names = Array.isArray(webmcp.toolNames)
     ? webmcp.toolNames.map(String).filter(Boolean)
     : [];
@@ -365,12 +372,17 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
   if (
     !persistedTriage.includes('Fictional demo review note') ||
     !JSON.stringify(webmcp.decision).includes('maybe') ||
-    webmcp.advancedTriage?.candidate !== null
+    webmcp.advancedTriage?.candidate?.id !== fixture.triageFollowupOpportunityId
   ) {
     throw new Error('Browser WebMCP did not persist and advance the local triage decision.');
   }
-  if (webmcp.triageModalVisible !== true) {
-    throw new Error('The authenticated browser did not open the existing triage modal.');
+  if (
+    webmcp.triageModalVisible !== true ||
+    webmcp.triageFollowupVisible !== true
+  ) {
+    throw new Error(
+      'The authenticated browser did not open the existing triage modal with the advanced candidate.',
+    );
   }
   if (inspect?.application?.status !== 'awaiting_user') {
     throw new Error('Application inspection did not expose the human approval boundary.');
@@ -406,6 +418,7 @@ async function authenticatedProof(root, fixture, environment, screenshotPath) {
     sourceId: fixture.sourceId,
     triageDecisionPersisted: true,
     triageModalVisible: true,
+    webmcpProofPath,
   };
 }
 

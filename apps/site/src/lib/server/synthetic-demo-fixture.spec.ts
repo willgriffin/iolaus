@@ -95,7 +95,7 @@ describe('synthetic demo fixture', () => {
     expect(second.created).toBe(false);
     for (const [name, records] of Object.entries(rows)) {
       expect(records, name).toHaveLength(
-        ['opportunities', 'sourceCrawlItems'].includes(name) ? 2 : 1,
+        ['opportunities', 'sourceCrawlItems'].includes(name) ? 3 : 1,
       );
     }
     expect(rows.sources[0]).toMatchObject({
@@ -108,9 +108,9 @@ describe('synthetic demo fixture', () => {
     expect(rows.sourceCrawls[0]).toMatchObject({
       sourceId: rows.sources[0].id,
       status: 'completed',
-      terminalCount: 2,
+      terminalCount: 3,
     });
-    expect(rows.sourceCrawlItems).toHaveLength(2);
+    expect(rows.sourceCrawlItems).toHaveLength(3);
     expect(rows.sourceCrawlItems).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -121,6 +121,10 @@ describe('synthetic demo fixture', () => {
           opportunityId: rows.opportunities[1].id,
           sourceCrawlId: rows.sourceCrawls[0].id,
         }),
+        expect.objectContaining({
+          opportunityId: rows.opportunities[2].id,
+          sourceCrawlId: rows.sourceCrawls[0].id,
+        }),
       ]),
     );
     expect(rows.opportunities[0]).toMatchObject({
@@ -128,6 +132,14 @@ describe('synthetic demo fixture', () => {
       postingUrl: expect.stringContaining('example.invalid'),
       sourceId: rows.sources[0].id,
     });
+    expect(rows.opportunities.slice(1)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          freshness: 'fresh',
+          humanReviewStatus: 'needs_input',
+        }),
+      ]),
+    );
     expect(rows.applications[0]).toMatchObject({
       applicationUrl: expect.stringContaining('example.invalid'),
       sourceCrawlId: rows.sourceCrawls[0].id,
