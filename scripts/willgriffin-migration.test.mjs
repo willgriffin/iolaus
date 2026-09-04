@@ -1240,12 +1240,16 @@ test('PostgreSQL batch failures do not expose bound private values', async () =>
   const store = new PostgresMigrationStore({
     async transaction(callback) {
       return await callback({
-        async query() {
+        async query(sql) {
+          if (sql.includes('FROM _iolaus_migration_leases')) {
+            return { rows: [{ holder: 'holder-1' }] };
+          }
           throw new Error('driver echoed private-marker');
         },
       });
     },
   });
+  store.migrationLease = { holder: 'holder-1', runId: 'run-1' };
   await assert.rejects(
     store.commitBatch({
       runId: 'run-1',
