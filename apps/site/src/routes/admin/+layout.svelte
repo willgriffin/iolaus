@@ -387,7 +387,9 @@ function handleTenantNavigate(): void {
     typeof window !== 'undefined' &&
     window.matchMedia('(max-width: 48rem)').matches
   ) {
-    adminShell.collapsePanel('left');
+    // Closing after mobile navigation is automatic; do not turn it into a
+    // persisted preference that overrides the responsive default later.
+    adminShell.panels.left = 'collapsed';
   }
 }
 
