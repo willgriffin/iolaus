@@ -47,6 +47,7 @@ import {
   filterStateFromSearchParams,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
+import SourceControlList from '../sources/SourceControlList.svelte';
 import AdminRecordValue from './AdminRecordValue.svelte';
 import ApplicationCardList from './ApplicationCardList.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
@@ -153,6 +154,7 @@ const isOpportunityResource = $derived(data.resource.slug === 'opportunities');
 const OPPORTUNITY_SWEEP_NOT_SEEN_DAYS = 30;
 const isApplicationResource = $derived(data.resource.slug === 'applications');
 const isSkillResource = $derived(data.resource.slug === 'skills');
+const isSourceResource = $derived(data.resource.slug === 'sources');
 const resourceActionFeedbackMessage = $derived(
   stringFromValue(feedbackValue(form, 'message')),
 );
@@ -1304,7 +1306,7 @@ function taskMeta(record: AdminRecord): string {
       </div>
       {#if (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
-          New {data.resource.singularLabel}
+          {isSourceResource ? 'Add a job source' : `New ${data.resource.singularLabel}`}
         </a>
       {/if}
     </header>
@@ -1534,6 +1536,8 @@ function taskMeta(record: AdminRecord): string {
         error={data.error}
         {onRetry}
       />
+    {:else if isSourceResource}
+      <SourceControlList records={data.records} onRefresh={() => onRetry?.()} />
     {:else}
     <div class="section-heading">
       <div class="section-title-stack">
