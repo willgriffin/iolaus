@@ -715,6 +715,25 @@ test('export refuses any source that is not explicitly attested as an isolated r
   );
 });
 
+test('export refuses connection parameters that can override the isolated restore endpoint', async () => {
+  await assert.rejects(
+    exportPredecessorMigration({
+      env: {
+        DATABASE_URL: 'postgresql://target.example.invalid/iolaus',
+        WILLGRIFFIN_MIGRATION_SOURCE_DATABASE_URL:
+          'postgresql://user:private-marker@localhost/willgriffin_restore?host=production.example.invalid',
+        WILLGRIFFIN_MIGRATION_SOURCE_ISOLATED_RESTORE: 'true',
+      },
+      path: '/tmp/example-migration.json',
+      sourceRoot: process.cwd(),
+    }),
+    (error) =>
+      !String(error.message).includes('private-marker') &&
+      !String(error.message).includes('production.example.invalid') &&
+      /requires a local database/.test(error.message),
+  );
+});
+
 test('PostgreSQL batches bind target, row-ledger, and checkpoint writes', async () => {
   const calls = [];
   const tx = {

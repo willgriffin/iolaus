@@ -26,7 +26,9 @@ The predecessor migration is deliberately separate from generic Iolaus
 portability. It reads a verified, isolated PostgreSQL restore and writes a
 private logical bundle. The exporter requires a loopback PostgreSQL endpoint
 whose database name visibly contains `backup`, `issue`, `restore`, `test`, or
-`verify`, matching the repository's disposable restore guard. Set the source
+`verify`, matching the repository's disposable restore guard. Connection URL
+query parameters and fragments are rejected so they cannot override that
+validated endpoint. Set the source
 URL through the environment so credentials do not enter shell history, then
 attest that the endpoint is the isolated restore:
 

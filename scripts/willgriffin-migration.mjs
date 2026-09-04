@@ -1058,6 +1058,8 @@ function assertIsolatedRestoreDatabaseUrl(value) {
   const databaseName = decodeURIComponent(url.pathname.replace(/^\/+|\/+$/gu, ''));
   if (
     !['postgres:', 'postgresql:'].includes(url.protocol) ||
+    url.search ||
+    url.hash ||
     !['', 'localhost', '127.0.0.1', '::1'].includes(host) ||
     !databaseName ||
     databaseName === 'postgres' ||
