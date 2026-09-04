@@ -132,8 +132,15 @@ function getRedirectUri(event: RequestEvent): string {
   return `${getBaseUrl(event)}/auth/oidc/callback`;
 }
 
+export function shouldUseSecureCookies(
+  runtimeProfile: RuntimeProfile,
+  requestProtocol: string,
+): boolean {
+  return runtimeProfile !== 'local' || requestProtocol === 'https:';
+}
+
 function secureCookie(event: RequestEvent): boolean {
-  return event.url.protocol === 'https:';
+  return shouldUseSecureCookies(applicationRuntime.profile, event.url.protocol);
 }
 
 function setTemporaryCookie(

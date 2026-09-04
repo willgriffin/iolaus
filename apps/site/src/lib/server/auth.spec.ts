@@ -3,9 +3,19 @@ import {
   canUseLocalDevLogin,
   getRuntimeCookieName,
   isAuthorizedOidcAdmin,
+  shouldUseSecureCookies,
   tenantSlugsFor,
   tokenClaimsToOidcClaims,
 } from './auth';
+
+describe('shouldUseSecureCookies', () => {
+  it('keeps deployed cookies secure behind TLS termination', () => {
+    expect(shouldUseSecureCookies('self-hosted', 'http:')).toBe(true);
+    expect(shouldUseSecureCookies('cloud', 'http:')).toBe(true);
+    expect(shouldUseSecureCookies('local', 'http:')).toBe(false);
+    expect(shouldUseSecureCookies('local', 'https:')).toBe(true);
+  });
+});
 
 const authEnvNames = [
   'IOLAUS_OIDC_ADMIN_EMAILS',

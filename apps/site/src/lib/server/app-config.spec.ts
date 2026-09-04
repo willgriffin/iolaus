@@ -135,6 +135,18 @@ describe('Iolaus application configuration', () => {
         IOLAUS_OIDC_CLIENT_ID: 'career\u0085other',
       }),
     ).toMatchObject({ kind: 'invalid' });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_REALM: '../other',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
+    expect(
+      getAuthConfiguration({
+        ...base,
+        IOLAUS_OIDC_CLIENT_ID: 'career\u202Eother',
+      }),
+    ).toMatchObject({ kind: 'invalid' });
   });
 
   it('recognizes only loopback hosts for local-only paths', () => {

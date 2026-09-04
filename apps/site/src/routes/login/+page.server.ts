@@ -1,9 +1,11 @@
 import { redirect } from '@sveltejs/kit';
 import { getAppConfig } from '$lib/server/app-config';
+import { applicationRuntime } from '$lib/server/application-runtime';
 import {
   canUseLocalDevLogin,
   completeLocalDevLogin,
   loginNextCookieName,
+  shouldUseSecureCookies,
   startOidcLogin,
 } from '$lib/server/auth';
 import type { Actions, PageServerLoad } from './$types';
@@ -30,7 +32,10 @@ export const actions: Actions = {
       maxAge: 10 * 60,
       path: '/',
       sameSite: 'lax',
-      secure: event.url.protocol === 'https:',
+      secure: shouldUseSecureCookies(
+        applicationRuntime.profile,
+        event.url.protocol,
+      ),
     });
 
     if (canUseLocalDevLogin(event)) {

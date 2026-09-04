@@ -151,11 +151,23 @@ function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
   }
 }
 
-function safeOidcIdentifier(value: string): string | null {
-  if (!value || value.length > 200 || /\p{Cc}/u.test(value)) {
+function safeOidcClientId(value: string): string | null {
+  if (
+    !value ||
+    value.length > 200 ||
+    /[/?#\\]|[\p{Cc}\p{Cf}\p{Z}]/u.test(value)
+  ) {
     return null;
   }
   return value;
+}
+
+function safeOidcRealm(value: string): string | null {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/u.test(value) &&
+    value !== '.' &&
+    value !== '..'
+    ? value
+    : null;
 }
 
 function configuredOidcServerUrl(
@@ -210,8 +222,8 @@ export function getAuthConfiguration(
 
   const publicUrl = configuredPublicUrl(environment);
   const serverUrl = configuredOidcServerUrl(environment);
-  const realm = safeOidcIdentifier(stringValue(environment.IOLAUS_OIDC_REALM));
-  const clientId = safeOidcIdentifier(
+  const realm = safeOidcRealm(stringValue(environment.IOLAUS_OIDC_REALM));
+  const clientId = safeOidcClientId(
     stringValue(environment.IOLAUS_OIDC_CLIENT_ID),
   );
   const adminEmails = configuredAdminEmails(environment);

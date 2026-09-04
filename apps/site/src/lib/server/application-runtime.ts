@@ -48,10 +48,19 @@ export type IolausDatabaseConfig = {
 };
 
 export function validateHostedDatabaseUrl(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
+    throw new Error('Public deployments require a PostgreSQL DATABASE_URL.');
+  }
   const databaseName = decodeURIComponent(
-    new URL(databaseUrl).pathname.replace(/^\/+|\/+$/gu, ''),
+    url.pathname.replace(/^\/+|\/+$/gu, ''),
   );
-  if (databaseName === 'iolaus' || databaseName === 'iolaus_dev') {
+  if (
+    !databaseName ||
+    ['iolaus', 'iolaus_dev', 'postgres', 'template0', 'template1'].includes(
+      databaseName,
+    )
+  ) {
     throw new Error(
       'Public deployments must use an operator-unique PostgreSQL database name.',
     );

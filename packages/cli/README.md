@@ -55,14 +55,17 @@ Example source-crawl status text content:
 pnpm --filter @willgriffin/iolaus-cli build
 pnpm --filter @willgriffin/iolaus-cli pack
 pnpm add -g ./packages/cli/iolaus-cli-0.0.0.tgz
-iolaus auth login --server https://your-app-host
+export IOLAUS_SERVER_URL=https://your-app-host
+iolaus auth login
 iolaus opportunities list
 iolaus-mcp
 ```
 
 The CLI stores its bearer session in a target-specific
 `~/.config/<SMRT_APP_ID>-<server-fingerprint>/config.json`; the `--server`
-option (or `IOLAUS_SERVER_URL`) selects that namespace.
+option (or `IOLAUS_SERVER_URL`) selects that namespace. Keep the selector set
+for every command targeting a non-default server; the CLI deliberately never
+guesses a target from credentials stored for another installation.
 Older development snapshots stored a token under
 `~/.config/iolaus.localhost/`; run `iolaus auth login` after upgrading rather
 than copying that credential into the new namespace.

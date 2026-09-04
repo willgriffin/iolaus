@@ -9,6 +9,15 @@ describe('validateHostedDatabaseUrl', () => {
     expect(() =>
       validateHostedDatabaseUrl('postgresql://db.example.com/iolaus_dev'),
     ).toThrow(/operator-unique PostgreSQL database name/u);
+    expect(() =>
+      validateHostedDatabaseUrl('postgresql://db.example.com/postgres'),
+    ).toThrow(/operator-unique PostgreSQL database name/u);
+    expect(() =>
+      validateHostedDatabaseUrl('postgresql://db.example.com'),
+    ).toThrow(/operator-unique PostgreSQL database name/u);
+    expect(() => validateHostedDatabaseUrl('sqlite:///tmp/iolaus.db')).toThrow(
+      /require a PostgreSQL DATABASE_URL/u,
+    );
     expect(
       validateHostedDatabaseUrl('postgresql://db.example.com/career_hub'),
     ).toBe('postgresql://db.example.com/career_hub');
