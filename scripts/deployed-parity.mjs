@@ -240,6 +240,48 @@ function inspectCandidateImage(
   );
 }
 
+export function candidateImageInvocation(imageRef, invocation) {
+  validateImageReference(imageRef);
+  return {
+    backend: 'docker-network-none',
+    binary: 'docker',
+    args: [
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--cap-drop',
+      'ALL',
+      '--security-opt',
+      'no-new-privileges',
+      '--tmpfs',
+      '/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001',
+      '--env',
+      'CI=true',
+      '--env',
+      'NODE_ENV=test',
+      '--env',
+      'SMRT_RUNTIME_PROFILE=local',
+      '--env',
+      'HOME=/tmp/home',
+      '--env',
+      'TMPDIR=/tmp',
+      '--env',
+      'XDG_CONFIG_HOME=/tmp/config',
+      '--env',
+      'XDG_CACHE_HOME=/tmp/cache',
+      '--env',
+      'COREPACK_ENABLE_DOWNLOAD_PROMPT=0',
+      '--env',
+      'NODE_OPTIONS=--require=/app/scripts/deny-outbound-network.cjs',
+      '--entrypoint',
+      '/usr/bin/env',
+      imageRef,
+      ...invocation,
+    ],
+  };
+}
+
 export function isolatedInvocation(binary, args, platform = process.platform) {
   if (platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
     return {
@@ -300,9 +342,12 @@ export function buildScenarioEnvironment(sandboxRoot, source = process.env) {
   };
 }
 
-function executeScenario(scenario, environment) {
+function executeScenario(scenario, environment, imageRef) {
   const [binary, ...args] = scenario.invocation;
-  const isolated = isolatedInvocation(binary, args);
+  const isolated =
+    imageRef && scenario.id !== 'self-hosted-topology'
+      ? candidateImageInvocation(imageRef, scenario.invocation)
+      : isolatedInvocation(binary, args);
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -378,17 +423,18 @@ function runtimeVersions() {
   return { node: process.versions.node, pnpm: actualPnpm };
 }
 
-function inventorySnapshot(environment) {
-  const isolated = isolatedInvocation(
+function inventorySnapshot(environment, imageRef) {
+  const invocation = [
     'pnpm',
-    [
-      '--filter',
-      '@willgriffin/iolaus-site',
-      'exec',
-      'tsx',
-      'scripts/deployed-parity-inventory.ts',
-    ],
-  );
+    '--filter',
+    '@willgriffin/iolaus-site',
+    'exec',
+    'tsx',
+    'scripts/deployed-parity-inventory.ts',
+  ];
+  const isolated = imageRef
+    ? candidateImageInvocation(imageRef, invocation)
+    : isolatedInvocation(invocation[0], invocation.slice(1));
   const result = spawnSync(isolated.binary, isolated.args, {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -444,6 +490,12 @@ async function main() {
   const imageRef = validateImageReference(argumentValue('--image-ref', argv));
   const startedAt = new Date().toISOString();
   const revision = gitRevision();
+  const expectedLockfileSha256 = createHash('sha256')
+    .update(readFileSync(resolve(repositoryRoot, 'pnpm-lock.yaml'), 'utf8'))
+    .digest('hex');
+  const candidateImageProvenance = imageRef
+    ? inspectCandidateImage(imageRef, revision, expectedLockfileSha256)
+    : null;
   const sandboxBase = resolve(
     process.env.HOME || tmpdir(),
     '.cache/iolaus-parity-contract',
@@ -456,32 +508,40 @@ async function main() {
   try {
     const environment = buildScenarioEnvironment(sandboxRoot);
     checks = scenarios.map((scenario) =>
-      executeScenario(scenario, environment),
+      executeScenario(scenario, environment, imageRef),
     );
-    inventory = inventorySnapshot(environment);
+    inventory = inventorySnapshot(environment, imageRef);
   } finally {
     rmSync(sandboxRoot, { force: true, recursive: true });
   }
-  const candidateImageProvenance = imageRef
-    ? inspectCandidateImage(
-        imageRef,
-        revision,
-        inventory.dependencyLockSha256,
-      )
-    : null;
+  if (inventory.dependencyLockSha256 !== expectedLockfileSha256) {
+    throw new Error(
+      'The exercised dependency lock digest does not match this checkout.',
+    );
+  }
+  if (
+    JSON.stringify(inventory.installedSmrtDependencies) !==
+    JSON.stringify(inventory.smrtDependencies)
+  ) {
+    throw new Error(
+      'The exercised s-m-r-t installation does not match its released dependency declarations.',
+    );
+  }
   if (candidateImageProvenance) {
     checks.push({
       id: 'candidate-image-provenance',
       invocation: 'docker image inspect <candidate-image-ref>',
       observable:
-        'the immutable local image digest embeds this exact source revision and dependency lock digest',
+        'the immutable local image digest embeds this exact source revision and dependency lock digest, and every executable parity scenario ran from that image with networking disabled',
       status: 'passed',
     });
   }
   const evidence = {
     schema: 'iolaus-deployed-parity-contract:v1',
     status: 'passed',
-    scope: imageRef ? 'candidate-image-source-contract' : 'source-contract',
+    scope: imageRef ? 'candidate-image-contract' : 'source-contract',
+    releaseEligible: Boolean(imageRef),
+    candidateImageTested: Boolean(imageRef),
     revision,
     runtime,
     candidateImageRef: imageRef,
@@ -489,6 +549,7 @@ async function main() {
     inventorySha256: inventory.inventorySha256,
     dependencyLockSha256: inventory.dependencyLockSha256,
     smrtDependencies: inventory.smrtDependencies,
+    installedSmrtDependencies: inventory.installedSmrtDependencies,
     counts: inventory.counts,
     checks,
     startedAt,
@@ -496,6 +557,7 @@ async function main() {
     isolation: {
       callerEnvironmentInherited: false,
       backend: isolationBackend,
+      candidateBackend: imageRef ? 'docker-network-none' : null,
       outboundNetworkDenied: true,
       scenarioRuntimeProfile: 'local',
       temporaryHome: true,

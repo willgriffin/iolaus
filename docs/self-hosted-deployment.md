@@ -175,6 +175,9 @@ boundary: macOS `sandbox-exec` denies remote IP sockets while retaining local
 Unix-domain IPC, and Linux uses an unshared network namespace. The command
 fails closed when neither isolation backend is available.
 
+This source-only report is explicitly marked `releaseEligible: false` and
+`candidateImageTested: false`. It is a pre-build check, never release evidence.
+
 Candidate image builds must set `IOLAUS_SOURCE_REVISION` to the exact
 40-character Git revision and `IOLAUS_LOCKFILE_SHA256` to the SHA-256 of
 `pnpm-lock.yaml`.
@@ -190,8 +193,17 @@ pnpm parity:contract -- \
 
 The image argument is accepted only when `docker image inspect` proves that the
 local image has the requested repository digest and its two provenance labels
-match the current source revision and lockfile digest. The check reads no image
-environment or filesystem content and records only those already-known values.
+match the current source revision and lockfile digest. All executable parity
+scenarios and the inventory then run from that immutable image with Docker
+networking disabled, dropped capabilities, no-new-privileges, and a synthetic
+local runtime environment. The disposable container layer allows the test
+runner to regenerate derived SMRT artifacts without mutating the image. The
+inventory resolves the installed
+s-m-r-t package versions and requires them to equal the released, pinned
+declarations. Only this mode writes `releaseEligible: true` and
+`candidateImageTested: true`; the topology check remains on the host because
+the runtime image deliberately contains no cluster administration tools.
+The report records only already-known digests, versions, and pass/fail facts.
 It is not a substitute for checking Kubernetes
 `status.containerStatuses[].imageID`. The isolated
 rehearsal must prove every web/task/schedule pod reports that same digest,

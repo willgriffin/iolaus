@@ -67,7 +67,46 @@ function releasedSmrtDependencies(): Record<string, string> {
   );
 }
 
+function installedSmrtDependencies(
+  expected: Record<string, string>,
+): Record<string, string> {
+  const installed = new Map<string, string>();
+  for (const [name, expectedVersion] of Object.entries(expected)) {
+    let cursor = dirname(fileURLToPath(import.meta.resolve(name)));
+    for (;;) {
+      const manifestPath = resolve(cursor, 'package.json');
+      try {
+        const manifest = readJson(manifestPath);
+        if (manifest.name === name) {
+          const version = String(manifest.version ?? '');
+          if (version !== expectedVersion) {
+            throw new Error(
+              `${name} is installed at ${version}, expected ${expectedVersion}.`,
+            );
+          }
+          installed.set(name, version);
+          break;
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith(`${name} is installed at`)
+        ) {
+          throw error;
+        }
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) {
+        throw new Error(`${name} could not be resolved from the installation.`);
+      }
+      cursor = parent;
+    }
+  }
+  return Object.fromEntries(installed);
+}
+
 export async function buildDeployedParityInventory() {
+  const releasedDependencies = releasedSmrtDependencies();
   const rest = listApiExposedResources().map((resource) => ({
     actions: sortedActions(resource.apiActions),
     className: resource.className,
@@ -142,7 +181,8 @@ export async function buildDeployedParityInventory() {
       lockfileSha256: digest(
         readFileSync(resolve(repositoryRoot, 'pnpm-lock.yaml'), 'utf8'),
       ),
-      smrt: releasedSmrtDependencies(),
+      smrt: releasedDependencies,
+      installedSmrt: installedSmrtDependencies(releasedDependencies),
     },
     surfaces: {
       dataSurface: [...opportunityDataSurfaceToolNames].sort((left, right) =>
@@ -182,6 +222,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       inventorySha256: inventory.inventorySha256,
       dependencyLockSha256: inventory.dependencies.lockfileSha256,
       smrtDependencies: inventory.dependencies.smrt,
+      installedSmrtDependencies: inventory.dependencies.installedSmrt,
       counts: {
         dataSurface: inventory.surfaces.dataSurface.length,
         mcp: inventory.surfaces.mcp.length,

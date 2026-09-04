@@ -6,12 +6,32 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   buildScenarioEnvironment,
+  candidateImageInvocation,
   evidenceDigest,
   invalidateEvidence,
   isolatedInvocation,
   validateCandidateImageMetadata,
   validateImageReference,
 } from './deployed-parity.mjs';
+
+test('runs candidate scenarios from the immutable image without networking', () => {
+  const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;
+  const result = candidateImageInvocation(imageRef, ['node', '--test', 'x']);
+  assert.equal(result.backend, 'docker-network-none');
+  assert.equal(result.binary, 'docker');
+  assert.deepEqual(result.args.slice(0, 6), [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--cap-drop',
+    'ALL',
+  ]);
+  assert.ok(result.args.includes('no-new-privileges'));
+  assert.ok(result.args.includes('SMRT_RUNTIME_PROFILE=local'));
+  assert.ok(result.args.includes(imageRef));
+  assert.deepEqual(result.args.slice(-3), ['node', '--test', 'x']);
+});
 
 test('accepts only the exact released Iolaus image reference', () => {
   const digest = 'a'.repeat(64);
