@@ -90,6 +90,14 @@ hosted workloads retain their PostgreSQL profile. Use the supported
 `pnpm --filter @willgriffin/iolaus-site db:migrate` command; no deployment
 specific migration wrapper is required.
 
+The migration prepares normalized Profile and User email keys first, then runs
+SMRT's native `backfillLegacyUserProfiles(db)` transaction. That backfill
+creates a canonical global `Person` and links each eligible legacy `User` while
+preserving the User id and existing data. It creates no OIDC identity, grant,
+issuer, or subject mapping. A failure rolls back that upstream transaction and
+keeps the workload blocked before serving traffic; rerunning the same
+`db:migrate` command is idempotent.
+
 Worker heartbeat files are held in per-pod `emptyDir` volumes and contain only
 worker kind, time, and a ready state. They are not durable application data.
 The liveness probe rejects a process whose event loop can no longer refresh its
