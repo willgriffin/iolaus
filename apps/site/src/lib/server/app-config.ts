@@ -38,6 +38,10 @@ export interface OidcConfiguration {
    * protected deployment configuration rather than source control.
    */
   importedOwnerBindings: OidcOwnerBinding[];
+  /** Canonical discovery issuer that login and token acceptance must match. */
+  issuer: string;
+  issuerMode: 'realm' | 'root';
+  /** Keycloak SDK realm selector; root mode uses its documented `..` adapter. */
   realm: string;
   serverUrl: string;
 }
@@ -206,6 +210,29 @@ function configuredOidcServerUrl(
   }
 }
 
+function configuredOidcIssuerMode(
+  environment: AppConfigEnvironment,
+): 'realm' | 'root' | null {
+  const mode = stringValue(environment.IOLAUS_OIDC_ISSUER_MODE) || 'realm';
+  return mode === 'realm' || mode === 'root' ? mode : null;
+}
+
+function configuredRootOidcIssuer(
+  environment: AppConfigEnvironment,
+  serverUrl: string,
+): string | null {
+  const rawUrl = stringValue(environment.IOLAUS_OIDC_SERVER_URL);
+  if (!rawUrl || /(?:^|\/)\.{1,2}(?:\/|$)|%2e/iu.test(rawUrl)) {
+    return null;
+  }
+  try {
+    const url = new URL(serverUrl);
+    return url.pathname === '' || url.pathname === '/' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 function configuredAdminEmails(environment: AppConfigEnvironment): string[] {
   const emails = stringValue(environment.IOLAUS_OIDC_ADMIN_EMAILS)
     .split(',')
@@ -286,17 +313,39 @@ export function getAuthConfiguration(
 
   const publicUrl = configuredPublicUrl(environment);
   const serverUrl = configuredOidcServerUrl(environment);
-  const realm = safeOidcRealm(stringValue(environment.IOLAUS_OIDC_REALM));
+  const issuerMode = configuredOidcIssuerMode(environment);
+  const configuredRealm = stringValue(environment.IOLAUS_OIDC_REALM);
+  const realm = safeOidcRealm(configuredRealm);
   const clientId = safeOidcClientId(
     stringValue(environment.IOLAUS_OIDC_CLIENT_ID),
   );
   const adminEmails = configuredAdminEmails(environment);
   const importedOwnerBindings = configuredImportedOwnerBindings(environment);
 
+  const rootIssuer =
+    issuerMode === 'root' && serverUrl
+      ? configuredRootOidcIssuer(environment, serverUrl)
+      : null;
+  const oidc =
+    issuerMode === 'realm' && realm && serverUrl
+      ? {
+          issuer: `${serverUrl}/realms/${realm}`,
+          issuerMode,
+          realm,
+          serverUrl,
+        }
+      : issuerMode === 'root' && !configuredRealm && rootIssuer && serverUrl
+        ? {
+            issuer: rootIssuer,
+            issuerMode,
+            realm: '..',
+            serverUrl,
+          }
+        : null;
+
   if (
     !publicUrl ||
-    !serverUrl ||
-    !realm ||
+    !oidc ||
     !clientId ||
     adminEmails.length === 0 ||
     !importedOwnerBindings
@@ -315,8 +364,7 @@ export function getAuthConfiguration(
       clientSecret:
         stringValue(environment.IOLAUS_OIDC_CLIENT_SECRET) || undefined,
       importedOwnerBindings,
-      realm,
-      serverUrl,
+      ...oidc,
     },
   };
 }

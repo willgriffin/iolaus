@@ -174,7 +174,7 @@ export async function getOidcAuth(event: RequestEvent) {
     error(503, message);
   }
 
-  return await getAuth({
+  const auth = await getAuth({
     type: 'keycloak',
     serverUrl: configuration.oidc.serverUrl,
     realm: configuration.oidc.realm,
@@ -184,6 +184,15 @@ export async function getOidcAuth(event: RequestEvent) {
     scopes: ['openid', 'profile', 'email'],
     usePKCE: true,
   });
+  try {
+    const discovery = await auth.getDiscoveryDocument();
+    if (!discovery || discovery.issuer !== configuration.oidc.issuer) {
+      error(503, `${appConfig.appName} OIDC issuer is unavailable.`);
+    }
+  } catch {
+    error(503, `${appConfig.appName} OIDC issuer is unavailable.`);
+  }
+  return auth;
 }
 
 export async function startOidcLogin(event: RequestEvent): Promise<string> {

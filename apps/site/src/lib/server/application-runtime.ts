@@ -19,6 +19,7 @@ import {
   runtimeConfigurationFingerprint,
 } from '../../../../../scripts/smrt-runtime-identity.mjs';
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
+import { getAuthConfiguration } from './app-config.js';
 import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
   getIolausSmrtConfigPath,
@@ -142,6 +143,12 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
   if (authenticationProvider === 'owner-bootstrap') {
     throw new Error('Deployed profiles require public authentication.');
   }
+  const authenticationConfiguration = getAuthConfiguration();
+  if (authenticationConfiguration.kind !== 'self-hosted') {
+    throw new Error(
+      'Deployed profiles require complete public authentication.',
+    );
+  }
   deployedRuntimePromise ??= initializeDeployedApplicationRuntime({
     profile: applicationRuntime.profile,
     providers: {
@@ -162,6 +169,7 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     authentication: {
       provider: authenticationProvider,
       readiness: createProviderReadinessProbe('authentication', {
+        oidc: authenticationConfiguration.oidc,
         profile: applicationRuntime.profile,
         provider: authenticationProvider,
       }),

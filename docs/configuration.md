@@ -39,6 +39,8 @@ SMRT_APP_ID=career-hub
 IOLAUS_APP_NAME="My Career Hub"
 IOLAUS_PUBLIC_URL=https://jobs.example.com
 IOLAUS_OIDC_SERVER_URL=https://identity.example.com
+# `realm` is the default OIDC issuer mode.
+IOLAUS_OIDC_ISSUER_MODE=realm
 IOLAUS_OIDC_REALM=career
 IOLAUS_OIDC_CLIENT_ID=career-hub
 IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
@@ -55,6 +57,23 @@ store. Iolaus rejects incomplete or malformed public authentication with a
 generic recovery message; it never falls back to local sign-in on a hosted
 deployment and never includes hostnames, emails, or secret values in that
 message.
+
+For an identity provider whose discovery issuer is exactly its HTTPS origin,
+set `IOLAUS_OIDC_ISSUER_MODE=root`, keep `IOLAUS_OIDC_SERVER_URL` to that
+origin, and leave `IOLAUS_OIDC_REALM` unset. Iolaus uses the released
+Keycloak client's root adapter internally, then requires discovery's `issuer`
+to exactly equal the configured origin before starting a login or accepting a
+token. Root mode refuses paths, queries, fragments, encoded traversal, an
+unknown mode, and any realm value. Do not configure `..` as a realm.
+
+The self-hosted runtime ships bounded readiness callbacks for its standard
+providers: Keycloak discovery for OIDC, an authenticated read-only S3
+`HeadBucket` for `RESUME_FILES_CONFIG_JSON`, and deployment environment shape
+for secrets. `RESUME_FILES_CONFIG_JSON` must be a protected `s3` configuration
+with region, bucket, endpoint, access key, secret key, and any required
+path-style setting. An `SMRT_AUTH_READINESS_MODULE`,
+`SMRT_ASSETS_READINESS_MODULE`, or `SMRT_SECRETS_READINESS_MODULE` is optional
+and replaces only the matching shipped callback.
 
 ### OIDC cutover and identity rebinding
 

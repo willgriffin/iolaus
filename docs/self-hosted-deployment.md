@@ -20,8 +20,10 @@ Create these resources outside this repository, in the target namespace:
   worker processes. It must include a unique, non-default `SMRT_APP_ID`, its
   matching dedicated PostgreSQL `DATABASE_URL`, `IOLAUS_PUBLIC_URL`, OIDC
   configuration, S3-compatible asset provider configuration (including
-  `RESUME_FILES_CONFIG_JSON`), and the installed authentication/assets/secrets
-  readiness module selectors required by the selected s-m-r-t providers. Add
+  `RESUME_FILES_CONFIG_JSON`). The shipped self-hosted defaults probe Keycloak
+  discovery, an authenticated read-only S3 bucket head, and required
+  environment shape; no readiness-module selector is required. Set an explicit
+  `SMRT_*_READINESS_MODULE` only to override one of those provider probes. Add
   optional crawler, model, or submit-provider settings only after their
   independent approval and budgeting checks.
 - `Secret/iolaus-migration-runtime`: migration-init configuration only. It
