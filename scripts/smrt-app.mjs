@@ -669,7 +669,7 @@ async function doctor() {
             component,
             severity: 'error',
             message: `The ${component} provider is not ready.`,
-            recovery: `Configure and verify the installed ${component} provider readiness module.`,
+            recovery: `Configure and verify the ${component} provider settings or its explicit readiness override.`,
           });
         }
       }

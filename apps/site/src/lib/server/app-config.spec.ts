@@ -54,10 +54,48 @@ describe('Iolaus application configuration', () => {
         clientId: 'career-hub',
         clientSecret: undefined,
         importedOwnerBindings: [],
+        issuer: 'https://identity.example.com/realms/career',
+        issuerMode: 'realm',
         realm: 'career',
         serverUrl: 'https://identity.example.com',
       },
     });
+  });
+
+  it('supports an explicit, canonical root issuer without weakening realm validation', () => {
+    const base = {
+      IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.com',
+      IOLAUS_OIDC_CLIENT_ID: 'career-hub',
+      IOLAUS_OIDC_ISSUER_MODE: 'root',
+      IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com/',
+      IOLAUS_PUBLIC_URL: 'https://career.example.com',
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+    };
+
+    expect(getAuthConfiguration(base)).toMatchObject({
+      kind: 'self-hosted',
+      oidc: {
+        issuer: 'https://identity.example.com',
+        issuerMode: 'root',
+        realm: '..',
+      },
+    });
+    for (const invalid of [
+      { ...base, IOLAUS_OIDC_ISSUER_MODE: 'unknown' },
+      { ...base, IOLAUS_OIDC_REALM: '..' },
+      { ...base, IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com/path' },
+      {
+        ...base,
+        IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com/%2e%2e',
+      },
+      {
+        ...base,
+        IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com/?mode=root',
+      },
+    ]) {
+      expect(getAuthConfiguration(invalid)).toMatchObject({ kind: 'invalid' });
+    }
   });
 
   it('fails closed with a secret-safe recovery message for incomplete public auth', () => {
