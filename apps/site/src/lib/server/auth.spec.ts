@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const getAuthMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@happyvertical/auth', () => ({ getAuth: getAuthMock }));
+
 import {
   canUseLocalDevLogin,
+  getOidcAuth,
   getRuntimeCookieName,
   isAuthorizedOidcAdmin,
   shouldUseSecureCookies,
@@ -20,6 +26,7 @@ describe('shouldUseSecureCookies', () => {
 const authEnvNames = [
   'IOLAUS_OIDC_ADMIN_EMAILS',
   'IOLAUS_OIDC_CLIENT_ID',
+  'IOLAUS_OIDC_ISSUER_MODE',
   'IOLAUS_OIDC_REALM',
   'IOLAUS_OIDC_SERVER_URL',
   'IOLAUS_PUBLIC_URL',
@@ -31,11 +38,58 @@ const originalEnvironment = Object.fromEntries(
 );
 
 afterEach(() => {
+  getAuthMock.mockReset();
   for (const name of authEnvNames) {
     const original = originalEnvironment[name];
     if (original === undefined) delete process.env[name];
     else process.env[name] = original;
   }
+});
+
+describe('getOidcAuth', () => {
+  function configureHostedRootOidc() {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://jobs.example.invalid';
+    process.env.IOLAUS_OIDC_ISSUER_MODE = 'root';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.invalid';
+    delete process.env.IOLAUS_OIDC_REALM;
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'career-hub';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'owner@example.com';
+  }
+
+  it('returns the released client only when discovery matches the configured issuer', async () => {
+    configureHostedRootOidc();
+    const client = {
+      getDiscoveryDocument: vi.fn().mockResolvedValue({
+        issuer: 'https://identity.example.invalid',
+      }),
+    };
+    getAuthMock.mockResolvedValue(client);
+
+    await expect(
+      getOidcAuth(requestEventFor('https://jobs.example.invalid/login')),
+    ).resolves.toBe(client);
+    expect(getAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        realm: '..',
+        serverUrl: 'https://identity.example.invalid',
+      }),
+    );
+  });
+
+  it('rejects a mismatched discovery issuer before login or token use', async () => {
+    configureHostedRootOidc();
+    getAuthMock.mockResolvedValue({
+      getDiscoveryDocument: vi.fn().mockResolvedValue({
+        issuer: 'https://other-issuer.example.invalid',
+      }),
+    });
+
+    await expect(
+      getOidcAuth(requestEventFor('https://jobs.example.invalid/login')),
+    ).rejects.toMatchObject({ status: 503 });
+  });
 });
 
 function requestEventFor(

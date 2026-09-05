@@ -126,6 +126,31 @@ test('fails closed and redacts invalid OIDC configuration and discovery failures
   }
 });
 
+test('fails closed and redacts OIDC upstream failures', async () => {
+  for (const getAuth of [
+    async () => {
+      throw new Error('upstream credential detail');
+    },
+    async () => ({
+      getDiscoveryDocument: async () => {
+        throw new Error('upstream discovery detail');
+      },
+    }),
+  ]) {
+    await assert.rejects(
+      createProviderReadinessProbe(
+        'authentication',
+        { profile: 'self-hosted', provider: 'oidc' },
+        { dependencies: { getAuth }, environment: hostedEnvironment, timeoutMs: 20 },
+      )(),
+      (error) =>
+        error.message === 'authentication provider readiness failed.' &&
+        !error.message.includes('upstream credential detail') &&
+        !error.message.includes('upstream discovery detail'),
+    );
+  }
+});
+
 test('performs one bounded, read-only HeadBucket probe for S3-compatible assets', async () => {
   const calls = [];
   class S3Client {
@@ -196,6 +221,44 @@ test('fails closed for malformed assets, unsupported defaults, and invalid envir
     )(),
     /secrets provider readiness failed\./u,
   );
+});
+
+test('fails closed for S3 upstream errors and destroys the client', async () => {
+  let destroyed = false;
+  class S3Client {
+    send() {
+      return Promise.reject(new Error('upstream S3 detail'));
+    }
+    destroy() {
+      destroyed = true;
+    }
+  }
+  class HeadBucketCommand {}
+  await assert.rejects(
+    createProviderReadinessProbe(
+      'assets',
+      { profile: 'self-hosted', provider: 's3-compatible' },
+      {
+        dependencies: { HeadBucketCommand, S3Client },
+        environment: {
+          ...hostedEnvironment,
+          RESUME_FILES_CONFIG_JSON: JSON.stringify({
+            accessKeyId: 'access-key',
+            bucket: 'resume-assets',
+            endpoint: 'https://garage.example.invalid',
+            region: 'garage',
+            secretAccessKey: 'secret-key',
+            type: 's3',
+          }),
+        },
+        timeoutMs: 20,
+      },
+    )(),
+    (error) =>
+      error.message === 'assets provider readiness failed.' &&
+      !error.message.includes('upstream S3 detail'),
+  );
+  assert.equal(destroyed, true);
 });
 
 test('preserves explicit operator readiness module overrides', async () => {
