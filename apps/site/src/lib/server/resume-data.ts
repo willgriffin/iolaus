@@ -711,13 +711,24 @@ async function listRecords(
 // the public homepage's cold load parallel without creating an unbounded burst
 // of connections, while retaining the request's tenant/database context.
 async function loadRecordSpec<K extends string>(
-  spec: Record<K, readonly [className: string, orderBy: string]>,
+  spec: Record<
+    K,
+    readonly [
+      className: string,
+      orderBy: string,
+      readLimit?: number,
+      inMemoryOrderBy?: string,
+    ]
+  >,
 ): Promise<Record<K, ResumeRecord[]>> {
   const keys = Object.keys(spec) as K[];
   const plan = Object.fromEntries(
     keys.map((key) => {
-      const [className, orderBy] = spec[key];
-      return [key, { className, options: { limit: 1000, orderBy } }];
+      const [className, orderBy, readLimit] = spec[key];
+      return [
+        key,
+        { className, options: { limit: readLimit ?? 1000, orderBy } },
+      ];
     }),
   ) as SmrtCollectionReadPlan;
   const results = await executeCollectionReadPlan(plan, {
@@ -725,10 +736,24 @@ async function loadRecordSpec<K extends string>(
     maxConcurrency: 2,
   });
   return Object.fromEntries(
-    keys.map((key) => [
-      key,
-      JSON.parse(JSON.stringify(results[key])) as ResumeRecord[],
-    ]),
+    keys.map((key) => {
+      const [, , readLimit, inMemoryOrderBy] = spec[key];
+      const records = results[key] as unknown as ResumeRecord[];
+
+      // The normal 1,000-row bound selected rows by sortOrder before the
+      // sensitive-field guard landed. A safe ID read may only replace that
+      // ordering when the collection is fully represented; fail closed at the
+      // first overflow rather than silently changing which 1,000 rows render.
+      if (readLimit === 1001 && records.length === readLimit) {
+        throw new Error(
+          `Published resume read exceeds the supported 1000-row limit for ${key}.`,
+        );
+      }
+
+      if (inMemoryOrderBy === 'sortOrder ASC') records.sort(bySortOrder);
+
+      return [key, JSON.parse(JSON.stringify(records)) as ResumeRecord[]];
+    }),
   ) as Record<K, ResumeRecord[]>;
 }
 

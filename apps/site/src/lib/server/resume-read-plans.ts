@@ -8,7 +8,15 @@
  */
 
 export type ResumeReadPlanSpec = Readonly<
-  Record<string, readonly [className: string, orderBy: string]>
+  Record<
+    string,
+    readonly [
+      className: string,
+      orderBy: string,
+      readLimit?: number,
+      inMemoryOrderBy?: string,
+    ]
+  >
 >;
 
 export const NORMALIZED_RESUME_READ_PLAN = {
@@ -27,7 +35,10 @@ export const NORMALIZED_RESUME_READ_PLAN = {
   experienceTags: ['ExperienceTag', 'updated_at ASC'],
   experiences: ['Experience', 'sortOrder ASC'],
   otherRoles: ['ResumeOtherRole', 'sortOrder ASC'],
-  profileLinks: ['CandidateProfileLink', 'sortOrder ASC'],
+  // CandidateProfileLink's contents and sort key are intentionally sensitive.
+  // Read it by the safe primary key, then restore the private ordering while
+  // the hydrated records remain server-side (see resume-data.ts).
+  profileLinks: ['CandidateProfileLink', 'id ASC', 1001, 'sortOrder ASC'],
   profiles: ['CandidateProfile', 'profileKey ASC'],
   projects: ['Project', 'sortOrder ASC'],
   projectAttachments: ['ProjectAttachment', 'sortOrder ASC'],
