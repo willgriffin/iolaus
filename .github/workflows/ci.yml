@@ -38,6 +38,10 @@ jobs:
           node-version: '24.18.0'
       - run: npm install --global pnpm@11.24.0
       - run: pnpm install --frozen-lockfile
+      - name: Install native build diagnostics
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gdb
       - name: Build exact candidate image without publishing
         run: |
           lock_sha256="$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)"
