@@ -40,6 +40,9 @@ describe('Iolaus local runtime paths', () => {
 
     expect(getIolausSourceRoot(sourceRoot)).toBe(sourceRoot);
     expect(getIolausSourceRoot(`${sourceRoot}/apps/site`)).toBe(sourceRoot);
+    expect(
+      getIolausSourceRoot(`${sourceRoot}/apps/site/.svelte-kit/output/server`),
+    ).toBe(sourceRoot);
     expect(getIolausSmrtConfigPath(sourceRoot)).toBe(
       `${sourceRoot}/apps/site/smrt.config.js`,
     );

@@ -29,6 +29,7 @@ import {
 
 const sourceRoot = getIolausSourceRoot();
 const loadedConfig = await loadConfig({
+  cache: false,
   configPath: getIolausSmrtConfigPath(sourceRoot),
 });
 

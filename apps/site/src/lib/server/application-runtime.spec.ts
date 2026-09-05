@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
@@ -15,32 +17,56 @@ const applicationRuntimeModule = pathToFileURL(
   resolve(siteRoot, 'src/lib/server/application-runtime.ts'),
 ).href;
 
-async function probeHostedRuntime(cwd: string): Promise<{
+async function probeHostedRuntime(
+  cwd: string,
+  primeLocalConfigCache = false,
+): Promise<{
   database: string;
   profile: string;
 }> {
-  const { stdout } = await execFileAsync(
-    process.execPath,
-    [
-      '--import',
-      'tsx',
-      '--input-type=module',
-      '--eval',
-      `const runtime = await import(${JSON.stringify(applicationRuntimeModule)}); process.stdout.write(JSON.stringify({ profile: runtime.applicationRuntime.profile, database: runtime.getApplicationDatabaseConfig().type }));`,
-    ],
-    {
-      cwd,
-      env: {
-        ...process.env,
-        DATABASE_URL:
-          'postgresql://runtime:runtime@127.0.0.1:5432/runtime_bootstrap_test',
-        SMRT_APP_ID: 'runtime-bootstrap',
-        SMRT_RUNTIME_PROFILE: 'self-hosted',
-        TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.json'),
+  const cacheDirectory = primeLocalConfigCache
+    ? await mkdtemp(join(tmpdir(), 'iolaus-runtime-config-'))
+    : undefined;
+  const cachedConfigPath = cacheDirectory
+    ? join(cacheDirectory, 'smrt.config.js')
+    : undefined;
+  if (cachedConfigPath) {
+    await writeFile(
+      cachedConfigPath,
+      "export default { runtime: { profile: 'local' } };\n",
+    );
+  }
+
+  const cachePreload = cachedConfigPath
+    ? `const { loadConfig } = await import('@happyvertical/smrt-config'); await loadConfig({ configPath: ${JSON.stringify(cachedConfigPath)} });`
+    : '';
+  try {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '--eval',
+        `${cachePreload} const runtime = await import(${JSON.stringify(applicationRuntimeModule)}); process.stdout.write(JSON.stringify({ profile: runtime.applicationRuntime.profile, database: runtime.getApplicationDatabaseConfig().type }));`,
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          DATABASE_URL:
+            'postgresql://runtime:runtime@127.0.0.1:5432/runtime_bootstrap_test',
+          SMRT_APP_ID: 'runtime-bootstrap',
+          SMRT_RUNTIME_PROFILE: 'self-hosted',
+          TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.json'),
+        },
       },
-    },
-  );
-  return JSON.parse(stdout) as { database: string; profile: string };
+    );
+    return JSON.parse(stdout) as { database: string; profile: string };
+  } finally {
+    if (cacheDirectory)
+      await rm(cacheDirectory, { force: true, recursive: true });
+  }
 }
 
 describe('validateHostedDatabaseUrl', () => {
@@ -97,5 +123,9 @@ describe('deployed runtime entrypoints', () => {
       database: 'postgres',
       profile: 'self-hosted',
     });
-  });
+    await expect(probeHostedRuntime(sourceRoot, true)).resolves.toEqual({
+      database: 'postgres',
+      profile: 'self-hosted',
+    });
+  }, 15_000);
 });
