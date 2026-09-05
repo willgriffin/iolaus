@@ -21,13 +21,29 @@ import {
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
 import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
+  getIolausSmrtConfigPath,
   getIolausSourceRoot,
   IOLAUS_APPLICATION_ID,
   resolveIolausLocalRuntimePaths,
 } from './runtime-paths.js';
 
-const loadedConfig = await loadConfig();
 const sourceRoot = getIolausSourceRoot();
+const loadedConfig = await loadConfig({
+  configPath: getIolausSmrtConfigPath(sourceRoot),
+});
+
+export function assertHostedRuntimeConfiguration(
+  config: { runtime?: unknown },
+  profile = process.env.SMRT_RUNTIME_PROFILE,
+): void {
+  if ((profile === 'self-hosted' || profile === 'cloud') && !config.runtime) {
+    throw new Error(
+      `Unable to load SMRT runtime configuration for ${profile}.`,
+    );
+  }
+}
+
+assertHostedRuntimeConfiguration(loadedConfig);
 
 export const applicationRuntime = loadedConfig.runtime
   ? resolveConfiguredApplicationRuntime()

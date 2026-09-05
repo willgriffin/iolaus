@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getIolausSmrtConfigPath,
   getIolausSourceRoot,
   getIolausUserAssetsRoot,
   resolveIolausLocalRuntimePaths,
@@ -31,6 +32,16 @@ describe('Iolaus local runtime paths', () => {
     );
     expect(getIolausUserAssetsRoot()).toBe(
       `${canonicalTemporaryRoot}/iolaus-explicit-data/assets`,
+    );
+  });
+
+  it('finds the site config from either supported entrypoint directory', () => {
+    const sourceRoot = getIolausSourceRoot();
+
+    expect(getIolausSourceRoot(sourceRoot)).toBe(sourceRoot);
+    expect(getIolausSourceRoot(`${sourceRoot}/apps/site`)).toBe(sourceRoot);
+    expect(getIolausSmrtConfigPath(sourceRoot)).toBe(
+      `${sourceRoot}/apps/site/smrt.config.js`,
     );
   });
 });

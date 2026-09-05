@@ -1,5 +1,47 @@
+import { execFile } from 'node:child_process';
+import { resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import { validateHostedDatabaseUrl } from './application-runtime';
+import {
+  assertHostedRuntimeConfiguration,
+  validateHostedDatabaseUrl,
+} from './application-runtime';
+
+const execFileAsync = promisify(execFile);
+const siteRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+const sourceRoot = resolve(siteRoot, '../..');
+const applicationRuntimeModule = pathToFileURL(
+  resolve(siteRoot, 'src/lib/server/application-runtime.ts'),
+).href;
+
+async function probeHostedRuntime(cwd: string): Promise<{
+  database: string;
+  profile: string;
+}> {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '--eval',
+      `const runtime = await import(${JSON.stringify(applicationRuntimeModule)}); process.stdout.write(JSON.stringify({ profile: runtime.applicationRuntime.profile, database: runtime.getApplicationDatabaseConfig().type }));`,
+    ],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        DATABASE_URL:
+          'postgresql://runtime:runtime@127.0.0.1:5432/runtime_bootstrap_test',
+        SMRT_APP_ID: 'runtime-bootstrap',
+        SMRT_RUNTIME_PROFILE: 'self-hosted',
+        TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.json'),
+      },
+    },
+  );
+  return JSON.parse(stdout) as { database: string; profile: string };
+}
 
 describe('validateHostedDatabaseUrl', () => {
   it('requires an operator-specific public database namespace', () => {
@@ -24,5 +66,36 @@ describe('validateHostedDatabaseUrl', () => {
     expect(() =>
       validateHostedDatabaseUrl('postgresql://db.example.com/shared_career'),
     ).toThrow(/operator-unique PostgreSQL database name/u);
+  });
+});
+
+describe('hosted runtime configuration', () => {
+  it('fails closed when an explicit hosted profile has no loaded config', () => {
+    expect(() => assertHostedRuntimeConfiguration({}, 'self-hosted')).toThrow(
+      /Unable to load SMRT runtime configuration/u,
+    );
+    expect(() => assertHostedRuntimeConfiguration({}, 'cloud')).toThrow(
+      /Unable to load SMRT runtime configuration/u,
+    );
+  });
+
+  it('keeps local as the canonical fallback and accepts loaded hosted config', () => {
+    expect(() => assertHostedRuntimeConfiguration({}, 'local')).not.toThrow();
+    expect(() =>
+      assertHostedRuntimeConfiguration({ runtime: { profile: 'self-hosted' } }),
+    ).not.toThrow();
+  });
+});
+
+describe('deployed runtime entrypoints', () => {
+  it('loads the self-hosted site config from root and site working directories', async () => {
+    await expect(probeHostedRuntime(sourceRoot)).resolves.toEqual({
+      database: 'postgres',
+      profile: 'self-hosted',
+    });
+    await expect(probeHostedRuntime(siteRoot)).resolves.toEqual({
+      database: 'postgres',
+      profile: 'self-hosted',
+    });
   });
 });

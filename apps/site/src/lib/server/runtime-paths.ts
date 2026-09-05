@@ -14,6 +14,13 @@ export function getIolausSourceRoot(cwd = process.cwd()): string {
   throw new Error('Unable to resolve the Iolaus source root.');
 }
 
+/** Resolve the application config independently of the invoking entrypoint cwd. */
+export function getIolausSmrtConfigPath(
+  sourceRoot = getIolausSourceRoot(),
+): string {
+  return resolve(sourceRoot, 'apps/site/smrt.config.js');
+}
+
 export function resolveIolausLocalRuntimePaths() {
   return resolveLocalRuntimePaths({
     appId: process.env.SMRT_APP_ID || IOLAUS_APPLICATION_ID,

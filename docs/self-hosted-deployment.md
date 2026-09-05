@@ -80,6 +80,13 @@ so parallel rollout cannot create concurrent schema writers. A failed
 migration blocks that workload before it serves traffic, executes jobs, or lets
 the read-only monitor query an incompatible schema.
 
+The image runs entrypoints from `/app` and pins `tsx` to the site's TypeScript
+configuration. Runtime configuration is resolved from `apps/site/smrt.config.js`
+for both root and site working directories, so hosted workloads retain their
+PostgreSQL profile. Use the supported
+`pnpm --filter @willgriffin/iolaus-site db:migrate` command; no deployment
+specific migration wrapper is required.
+
 Worker heartbeat files are held in per-pod `emptyDir` volumes and contain only
 worker kind, time, and a ready state. They are not durable application data.
 The liveness probe rejects a process whose event loop can no longer refresh its
