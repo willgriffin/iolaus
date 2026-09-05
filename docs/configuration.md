@@ -97,9 +97,12 @@ issuer/subject/user-ID entry in the protected
 one-to-one migration approval, not an email allowlist; the verified canonical
 email is only an additional consistency check. The released s-m-r-t
 transaction verifies the declared user and canonical Profile atomically. An
-unknown, duplicate, unverified, ambiguous, or pre-owned identity fails closed.
-Do not commit or log this mapping. Preserve the provider's issuer and subject
-when changing the redirect URI or client so existing links remain stable.
+empty binding list leaves normal first OIDC login to SMRT's verified-email and
+existing-identity path. An unmatched binding also leaves that secure default in
+place; a matching binding that is unverified, ambiguous, or cannot prove the
+declared owner fails closed. Do not commit or log this mapping. Preserve the
+provider's issuer and subject when changing the redirect URI or client so
+existing links remain stable.
 
 After importing a restored logical backup and before enabling public traffic,
 run the normal application database migration once more. It is idempotent and

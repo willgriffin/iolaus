@@ -34,7 +34,11 @@ export function createImportedOwnerAuthorizer(
     const binding = bindings.find(
       ({ issuer, subject }) => issuer === claims.iss && subject === claims.sub,
     );
-    if (!binding || claims.email_verified !== true) return null;
+    // `undefined` preserves the released SMRT verified-email and existing
+    // identity path. A matching binding that cannot be validated is an
+    // explicit denial: it must never fall through to an email-only takeover.
+    if (!binding) return undefined;
+    if (claims.email_verified !== true) return null;
 
     const user = await users.get({ id: binding.userId });
     if (
@@ -61,8 +65,14 @@ export async function provisionHostedOidcUser(
   users: HostedOidcUserCollection,
   bindings: readonly OidcOwnerBinding[] = [],
 ): Promise<User> {
-  const result = await users.getOrCreateFromOidc(claims, hostedOidcProvider, {
-    authorizeProfileOwner: createImportedOwnerAuthorizer(bindings),
-  });
+  const options =
+    bindings.length === 0
+      ? undefined
+      : { authorizeProfileOwner: createImportedOwnerAuthorizer(bindings) };
+  const result = await users.getOrCreateFromOidc(
+    claims,
+    hostedOidcProvider,
+    options,
+  );
   return result.user;
 }

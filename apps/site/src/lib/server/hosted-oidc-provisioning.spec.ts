@@ -1,6 +1,7 @@
 import type { User } from '@happyvertical/smrt-users';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createImportedOwnerAuthorizer,
   hostedOidcProvider,
   provisionHostedOidcUser,
 } from './hosted-oidc-provisioning';
@@ -37,9 +38,7 @@ describe('hosted OIDC identity provisioning', () => {
     expect(getOrCreateFromOidc).toHaveBeenCalledWith(
       claims,
       hostedOidcProvider,
-      {
-        authorizeProfileOwner: expect.any(Function),
-      },
+      undefined,
     );
   });
 
@@ -87,18 +86,7 @@ describe('hosted OIDC identity provisioning', () => {
     });
   });
 
-  it('fails closed for an unapproved first binding to an imported owner', async () => {
-    const authorizations: unknown[] = [];
-    const getOrCreateFromOidc = vi.fn(async (_claims, _provider, options) => {
-      const authorization = await options.authorizeProfileOwner({
-        claims: _claims,
-        db: {},
-        users: { get: vi.fn() },
-      });
-      authorizations.push(authorization);
-      if (!authorization) throw new Error('profile_owned');
-      return { user: authorization.user };
-    });
+  it('preserves SMRT fallback for unrelated claims and rejects an invalid matching binding', async () => {
     const claims = {
       email: 'owner@example.invalid',
       email_verified: true,
@@ -106,23 +94,29 @@ describe('hosted OIDC identity provisioning', () => {
       sub: 'subject-immutable-1',
     };
 
+    const authorizer = createImportedOwnerAuthorizer([
+      {
+        issuer: claims.iss,
+        subject: claims.sub,
+        userId: '11111111-1111-4111-8111-111111111111',
+      },
+    ]);
     await expect(
-      provisionHostedOidcUser(claims, { getOrCreateFromOidc }),
-    ).rejects.toThrow('profile_owned');
+      authorizer({
+        claims: { ...claims, sub: 'different-subject' },
+        db: {} as never,
+        provider: hostedOidcProvider,
+        users: { get: vi.fn() } as never,
+      }),
+    ).resolves.toBeUndefined();
     await expect(
-      provisionHostedOidcUser(
-        { ...claims, email_verified: false },
-        { getOrCreateFromOidc },
-        [
-          {
-            issuer: claims.iss,
-            subject: claims.sub,
-            userId: '11111111-1111-4111-8111-111111111111',
-          },
-        ],
-      ),
-    ).rejects.toThrow('profile_owned');
-    expect(authorizations).toEqual([null, null]);
+      authorizer({
+        claims: { ...claims, email_verified: false },
+        db: {} as never,
+        provider: hostedOidcProvider,
+        users: { get: vi.fn() } as never,
+      }),
+    ).resolves.toBeNull();
   });
 
   it('does not replace SMRT ownership failures with an email-only fallback', async () => {
