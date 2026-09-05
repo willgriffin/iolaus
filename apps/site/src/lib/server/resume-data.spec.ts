@@ -707,6 +707,10 @@ describe('SMRT resume collection read plans', () => {
       className: 'Achievement',
       options: { limit: 1000, orderBy: 'sortOrder ASC' },
     });
+    expect(plan.profileLinks).toEqual({
+      className: 'CandidateProfileLink',
+      options: { limit: 1001, orderBy: 'id ASC' },
+    });
     expect(plan.tags).toEqual({
       className: 'Tag',
       options: { limit: 1000, orderBy: 'slug ASC' },
@@ -754,6 +758,68 @@ describe('SMRT resume collection read plans', () => {
       collectionOptions: { db: 'request-db' },
       maxConcurrency: 2,
     });
+  });
+
+  it('restores approved profile-link ordering before the trusted server projection', async () => {
+    const records = normalizedRecordsFromSource(loadLegacyResumeSource());
+    records.profileLinks = [
+      {
+        href: 'https://example.invalid/third',
+        id: 'link-third',
+        label: 'Third',
+        profileKey: 'default',
+        sortOrder: 2,
+      },
+      {
+        href: 'https://example.invalid/first-b',
+        id: 'link-b',
+        label: 'First B',
+        profileKey: 'default',
+        sortOrder: 1,
+      },
+      {
+        href: 'https://example.invalid/first-a',
+        id: 'link-a',
+        label: 'First A',
+        profileKey: 'default',
+        sortOrder: 1,
+      },
+    ];
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      Object.fromEntries(
+        Object.keys(plan).map((key) => [
+          key,
+          records[key as keyof ResumeSourceRecords] ?? [],
+        ]),
+      ),
+    );
+
+    const source = await loadNormalizedResumeSource();
+
+    expect(source?.profile.links).toEqual([
+      { href: 'https://example.invalid/first-a', label: 'First A' },
+      { href: 'https://example.invalid/first-b', label: 'First B' },
+      { href: 'https://example.invalid/third', label: 'Third' },
+    ]);
+    expect(source?.profile).not.toHaveProperty('profileKey');
+    expect(source?.profile.links[0]).not.toHaveProperty('sortOrder');
+  });
+
+  it('fails closed instead of changing the legacy top-1000 membership', async () => {
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      Object.fromEntries(
+        Object.keys(plan).map((key) => [
+          key,
+          key === 'profileLinks'
+            ? Array.from({ length: 1001 }, () => ({}))
+            : [],
+        ]),
+      ),
+    );
+
+    await expect(loadNormalizedResumeSource()).rejects.toThrow(
+      'Published resume read exceeds the supported 1000-row limit for profileLinks.',
+    );
   });
 
   it('keeps concurrent request database options isolated', async () => {
