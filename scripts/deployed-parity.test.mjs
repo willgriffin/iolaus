@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   buildScenarioEnvironment,
+  candidateScratchMounts,
   candidateImageInvocation,
   evidenceDigest,
   invalidateEvidence,
@@ -19,6 +20,7 @@ import {
   parsePaxRecords,
   sourceFingerprint,
   validatePaxMetadata,
+  validateCandidateScratchPaths,
   validateCandidateImageMetadata,
   validateImageReference,
   validateInstalledSmrtDependencies,
@@ -129,6 +131,20 @@ test('fingerprints exact source bytes with path framing', () => {
   }
 });
 
+test('rejects candidate scratch mounts that overlap tracked source paths', () => {
+  assert.ok(Object.isFrozen(candidateScratchMounts));
+  assert.ok(candidateScratchMounts.every((mount) => Object.isFrozen(mount)));
+  assert.throws(
+    () => validateCandidateScratchPaths(['apps/site/src/types/future.ts']),
+    /scratch mount overlaps reviewed tracked source/u,
+  );
+  assert.throws(
+    () => validateCandidateScratchPaths(['apps/site/src']),
+    /scratch mount overlaps reviewed tracked source/u,
+  );
+  assert.doesNotThrow(() => validateCandidateScratchPaths(['package.json']));
+});
+
 test(
   'rejects a PAX link-enabled tracked path through the Docker export inspection boundary',
   { skip: !dockerAvailable() },
@@ -205,6 +221,45 @@ test(
   },
 );
 
+test(
+  'rejects symlinked candidate scratch paths and ancestors through the Docker export inspection boundary',
+  { skip: !dockerAvailable() },
+  async () => {
+    const content = readFileSync(resolve(repositoryRoot, 'package.json'));
+    for (const path of ['app/.smrt', 'app/apps']) {
+      const image = `iolaus-parity-scratch-link-test-${process.pid}-${path.includes('apps') ? 'ancestor' : 'path'}`;
+      const archive = Buffer.concat([
+        tarEntry('app', '5'),
+        tarEntry('outside', '0', Buffer.from('unreviewed bytes')),
+        tarEntry(path, '2', Buffer.alloc(0), '../outside'),
+        tarEntry('app/package.json', '0', content),
+        Buffer.alloc(1024),
+      ]);
+      const imported = spawnSync('docker', ['import', '-', image], {
+        encoding: 'utf8',
+        input: archive,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      assert.equal(imported.status, 0, imported.stdout);
+      const imageId = imported.stdout.trim();
+      try {
+        await assert.rejects(
+          inspectCandidateImageFilesystem(
+            imageId,
+            ['package.json'],
+            sourceFingerprint(repositoryRoot, ['package.json']),
+          ),
+          /scratch mount path is not a directory/u,
+        );
+      } finally {
+        spawnSync('docker', ['image', 'rm', '--force', imageId], {
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+      }
+    }
+  },
+);
+
 test('uses a read-only filesystem for candidate-image scenarios', () => {
   const imageRef = `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`;
   const result = candidateImageInvocation(imageRef, ['node', '--test', 'x']);
@@ -228,6 +283,12 @@ test('runs candidate scenarios from the immutable image without networking', () 
   assert.ok(result.args.includes('no-new-privileges'));
   assert.ok(result.args.includes('--read-only'));
   assert.ok(result.args.includes('SMRT_RUNTIME_PROFILE=local'));
+  assert.ok(result.args.includes('pnpm_config_verify_deps_before_run=false'));
+  for (const { path, size } of candidateScratchMounts) {
+    assert.ok(
+      result.args.includes(`${path}:rw,nosuid,nodev,size=${size},uid=10001,gid=10001`),
+    );
+  }
   assert.ok(result.args.includes(imageRef));
   assert.deepEqual(result.args.slice(-3), ['node', '--test', 'x']);
 });

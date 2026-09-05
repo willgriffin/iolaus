@@ -251,7 +251,12 @@ checksum and terminating block,
 accepts standard PAX `path` metadata and `linkpath` only on link entries,
 rejects other or ambiguous PAX metadata, duplicate normalized application paths, and
 any link or non-regular entry at a reviewed source path or its ancestors, then
-hashes only the raw regular-file bodies. It never dereferences a
+hashes only the raw regular-file bodies. Candidate scenarios keep source and
+dependencies read-only, with bounded temporary filesystems only for `/tmp`,
+Vite caches, SvelteKit output, SMRT artifacts, and generated type declarations.
+The verifier rejects any temporary mount that overlaps tracked source, or whose
+image path or ancestors are links or non-directories. pnpm dependency refresh
+is disabled so execution cannot attempt an install. It never dereferences a
 candidate-controlled path on the host. The candidate inventory is executed
 only after those reviewed source bytes match and must match the independently
 executed host inventory, including installed pinned s-m-r-t versions.

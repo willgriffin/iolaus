@@ -27,6 +27,14 @@ const localImageIdPattern = /^sha256:[a-f0-9]{64}$/u;
 const darwinNetworkSandboxProfile =
   '(version 1) (allow default) (deny network-outbound (remote ip))';
 let failureStage = 'startup';
+export const candidateScratchMounts = Object.freeze([
+  Object.freeze({ path: '/app/apps/site/node_modules/.vite-temp', size: '64m' }),
+  Object.freeze({ path: '/app/apps/site/node_modules/.vite', size: '64m' }),
+  Object.freeze({ path: '/app/apps/site/.svelte-kit', size: '256m' }),
+  Object.freeze({ path: '/app/apps/site/.smrt', size: '64m' }),
+  Object.freeze({ path: '/app/.smrt', size: '64m' }),
+  Object.freeze({ path: '/app/apps/site/src/types', size: '16m' }),
+]);
 
 const scenarios = [
   {
@@ -306,6 +314,7 @@ export function validateLocalCandidateImageMetadata(
 
 export function candidateImageInvocation(candidateRef, invocation) {
   validateCandidateReference(candidateRef);
+  validateCandidateScratchPaths(trackedImageSourcePaths());
   return {
     backend: 'docker-network-none',
     binary: 'docker',
@@ -321,6 +330,10 @@ export function candidateImageInvocation(candidateRef, invocation) {
       '--read-only',
       '--tmpfs',
       '/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001',
+      ...candidateScratchMounts.flatMap(({ path, size }) => [
+        '--tmpfs',
+        `${path}:rw,nosuid,nodev,size=${size},uid=10001,gid=10001`,
+      ]),
       '--env',
       'CI=true',
       '--env',
@@ -337,6 +350,8 @@ export function candidateImageInvocation(candidateRef, invocation) {
       'XDG_CACHE_HOME=/tmp/cache',
       '--env',
       'COREPACK_ENABLE_DOWNLOAD_PROMPT=0',
+      '--env',
+      'pnpm_config_verify_deps_before_run=false',
       '--env',
       'NODE_OPTIONS=--require=/app/scripts/deny-outbound-network.cjs',
       '--entrypoint',
@@ -362,6 +377,29 @@ export function sourceFingerprint(root, paths) {
     hash.update(content);
   }
   return hash.digest('hex');
+}
+
+export function validateCandidateScratchPaths(paths) {
+  for (const { path: scratchPath } of candidateScratchMounts) {
+    const scratch = scratchArchivePath(scratchPath);
+    for (const path of paths) {
+      const source = archivePath(`app/${path}`);
+      if (
+        source === scratch ||
+        source.startsWith(`${scratch}/`) ||
+        scratch.startsWith(`${source}/`)
+      ) {
+        throw new Error('A candidate scratch mount overlaps reviewed tracked source.');
+      }
+    }
+  }
+}
+
+function scratchArchivePath(path) {
+  if (!path.startsWith('/app/')) {
+    throw new Error('The candidate scratch mount path is unsafe.');
+  }
+  return archivePath(path.slice(1));
 }
 
 function sourceFingerprintContents(contents, paths) {
@@ -508,6 +546,13 @@ async function inspectDockerExport(containerId, targets) {
       sourceRelevantPaths.add(parts.slice(0, index).join('/'));
     }
   }
+  const scratchRelevantPaths = new Set();
+  for (const { path } of candidateScratchMounts) {
+    const parts = scratchArchivePath(path).split('/');
+    for (let index = 1; index <= parts.length; index += 1) {
+      scratchRelevantPaths.add(parts.slice(0, index).join('/'));
+    }
+  }
   const seen = new Map();
   const appEntries = new Set();
   const linkPaths = new Set();
@@ -535,6 +580,7 @@ async function inspectDockerExport(containerId, targets) {
     }
     const target = expected.get(entry.path);
     const sourceRelevant = sourceRelevantPaths.has(entry.path);
+    const scratchRelevant = scratchRelevantPaths.has(entry.path);
     if (entry.path === 'app' || entry.path.startsWith('app/')) {
       if (appEntries.has(entry.path)) {
         throw new Error('The candidate image archive repeats a normalized application path.');
@@ -543,6 +589,9 @@ async function inspectDockerExport(containerId, targets) {
     }
     if (sourceRelevant && (entry.type === '1' || entry.type === '2')) {
       linkPaths.add(entry.path);
+    }
+    if (scratchRelevant && entry.type !== '5') {
+      throw new Error('The candidate image scratch mount path is not a directory.');
     }
     if (
       sourceRelevant &&
@@ -706,6 +755,7 @@ export async function inspectCandidateImageFilesystem(
   paths,
   expectedSha256,
 ) {
+  validateCandidateScratchPaths(paths);
   const created = spawnSync(
     'docker',
     ['create', '--network', 'none', '--entrypoint', '/bin/true', candidateRef],
