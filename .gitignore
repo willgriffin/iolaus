@@ -1,4 +1,5 @@
 node_modules
+/.omo/
 .DS_Store
 .env
 .env.*

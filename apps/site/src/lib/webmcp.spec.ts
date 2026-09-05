@@ -21,17 +21,24 @@ type RegisteredTool = {
   name: string;
 };
 
-function installModelContext(registered: RegisteredTool[]) {
+function installModelContext(
+  registered: RegisteredTool[],
+  registrationSignals: AbortSignal[] = [],
+) {
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: {
       modelContext: {
-        async registerTool(tool: {
-          annotations?: Record<string, unknown>;
-          execute: (args: Record<string, unknown>) => Promise<string>;
-          name: string;
-        }) {
+        async registerTool(
+          tool: {
+            annotations?: Record<string, unknown>;
+            execute: (args: Record<string, unknown>) => Promise<string>;
+            name: string;
+          },
+          options?: { signal?: AbortSignal },
+        ) {
           registered.push(tool);
+          if (options?.signal) registrationSignals.push(options.signal);
         },
       },
     },
@@ -73,7 +80,7 @@ describe('command-center WebMCP registration', () => {
     );
   });
 
-  it('admits only the twelve canonical job-search definition objects', () => {
+  it('admits only the sixteen canonical job-search definition objects', () => {
     const forgedDefinition = {
       ...jobSearchWebMcpToolDefinitions[0],
       name: 'job_search_generated_write',
@@ -135,7 +142,8 @@ describe('command-center WebMCP registration', () => {
 
   it('registers generated reads plus bounded job-search operations without invoking a tool', async () => {
     const registered: RegisteredTool[] = [];
-    installModelContext(registered);
+    const registrationSignals: AbortSignal[] = [];
+    installModelContext(registered, registrationSignals);
 
     const config = commandCenterWebMcpConfig(
       [...webMcpToolDefinitions, ...jobSearchWebMcpToolDefinitions],
@@ -214,6 +222,25 @@ describe('command-center WebMCP registration', () => {
         'job_search_read_resume',
       ]),
     );
+    expect(
+      new Map(registered.map((tool) => [tool.name, tool.annotations])),
+    ).toEqual(
+      new Map(
+        config.definitions.map((definition) => [
+          definition.name,
+          expect.objectContaining({
+            destructiveHint:
+              'effect' in definition ? definition.effect !== 'read' : false,
+            idempotentHint:
+              'idempotent' in definition ? definition.idempotent : true,
+            openWorldHint:
+              'openWorld' in definition ? definition.openWorld : false,
+            readOnlyHint: 'readOnly' in definition ? definition.readOnly : true,
+            untrustedContentHint: true,
+          }),
+        ]),
+      ),
+    );
     expect(registered.some((tool) => tool.name === 'opportunity_create')).toBe(
       false,
     );
@@ -232,7 +259,10 @@ describe('command-center WebMCP registration', () => {
       ),
     ).toBe(false);
 
+    expect(registrationSignals).toHaveLength(registered.length);
+    expect(registrationSignals.every((signal) => !signal.aborted)).toBe(true);
     dispose();
+    expect(registrationSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it('maps canonical job-search tools to their same-origin REST routes', async () => {

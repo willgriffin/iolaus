@@ -1,5 +1,6 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { callMcpTool, McpAccessError } from '$lib/server/mcp';
+import { administrativeSessionFailure } from '$lib/server/administrative-auth';
+import { callMcpTool, isPublicMcpTool, McpAccessError } from '$lib/server/mcp';
 
 function jsonObjectPayload(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -26,6 +27,21 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) {
       return json({ error: 'name is required.' }, { status: 400 });
+    }
+
+    // Tool discovery is intentionally public, so enforce the same private
+    // administrative boundary here as well. A non-admin must not be able to
+    // bypass inventory redaction by guessing a generated tool name.
+    if (!isPublicMcpTool(name)) {
+      const failure = administrativeSessionFailure(locals);
+      if (failure) {
+        return json(
+          {
+            error: failure === 'unauthenticated' ? 'Unauthorized' : 'Forbidden',
+          },
+          { status: failure === 'unauthenticated' ? 401 : 403 },
+        );
+      }
     }
 
     return json(

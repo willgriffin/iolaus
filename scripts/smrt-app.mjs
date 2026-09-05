@@ -925,6 +925,129 @@ async function portability(operation, operationLock) {
   }
 }
 
+async function predecessorMigration(operation) {
+  const adapter = await import(
+    pathToFileURL(join(sourceRoot, 'scripts', 'willgriffin-migration.mjs')).href
+  );
+  const dryRun = commandArgs.includes('--dry-run');
+  const unknownOption = commandArgs.find(
+    (argument) => argument.startsWith('--') && argument !== '--dry-run',
+  );
+  if (unknownOption) throw new Error('Unknown predecessor migration option.');
+  if (operation === 'export' && dryRun) {
+    throw new Error('Predecessor export does not support --dry-run.');
+  }
+  const pathArgument = commandArgs.find((argument) => !argument.startsWith('--'));
+  const artifactPath = pathArgument
+    ? assertExternalArtifactPath({
+        sourceRoot,
+        path: resolve(pathArgument),
+        label:
+          operation === 'export'
+            ? 'Migration export destination'
+            : 'Migration import source',
+      })
+    : undefined;
+  const runtime = await resolveRuntime();
+  const environment = runtimeEnvironment(runtime);
+  if (
+    operation === 'import' &&
+    !dryRun &&
+    process.env.SMRT_MAINTENANCE_MODE !== 'true'
+  ) {
+    throw new Error(
+      'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before migration import.',
+    );
+  }
+  const result = await adapter[
+    operation === 'export'
+      ? 'exportPredecessorMigration'
+      : 'importPredecessorMigration'
+  ]({
+    appId,
+    sourceRoot,
+    stateRoot: preparedStateRoot(),
+    runtime,
+    ...environment,
+    path: artifactPath,
+    dryRun,
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+function predecessorAssetArguments() {
+  const values = {};
+  for (let index = 0; index < commandArgs.length; index += 1) {
+    const argument = commandArgs[index];
+    if (!['--bundle', '--source-assets', '--manifest'].includes(argument)) {
+      throw new Error('Unknown predecessor asset migration option.');
+    }
+    const value = commandArgs[index + 1];
+    if (!value || value.startsWith('--') || values[argument]) {
+      throw new Error('Predecessor asset migration options require one value.');
+    }
+    values[argument] = value;
+    index += 1;
+  }
+  return values;
+}
+
+async function predecessorAssetMigration(operation) {
+  const options = predecessorAssetArguments();
+  const runtime = await resolveRuntime();
+  const environment = runtimeEnvironment(runtime);
+  if (
+    operation === 'import' &&
+    process.env.SMRT_MAINTENANCE_MODE !== 'true'
+  ) {
+    throw new Error(
+      'Stop deployed web/workers and set SMRT_MAINTENANCE_MODE=true before asset migration import.',
+    );
+  }
+  const sourceAssetsRoot = options['--source-assets']
+    ? assertExternalArtifactPath({
+        sourceRoot,
+        path: resolve(options['--source-assets']),
+        label: 'Isolated predecessor asset backup root',
+      })
+    : undefined;
+  const manifestPath = options['--manifest']
+    ? assertExternalArtifactPath({
+        sourceRoot,
+        path: resolve(options['--manifest']),
+        label: 'Asset migration manifest',
+      })
+    : undefined;
+  const bundlePath = options['--bundle']
+    ? assertExternalArtifactPath({
+        sourceRoot,
+        path: resolve(options['--bundle']),
+        label: 'Logical migration bundle',
+      })
+    : undefined;
+  const adapter = await import(
+    pathToFileURL(
+      join(sourceRoot, 'scripts', 'willgriffin-asset-migration.mjs'),
+    ).href,
+  );
+  const result = await adapter[
+    operation === 'plan'
+      ? 'planPredecessorAssetMigration'
+      : 'importPredecessorAssetMigration'
+  ]({
+    sourceRoot,
+    stateRoot: preparedStateRoot(),
+    runtime,
+    ...environment,
+    bundlePath,
+    sourceAssetsRoot,
+    manifestPath,
+    targetAssetsConfigJson: environment.RESUME_FILES_CONFIG_JSON,
+  });
+  console.log(JSON.stringify(result, null, 2));
+  if (result.status === 'quarantined') process.exitCode = 2;
+}
+
 try {
   switch (command) {
     case 'install': {
@@ -982,6 +1105,26 @@ try {
     case 'import':
       await withOperationLock(preparedStateRoot(), command, (lock) =>
         portability(command, lock),
+      );
+      break;
+    case 'migration-export':
+      await withOperationLock(preparedStateRoot(), command, () =>
+        predecessorMigration('export'),
+      );
+      break;
+    case 'migration-import':
+      await withOperationLock(preparedStateRoot(), command, () =>
+        predecessorMigration('import'),
+      );
+      break;
+    case 'migration-assets-plan':
+      await withOperationLock(preparedStateRoot(), command, () =>
+        predecessorAssetMigration('plan'),
+      );
+      break;
+    case 'migration-assets-import':
+      await withOperationLock(preparedStateRoot(), command, () =>
+        predecessorAssetMigration('import'),
       );
       break;
     default:

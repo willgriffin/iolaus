@@ -15,9 +15,9 @@ import {
   SOURCE_CRAWL_METHOD,
   SOURCE_JOB_OBJECT_TYPE,
 } from './source-schedules.js';
-// Importing the server registration registers the local @willgriffin/iolaus-site
-// objects in ObjectRegistry, mirroring how the job worker boots.
-import './smrt.js';
+// Import the actual worker bootstrap so this verifies its local registration
+// graph, rather than merely a nearby server module.
+import '../../../scripts/jobs-worker-bootstrap.js';
 
 // The worker turns a persisted job into a call like:
 //   ObjectRegistry.getClass(job.objectType) -> instance[job.method](args, ctx)

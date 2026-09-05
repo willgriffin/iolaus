@@ -31,6 +31,7 @@
     "db:status": "tsx scripts/db-status.ts",
     "db:backfill-smrt-native": "tsx scripts/backfill-smrt-native.ts",
     "jobs:worker": "tsx scripts/jobs-worker.ts",
+    "deployment:monitor": "tsx scripts/deployment-monitor.ts",
     "opportunities:crawl": "tsx scripts/crawl-opportunity-sources.ts",
     "opportunities:crawl-status": "tsx scripts/source-crawl-status.ts",
     "opportunities:intelligence-canary": "tsx scripts/opportunity-intelligence-canary.ts",

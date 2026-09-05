@@ -47,6 +47,12 @@ Optional AI/PDF/crawling features require separately configured providers or
 system dependencies. Missing optional providers never block the local install;
 features stay disabled and can be diagnosed with `pnpm app:doctor`.
 
+For a PostgreSQL-backed public installation, use the isolated self-hosted
+Kubernetes topology and its operator runbook in
+[docs/self-hosted-deployment.md](docs/self-hosted-deployment.md). It contains
+no live domain, credentials, or deployment values; every production-like
+install must use a reviewed private overlay with a released immutable image.
+
 The checked-in candidate data is empty. Never commit candidate information,
 credentials, generated resumes, application history or deployment secrets.
 See [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) and

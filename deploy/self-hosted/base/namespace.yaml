@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iolaus-self-hosted
+  labels:
+    app.kubernetes.io/name: iolaus
+    app.kubernetes.io/part-of: iolaus

@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {
+  basename,
   dirname,
   isAbsolute,
   join,
@@ -653,18 +654,20 @@ export function recoverFilesystemAssets({
 }
 
 export function readSensitiveBundle(path, options = {}) {
+  const lexicalPath = resolve(path);
+  let canonicalParent;
+  let canonicalPath;
   let details;
-  let initialRealPath;
   try {
-    details = lstatSync(path);
-    initialRealPath = realpathSync(path);
+    canonicalParent = realpathSync(dirname(lexicalPath));
+    canonicalPath = join(canonicalParent, basename(lexicalPath));
+    details = lstatSync(canonicalPath);
   } catch {
     throw fail('unsafe-bundle-file');
   }
   if (
     details.isSymbolicLink() ||
     !details.isFile() ||
-    initialRealPath !== resolve(path) ||
     details.size > MAX_BUNDLE_BYTES ||
     (process.platform !== 'win32' && (details.mode & 0o777) !== 0o600)
   ) {
@@ -673,7 +676,7 @@ export function readSensitiveBundle(path, options = {}) {
   const noFollow = constants.O_NOFOLLOW ?? 0;
   let descriptor;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | noFollow);
+    descriptor = openSync(canonicalPath, constants.O_RDONLY | noFollow);
   } catch {
     throw fail('bundle-changed-during-read');
   }
@@ -683,7 +686,8 @@ export function readSensitiveBundle(path, options = {}) {
       opened.dev !== details.dev ||
       opened.ino !== details.ino ||
       opened.size !== details.size ||
-      !opened.isFile()
+      !opened.isFile() ||
+      (process.platform !== 'win32' && (opened.mode & 0o777) !== 0o600)
     ) {
       throw fail('bundle-changed-during-read');
     }
@@ -695,10 +699,12 @@ export function readSensitiveBundle(path, options = {}) {
     );
     const after = fstatSync(descriptor);
     let afterPath;
+    let finalParent;
     let finalRealPath;
     try {
-      afterPath = statSync(path);
-      finalRealPath = realpathSync(path);
+      afterPath = lstatSync(canonicalPath);
+      finalParent = realpathSync(dirname(canonicalPath));
+      finalRealPath = realpathSync(canonicalPath);
     } catch {
       throw fail('bundle-changed-during-read');
     }
@@ -706,9 +712,14 @@ export function readSensitiveBundle(path, options = {}) {
       after.dev !== opened.dev ||
       after.ino !== opened.ino ||
       after.size !== opened.size ||
+      (process.platform !== 'win32' && (after.mode & 0o777) !== 0o600) ||
+      afterPath.isSymbolicLink() ||
+      !afterPath.isFile() ||
       afterPath.dev !== opened.dev ||
       afterPath.ino !== opened.ino ||
-      finalRealPath !== resolve(path)
+      (process.platform !== 'win32' && (afterPath.mode & 0o777) !== 0o600) ||
+      finalParent !== canonicalParent ||
+      finalRealPath !== canonicalPath
     ) {
       throw fail('bundle-changed-during-read');
     }

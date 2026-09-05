@@ -23,6 +23,11 @@
     "app:backup": "node scripts/smrt-app.mjs backup",
     "app:export": "node scripts/smrt-app.mjs export",
     "app:import": "node scripts/smrt-app.mjs import",
+    "migration:willgriffin:export": "node scripts/smrt-app.mjs migration-export",
+    "migration:willgriffin:import": "node scripts/smrt-app.mjs migration-import",
+    "migration:willgriffin:assets:plan": "node scripts/smrt-app.mjs migration-assets-plan",
+    "migration:willgriffin:assets:import": "node scripts/smrt-app.mjs migration-assets-import",
+    "migration:willgriffin:rehearse:synthetic": "node scripts/synthetic-migration-rehearsal.mjs",
     "demo:prepare": "node scripts/iolaus-demo.mjs prepare",
     "demo:smoke": "node scripts/iolaus-demo.mjs smoke",
     "demo:status": "node scripts/iolaus-demo.mjs status",
@@ -30,13 +35,15 @@
     "demo:test": "node --test scripts/iolaus-demo.spec.mjs",
     "worker": "node scripts/smrt-worker.mjs task",
     "worker:schedule": "node scripts/smrt-worker.mjs schedule",
+    "deploy:self-hosted:check": "node scripts/check-self-hosted-manifests.mjs",
+    "parity:contract": "node scripts/deployed-parity.mjs",
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && lefthook install || echo 'Skipping lefthook install (not in git repository)'",
     "build": "turbo run build",
     "check": "turbo run check",
     "dev": "turbo run dev",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "turbo run test",
+    "test": "node --test scripts/*.test.mjs && turbo run test && pnpm deploy:self-hosted:check",
     "format": "biome check --write .",
     "format-check": "biome ci --diagnostic-level=error .",
     "format:check": "pnpm format-check",
@@ -63,7 +70,9 @@
   "dependencies": {
     "@happyvertical/smrt-app-runtime": "0.45.0",
     "@happyvertical/smrt-config": "0.45.0",
-    "@happyvertical/sql": "0.89.4"
+    "@happyvertical/smrt-scanner": "0.45.0",
+    "@happyvertical/sql": "0.89.4",
+    "tsx": "catalog:"
   },
   "license": "MIT"
 }
