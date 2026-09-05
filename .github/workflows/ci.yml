@@ -39,7 +39,7 @@ jobs:
       - run: npm install --global pnpm@11.24.0
       - run: pnpm install --frozen-lockfile
       - name: Verify host network isolation prerequisite
-        run: /usr/bin/unshare --user --map-root-user --net -- true
+        run: scripts/ci/prepare-parity-isolation.sh
       - name: Install native build diagnostics
         run: |
           sudo apt-get update

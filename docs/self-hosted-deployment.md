@@ -138,6 +138,13 @@ operator-owned object store.
 
 ### Parity contract and evidence
 
+Qualify changes locally before review and CI: run the documented workspace
+checks, then the exact-image synthetic rehearsal below. `pnpm test` includes
+a disposable PostgreSQL 16 regression for batch rollback, resume, and lease
+fencing; Docker must be available for that qualification, and no external
+database URL is accepted. The CI isolation helper also has local failure-path
+regressions; its AppArmor behavior needs an Ubuntu host or guest.
+
 Before building an image, run the deterministic source contract under the
 pinned Node and pnpm versions:
 
@@ -202,6 +209,11 @@ a fallback. It does not read process arguments or environments, inspect
 unrelated processes, or change the build's exit status.
 
 Candidate CI first probes the host network namespace isolation prerequisite.
+If Ubuntu blocks the user-ID mapping, the ephemeral runner loads an AppArmor
+profile permitting user namespaces only for `/usr/bin/unshare`, then repeats
+the probe. It does not disable AppArmor or change the global user-namespace
+setting; a failed probe still stops the job. This follows the
+[Ubuntu per-application profile guidance](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions).
 Rehearsal failures report a fixed parity stage without forwarding child output;
 the artifact upload includes only the two named JSON evidence files.
 
