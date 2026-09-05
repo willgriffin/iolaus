@@ -392,8 +392,8 @@ test('binds a local candidate image ID to source and dependency provenance', () 
 
 test('compares independently inspected installed s-m-r-t dependencies', () => {
   const expected = {
-    '@happyvertical/smrt-core': '0.45.0',
-    '@happyvertical/smrt-web': '0.45.0',
+    '@happyvertical/smrt-core': '0.45.3',
+    '@happyvertical/smrt-web': '0.45.3',
   };
   assert.deepEqual(validateInstalledSmrtDependencies(expected, expected), expected);
   assert.throws(

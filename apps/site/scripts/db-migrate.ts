@@ -10,7 +10,10 @@ import {
   withSmrtDatabaseMigrationLock,
 } from './db-common.js';
 import { backfillProfileEmailKeys } from '@happyvertical/smrt-profiles';
-import { backfillUserEmailKeys } from '@happyvertical/smrt-users';
+import {
+  backfillLegacyUserProfiles,
+  backfillUserEmailKeys,
+} from '@happyvertical/smrt-users';
 import { backfillSmrtNative, formatBackfillSummary } from './backfill-smrt-native.js';
 import {
   backfillResumeAdmin,
@@ -106,6 +109,7 @@ const {
   sourceCrawlJobDedupe,
   sourceCrawlOpportunityGuard,
   oidcIdentityEmailKeys,
+  legacyUserProfiles,
   tagIntegrityGuards,
 } = await withSmrtDatabaseMigrationLock(async (database) => {
   await repairExistingCandidateAnswerNaturalKeyIndex(database);
@@ -183,6 +187,7 @@ const {
   // any hosted OIDC callback is allowed to resolve an identity.
   const profileEmailKeys = await backfillProfileEmailKeys(migration.db);
   const userEmailKeys = await backfillUserEmailKeys(migration.db);
+  const legacyUserProfiles = await backfillLegacyUserProfiles(migration.db);
   // The change feed has to exist before anything appends to it. Raw writers
   // bump with `appendChange`, which issues no DDL on purpose (issue #458): the
   // framework's `bumpChangeFeed` would ensure the table on a per-handle basis,
@@ -222,6 +227,7 @@ const {
       profilesUpdated: profileEmailKeys.updated,
       usersUpdated: userEmailKeys.updated,
     },
+    legacyUserProfiles,
     opportunityQueryIndexes: true,
     opportunitySourceFingerprints,
     restoredResumeAssetFiles,
@@ -284,6 +290,9 @@ console.log(
 );
 console.log(
   `OIDC identity readiness: ${oidcIdentityEmailKeys.profilesUpdated} profile email keys and ${oidcIdentityEmailKeys.usersUpdated} user email keys prepared.`,
+);
+console.log(
+  `Legacy User/Profile backfill: ${legacyUserProfiles.created} canonical profiles created, ${legacyUserProfiles.linked} users linked.`,
 );
 console.log(
   `Source providers: ${sourceProviders.classified} roots classified from adapter declarations, ${sourceProviders.unknown} remain unknown${sourceProviders.truncated ? ', bounded backfill truncated' : ''}.`,
