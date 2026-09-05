@@ -26,6 +26,7 @@ const imagePattern =
 const localImageIdPattern = /^sha256:[a-f0-9]{64}$/u;
 const darwinNetworkSandboxProfile =
   '(version 1) (allow default) (deny network-outbound (remote ip))';
+let failureStage = 'startup';
 
 const scenarios = [
   {
@@ -432,8 +433,8 @@ function assertTarChecksum(header) {
   }
 }
 
-function parsePaxRecords(content) {
-  const records = {};
+export function parsePaxRecords(content) {
+  const records = Object.create(null);
   let offset = 0;
   while (offset < content.length) {
     const space = content.indexOf(0x20, offset);
@@ -461,6 +462,20 @@ function parsePaxRecords(content) {
     offset = end;
   }
   return records;
+}
+
+export function validatePaxMetadata(metadata, entryType) {
+  if (Object.keys(metadata).some((key) => key !== 'path' && key !== 'linkpath')) {
+    throw new Error('The candidate image archive has unsupported PAX metadata.');
+  }
+  if (
+    Object.hasOwn(metadata, 'linkpath') &&
+    entryType !== '1' &&
+    entryType !== '2'
+  ) {
+    throw new Error('The candidate image archive has an invalid PAX link target.');
+  }
+  return metadata;
 }
 
 function tarHeader(header, pax) {
@@ -515,9 +530,6 @@ async function inspectDockerExport(containerId, targets) {
         throw new Error('The candidate image archive has ambiguous PAX metadata.');
       }
       const metadata = parsePaxRecords(content);
-      if (Object.keys(metadata).some((key) => key !== 'path')) {
-        throw new Error('The candidate image archive has unsupported PAX metadata.');
-      }
       nextPax = metadata;
       return;
     }
@@ -564,6 +576,15 @@ async function inspectDockerExport(containerId, targets) {
         const pax = nextPax;
         nextPax = {};
         const entry = tarHeader(header, pax);
+        if (
+          Object.keys(pax).length > 0 &&
+          (entry.type === 'x' || entry.type === 'g')
+        ) {
+          throw new Error('The candidate image archive has ambiguous PAX metadata.');
+        }
+        if (entry.type !== 'x' && entry.type !== 'g') {
+          validatePaxMetadata(pax, entry.type);
+        }
         if (!['\0', '0', '1', '2', '5', 'x', 'g'].includes(entry.type)) {
           throw new Error('The candidate image archive has an unsupported entry type.');
         }
@@ -619,6 +640,7 @@ async function inspectDockerExport(containerId, targets) {
             status !== 0 ||
             current ||
             !finished ||
+            Object.keys(nextPax).length > 0 ||
             buffered.length < 512 ||
             buffered.some((value) => value !== 0)
           ) {
@@ -975,6 +997,7 @@ async function main() {
     .digest('hex');
   const sourcePaths = trackedImageSourcePaths();
   const sourceTreeSha256 = sourceFingerprint(repositoryRoot, sourcePaths);
+  failureStage = 'candidate-image-provenance';
   let candidateImageProvenance = candidateRef
     ? inspectCandidateImage(
         candidateRef,
@@ -994,8 +1017,10 @@ async function main() {
   let inventory;
   try {
     const environment = buildScenarioEnvironment(sandboxRoot);
+    failureStage = 'reviewed-inventory';
     const reviewedInventory = inventorySnapshot(environment, null);
     if (candidateRef && candidateImageProvenance) {
+      failureStage = 'candidate-image-source-filesystem';
       const inspectedFilesystem = await inspectCandidateImageFilesystem(
         candidateRef,
         sourcePaths,
@@ -1006,9 +1031,11 @@ async function main() {
         sourceTreeSha256: inspectedFilesystem.sourceTreeSha256,
       };
     }
+    failureStage = 'scenario-execution';
     checks = scenarios.map((scenario) =>
       executeScenario(scenario, environment, candidateRef),
     );
+    failureStage = 'candidate-inventory';
     inventory = candidateRef
       ? inventorySnapshot(environment, candidateRef)
       : reviewedInventory;
@@ -1033,6 +1060,7 @@ async function main() {
   } finally {
     rmSync(sandboxRoot, { force: true, recursive: true });
   }
+  failureStage = 'post-validation';
   if (inventory.dependencyLockSha256 !== expectedLockfileSha256) {
     throw new Error(
       'The exercised dependency lock digest does not match this checkout.',
@@ -1119,6 +1147,7 @@ async function main() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
+    console.error(`IOLAUS_PARITY_FAILURE_STAGE=${failureStage}`);
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });

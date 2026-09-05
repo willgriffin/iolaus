@@ -40,6 +40,31 @@ const defaultParityEvidencePath = resolve(
   repositoryRoot,
   '.omo/evidence/issue-32/deployed-parity-contract.json',
 );
+const parityFailureStages = new Set([
+  'startup',
+  'candidate-image-provenance',
+  'reviewed-inventory',
+  'candidate-image-source-filesystem',
+  'scenario-execution',
+  'candidate-inventory',
+  'post-validation',
+]);
+const parityFailureMarker = /^IOLAUS_PARITY_FAILURE_STAGE=([a-z-]+)$/u;
+
+export function parseParityFailureStage(stderr) {
+  if (typeof stderr !== 'string') return 'unknown';
+  for (const line of stderr.split(/\r?\n/u)) {
+    const match = parityFailureMarker.exec(line);
+    if (match && parityFailureStages.has(match[1])) return match[1];
+  }
+  return 'unknown';
+}
+
+export function formatParityHelperFailure(stderr, status) {
+  const exitCode = Number.isInteger(status) ? status : 1;
+  const stage = parseParityFailureStage(stderr);
+  return `Synthetic rehearsal parity helper failed at stage ${stage} with exit code ${exitCode}.`;
+}
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -502,7 +527,17 @@ function runParity(argv, evidencePath) {
     const value = argumentValue(option, argv);
     if (value) args.push(option, value);
   }
-  run(process.execPath, args);
+  const result = spawnSync(process.execPath, args, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      formatParityHelperFailure(result.stderr, result.status),
+      { cause: result.error },
+    );
+  }
   const evidenceBytes = readFileSync(evidencePath);
   const parsed = JSON.parse(evidenceBytes);
   if (!candidateParityIsAdmissible(parsed, gitRevision())) {

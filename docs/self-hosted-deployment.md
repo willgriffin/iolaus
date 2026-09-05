@@ -201,6 +201,10 @@ when `gdb` is available, or `/proc` CPU, RSS, state, and wait-channel fields as
 a fallback. It does not read process arguments or environments, inspect
 unrelated processes, or change the build's exit status.
 
+Candidate CI first probes the host network namespace isolation prerequisite.
+Rehearsal failures report a fixed parity stage without forwarding child output;
+the artifact upload includes only the two named JSON evidence files.
+
 For pull requests, candidate CI checks out the pull request head revision and
 uses that same revision for the image provenance label, evidence assertion, and
 artifact name. Pushes use `github.sha`. This exact revision binding is required
@@ -244,7 +248,8 @@ fingerprints every tracked source file included by the Docker context and
 requires the candidate's bytes to match the clean reviewed checkout exactly.
 Host-reviewed code streams the Docker-export TAR archive, verifies every header
 checksum and terminating block,
-rejects unsafe/ambiguous PAX names, duplicate normalized application paths, and
+accepts standard PAX `path` metadata and `linkpath` only on link entries,
+rejects other or ambiguous PAX metadata, duplicate normalized application paths, and
 any link or non-regular entry at a reviewed source path or its ancestors, then
 hashes only the raw regular-file bodies. It never dereferences a
 candidate-controlled path on the host. The candidate inventory is executed

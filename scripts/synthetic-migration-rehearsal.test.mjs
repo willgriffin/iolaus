@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   candidateParityIsAdmissible,
+  formatParityHelperFailure,
+  parseParityFailureStage,
   syntheticBundle,
   syntheticContracts,
   syntheticRehearsalDisposition,
@@ -124,4 +126,41 @@ test('rehearsal database guard accepts only named loopback PostgreSQL databases'
   ]) {
     assert.throws(() => validateRehearsalDatabaseUrl(value), /rehearsal database/iu);
   }
+});
+
+test('parity failure stage accepts only the fixed allowlist', () => {
+  assert.equal(
+    parseParityFailureStage(
+      'IOLAUS_PARITY_FAILURE_STAGE=candidate-image-source-filesystem\n',
+    ),
+    'candidate-image-source-filesystem',
+  );
+  assert.equal(
+    parseParityFailureStage('IOLAUS_PARITY_FAILURE_STAGE=unknown\n'),
+    'unknown',
+  );
+  assert.equal(
+    parseParityFailureStage(
+      'IOLAUS_PARITY_FAILURE_STAGE=scenario-execution secret=/tmp/token\n',
+    ),
+    'unknown',
+  );
+});
+
+test('parity helper failure formatting redacts arbitrary child stderr', () => {
+  const message = formatParityHelperFailure(
+    'Error: DATABASE_URL=postgresql://user:secret@example.invalid/db\n' +
+      'IOLAUS_PARITY_FAILURE_STAGE=candidate-inventory\n' +
+      '/private/worktree/source.ts:42\n',
+    17,
+  );
+  assert.equal(
+    message,
+    'Synthetic rehearsal parity helper failed at stage candidate-inventory with exit code 17.',
+  );
+  assert.doesNotMatch(message, /secret|example\.invalid|source\.ts/u);
+  assert.match(
+    formatParityHelperFailure('fatal: arbitrary child payload', null),
+    /stage unknown with exit code 1\.$/u,
+  );
 });

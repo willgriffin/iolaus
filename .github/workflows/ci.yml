@@ -38,6 +38,8 @@ jobs:
           node-version: '24.18.0'
       - run: npm install --global pnpm@11.24.0
       - run: pnpm install --frozen-lockfile
+      - name: Verify host network isolation prerequisite
+        run: /usr/bin/unshare --user --map-root-user --net -- true
       - name: Install native build diagnostics
         run: |
           sudo apt-get update
@@ -115,4 +117,5 @@ jobs:
           path: |
             .omo/evidence/issue-32/ci-synthetic-rehearsal.json
             .omo/evidence/issue-32/ci-candidate-contract.json
+          include-hidden-files: true
           if-no-files-found: error

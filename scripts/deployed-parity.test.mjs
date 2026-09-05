@@ -16,7 +16,9 @@ import {
   invalidateEvidence,
   inspectCandidateImageFilesystem,
   isolatedInvocation,
+  parsePaxRecords,
   sourceFingerprint,
+  validatePaxMetadata,
   validateCandidateImageMetadata,
   validateImageReference,
   validateInstalledSmrtDependencies,
@@ -58,6 +60,49 @@ function tarEntry(path, type, content = Buffer.alloc(0), linkname = '') {
   return Buffer.concat([header, content, padding]);
 }
 
+function paxRecord(key, value) {
+  const payload = `${key}=${value}\n`;
+  let length = Buffer.byteLength(payload) + 2;
+  while (true) {
+    const record = `${length} ${payload}`;
+    const actualLength = Buffer.byteLength(record);
+    if (actualLength === length) return Buffer.from(record);
+    length = actualLength;
+  }
+}
+
+test('allows a PAX long link target only for link entries', () => {
+  const linkpath = `node_modules/${'nested/'.repeat(24)}target`;
+  assert.doesNotThrow(() =>
+    validatePaxMetadata({ linkpath }, '2'),
+  );
+  assert.doesNotThrow(() =>
+    validatePaxMetadata({ path: 'app/node_modules/long-link', linkpath }, '1'),
+  );
+  assert.throws(
+    () => validatePaxMetadata({ linkpath }, '0'),
+    /invalid PAX link target/u,
+  );
+});
+
+test('rejects unknown and duplicate PAX metadata', () => {
+  assert.throws(
+    () => validatePaxMetadata({ mtime: '0' }, '0'),
+    /unsupported PAX metadata/u,
+  );
+  assert.throws(
+    () =>
+      parsePaxRecords(
+        Buffer.concat([paxRecord('path', 'app/a'), paxRecord('path', 'app/b')]),
+      ),
+    /ambiguous PAX metadata/u,
+  );
+  assert.throws(
+    () => validatePaxMetadata(parsePaxRecords(paxRecord('__proto__', 'value')), '0'),
+    /unsupported PAX metadata/u,
+  );
+});
+
 function dockerAvailable() {
   const result = spawnSync('docker', ['info'], {
     stdio: ['ignore', 'ignore', 'ignore'],
@@ -85,13 +130,18 @@ test('fingerprints exact source bytes with path framing', () => {
 });
 
 test(
-  'rejects a symlinked tracked path through the Docker export inspection boundary',
+  'rejects a PAX link-enabled tracked path through the Docker export inspection boundary',
   { skip: !dockerAvailable() },
   async () => {
     const image = `iolaus-parity-malicious-link-test:${process.pid}`;
     const archive = Buffer.concat([
       tarEntry('app', '5'),
       tarEntry('outside', '0', Buffer.from('reviewed bytes')),
+      tarEntry(
+        'PaxHeader',
+        'x',
+        paxRecord('linkpath', `../${'outside/'.repeat(24)}target`),
+      ),
       tarEntry('app/package.json', '2', Buffer.alloc(0), '../outside'),
       Buffer.alloc(1024),
     ]);
