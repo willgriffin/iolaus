@@ -41,9 +41,9 @@ list_candidate_pids() {
       [ -d "${proc_dir}" ] || continue
       cwd="$(readlink "${proc_dir}/cwd" 2>/dev/null || true)"
       [ "${cwd}" = "/app/apps/site" ] || continue
-      comm="$(tr -d "\0" < "${proc_dir}/comm" 2>/dev/null || true)"
-      case "${comm}" in
-        node|nodejs|vite) printf "%s\\n" "${proc_dir##*/}" ;;
+      executable="$(readlink "${proc_dir}/exe" 2>/dev/null || true)"
+      case "${executable}" in
+        */node|*/nodejs) printf "%s\\n" "${proc_dir##*/}" ;;
       esac
     done
   ' 2>/dev/null || true
