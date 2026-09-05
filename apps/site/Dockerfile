@@ -39,6 +39,7 @@ LABEL org.opencontainers.image.revision="${IOLAUS_SOURCE_REVISION}"
 LABEL dev.happyvertical.iolaus.pnpm-lock.sha256="${IOLAUS_LOCKFILE_SHA256}"
 ENV NODE_ENV=production
 ENV SMRT_RUNTIME_PROFILE=self-hosted
+ENV TSX_TSCONFIG_PATH=/app/apps/site/tsconfig.runtime.json
 ENV HOST=0.0.0.0
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

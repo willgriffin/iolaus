@@ -1,17 +1,34 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
 import { canonicalizeDataDirectory } from '../../../../../scripts/smrt-runtime-identity.mjs';
 
 export const IOLAUS_APPLICATION_ID = 'iolaus';
 
-/** Resolve the monorepo root from either a root or apps/site process cwd. */
+/** Resolve the monorepo root from root, site, or generated-server process cwd. */
 export function getIolausSourceRoot(cwd = process.cwd()): string {
-  if (existsSync(resolve(cwd, 'apps/site/package.json'))) return resolve(cwd);
-  const candidate = resolve(cwd, '../..');
-  if (existsSync(resolve(candidate, 'apps/site/package.json')))
-    return candidate;
+  let candidate = resolve(cwd);
+  while (true) {
+    if (existsSync(resolve(candidate, 'apps/site/package.json')))
+      return candidate;
+    if (
+      existsSync(resolve(candidate, 'package.json')) &&
+      existsSync(resolve(candidate, 'smrt.config.js'))
+    ) {
+      return resolve(candidate, '../..');
+    }
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
   throw new Error('Unable to resolve the Iolaus source root.');
+}
+
+/** Resolve the application config independently of the invoking entrypoint cwd. */
+export function getIolausSmrtConfigPath(
+  sourceRoot = getIolausSourceRoot(),
+): string {
+  return resolve(sourceRoot, 'apps/site/smrt.config.js');
 }
 
 export function resolveIolausLocalRuntimePaths() {
