@@ -226,7 +226,7 @@ test(
   { skip: !dockerAvailable() },
   async () => {
     const content = readFileSync(resolve(repositoryRoot, 'package.json'));
-    for (const path of ['app/.smrt', 'app/apps']) {
+    for (const path of ['app/.smrt', 'app/apps', 'tmp']) {
       const image = `iolaus-parity-scratch-link-test-${process.pid}-${path.includes('apps') ? 'ancestor' : 'path'}`;
       const archive = Buffer.concat([
         tarEntry('app', '5'),
@@ -284,6 +284,9 @@ test('runs candidate scenarios from the immutable image without networking', () 
   assert.ok(result.args.includes('--read-only'));
   assert.ok(result.args.includes('SMRT_RUNTIME_PROFILE=local'));
   assert.ok(result.args.includes('pnpm_config_verify_deps_before_run=false'));
+  assert.ok(
+    result.args.includes('/tmp:rw,nosuid,nodev,size=1g,uid=0,gid=0,mode=1777'),
+  );
   for (const { path, size } of candidateScratchMounts) {
     assert.ok(
       result.args.includes(`${path}:rw,nosuid,nodev,size=${size},uid=10001,gid=10001`),

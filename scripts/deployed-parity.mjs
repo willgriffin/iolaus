@@ -329,7 +329,7 @@ export function candidateImageInvocation(candidateRef, invocation) {
       'no-new-privileges',
       '--read-only',
       '--tmpfs',
-      '/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001',
+      '/tmp:rw,nosuid,nodev,size=1g,uid=0,gid=0,mode=1777',
       ...candidateScratchMounts.flatMap(({ path, size }) => [
         '--tmpfs',
         `${path}:rw,nosuid,nodev,size=${size},uid=10001,gid=10001`,
@@ -546,7 +546,7 @@ async function inspectDockerExport(containerId, targets) {
       sourceRelevantPaths.add(parts.slice(0, index).join('/'));
     }
   }
-  const scratchRelevantPaths = new Set();
+  const scratchRelevantPaths = new Set(['tmp']);
   for (const { path } of candidateScratchMounts) {
     const parts = scratchArchivePath(path).split('/');
     for (let index = 1; index <= parts.length; index += 1) {
