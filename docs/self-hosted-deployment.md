@@ -186,14 +186,13 @@ uploaded as a secret-free workflow artifact, but remains
 The `--local-image-id` option exists only for that non-release verification and
 rejects tags and mutable references.
 
-The Docker build sets `ROLLDOWN_MAX_BLOCKING_THREADS=64` only in its build
-stage. This is a targeted workaround for a silent low-CPU Vite 8 SSR hang with
-the pinned Rolldown 1.1.5; see the upstream context at
-<https://github.com/rolldown/rolldown/pull/10666>. The mitigation is not proven
-by local builds and does not establish that it resolves the authoritative
-45-minute CI timeout. A successful CI build and contract run for the exact
-candidate image remain required before relying on this mitigation; the setting
-is intentionally absent from the runtime image.
+The build sets `SMRT_APP_ID=iolaus-build` because SvelteKit imports server
+modules during route analysis, including the hosted profile's non-default
+identity guard. Omitting it causes the build to stall during those imports.
+This synthetic identity exists only in the build stage: the `runner` starts
+from `base` and does not inherit it. Deployed workloads must receive their
+unique operator-owned `SMRT_APP_ID` through runtime configuration. No build
+identity or synthetic database is a production configuration default.
 
 Candidate CI runs this build under a one-shot watchdog. If it is still running
 after three minutes, CI records bounded diagnostics only for Node/Vite processes

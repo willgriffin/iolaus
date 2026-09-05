@@ -22,14 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV DATABASE_URL=postgresql://iolaus:iolaus@localhost:5432/iolaus_build
 ENV SMRT_RUNTIME_PROFILE=self-hosted
+# SvelteKit route analysis enforces hosted identity during the build.
+ENV SMRT_APP_ID=iolaus-build
 # The CI workflow sets NODE_OPTIONS for the runner, but that does not cross into
 # the Docker build, so the in-container vite build OOMs on Node's ~2GB default
 # heap. Keep the cap below the self-hosted builder's memory ceiling so the
 # build cannot consume the whole VM and stall its BuildKit control process.
 ENV NODE_OPTIONS=--max-old-space-size=2048
-# Vite 8 pins Rolldown 1.1.5; raise blocking threads for low-CPU SSR builds.
-# See https://github.com/rolldown/rolldown/pull/10666.
-ENV ROLLDOWN_MAX_BLOCKING_THREADS=64
 COPY . .
 RUN pnpm --filter @willgriffin/iolaus-site build
 
