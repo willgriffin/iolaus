@@ -56,6 +56,9 @@ importers:
       '@happyvertical/sql':
         specifier: 0.89.4
         version: 0.89.4
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.0
     devDependencies:
       '@biomejs/biome':
         specifier: 2.5.3

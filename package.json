@@ -71,7 +71,8 @@
     "@happyvertical/smrt-app-runtime": "0.45.0",
     "@happyvertical/smrt-config": "0.45.0",
     "@happyvertical/smrt-scanner": "0.45.0",
-    "@happyvertical/sql": "0.89.4"
+    "@happyvertical/sql": "0.89.4",
+    "tsx": "catalog:"
   },
   "license": "MIT"
 }
