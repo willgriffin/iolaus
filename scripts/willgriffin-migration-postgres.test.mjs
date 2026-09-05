@@ -75,7 +75,7 @@ function startPostgres() {
     '--env',
     `POSTGRES_DB=${databaseName}`,
     '--health-cmd',
-    `pg_isready --username=postgres --dbname=${databaseName}`,
+    `pg_isready --host=127.0.0.1 --username=postgres --dbname=${databaseName}`,
     '--health-interval',
     '1s',
     '--health-timeout',
