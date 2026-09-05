@@ -80,10 +80,11 @@ so parallel rollout cannot create concurrent schema writers. A failed
 migration blocks that workload before it serves traffic, executes jobs, or lets
 the read-only monitor query an incompatible schema.
 
-The image runs entrypoints from `/app` and pins `tsx` to the site's TypeScript
-configuration. Runtime configuration is resolved from `apps/site/smrt.config.js`
-for both root and site working directories, so hosted workloads retain their
-PostgreSQL profile. Use the supported
+The image runs entrypoints from `/app` and pins `tsx` to a runtime-only
+TypeScript configuration that resolves deployed `$lib` aliases without relying
+on generated SvelteKit output. Runtime configuration is resolved from
+`apps/site/smrt.config.js` for both root and site working directories, so
+hosted workloads retain their PostgreSQL profile. Use the supported
 `pnpm --filter @willgriffin/iolaus-site db:migrate` command; no deployment
 specific migration wrapper is required.
 

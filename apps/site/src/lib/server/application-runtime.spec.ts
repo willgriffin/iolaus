@@ -58,7 +58,7 @@ async function probeHostedRuntime(
             'postgresql://runtime:runtime@127.0.0.1:5432/runtime_bootstrap_test',
           SMRT_APP_ID: 'runtime-bootstrap',
           SMRT_RUNTIME_PROFILE: 'self-hosted',
-          TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.json'),
+          TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.runtime.json'),
         },
       },
     );
