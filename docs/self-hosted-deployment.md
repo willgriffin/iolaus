@@ -195,6 +195,13 @@ by local builds and does not establish that it resolves the authoritative
 candidate image remain required before relying on this mitigation; the setting
 is intentionally absent from the runtime image.
 
+Candidate CI runs this build under a one-shot watchdog. If it is still running
+after three minutes, CI records bounded diagnostics only for Node/Vite processes
+whose working directory is exactly `/app/apps/site`: a short native backtrace
+when `gdb` is available, or `/proc` CPU, RSS, state, and wait-channel fields as
+a fallback. It does not read process arguments or environments, inspect
+unrelated processes, or change the build's exit status.
+
 For pull requests, candidate CI checks out the pull request head revision and
 uses that same revision for the image provenance label, evidence assertion, and
 artifact name. Pushes use `github.sha`. This exact revision binding is required

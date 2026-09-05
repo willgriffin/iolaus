@@ -41,7 +41,8 @@ jobs:
       - name: Build exact candidate image without publishing
         run: |
           lock_sha256="$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)"
-          docker build --progress=plain --load \
+          scripts/ci/candidate-build-watchdog.sh -- \
+            docker build --progress=plain --load \
             --file apps/site/Dockerfile \
             --build-arg "IOLAUS_SOURCE_REVISION=${CANDIDATE_REVISION}" \
             --build-arg "IOLAUS_LOCKFILE_SHA256=${lock_sha256}" \
