@@ -22,6 +22,10 @@ const schedulesMock = vi.hoisted(() => ({
   list: vi.fn(),
 }));
 
+const databaseMock = vi.hoisted(() => ({
+  query: vi.fn(),
+}));
+
 vi.mock('@happyvertical/smrt-agents', () => ({
   AgentScheduleCollection: {
     create: vi.fn(async () => schedulesMock),
@@ -55,6 +59,8 @@ beforeEach(() => {
   smrtMock.listCalls.length = 0;
   smrtMock.sources.length = 0;
   schedulesMock.deleted.length = 0;
+  databaseMock.query.mockReset();
+  databaseMock.query.mockResolvedValue({ rows: [] });
   schedulesMock.get.mockReset();
   schedulesMock.getOrUpsert.mockReset();
   schedulesMock.list.mockReset();
@@ -158,7 +164,7 @@ describe('syncSourceSchedule', () => {
     };
 
     await syncSourceSchedule(source, {
-      db: {} as never,
+      db: databaseMock as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
 
@@ -186,11 +192,11 @@ describe('syncSourceSchedule', () => {
     };
 
     await syncSourceSchedule(source, {
-      db: {} as never,
+      db: databaseMock as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
     await syncSourceSchedule(source, {
-      db: {} as never,
+      db: databaseMock as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
 
@@ -205,15 +211,10 @@ describe('syncSourceSchedule', () => {
 
   it('refuses an unbackfilled legacy schedule before writing a duplicate', async () => {
     const sourceId = '11111111-1111-1111-1111-111111111111';
-    schedulesMock.list.mockResolvedValue([
-      {
-        agentId: sourceId,
-        agentType: SOURCE_JOB_OBJECT_TYPE,
-        id: `source-crawl:${sourceId}`,
-        method: SOURCE_CRAWL_METHOD,
-        slug: null,
-      },
-    ]);
+    databaseMock.query.mockResolvedValue({ rows: [{ '?column?': 1 }] });
+    schedulesMock.list.mockRejectedValue(
+      new Error('slug is invalid, null given'),
+    );
     const source = {
       id: sourceId,
       isActive: true,
@@ -224,12 +225,17 @@ describe('syncSourceSchedule', () => {
     };
 
     await expect(
-      syncSourceSchedule(source, { db: {} as never }),
+      syncSourceSchedule(source, { db: databaseMock as never }),
     ).rejects.toThrow(
       'requires SMRT schedule backfill; run smrt db:migrate-agent-schedule-slugs before synchronizing source schedules',
     );
 
+    expect(databaseMock.query).toHaveBeenCalledWith(
+      'SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND slug IS NULL LIMIT 1',
+      [`source-crawl:${sourceId}`],
+    );
     expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
+    expect(schedulesMock.list).not.toHaveBeenCalled();
     expect(source.save).not.toHaveBeenCalled();
   });
 
@@ -249,7 +255,7 @@ describe('syncSourceSchedule', () => {
         refreshCadence: 'daily',
         sourceRole: 'root',
       },
-      { db: {} as never, saveSource: false },
+      { db: databaseMock as never, saveSource: false },
     );
 
     expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
@@ -273,7 +279,7 @@ describe('syncSourceSchedule', () => {
       refreshCadence: 'daily',
     };
 
-    await syncSourceSchedule(source, { db: {} as never });
+    await syncSourceSchedule(source, { db: databaseMock as never });
 
     expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -306,7 +312,7 @@ describe('syncAllSourceSchedules', () => {
     );
 
     const summary = await syncAllSourceSchedules({
-      db: {} as never,
+      db: databaseMock as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
       saveSource: false,
     });
@@ -332,7 +338,10 @@ describe('syncAllSourceSchedules', () => {
       sourceRole: 'root',
     });
 
-    await syncAllSourceSchedules({ db: {} as never, saveSource: false });
+    await syncAllSourceSchedules({
+      db: databaseMock as never,
+      saveSource: false,
+    });
 
     expect(staleSchedule.delete).toHaveBeenCalledOnce();
   });
@@ -347,7 +356,7 @@ describe('deleteSourceSchedule', () => {
     };
     schedulesMock.get.mockResolvedValue(schedule);
 
-    await deleteSourceSchedule(' source-1 ', { db: {} as never });
+    await deleteSourceSchedule(' source-1 ', { db: databaseMock as never });
 
     expect(schedulesMock.get).toHaveBeenCalledWith({
       context: '',

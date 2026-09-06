@@ -205,23 +205,19 @@ async function sourceSchedules(db: SmrtDatabase) {
 }
 
 async function assertSourceScheduleBackfillApplied(
-  schedules: Awaited<ReturnType<typeof sourceSchedules>>,
+  db: SmrtDatabase,
   sourceId: string,
 ): Promise<void> {
   const legacyId = `source-crawl:${sourceId}`;
-  const schedulesForSource = await schedules.list({
-    where: {
-      agentId: sourceId,
-      agentType: SOURCE_JOB_OBJECT_TYPE,
-      method: SOURCE_CRAWL_METHOD,
-    },
-  });
-  const unbackfilledSchedule = schedulesForSource.find(
-    (schedule) =>
-      stringValue(schedule.id) === legacyId && !stringValue(schedule.slug),
+  // Legacy rows can have a NULL slug, which AgentSchedule cannot hydrate.
+  // Read only the legacy identity before using collection operations so the
+  // supported SMRT backfill remains the sole schema/data repair path.
+  const result = await db.query(
+    'SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND slug IS NULL LIMIT 1',
+    [legacyId],
   );
 
-  if (unbackfilledSchedule) {
+  if (result.rows.length > 0) {
     throw new Error(
       `Source schedule ${legacyId} requires SMRT schedule backfill; run smrt db:migrate-agent-schedule-slugs before synchronizing source schedules.`,
     );
@@ -237,7 +233,7 @@ export async function syncSourceSchedule(
   if (!schedule) return null;
 
   const schedules = await sourceSchedules(db);
-  await assertSourceScheduleBackfillApplied(schedules, schedule.agentId);
+  await assertSourceScheduleBackfillApplied(db, schedule.agentId);
   await schedules.getOrUpsert({
     agentId: schedule.agentId,
     agentType: schedule.agentType,
