@@ -15,6 +15,19 @@ import {
   syncSourceSchedule,
 } from './source-schedules';
 
+const schedulesMock = vi.hoisted(() => ({
+  deleted: [] as Array<{ delete: () => Promise<void> }>,
+  get: vi.fn(),
+  getOrUpsert: vi.fn(),
+  list: vi.fn(),
+}));
+
+vi.mock('@happyvertical/smrt-agents', () => ({
+  AgentScheduleCollection: {
+    create: vi.fn(async () => schedulesMock),
+  },
+}));
+
 const smrtMock = vi.hoisted(() => ({
   listCalls: [] as Array<{ limit: number; offset?: number }>,
   sources: [] as Array<Record<string, unknown>>,
@@ -38,22 +51,16 @@ vi.mock('./smrt.js', () => ({
   }),
 }));
 
-function captureDb() {
-  const queries: Array<{ params: unknown[]; sql: string }> = [];
-  return {
-    db: {
-      query: vi.fn(async (sql: string, params: unknown[] = []) => {
-        queries.push({ params, sql });
-        return [];
-      }),
-    },
-    queries,
-  };
-}
-
 beforeEach(() => {
   smrtMock.listCalls.length = 0;
   smrtMock.sources.length = 0;
+  schedulesMock.deleted.length = 0;
+  schedulesMock.get.mockReset();
+  schedulesMock.getOrUpsert.mockReset();
+  schedulesMock.list.mockReset();
+  schedulesMock.get.mockResolvedValue(null);
+  schedulesMock.getOrUpsert.mockResolvedValue({});
+  schedulesMock.list.mockResolvedValue([]);
 });
 
 describe('source schedule cadence mapping', () => {
@@ -132,23 +139,13 @@ describe('source schedule cadence mapping', () => {
 });
 
 describe('syncSourceSchedule', () => {
-  it('creates timezone-aware schedule timestamps for fresh databases', async () => {
-    const { db, queries } = captureDb();
+  it('uses the framework AgentSchedule collection instead of creating a table', async () => {
+    await ensureSourceScheduleTable({} as never);
 
-    await ensureSourceScheduleTable(db as never);
-
-    const createTable = queries[0]?.sql;
-    expect(createTable).toMatch(/next_run\s+TIMESTAMPTZ/u);
-    expect(createTable).toMatch(/last_run\s+TIMESTAMPTZ/u);
-    expect(createTable).toMatch(/created_at\s+TIMESTAMPTZ/u);
-    expect(createTable).toMatch(/updated_at\s+TIMESTAMPTZ/u);
-    expect(createTable).not.toMatch(
-      /(?:next_run|last_run|created_at|updated_at)\s+TIMESTAMP(?:\s|,)/u,
-    );
+    expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
   });
 
-  it('upserts one active schedule row and updates nextCheckAt', async () => {
-    const { db, queries } = captureDb();
+  it('upserts one active schedule by the framework-backfilled legacy slug', async () => {
     const source = {
       id: 'source-1',
       isActive: true,
@@ -161,25 +158,25 @@ describe('syncSourceSchedule', () => {
     };
 
     await syncSourceSchedule(source, {
-      db: db as never,
+      db: {} as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
 
-    const upsert = queries.at(-1);
-    expect(upsert?.sql).toContain('ON CONFLICT (id) DO UPDATE');
-    expect(upsert?.params[0]).toBe('source-crawl:source-1');
-    expect(upsert?.params[1]).toBe(SOURCE_JOB_OBJECT_TYPE);
-    expect(upsert?.params[2]).toBe('source-1');
-    expect(upsert?.params[4]).toBe(SOURCE_CRAWL_METHOD);
-    expect(upsert?.params[5]).toBe(
-      JSON.stringify({ includeGeneric: true, reason: 'scheduled' }),
+    expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'source-1',
+        agentType: SOURCE_JOB_OBJECT_TYPE,
+        context: '',
+        method: SOURCE_CRAWL_METHOD,
+        slug: 'source-crawl-source-1',
+        timezone: 'UTC',
+      }),
     );
     expect(source.nextCheckAt).toBeInstanceOf(Date);
     expect(source.save).toHaveBeenCalledOnce();
   });
 
   it('is idempotent for repeated syncs of the same source', async () => {
-    const { db, queries } = captureDb();
     const source = {
       id: 'source-1',
       isActive: true,
@@ -189,24 +186,56 @@ describe('syncSourceSchedule', () => {
     };
 
     await syncSourceSchedule(source, {
-      db: db as never,
+      db: {} as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
     await syncSourceSchedule(source, {
-      db: db as never,
+      db: {} as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
     });
 
-    const upserts = queries.filter((query) =>
-      query.sql.includes('ON CONFLICT (id) DO UPDATE'),
+    expect(schedulesMock.getOrUpsert).toHaveBeenCalledTimes(2);
+    expect(schedulesMock.getOrUpsert.mock.calls[0]?.[0].slug).toBe(
+      'source-crawl-source-1',
     );
-    expect(upserts).toHaveLength(2);
-    expect(upserts[0].params[0]).toBe('source-crawl:source-1');
-    expect(upserts[1].params[0]).toBe('source-crawl:source-1');
+    expect(schedulesMock.getOrUpsert.mock.calls[1]?.[0].slug).toBe(
+      'source-crawl-source-1',
+    );
+  });
+
+  it('updates the framework-backfilled legacy schedule by slug', async () => {
+    const legacySchedule = {
+      id: 'legacy-schedule-id',
+      runCount: 7,
+      successCount: 6,
+    };
+    schedulesMock.getOrUpsert.mockResolvedValue(legacySchedule);
+
+    await syncSourceSchedule(
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        isActive: true,
+        parentSourceId: null,
+        refreshCadence: 'daily',
+        sourceRole: 'root',
+      },
+      { db: {} as never, saveSource: false },
+    );
+
+    expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: '',
+        slug: 'source-crawl-11111111-1111-1111-1111-111111111111',
+      }),
+    );
+    expect(legacySchedule).toMatchObject({
+      id: 'legacy-schedule-id',
+      runCount: 7,
+      successCount: 6,
+    });
   });
 
   it('disables the schedule and clears nextCheckAt when inactive', async () => {
-    const { db, queries } = captureDb();
     const source = {
       id: 'source-1',
       isActive: false,
@@ -214,18 +243,21 @@ describe('syncSourceSchedule', () => {
       refreshCadence: 'daily',
     };
 
-    await syncSourceSchedule(source, { db: db as never });
+    await syncSourceSchedule(source, { db: {} as never });
 
-    const upsert = queries.at(-1);
-    expect(upsert?.sql).toContain("status = 'inactive'");
-    expect(upsert?.params[3]).toBe('* * * * *');
+    expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: '* * * * *',
+        enabled: false,
+        status: 'disabled',
+      }),
+    );
     expect(source.nextCheckAt).toBeNull();
   });
 });
 
 describe('syncAllSourceSchedules', () => {
   it('syncs existing sources and deletes orphan schedule rows', async () => {
-    const { db, queries } = captureDb();
     smrtMock.sources.push(
       {
         id: 'source-1',
@@ -244,38 +276,54 @@ describe('syncAllSourceSchedules', () => {
     );
 
     const summary = await syncAllSourceSchedules({
-      db: db as never,
+      db: {} as never,
       now: new Date('2026-06-04T00:00:00.000Z'),
       saveSource: false,
     });
 
     expect(summary).toEqual({ disabled: 1, enabled: 1, total: 2 });
     expect(smrtMock.listCalls).toEqual([{ limit: 500, offset: 0 }]);
-    const deleteQuery = queries.at(-1);
-    expect(deleteQuery?.sql).toContain('agent_id NOT IN (?, ?)');
-    expect(deleteQuery?.params).toEqual([
-      SOURCE_JOB_OBJECT_TYPE,
-      SOURCE_CRAWL_METHOD,
-      'source-1',
-      'source-2',
-    ]);
+    expect(schedulesMock.list).toHaveBeenCalledWith({
+      where: { agentType: SOURCE_JOB_OBJECT_TYPE, method: SOURCE_CRAWL_METHOD },
+    });
+  });
+
+  it('deletes only orphaned source-crawl schedules through the collection', async () => {
+    const staleSchedule = {
+      agentId: 'source-gone',
+      delete: vi.fn(async () => {}),
+    };
+    schedulesMock.list.mockResolvedValue([staleSchedule]);
+    smrtMock.sources.push({
+      id: 'source-1',
+      isActive: true,
+      parentSourceId: null,
+      refreshCadence: 'daily',
+      sourceRole: 'root',
+    });
+
+    await syncAllSourceSchedules({ db: {} as never, saveSource: false });
+
+    expect(staleSchedule.delete).toHaveBeenCalledOnce();
   });
 });
 
 describe('deleteSourceSchedule', () => {
   it('removes the recurring schedule for a deleted source', async () => {
-    const { db, queries } = captureDb();
+    const schedule = {
+      agentType: SOURCE_JOB_OBJECT_TYPE,
+      delete: vi.fn(async () => {}),
+      method: SOURCE_CRAWL_METHOD,
+    };
+    schedulesMock.get.mockResolvedValue(schedule);
 
-    await deleteSourceSchedule(' source-1 ', { db: db as never });
+    await deleteSourceSchedule(' source-1 ', { db: {} as never });
 
-    const deleteQuery = queries.find((query) =>
-      query.sql.includes('DELETE FROM _smrt_agent_schedules'),
-    );
-    expect(deleteQuery?.params).toEqual([
-      'source-crawl:source-1',
-      SOURCE_JOB_OBJECT_TYPE,
-      SOURCE_CRAWL_METHOD,
-    ]);
+    expect(schedulesMock.get).toHaveBeenCalledWith({
+      context: '',
+      slug: 'source-crawl-source-1',
+    });
+    expect(schedule.delete).toHaveBeenCalledOnce();
   });
 });
 
