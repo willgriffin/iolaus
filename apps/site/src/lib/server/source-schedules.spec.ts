@@ -231,12 +231,40 @@ describe('syncSourceSchedule', () => {
     );
 
     expect(databaseMock.query).toHaveBeenCalledWith(
-      'SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND slug IS NULL LIMIT 1',
+      "SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND (slug IS NULL OR slug = '') LIMIT 1",
       [`source-crawl:${sourceId}`],
     );
     expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
     expect(schedulesMock.list).not.toHaveBeenCalled();
     expect(source.save).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty legacy slug before collection hydration', async () => {
+    const sourceId = '22222222-2222-2222-2222-222222222222';
+    databaseMock.query.mockImplementation(async (statement: string) => ({
+      rows: statement.includes("slug IS NULL OR slug = ''")
+        ? [{ '?column?': 1 }]
+        : [],
+    }));
+    schedulesMock.list.mockRejectedValue(
+      new Error('slug is invalid, empty string given'),
+    );
+
+    await expect(
+      syncSourceSchedule(
+        {
+          id: sourceId,
+          isActive: true,
+          parentSourceId: null,
+          refreshCadence: 'daily',
+          sourceRole: 'root',
+        },
+        { db: databaseMock as never, saveSource: false },
+      ),
+    ).rejects.toThrow('requires SMRT schedule backfill');
+
+    expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
+    expect(schedulesMock.list).not.toHaveBeenCalled();
   });
 
   it('updates the framework-backfilled legacy schedule by slug', async () => {

@@ -209,11 +209,11 @@ async function assertSourceScheduleBackfillApplied(
   sourceId: string,
 ): Promise<void> {
   const legacyId = `source-crawl:${sourceId}`;
-  // Legacy rows can have a NULL slug, which AgentSchedule cannot hydrate.
+  // Legacy rows can have a NULL or empty slug, which AgentSchedule cannot hydrate.
   // Read only the legacy identity before using collection operations so the
   // supported SMRT backfill remains the sole schema/data repair path.
   const result = await db.query(
-    'SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND slug IS NULL LIMIT 1',
+    "SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND (slug IS NULL OR slug = '') LIMIT 1",
     [legacyId],
   );
 
