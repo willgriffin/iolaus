@@ -203,6 +203,36 @@ describe('syncSourceSchedule', () => {
     );
   });
 
+  it('refuses an unbackfilled legacy schedule before writing a duplicate', async () => {
+    const sourceId = '11111111-1111-1111-1111-111111111111';
+    schedulesMock.list.mockResolvedValue([
+      {
+        agentId: sourceId,
+        agentType: SOURCE_JOB_OBJECT_TYPE,
+        id: `source-crawl:${sourceId}`,
+        method: SOURCE_CRAWL_METHOD,
+        slug: null,
+      },
+    ]);
+    const source = {
+      id: sourceId,
+      isActive: true,
+      parentSourceId: null,
+      refreshCadence: 'daily',
+      save: vi.fn(async () => {}),
+      sourceRole: 'root',
+    };
+
+    await expect(
+      syncSourceSchedule(source, { db: {} as never }),
+    ).rejects.toThrow(
+      'requires SMRT schedule backfill; run smrt db:migrate before synchronizing source schedules',
+    );
+
+    expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
+    expect(source.save).not.toHaveBeenCalled();
+  });
+
   it('updates the framework-backfilled legacy schedule by slug', async () => {
     const legacySchedule = {
       id: 'legacy-schedule-id',

@@ -204,6 +204,30 @@ async function sourceSchedules(db: SmrtDatabase) {
   return await AgentScheduleCollection.create({ db });
 }
 
+async function assertSourceScheduleBackfillApplied(
+  schedules: Awaited<ReturnType<typeof sourceSchedules>>,
+  sourceId: string,
+): Promise<void> {
+  const legacyId = `source-crawl:${sourceId}`;
+  const schedulesForSource = await schedules.list({
+    where: {
+      agentId: sourceId,
+      agentType: SOURCE_JOB_OBJECT_TYPE,
+      method: SOURCE_CRAWL_METHOD,
+    },
+  });
+  const unbackfilledSchedule = schedulesForSource.find(
+    (schedule) =>
+      stringValue(schedule.id) === legacyId && !stringValue(schedule.slug),
+  );
+
+  if (unbackfilledSchedule) {
+    throw new Error(
+      `Source schedule ${legacyId} requires SMRT schedule backfill; run smrt db:migrate before synchronizing source schedules.`,
+    );
+  }
+}
+
 export async function syncSourceSchedule(
   source: ScheduleSource,
   options: SyncSourceScheduleOptions = {},
@@ -213,6 +237,7 @@ export async function syncSourceSchedule(
   if (!schedule) return null;
 
   const schedules = await sourceSchedules(db);
+  await assertSourceScheduleBackfillApplied(schedules, schedule.agentId);
   await schedules.getOrUpsert({
     agentId: schedule.agentId,
     agentType: schedule.agentType,
