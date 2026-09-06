@@ -231,8 +231,8 @@ describe('syncSourceSchedule', () => {
     );
 
     expect(databaseMock.query).toHaveBeenCalledWith(
-      "SELECT id FROM _smrt_agent_schedules WHERE id = ? AND (slug IS NULL OR slug = '') LIMIT 1",
-      [`source-crawl:${sourceId}`],
+      "SELECT id FROM _smrt_agent_schedules WHERE agent_id = ? AND agent_type = ? AND method = ? AND (slug IS NULL OR slug = '') LIMIT 1",
+      [sourceId, SOURCE_JOB_OBJECT_TYPE, SOURCE_CRAWL_METHOD],
     );
     expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
     expect(schedulesMock.list).not.toHaveBeenCalled();
