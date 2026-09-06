@@ -223,7 +223,7 @@ async function assertSourceScheduleBackfillApplied(
 
   if (unbackfilledSchedule) {
     throw new Error(
-      `Source schedule ${legacyId} requires SMRT schedule backfill; run smrt db:migrate before synchronizing source schedules.`,
+      `Source schedule ${legacyId} requires SMRT schedule backfill; run smrt db:migrate-agent-schedule-slugs before synchronizing source schedules.`,
     );
   }
 }

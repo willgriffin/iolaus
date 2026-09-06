@@ -226,7 +226,7 @@ describe('syncSourceSchedule', () => {
     await expect(
       syncSourceSchedule(source, { db: {} as never }),
     ).rejects.toThrow(
-      'requires SMRT schedule backfill; run smrt db:migrate before synchronizing source schedules',
+      'requires SMRT schedule backfill; run smrt db:migrate-agent-schedule-slugs before synchronizing source schedules',
     );
 
     expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
