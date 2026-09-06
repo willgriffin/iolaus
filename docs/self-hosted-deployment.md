@@ -90,6 +90,13 @@ hosted workloads retain their PostgreSQL profile. Use the supported
 `pnpm --filter @willgriffin/iolaus-site db:migrate` command; no deployment
 specific migration wrapper is required.
 
+The generic topology does not enable SMRT's restricted PostgreSQL deployment
+permission contract. A private overlay that enables it must use the offline
+qualification sequence in [PostgreSQL deployment permissions](postgres-permissions.md),
+including removal of these per-pod migration init containers before restricted
+runtime and monitor roles are activated. Do not enable the contract around the
+rolling init-container workflow.
+
 The migration prepares normalized Profile and User email keys first, then runs
 SMRT's native `backfillLegacyUserProfiles(db)` transaction. That backfill
 creates a canonical global `Person` and links each eligible legacy `User` while
