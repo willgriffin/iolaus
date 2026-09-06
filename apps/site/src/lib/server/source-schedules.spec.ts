@@ -231,7 +231,7 @@ describe('syncSourceSchedule', () => {
     );
 
     expect(databaseMock.query).toHaveBeenCalledWith(
-      "SELECT 1 FROM _smrt_agent_schedules WHERE id = ? AND (slug IS NULL OR slug = '') LIMIT 1",
+      "SELECT id FROM _smrt_agent_schedules WHERE id = ? AND (slug IS NULL OR slug = '') LIMIT 1",
       [`source-crawl:${sourceId}`],
     );
     expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
@@ -350,6 +350,37 @@ describe('syncAllSourceSchedules', () => {
     expect(schedulesMock.list).toHaveBeenCalledWith({
       where: { agentType: SOURCE_JOB_OBJECT_TYPE, method: SOURCE_CRAWL_METHOD },
     });
+  });
+
+  it('refuses an unbackfilled orphan schedule before synchronizing sources', async () => {
+    databaseMock.query.mockImplementation(async (statement: string) => ({
+      rows: statement.includes('agent_type = ? AND method = ?')
+        ? [{ id: 'source-crawl:source-gone' }]
+        : [],
+    }));
+    schedulesMock.list.mockRejectedValue(
+      new Error('slug is invalid, null given'),
+    );
+    smrtMock.sources.push({
+      id: 'source-1',
+      isActive: true,
+      parentSourceId: null,
+      refreshCadence: 'daily',
+      sourceRole: 'root',
+    });
+
+    await expect(
+      syncAllSourceSchedules({
+        db: databaseMock as never,
+        saveSource: false,
+      }),
+    ).rejects.toThrow(
+      'Source schedule source-crawl:source-gone requires SMRT schedule backfill',
+    );
+
+    expect(schedulesMock.getOrUpsert).not.toHaveBeenCalled();
+    expect(schedulesMock.list).not.toHaveBeenCalled();
+    expect(smrtMock.listCalls).toEqual([]);
   });
 
   it('deletes only orphaned source-crawl schedules through the collection', async () => {
