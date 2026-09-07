@@ -12,7 +12,7 @@ import {
   mcp: { include: ['list', 'get', 'create', 'update'] },
 })
 export class SkillGroupMember extends SmrtObject {
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   groupId = '';
   @crossPackageRef('@happyvertical/smrt-tags:Tag', {
     idType: 'text',
