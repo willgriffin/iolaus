@@ -488,7 +488,7 @@ export async function applyTagIntegrityRepair(
       TAG_INTEGRITY_REPAIR_ID,
     ]);
     await lockTagIntegrityTables(transaction);
-    await ensureAuditTables(transaction);
+    await ensureRepairAuditTables(transaction);
     const priorRun = await transaction.query(
       'SELECT 1 FROM data_repair_runs WHERE repair_id = ? LIMIT 1',
       [TAG_INTEGRITY_REPAIR_ID],
@@ -771,7 +771,12 @@ async function indexExists(db: SmrtDatabase, index: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
-async function ensureAuditTables(db: SmrtDatabase): Promise<void> {
+/**
+ * Bootstrap the operator-owned repair audit surface during the supported
+ * application migration, before native permission reconciliation. Repair
+ * commands retain their idempotent guard for standalone recovery use.
+ */
+export async function ensureRepairAuditTables(db: SmrtDatabase): Promise<void> {
   await db.query(`
     CREATE TABLE IF NOT EXISTS data_repair_runs (
       repair_id TEXT PRIMARY KEY,

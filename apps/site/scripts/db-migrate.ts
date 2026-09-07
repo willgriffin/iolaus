@@ -34,6 +34,7 @@ import {
 } from './backfill-achievement-placement.js';
 import { syncAllSourceSchedules } from '../src/lib/server/source-schedules.js';
 import {
+  ensureRepairAuditTables,
   ensureTagIntegrityGuards,
   inspectTagIntegrity,
   validateTagIntegrityGuards,
@@ -207,6 +208,7 @@ const {
       await validateSourceCrawlOpportunityGuard(migration.db);
   }
   let tagIntegrityGuards = await ensureTagIntegrityGuards(migration.db);
+  await ensureRepairAuditTables(migration.db);
   const tagIntegrityPlan = await inspectTagIntegrity(migration.db);
   if (
     tagIntegrityPlan.canonicalizations.length === 0 &&
