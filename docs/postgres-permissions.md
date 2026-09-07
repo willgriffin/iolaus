@@ -64,6 +64,20 @@ read-only and never repair privileges. Any refusal requires its documented
 infrastructure remediation, followed by a fresh plan; do not apply custom ACL
 SQL or reactivate workload sessions until all checks pass.
 
+## Verification matrix
+
+| Behavior | Evidence |
+| --- | --- |
+| Local SQLite remains outside this contract | `pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/postgres-permissions-config.spec.ts` covers the local profile and an unopted-in deployment. |
+| The deployment declaration has the expected schema, roles, managed tables, trigger functions, and monitor columns | The same focused configuration spec asserts the complete contract object. |
+| Framework command support is present | `pnpm --filter @willgriffin/iolaus-site exec smrt db:permissions --help`, `db:validate --help`, and `doctor --help` expose the native commands. |
+| A qualified catalog converges without custom application ACL code | In a disposable PostgreSQL database only, run the offline sequence above, then repeat `db:permissions --dry-run`; it must report zero permission diagnostics and the same fingerprint. |
+| Runtime and monitor access remain bounded | In that disposable database, verify runtime has no `CREATE` privilege on `public`, and verify the monitor has `SELECT` only for `_smrt_jobs(queue, status)` and `source_crawls(status, started_at, finished_at)`. |
+
+`doctor --db` includes the permission diagnostic and a separate live-schema
+parity diagnostic. Both must be clean before activating the restricted roles;
+zero permission findings alone are not permission to cut over a deployment.
+
 Run the same offline sequence after every schema migration or restore. Repeated
 application against an unchanged qualified catalog is a no-op. Production
 cutover remains governed by the separate deployment approval process.

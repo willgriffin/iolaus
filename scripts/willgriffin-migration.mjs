@@ -28,7 +28,7 @@ export const MIGRATION_BUNDLE_KIND =
   'iolaus/willgriffin.dev-logical-migration';
 export const MIGRATION_BUNDLE_VERSION = 1;
 export const PREDECESSOR_CONTRACT_VERSION = 1;
-export const TARGET_SMRT_VERSION = '0.47.0';
+export const TARGET_SMRT_VERSION = '0.47.1';
 export const DEFAULT_MIGRATION_BATCH_SIZE = 100;
 export const SUPPORTED_SOURCE_SCHEMA_FINGERPRINT =
   '86381010c2258a48ce6d36bfda9c70689031ebbdf6da81e4ea5bb4e233ece701';
