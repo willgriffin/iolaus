@@ -13,6 +13,16 @@ const OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX =
   'idx_smrt_jobs_opportunity_intelligence_active_fingerprint';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
+type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
+
+function normalizeIndexDefinition(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replaceAll('"', '')
+    .replace(/::(?:text|character varying)/g, '')
+    .replace(/\b[a-z_][a-z0-9_]*\._smrt_jobs\b/g, '_smrt_jobs')
+    .replace(/[\s()]+/g, '');
+}
 
 let dedupeIndexPromise: Promise<void> | null = null;
 
@@ -20,9 +30,32 @@ function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function expectedOpportunityIntelligenceActiveIndexDefinition(): string {
+  return normalizeIndexDefinition(`
+    CREATE UNIQUE INDEX ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}
+      ON _smrt_jobs USING btree (
+        queue,
+        object_type,
+        object_id,
+        method,
+        (COALESCE(args ->> 'contentFingerprint', ''))
+      )
+      WHERE status = ANY (ARRAY['pending', 'running'])
+        AND queue = ${sqlString(OPPORTUNITY_INTELLIGENCE_QUEUE)}
+        AND object_type = ${sqlString(OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE)}
+        AND method = ${sqlString(OPPORTUNITY_INTELLIGENCE_METHOD)}
+        AND object_id IS NOT NULL
+  `);
+}
+
 async function applyOpportunityIntelligenceJobDedupe(
   db: SmrtDatabase,
 ): Promise<void> {
+  const installed = await getOpportunityIntelligenceJobDedupeStatus(db);
+  if (installed.activeIndexNamed && !installed.activeIndexPresent) {
+    await db.query(`DROP INDEX ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}`);
+  }
+
   await db.query(
     `
       WITH ranked AS (
@@ -83,6 +116,62 @@ async function applyOpportunityIntelligenceJobDedupe(
   await db.query(
     `DROP INDEX IF EXISTS ${LEGACY_OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}`,
   );
+
+  const attested = await getOpportunityIntelligenceJobDedupeStatus(db);
+  if (!attested.activeIndexPresent) {
+    throw new Error(
+      'Opportunity-intelligence active-job uniqueness index is not ready.',
+    );
+  }
+}
+
+export async function getOpportunityIntelligenceJobDedupeStatus(
+  db: QueryableDatabase,
+): Promise<{ activeIndexNamed: boolean; activeIndexPresent: boolean }> {
+  const result = await db.query(
+    `SELECT
+       indexes.indisunique AS is_unique,
+       indexes.indisvalid AS is_valid,
+       indexes.indisready AS is_ready,
+       pg_get_indexdef(indexes.indexrelid) AS index_definition
+     FROM pg_class AS index_relation
+     INNER JOIN pg_namespace AS index_namespace
+       ON index_namespace.oid = index_relation.relnamespace
+     INNER JOIN pg_index AS indexes
+       ON indexes.indexrelid = index_relation.oid
+     INNER JOIN pg_class AS table_relation
+       ON table_relation.oid = indexes.indrelid
+     INNER JOIN pg_namespace AS table_namespace
+       ON table_namespace.oid = table_relation.relnamespace
+     WHERE index_namespace.nspname = current_schema()
+       AND table_namespace.nspname = current_schema()
+       AND table_relation.relname = '_smrt_jobs'
+       AND index_relation.relname = ?`,
+    [OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX],
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  const activeIndexNamed = result.rows.length === 1;
+  const activeIndexPresent = Boolean(
+    activeIndexNamed &&
+      row?.is_unique === true &&
+      row?.is_valid === true &&
+      row?.is_ready === true &&
+      normalizeIndexDefinition(row?.index_definition) ===
+        expectedOpportunityIntelligenceActiveIndexDefinition(),
+  );
+  return { activeIndexNamed, activeIndexPresent };
+}
+
+async function verifyOpportunityIntelligenceJobDedupe(
+  db: SmrtDatabase,
+): Promise<void> {
+  if (
+    !(await getOpportunityIntelligenceJobDedupeStatus(db)).activeIndexPresent
+  ) {
+    throw new Error(
+      'Opportunity-intelligence job dedupe index is missing; run db:migrate as the migration owner before activating runtime roles.',
+    );
+  }
 }
 
 export async function ensureOpportunityIntelligenceJobDedupe(
@@ -94,7 +183,7 @@ export async function ensureOpportunityIntelligenceJobDedupe(
   }
 
   dedupeIndexPromise ??= resolveDatabase(getDbConfig())
-    .then(applyOpportunityIntelligenceJobDedupe)
+    .then(verifyOpportunityIntelligenceJobDedupe)
     .catch((error: unknown) => {
       dedupeIndexPromise = null;
       throw error;
