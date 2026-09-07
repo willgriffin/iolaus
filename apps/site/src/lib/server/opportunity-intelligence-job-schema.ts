@@ -17,11 +17,18 @@ type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
 
 function normalizeIndexDefinition(value: unknown): string {
   return String(value ?? '')
-    .toLowerCase()
-    .replaceAll('"', '')
-    .replace(/::(?:text|character varying)/g, '')
-    .replace(/\b[a-z_][a-z0-9_]*\._smrt_jobs\b/g, '_smrt_jobs')
-    .replace(/[\s()]+/g, '');
+    .split(/('(?:''|[^'])*')/g)
+    .map((part, index) =>
+      index % 2 === 0
+        ? part
+            .toLowerCase()
+            .replaceAll('"', '')
+            .replace(/::(?:text|character varying)/g, '')
+            .replace(/\b[a-z_][a-z0-9_]*\._smrt_jobs\b/g, '_smrt_jobs')
+            .replace(/[\s()]+/g, '')
+        : part,
+    )
+    .join('');
 }
 
 let dedupeIndexPromise: Promise<void> | null = null;
