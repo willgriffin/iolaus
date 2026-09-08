@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -363,6 +364,67 @@ test('pinned manifests produce the explicitly approved predecessor contract', as
       }
     }
   }
+});
+
+test('keeps the approved predecessor requiredness independent from target guards', async () => {
+  const historical = JSON.parse(
+    readFileSync(
+      new URL('./fixtures/willgriffin-predecessor-requiredness.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const { sourceContract, targetContract } = await loadSupportedMigrationContracts(
+    process.cwd(),
+  );
+  const sourceTables = new Map(sourceContract.map((table) => [table.name, table]));
+  const targetTables = new Map(targetContract.map((table) => [table.name, table]));
+
+  assert.equal(historical.sourceSchemaFingerprint, SUPPORTED_SOURCE_SCHEMA_FINGERPRINT);
+  assert.equal(contractFingerprint(sourceContract), historical.sourceSchemaFingerprint);
+
+  for (const [tableName, columns] of Object.entries(historical.nullableColumns)) {
+    for (const columnName of columns) {
+      assert.equal(
+        sourceTables.get(tableName)?.columns.find((column) => column.name === columnName)
+          ?.notNull,
+        false,
+        `historical source ${tableName}.${columnName}`,
+      );
+      assert.equal(
+        targetTables.get(tableName)?.columns.find((column) => column.name === columnName)
+          ?.notNull,
+        true,
+        `current target ${tableName}.${columnName}`,
+      );
+    }
+  }
+  assert.equal(
+    sourceTables.get('sources')?.columns.some((column) => column.name === 'source_role'),
+    false,
+  );
+  assert.equal(
+    targetTables.get('sources')?.columns.find((column) => column.name === 'source_role')
+      ?.notNull,
+    true,
+  );
+
+  const bundle = buildMigrationBundle({
+    sourceContract,
+    targetContract,
+    sourceRows: new Map(sourceContract.map((table) => [table.name, []])),
+  });
+  assert.doesNotThrow(() =>
+    validateMigrationBundle(bundle, sourceContract, targetContract),
+  );
+  assert.throws(
+    () =>
+      validateMigrationBundle(
+        { ...bundle, targetSchemaFingerprint: '0'.repeat(64) },
+        sourceContract,
+        targetContract,
+      ),
+    /schema is incompatible/,
+  );
 });
 
 test('predecessor table inventory permits only migrated or explicitly excluded tables', () => {

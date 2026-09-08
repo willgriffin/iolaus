@@ -49,6 +49,11 @@ with mode `0600` outside the checkout; it contains private candidate and
 application data and must be handled like a database backup. Never commit it,
 attach it to an issue or pull request, or paste it into logs.
 
+The predecessor contract is a versioned historical manifest contract. It is
+not re-derived from later target-model requiredness changes: a newer Iolaus
+target can require fields whose qualified predecessor manifest remains
+nullable, while its database integrity guards enforce the stronger invariant.
+
 Build and migrate a fresh PostgreSQL Iolaus target before import. A new run
 requires the exact pinned framework bootstrap row counts and refuses any other
 pre-existing migrated data; only a ledger-backed resume may continue after

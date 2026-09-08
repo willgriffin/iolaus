@@ -31,7 +31,7 @@ export const PREDECESSOR_CONTRACT_VERSION = 1;
 export const TARGET_SMRT_VERSION = '0.47.1';
 export const DEFAULT_MIGRATION_BATCH_SIZE = 100;
 export const SUPPORTED_SOURCE_SCHEMA_FINGERPRINT =
-  'd917ff5685a51fd8f0538f28aef13eb7457892e86d48b2b8c4e28df55e4cae1d';
+  '86381010c2258a48ce6d36bfda9c70689031ebbdf6da81e4ea5bb4e233ece701';
 export const SUPPORTED_TARGET_SCHEMA_FINGERPRINT =
   'c91708141cf153058e34b242daa75997e6ec1dde53f5c6a10a3f9bb3d57faad1';
 
@@ -165,6 +165,24 @@ const TARGET_ONLY_COLUMNS = Object.freeze({
 
 const SOURCE_COLUMN_TYPE_OVERRIDES = Object.freeze({
   'sources.id': 'UUID',
+});
+
+// The exported predecessor predates #61's model metadata correction. Its
+// deployed integrity guards may be stricter than these historical manifest
+// fields, as documented for the isolated logical-export qualification.
+const PREDECESSOR_NULLABLE_COLUMNS = Object.freeze({
+  achievement_tags: ['achievement_id', 'tag_role'],
+  company_tags: ['company_id', 'tag_role'],
+  decision_tags: ['decision_id', 'tag_role'],
+  duty_tags: ['duty_id', 'tag_role'],
+  education_tags: ['education_id', 'tag_role'],
+  employment_role_tags: ['role_id', 'tag_role'],
+  experience_tags: ['experience_id', 'tag_role'],
+  opportunity_tags: ['opportunity_id', 'tag_role'],
+  project_tags: ['project_id', 'tag_role'],
+  skill_category_members: ['category_id'],
+  skill_group_members: ['group_id'],
+  source_tags: ['source_id', 'tag_role'],
 });
 
 // Source schedules predate the released AgentSchedule object and remain owned
@@ -506,6 +524,9 @@ export function derivePredecessorContract(targetContract) {
     .filter((table) => !excluded.has(table.name))
     .map((table) => {
       const targetOnlyColumns = new Set(TARGET_ONLY_COLUMNS[table.name] || []);
+      const predecessorNullableColumns = new Set(
+        PREDECESSOR_NULLABLE_COLUMNS[table.name] || [],
+      );
       return normalizedTable({
         name: table.name,
         uniqueKeys: table.uniqueKeys?.filter((key) =>
@@ -515,6 +536,9 @@ export function derivePredecessorContract(targetContract) {
           .filter((column) => !targetOnlyColumns.has(column.name))
           .map((column) => ({
             ...column,
+            notNull: predecessorNullableColumns.has(column.name)
+              ? false
+              : column.notNull,
             type:
               SOURCE_COLUMN_TYPE_OVERRIDES[`${table.name}.${column.name}`] ||
               column.type,
