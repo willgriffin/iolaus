@@ -261,7 +261,10 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
   await seedEmploymentTagContexts(tags);
   await seedEmploymentPlaceTypes(placeTypes);
   await ensureSourceScheduleTable();
-  await ensureOpportunityIntelligenceJobDedupe();
+  // Migration supplies its owner connection so this creates or repairs the
+  // physical guard before runtime roles are activated. Runtime callers only
+  // attest the guard and never issue DDL.
+  await ensureOpportunityIntelligenceJobDedupe(db);
   await ensureOpportunityIntelligenceGovernanceSchema();
   await ensureOpportunityIntelligenceControl();
   await ensureCanonicalResumeTailoringConfig();

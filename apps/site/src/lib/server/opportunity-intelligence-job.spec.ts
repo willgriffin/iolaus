@@ -13,6 +13,7 @@ import {
 } from './opportunity-intelligence-job';
 import {
   ensureOpportunityIntelligenceJobDedupe,
+  getOpportunityIntelligenceJobDedupeStatus,
   isOpportunityIntelligenceActiveJobConflict,
 } from './opportunity-intelligence-job-schema';
 
@@ -228,22 +229,55 @@ describe('opportunity intelligence jobs', () => {
   });
 
   it('installs fingerprint-aware active-job uniqueness before dropping the legacy index', async () => {
-    const query = vi.fn(async (_sql: string, _params?: unknown[]) => ({
-      rows: [],
-    }));
+    let statusReads = 0;
+    const query = vi.fn(async (statement: string) => {
+      if (statement.includes('pg_get_indexdef')) {
+        statusReads += 1;
+        return {
+          rows:
+            statusReads === 1
+              ? []
+              : [
+                  {
+                    index_definition: `CREATE UNIQUE INDEX idx_smrt_jobs_opportunity_intelligence_active_fingerprint ON public._smrt_jobs USING btree (queue, object_type, object_id, method, COALESCE((args ->> 'contentFingerprint'::text), ''::text)) WHERE ((status = ANY (ARRAY['pending'::text, 'running'::text])) AND (queue = 'opportunity-intelligence'::text) AND (object_type = '@willgriffin/iolaus-site:Opportunity'::text) AND (method = 'processIntelligence'::text) AND (object_id IS NOT NULL))`,
+                    is_ready: true,
+                    is_unique: true,
+                    is_valid: true,
+                  },
+                ],
+        };
+      }
+      return { rows: [] };
+    });
 
     await ensureOpportunityIntelligenceJobDedupe({ query } as never);
 
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(String(query.mock.calls[0]?.[0])).toContain(
+    expect(query).toHaveBeenCalledTimes(5);
+    expect(String(query.mock.calls[1]?.[0])).toContain(
       "COALESCE(args ->> 'contentFingerprint', '')",
     );
-    expect(String(query.mock.calls[1]?.[0])).toContain(
+    expect(String(query.mock.calls[2]?.[0])).toContain(
       'idx_smrt_jobs_opportunity_intelligence_active_fingerprint',
     );
-    expect(String(query.mock.calls[2]?.[0])).toContain(
+    expect(String(query.mock.calls[3]?.[0])).toContain(
       'DROP INDEX IF EXISTS idx_smrt_jobs_opportunity_intelligence_active',
     );
+  });
+
+  it('rejects a same-name guard whose SQL literal casing changes the predicate', async () => {
+    const status = await getOpportunityIntelligenceJobDedupeStatus({
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            index_definition: `CREATE UNIQUE INDEX idx_smrt_jobs_opportunity_intelligence_active_fingerprint ON public._smrt_jobs USING btree (queue, object_type, object_id, method, COALESCE((args ->> 'contentFingerprint'::text), ''::text)) WHERE ((status = ANY (ARRAY['pending'::text, 'running'::text])) AND (queue = 'opportunity-intelligence'::text) AND (object_type = '@willgriffin/iolaus-site:Opportunity'::text) AND (method = 'PROCESSINTELLIGENCE'::text) AND (object_id IS NOT NULL))`,
+            is_ready: true,
+            is_unique: true,
+            is_valid: true,
+          },
+        ],
+      })),
+    } as never);
+    expect(status.activeIndexPresent).toBe(false);
   });
 
   it('deduplicates only the same active opportunity content fingerprint', async () => {

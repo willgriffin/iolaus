@@ -2,12 +2,17 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
 import { canonicalizeDataDirectory } from '../../scripts/smrt-runtime-identity.mjs';
+import { postgresPermissionsForRuntime } from './scripts/postgres-permissions-config.js';
 
 const sourceRoot = existsSync(resolve(process.cwd(), 'apps/site/package.json'))
   ? process.cwd()
   : resolve(process.cwd(), '../..');
 const profile = process.env.SMRT_RUNTIME_PROFILE || 'local';
 const appId = process.env.SMRT_APP_ID || 'iolaus';
+const postgresPermissions = postgresPermissionsForRuntime({
+  enabled: process.env.IOLAUS_POSTGRES_PERMISSION_CONTRACT === 'true',
+  profile,
+});
 const localDatabase =
   profile === 'local'
     ? resolveLocalRuntimePaths({
@@ -23,6 +28,7 @@ export default {
   },
   smrt: {
     logLevel: 'info',
+    ...(postgresPermissions ? { postgresPermissions } : {}),
     schemaMigration: {
       strategy: 'auto-add',
     },
