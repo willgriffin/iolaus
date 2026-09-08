@@ -63,4 +63,43 @@ describe('tag integrity', () => {
     });
     expect(field?._meta).toMatchObject({ idType: 'text', validate: true });
   });
+
+  it('marks every tag guard uniqueness field as required in its model', () => {
+    const classByTable: Record<string, string> = {
+      achievement_tags: 'AchievementTag',
+      company_tags: 'CompanyTag',
+      decision_tags: 'DecisionTag',
+      duty_tags: 'DutyTag',
+      education_tags: 'EducationTag',
+      employment_role_tags: 'EmploymentRoleTag',
+      experience_tags: 'ExperienceTag',
+      opportunity_tags: 'OpportunityTag',
+      project_tags: 'ProjectTag',
+      skill_category_members: 'SkillCategoryMember',
+      skill_group_members: 'SkillGroupMember',
+      source_tags: 'SourceTag',
+    };
+
+    for (const spec of tagReferenceSpecs) {
+      const fields = ObjectRegistry.getClass(classByTable[spec.table])?.fields;
+
+      for (const column of spec.uniqueColumns) {
+        const fieldName = column.replace(/_([a-z])/g, (_, letter: string) =>
+          letter.toUpperCase(),
+        );
+
+        expect(fields?.get(fieldName), `${spec.table}.${column}`).toMatchObject(
+          { required: true },
+        );
+      }
+    }
+  });
+
+  it('marks source provenance role as required in its model', () => {
+    expect(
+      ObjectRegistry.getClass('Source')?.fields.get('sourceRole'),
+    ).toMatchObject({
+      required: true,
+    });
+  });
 });

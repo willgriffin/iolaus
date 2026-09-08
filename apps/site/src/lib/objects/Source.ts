@@ -14,7 +14,7 @@ export class Source extends SmrtObject {
   name = '';
   @field({ type: 'text' })
   type = 'manual';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   sourceRole = 'unknown';
   @foreignKey(() => Source, { onDelete: 'RESTRICT' })
   parentSourceId: string | null = null;

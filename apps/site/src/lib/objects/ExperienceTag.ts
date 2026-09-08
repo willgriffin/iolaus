@@ -12,7 +12,7 @@ import {
   mcp: { include: ['list', 'get', 'create', 'update'] },
 })
 export class ExperienceTag extends SmrtObject {
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   experienceId = '';
   @crossPackageRef('@happyvertical/smrt-tags:Tag', {
     idType: 'text',
@@ -20,6 +20,6 @@ export class ExperienceTag extends SmrtObject {
     validate: true,
   })
   tagId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   tagRole = 'general';
 }
