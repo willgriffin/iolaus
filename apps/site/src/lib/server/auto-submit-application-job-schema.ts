@@ -11,11 +11,40 @@ const AUTO_SUBMIT_APPLICATION_ACTIVE_JOB_INDEX =
   'idx_smrt_jobs_auto_submit_application_active';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
+type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
+
+function normalizeIndexDefinition(value: unknown): string {
+  return String(value ?? '')
+    .split(/('(?:''|[^'])*')/g)
+    .map((part, index) =>
+      index % 2 === 0
+        ? part
+            .toLowerCase()
+            .replaceAll('"', '')
+            .replace(/::(?:text|character varying)/g, '')
+            .replace(/\b[a-z_][a-z0-9_]*\._smrt_jobs\b/g, '_smrt_jobs')
+            .replace(/[\s()]+/g, '')
+        : part,
+    )
+    .join('');
+}
 
 let dedupeIndexPromise: Promise<void> | null = null;
 
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+function expectedAutoSubmitApplicationActiveIndexDefinition(): string {
+  return normalizeIndexDefinition(`
+    CREATE UNIQUE INDEX ${AUTO_SUBMIT_APPLICATION_ACTIVE_JOB_INDEX}
+      ON _smrt_jobs USING btree (queue, object_type, object_id, method)
+      WHERE status = ANY (ARRAY['pending', 'running'])
+        AND queue = ${sqlString(AUTO_SUBMIT_APPLICATION_QUEUE)}
+        AND object_type = ${sqlString(AUTO_SUBMIT_APPLICATION_JOB_OBJECT_TYPE)}
+        AND method = ${sqlString(AUTO_SUBMIT_APPLICATION_METHOD)}
+        AND object_id IS NOT NULL
+  `);
 }
 
 // Idempotency safety: at most one active auto-submit job per application. This
@@ -24,6 +53,11 @@ function sqlString(value: string): string {
 async function applyAutoSubmitApplicationJobDedupe(
   db: SmrtDatabase,
 ): Promise<void> {
+  const installed = await getAutoSubmitApplicationJobDedupeStatus(db);
+  if (installed.activeIndexNamed && !installed.activeIndexPresent) {
+    await db.query(`DROP INDEX ${AUTO_SUBMIT_APPLICATION_ACTIVE_JOB_INDEX}`);
+  }
+
   await db.query(
     `
       WITH ranked AS (
@@ -66,6 +100,58 @@ async function applyAutoSubmitApplicationJobDedupe(
         AND method = ${sqlString(AUTO_SUBMIT_APPLICATION_METHOD)}
         AND object_id IS NOT NULL
   `);
+
+  const attested = await getAutoSubmitApplicationJobDedupeStatus(db);
+  if (!attested.activeIndexPresent) {
+    throw new Error('Auto-submit active-job uniqueness index is not ready.');
+  }
+}
+
+export async function getAutoSubmitApplicationJobDedupeStatus(
+  db: QueryableDatabase,
+): Promise<{ activeIndexNamed: boolean; activeIndexPresent: boolean }> {
+  const result = await db.query(
+    `SELECT
+       indexes.indisunique AS is_unique,
+       indexes.indisvalid AS is_valid,
+       indexes.indisready AS is_ready,
+       pg_get_indexdef(indexes.indexrelid) AS index_definition
+     FROM pg_class AS index_relation
+     INNER JOIN pg_namespace AS index_namespace
+       ON index_namespace.oid = index_relation.relnamespace
+     INNER JOIN pg_index AS indexes
+       ON indexes.indexrelid = index_relation.oid
+     INNER JOIN pg_class AS table_relation
+       ON table_relation.oid = indexes.indrelid
+     INNER JOIN pg_namespace AS table_namespace
+       ON table_namespace.oid = table_relation.relnamespace
+     WHERE index_namespace.nspname = current_schema()
+       AND table_namespace.nspname = current_schema()
+       AND table_relation.relname = '_smrt_jobs'
+       AND index_relation.relname = ?`,
+    [AUTO_SUBMIT_APPLICATION_ACTIVE_JOB_INDEX],
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  const activeIndexNamed = result.rows.length === 1;
+  const activeIndexPresent = Boolean(
+    activeIndexNamed &&
+      row?.is_unique === true &&
+      row?.is_valid === true &&
+      row?.is_ready === true &&
+      normalizeIndexDefinition(row?.index_definition) ===
+        expectedAutoSubmitApplicationActiveIndexDefinition(),
+  );
+  return { activeIndexNamed, activeIndexPresent };
+}
+
+async function verifyAutoSubmitApplicationJobDedupe(
+  db: SmrtDatabase,
+): Promise<void> {
+  if (!(await getAutoSubmitApplicationJobDedupeStatus(db)).activeIndexPresent) {
+    throw new Error(
+      'Auto-submit job dedupe index is missing; run db:migrate as the migration owner before activating runtime roles.',
+    );
+  }
 }
 
 export async function ensureAutoSubmitApplicationJobDedupe(
@@ -77,7 +163,7 @@ export async function ensureAutoSubmitApplicationJobDedupe(
   }
 
   dedupeIndexPromise ??= resolveDatabase(getDbConfig())
-    .then(applyAutoSubmitApplicationJobDedupe)
+    .then(verifyAutoSubmitApplicationJobDedupe)
     .catch((error: unknown) => {
       dedupeIndexPromise = null;
       throw error;

@@ -23,6 +23,7 @@ describe('PostgreSQL deployment permissions configuration', () => {
       migrationOwner: 'iolaus_willgriffin_migration',
       runtimeRole: 'iolaus_willgriffin_runtime',
       managedTables: ['_smrt_agent_schedules'],
+      retainedTables: ['data_repair_audit', 'data_repair_runs'],
       managedTriggerFunctions: [
         'enforce_source_parent_provenance',
         'enforce_source_parent_reverse_provenance',

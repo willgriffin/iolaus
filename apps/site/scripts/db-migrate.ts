@@ -34,6 +34,7 @@ import {
 } from './backfill-achievement-placement.js';
 import { syncAllSourceSchedules } from '../src/lib/server/source-schedules.js';
 import {
+  ensureRepairAuditTables,
   ensureTagIntegrityGuards,
   inspectTagIntegrity,
   validateTagIntegrityGuards,
@@ -52,6 +53,8 @@ import {
 import { ensureChangeFeedTableOnce } from '../src/lib/server/change-feed.js';
 import { ensureSourceCrawlAccountingSchema } from '../src/lib/server/source-crawl-accounting.js';
 import { ensureSourceCrawlJobDedupe } from '../src/lib/server/source-crawl-job-schema.js';
+import { ensureAutoSubmitApplicationJobDedupe } from '../src/lib/server/auto-submit-application-job-schema.js';
+import { ensureOpportunityIntelligenceJobDedupe } from '../src/lib/server/opportunity-intelligence-job-schema.js';
 import { ensureSourceProvenanceSchema } from '../src/lib/server/source-provenance.js';
 import { backfillSourceProviders } from '../src/lib/server/source-provider.js';
 import {
@@ -197,6 +200,8 @@ const {
   // long-lived migration handle, is what lets those paths only append.
   await ensureChangeFeedTableOnce(migration.db);
   await ensureSourceCrawlJobDedupe(migration.db);
+  await ensureOpportunityIntelligenceJobDedupe(migration.db);
+  await ensureAutoSubmitApplicationJobDedupe(migration.db);
   const sourceSchedules = await syncAllSourceSchedules({ db: migration.db });
   const sourceCrawlAccountingSchema =
     await ensureSourceCrawlAccountingSchema(migration.db);
@@ -207,6 +212,7 @@ const {
       await validateSourceCrawlOpportunityGuard(migration.db);
   }
   let tagIntegrityGuards = await ensureTagIntegrityGuards(migration.db);
+  await ensureRepairAuditTables(migration.db);
   const tagIntegrityPlan = await inspectTagIntegrity(migration.db);
   if (
     tagIntegrityPlan.canonicalizations.length === 0 &&
