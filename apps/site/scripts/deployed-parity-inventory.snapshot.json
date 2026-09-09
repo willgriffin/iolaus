@@ -1,44 +1,44 @@
 {
   "schema": "iolaus-deployed-parity-inventory:v1",
   "dependencies": {
-    "lockfileSha256": "6a6500516884639b9c097e1f297360bbb2c039d834661c345f7f957cfd524267",
+    "lockfileSha256": "62f49a90aa2b4592239ef80ec9cab7d773f5083bf5042012cd7881a9bdec0608",
     "smrt": {
-      "@happyvertical/smrt-agents": "0.49.0",
-      "@happyvertical/smrt-app-runtime": "0.49.0",
-      "@happyvertical/smrt-cli": "0.49.0",
-      "@happyvertical/smrt-config": "0.49.0",
-      "@happyvertical/smrt-core": "0.49.0",
-      "@happyvertical/smrt-dev-mcp": "0.49.0",
-      "@happyvertical/smrt-facts": "0.49.0",
-      "@happyvertical/smrt-jobs": "0.49.0",
-      "@happyvertical/smrt-places": "0.49.0",
-      "@happyvertical/smrt-profiles": "0.49.0",
-      "@happyvertical/smrt-scanner": "0.49.0",
-      "@happyvertical/smrt-svelte": "0.49.0",
-      "@happyvertical/smrt-tags": "0.49.0",
-      "@happyvertical/smrt-tenancy": "0.49.0",
-      "@happyvertical/smrt-ui": "0.49.0",
-      "@happyvertical/smrt-users": "0.49.0",
-      "@happyvertical/smrt-web": "0.49.0"
+      "@happyvertical/smrt-agents": "0.49.1",
+      "@happyvertical/smrt-app-runtime": "0.49.1",
+      "@happyvertical/smrt-cli": "0.49.1",
+      "@happyvertical/smrt-config": "0.49.1",
+      "@happyvertical/smrt-core": "0.49.1",
+      "@happyvertical/smrt-dev-mcp": "0.49.1",
+      "@happyvertical/smrt-facts": "0.49.1",
+      "@happyvertical/smrt-jobs": "0.49.1",
+      "@happyvertical/smrt-places": "0.49.1",
+      "@happyvertical/smrt-profiles": "0.49.1",
+      "@happyvertical/smrt-scanner": "0.49.1",
+      "@happyvertical/smrt-svelte": "0.49.1",
+      "@happyvertical/smrt-tags": "0.49.1",
+      "@happyvertical/smrt-tenancy": "0.49.1",
+      "@happyvertical/smrt-ui": "0.49.1",
+      "@happyvertical/smrt-users": "0.49.1",
+      "@happyvertical/smrt-web": "0.49.1"
     },
     "installedSmrt": {
-      "@happyvertical/smrt-agents": "0.49.0",
-      "@happyvertical/smrt-app-runtime": "0.49.0",
-      "@happyvertical/smrt-cli": "0.49.0",
-      "@happyvertical/smrt-config": "0.49.0",
-      "@happyvertical/smrt-core": "0.49.0",
-      "@happyvertical/smrt-dev-mcp": "0.49.0",
-      "@happyvertical/smrt-facts": "0.49.0",
-      "@happyvertical/smrt-jobs": "0.49.0",
-      "@happyvertical/smrt-places": "0.49.0",
-      "@happyvertical/smrt-profiles": "0.49.0",
-      "@happyvertical/smrt-scanner": "0.49.0",
-      "@happyvertical/smrt-svelte": "0.49.0",
-      "@happyvertical/smrt-tags": "0.49.0",
-      "@happyvertical/smrt-tenancy": "0.49.0",
-      "@happyvertical/smrt-ui": "0.49.0",
-      "@happyvertical/smrt-users": "0.49.0",
-      "@happyvertical/smrt-web": "0.49.0"
+      "@happyvertical/smrt-agents": "0.49.1",
+      "@happyvertical/smrt-app-runtime": "0.49.1",
+      "@happyvertical/smrt-cli": "0.49.1",
+      "@happyvertical/smrt-config": "0.49.1",
+      "@happyvertical/smrt-core": "0.49.1",
+      "@happyvertical/smrt-dev-mcp": "0.49.1",
+      "@happyvertical/smrt-facts": "0.49.1",
+      "@happyvertical/smrt-jobs": "0.49.1",
+      "@happyvertical/smrt-places": "0.49.1",
+      "@happyvertical/smrt-profiles": "0.49.1",
+      "@happyvertical/smrt-scanner": "0.49.1",
+      "@happyvertical/smrt-svelte": "0.49.1",
+      "@happyvertical/smrt-tags": "0.49.1",
+      "@happyvertical/smrt-tenancy": "0.49.1",
+      "@happyvertical/smrt-ui": "0.49.1",
+      "@happyvertical/smrt-users": "0.49.1",
+      "@happyvertical/smrt-web": "0.49.1"
     }
   },
   "surfaces": {
@@ -1915,5 +1915,5 @@
       }
     ]
   },
-  "inventorySha256": "ea35b5568c4c775bf5d6d75b5a7831fac29e55107534f2e604ed1fe692328702"
+  "inventorySha256": "e49892c7068da9c0fbec05fd427af09a300506a5bfe44b17e7f5bc906611afca"
 }
