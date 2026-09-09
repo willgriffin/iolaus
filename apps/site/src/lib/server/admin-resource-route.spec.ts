@@ -294,7 +294,7 @@ describe('admin-resource-route', () => {
     info.mockRestore();
   });
 
-  it('refuses recommendation decisions the owner principal lacks permission for', async () => {
+  it('refuses recommendation decisions without decisions.create', async () => {
     const { processRecommendationTaskAction } = await import(
       './admin-resource-route'
     );
@@ -305,23 +305,47 @@ describe('admin-resource-route', () => {
         ownerLocals(without('decisions.create')),
       ),
     ).rejects.toMatchObject({ body: { message: 'Forbidden' }, status: 403 });
-
-    // Accepting additionally needs the application and research writes and
-    // the AgentRun audit surrogate for the posting-preflight verdict.
-    for (const denied of ['applications.create', 'agentruns.read']) {
-      await expect(
-        processRecommendationTaskAction(
-          postForm('/admin/tasks', {
-            decision: 'accept_to_apply',
-            taskId: 'task-1',
-          }),
-          ownerLocals(without(denied)),
-        ),
-        denied,
-      ).rejects.toMatchObject({ body: { message: 'Forbidden' }, status: 403 });
-    }
     expect(mocks.processRecommendationTask).not.toHaveBeenCalled();
+  });
 
+  it('refuses accepted recommendation decisions without applications.create', async () => {
+    const { processRecommendationTaskAction } = await import(
+      './admin-resource-route'
+    );
+
+    await expect(
+      processRecommendationTaskAction(
+        postForm('/admin/tasks', {
+          decision: 'accept_to_apply',
+          taskId: 'task-1',
+        }),
+        ownerLocals(without('applications.create')),
+      ),
+    ).rejects.toMatchObject({ body: { message: 'Forbidden' }, status: 403 });
+    expect(mocks.processRecommendationTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses accepted recommendation decisions without the AgentRun audit surrogate', async () => {
+    const { processRecommendationTaskAction } = await import(
+      './admin-resource-route'
+    );
+
+    await expect(
+      processRecommendationTaskAction(
+        postForm('/admin/tasks', {
+          decision: 'accept_to_apply',
+          taskId: 'task-1',
+        }),
+        ownerLocals(without('agentruns.read')),
+      ),
+    ).rejects.toMatchObject({ body: { message: 'Forbidden' }, status: 403 });
+    expect(mocks.processRecommendationTask).not.toHaveBeenCalled();
+  });
+
+  it('permits non-apply recommendation decisions without apply-only permissions', async () => {
+    const { processRecommendationTaskAction } = await import(
+      './admin-resource-route'
+    );
     // A non-apply decision records no AgentRun and does not require them.
     mocks.processRecommendationTask.mockResolvedValue({ status: 'rejected' });
     await processRecommendationTaskAction(
