@@ -195,6 +195,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await expect(
         ensureNativeAuthUniqueIndexes(scoped as never),
       ).rejects.toThrow('duplicate non-null values exist');
+      for (const { index } of AUTH_UNIQUE_INDEXES) {
+        await expect(indexState(index)).resolves.toEqual({});
+      }
       const count = await db?.query(
         `SELECT count(*)::int AS "count" FROM ${schema}.${table}`,
       );

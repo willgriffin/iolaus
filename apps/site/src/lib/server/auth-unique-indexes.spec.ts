@@ -53,15 +53,20 @@ describe('native auth uniqueness compatibility', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('rolls back and releases the session when a duplicate or wrong index shape is found', async () => {
-    const query = vi
-      .fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockRejectedValueOnce(new Error('duplicate non-null values exist'));
+  it.each(
+    AUTH_UNIQUE_INDEXES.slice(1),
+  )('rolls back before any DDL when the $column preflight fails', async ({
+    column,
+  }) => {
+    const query = vi.fn(async (sql: string) => {
+      if (
+        sql.includes('duplicate non-null values exist') &&
+        sql.includes(`'${column}'`)
+      ) {
+        throw new Error('duplicate non-null values exist');
+      }
+      return { rows: [] };
+    });
     const release = vi.fn(async () => undefined);
 
     await expect(
@@ -70,6 +75,9 @@ describe('native auth uniqueness compatibility', () => {
       } as never),
     ).rejects.toThrow('duplicate non-null values exist');
 
+    expect(query).not.toHaveBeenCalledWith(
+      expect.stringContaining('CREATE UNIQUE INDEX'),
+    );
     expect(query).toHaveBeenLastCalledWith('ROLLBACK');
     expect(release).toHaveBeenCalledOnce();
   });

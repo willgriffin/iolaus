@@ -177,10 +177,14 @@ export async function ensureNativeAuthUniqueIndexes(
     }
     for (const target of AUTH_UNIQUE_INDEXES) {
       await session.query(assertionSql(target));
+    }
+    for (const target of AUTH_UNIQUE_INDEXES) {
       await session.query(
         `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(target.index)}
          ON ${quoteIdentifier(target.table)} (${quoteIdentifier(target.column)})`,
       );
+    }
+    for (const target of AUTH_UNIQUE_INDEXES) {
       await session.query(verifySql(target));
     }
     await session.query('COMMIT');
