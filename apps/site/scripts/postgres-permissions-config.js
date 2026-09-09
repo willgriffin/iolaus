@@ -17,7 +17,12 @@ export function postgresPermissionsForRuntime({ enabled, profile }) {
     migrationOwner: 'iolaus_willgriffin_migration',
     runtimeRole: 'iolaus_willgriffin_runtime',
     managedTables: ['_smrt_agent_schedules'],
-    retainedTables: ['data_repair_audit', 'data_repair_runs'],
+    retainedTables: [
+      'asset_association_collections',
+      'data_repair_audit',
+      'data_repair_runs',
+      'fact_content_collections',
+    ],
     managedTriggerFunctions,
     monitor: {
       role: 'iolaus_willgriffin_monitor',

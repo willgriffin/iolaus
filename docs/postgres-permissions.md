@@ -34,7 +34,14 @@ Iolaus-owned source-provenance trigger functions; SMRT verifies their supported
 trigger shape and removes direct execution access from the restricted roles.
 `data_repair_runs` and `data_repair_audit` are retained operator-owned audit
 tables: the application migration creates them before reconciliation, and the
-native plan revokes all runtime and monitor access.
+native plan revokes all runtime and monitor access. Two existing physical
+collection-wrapper artifacts are retained for the same reason:
+`fact_content_collections` and `asset_association_collections` are unused
+physical artifacts of wrapper classes whose backing tables are respectively
+`fact_contents` and `asset_associations`. They are not runtime backing tables,
+so they receive no runtime or monitor privileges. Do not add manifest-only
+`*_collections` names that are absent from the catalog:
+the schema-exclusive contract deliberately rejects missing retained tables.
 
 ## Offline qualification
 
@@ -75,7 +82,7 @@ SQL or reactivate workload sessions until all checks pass.
 | The deployment declaration has the expected schema, roles, managed tables, trigger functions, and monitor columns | The same focused configuration spec asserts the complete contract object. |
 | Framework command support is present | `pnpm --filter @willgriffin/iolaus-site exec smrt db:permissions --help`, `db:validate --help`, and `doctor --help` expose the native commands. |
 | A qualified catalog converges without custom application ACL code | In a disposable PostgreSQL database only, run the offline sequence above, then repeat `db:permissions --dry-run`; it must report zero permission diagnostics and the same fingerprint. |
-| Runtime and monitor access remain bounded | In that disposable database, verify runtime has no `CREATE` privilege on `public` or access to `data_repair_runs`/`data_repair_audit`, and verify the monitor has `SELECT` only for `_smrt_jobs(queue, status)` and `source_crawls(status, started_at, finished_at)`. |
+| Runtime and monitor access remain bounded | In that disposable database, verify runtime has no `CREATE` privilege on `public` or access to `data_repair_runs`/`data_repair_audit`/`fact_content_collections`/`asset_association_collections`, and verify the monitor has `SELECT` only for `_smrt_jobs(queue, status)` and `source_crawls(status, started_at, finished_at)`. |
 
 `doctor --db` includes the permission diagnostic and a separate live-schema
 parity diagnostic. Both must be clean before activating the restricted roles;
