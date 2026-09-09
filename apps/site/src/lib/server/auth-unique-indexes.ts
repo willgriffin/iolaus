@@ -61,6 +61,7 @@ function assertionSql({
           AND index_relation.relnamespace = current_schema()::regnamespace
           AND index_definition.indisvalid
           AND index_definition.indisunique
+          AND index_definition.indimmediate
           AND index_definition.indpred IS NULL
           AND NOT index_definition.indnullsnotdistinct
           AND index_definition.indnkeyatts = 1
@@ -116,6 +117,7 @@ function verifySql({
           AND index_relation.relnamespace = current_schema()::regnamespace
           AND index_definition.indisvalid
           AND index_definition.indisunique
+          AND index_definition.indimmediate
           AND index_definition.indpred IS NULL
           AND NOT index_definition.indnullsnotdistinct
           AND index_definition.indnkeyatts = 1

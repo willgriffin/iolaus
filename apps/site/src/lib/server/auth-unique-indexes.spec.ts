@@ -38,6 +38,9 @@ describe('native auth uniqueness compatibility', () => {
         expect.stringContaining('duplicate non-null values exist'),
       );
       expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('index_definition.indimmediate'),
+      );
+      expect(query).toHaveBeenCalledWith(
         expect.stringContaining(`CREATE UNIQUE INDEX IF NOT EXISTS "${index}"`),
       );
       expect(query).toHaveBeenCalledWith(

@@ -80,6 +80,25 @@ async function indexState(index: string): Promise<Record<string, unknown>> {
   return rows[0] ?? {};
 }
 
+async function constraintCount(constraint: string): Promise<number> {
+  if (!schemaName) {
+    throw new Error('Expected a PostgreSQL test schema.');
+  }
+  const result = await db?.query(`
+    SELECT count(*)::int AS "count"
+    FROM pg_constraint AS constraint_definition
+    JOIN pg_namespace AS schema_relation
+      ON schema_relation.oid = constraint_definition.connamespace
+    WHERE schema_relation.nspname = ${quoteLiteral(schemaName)}
+      AND constraint_definition.conname = ${quoteLiteral(constraint)}
+      AND constraint_definition.contype = 'u'
+  `);
+  const rows = Array.isArray(result)
+    ? result
+    : ((result as { rows?: Record<string, unknown>[] })?.rows ?? []);
+  return Number(rows[0]?.count ?? 0);
+}
+
 afterEach(async () => {
   if (db && schemaName) {
     await db.query(
@@ -240,6 +259,32 @@ describe.skipIf(!process.env.DATABASE_URL)(
         unique: true,
         valid: true,
       });
+    });
+
+    it.each(
+      AUTH_UNIQUE_INDEXES,
+    )('fails closed for a same-name deferrable unique constraint on $table.$column', async ({
+      column,
+      index,
+      table,
+    }) => {
+      const scoped = await scopedDatabase();
+      const schema = currentSchema();
+      await db?.query(
+        `ALTER TABLE ${schema}.${quoteIdentifier(table)}
+           ADD CONSTRAINT ${quoteIdentifier(index)} UNIQUE (${quoteIdentifier(column)})
+           DEFERRABLE INITIALLY IMMEDIATE`,
+      );
+
+      await expect(
+        ensureNativeAuthUniqueIndexes(scoped as never),
+      ).rejects.toThrow('required valid unique auth index');
+      await expect(indexState(index)).resolves.toEqual({
+        full: true,
+        unique: true,
+        valid: true,
+      });
+      await expect(constraintCount(index)).resolves.toBe(1);
     });
   },
 );
