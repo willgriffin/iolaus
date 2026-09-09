@@ -45,6 +45,7 @@ import {
   ensureCandidateAnswerNaturalKeyIndex,
   repairExistingCandidateAnswerNaturalKeyIndex,
 } from '../src/lib/server/candidate-answer-schema.js';
+import { ensureNativeAuthUniqueIndexes } from '../src/lib/server/auth-unique-indexes.js';
 import {
   ensureSourceCrawlOpportunityGuard,
   prepareSourceCrawlOpportunityReference,
@@ -156,6 +157,7 @@ const {
     );
   }
   await ensureCandidateAnswerNaturalKeyIndex(migration.db);
+  await ensureNativeAuthUniqueIndexes(migration.db);
   const initialized = await initializeSmrtCollections(database);
   await ensureOpportunityListQueryIndexes(migration.db);
   const backfillAlreadyApplied = await isSmrtNativeBackfillApplied(migration.db);

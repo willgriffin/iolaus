@@ -105,6 +105,12 @@ issuer, or subject mapping. A failure rolls back that upstream transaction and
 keeps the workload blocked before serving traffic; rerunning the same
 `db:migrate` command is idempotent.
 
+The same locked migration restores the full unique indexes for `users.profile_id`
+and the CLI authorization request's `device_code_hash` and `user_code`. It
+leaves existing operator-created plain indexes intact, but fails before DDL if
+duplicate non-null values or a same-name index of the wrong shape would make
+the native contract unsafe to apply.
+
 Worker heartbeat files are held in per-pod `emptyDir` volumes and contain only
 worker kind, time, and a ready state. They are not durable application data.
 The liveness probe rejects a process whose event loop can no longer refresh its
