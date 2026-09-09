@@ -23,7 +23,12 @@ describe('PostgreSQL deployment permissions configuration', () => {
       migrationOwner: 'iolaus_willgriffin_migration',
       runtimeRole: 'iolaus_willgriffin_runtime',
       managedTables: ['_smrt_agent_schedules'],
-      retainedTables: ['data_repair_audit', 'data_repair_runs'],
+      retainedTables: [
+        'asset_association_collections',
+        'data_repair_audit',
+        'data_repair_runs',
+        'fact_content_collections',
+      ],
       managedTriggerFunctions: [
         'enforce_source_parent_provenance',
         'enforce_source_parent_reverse_provenance',
@@ -36,5 +41,29 @@ describe('PostgreSQL deployment permissions configuration', () => {
         },
       },
     });
+  });
+
+  it('retains only the observed physical collection-wrapper artifacts', () => {
+    const contract = postgresPermissionsForRuntime({
+      enabled: true,
+      profile: 'self-hosted',
+    });
+
+    expect(contract?.retainedTables).toEqual(
+      expect.arrayContaining([
+        'asset_association_collections',
+        'fact_content_collections',
+      ]),
+    );
+    for (const table of [
+      'asset_association_collections',
+      'fact_content_collections',
+    ]) {
+      expect(contract?.managedTables).not.toContain(table);
+      expect(contract?.monitor.tables).not.toHaveProperty(table);
+    }
+    expect(contract?.retainedTables).not.toEqual(
+      expect.arrayContaining(['fact_source_collections']),
+    );
   });
 });
