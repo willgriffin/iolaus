@@ -91,3 +91,24 @@ zero permission findings alone are not permission to cut over a deployment.
 Run the same offline sequence after every schema migration or restore. Repeated
 application against an unchanged qualified catalog is a no-op. Production
 cutover remains governed by the separate deployment approval process.
+
+## Disposable PostgreSQL regression probes
+
+These developer checks are local-only and are not permission-plan commands or
+a production migration substitute. Point them only at a disposable loopback
+PostgreSQL control database. The hosted-OIDC probe creates and removes its own
+random database and restricted login; it proves a fresh runtime connection in
+the `public` schema has no `CREATE` privilege while it reuses the imported
+owner binding. The data-surface probe requires an already migrated disposable
+application database.
+
+```sh
+# Control connection must be local and permitted to create a temporary database.
+HOSTED_OIDC_POSTGRES_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres \
+  pnpm --filter @willgriffin/iolaus-site exec vitest run \
+  src/lib/server/hosted-oidc-provisioning.integration.spec.ts
+
+# Prepare an isolated application database first, then run the state-store SQL probe.
+DATA_SURFACE_STORE_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/iolaus_test \
+  pnpm --filter @willgriffin/iolaus-site test:data-surface-store:db
+```

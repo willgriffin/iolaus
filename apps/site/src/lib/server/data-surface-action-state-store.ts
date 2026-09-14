@@ -191,6 +191,72 @@ export class SmrtDataSurfaceActionStateStore
     return affectedRows(result) === 1;
   }
 
+  /**
+   * Keep confirmation consumption and idempotency arbitration in one database
+   * transaction. A separate mark-then-reserve sequence can strand a valid
+   * confirmation if the process stops between those writes.
+   */
+  async consumeTokenAndReserveIdempotency(
+    token: string,
+    idempotencyKey: string,
+    scope: string,
+    reservation: DataSurfaceIdempotencyReservation,
+  ): Promise<DataSurfaceIdempotencyRecord | undefined> {
+    if (!this.db.transaction) {
+      throw new Error('Data-surface action state requires transactions.');
+    }
+    return await this.db.transaction(async (transaction) => {
+      const consumed = (await transaction.query(
+        `UPDATE data_surface_preview_tokens
+        SET consumed_by = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE token = $1
+          AND (
+            (consumed_by = '' AND expires_at > CURRENT_TIMESTAMP)
+            OR consumed_by = $2
+          )`,
+        token,
+        idempotencyKey,
+      )) as QueryResult;
+      if (affectedRows(consumed) !== 1) return undefined;
+
+      const inserted = (await transaction.query(
+        `INSERT INTO data_surface_idempotency (
+          id, slug, context, scope_key, status, request_fingerprint,
+          owner_token, reserved_at, result, created_at, updated_at
+        ) VALUES (
+          gen_random_uuid(), $1, 'data-surface-idempotency', $1, 'reserved', $2,
+          $3, $4, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        -- The SMRT base object owns UNIQUE (slug, context), while this model
+        -- owns UNIQUE (scope_key); both carry the scope. PostgreSQL can pick
+        -- either index for a simultaneous equivalent insert, so accept either
+        -- conflict and then require the expected scope_key row below. If an
+        -- unrelated conflict ever occurs, that check throws and rolls this
+        -- transaction back rather than silently consuming the token.
+        ON CONFLICT DO NOTHING
+        RETURNING *`,
+        scope,
+        reservation.requestFingerprint,
+        reservation.ownerToken,
+        new Date(reservation.reservedAt),
+      )) as QueryResult;
+      if (rowsFrom(inserted)[0]) {
+        return this.toIdempotencyRecord(rowsFrom(inserted)[0]);
+      }
+
+      const current = rowsFrom(
+        (await transaction.query(
+          `SELECT * FROM data_surface_idempotency WHERE scope_key = $1 LIMIT 1`,
+          scope,
+        )) as QueryResult,
+      )[0];
+      if (current) return this.toIdempotencyRecord(current);
+      throw new Error(
+        'Idempotency reservation conflicted without a matching scope key.',
+      );
+    });
+  }
+
   async getIdempotency(
     key: string,
   ): Promise<DataSurfaceIdempotencyRecord | undefined> {
@@ -223,7 +289,10 @@ export class SmrtDataSurfaceActionStateStore
           gen_random_uuid(), $1, 'data-surface-idempotency', $1, 'reserved', $2,
           $3, $4, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
-        ON CONFLICT (scope_key) DO NOTHING
+        -- See consumeTokenAndReserveIdempotency: PostgreSQL may observe either
+        -- equivalent unique index under concurrent inserts. A missing expected
+        -- scope_key row after this conflict is treated as an error below.
+        ON CONFLICT DO NOTHING
         RETURNING *`,
         [
           key,
@@ -237,15 +306,12 @@ export class SmrtDataSurfaceActionStateStore
 
     const existing = await this.getIdempotency(key);
     if (existing) return existing;
-    // The holder released the key between the conflict and the read. The
-    // caller owns nothing, so report a reservation held by no one rather than
-    // inventing ownership it could later use to complete another's work.
-    return {
-      status: 'reserved',
-      requestFingerprint: reservation.requestFingerprint,
-      ownerToken: '',
-      reservedAt: reservation.reservedAt,
-    };
+    // An expected contention always leaves the scope-key record to read. A
+    // missing record means a different constraint rejected the insert or the
+    // schema is inconsistent; do not make that look like a safe reservation.
+    throw new Error(
+      'Idempotency reservation conflicted without a matching scope key.',
+    );
   }
 
   async completeIdempotency(

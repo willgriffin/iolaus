@@ -28,12 +28,14 @@ export const MIGRATION_BUNDLE_KIND =
   'iolaus/willgriffin.dev-logical-migration';
 export const MIGRATION_BUNDLE_VERSION = 1;
 export const PREDECESSOR_CONTRACT_VERSION = 1;
-export const TARGET_SMRT_VERSION = '0.49.1';
+// The target manifest is pinned to the verified cold-root release. The source
+// fingerprint below remains the historical willgriffin.dev predecessor.
+export const TARGET_SMRT_VERSION = '0.50.0';
 export const DEFAULT_MIGRATION_BATCH_SIZE = 100;
 export const SUPPORTED_SOURCE_SCHEMA_FINGERPRINT =
   '86381010c2258a48ce6d36bfda9c70689031ebbdf6da81e4ea5bb4e233ece701';
 export const SUPPORTED_TARGET_SCHEMA_FINGERPRINT =
-  'c91708141cf153058e34b242daa75997e6ec1dde53f5c6a10a3f9bb3d57faad1';
+  '8e92c8d33dcb8ffd2f9ee08da398d59628770442ab800037bb2cb07d637f1c11';
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
@@ -144,6 +146,9 @@ export const REQUIRED_PREDECESSOR_MIGRATIONS = Object.freeze([
 ]);
 
 const TARGET_ONLY_COLUMNS = Object.freeze({
+  // Added by SMRT 0.50.0; the historical willgriffin.dev predecessor has no
+  // corresponding source value, so retain the approved source fingerprint.
+  facts: ['catalog_search'],
   candidate_answers: [
     'provenance',
     'saved_for_reuse_at',

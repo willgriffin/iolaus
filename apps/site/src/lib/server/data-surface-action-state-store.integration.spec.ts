@@ -89,6 +89,70 @@ describe.runIf(enabled)('data surface action state store (postgres)', () => {
     );
   });
 
+  it('atomically consumes a confirmation and preserves one durable reservation', async () => {
+    const token = `tok-${randomUUID()}`;
+    const scope = `scope-${randomUUID()}`;
+    await store.putToken(token, tokenRecord());
+
+    const [first, second] = await Promise.all([
+      store.consumeTokenAndReserveIdempotency(token, 'key-a', scope, {
+        requestFingerprint: 'request-fp',
+        ownerToken: 'owner-a',
+        reservedAt: Date.now(),
+      }),
+      store.consumeTokenAndReserveIdempotency(token, 'key-b', scope, {
+        requestFingerprint: 'request-fp',
+        ownerToken: 'owner-b',
+        reservedAt: Date.now(),
+      }),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    await expect(store.getIdempotency(scope)).resolves.toMatchObject({
+      status: 'reserved',
+      requestFingerprint: 'request-fp',
+    });
+  });
+
+  it('does not consume an expired confirmation while reserving nothing', async () => {
+    const token = `tok-${randomUUID()}`;
+    const scope = `scope-${randomUUID()}`;
+    await store.putToken(token, tokenRecord({ expiresAt: Date.now() - 1000 }));
+
+    await expect(
+      store.consumeTokenAndReserveIdempotency(token, 'key-a', scope, {
+        requestFingerprint: 'request-fp',
+        ownerToken: 'owner-a',
+        reservedAt: Date.now(),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(store.getIdempotency(scope)).resolves.toBeUndefined();
+  });
+
+  it('rolls back confirmation consumption when the reservation write fails', async () => {
+    const token = `tok-${randomUUID()}`;
+    await store.putToken(token, tokenRecord());
+
+    // PostgreSQL rejects an invalid timestamptz parameter after the token
+    // update has run. The transaction must therefore restore consumed_by
+    // instead of stranding a confirmation with no durable reservation.
+    await expect(
+      store.consumeTokenAndReserveIdempotency(
+        token,
+        'key-a',
+        `scope-${randomUUID()}`,
+        {
+          requestFingerprint: 'request-fp',
+          ownerToken: 'owner-a',
+          reservedAt: Number.NaN,
+        },
+      ),
+    ).rejects.toThrow();
+    await expect(store.getToken(token)).resolves.toMatchObject({
+      consumedBy: '',
+    });
+  });
+
   it('refuses a first consumption of an already expired token', async () => {
     const token = `tok-${randomUUID()}`;
     // The deadline is evaluated by PostgreSQL, so this asserts the real
@@ -117,8 +181,9 @@ describe.runIf(enabled)('data surface action state store (postgres)', () => {
       }),
     ]);
 
-    // `ON CONFLICT (scope_key) DO NOTHING` is the arbitration point, so it
-    // must resolve against a real unique index, not just parse. Both callers
+    // `ON CONFLICT DO NOTHING` admits either equivalent deployed unique index
+    // (`scope_key` and inherited `slug, context`) as the arbitration point. It
+    // must resolve against a real database, not just parse. Both callers
     // are told the same winner: the loser reads the existing record rather
     // than being handed ownership it could use to complete another's work.
     const owners = [first, second].map((record) =>

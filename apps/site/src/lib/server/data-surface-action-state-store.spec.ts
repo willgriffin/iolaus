@@ -134,7 +134,11 @@ function createFakeDatabase() {
 
   return {
     clock,
-    db: { query } as never,
+    db: {
+      query,
+      transaction: async <T>(work: (db: { query: typeof query }) => T) =>
+        await work({ query }),
+    } as never,
     idempotency,
     query,
     statements,
@@ -199,6 +203,30 @@ describe('SmrtDataSurfaceActionStateStore', () => {
     // A different key is a different decision wearing a used confirmation.
     expect(await store.markTokenConsumed('token-1', 'key-b')).toBe(false);
     expect(await store.markTokenConsumed('missing', 'key-a')).toBe(false);
+  });
+
+  it('atomically consumes a token and reserves its scope', async () => {
+    await store.putToken('token-1', tokenRecord);
+
+    await expect(
+      store.consumeTokenAndReserveIdempotency('token-1', 'key-a', 'scope-1', {
+        requestFingerprint: 'request-fp',
+        ownerToken: 'owner-a',
+        reservedAt: 1,
+      }),
+    ).resolves.toEqual({
+      status: 'reserved',
+      requestFingerprint: 'request-fp',
+      ownerToken: 'owner-a',
+      reservedAt: 1,
+    });
+    await expect(
+      store.consumeTokenAndReserveIdempotency('token-1', 'key-b', 'scope-1', {
+        requestFingerprint: 'request-fp',
+        ownerToken: 'owner-b',
+        reservedAt: 2,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('refuses a first consumption once the token has expired', async () => {
