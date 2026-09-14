@@ -129,6 +129,7 @@ jobs:
             --tmpfs /app/apps/site/node_modules/.vite:"${cache_tmpfs}" \
             --tmpfs /app/apps/site/.svelte-kit:"size=256m,${runtime_tmpfs}" \
             --tmpfs /app/.smrt:"${cache_tmpfs}" \
+            --tmpfs /app/apps/site/.smrt:"${cache_tmpfs}" \
             --tmpfs /app/apps/site/src/types:"size=16m,${runtime_tmpfs}" \
             --env CI=true --env NODE_ENV=test \
             --env SMRT_RUNTIME_PROFILE=local \
