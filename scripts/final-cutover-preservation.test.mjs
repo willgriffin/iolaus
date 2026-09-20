@@ -96,6 +96,24 @@ test('extra asset supports copy, byte-identical retry noop, and conflict rejecti
   assert.throws(() => planExtraAsset({ sha256: 'a'.repeat(64) }, { sha256: 'b'.repeat(64) }));
 });
 
+for (const table of ['profiles', 'users', 'memberships', 'oidc_profile_email_reservations']) {
+  for (const timestamp of ['created_at', 'updated_at']) {
+    test(`retry rejects timestamp-only change to ${table}.${timestamp}`, async () => {
+      const { source, target } = fixture();
+      const row = { ...source[table][0], created_at: '2026-09-19T00:00:00+00:00', updated_at: '2026-09-19T00:00:00+00:00' };
+      source[table] = [row];
+      target[table] = [{ ...row }];
+      if (table === 'profiles') Object.assign(target[table][0], { tenant_id: target.tenants[0].id, type_id: target.profile_types[0].id });
+      if (table === 'memberships') Object.assign(target[table][0], { tenant_id: target.tenants[0].id, role_id: target.roles[0].id });
+      assert.equal(planFinalCutoverPreservation(source, target).dispositions[table], 'noop');
+      target[table][0][timestamp] = '2026-09-20T00:00:00+00:00';
+      let transactions = 0;
+      await assert.rejects(applyFinalCutoverPreservation({ transaction: async () => { transactions += 1; } }, source, target), /no-overwrite conflict/);
+      assert.equal(transactions, 0);
+    });
+  }
+}
+
 test('asset parity permits target reuse only when every source object is byte-identical', () => {
   const source = [{ key: 'source-object', sha256: 'a'.repeat(64), bytes: 4 }];
   const target = [...source, { key: 'extra-object', sha256: 'b'.repeat(64), bytes: 9 }];
@@ -183,6 +201,16 @@ test('restored PostgreSQL closure preserves rows and rolls back partial applicat
     const retry = await applyFinalCutoverPreservation(database, source, target);
     assert.equal(writes, 0);
     assert.equal(Object.values(retry.noopCounts).reduce((a, b) => a + b), 4);
+    for (const table of roots) {
+      for (const timestamp of ['created_at', 'updated_at']) {
+        await client.query('SAVEPOINT conflicting_timestamp');
+        await client.query(`UPDATE "${table}" SET "${timestamp}" = COALESCE("${timestamp}", CURRENT_TIMESTAMP) + INTERVAL '1 second'`);
+        const timestampConflict = { ...target, [table]: await read(table) };
+        await assert.rejects(applyFinalCutoverPreservation(database, source, timestampConflict), /no-overwrite conflict/);
+        assert.equal(writes, 0);
+        await client.query('ROLLBACK TO SAVEPOINT conflicting_timestamp');
+      }
+    }
     await client.query('SAVEPOINT conflicting_identity');
     await client.query('UPDATE users SET id = $1 WHERE id = $2', [randomUUID(), target.users[0].id]);
     const conflict = { ...target, users: await read('users') };

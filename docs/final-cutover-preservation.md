@@ -19,6 +19,10 @@ the tenant semantically. A populated profile tenant must match that membership's
 source tenant. Parent IDs may change; the four root IDs and all other values
 must survive exactly.
 
+Retry comparison and transfer digests include every supplied root field,
+including `created_at` and `updated_at`. Timestamp-only differences are
+no-overwrite conflicts, even when the root ID and business fields match.
+
 First compare fresh source assets to the current target bucket. If every source
 object is byte-identical there, retain that bucket and preserve the one extra
 object; otherwise stop before bucket changes. Keep the protected snapshot and
@@ -45,6 +49,7 @@ transaction that always rolls back. Never point it at a working database.
 | --- | --- | --- | --- |
 | Restore preserved owner closure | Original four IDs and complete row hashes match after semantic parent remap; invalid closure rejected | Local protected snapshot; one PostgreSQL connection; PostgreSQL 17 | Four existing tables; integration |
 | Retry apply | Four noops and zero SQL writes; same email with another ID rejected | Same connection and snapshot | No overwrite; integration |
+| Timestamp-only retry change on any root | Exact timestamps permit noop; changing either `created_at` or `updated_at` rejects before opening an application transaction | Operator retry; supplied snapshots in Node unit cases and same-connection PostgreSQL 17 reads | Complete supplied row values; unit and integration via the same test command above |
 | Ambiguous parent | Duplicate semantic tenant rejected before writes | Operator preflight; PostgreSQL-read snapshot | Slug/context lookup; integration |
 | Mid-apply SQL failure | Division by zero on third insert, after two successful writes; all four root tables empty after rollback | Same connection; real SQL savepoint rollback | Atomic adapter; integration |
 | Global profile | Null tenant preserved while membership tenant maps | Unit and restored PostgreSQL fixture | Nullable profile tenant; both levels |
@@ -58,3 +63,10 @@ not merely propagation of an adapter error. It verifies the transaction adapter
 used by the rehearsal; the final-window operator must supply the same atomic
 connection semantics. This is a local preservation rehearsal, not evidence of
 production application or final source-clone freshness.
+
+On 2026-09-20, the eight timestamp-only regression cases (two fields across
+four roots) all failed against the previous comparison with missing expected
+rejections. After including those fields, all sixteen tests passed with the
+restored PostgreSQL case enabled. That case also changes each timestamp in the
+actual database, confirms rejection with zero application writes, and rolls
+back each change before continuing the existing preservation proof.

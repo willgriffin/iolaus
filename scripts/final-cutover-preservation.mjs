@@ -35,12 +35,6 @@ function resolveParent(source, target, table, fields, label) {
   return { source: sourceRow, target: matches[0] };
 }
 
-function comparable(row) {
-  return Object.fromEntries(
-    Object.entries(row).filter(([key]) => !['id', 'created_at', 'updated_at'].includes(key)),
-  );
-}
-
 function targetDisposition(targetRows, candidate, label) {
   const matches = (targetRows ?? []).filter((row) =>
     row.id === candidate.id ||
@@ -56,7 +50,7 @@ function targetDisposition(targetRows, candidate, label) {
   );
   if (
     matches.length !== 1 ||
-    digest(comparable(matchedComparable)) !== digest(comparable(candidate))
+    digest(matchedComparable) !== digest(candidate)
   ) {
     throw new Error(`Preservation preflight found a no-overwrite conflict for ${label}.`);
   }
@@ -109,7 +103,7 @@ export function planFinalCutoverPreservation(source, target) {
     sessionsCopied: false,
     sessionRowsObserved: Array.isArray(source.sessions) ? source.sessions.length : 0,
     transferDigest: digest({
-      roots: ROOTS.map((table) => [table, digest(comparable(remapped[table]))]),
+      roots: ROOTS.map((table) => [table, digest(remapped[table])]),
       parents: [tenant.target.id, role.target.id, profileType.target.id].length,
     }),
   };
