@@ -111,6 +111,10 @@ test('extra asset rejects malformed SHA-256 receipts before copy, noop, or confl
     { sha256: 'a'.repeat(63) },
     { sha256: 'g'.repeat(64) },
     { sha256: 1 },
+    { sha256: ['a'.repeat(64)] },
+    { sha256: new String('a'.repeat(64)) },
+    { sha256: { toString: () => 'a'.repeat(64) } },
+    { sha256: true },
   ];
   for (const receipt of malformed) {
     assert.throws(() => planExtraAsset(receipt, null), 'copy rejects malformed source');
@@ -148,6 +152,18 @@ test('asset parity permits target reuse only when every source object is byte-id
   assert.throws(() => planSourceAssetParity([], target));
   assert.throws(() => planSourceAssetParity(source, [{ ...source[0] }, { ...source[0] }]));
   assert.throws(() => planSourceAssetParity(source, [{ key: 'bad', sha256: 'no', bytes: 1 }]));
+  for (const sha256 of [
+    ['a'.repeat(64)],
+    new String('a'.repeat(64)),
+    { toString: () => 'a'.repeat(64) },
+    1,
+    true,
+    null,
+    undefined,
+  ]) {
+    assert.throws(() => planSourceAssetParity([{ ...source[0], sha256 }], target));
+    assert.throws(() => planSourceAssetParity(source, [{ ...target[0], sha256 }]));
+  }
 });
 
 // Opt-in only: a disposable PostgreSQL database restored from the protected dump.

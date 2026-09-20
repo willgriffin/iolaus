@@ -8,6 +8,10 @@ const ROOTS = Object.freeze([
 ]);
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
 
+function isCanonicalSha256(value) {
+  return typeof value === 'string' && SHA256_HEX.test(value);
+}
+
 function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -135,13 +139,13 @@ export async function applyFinalCutoverPreservation(database, source, target) {
 }
 
 export function planExtraAsset(sourceAsset, targetAsset) {
-  if (!sourceAsset || !SHA256_HEX.test(sourceAsset.sha256)) {
+  if (!sourceAsset || !isCanonicalSha256(sourceAsset.sha256)) {
     throw new Error('Preservation preflight requires a protected extra-asset receipt.');
   }
   if (targetAsset === null || targetAsset === undefined) {
     return { disposition: 'copy', sha256: sourceAsset.sha256 };
   }
-  if (!SHA256_HEX.test(targetAsset.sha256)) {
+  if (!isCanonicalSha256(targetAsset.sha256)) {
     throw new Error('Preservation preflight requires a protected extra-asset receipt.');
   }
   if (targetAsset.sha256 !== sourceAsset.sha256) {
@@ -154,7 +158,7 @@ export function planExtraAsset(sourceAsset, targetAsset) {
  * protected artifact. This receipt intentionally reports no object names. */
 export function planSourceAssetParity(sourceManifest, targetManifest) {
   if (!Array.isArray(sourceManifest) || !sourceManifest.length || !Array.isArray(targetManifest) || !targetManifest.length) throw new Error('Source asset parity requires non-empty validated manifests.');
-  for (const manifest of [sourceManifest, targetManifest]) { const keys = new Set(); for (const entry of manifest) { if (!entry || typeof entry.key !== 'string' || !entry.key || !SHA256_HEX.test(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || keys.has(entry.key)) throw new Error('Source asset parity manifest is invalid.'); keys.add(entry.key); } }
+  for (const manifest of [sourceManifest, targetManifest]) { const keys = new Set(); for (const entry of manifest) { if (!entry || typeof entry.key !== 'string' || !entry.key || !isCanonicalSha256(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || keys.has(entry.key)) throw new Error('Source asset parity manifest is invalid.'); keys.add(entry.key); } }
   const targetByKey = new Map((targetManifest ?? []).map((entry) => [entry.key, entry]));
   const missing = [];
   const changed = [];
