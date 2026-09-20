@@ -96,6 +96,30 @@ test('extra asset supports copy, byte-identical retry noop, and conflict rejecti
   assert.throws(() => planExtraAsset({ sha256: 'a'.repeat(64) }, { sha256: 'b'.repeat(64) }));
 });
 
+test('extra asset rejects malformed SHA-256 receipts before copy, noop, or conflict decisions', () => {
+  const valid = { sha256: 'a'.repeat(64) };
+  const different = { sha256: 'b'.repeat(64) };
+  const malformed = [
+    undefined,
+    null,
+    '',
+    1,
+    {},
+    { sha256: undefined },
+    { sha256: null },
+    { sha256: '' },
+    { sha256: 'a'.repeat(63) },
+    { sha256: 'g'.repeat(64) },
+    { sha256: 1 },
+  ];
+  for (const receipt of malformed) {
+    assert.throws(() => planExtraAsset(receipt, null), 'copy rejects malformed source');
+    assert.throws(() => planExtraAsset(receipt, receipt), 'noop rejects malformed source');
+    assert.throws(() => planExtraAsset(receipt, different), 'conflict rejects malformed source');
+    if (receipt !== undefined && receipt !== null) assert.throws(() => planExtraAsset(valid, receipt), 'target receipt rejects before disposition');
+  }
+});
+
 for (const table of ['profiles', 'users', 'memberships', 'oidc_profile_email_reservations']) {
   for (const timestamp of ['created_at', 'updated_at']) {
     test(`retry rejects timestamp-only change to ${table}.${timestamp}`, async () => {
