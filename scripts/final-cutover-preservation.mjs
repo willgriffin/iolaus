@@ -80,13 +80,13 @@ function buildPreservation(source, target) {
   const tenant = resolveParent(source, target, 'tenants', ['slug', 'context'], 'tenant');
   const role = resolveParent(source, target, 'roles', ['slug', 'context'], 'role');
   const profileType = resolveParent(source, target, 'profile_types', ['slug', 'context'], 'profile type');
-  if (membership.tenant_id !== tenant.source.id || profile.tenant_id !== tenant.source.id || membership.role_id !== role.source.id || profile.type_id !== profileType.source.id) {
+  if (membership.tenant_id !== tenant.source.id || (profile.tenant_id !== null && profile.tenant_id !== tenant.source.id) || membership.role_id !== role.source.id || profile.type_id !== profileType.source.id) {
     throw new Error('Preservation preflight found a root that does not bind its semantic parents.');
   }
 
   const remapped = {
     users: { ...user },
-    profiles: { ...profile, tenant_id: tenant.target.id, type_id: profileType.target.id },
+    profiles: { ...profile, tenant_id: profile.tenant_id === null ? null : tenant.target.id, type_id: profileType.target.id },
     memberships: { ...membership, tenant_id: tenant.target.id, role_id: role.target.id },
     oidc_profile_email_reservations: { ...reservation },
   };

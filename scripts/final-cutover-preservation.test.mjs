@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   applyFinalCutoverPreservation,
   planExtraAsset,
@@ -78,6 +79,17 @@ test('application requires an atomic adapter and does not report partial writes'
   assert.equal(writes.length, 2);
 });
 
+test('global profile keeps its null tenant while membership maps its tenant', async () => {
+  const { source, target } = fixture();
+  source.profiles[0].tenant_id = null;
+  const writes = [];
+  await applyFinalCutoverPreservation({ transaction: async (run) => run({
+    query: async (sql, values) => writes.push({ sql, values }),
+  }) }, source, target);
+  assert.equal(writes[0].values[Object.keys(source.profiles[0]).indexOf('tenant_id')], null);
+  assert.equal(writes[2].values[Object.keys(source.memberships[0]).indexOf('tenant_id')], 'target-tenant');
+});
+
 test('extra asset supports copy, byte-identical retry noop, and conflict rejection', () => {
   assert.equal(planExtraAsset({ sha256: 'a'.repeat(64) }, null).disposition, 'copy');
   assert.equal(planExtraAsset({ sha256: 'a'.repeat(64) }, { sha256: 'a'.repeat(64) }).disposition, 'noop');
@@ -94,4 +106,94 @@ test('asset parity permits target reuse only when every source object is byte-id
   assert.throws(() => planSourceAssetParity([], target));
   assert.throws(() => planSourceAssetParity(source, [{ ...source[0] }, { ...source[0] }]));
   assert.throws(() => planSourceAssetParity(source, [{ key: 'bad', sha256: 'no', bytes: 1 }]));
+});
+
+// Opt-in only: a disposable PostgreSQL database restored from the protected dump.
+// All fixture changes are enclosed in an outer transaction that always rolls back.
+test('restored PostgreSQL closure preserves rows and rolls back partial application', {
+  skip: !process.env.PRESERVATION_PROOF_DATABASE_URL,
+}, async () => {
+  const { default: pg } = await import(process.env.PRESERVATION_PROOF_PG_MODULE || 'pg');
+  const databaseUrl = new URL(process.env.PRESERVATION_PROOF_DATABASE_URL);
+  assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(databaseUrl.hostname), 'proof requires a local disposable database');
+  assert.ok(databaseUrl.pathname.endsWith('_proof'), 'proof requires a database named with the _proof suffix');
+  const client = new pg.Client({ connectionString: process.env.PRESERVATION_PROOF_DATABASE_URL });
+  await client.connect();
+  const roots = ['profiles', 'users', 'memberships', 'oidc_profile_email_reservations'];
+  const read = async (table) => (await client.query(`SELECT row_to_json(t) AS row FROM "${table}" t ORDER BY id`)).rows.map(({ row }) => row);
+  const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  try {
+    await client.query('BEGIN');
+    const joined = await client.query(`SELECT row_to_json(p) AS profiles, row_to_json(u) AS users,
+      row_to_json(m) AS memberships, row_to_json(o) AS oidc_profile_email_reservations
+      FROM users u JOIN profiles p ON p.id = u.profile_id
+      JOIN memberships m ON m.user_id = u.id
+      JOIN oidc_profile_email_reservations o ON o.profile_id = p.id`);
+    assert.equal(joined.rowCount, 1, 'protected fixture must contain exactly one joined closure');
+    const source = Object.fromEntries(roots.map((table) => [table, [joined.rows[0][table]]]));
+    const target = {};
+    for (const [table, id] of [['tenants', source.memberships[0].tenant_id], ['roles', source.memberships[0].role_id], ['profile_types', source.profiles[0].type_id]]) {
+      target[table] = await read(table);
+      source[table] = target[table].filter((row) => row.id === id).map((row) => ({ ...row }));
+      assert.equal(source[table].length, 1);
+    }
+    const expected = structuredClone(source);
+    // Deliberately distinct source parent IDs prove semantic mapping, while all
+    // four original root IDs and every non-parent value remain untouched.
+    for (const table of ['tenants', 'roles', 'profile_types']) source[table][0].id = randomUUID();
+    if (source.profiles[0].tenant_id !== null) source.profiles[0].tenant_id = source.tenants[0].id;
+    source.profiles[0].type_id = source.profile_types[0].id;
+    source.memberships[0].tenant_id = source.tenants[0].id;
+    source.memberships[0].role_id = source.roles[0].id;
+    await client.query('TRUNCATE profiles, users, memberships, oidc_profile_email_reservations CASCADE');
+    for (const table of roots) target[table] = [];
+    let failAt = 0;
+    let writes = 0;
+    const database = { transaction: async (run) => {
+      await client.query('SAVEPOINT preservation_apply');
+      try {
+        const result = await run({ query: async (sql, values) => {
+          writes += 1;
+          if (failAt === writes) await client.query('SELECT 1 / 0');
+          let index = 0;
+          return client.query(sql.replaceAll('?', () => `$${++index}`), values);
+        } });
+        await client.query('RELEASE SAVEPOINT preservation_apply');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT preservation_apply');
+        throw error;
+      }
+    } };
+    failAt = 3;
+    await assert.rejects(applyFinalCutoverPreservation(database, source, target), /division by zero/);
+    assert.equal(writes, 3);
+    for (const table of roots) assert.equal((await read(table)).length, 0, `${table} rolled back`);
+    failAt = 0;
+    writes = 0;
+    const receipt = await applyFinalCutoverPreservation(database, source, target);
+    assert.equal(Object.values(receipt.insertedCounts).reduce((a, b) => a + b), 4);
+    for (const table of roots) {
+      target[table] = await read(table);
+      const changedFields = Object.keys(expected[table][0]).filter((key) => hash(target[table][0][key]) !== hash(expected[table][0][key]));
+      assert.equal(changedFields.join(','), '', `${table} changed column names`);
+      assert.equal(hash(target[table]), hash(expected[table]), `${table} exact IDs and full row hash`);
+    }
+    writes = 0;
+    const retry = await applyFinalCutoverPreservation(database, source, target);
+    assert.equal(writes, 0);
+    assert.equal(Object.values(retry.noopCounts).reduce((a, b) => a + b), 4);
+    await client.query('SAVEPOINT conflicting_identity');
+    await client.query('UPDATE users SET id = $1 WHERE id = $2', [randomUUID(), target.users[0].id]);
+    const conflict = { ...target, users: await read('users') };
+    await assert.rejects(applyFinalCutoverPreservation(database, source, conflict), /identity conflict/);
+    await client.query('ROLLBACK TO SAVEPOINT conflicting_identity');
+    const ambiguous = structuredClone(target);
+    ambiguous.tenants.push({ ...source.tenants[0], id: randomUUID() });
+    await assert.rejects(applyFinalCutoverPreservation(database, source, ambiguous), /exactly one target tenant/);
+    assert.equal(writes, 0);
+  } finally {
+    await client.query('ROLLBACK');
+    await client.end();
+  }
 });
