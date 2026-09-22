@@ -7,11 +7,11 @@ RUN corepack enable
 WORKDIR /app
 
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json .npmrc ./
 COPY apps/site/package.json apps/site/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/resume/package.json packages/resume/package.json
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
