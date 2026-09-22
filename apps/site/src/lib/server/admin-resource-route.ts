@@ -23,6 +23,7 @@ import {
   getAdminRecord,
   listAdminRecords,
   listComboOptions,
+  listPageReferenceOptions,
   listReferenceOptions,
   requireAdminResource,
   serializeRecord,
@@ -1032,12 +1033,11 @@ export async function loadAdminResourcePageData(
     resource.slug === 'tasks'
       ? taskWhereForFilters(taskOwnerFilter, taskStatusFilter)
       : undefined;
-  // The total, combo options, and reference options are independent queries;
-  // load them concurrently instead of serializing the round-trips.
-  const [totalRecords, comboOptions, referenceOptions] = await Promise.all([
+  // The total and combo options are independent queries; load them
+  // concurrently instead of serializing the round-trips.
+  const [totalRecords, comboOptions] = await Promise.all([
     countAdminResourceRecords(resource, { where: recordWhere }),
     listComboOptions(resource),
-    listReferenceOptions(resource),
   ]);
 
   const pagination = createAdminListPagination(
@@ -1050,6 +1050,9 @@ export async function loadAdminResourcePageData(
     offset: pagination.offset,
     where: recordWhere,
   });
+  // A list only labels the references on this page (issue #86): resolving
+  // them by id replaces loading every referenced class's newest 1000 rows.
+  const referenceOptions = await listPageReferenceOptions(resource, rawRecords);
   const records =
     resource.slug === 'applications'
       ? await attachApplicationContext(rawRecords)

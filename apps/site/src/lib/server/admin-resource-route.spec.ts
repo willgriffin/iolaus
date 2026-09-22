@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     listComboOptions: vi.fn(),
     listOpportunityFilterOptions: vi.fn(),
     listOpportunityPageIds: vi.fn(),
+    listPageReferenceOptions: vi.fn(),
     listReferenceOptions: vi.fn(),
     processRecommendationTask: vi.fn(),
     requireAdminResource: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock('./admin-data', () => ({
   getAdminRecord: mocks.getAdminRecord,
   listAdminRecords: mocks.listAdminRecords,
   listComboOptions: mocks.listComboOptions,
+  listPageReferenceOptions: mocks.listPageReferenceOptions,
   listReferenceOptions: mocks.listReferenceOptions,
   requireAdminResource: mocks.requireAdminResource,
   serializeRecord: mocks.serializeRecord,
@@ -217,6 +219,8 @@ describe('admin-resource-route', () => {
     });
     mocks.listOpportunityPageIds.mockReset();
     mocks.listReferenceOptions.mockReset();
+    mocks.listPageReferenceOptions.mockReset();
+    mocks.listPageReferenceOptions.mockResolvedValue({});
     mocks.processRecommendationTask.mockReset();
     mocks.requireAdminResource.mockReset();
     mocks.acceptOpportunityForApplication.mockReset();
@@ -1074,6 +1078,13 @@ describe('admin-resource-route', () => {
 
     expect(data.activeTaskOwnerFilter).toBe('owner');
     expect(data.activeTaskStatusFilter).toBe('open');
+    // Lists label only the references on the page (#86); the full picker
+    // option load stays on form paths.
+    expect(mocks.listReferenceOptions).not.toHaveBeenCalled();
+    expect(mocks.listPageReferenceOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: 'tasks' }),
+      [records[0]],
+    );
     expect(data.records.map((record) => record.id)).toEqual([
       'task-owner-open',
     ]);
