@@ -11,9 +11,7 @@ pre-commit:
         exit_code=0
         for file in {staged_files}; do
           echo "Checking $file"
-          if [ "$file" = ".github/workflows/agent-policy.yml" ]; then
-            echo "Skipping YAML style checks for generated agent policy workflow"
-          elif command -v yamllint >/dev/null 2>&1; then
+          if command -v yamllint >/dev/null 2>&1; then
             yamllint "$file" || exit_code=1
           else
             echo "yamllint not found, skipping YAML style validation"
