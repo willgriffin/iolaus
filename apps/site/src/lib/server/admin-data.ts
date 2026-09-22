@@ -240,22 +240,53 @@ function referenceHref(
   return `/admin/${reference.resourceSlug}/${encodeURIComponent(value)}`;
 }
 
+type ReferenceFieldEntry = readonly [
+  AdminResource['fields'][number],
+  ReferenceFieldConfig,
+];
+
+function referenceFieldEntries(resource: AdminResource): ReferenceFieldEntry[] {
+  return resource.fields
+    .map((field) => [field, referenceForField(field)] as const)
+    .filter((entry): entry is ReferenceFieldEntry =>
+      Boolean(entry[1]?.className),
+    );
+}
+
+function referenceOptionsFromRecords(
+  reference: ReferenceFieldConfig,
+  records: readonly AdminRecord[],
+): ReferenceOption[] {
+  return records
+    .map((record): ReferenceOption => {
+      const value = stringRecordValue(record.id);
+      return {
+        href: referenceHref(reference, value),
+        label: referenceRecordLabel(reference, record),
+        value,
+      };
+    })
+    .filter((option) => option.value)
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+/**
+ * Picker options for create/edit forms: the newest records of every
+ * referenced class. Several fields often target one class (tasks reference
+ * CandidateProfile three times), so each class is fetched once.
+ */
 export async function listReferenceOptions(
   resource: AdminResource,
 ): Promise<ReferenceOptionsByField> {
-  const entries = await Promise.all(
-    resource.fields
-      .map((field) => [field, referenceForField(field)] as const)
-      .filter(
-        (
-          entry,
-        ): entry is readonly [
-          (typeof resource.fields)[number],
-          ReferenceFieldConfig,
-        ] => Boolean(entry[1]?.className),
-      )
-      .map(async ([field, reference]) => {
-        const collection = await getCollection(reference.className as string);
+  const entries = referenceFieldEntries(resource);
+  const recordsByClass = new Map<string, Promise<AdminRecord[]>>();
+  for (const [, reference] of entries) {
+    const className = reference.className as string;
+    if (recordsByClass.has(className)) continue;
+    recordsByClass.set(
+      className,
+      (async () => {
+        const collection = await getCollection(className);
         // Label keys are often sensitive fields (CandidateProfile.name), which
         // SMRT refuses to ORDER BY. Fetch by a neutral column and sort the
         // rendered labels instead.
@@ -263,24 +294,74 @@ export async function listReferenceOptions(
           orderBy: 'updated_at DESC',
           limit: 1000,
         })) as SmrtObject[];
-        return [
-          field.key,
-          records
-            .map(serializeRecord)
-            .map((record): ReferenceOption => {
-              const value = stringRecordValue(record.id);
-              return {
-                href: referenceHref(reference, value),
-                label: referenceRecordLabel(reference, record),
-                value,
-              };
-            })
-            .filter((option) => option.value)
-            .sort((left, right) => left.label.localeCompare(right.label)),
-        ] as const;
-      }),
+        return records.map(serializeRecord);
+      })(),
+    );
+  }
+  return Object.fromEntries(
+    await Promise.all(
+      entries.map(
+        async ([field, reference]) =>
+          [
+            field.key,
+            referenceOptionsFromRecords(
+              reference,
+              await (recordsByClass.get(
+                reference.className as string,
+              ) as Promise<AdminRecord[]>),
+            ),
+          ] as const,
+      ),
+    ),
   );
-  return Object.fromEntries(entries);
+}
+
+/**
+ * Labels for the references a list page actually renders. A list only needs
+ * to name the ids present on the page, so this issues one `id in` lookup per
+ * referenced class instead of loading every class's newest 1000 rows.
+ */
+export async function listPageReferenceOptions(
+  resource: AdminResource,
+  records: readonly AdminRecord[],
+): Promise<ReferenceOptionsByField> {
+  const entries = referenceFieldEntries(resource);
+  const idsByClass = new Map<string, Set<string>>();
+  for (const [field, reference] of entries) {
+    const className = reference.className as string;
+    const ids = idsByClass.get(className) ?? new Set<string>();
+    for (const record of records) {
+      const id = stringRecordValue(record[field.key]);
+      if (id) ids.add(id);
+    }
+    idsByClass.set(className, ids);
+  }
+  const recordsByClass = new Map(
+    await Promise.all(
+      [...idsByClass].map(async ([className, ids]) => {
+        if (ids.size === 0) return [className, [] as AdminRecord[]] as const;
+        const collection = await getCollection(className);
+        const found = (await collection.list({
+          where: { 'id in': [...ids] },
+          limit: ids.size,
+        })) as SmrtObject[];
+        return [className, found.map(serializeRecord)] as const;
+      }),
+    ),
+  );
+  return Object.fromEntries(
+    entries.map(([field, reference]) => {
+      const ids = new Set(
+        records
+          .map((record) => stringRecordValue(record[field.key]))
+          .filter(Boolean),
+      );
+      const referenced = (
+        recordsByClass.get(reference.className as string) ?? []
+      ).filter((record) => ids.has(stringRecordValue(record.id)));
+      return [field.key, referenceOptionsFromRecords(reference, referenced)];
+    }),
+  );
 }
 
 export async function listComboOptions(
