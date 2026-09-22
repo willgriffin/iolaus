@@ -93,7 +93,7 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
       ON latest.id = (
         SELECT es.id
         FROM evaluation_scores es
-        WHERE es.opportunity_id = o.id
+        WHERE es.opportunity_id = CAST(o.id AS TEXT)
           AND COALESCE(es.source_content_fingerprint, '') =
             COALESCE(o.source_content_fingerprint, '')
         ORDER BY es.updated_at DESC
@@ -103,7 +103,7 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
   return `LEFT JOIN LATERAL (
     SELECT es.score
     FROM evaluation_scores es
-    WHERE es.opportunity_id = o.id
+    WHERE es.opportunity_id = CAST(o.id AS TEXT)
       AND COALESCE(es.source_content_fingerprint, '') =
         COALESCE(o.source_content_fingerprint, '')
     ORDER BY es.updated_at DESC
@@ -117,7 +117,7 @@ function latestApplicationJoinSql(dialect: OpportunityQueryDialect): string {
       ON latest_application.id = (
         SELECT a.id
         FROM applications a
-        WHERE a.opportunity_id = o.id
+        WHERE a.opportunity_id = CAST(o.id AS TEXT)
         ORDER BY a.updated_at DESC
         LIMIT 1
       )`;
@@ -125,7 +125,7 @@ function latestApplicationJoinSql(dialect: OpportunityQueryDialect): string {
   return `LEFT JOIN LATERAL (
     SELECT a.id, a.resume_mode, a.cover_letter_mode
     FROM applications a
-    WHERE a.opportunity_id = o.id
+    WHERE a.opportunity_id = CAST(o.id AS TEXT)
     ORDER BY a.updated_at DESC
     LIMIT 1
   ) latest_application ON TRUE`;
@@ -283,7 +283,7 @@ function filterWhereSql({
       OR EXISTS (
         SELECT 1
         FROM companies search_company
-        WHERE search_company.id = o.company_id
+        WHERE CAST(search_company.id AS TEXT) = o.company_id
           AND search_company.name ILIKE ${pattern}
       )
     )`);
@@ -754,14 +754,14 @@ export async function listLatestOpportunityRelatedContext(
     LEFT JOIN LATERAL (
       SELECT a.id, a.status
       FROM applications a
-      WHERE a.opportunity_id = o.id
+      WHERE a.opportunity_id = CAST(o.id AS TEXT)
       ORDER BY a.updated_at DESC
       LIMIT 1
     ) latest_application ON TRUE
     LEFT JOIN LATERAL (
       SELECT es.id, es.score, es.recommendation, es.summary
       FROM evaluation_scores es
-      WHERE es.opportunity_id = o.id
+      WHERE es.opportunity_id = CAST(o.id AS TEXT)
         AND COALESCE(es.source_content_fingerprint, '') =
           COALESCE(o.source_content_fingerprint, '')
       ORDER BY es.updated_at DESC
