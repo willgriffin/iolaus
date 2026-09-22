@@ -63,7 +63,33 @@ export const applicationRuntimeConfiguration = runtimeConfigurationFingerprint(
 export type IolausDatabaseConfig = {
   type: 'postgres' | 'sqlite';
   url: string;
+  /** PostgreSQL pool size per process; see {@link hostedDatabasePoolMax}. */
+  max?: number;
 };
+
+/**
+ * Per-process PostgreSQL pool ceiling.
+ *
+ * `@happyvertical/sql` defaults every pool to 20 clients, but the hosted
+ * runtime role is capped at 30 connections across the web replicas and both
+ * workers. Bursts grew several pools toward 20 at once and failed with
+ * `too many connections for role` (53300). Five per process keeps two web
+ * replicas plus a rollout surge and both workers inside the role limit;
+ * `IOLAUS_DB_POOL_MAX` raises it where the role limit allows.
+ */
+export const DEFAULT_HOSTED_DATABASE_POOL_MAX = 5;
+
+export function hostedDatabasePoolMax(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.IOLAUS_DB_POOL_MAX?.trim();
+  if (!raw) return DEFAULT_HOSTED_DATABASE_POOL_MAX;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('IOLAUS_DB_POOL_MAX must be a positive integer.');
+  }
+  return value;
+}
 
 export function validateHostedDatabaseUrl(databaseUrl: string): string {
   const url = new URL(databaseUrl);
@@ -98,7 +124,11 @@ export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (!databaseUrl) {
     throw new Error(`${applicationRuntime.profile} requires DATABASE_URL.`);
   }
-  return { type: 'postgres', url: validateHostedDatabaseUrl(databaseUrl) };
+  return {
+    max: hostedDatabasePoolMax(),
+    type: 'postgres',
+    url: validateHostedDatabaseUrl(databaseUrl),
+  };
 }
 
 let localRuntimePromise: Promise<LocalApplicationRuntime> | undefined;
@@ -163,7 +193,9 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     database: {
       engine: 'postgres',
       connect: () =>
-        getDatabase({ type: 'postgres', url: validatedDatabaseUrl }),
+        // Readiness probes only; keep this separate pool to one client so it
+        // does not compete with the SMRT pool for the role's connections.
+        getDatabase({ max: 1, type: 'postgres', url: validatedDatabaseUrl }),
       close: async (db) => db.close?.(),
     },
     authentication: {
