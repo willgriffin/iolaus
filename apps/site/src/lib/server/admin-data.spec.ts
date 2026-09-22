@@ -810,7 +810,7 @@ describe('createAdminRecord combo fields', () => {
 
     expect(companyResearch.list).toHaveBeenCalledWith({
       limit: 1000,
-      orderBy: 'websiteUrl ASC',
+      orderBy: 'updated_at DESC',
     });
     expect(options.companyResearchId).toEqual([
       {
@@ -818,6 +818,35 @@ describe('createAdminRecord combo fields', () => {
         label: 'https://example.invalid',
         value: 'research-1',
       },
+    ]);
+  });
+
+  it('never orders reference options by a sensitive label field', async () => {
+    const profiles = mockCollection([
+      { id: 'profile-b', name: 'Zed Owner' },
+      { id: 'profile-a', name: 'Ada Owner' },
+    ]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+
+    const options = await listReferenceOptions({
+      ...resource,
+      fields: resource.fields.filter(
+        (field) => field.key === 'assignedToProfileId',
+      ),
+    });
+
+    // CandidateProfile.name is sensitive; SMRT rejects it in ORDER BY
+    // (willgriffin/iolaus#82), so labels are sorted after serialization.
+    expect(profiles.list).toHaveBeenCalledWith({
+      limit: 1000,
+      orderBy: 'updated_at DESC',
+    });
+    expect(options.assignedToProfileId?.map((option) => option.value)).toEqual([
+      'profile-a',
+      'profile-b',
     ]);
   });
 

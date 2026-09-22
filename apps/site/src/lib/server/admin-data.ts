@@ -256,10 +256,11 @@ export async function listReferenceOptions(
       )
       .map(async ([field, reference]) => {
         const collection = await getCollection(reference.className as string);
-        const orderKey =
-          reference.labelKey ?? reference.labelKeys?.[0] ?? 'updated_at';
+        // Label keys are often sensitive fields (CandidateProfile.name), which
+        // SMRT refuses to ORDER BY. Fetch by a neutral column and sort the
+        // rendered labels instead.
         const records = (await collection.list({
-          orderBy: `${orderKey} ASC`,
+          orderBy: 'updated_at DESC',
           limit: 1000,
         })) as SmrtObject[];
         return [
@@ -274,7 +275,8 @@ export async function listReferenceOptions(
                 value,
               };
             })
-            .filter((option) => option.value),
+            .filter((option) => option.value)
+            .sort((left, right) => left.label.localeCompare(right.label)),
         ] as const;
       }),
   );
