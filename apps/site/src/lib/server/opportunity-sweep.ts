@@ -166,18 +166,18 @@ export function sweepCutoff(notSeenDays: number, now: Date = new Date()): Date {
 const SWEEP_MATCH_SQL = `o.source_id <> ''
     AND EXISTS (
       SELECT 1 FROM sources s
-      WHERE s.id = o.source_id AND s.is_active IS NOT TRUE
+      WHERE CAST(s.id AS TEXT) = o.source_id AND s.is_active IS NOT TRUE
     )
     AND o.status = ANY($1::text[])
     AND o.last_seen_at IS NOT NULL
     AND o.last_seen_at < $2
     AND COALESCE(lower(btrim(o.human_review_status)), '') <> ALL($3::text[])
     AND NOT EXISTS (
-      SELECT 1 FROM applications a WHERE a.opportunity_id = o.id
+      SELECT 1 FROM applications a WHERE a.opportunity_id = CAST(o.id AS TEXT)
     )
     AND NOT EXISTS (
       SELECT 1 FROM decisions d
-      WHERE d.opportunity_id = o.id AND d.decision_by = 'owner'
+      WHERE d.opportunity_id = CAST(o.id AS TEXT) AND d.decision_by = 'owner'
     )`;
 
 function sweepFilter(
@@ -343,7 +343,7 @@ export async function sweepInactiveSourceOpportunities(
         freshness = $6,
         archive_reason = $7,
         updated_at = now()
-      WHERE o.id = ANY($8::text[])
+      WHERE CAST(o.id AS TEXT) = ANY($8::text[])
         AND ${SWEEP_MATCH_SQL}
       RETURNING o.id`,
             statuses,
