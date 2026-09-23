@@ -2,6 +2,10 @@ import type { SmrtObject } from '@happyvertical/smrt-core';
 import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import {
+  type AdminRecord,
+  DEFAULT_ADMIN_RECORD_PAGE_SIZE,
+} from '$lib/admin/resource-shell';
+import {
   type AdminResource,
   adminResources,
   type ComboFieldConfig,
@@ -54,7 +58,6 @@ import {
   syncSourceSchedule,
 } from './source-schedules.js';
 
-export type AdminRecord = Record<string, unknown> & { id?: string };
 export interface ComboOption {
   fieldKey: string;
   label: string;
@@ -62,7 +65,6 @@ export interface ComboOption {
 }
 export type ComboOptionsByField = Record<string, ComboOption[]>;
 type AdminActor = Pick<User, 'id'> | null | undefined;
-export const DEFAULT_ADMIN_RECORD_PAGE_SIZE = 250;
 const RESUME_SOURCE_CLASS_NAMES = new Set([
   'Achievement',
   'AchievementAttachment',
@@ -944,3 +946,5 @@ export async function deleteAdminRecord(
 
   return { deleted: true };
 }
+
+export { type AdminRecord, DEFAULT_ADMIN_RECORD_PAGE_SIZE };

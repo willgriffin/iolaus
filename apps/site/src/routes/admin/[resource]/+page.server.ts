@@ -9,7 +9,6 @@ import {
   createFactIntakeAction,
   deleteAdminResourceAction,
   digDeeperOpportunityAction,
-  loadAdminResourcePageShellData,
   loadOpportunityDetailsAction,
   previewInactiveOpportunitySweepAction,
   processOpportunityAction,
@@ -21,13 +20,7 @@ import {
   updateAdminResourceAction,
   verifyOpportunityPostingAction,
 } from '$lib/server/admin-resource-route';
-import type { Actions, PageServerLoad } from './$types';
-
-export const load: PageServerLoad = ({ locals, params, url }) =>
-  loadAdminResourcePageShellData(params.resource, url, {
-    tenantId: locals.tenantId,
-    user: locals.user ? { id: locals.user.id } : null,
-  });
+import type { Actions } from './$types';
 
 export const actions: Actions = {
   create: async ({ locals, params, request }) => {
