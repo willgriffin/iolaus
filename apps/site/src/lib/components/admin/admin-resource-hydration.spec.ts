@@ -157,6 +157,32 @@ describe('readAdminResourceListPayload', () => {
       { headers: { 'content-type': 'application/json' } },
     );
 
+  it('sends an expired session to login from the list API (#96)', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('window', {
+      location: { assign, pathname: '/admin/tasks/', search: '?owner=me' },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+          }),
+      ),
+    );
+    const { readAdminResourceListPayload } = await import(
+      './admin-resource-hydration'
+    );
+
+    await expect(readAdminResourceListPayload('/api/x', {})).rejects.toThrow(
+      'Unauthorized',
+    );
+    expect(assign).toHaveBeenCalledWith(
+      `/login?next=${encodeURIComponent('/admin/tasks/?owner=me')}`,
+    );
+  });
+
   it('carries the opportunity query fingerprint through normalization', async () => {
     // The hydrated list is the only path that reaches the browser, and the
     // normalizer rebuilds the payload from an explicit key list. A fingerprint

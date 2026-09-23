@@ -29,7 +29,7 @@ const OPPORTUNITY_QUERY_INDEXES = [
   },
 ] as const;
 
-export const OPPORTUNITY_TABLE_PAGE_SIZE = 100;
+export { OPPORTUNITY_TABLE_PAGE_SIZE } from '$lib/admin/resource-shell';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 type OpportunityQueryDialect = 'postgres' | 'sqlite';

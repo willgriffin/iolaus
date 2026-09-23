@@ -713,49 +713,6 @@ describe('admin-resource-route', () => {
     );
   });
 
-  it('builds the admin page shell without waiting on record or editor queries', async () => {
-    const resource = {
-      className: 'Task',
-      description: '',
-      fields: [],
-      icon: 'check-square',
-      label: 'Tasks',
-      orderBy: 'updated_at DESC',
-      singularLabel: 'Task',
-      slug: 'tasks',
-      tableColumns: ['title'],
-    };
-    mocks.requireAdminResource.mockReturnValue(resource);
-
-    const { loadAdminResourcePageShellData } = await import(
-      './admin-resource-route'
-    );
-    const data = loadAdminResourcePageShellData(
-      'tasks',
-      new URL('http://localhost/admin/tasks?owner=me&status=open&page=3'),
-      { tenantId: 'tenant-a', user: { id: 'user-a' } },
-    );
-
-    expect(data).toMatchObject({
-      activeTaskOwnerFilter: 'me',
-      activeTaskStatusFilter: 'open',
-      loading: true,
-      pagination: {
-        page: 3,
-        pageSize: 250,
-        totalRecords: 0,
-      },
-      records: [],
-      resource,
-      tenantId: 'tenant-a',
-      user: { id: 'user-a' },
-    });
-    expect(mocks.countAdminResourceRecords).not.toHaveBeenCalled();
-    expect(mocks.listAdminRecords).not.toHaveBeenCalled();
-    expect(mocks.listComboOptions).not.toHaveBeenCalled();
-    expect(mocks.listReferenceOptions).not.toHaveBeenCalled();
-  });
-
   it('hydrates only the current server-paged opportunity page', async () => {
     const records = Array.from({ length: 339 }, (_, index) => ({
       id: `opp-${index + 1}`,

@@ -243,6 +243,12 @@ export function createAdminLiveInvalidationCapabilities(
 
 async function readJson(response: Response): Promise<unknown> {
   const payload = await response.json().catch(() => null);
+  if (response.status === 401 && browser) {
+    // Admin navigation is client-only (#96), so an expired session no longer
+    // meets the hooks' /login redirect on a click; the first API call does.
+    const next = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+  }
   if (!response.ok) {
     const message =
       payload &&

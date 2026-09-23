@@ -5,6 +5,11 @@ import {
   createAdminListPagination,
   positiveIntegerSearchParam,
 } from '$lib/admin/pagination';
+import {
+  type AdminResourcePageData,
+  createPendingAdminListPagination,
+  OPPORTUNITY_DEFAULT_REVIEW_FILTER,
+} from '$lib/admin/resource-shell';
 import type { AdminResource } from '$lib/admin/resources';
 import experienceData from '$lib/data/experience.json';
 import skillsData from '$lib/data/skills.json';
@@ -262,33 +267,7 @@ export function isOpportunityRelationKind(
   return (OPPORTUNITY_RELATION_KINDS as readonly string[]).includes(value);
 }
 
-export interface AdminResourcePageData {
-  activeReviewFilter: string;
-  activeTaskOwnerFilter: string;
-  activeTaskStatusFilter: string;
-  candidateSkills: string[];
-  comboOptions: Record<string, Array<{ label: string; value: string }>>;
-  error?: string | null;
-  loading?: boolean;
-  opportunityFilterOptions: OpportunityFilterOptions;
-  /**
-   * Digest of the filter state this page was resolved under (opportunities
-   * only). A bulk action over "all matching rows" hands this back instead of
-   * a list of ids, so the server can re-resolve the set and refuse the action
-   * if the caller's filters have drifted from the ones the operator saw.
-   */
-  opportunityQueryFingerprint?: string;
-  pagination: import('$lib/admin/pagination').AdminListPagination;
-  records: AdminRecord[];
-  referenceOptions: import('$lib/admin/resources').ReferenceOptionsByField;
-  refreshing?: boolean;
-  resource: AdminResource;
-  stale?: boolean;
-  tenantId?: string | null;
-  user?: { id?: string | null } | null;
-}
-
-const OPPORTUNITY_DEFAULT_REVIEW_FILTER = 'unsorted';
+export type { AdminResourcePageData } from '$lib/admin/resource-shell';
 
 function stringValue(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -862,80 +841,6 @@ export function safeAdminReturnTo(value: string | null | undefined): string {
   }
 
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-}
-
-/**
- * Build the synchronous portion of an admin list route.
- *
- * The resource schema and URL state are safe to render immediately. Records
- * and editor metadata deliberately arrive through the authenticated list API
- * after navigation, rather than delaying the route transition.
- */
-export function loadAdminResourcePageShellData(
-  resourceSlug: string,
-  url: URL,
-  identity: {
-    tenantId?: string | null;
-    user?: { id?: string | null } | null;
-  } = {},
-): AdminResourcePageData {
-  const resource = requireAdminResource(resourceSlug);
-  const requestedPage = positiveIntegerSearchParam(url, 'page', 1);
-  const reviewFilter =
-    resource.slug === 'opportunities'
-      ? (url.searchParams.get('review') ?? OPPORTUNITY_DEFAULT_REVIEW_FILTER)
-      : 'all';
-  const taskOwnerFilter =
-    resource.slug === 'tasks'
-      ? (url.searchParams.get('owner') ?? 'all')
-      : 'all';
-  const taskStatusFilter =
-    resource.slug === 'tasks'
-      ? (url.searchParams.get('status') ?? 'all')
-      : 'all';
-  const pageSize =
-    resource.slug === 'opportunities'
-      ? OPPORTUNITY_TABLE_PAGE_SIZE
-      : DEFAULT_ADMIN_RECORD_PAGE_SIZE;
-
-  return {
-    activeReviewFilter: reviewFilter,
-    activeTaskOwnerFilter: taskOwnerFilter,
-    activeTaskStatusFilter: taskStatusFilter,
-    candidateSkills: [],
-    comboOptions: {},
-    loading: true,
-    opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
-    pagination: createPendingAdminListPagination(requestedPage, pageSize),
-    records: [],
-    referenceOptions: {},
-    resource,
-    tenantId: identity.tenantId ?? null,
-    user: identity.user ?? null,
-  };
-}
-
-/**
- * Keep the requested page visible while the real total is still loading.
- * `createAdminListPagination` correctly clamps page numbers against a known
- * total, but a shell total of zero must not erase a deep-linked page.
- */
-function createPendingAdminListPagination(
-  requestedPage: number,
-  pageSize: number,
-): AdminListPagination {
-  return {
-    end: 0,
-    hasNextPage: false,
-    hasPreviousPage: requestedPage > 1,
-    offset: (requestedPage - 1) * pageSize,
-    page: requestedPage,
-    pageSize,
-    recordCount: 0,
-    start: 0,
-    totalPages: requestedPage,
-    totalRecords: 0,
-  };
 }
 
 export async function loadAdminResourcePageData(
