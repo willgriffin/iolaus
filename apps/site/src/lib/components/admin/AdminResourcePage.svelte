@@ -21,6 +21,7 @@ import {
   type AdminDockApi,
   type AdminRecord,
 } from '$lib/admin/dock';
+import { keepFormValues } from '$lib/admin/form-enhance';
 import type { AdminListPagination } from '$lib/admin/pagination';
 import type {
   AdminResource,
@@ -1146,7 +1147,7 @@ function taskMeta(record: AdminRecord): string {
     set.
   -->
   {#if isOpportunityResource && (headerOpportunityReviewCount > 0 || allMatchingSelected)}
-    <form use:enhance
+    <form use:enhance={keepFormValues}
       method="POST"
       action={headerOpportunityReviewCount > 1
         ? '?/bulkReviewOpportunities'

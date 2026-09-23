@@ -1,5 +1,6 @@
 <script lang="ts">
 import { enhance } from '$app/forms';
+import { keepFormValues } from '$lib/admin/form-enhance';
 
 let { data, form } = $props();
 
@@ -41,7 +42,7 @@ const stringList = (value: string | string[] | undefined) =>
     <p class="notice success" role="status">Removed that answer from future reuse.</p>
   {/if}
 
-  <form use:enhance method="POST" action="?/save" class="onboarding-form">
+  <form use:enhance={keepFormValues} method="POST" action="?/save" class="onboarding-form">
     <section>
       <h2>Contact and location</h2>
       <div class="grid two">

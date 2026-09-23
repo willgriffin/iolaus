@@ -36,6 +36,32 @@ function unenhancedActionForms(): string[] {
   return offenders;
 }
 
+function resettingFormsWithSeededFields(): string[] {
+  const offenders: string[] = [];
+  for (const file of adminRoots.flatMap(svelteFiles)) {
+    const source = readFileSync(file, 'utf8');
+    for (const match of source.matchAll(
+      /<form\b([^>]*)>([\s\S]*?)<\/form>/gu,
+    )) {
+      const [, attributes = '', body = ''] = match;
+      // Only plain `use:enhance` resets the form after a successful action.
+      if (!/\buse:enhance(?!=)/u.test(attributes)) continue;
+      const seeded = [
+        ...body.matchAll(/<(?:input|select|textarea)\b([^>]*)>/gu),
+      ]
+        .map((field) => field[1] ?? '')
+        .filter((field) => !/type=["']hidden["']/u.test(field))
+        .some((field) =>
+          /\bbind:|\bvalue=\{|\bchecked=\{|\bselected=/u.test(field),
+        );
+      if (!seeded) continue;
+      const line = source.slice(0, match.index).split('\n').length;
+      offenders.push(`${relative(siteSrc, file)}:${line}`);
+    }
+  }
+  return offenders;
+}
+
 describe('admin SPA rendering', () => {
   it('renders the admin tree client-side only', () => {
     const layout = readFileSync(
@@ -50,5 +76,11 @@ describe('admin SPA rendering', () => {
 
   it('enhances every admin POST form that targets a page action', () => {
     expect(unenhancedActionForms()).toEqual([]);
+  });
+
+  it('keeps existing field values when an enhanced edit form succeeds', () => {
+    // Default enhance resets fields before invalidated data re-renders, which
+    // blanks forms that display saved values; they use keepFormValues.
+    expect(resettingFormsWithSeededFields()).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import Save from '@lucide/svelte/icons/save';
 import Sparkles from '@lucide/svelte/icons/sparkles';
 import Trash2 from '@lucide/svelte/icons/trash-2';
 import { enhance } from '$app/forms';
+import { keepFormValues } from '$lib/admin/form-enhance';
 import { notifyOpportunityListChanged } from '$lib/admin/opportunity-list-refresh';
 import { displayFieldLabel, type ResourceField } from '$lib/admin/resources';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
@@ -716,7 +717,7 @@ $effect(() => {
   {#if isRecommendationTask}
     <section class="panel workflow-panel" aria-label="Recommendation decision">
       <h2 class="panel-title">Recommendation decision</h2>
-      <form use:enhance method="POST" action="?/processRecommendationTask" class="stack-form">
+      <form use:enhance={keepFormValues} method="POST" action="?/processRecommendationTask" class="stack-form">
         <input type="hidden" name="taskId" value={data.record.id ?? ''} />
         <label>
           <span>Decision</span>
@@ -831,7 +832,7 @@ $effect(() => {
           </a>
         </div>
       {:else}
-        <form use:enhance method="POST" action="?/reviewOpportunity" class="opportunity-review-bar">
+        <form use:enhance={keepFormValues} method="POST" action="?/reviewOpportunity" class="opportunity-review-bar">
           <input type="hidden" name="opportunityId" value={data.record.id ?? ''} />
           <input type="hidden" name="humanReviewStatus" value={opportunityReviewStatus} />
           <input type="hidden" name="reviewedByProfileId" value={stringValue('reviewedByProfileId')} />

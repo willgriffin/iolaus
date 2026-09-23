@@ -4,6 +4,7 @@ import Upload from '@lucide/svelte/icons/upload';
 import type { ResumeSource, Skill } from '@willgriffin/iolaus-resume';
 import { enhance } from '$app/forms';
 import { invalidateAll } from '$app/navigation';
+import { keepFormValues } from '$lib/admin/form-enhance';
 
 type AdminRecord = Record<string, unknown> & { id?: string };
 type ResumePageTab = 'data' | 'pdf' | 'markdown' | 'text';
@@ -205,7 +206,7 @@ function educationRecord(title: string): AdminRecord | undefined {
     </header>
 
     {#if activeProfile}
-      <form use:enhance class="edit-panel" method="POST" action="?/updateProfile">
+      <form use:enhance={keepFormValues} class="edit-panel" method="POST" action="?/updateProfile">
         <input type="hidden" name="id" value={activeProfile.id} />
         <div class="form-heading">
           <strong>Active profile</strong>
@@ -296,7 +297,7 @@ function educationRecord(title: string): AdminRecord | undefined {
             <p>{position.blurb}</p>
           {/if}
           {#if record}
-            <form use:enhance class="edit-panel compact" method="POST" action="?/updateExperience">
+            <form use:enhance={keepFormValues} class="edit-panel compact" method="POST" action="?/updateExperience">
               <input type="hidden" name="id" value={record.id} />
               <label>Key <input name="experienceKey" value={value(record, 'experienceKey')} /></label>
               <label>URL <input name="url" value={value(record, 'url')} /></label>
@@ -365,7 +366,7 @@ function educationRecord(title: string): AdminRecord | undefined {
           {#if item.institution}<span>{item.institution}</span>{/if}
           <p>{item.detail}</p>
           {#if record}
-            <form use:enhance class="edit-panel compact" method="POST" action="?/updateEducation">
+            <form use:enhance={keepFormValues} class="edit-panel compact" method="POST" action="?/updateEducation">
               <input type="hidden" name="id" value={record.id} />
               <input type="hidden" name="profileKey" value={value(record, 'profileKey') || 'default'} />
               <label>Title <input name="title" value={value(record, 'title')} /></label>
