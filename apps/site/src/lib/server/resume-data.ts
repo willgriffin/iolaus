@@ -866,7 +866,12 @@ function publishedResumeCacheContext():
     return undefined;
 
   return {
-    database: { type, url } as ResumeStampDatabase,
+    // Keep the configured pool options (notably `max`). SMRT caches the pool
+    // under `smrt:<url>` regardless of options, so whichever caller creates it
+    // first sets its size; this stamp probe runs on the first public request
+    // and used to create every process's shared pool at the SQL default of 20
+    // instead of IOLAUS_DB_POOL_MAX (#93).
+    database: { ...fields, type, url } as ResumeStampDatabase,
     key: JSON.stringify([type, url, tenantId ?? null]),
   };
 }
