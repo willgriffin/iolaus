@@ -205,7 +205,7 @@ function educationRecord(title: string): AdminRecord | undefined {
     </header>
 
     {#if activeProfile}
-      <form class="edit-panel" method="POST" action="?/updateProfile">
+      <form use:enhance class="edit-panel" method="POST" action="?/updateProfile">
         <input type="hidden" name="id" value={activeProfile.id} />
         <div class="form-heading">
           <strong>Active profile</strong>
@@ -230,7 +230,7 @@ function educationRecord(title: string): AdminRecord | undefined {
     {/if}
 
     {#if data.profiles.length > 1}
-      <form class="inline-form" method="POST" action="?/setDefaultProfile">
+      <form use:enhance class="inline-form" method="POST" action="?/setDefaultProfile">
         <select name="profileId" aria-label="Default profile">
           {#each data.profiles as profile}
             <option value={profile.id} selected={profile.id === activeProfile?.id}>
@@ -296,7 +296,7 @@ function educationRecord(title: string): AdminRecord | undefined {
             <p>{position.blurb}</p>
           {/if}
           {#if record}
-            <form class="edit-panel compact" method="POST" action="?/updateExperience">
+            <form use:enhance class="edit-panel compact" method="POST" action="?/updateExperience">
               <input type="hidden" name="id" value={record.id} />
               <label>Key <input name="experienceKey" value={value(record, 'experienceKey')} /></label>
               <label>URL <input name="url" value={value(record, 'url')} /></label>
@@ -365,7 +365,7 @@ function educationRecord(title: string): AdminRecord | undefined {
           {#if item.institution}<span>{item.institution}</span>{/if}
           <p>{item.detail}</p>
           {#if record}
-            <form class="edit-panel compact" method="POST" action="?/updateEducation">
+            <form use:enhance class="edit-panel compact" method="POST" action="?/updateEducation">
               <input type="hidden" name="id" value={record.id} />
               <input type="hidden" name="profileKey" value={value(record, 'profileKey') || 'default'} />
               <label>Title <input name="title" value={value(record, 'title')} /></label>
@@ -387,14 +387,14 @@ function educationRecord(title: string): AdminRecord | undefined {
       <h2 id="artifacts-heading">{activeResumeTabLabel}</h2>
     </div>
     <div class="action-row">
-      <form method="POST" action={actionUrl('generate')}>
+      <form use:enhance method="POST" action={actionUrl('generate')}>
         <button class="primary-button" type="submit">
           <Rocket size={16} strokeWidth={2.2} />
           <span>Canonical resume</span>
         </button>
       </form>
 
-      <form method="POST" action={actionUrl('generate')} class="variant-form">
+      <form use:enhance method="POST" action={actionUrl('generate')} class="variant-form">
         <select name="tailoringId" aria-label="Tailoring config">
           {#each data.tailoringConfigs as config}
             <option value={config.id}>{value(config, 'name') || value(config, 'configSlug')}</option>
@@ -445,7 +445,7 @@ function educationRecord(title: string): AdminRecord | undefined {
                   <span>{regeneratingAssetIds.includes(id) ? 'Regenerating…' : 'Regenerate'}</span>
                 </button>
               </form>
-              <form method="POST" action={actionUrl('publish')}>
+              <form use:enhance method="POST" action={actionUrl('publish')}>
                 <input type="hidden" name="assetId" value={id} />
                 <button class="icon-button" type="submit" disabled={boolValue(asset, 'isPublished') || !value(asset, 'pdfPath')}>
                   <Upload size={16} strokeWidth={2.2} />

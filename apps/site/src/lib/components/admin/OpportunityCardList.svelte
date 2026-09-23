@@ -15,6 +15,7 @@ import Sparkles from '@lucide/svelte/icons/sparkles';
 import Star from '@lucide/svelte/icons/star';
 import X from '@lucide/svelte/icons/x';
 import { onMount, type Snippet, untrack } from 'svelte';
+import { enhance } from '$app/forms';
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import type { AdminRecord } from '$lib/admin/dock';
@@ -979,7 +980,7 @@ const resultCountLabel = $derived.by(() => {
             <section>
               <div class="section-head">
                 <h4><Sparkles size={13} strokeWidth={2.2} /> Intelligence summary</h4>
-                <form method="POST" action="?/processOpportunity" class="inline-form">
+                <form use:enhance method="POST" action="?/processOpportunity" class="inline-form">
                   <input type="hidden" name="opportunityId" value={oppId} />
                   <button
                     type="submit"
@@ -1073,7 +1074,7 @@ const resultCountLabel = $derived.by(() => {
 
             <section>
               <h4><Star size={13} strokeWidth={2.2} /> Your rating</h4>
-              <form method="POST" action="?/reviewOpportunity" class="rating-form" aria-label="Rating">
+              <form use:enhance method="POST" action="?/reviewOpportunity" class="rating-form" aria-label="Rating">
                 <input type="hidden" name="opportunityId" value={oppId} />
                 <input type="hidden" name="humanReviewStatus" value={currentStatus} />
                 <input type="hidden" name="reviewedByProfileId" value={reviewedByProfileId} />
@@ -1106,7 +1107,7 @@ const resultCountLabel = $derived.by(() => {
       </div>
 
         <div class="card-actions">
-          <form method="POST" action={pageActionHref('reviewOpportunity')} class="decision-form">
+          <form use:enhance method="POST" action={pageActionHref('reviewOpportunity')} class="decision-form">
             <input type="hidden" name="opportunityId" value={oppId} />
             <input type="hidden" name="humanRating" value={rating ?? ''} />
             <input type="hidden" name="reviewedByProfileId" value={reviewedByProfileId} />

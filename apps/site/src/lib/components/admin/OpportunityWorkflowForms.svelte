@@ -1,6 +1,7 @@
 <script lang="ts">
 import FileText from '@lucide/svelte/icons/file-text';
 import MessageSquareText from '@lucide/svelte/icons/message-square-text';
+import { enhance } from '$app/forms';
 import type { AdminRecord } from '$lib/admin/dock';
 import {
   applyMethods,
@@ -71,7 +72,7 @@ const factIntakeCount = $derived(Number(record.factIntakeCount ?? 0) || 0);
         </a>
       {/if}
     </div>
-    <form method="POST" action={draftApplicationAction} class="stack-form grid-form">
+    <form use:enhance method="POST" action={draftApplicationAction} class="stack-form grid-form">
       <input type="hidden" name="opportunityId" value={opportunityId} />
       <label>
         <span>Apply method</span>
@@ -137,7 +138,7 @@ const factIntakeCount = $derived(Number(record.factIntakeCount ?? 0) || 0);
         <span class="section-meta">{factIntakeCount} linked</span>
       {/if}
     </div>
-    <form method="POST" action={factIntakeAction} class="stack-form">
+    <form use:enhance method="POST" action={factIntakeAction} class="stack-form">
       <input type="hidden" name="targetEntityType" value="Opportunity" />
       <input type="hidden" name="targetEntityId" value={opportunityId} />
       <input type="hidden" name="sourceKind" value="story" />

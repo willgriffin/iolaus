@@ -1106,7 +1106,7 @@ function taskMeta(record: AdminRecord): string {
 
 {#snippet opportunityBulkToolbar()}
   {#if isOpportunityResource}
-    <form
+    <form use:enhance
       method="POST"
       action="?/previewInactiveOpportunitySweep"
       class="sweep-form"
@@ -1146,7 +1146,7 @@ function taskMeta(record: AdminRecord): string {
     set.
   -->
   {#if isOpportunityResource && (headerOpportunityReviewCount > 0 || allMatchingSelected)}
-    <form
+    <form use:enhance
       method="POST"
       action={headerOpportunityReviewCount > 1
         ? '?/bulkReviewOpportunities'
@@ -1362,7 +1362,7 @@ function taskMeta(record: AdminRecord): string {
             </button>
           </div>
 
-          <form method="POST" action="?/syncRecommendationTasks">
+          <form use:enhance method="POST" action="?/syncRecommendationTasks">
             <button type="submit" class="sync-button">
               <RefreshCw size={14} strokeWidth={2.2} />
               <span>Sync recommendations</span>

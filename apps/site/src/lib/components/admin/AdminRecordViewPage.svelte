@@ -716,7 +716,7 @@ $effect(() => {
   {#if isRecommendationTask}
     <section class="panel workflow-panel" aria-label="Recommendation decision">
       <h2 class="panel-title">Recommendation decision</h2>
-      <form method="POST" action="?/processRecommendationTask" class="stack-form">
+      <form use:enhance method="POST" action="?/processRecommendationTask" class="stack-form">
         <input type="hidden" name="taskId" value={data.record.id ?? ''} />
         <label>
           <span>Decision</span>
@@ -831,7 +831,7 @@ $effect(() => {
           </a>
         </div>
       {:else}
-        <form method="POST" action="?/reviewOpportunity" class="opportunity-review-bar">
+        <form use:enhance method="POST" action="?/reviewOpportunity" class="opportunity-review-bar">
           <input type="hidden" name="opportunityId" value={data.record.id ?? ''} />
           <input type="hidden" name="humanReviewStatus" value={opportunityReviewStatus} />
           <input type="hidden" name="reviewedByProfileId" value={stringValue('reviewedByProfileId')} />
@@ -1109,7 +1109,7 @@ $effect(() => {
           {#each editor.records as relation (relation.id)}
             <li class="related-item related-item-row">
               <span>{relationSummary(editor, relation) || relation.id}</span>
-              <form method="POST" action="?/deleteOpportunityRelation" class="inline-form">
+              <form use:enhance method="POST" action="?/deleteOpportunityRelation" class="inline-form">
                 <input type="hidden" name="relation" value={editor.kind} />
                 <input type="hidden" name="id" value={relation.id ?? ''} />
                 <button
