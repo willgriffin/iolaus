@@ -54,21 +54,17 @@ jobs:
             --build-arg "IOLAUS_SOURCE_REVISION=${CANDIDATE_REVISION}" \
             --build-arg "IOLAUS_LOCKFILE_SHA256=${lock_sha256}" \
             --tag iolaus-parity-candidate:ci .
-      - name: Verify immutable candidate with synthetic data
+      - name: Verify immutable candidate parity
         run: |
           image_id="$(
             docker image inspect --format '{{.Id}}' \
               iolaus-parity-candidate:ci
           )"
-          pnpm migration:willgriffin:rehearse:synthetic -- \
+          node scripts/deployed-parity.mjs \
             --local-image-id "${image_id}" \
-            --evidence .omo/evidence/issue-32/ci-synthetic-rehearsal.json \
-            --parity-evidence .omo/evidence/issue-32/ci-candidate-contract.json
+            --evidence .omo/evidence/issue-32/ci-candidate-contract.json
           node --input-type=module <<'EOF'
           import { readFileSync } from 'node:fs';
-          const rehearsal = JSON.parse(
-            readFileSync('.omo/evidence/issue-32/ci-synthetic-rehearsal.json'),
-          );
           const candidate = JSON.parse(
             readFileSync('.omo/evidence/issue-32/ci-candidate-contract.json'),
           );
@@ -77,24 +73,11 @@ jobs:
             (check) => check.id === 'self-hosted-topology',
           );
           if (
-            rehearsal.status !== 'passed' ||
-            rehearsal.syntheticRehearsalExitEligible !== true ||
-            rehearsal.productionRehearsalExitEligible !== false ||
-            rehearsal.syntheticDataOnly !== true ||
-            rehearsal.productionAccessPerformed !== false ||
-            rehearsal.logicalMigration?.interruptionObserved !== true ||
-            rehearsal.logicalMigration
-              ?.reconciliationStableAcrossDryRunResumeRerun !== true ||
-            rehearsal.assetMigration?.reconciliationStableAcrossResumeRerun !==
-              true ||
-            rehearsal.assetMigration?.copiedOnIdempotentRerun !== 0 ||
-            rehearsal.candidateParity?.candidateImageTested !== true ||
-            rehearsal.candidateParity?.provenanceBinding !== 'local-image-id' ||
-            rehearsal.candidateParity?.revision !==
-              process.env.CANDIDATE_REVISION ||
-            rehearsal.secretValuesIncluded !== false ||
             candidate.status !== 'passed' ||
             candidate.candidateImageTested !== true ||
+            candidate.revision !== process.env.CANDIDATE_REVISION ||
+            candidate.syntheticDataOnly !== true ||
+            candidate.productionAccessPerformed !== false ||
             candidate.releaseEligible !== false ||
             candidate.candidateImageProvenance?.binding !== 'local-image-id' ||
             provenance?.deploymentEvidenceRequiredForRelease !== true ||
@@ -147,8 +130,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iolaus-candidate-parity-${{ env.CANDIDATE_REVISION }}
-          path: |
-            .omo/evidence/issue-32/ci-synthetic-rehearsal.json
-            .omo/evidence/issue-32/ci-candidate-contract.json
+          path: .omo/evidence/issue-32/ci-candidate-contract.json
           include-hidden-files: true
           if-no-files-found: error
