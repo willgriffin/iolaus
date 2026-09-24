@@ -24,24 +24,38 @@ let primeSettled = false;
 
 export function startPublishedResumePrime(
   deadlineMs = PRIME_DEADLINE_MS,
+  log: Pick<Console, 'info'> = console,
 ): void {
   if (primeStarted) return;
   primeStarted = true;
 
-  const settle = () => {
+  const startedAt = Date.now();
+  log.info('[startup] resume prime started');
+  const settle = (outcome: string) => {
+    if (primeSettled) return;
     primeSettled = true;
+    log.info(
+      `[startup] resume prime settled: ${outcome} in ${Date.now() - startedAt}ms`,
+    );
   };
-  const deadline = setTimeout(settle, deadlineMs);
+  const deadline = setTimeout(
+    () => settle(`deadline (${deadlineMs}ms, load continues)`),
+    deadlineMs,
+  );
   deadline.unref?.();
 
   void getCachedPublishedResume()
-    .catch(() => {
-      // Startup priming is best-effort; request-time loading reports failures.
-    })
-    .finally(() => {
-      clearTimeout(deadline);
-      settle();
-    });
+    .then(
+      () => settle('loaded'),
+      (error: unknown) => {
+        // Startup priming is best-effort; request-time loading reports the
+        // real failure. Log only the error class, never its message.
+        settle(
+          `failed (${error instanceof Error ? error.name : 'non-error rejection'})`,
+        );
+      },
+    )
+    .finally(() => clearTimeout(deadline));
 }
 
 export function isPublishedResumePrimeSettled(): boolean {

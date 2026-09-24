@@ -83,3 +83,62 @@ describe('startPublishedResumePrime', () => {
     );
   });
 });
+
+describe('startPublishedResumePrime logging (#100)', () => {
+  it('logs the outcome and duration of a successful prime', async () => {
+    mocks.getCachedPublishedResume.mockResolvedValue(undefined);
+    const log = { info: vi.fn() };
+
+    const prime = await freshPrime();
+    prime.startPublishedResumePrime(20_000, log);
+
+    await vi.waitFor(() =>
+      expect(prime.isPublishedResumePrimeSettled()).toBe(true),
+    );
+    expect(log.info).toHaveBeenCalledWith('[startup] resume prime started');
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[startup\] resume prime settled: loaded in \d+ms$/u,
+      ),
+    );
+  });
+
+  it('logs a failed prime by error class only', async () => {
+    mocks.getCachedPublishedResume.mockRejectedValue(
+      new TypeError('postgres://user:secret@db refused'),
+    );
+    const log = { info: vi.fn() };
+
+    const prime = await freshPrime();
+    prime.startPublishedResumePrime(20_000, log);
+
+    await vi.waitFor(() =>
+      expect(prime.isPublishedResumePrimeSettled()).toBe(true),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[startup\] resume prime settled: failed \(TypeError\) in \d+ms$/u,
+      ),
+    );
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain('secret');
+  });
+
+  it('logs when the deadline settles a stalled prime, exactly once', async () => {
+    mocks.getCachedPublishedResume.mockReturnValue(new Promise(() => {}));
+    const log = { info: vi.fn() };
+
+    const prime = await freshPrime();
+    prime.startPublishedResumePrime(5, log);
+
+    await vi.waitFor(() =>
+      expect(prime.isPublishedResumePrimeSettled()).toBe(true),
+    );
+    const settled = log.info.mock.calls.filter(([line]) =>
+      String(line).includes('settled'),
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.[0]).toMatch(
+      /settled: deadline \(5ms, load continues\)/u,
+    );
+  });
+});
