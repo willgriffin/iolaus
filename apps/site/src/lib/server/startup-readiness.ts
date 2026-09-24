@@ -30,8 +30,10 @@ export interface RuntimeThenPrimeOptions {
 export function sanitizeStartupMessage(message: string): string {
   return message
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/giu, '<url>')
+    .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/gu, '<jwt>')
+    .replace(/\b(Bearer|Basic)\s+\S+/giu, '$1 <redacted>')
     .replace(
-      /\b(password|passwd|pwd|secret|token|apikey|api_key|authorization)\s*[=:]\s*\S+/giu,
+      /\b([a-z_-]*(?:password|passwd|pwd|secret|token|apikey|api_key|authorization))\s*[=:]\s*(?!<redacted>|Bearer |Basic )\S+/giu,
       '$1=<redacted>',
     )
     .replace(/\s+/gu, ' ')

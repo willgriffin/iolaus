@@ -88,6 +88,23 @@ describe('describeStartupFailure', () => {
     ).toBe(
       'Error "login failed password=<redacted> via <url> token=<redacted>"',
     );
+    const leaky = describeStartupFailure(
+      new Error(
+        'oidc rejected client_secret=s3cr3t, Authorization: Bearer abc.def-ghi, raw eyJhbGciOi.eyJzdWIiOi.c2lnbmF0 and host=db password=pw1 access_token=tok9',
+      ),
+    );
+    for (const secret of [
+      's3cr3t',
+      'abc.def-ghi',
+      'eyJhbGciOi',
+      'pw1',
+      'tok9',
+    ]) {
+      expect(leaky).not.toContain(secret);
+    }
+    expect(leaky).toContain('client_secret=<redacted>');
+    expect(leaky).toContain('Bearer <redacted>');
+    expect(leaky).toContain('<jwt>');
     expect(describeStartupFailure(new Error('x'.repeat(500)))).toHaveLength(
       'Error ""'.length + 160,
     );
