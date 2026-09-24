@@ -221,7 +221,18 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
       }),
     },
   });
-  await deployedRuntimePromise;
+  const initialization = deployedRuntimePromise;
+  try {
+    await initialization;
+  } catch (error) {
+    // Forget a failed start so the next readiness check retries it (#100).
+    // A cached rejection used to wedge /health at 503 until kubelet restarted
+    // the pod.
+    if (deployedRuntimePromise === initialization) {
+      deployedRuntimePromise = undefined;
+    }
+    throw error;
+  }
 }
 
 /**

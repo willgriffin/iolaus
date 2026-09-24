@@ -7,6 +7,7 @@ import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
+import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
 import { withBearerSessionContext } from '$lib/server/terminal-auth';
 
 // Warm the published resume before the readiness probe passes, so a fresh
@@ -16,10 +17,12 @@ export const init: ServerInit = async () => {
   if (building) return;
   // Do not block the server's request loop on an external provider. /health
   // owns its bounded readiness budget and /live must remain process-only.
-  void ensureApplicationRuntimeReady().then(
-    () => startPublishedResumePrime(),
-    () => {},
-  );
+  // Runtime initialisation retries with backoff (#100): a transient provider
+  // failure at boot must not leave the pod unready until kubelet restarts it.
+  void startRuntimeThenPrime({
+    ensureRuntime: ensureApplicationRuntimeReady,
+    prime: () => startPublishedResumePrime(),
+  });
 };
 
 const sessionHandler = createSessionHandler({
