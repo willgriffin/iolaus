@@ -103,7 +103,7 @@ describe('startPublishedResumePrime logging (#100)', () => {
     );
   });
 
-  it('logs a failed prime by error class only', async () => {
+  it('logs a failed prime with a sanitized description', async () => {
     mocks.getCachedPublishedResume.mockRejectedValue(
       new TypeError('postgres://user:secret@db refused'),
     );
@@ -117,7 +117,7 @@ describe('startPublishedResumePrime logging (#100)', () => {
     );
     expect(log.info).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^\[startup\] resume prime settled: failed \(TypeError\) in \d+ms$/u,
+        /^\[startup\] resume prime settled: failed \(TypeError "<url> refused"\) in \d+ms$/u,
       ),
     );
     expect(JSON.stringify(log.info.mock.calls)).not.toContain('secret');

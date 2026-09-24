@@ -21,9 +21,29 @@ export interface RuntimeThenPrimeOptions {
 }
 
 /**
- * Describe a startup failure without its message or cause. Messages and causes
- * can carry connection details; the runtime's error name, code and component
- * are enough to tell a database stall from an OIDC outage in pod logs.
+ * Strip anything that could carry a connection string or credential from an
+ * error message before it reaches pod logs: URLs (which may embed
+ * `user:password@`), `key=value` credentials and anything after a colon that
+ * looks like a secret. The result is bounded so a large driver message cannot
+ * flood the log.
+ */
+export function sanitizeStartupMessage(message: string): string {
+  return message
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/giu, '<url>')
+    .replace(
+      /\b(password|passwd|pwd|secret|token|apikey|api_key|authorization)\s*[=:]\s*\S+/giu,
+      '$1=<redacted>',
+    )
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+/**
+ * Describe a startup failure for pod logs: the error class, the runtime's
+ * code and component when present, and a sanitized, bounded message. Causes
+ * are never logged. That is enough to tell a database stall from an OIDC
+ * outage or a missing configuration value.
  */
 export function describeStartupFailure(error: unknown): string {
   if (!(error instanceof Error)) return 'non-error rejection';
@@ -33,6 +53,8 @@ export function describeStartupFailure(error: unknown): string {
   if (typeof details.component === 'string') {
     parts.push(`component=${details.component}`);
   }
+  const message = sanitizeStartupMessage(error.message ?? '');
+  if (message) parts.push(`"${message}"`);
   return parts.join(' ');
 }
 

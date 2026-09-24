@@ -1,4 +1,5 @@
 import { getCachedPublishedResume } from './resume-data.js';
+import { describeStartupFailure } from './startup-readiness.js';
 
 /**
  * Warm the published resume cache at server start.
@@ -49,10 +50,8 @@ export function startPublishedResumePrime(
       () => settle('loaded'),
       (error: unknown) => {
         // Startup priming is best-effort; request-time loading reports the
-        // real failure. Log only the error class, never its message.
-        settle(
-          `failed (${error instanceof Error ? error.name : 'non-error rejection'})`,
-        );
+        // real failure. The description is sanitized and bounded.
+        settle(`failed (${describeStartupFailure(error)})`);
       },
     )
     .finally(() => clearTimeout(deadline));

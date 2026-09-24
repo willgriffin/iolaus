@@ -19,7 +19,7 @@ describe('startRuntimeThenPrime', () => {
   it('retries a failed runtime start with backoff, then primes once', async () => {
     const failure = new FakeRuntimeError(
       'provider_unavailable',
-      'postgres://user:secret@db/app refused',
+      'Connect to postgres://user:secret@db/app refused',
       'database',
     );
     const ensureRuntime = vi
@@ -37,7 +37,7 @@ describe('startRuntimeThenPrime', () => {
     expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([2_000, 4_000]);
     expect(prime).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith(
-      '[startup] runtime not ready (attempt 1, DeployedRuntimeError code=provider_unavailable component=database); retrying in 2000ms',
+      '[startup] runtime not ready (attempt 1, DeployedRuntimeError code=provider_unavailable component=database "Connect to <url> refused"); retrying in 2000ms',
     );
     expect(log.info).toHaveBeenCalledWith(
       expect.stringMatching(/^\[startup\] runtime ready after 3 attempt\(s\)/u),
@@ -69,9 +69,27 @@ describe('startRuntimeThenPrime', () => {
 });
 
 describe('describeStartupFailure', () => {
-  it('keeps only the error class, code and component', () => {
-    expect(describeStartupFailure(new TypeError('secret detail'))).toBe(
-      'TypeError',
+  it('keeps the class and a sanitized message, never credentials', () => {
+    expect(
+      describeStartupFailure(
+        new TypeError(
+          'Deployed profiles require complete public authentication.',
+        ),
+      ),
+    ).toBe(
+      'TypeError "Deployed profiles require complete public authentication."',
+    );
+    expect(
+      describeStartupFailure(
+        new Error(
+          'login failed password=hunter2 via https://u:p@idp/x token: abc',
+        ),
+      ),
+    ).toBe(
+      'Error "login failed password=<redacted> via <url> token=<redacted>"',
+    );
+    expect(describeStartupFailure(new Error('x'.repeat(500)))).toHaveLength(
+      'Error ""'.length + 160,
     );
     expect(describeStartupFailure('boom')).toBe('non-error rejection');
   });
