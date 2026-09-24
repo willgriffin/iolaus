@@ -7,6 +7,9 @@ RUN corepack enable
 WORKDIR /app
 
 FROM base AS deps
+# .npmrc only routes the @happyvertical scope to its registry and is copied
+# into the image. Never add credentials to it: pass them with a BuildKit
+# secret mount. `pnpm lint` fails on credential keys (scripts/check-npmrc-credentials.mjs).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json .npmrc ./
 COPY apps/site/package.json apps/site/package.json
 COPY packages/cli/package.json packages/cli/package.json

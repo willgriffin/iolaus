@@ -36,7 +36,7 @@
     "build": "turbo run build",
     "check": "turbo run check",
     "dev": "turbo run dev",
-    "lint": "biome check .",
+    "lint": "biome check . && node scripts/check-npmrc-credentials.mjs",
     "lint:fix": "biome check --write .",
     "test": "node --test scripts/*.test.mjs && turbo run test && pnpm deploy:self-hosted:check",
     "format": "biome check --write .",
