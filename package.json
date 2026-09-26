@@ -58,16 +58,16 @@
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/smrt-cli": "0.51.16",
-    "@happyvertical/smrt-dev-mcp": "0.51.16",
+    "@happyvertical/smrt-cli": "0.51.31",
+    "@happyvertical/smrt-dev-mcp": "0.51.31",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-runtime": "0.51.16",
-    "@happyvertical/smrt-config": "0.51.16",
-    "@happyvertical/smrt-scanner": "0.51.16",
+    "@happyvertical/smrt-app-runtime": "0.51.31",
+    "@happyvertical/smrt-config": "0.51.31",
+    "@happyvertical/smrt-scanner": "0.51.31",
     "@happyvertical/sql": "0.89.12",
     "tsx": "catalog:"
   },

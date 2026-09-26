@@ -1474,6 +1474,8 @@ $effect(() => {
   }
 
   .header-actions {
+    min-width: 0;
+    max-width: 100%;
     display: flex;
     flex: 0 0 auto;
     flex-wrap: wrap;
@@ -1600,6 +1602,18 @@ $effect(() => {
   .submission-summary dd {
     margin: 0;
     overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 640px) {
+    .review-header {
+      flex-direction: column;
+    }
+
+    .review-header > div {
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
   }
 
   @media (max-width: 1024px) {

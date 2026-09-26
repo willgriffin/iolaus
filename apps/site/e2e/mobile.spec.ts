@@ -41,19 +41,13 @@ async function openTasks(page: Page) {
   ).toBeAttached();
 }
 
-function knownRegression(condition: boolean, auditId: string) {
-  test.fail(
-    condition && process.env.IOLAUS_E2E_STRICT !== '1',
-    `${auditId}: mobile audit; issue #103. Run IOLAUS_E2E_STRICT=1 for red baseline.`,
-  );
-}
-
 async function swipe(
   page: Page,
   target: Locator,
   direction: 'up' | 'left',
   header = false,
 ) {
+  await target.scrollIntoViewIfNeeded();
   const box = await target.boundingBox();
   expect(box).not.toBeNull();
   if (!box) throw new Error('Swipe target has no bounds');
@@ -157,10 +151,7 @@ test('navigation can be opened, used and reopened', async ({ page }) => {
   const opener = page
     .getByRole('button', { name: 'Expand navigation', exact: true })
     .first();
-  const mobile = (page.viewportSize()?.width ?? 0) <= 768;
-  knownRegression(mobile, 'M01');
   await expect(opener).toBeInViewport();
-  if (mobile && process.env.IOLAUS_E2E_STRICT !== '1') return;
   await opener.tap();
   await expect(panel).toBeInViewport();
   await panel.getByRole('link', { name: 'Opportunities', exact: true }).tap();
@@ -186,10 +177,7 @@ test('task cards have usable height and respond to a vertical swipe', async ({
     list.locator('.task-card').filter({ hasText: 'Fictional mobile task' }),
   ).toHaveCount(16);
   const height = await list.evaluate((element) => element.clientHeight);
-  const shortViewport = (page.viewportSize()?.height ?? 0) <= 568;
-  knownRegression(shortViewport, 'M02');
   expect(height).toBeGreaterThanOrEqual(120);
-  if (shortViewport && process.env.IOLAUS_E2E_STRICT !== '1') return;
   expect(
     await list.evaluate(
       (element) => element.scrollHeight > element.clientHeight,
@@ -207,10 +195,7 @@ test('task board responds to a horizontal swipe across lane headers', async ({
   await openTasks(page);
   const board = page.locator('.kanban-board');
   const height = await board.evaluate((element) => element.clientHeight);
-  const shortViewport = (page.viewportSize()?.height ?? 0) <= 375;
-  knownRegression(shortViewport, 'M02');
   expect(height).toBeGreaterThan(80);
-  if (shortViewport && process.env.IOLAUS_E2E_STRICT !== '1') return;
   await swipe(page, board, 'left', true);
   await expect
     .poll(() => board.evaluate((element) => element.scrollLeft))
@@ -250,7 +235,6 @@ test('app settings use the full mobile width', async ({ page }) => {
   const box = await drawer.boundingBox();
   expect(box).not.toBeNull();
   if (!box) return;
-  knownRegression(width <= 768, 'M03 (upstream SMRT shell)');
   if (width <= 768) {
     expect(box.x).toBeLessThanOrEqual(1);
     expect(box.x + box.width).toBeGreaterThanOrEqual(width - 1);
@@ -258,6 +242,11 @@ test('app settings use the full mobile width', async ({ page }) => {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);
   }
+  expect(
+    await drawer.evaluate(
+      (element) => element.scrollWidth - element.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
 });
 
 test('application review actions fit inside the page', async ({ page }) => {
@@ -272,7 +261,6 @@ test('application review actions fit inside the page', async ({ page }) => {
   const actions = await page.locator('.header-actions').boundingBox();
   expect(actions).not.toBeNull();
   if (!actions) return;
-  knownRegression(width <= 390, 'M04');
   expect(actions.x).toBeGreaterThanOrEqual(0);
   expect(actions.x + actions.width).toBeLessThanOrEqual(width);
 });
@@ -286,11 +274,6 @@ test('filter controls fit without horizontal clipping', async ({ page }) => {
   await expect(body).toBeVisible();
   const overflow = await body.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
-  );
-  // Linux fallback fonts also overflow the fixed 420px drawer at wider sizes.
-  knownRegression(
-    (page.viewportSize()?.width ?? 0) <= 390 || process.platform === 'linux',
-    'M05',
   );
   expect(overflow).toBeLessThanOrEqual(1);
 });
@@ -313,7 +296,6 @@ test('application stage labels do not overlap', async ({ page }) => {
       };
     }),
   );
-  knownRegression((page.viewportSize()?.width ?? 0) <= 320, 'M06');
   for (let index = 1; index < boxes.length; index += 1) {
     const previous = boxes[index - 1];
     const current = boxes[index];
@@ -333,7 +315,6 @@ test('footer status chips stay inside the visible footer', async ({ page }) => {
   expect(outer).not.toBeNull();
   expect(inner).not.toBeNull();
   if (!outer || !inner) return;
-  knownRegression((page.viewportSize()?.width ?? 0) <= 390, 'M07');
   expect(inner.y).toBeGreaterThanOrEqual(outer.y);
   expect(inner.y + inner.height).toBeLessThanOrEqual(
     Math.min(outer.y + outer.height, page.viewportSize()?.height ?? 0) + 1,
@@ -346,15 +327,49 @@ test('horizontal swipes over lane content reach later lanes', async ({
   await openTasks(page);
   const board = page.locator('.kanban-board');
   const height = await board.evaluate((element) => element.clientHeight);
-  if ((page.viewportSize()?.height ?? 0) <= 375) {
-    knownRegression(true, 'M02');
-    expect(height).toBeGreaterThan(80);
-    return;
-  }
   expect(height).toBeGreaterThan(80);
   await swipe(page, board, 'left');
-  // Only the scroll invariant is expected to fail; gesture errors fail normally.
   const offset = await board.evaluate((element) => element.scrollLeft);
-  knownRegression(true, 'M08: lane content traps horizontal touch scrolling');
   expect(offset).toBeGreaterThan(30);
+});
+
+test('navigation remains reachable after reload and viewport changes', async ({
+  page,
+}) => {
+  await openTasks(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const toggle = page
+    .locator('.admin-app-bar')
+    .getByRole('button', { name: /navigation$/ });
+  await expect(toggle).toBeInViewport();
+  if ((await toggle.getAttribute('aria-expanded')) === 'true')
+    await toggle.tap();
+  await page.reload();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.tap();
+  await expect(page.locator('.admin-tenant-panel')).toBeInViewport();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(toggle).toBeInViewport();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(toggle).toBeInViewport();
+  await expect(page.locator('.admin-tenant-panel')).toBeInViewport();
+});
+
+test('short task pages allow the toolbar to scroll out of the way', async ({
+  page,
+}) => {
+  await openTasks(page);
+  await page.setViewportSize({ width: 667, height: 375 });
+  const main = page.locator('.smrt-admin-shell__main');
+  expect(
+    await main.evaluate(
+      (element) => element.scrollHeight - element.clientHeight,
+    ),
+  ).toBeGreaterThan(30);
+  const before = await main.evaluate((element) => element.scrollTop);
+  await swipe(page, page.locator('.task-toolbar'), 'up');
+  await expect
+    .poll(() => main.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(before + 30);
+  await expect(page.locator('.kanban-board')).toBeInViewport();
 });

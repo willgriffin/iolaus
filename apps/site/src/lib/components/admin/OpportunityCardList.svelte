@@ -1637,6 +1637,7 @@ const resultCountLabel = $derived.by(() => {
   }
 
   .drawer-group label {
+    min-width: 0;
     display: grid;
     gap: 4px;
     color: var(--smrt-color-on-surface);
@@ -1654,6 +1655,9 @@ const resultCountLabel = $derived.by(() => {
   .drawer-group select,
   .drawer-group input[type='number'],
   .drawer-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
     min-height: 34px;
     padding: 0 10px;
     border: 1px solid var(--smrt-color-outline-variant);
@@ -1665,7 +1669,7 @@ const resultCountLabel = $derived.by(() => {
 
   .field-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
   }
 
@@ -1690,6 +1694,7 @@ const resultCountLabel = $derived.by(() => {
   }
 
   .segmented {
+    min-width: 0;
     display: inline-flex;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 6px;
@@ -1697,6 +1702,8 @@ const resultCountLabel = $derived.by(() => {
   }
 
   .segmented button {
+    min-width: 0;
+    overflow-wrap: anywhere;
     flex: 1;
     min-height: 32px;
     padding: 0 10px;

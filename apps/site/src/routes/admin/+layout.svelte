@@ -575,6 +575,16 @@ function currentTenantHref(pathname: string): string {
 {#snippet appBar()}
   <div class="admin-app-bar">
     <div class="admin-app-bar-left">
+      <button
+        class="admin-icon-button"
+        type="button"
+        aria-label={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
+        aria-expanded={adminShell.panels.left === 'expanded'}
+        aria-controls="admin-navigation"
+        onclick={() => adminShell.togglePanel('left')}
+      >
+        <PanelLeftOpen size={18} strokeWidth={2.1} />
+      </button>
       <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
         <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">
@@ -651,7 +661,7 @@ function currentTenantHref(pathname: string): string {
 {/snippet}
 
 {#snippet tenantPanel()}
-  <div class="admin-tenant-panel" data-sveltekit-preload-data="tap">
+  <div id="admin-navigation" class="admin-tenant-panel" data-sveltekit-preload-data="tap">
     <div class="admin-panel-header">
       <strong>Navigation</strong>
       <button
@@ -886,6 +896,9 @@ function currentTenantHref(pathname: string): string {
 
   .admin-brand strong {
     display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 14px;
     line-height: 1.2;
   }
@@ -906,6 +919,7 @@ function currentTenantHref(pathname: string): string {
   }
 
   .admin-icon-button {
+    flex: 0 0 auto;
     display: grid;
     place-items: center;
     width: 32px;
@@ -1034,7 +1048,7 @@ function currentTenantHref(pathname: string): string {
   }
 
   .admin-system-bar :global(.smrt-system-status-chips) {
-    justify-content: flex-end;
+    justify-content: safe flex-end;
   }
 
   .admin-content {
@@ -1072,6 +1086,7 @@ function currentTenantHref(pathname: string): string {
   }
 
   @media (max-width: 640px) {
+    .admin-brand-mark,
     .admin-brand-eyebrow,
     .admin-user-button span {
       display: none;
