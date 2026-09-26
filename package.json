@@ -50,7 +50,9 @@
     "knowledge:architecture-context:json": "smrt knowledge:architecture-context --scope project --format json",
     "smrt:dev-mcp": "smrt-dev-mcp",
     "typecheck": "pnpm check",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "test:e2e": "pnpm --filter @willgriffin/iolaus-site exec playwright test",
+    "test:e2e:check": "pnpm --filter @willgriffin/iolaus-site exec tsc --noEmit -p tsconfig.e2e.json"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",

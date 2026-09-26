@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "checkJs": false
+  },
+  "include": [
+    "e2e/**/*.ts",
+    "playwright.config.ts",
+    ".svelte-kit/ambient.d.ts",
+    ".svelte-kit/non-ambient.d.ts",
+    "src/app.d.ts"
+  ],
+  "exclude": ["node_modules"]
+}
