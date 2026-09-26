@@ -15,7 +15,8 @@
       "packages/*/*.{js,ts,json,jsonc}",
       ".github/**/*.{js,ts}",
       "scripts/**/*.{js,ts}",
-      "*.{js,ts,json,jsonc}"
+      "*.{js,ts,json,jsonc}",
+      "apps/site/e2e/**/*.ts"
     ],
     "ignoreUnknown": true
   },
@@ -192,7 +193,9 @@
       ],
       "linter": {
         "rules": {
-          "suspicious": { "noExplicitAny": "off" },
+          "suspicious": {
+            "noExplicitAny": "off"
+          },
           "correctness": {
             "noUnusedVariables": "off",
             "noUnusedFunctionParameters": "off"

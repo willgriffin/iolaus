@@ -67,6 +67,7 @@
     "@willgriffin/iolaus-resume": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@sveltejs/adapter-node": "catalog:",
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",

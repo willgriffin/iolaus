@@ -70,3 +70,7 @@ var/
 *.sqlite
 *.sqlite-*
 *.db
+
+# Browser E2E artifacts
+apps/site/playwright-report/
+apps/site/test-results/

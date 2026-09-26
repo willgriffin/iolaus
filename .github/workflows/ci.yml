@@ -16,6 +16,31 @@ jobs:
       - run: >-
           pnpm format-check && pnpm lint && pnpm check && pnpm test && pnpm
           build && pnpm knowledge:check
+  mobile-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - run: npm install --global pnpm@11.24.0
+      - run: pnpm install --frozen-lockfile
+      - run: >-
+          pnpm --filter @willgriffin/iolaus-site exec playwright install
+          --with-deps chromium
+      - run: pnpm test:e2e
+      - run: pnpm test:e2e:check
+      - name: Upload synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-e2e
+          path: |
+            apps/site/playwright-report/
+            apps/site/test-results/
+          retention-days: 7
+          if-no-files-found: warn
   candidate-image:
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -1,0 +1,333 @@
+import {
+  test as base,
+  expect,
+  type Locator,
+  type Page,
+} from '@playwright/test';
+
+const test = base.extend<{ localNetwork: void }>({
+  // biome-ignore lint/correctness/noEmptyPattern: Playwright requires destructured fixture dependencies.
+  baseURL: async ({}, use) => {
+    const origin = process.env.IOLAUS_E2E_ORIGIN;
+    if (!origin) throw new Error('E2E setup missing');
+    await use(origin);
+  },
+  // biome-ignore lint/correctness/noEmptyPattern: Playwright requires destructured fixture dependencies.
+  storageState: async ({}, use) => {
+    if (!process.env.IOLAUS_E2E_AUTH) throw new Error('E2E auth missing');
+    await use(process.env.IOLAUS_E2E_AUTH);
+  },
+  localNetwork: [
+    async ({ context, baseURL }, use) => {
+      await context.route('**/*', (route) => {
+        if (new URL(route.request().url()).origin === baseURL)
+          return route.continue();
+        return route.abort();
+      });
+      await use();
+    },
+    { auto: true },
+  ],
+});
+
+async function openTasks(page: Page) {
+  const response = await page.goto('/admin/tasks');
+  expect(response?.status()).toBe(200);
+  await expect(
+    page.getByRole('heading', { name: 'Tasks', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Fictional mobile task 01', { exact: true }),
+  ).toBeAttached();
+}
+
+function knownRegression(condition: boolean, auditId: string) {
+  test.fail(
+    condition && process.env.IOLAUS_E2E_STRICT !== '1',
+    `${auditId}: mobile audit; issue #103. Run IOLAUS_E2E_STRICT=1 for red baseline.`,
+  );
+}
+
+async function swipe(
+  page: Page,
+  target: Locator,
+  direction: 'up' | 'left',
+  header = false,
+) {
+  const box = await target.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) throw new Error('Swipe target has no bounds');
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('Swipe needs a viewport');
+  const right = Math.min(box.x + box.width, viewport.width);
+  const bottom = Math.min(box.y + box.height, viewport.height);
+  const left = Math.max(0, box.x);
+  const top = Math.max(0, box.y);
+  expect(right - left).toBeGreaterThan(80);
+  expect(bottom - top).toBeGreaterThan(80);
+  const start = {
+    x: left + (right - left) * 0.8,
+    y: header ? top + 24 : top + (bottom - top) * 0.8,
+  };
+  const end =
+    direction === 'up'
+      ? { x: start.x, y: top + (bottom - top) * 0.2 }
+      : { x: left + (right - left) * 0.2, y: start.y };
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [start],
+    });
+    for (let step = 1; step <= 12; step += 1) {
+      await session.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [
+          {
+            x: start.x + ((end.x - start.x) * step) / 12,
+            y: start.y + ((end.y - start.y) * step) / 12,
+          },
+        ],
+      });
+      // Pace physical input; assertions below poll the actual scroll result.
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    await session.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    });
+  } finally {
+    await session.detach();
+  }
+}
+
+test('authenticated admin routes render without application errors', async ({
+  page,
+}) => {
+  for (const path of [
+    '/admin/tasks',
+    '/admin/opportunities',
+    '/admin/applications',
+    '/admin/sources',
+  ]) {
+    const resource = path.split('/').at(-1);
+    const dataResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/admin-resources/${resource}`,
+    );
+    const response = await page.goto(path);
+    expect((await dataResponse).status(), `${resource} data`).toBe(200);
+    expect(response?.status(), path).toBe(200);
+    await expect(page.locator('.admin-content')).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: /employment search/i }),
+    ).toBeVisible();
+    await expect(page.locator('.resource-action-feedback.error')).toHaveCount(
+      0,
+    );
+  }
+});
+
+test('navigation can be opened, used and reopened', async ({ page }) => {
+  await openTasks(page);
+  const opener = page
+    .getByRole('button', { name: 'Expand navigation', exact: true })
+    .first();
+  const mobile = (page.viewportSize()?.width ?? 0) <= 768;
+  knownRegression(mobile, 'M01');
+  await expect(opener).toBeInViewport();
+  if (mobile && process.env.IOLAUS_E2E_STRICT !== '1') return;
+  await opener.tap();
+  const panel = page.locator('.admin-tenant-panel');
+  await expect(panel).toBeInViewport();
+  await panel.getByRole('link', { name: 'Opportunities', exact: true }).tap();
+  await expect(page).toHaveURL(/\/admin\/opportunities/);
+  if ((page.viewportSize()?.width ?? 0) <= 768) {
+    await expect(opener).toBeInViewport();
+    await opener.tap();
+  }
+  await panel
+    .getByRole('button', { name: 'Collapse navigation', exact: true })
+    .tap();
+  await expect(opener).toBeInViewport();
+});
+
+test('task cards have usable height and respond to a vertical swipe', async ({
+  page,
+}) => {
+  await openTasks(page);
+  const list = page
+    .getByRole('region', { name: 'Intake & Decisions', exact: true })
+    .locator('.task-card-list');
+  await expect(
+    list.locator('.task-card').filter({ hasText: 'Fictional mobile task' }),
+  ).toHaveCount(16);
+  const height = await list.evaluate((element) => element.clientHeight);
+  const shortViewport = (page.viewportSize()?.height ?? 0) <= 568;
+  knownRegression(shortViewport, 'M02');
+  expect(height).toBeGreaterThanOrEqual(120);
+  if (shortViewport && process.env.IOLAUS_E2E_STRICT !== '1') return;
+  expect(
+    await list.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+  ).toBe(true);
+  await swipe(page, list, 'up');
+  await expect
+    .poll(() => list.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(30);
+});
+
+test('task board responds to a horizontal swipe across lane headers', async ({
+  page,
+}) => {
+  await openTasks(page);
+  const board = page.locator('.kanban-board');
+  const height = await board.evaluate((element) => element.clientHeight);
+  const shortViewport = (page.viewportSize()?.height ?? 0) <= 375;
+  knownRegression(shortViewport, 'M02');
+  expect(height).toBeGreaterThan(120);
+  if (shortViewport && process.env.IOLAUS_E2E_STRICT !== '1') return;
+  await swipe(page, board, 'left', true);
+  await expect
+    .poll(() => board.evaluate((element) => element.scrollLeft))
+    .toBeGreaterThan(30);
+});
+
+test('opportunity filters scroll vertically and close', async ({ page }) => {
+  const response = await page.goto('/admin/opportunities');
+  expect(response?.status()).toBe(200);
+  await page.getByRole('button', { name: /^Filters/ }).tap();
+  const dialog = page.getByRole('dialog', { name: 'Opportunity filters' });
+  await expect(dialog).toBeVisible();
+  const body = dialog.locator('.drawer-body');
+  const overflows = await body.evaluate(
+    (element) => element.scrollHeight > element.clientHeight,
+  );
+  if (overflows) {
+    await swipe(page, body, 'up');
+    await expect
+      .poll(() => body.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(30);
+  } else {
+    await expect(body.locator('.drawer-group').last()).toBeInViewport({
+      ratio: 1,
+    });
+  }
+  await dialog.getByRole('button', { name: 'Close filters' }).tap();
+  await expect(dialog).toHaveCount(0);
+});
+
+test('app settings use the full mobile width', async ({ page }) => {
+  await openTasks(page);
+  await page.getByRole('button', { name: 'Open app settings' }).tap();
+  const drawer = page.locator('.smrt-admin-shell__drawer--top');
+  await expect(drawer).toBeVisible();
+  const width = page.viewportSize()?.width ?? 0;
+  const box = await drawer.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  knownRegression(width <= 768, 'M03 (upstream SMRT shell)');
+  if (width <= 768) {
+    expect(box.x).toBeLessThanOrEqual(1);
+    expect(box.x + box.width).toBeGreaterThanOrEqual(width - 1);
+  } else {
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+  }
+});
+
+test('application review actions fit inside the page', async ({ page }) => {
+  await page.goto('/admin/applications');
+  const review = page
+    .locator('.application-list a[href^="/admin/applications/"]')
+    .first();
+  await expect(review).toBeVisible();
+  await review.tap();
+  await expect(page.locator('.review-header')).toBeVisible();
+  const width = page.viewportSize()?.width ?? 0;
+  const actions = await page.locator('.header-actions').boundingBox();
+  expect(actions).not.toBeNull();
+  if (!actions) return;
+  knownRegression(width <= 390, 'M04');
+  expect(actions.x).toBeGreaterThanOrEqual(0);
+  expect(actions.x + actions.width).toBeLessThanOrEqual(width);
+});
+
+test('filter controls fit without horizontal clipping', async ({ page }) => {
+  await page.goto('/admin/opportunities');
+  await page.getByRole('button', { name: /^Filters/ }).tap();
+  const body = page
+    .getByRole('dialog', { name: 'Opportunity filters' })
+    .locator('.drawer-body');
+  await expect(body).toBeVisible();
+  const overflow = await body.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  knownRegression((page.viewportSize()?.width ?? 0) <= 390, 'M05');
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test('application stage labels do not overlap', async ({ page }) => {
+  await page.goto('/admin/applications');
+  const labels = page
+    .locator('.application-list .track')
+    .first()
+    .locator('.step-label');
+  await expect(labels).toHaveCount(5);
+  const boxes = await labels.evaluateAll((elements) =>
+    elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+      };
+    }),
+  );
+  knownRegression((page.viewportSize()?.width ?? 0) <= 320, 'M06');
+  for (let index = 1; index < boxes.length; index += 1) {
+    const previous = boxes[index - 1];
+    const current = boxes[index];
+    expect(
+      current.left >= previous.right || current.top >= previous.bottom,
+    ).toBe(true);
+  }
+});
+
+test('footer status chips stay inside the visible footer', async ({ page }) => {
+  await openTasks(page);
+  const bar = page.locator('footer.smrt-admin-shell__edge--bottom');
+  const chips = bar.locator('.smrt-system-status-chips');
+  await expect(chips).toBeVisible();
+  const outer = await bar.boundingBox();
+  const inner = await chips.boundingBox();
+  expect(outer).not.toBeNull();
+  expect(inner).not.toBeNull();
+  if (!outer || !inner) return;
+  knownRegression((page.viewportSize()?.width ?? 0) <= 390, 'M07');
+  expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+  expect(inner.y + inner.height).toBeLessThanOrEqual(
+    Math.min(outer.y + outer.height, page.viewportSize()?.height ?? 0) + 1,
+  );
+});
+
+test('horizontal swipes over lane content reach later lanes', async ({
+  page,
+}) => {
+  await openTasks(page);
+  const board = page.locator('.kanban-board');
+  const height = await board.evaluate((element) => element.clientHeight);
+  if ((page.viewportSize()?.height ?? 0) <= 375) {
+    knownRegression(true, 'M02');
+    expect(height).toBeGreaterThan(120);
+    return;
+  }
+  expect(height).toBeGreaterThan(120);
+  await swipe(page, board, 'left');
+  // Only the scroll invariant is expected to fail; gesture errors fail normally.
+  const offset = await board.evaluate((element) => element.scrollLeft);
+  knownRegression(true, 'M08: lane content traps horizontal touch scrolling');
+  expect(offset).toBeGreaterThan(30);
+});

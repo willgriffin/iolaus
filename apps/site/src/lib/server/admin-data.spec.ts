@@ -591,6 +591,27 @@ describe('createAdminRecord combo fields', () => {
     expect(tags.create).not.toHaveBeenCalled();
   });
 
+  it('loads task profile references without ordering by sensitive CandidateProfile.name', async () => {
+    const profiles = mockCollection([
+      { id: 'profile-1', name: 'Fictional Owner' },
+    ]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+    const fields = resource.fields.filter(
+      (field) => field.key === 'organizationProfileId',
+    );
+    expect(fields).toHaveLength(1);
+    const options = await listReferenceOptions({ ...resource, fields });
+    expect(profiles.list).toHaveBeenCalledWith({
+      limit: 1000,
+      orderBy: 'profileKey ASC',
+    });
+    expect(options.organizationProfileId).toEqual([
+      expect.objectContaining({ label: 'Fictional Owner', value: 'profile-1' }),
+    ]);
+  });
+
   it('loads reference labels and canonical hrefs for resource fields', async () => {
     const sources = mockCollection([{ id: 'source-1', name: 'Greenhouse' }]);
     smrtMock.collections.set('Source', sources);

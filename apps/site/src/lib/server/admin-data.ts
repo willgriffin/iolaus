@@ -256,8 +256,11 @@ export async function listReferenceOptions(
       )
       .map(async ([field, reference]) => {
         const collection = await getCollection(reference.className as string);
+        // SMRT forbids ordering by sensitive CandidateProfile fields such as name.
         const orderKey =
-          reference.labelKey ?? reference.labelKeys?.[0] ?? 'updated_at';
+          reference.className === 'CandidateProfile'
+            ? 'profileKey'
+            : (reference.labelKey ?? reference.labelKeys?.[0] ?? 'updated_at');
         const records = (await collection.list({
           orderBy: `${orderKey} ASC`,
           limit: 1000,
