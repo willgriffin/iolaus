@@ -156,6 +156,17 @@ $effect(() => {
   retryListLoad();
 });
 
+// Enhanced form actions re-run `load` through invalidateAll instead of
+// reloading the page, and an action may return no data (leaving `form`
+// unchanged), so a new shell `data` object also refreshes the list (#90).
+let lastData = untrack(() => data);
+$effect(() => {
+  const currentData = data;
+  if (currentData === lastData) return;
+  lastData = currentData;
+  retryListLoad();
+});
+
 onMount(() => {
   const refresh = () => retryListLoad();
   window.addEventListener(ADMIN_RESOURCE_REFRESH_EVENT, refresh);

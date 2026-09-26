@@ -1,4 +1,7 @@
 <script lang="ts">
+import { enhance } from '$app/forms';
+import { keepFormValues } from '$lib/admin/form-enhance';
+
 let { data, form } = $props();
 
 function preferences(): Record<string, string | string[]> {
@@ -39,7 +42,7 @@ const stringList = (value: string | string[] | undefined) =>
     <p class="notice success" role="status">Removed that answer from future reuse.</p>
   {/if}
 
-  <form method="POST" action="?/save" class="onboarding-form">
+  <form use:enhance={keepFormValues} method="POST" action="?/save" class="onboarding-form">
     <section>
       <h2>Contact and location</h2>
       <div class="grid two">
@@ -114,7 +117,7 @@ const stringList = (value: string | string[] | undefined) =>
     <section class="saved-answers" aria-label="Saved reusable answers">
       <h2>Saved reusable answers</h2>
       {#each data.reusableAnswers as answer (answer.id)}
-        <form method="POST" action="?/revokeReusableAnswer">
+        <form use:enhance method="POST" action="?/revokeReusableAnswer">
           <div><strong>{answer.label}</strong><span>{answer.value}</span></div>
           <input type="hidden" name="labelKey" value={answer.labelKey} />
           <button type="submit" class="secondary">Stop reusing</button>

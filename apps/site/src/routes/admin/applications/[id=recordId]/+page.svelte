@@ -7,6 +7,7 @@ import Package from '@lucide/svelte/icons/package';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import Save from '@lucide/svelte/icons/save';
 import Send from '@lucide/svelte/icons/send';
+import { enhance } from '$app/forms';
 import { renderSafeMarkdown } from '$lib/markdown-preview';
 
 type RecordLike = Record<string, unknown> & { id?: string };
@@ -232,7 +233,7 @@ $effect(() => {
     </div>
     <div class="header-actions">
       {#if canGeneratePacket && !data.preflight.requiresOverride}
-        <form method="POST" action="?/generatePacket">
+        <form use:enhance method="POST" action="?/generatePacket">
           <button class="secondary-action" type="submit">
             <Package size={16} strokeWidth={2.2} />
             <span>{value(data.application, 'packetAssetId') ? 'Regenerate packet' : 'Generate packet'}</span>
@@ -324,7 +325,7 @@ $effect(() => {
               </details>
             {/if}
           {:else if material.materialType === 'answers' && data.answersEditor.hasSchema}
-            <form
+            <form use:enhance
               method="POST"
               action="?/provideAnswers"
               class="answers-editor"
@@ -406,7 +407,7 @@ $effect(() => {
                   submitted.
                 </p>
                 {#each savedReusableAnswers as question (question.id)}
-                  <form
+                  <form use:enhance
                     method="POST"
                     action="?/revokeReusableAnswer"
                     class="answers-library-row"
@@ -472,7 +473,7 @@ $effect(() => {
   </div>
 
 	  <aside class="review-sidebar" aria-label="Review">
-	    <form
+	    <form use:enhance
 	      id="application-review-form"
 	      method="POST"
 	      action="?/addComments"
@@ -523,7 +524,7 @@ $effect(() => {
             yourself, then explain what you verified before generating the
             packet.
           </p>
-          <form method="POST" action="?/generatePacket">
+          <form use:enhance method="POST" action="?/generatePacket">
             <label for="preflight-override-reason">
               <span>Reason to override the posting check</span>
               <textarea
@@ -637,7 +638,7 @@ $effect(() => {
 
   {#if canRecordSubmission}
     <section class="submission-row" aria-label="Submission">
-      <form method="POST" action="?/recordSubmission" class="submission-panel">
+      <form use:enhance method="POST" action="?/recordSubmission" class="submission-panel">
         <h2>
           <Send size={16} strokeWidth={2.2} />
           <span>Record submission</span>
@@ -700,7 +701,7 @@ $effect(() => {
         </button>
       </form>
 
-      <form method="POST" action="?/reportBlocker" class="submission-panel blocker">
+      <form use:enhance method="POST" action="?/reportBlocker" class="submission-panel blocker">
         <h2>
           <AlertTriangle size={16} strokeWidth={2.2} />
           <span>Report blocker</span>

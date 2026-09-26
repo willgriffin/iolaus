@@ -1005,6 +1005,30 @@ describe('loadPublishedResumeSource', () => {
     expect(mocks.loadPublishedResumeStamp).not.toHaveBeenCalled();
   });
 
+  it('keeps the configured pool size on the stamp database (#93)', async () => {
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+    const database = {
+      max: 5,
+      type: 'postgres',
+      url: 'postgresql://example.test/resume',
+    };
+    mocks.getCurrentSessionPermissionContext.mockReturnValue({
+      database,
+      tenantId: 'tenant-a',
+    });
+    mocks.getRequestScopedSmrtOptions.mockReturnValue({ db: database });
+
+    await getCachedPublishedResumeSource();
+
+    // The first resolver of `smrt:<url>` sizes the shared pool, so dropping
+    // `max` here reverted every process to the SQL default of 20 clients.
+    expect(mocks.loadPublishedResumeStamp).toHaveBeenCalledWith(
+      expect.objectContaining({ max: 5 }),
+    );
+  });
+
   it('stamps against the same database the payload was loaded from', async () => {
     // The isolation property that matters: a stamp read from one database must
     // never validate a payload loaded from another. Assert BOTH sides come from

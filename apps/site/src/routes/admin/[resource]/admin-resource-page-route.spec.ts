@@ -20,7 +20,6 @@ vi.mock('$lib/server/admin-resource-route', () => ({
   createFactIntakeAction: vi.fn(),
   deleteAdminResourceAction: vi.fn(),
   digDeeperOpportunityAction: mocks.digDeeper,
-  loadAdminResourcePageShellData: vi.fn(),
   loadOpportunityDetailsAction: vi.fn(),
   previewInactiveOpportunitySweepAction: vi.fn(),
   processOpportunityAction: vi.fn(),

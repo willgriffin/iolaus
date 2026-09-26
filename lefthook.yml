@@ -5,6 +5,10 @@ pre-commit:
       run: pnpm biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
 
+    npmrc-credentials:
+      glob: '**/.npmrc'
+      run: node scripts/check-npmrc-credentials.mjs
+
     validate-workflows:
       glob: '.github/workflows/*.{yml,yaml}'
       run: |

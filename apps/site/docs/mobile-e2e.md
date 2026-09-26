@@ -12,7 +12,7 @@ happy-dom and does not provide this coverage.
 
 | Invariant | Trigger / positive case | Failure case | Context / data | Level / command |
 | --- | --- | --- | --- | --- |
-| CandidateProfile references use permitted query fields | Load task data with an candidate profile | SMRT rejects ordering on sensitive `CandidateProfile.name` | Real SMRT + SQLite, no raw SQL bypass | E2E setup health check and unit regression |
+| CandidateProfile references use permitted query fields | Load task data with an candidate profile | SMRT rejects ordering on sensitive `CandidateProfile.name` | Real SMRT + SQLite, no raw SQL bypass | E2E setup health check; existing unit coverage |
 | Authenticated routes load | Fresh owner session opens tasks, opportunities, applications, sources | HTTP failure or application error fails before mobile assertions | Isolated local owner; synthetic SQLite records | E2E: `pnpm test:e2e` |
 | Navigation remains reachable | Tap header navigation, select Opportunities, reopen and close | No on-screen opener at mobile widths (audit M01) | Fresh browser context for each viewport; real shell | E2E, expected failure until fixed |
 | Task cards remain usable | At least 120 CSS pixels of card viewport, then swipe vertically | Zero/58px card viewport in landscape/small portrait (M02) | 16 fictional inbox tasks in the Intake & Decisions lane; local SQLite | E2E, expected failure at affected sizes |
@@ -64,10 +64,10 @@ a physical Android phone, Android WebView, or Safari. The suite covers the seven
 behavior; expand it alongside those fixes. Font requests are blocked, so these
 checks use local fallback fonts rather than depending on Google Fonts.
 
-The initial baseline also exposed a task-data HTTP 500: CandidateProfile reference options
-ordered on sensitive `name`. This change orders CandidateProfile references by stable `profileKey`;
-other reference types keep their configured label ordering. The suite refuses
-to start if the authenticated task-data endpoint fails.
+The older checkout exposed a task-data HTTP 500 from sorting sensitive
+`CandidateProfile.name`. Current main already fixes this by querying neutral
+fields and sorting rendered labels; this test change preserves that solution.
+The suite refuses to start if authenticated task data fails to load.
 
 The legacy package `db:status` script assumes PostgreSQL and fails on SQLite
 (`pg_tables` missing); tracked separately in [#104](https://github.com/willgriffin/iolaus/issues/104).
@@ -76,7 +76,7 @@ runtime. No PostgreSQL schema or migration is changed.
 
 ## Recorded baseline
 
-On the initial macOS Chromium run, strict mode executed 44 scenarios: 24 passed
+On macOS Chromium against current main (SMRT 0.51.16), strict mode executes 44 scenarios: 24 passed
 and 20 failed on the tracked M01–M08 defects, with no skipped tests. These are
 viewport/scenario counts, not 20 distinct bugs. Default mode marks precisely
 those existing failures as expected; it must not be described as a clean mobile

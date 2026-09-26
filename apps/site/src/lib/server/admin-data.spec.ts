@@ -8,6 +8,7 @@ import {
   getAdminRecord,
   listAdminRecords,
   listComboOptions,
+  listPageReferenceOptions,
   listReferenceOptions,
   parseResourceForm,
   updateAdminRecord,
@@ -29,7 +30,13 @@ function matchesWhere(
   where: Record<string, unknown> | undefined,
 ): boolean {
   if (!where) return true;
-  return Object.entries(where).every(([key, value]) => record[key] === value);
+  return Object.entries(where).every(([key, value]) => {
+    const inMatch = /^(\w+) in$/u.exec(key);
+    if (inMatch?.[1] && Array.isArray(value)) {
+      return value.includes(record[inMatch[1]]);
+    }
+    return record[key] === value;
+  });
 }
 
 function mockCollection(initialRecords: Array<Record<string, unknown>> = []) {
@@ -591,27 +598,6 @@ describe('createAdminRecord combo fields', () => {
     expect(tags.create).not.toHaveBeenCalled();
   });
 
-  it('loads task profile references without ordering by sensitive CandidateProfile.name', async () => {
-    const profiles = mockCollection([
-      { id: 'profile-1', name: 'Fictional Owner' },
-    ]);
-    smrtMock.collections.set('CandidateProfile', profiles);
-    const resource = getAdminResource('tasks');
-    if (!resource) throw new Error('Expected tasks resource.');
-    const fields = resource.fields.filter(
-      (field) => field.key === 'organizationProfileId',
-    );
-    expect(fields).toHaveLength(1);
-    const options = await listReferenceOptions({ ...resource, fields });
-    expect(profiles.list).toHaveBeenCalledWith({
-      limit: 1000,
-      orderBy: 'profileKey ASC',
-    });
-    expect(options.organizationProfileId).toEqual([
-      expect.objectContaining({ label: 'Fictional Owner', value: 'profile-1' }),
-    ]);
-  });
-
   it('loads reference labels and canonical hrefs for resource fields', async () => {
     const sources = mockCollection([{ id: 'source-1', name: 'Greenhouse' }]);
     smrtMock.collections.set('Source', sources);
@@ -831,7 +817,7 @@ describe('createAdminRecord combo fields', () => {
 
     expect(companyResearch.list).toHaveBeenCalledWith({
       limit: 1000,
-      orderBy: 'websiteUrl ASC',
+      orderBy: 'updated_at DESC',
     });
     expect(options.companyResearchId).toEqual([
       {
@@ -840,6 +826,115 @@ describe('createAdminRecord combo fields', () => {
         value: 'research-1',
       },
     ]);
+  });
+
+  it('never orders reference options by a sensitive label field', async () => {
+    const profiles = mockCollection([
+      { id: 'profile-b', name: 'Zed Owner' },
+      { id: 'profile-a', name: 'Ada Owner' },
+    ]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+
+    const options = await listReferenceOptions({
+      ...resource,
+      fields: resource.fields.filter(
+        (field) => field.key === 'assignedToProfileId',
+      ),
+    });
+
+    // CandidateProfile.name is sensitive; SMRT rejects it in ORDER BY
+    // (willgriffin/iolaus#82), so labels are sorted after serialization.
+    expect(profiles.list).toHaveBeenCalledWith({
+      limit: 1000,
+      orderBy: 'updated_at DESC',
+    });
+    expect(options.assignedToProfileId?.map((option) => option.value)).toEqual([
+      'profile-a',
+      'profile-b',
+    ]);
+  });
+
+  it('fetches each referenced class once for form picker options', async () => {
+    const profiles = mockCollection([{ id: 'profile-a', name: 'Ada Owner' }]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+    const profileFields = resource.fields.filter((field) =>
+      [
+        'assignedToProfileId',
+        'createdByProfileId',
+        'organizationProfileId',
+      ].includes(field.key),
+    );
+    expect(profileFields).toHaveLength(3);
+
+    const options = await listReferenceOptions({
+      ...resource,
+      fields: profileFields,
+    });
+
+    expect(profiles.list).toHaveBeenCalledTimes(1);
+    for (const field of profileFields) {
+      expect(options[field.key]?.map((option) => option.value)).toEqual([
+        'profile-a',
+      ]);
+    }
+  });
+
+  it('labels only the references present on a list page', async () => {
+    const profiles = mockCollection([
+      { id: 'profile-a', name: 'Ada Owner' },
+      { id: 'profile-b', name: 'Bea Owner' },
+      { id: 'profile-c', name: 'Cy Owner' },
+    ]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+    const fields = resource.fields.filter((field) =>
+      ['assignedToProfileId', 'createdByProfileId'].includes(field.key),
+    );
+
+    const options = await listPageReferenceOptions({ ...resource, fields }, [
+      { assignedToProfileId: 'profile-b', createdByProfileId: 'profile-a' },
+      { assignedToProfileId: 'profile-b', createdByProfileId: '' },
+    ]);
+
+    // One id-scoped lookup for the class, never an unfiltered newest-1000 scan.
+    expect(profiles.list).toHaveBeenCalledTimes(1);
+    const [listOptions] = profiles.list.mock.calls[0] ?? [];
+    expect(listOptions?.limit).toBe(2);
+    expect(
+      [...((listOptions?.where?.['id in'] as string[]) ?? [])].sort(),
+    ).toEqual(['profile-a', 'profile-b']);
+    expect(options.assignedToProfileId).toEqual([
+      expect.objectContaining({ label: 'Bea Owner', value: 'profile-b' }),
+    ]);
+    expect(options.createdByProfileId).toEqual([
+      expect.objectContaining({ label: 'Ada Owner', value: 'profile-a' }),
+    ]);
+  });
+
+  it('skips reference lookups when a list page has no references', async () => {
+    const profiles = mockCollection([{ id: 'profile-a', name: 'Ada Owner' }]);
+    smrtMock.collections.set('CandidateProfile', profiles);
+    const resource = getAdminResource('tasks');
+    if (!resource) throw new Error('Expected tasks resource.');
+
+    const options = await listPageReferenceOptions(
+      {
+        ...resource,
+        fields: resource.fields.filter(
+          (field) => field.key === 'assignedToProfileId',
+        ),
+      },
+      [{ assignedToProfileId: '' }],
+    );
+
+    expect(profiles.list).not.toHaveBeenCalled();
+    expect(options.assignedToProfileId).toEqual([]);
   });
 
   it('falls back to serialized list records when direct record lookup misses', async () => {

@@ -1,4 +1,7 @@
 <script lang="ts">
+import { enhance } from '$app/forms';
+import { keepFormValues } from '$lib/admin/form-enhance';
+
 let { data, form } = $props();
 </script>
 
@@ -13,7 +16,7 @@ let { data, form } = $props();
     </div>
   </header>
 
-  <form class="approval-panel" method="POST" action="?/approve">
+  <form use:enhance={keepFormValues} class="approval-panel" method="POST" action="?/approve">
     <label>
       <span>Code</span>
       <input value={form?.userCode ?? data.userCode} name="userCode" autocomplete="one-time-code" />

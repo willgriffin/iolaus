@@ -81,6 +81,29 @@ const MAX_ERROR_SAMPLES = 5;
 const MAX_ERROR_LENGTH = 300;
 const MAX_LABEL_LENGTH = 200;
 const MAX_ENUM_LENGTH = 64;
+// Crawl-history reads per source run a few at a time: an unbounded fan-out
+// over up to MAX_SOURCE_SCAN sources queued hundreds of queries on the pool
+// (IOLAUS_DB_POOL_MAX, default 5) and timed out other requests (#93).
+export const SOURCE_HEALTH_QUERY_CONCURRENCY = 4;
+
+async function mapWithBoundedConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  map: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index] as T);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+  return results;
+}
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -450,8 +473,10 @@ export async function listRootSourceHealth(
             .map((value) => stringValue(value).toLowerCase())
             .some((value) => value.includes(query))),
     );
-  const allItems = await Promise.all(
-    selected.map(async (source) => {
+  const allItems = await mapWithBoundedConcurrency(
+    selected,
+    SOURCE_HEALTH_QUERY_CONCURRENCY,
+    async (source) => {
       const history = await terminalCrawlsForSource(
         crawls,
         stringValue(source.id),
@@ -468,7 +493,7 @@ export async function listRootSourceHealth(
         nextCheckAt: source.nextCheckAt ?? null,
         health: aggregateHealth(history),
       };
-    }),
+    },
   );
   const providerMap = new Map<string, ReturnType<typeof aggregateHealth>>();
   for (const item of allItems) {

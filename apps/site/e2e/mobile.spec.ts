@@ -130,6 +130,13 @@ test('authenticated admin routes render without application errors', async ({
 
 test('navigation can be opened, used and reopened', async ({ page }) => {
   await openTasks(page);
+  const panel = page.locator('.admin-tenant-panel');
+  if ((page.viewportSize()?.width ?? 0) >= 1280) {
+    await expect(panel).toBeInViewport();
+    await panel
+      .getByRole('button', { name: 'Collapse navigation', exact: true })
+      .tap();
+  }
   const opener = page
     .getByRole('button', { name: 'Expand navigation', exact: true })
     .first();
@@ -138,7 +145,6 @@ test('navigation can be opened, used and reopened', async ({ page }) => {
   await expect(opener).toBeInViewport();
   if (mobile && process.env.IOLAUS_E2E_STRICT !== '1') return;
   await opener.tap();
-  const panel = page.locator('.admin-tenant-panel');
   await expect(panel).toBeInViewport();
   await panel.getByRole('link', { name: 'Opportunities', exact: true }).tap();
   await expect(page).toHaveURL(/\/admin\/opportunities/);

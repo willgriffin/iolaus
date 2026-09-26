@@ -4,7 +4,7 @@ import type { ColorScheme } from '@happyvertical/smrt-ui/themes';
 import { ThemeProvider } from '@happyvertical/smrt-ui/themes';
 import { webMcpToolDefinitions } from '@happyvertical/smrt-virt-web';
 import { browser } from '$app/environment';
-import { page } from '$app/state';
+import { navigating, page } from '$app/state';
 import {
   commandCenterWebMcpConfig,
   jobSearchWebMcpToolDefinitions,
@@ -38,6 +38,9 @@ function persistedColorScheme(): ColorScheme {
 const initialColorScheme: ColorScheme = browser
   ? persistedColorScheme()
   : 'system';
+// `navigating.to` flips as soon as SvelteKit starts a client navigation, before
+// any load resolves, so the bar gives immediate feedback on click.
+const isNavigating = $derived(Boolean(navigating.to));
 const webmcp = $derived(
   commandCenterWebMcpConfig(
     [...webMcpToolDefinitions, ...jobSearchWebMcpToolDefinitions],
@@ -46,8 +49,50 @@ const webmcp = $derived(
 );
 </script>
 
+{#if isNavigating}
+  <!-- Decorative only: routes announce their own loading states. -->
+  <div class="nav-progress" aria-hidden="true">
+    <div class="nav-progress-bar"></div>
+  </div>
+{/if}
+
 <Provider {webmcp}>
   <ThemeProvider preset="studio" colorScheme={initialColorScheme}>
     {@render children?.()}
   </ThemeProvider>
 </Provider>
+
+<style>
+  .nav-progress {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline: 0;
+    block-size: 3px;
+    z-index: 2147483647;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .nav-progress-bar {
+    block-size: 100%;
+    inline-size: 40%;
+    background: var(--smrt-color-primary, currentColor);
+    animation: nav-progress-slide 1s ease-in-out infinite;
+  }
+
+  @keyframes nav-progress-slide {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(250%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-progress-bar {
+      animation: none;
+      inline-size: 100%;
+    }
+  }
+</style>

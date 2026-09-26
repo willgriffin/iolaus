@@ -4,6 +4,7 @@ import {
   SelectInput,
   TextInput,
 } from '@happyvertical/smrt-svelte/forms';
+import { enhance } from '$app/forms';
 
 let { data, form } = $props();
 </script>
@@ -18,7 +19,7 @@ let { data, form } = $props();
     </p>
   </header>
 
-  <form method="POST" action="?/create">
+  <form use:enhance method="POST" action="?/create">
     <TextInput
       name="name"
       required

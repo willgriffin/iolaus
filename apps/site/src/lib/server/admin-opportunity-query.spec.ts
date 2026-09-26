@@ -254,7 +254,7 @@ describe('admin-opportunity-query', () => {
       reviewFilter: 'unsorted',
     });
     const scoreJoin = joins.find((join) => join.includes('evaluation_scores'));
-    expect(scoreJoin).toContain('es.opportunity_id = o.id');
+    expect(scoreJoin).toContain('es.opportunity_id = CAST(o.id AS TEXT)');
     expect(scoreJoin).toContain(
       "COALESCE(es.source_content_fingerprint, '') =",
     );

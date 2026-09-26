@@ -114,10 +114,10 @@ describe('opportunity-sweep', () => {
       "COALESCE(lower(btrim(o.human_review_status)), '') <> ALL($3::text[])",
     );
     expect(sql).toContain(
-      'NOT EXISTS (\n      SELECT 1 FROM applications a WHERE a.opportunity_id = o.id\n    )',
+      'NOT EXISTS (\n      SELECT 1 FROM applications a WHERE a.opportunity_id = CAST(o.id AS TEXT)\n    )',
     );
     expect(sql).toContain(
-      "d.opportunity_id = o.id AND d.decision_by = 'owner'",
+      "d.opportunity_id = CAST(o.id AS TEXT) AND d.decision_by = 'owner'",
     );
     expect(reviewStatuses).toEqual(['apply', 'maybe', 'reject']);
     for (const protectedStatus of [
@@ -471,9 +471,11 @@ describe('opportunity-sweep', () => {
     expect(statements[lockIndex]).toContain('FOR UPDATE OF o SKIP LOCKED');
     // The archive is restricted to the rows the lock actually took and
     // re-evaluates the whole match predicate against a fresh snapshot.
-    expect(statements[updateIndex]).toContain('o.id = ANY($8::text[])');
     expect(statements[updateIndex]).toContain(
-      "d.opportunity_id = o.id AND d.decision_by = 'owner'",
+      'CAST(o.id AS TEXT) = ANY($8::text[])',
+    );
+    expect(statements[updateIndex]).toContain(
+      "d.opportunity_id = CAST(o.id AS TEXT) AND d.decision_by = 'owner'",
     );
   });
 

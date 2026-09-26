@@ -2034,7 +2034,8 @@ export const adminResources: AdminResource[] = [
     description:
       'Contact and profile links shown in profile and resume headers.',
     icon: 'rss',
-    orderBy: 'sortOrder ASC',
+    // sortOrder is a sensitive field, which SMRT refuses to ORDER BY.
+    orderBy: 'created_at ASC',
     tableColumns: ['profileKey', 'label', 'href', 'sortOrder', 'updated_at'],
     fields: [
       {

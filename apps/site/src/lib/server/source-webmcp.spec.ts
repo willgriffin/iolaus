@@ -19,6 +19,7 @@ import {
   enqueueRootSourceCrawl,
   listRootSourceHealth,
   listSourceCrawlStatus,
+  SOURCE_HEALTH_QUERY_CONCURRENCY,
   setRootSourceActive,
 } from './source-webmcp';
 
@@ -164,6 +165,44 @@ describe('source WebMCP service', () => {
         user: { id: 'user-1' },
       }),
     );
+  });
+
+  it('reads crawl history for many sources with bounded concurrency (#93)', async () => {
+    const roots = Array.from({ length: 24 }, (_, index) => ({
+      ...root,
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      name: `Root ${index}`,
+    }));
+    const sources = collection(roots);
+    const crawls = collection([]);
+    let inFlight = 0;
+    let peak = 0;
+    const list = crawls.list;
+    crawls.list = vi.fn(async (...args: Parameters<typeof list>) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      try {
+        return await list(...args);
+      } finally {
+        inFlight -= 1;
+      }
+    }) as typeof list;
+
+    const result = await listRootSourceHealth(
+      { historyLimit: 5, limit: 25 },
+      {
+        crawlCollection: crawls as never,
+        database: database() as never,
+        jobCollection: collection() as never,
+        sourceCollection: sources as never,
+      },
+    );
+
+    expect(crawls.list).toHaveBeenCalledTimes(24);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(SOURCE_HEALTH_QUERY_CONCURRENCY);
+    expect(result.items).toHaveLength(24);
   });
 
   it('ranks provider health from terminal durable counts without sensitive fields', async () => {

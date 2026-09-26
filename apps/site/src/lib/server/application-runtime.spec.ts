@@ -129,3 +129,24 @@ describe('deployed runtime entrypoints', () => {
     });
   }, 15_000);
 });
+
+describe('hosted database pool ceiling', () => {
+  it('defaults each process to a pool that fits the runtime role limit', async () => {
+    const { DEFAULT_HOSTED_DATABASE_POOL_MAX, hostedDatabasePoolMax } =
+      await import('./application-runtime');
+    expect(hostedDatabasePoolMax({})).toBe(DEFAULT_HOSTED_DATABASE_POOL_MAX);
+    // Two web replicas plus a rollout surge and both workers must fit the
+    // 30-connection runtime role alongside one readiness client each.
+    expect(5 * DEFAULT_HOSTED_DATABASE_POOL_MAX + 5).toBeLessThanOrEqual(30);
+  });
+
+  it('accepts a positive integer override and rejects anything else', async () => {
+    const { hostedDatabasePoolMax } = await import('./application-runtime');
+    expect(hostedDatabasePoolMax({ IOLAUS_DB_POOL_MAX: ' 8 ' })).toBe(8);
+    for (const value of ['0', '-1', '2.5', 'many']) {
+      expect(() =>
+        hostedDatabasePoolMax({ IOLAUS_DB_POOL_MAX: value }),
+      ).toThrow('IOLAUS_DB_POOL_MAX must be a positive integer.');
+    }
+  });
+});
