@@ -14,14 +14,14 @@ happy-dom and does not provide this coverage.
 | --- | --- | --- | --- | --- |
 | CandidateProfile references use permitted query fields | Load task data with an candidate profile | SMRT rejects ordering on sensitive `CandidateProfile.name` | Real SMRT + SQLite, no raw SQL bypass | E2E setup health check; existing unit coverage |
 | Authenticated routes load | Fresh owner session opens tasks, opportunities, applications, sources | HTTP failure or application error fails before mobile assertions | Isolated local owner; synthetic SQLite records | E2E: `pnpm test:e2e` |
-| Navigation remains reachable | Tap header navigation, select Opportunities, reopen and close | No on-screen opener at mobile widths (audit M01) | Fresh browser context for each viewport; real shell | E2E, expected failure until fixed |
-| Task cards remain usable | At least 120 CSS pixels of card viewport, then swipe vertically | Zero/58px card viewport in landscape/small portrait (M02) | 16 fictional inbox tasks in the Intake & Decisions lane; local SQLite | E2E, expected failure at affected sizes |
+| Navigation remains reachable | Tap header navigation, select Opportunities, reopen and close | No on-screen opener at mobile widths (audit M01) | Fresh browser context for each viewport; real shell | E2E, required pass |
+| Task cards remain usable | At least 120 CSS pixels of card viewport, then swipe vertically | Zero/58px card viewport in landscape/small portrait (M02) | 16 fictional inbox tasks in the Intake & Decisions lane; local SQLite | E2E, required pass; short pages scroll the header out of the way |
 | Board scrolls horizontally | Swipe across lane headers reveals later lanes | Touch gesture does not move board | Chromium CDP touch input; no DOM scroll assignment | E2E: `pnpm test:e2e` |
-| Lane content passes horizontal swipes to the board | Swipe over lane content at usable sizes | Nested lane scroller traps horizontal touch input (M08) | Real pointer input; portrait and desktop control | E2E, expected failure; landscape first fails M02 |
+| Lane content passes horizontal swipes to the board | Swipe over lane content at usable sizes | Nested lane scroller traps horizontal touch input (M08) | Real pointer input; portrait and desktop control | E2E, required pass on every viewport |
 | Settings overlay uses mobile width | Open account/settings drawer | Reserved desktop rail width clips mobile panel (M03, SMRT) | Local owner, real upstream shell | E2E, expected failure on mobile |
-| Review actions remain on screen | Open fictional application review | Header actions overflow narrow viewport (M04) | Synthetic awaiting-review application | E2E, expected failure at narrow widths |
-| Filter controls fit | Open opportunity filters | Horizontal content overflow (M05) | Real form controls, no mocked layout | E2E, expected failure at 320/390px; Linux fallback fonts also overflow the 420px drawer |
-| Application stages remain legible | Render the five stage labels | Adjacent label bounds overlap (M06) | Fictional application | E2E, expected failure at 320px |
+| Review actions remain on screen | Open fictional application review | Header actions overflow narrow viewport (M04) | Synthetic awaiting-review application | E2E, required pass |
+| Filter controls fit | Open opportunity filters | Horizontal content overflow (M05) | Real form controls, no mocked layout | E2E, required pass with macOS and Linux fonts |
+| Application stages remain legible | Render the five stage labels | Adjacent label bounds overlap (M06) | Fictional application | E2E, required pass |
 | Footer chips remain visible | Render status footer | Chips extend past fixed footer bounds (M07) | Real shell footer | E2E, expected failure at narrow widths |
 | Filters remain usable | Open filters, swipe to lower controls, close | Drawer traps scrolling or exceeds viewport | Real opportunity filters and synthetic records | E2E: `pnpm test:e2e` |
 
@@ -60,9 +60,8 @@ command, not the default CI command while known defects remain.
 
 Projects: 390×844 Android portrait, 667×375 Android landscape, 320×568 narrow
 portrait, and 1280×800 desktop control. Chromium device emulation is not proof on
-a physical Android phone, Android WebView, or Safari. The suite covers the seven audited defects plus the newly reproduced M08, not every admin form or keyboard
-behavior; expand it alongside those fixes. Font requests are blocked, so these
-checks use local fallback fonts rather than depending on Google Fonts. Linux and macOS font metrics differ; M05 is also expected at wider Linux viewports. Gesture helpers wait for scrolling to settle before the next interaction, because a tap during kinetic scrolling can be consumed to stop the scroll.
+a physical Android phone, Android WebView, or Safari. The suite covers M01–M08 plus navigation reload/resize and short-page toolbar scrolling. It does not cover every admin form or keyboard behavior. Font requests are blocked, so these
+checks use local fallback fonts rather than depending on Google Fonts. Linux and macOS font metrics differ; filter sizing must pass on both. Gesture helpers wait for scrolling to settle before the next interaction, because a tap during kinetic scrolling can be consumed to stop the scroll.
 
 The older checkout exposed a task-data HTTP 500 from sorting sensitive
 `CandidateProfile.name`. Current main already fixes this by querying neutral
@@ -81,3 +80,25 @@ and 20 failed on the tracked M01–M08 defects, with no skipped tests. These are
 viewport/scenario counts, not 20 distinct bugs. Default mode marks precisely
 those existing failures as expected; it must not be described as a clean mobile
 UI audit. A passing annotation becomes an unexpected pass that fails CI. Linux additionally reproduces M05 at landscape and desktop drawer widths (22 expected failures across the same 44 scenarios).
+
+
+## Mobile fixes (issue #103)
+
+The app restores an always-reachable app-bar navigation toggle. Short task
+viewports allow the page header and filters to scroll while keeping a useful
+card area; vertical lane scroll containment no longer traps horizontal swipes.
+Review actions stack on narrow screens, filter fields can shrink, and stage
+labels stack vertically on phones at 400 CSS pixels or narrower.
+
+The suite now runs 52 scenarios. With the existing released SMRT dependency,
+47 pass normally and five remain explicit expected failures: M03 settings drawer
+width (three mobile projects) and M07 footer clipping (two narrow projects).
+The shared fixes belong to happyvertical/smrt#3156. Their annotations must be
+removed when the upstream release is adopted; strict mode remains the full
+acceptance gate. There is no downstream shell CSS patch or dependency override.
+
+The combined app and candidate upstream components pass all 52 scenarios in
+strict mode on macOS Chromium. This integration probe temporarily substitutes
+the four built shell components for validation and restores the installed
+package afterward; it is not a shipped dependency override. The upstream shell
+suite also passes 37 geometry, long-content, and touch-scroll scenarios.

@@ -1950,7 +1950,7 @@ function taskMeta(record: AdminRecord): string {
     gap: 8px;
     min-height: 0;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior-y: contain;
     padding-right: 2px;
   }
 
@@ -2588,5 +2588,28 @@ function taskMeta(record: AdminRecord): string {
 
   .empty {
     color: var(--smrt-color-on-surface-variant);
+  }
+  @media (max-height: 700px) {
+    :global(.smrt-admin-shell__main:has(.task-kanban-page)) {
+      overflow: auto !important;
+    }
+
+    :global(.admin-content:has(.task-kanban-page)),
+    .task-kanban-page {
+      height: auto;
+      min-height: 100%;
+      overflow: visible;
+    }
+
+    .task-kanban-page,
+    .task-kanban-page .task-workspace {
+      grid-template-rows: auto auto;
+      overflow: visible;
+    }
+
+    .kanban-board {
+      height: clamp(18rem, 60dvh, 30rem);
+      min-height: 18rem;
+    }
   }
 </style>

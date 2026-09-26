@@ -303,9 +303,14 @@ const cards = $derived(
   }
 
   .step-label {
+    max-width: 100%;
+    padding-inline: 2px;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+    text-align: center;
     font-size: 0.68rem;
     color: var(--smrt-color-on-surface-variant);
-    white-space: nowrap;
+    white-space: normal;
   }
 
   .track li.current .step-label {
@@ -377,6 +382,28 @@ const cards = $derived(
     }
     .actions {
       justify-self: start;
+    }
+  }
+  @media (max-width: 400px) {
+    .track {
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .track li {
+      flex-direction: row;
+      gap: 8px;
+    }
+
+    .track li::before {
+      top: -8px;
+      left: 5px;
+      width: 2px;
+      height: 100%;
+    }
+
+    .dot {
+      flex-shrink: 0;
     }
   }
 </style>
