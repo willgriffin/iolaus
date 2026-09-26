@@ -18,11 +18,11 @@ happy-dom and does not provide this coverage.
 | Task cards remain usable | At least 120 CSS pixels of card viewport, then swipe vertically | Zero/58px card viewport in landscape/small portrait (M02) | 16 fictional inbox tasks in the Intake & Decisions lane; local SQLite | E2E, required pass; short pages scroll the header out of the way |
 | Board scrolls horizontally | Swipe across lane headers reveals later lanes | Touch gesture does not move board | Chromium CDP touch input; no DOM scroll assignment | E2E: `pnpm test:e2e` |
 | Lane content passes horizontal swipes to the board | Swipe over lane content at usable sizes | Nested lane scroller traps horizontal touch input (M08) | Real pointer input; portrait and desktop control | E2E, required pass on every viewport |
-| Settings overlay uses mobile width | Open account/settings drawer | Reserved desktop rail width clips mobile panel (M03, SMRT) | Local owner, real upstream shell | E2E, expected failure on mobile |
+| Settings overlay uses mobile width | Open account/settings drawer | Reserved desktop rail width clips mobile panel (M03, SMRT) | Local owner, real upstream shell | E2E, required pass |
 | Review actions remain on screen | Open fictional application review | Header actions overflow narrow viewport (M04) | Synthetic awaiting-review application | E2E, required pass |
 | Filter controls fit | Open opportunity filters | Horizontal content overflow (M05) | Real form controls, no mocked layout | E2E, required pass with macOS and Linux fonts |
 | Application stages remain legible | Render the five stage labels | Adjacent label bounds overlap (M06) | Fictional application | E2E, required pass |
-| Footer chips remain visible | Render status footer | Chips extend past fixed footer bounds (M07) | Real shell footer | E2E, expected failure at narrow widths |
+| Footer chips remain visible | Render status footer | Chips extend past fixed footer bounds (M07) | Real shell footer | E2E, required pass |
 | Filters remain usable | Open filters, swipe to lower controls, close | Drawer traps scrolling or exceeds viewport | Real opportunity filters and synthetic records | E2E: `pnpm test:e2e` |
 
 External services, PostgreSQL, OIDC and worker jobs are N/A: this suite targets
@@ -40,8 +40,6 @@ pnpm install --frozen-lockfile
 pnpm --filter @willgriffin/iolaus-site exec playwright install chromium
 pnpm test:e2e
 pnpm test:e2e:check
-# Show all known regressions as ordinary failures:
-IOLAUS_E2E_STRICT=1 pnpm test:e2e
 ```
 
 The runner builds, migrates and seeds a fresh temporary local runtime, starts the built Node server
@@ -53,10 +51,9 @@ stay in that temporary runtime and are retained only if setup/cleanup fails.
 
 Reports and failure screenshots/traces are under `apps/site/playwright-report`
 and `apps/site/test-results`. These contain only fictional local data; do not
-point the suite at production. Expected failures reference the audit IDs above;
-Playwright treats an unexpected pass as a failure so the annotation must be
-removed when fixing a regression. Strict mode is the baseline/fix verification
-command, not the default CI command while known defects remain.
+point the suite at production. All scenarios are ordinary required tests; no
+known-regression annotations remain. The historical strict-mode baseline below
+records the defects before the mobile fixes.
 
 Projects: 390×844 Android portrait, 667×375 Android landscape, 320×568 narrow
 portrait, and 1280×800 desktop control. Chromium device emulation is not proof on
@@ -75,7 +72,7 @@ runtime. No PostgreSQL schema or migration is changed.
 
 ## Recorded baseline
 
-On macOS Chromium against current main (SMRT 0.51.16), strict mode executes 44 scenarios: 24 passed
+On macOS Chromium against the pre-fix baseline (SMRT 0.51.16), strict mode executes 44 scenarios: 24 passed
 and 20 failed on the tracked M01–M08 defects, with no skipped tests. These are
 viewport/scenario counts, not 20 distinct bugs. Default mode marks precisely
 those existing failures as expected; it must not be described as a clean mobile
@@ -90,15 +87,14 @@ card area; vertical lane scroll containment no longer traps horizontal swipes.
 Review actions stack on narrow screens, filter fields can shrink, and stage
 labels stack vertically on phones at 400 CSS pixels or narrower.
 
-The suite now runs 52 scenarios. With the existing released SMRT dependency,
-47 pass normally and five remain explicit expected failures: M03 settings drawer
-width (three mobile projects) and M07 footer clipping (two narrow projects).
-The shared fixes belong to happyvertical/smrt#3156. Their annotations must be
-removed when the upstream release is adopted; strict mode remains the full
-acceptance gate. There is no downstream shell CSS patch or dependency override.
+The suite runs 52 required scenarios. The shared settings drawer and footer
+fixes shipped through [SMRT #3157](https://github.com/happyvertical/smrt/pull/3157).
+Iolaus adopts the published SMRT 0.51.31 packages; there is no local component substitution,
+downstream shell CSS patch, or dependency override in the shipped application.
 
-The combined app and candidate upstream components pass all 52 scenarios in
-strict mode on macOS Chromium. This integration probe temporarily substitutes
-the four built shell components for validation and restores the installed
-package afterward; it is not a shipped dependency override. The upstream shell
-suite also passes 37 geometry, long-content, and touch-scroll scenarios.
+Before adoption, the existing SMRT 0.51.16 dependency passed 47 scenarios and
+reproduced five known failures across M03 and M07. A validation-only integration
+probe using the candidate upstream components passed all 52 strict scenarios.
+The final acceptance run uses the published SMRT 0.51.31 dependency and its
+required Svelte 5.57.1 peer, with all 52 scenarios passing normally. The upstream shell suite adds 37 geometry, long-content, and
+touch-scroll scenarios.

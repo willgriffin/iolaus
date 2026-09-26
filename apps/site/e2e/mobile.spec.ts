@@ -41,13 +41,6 @@ async function openTasks(page: Page) {
   ).toBeAttached();
 }
 
-function knownRegression(condition: boolean, auditId: string) {
-  test.fail(
-    condition && process.env.IOLAUS_E2E_STRICT !== '1',
-    `${auditId}: mobile audit; issue #103. Run IOLAUS_E2E_STRICT=1 for red baseline.`,
-  );
-}
-
 async function swipe(
   page: Page,
   target: Locator,
@@ -242,7 +235,6 @@ test('app settings use the full mobile width', async ({ page }) => {
   const box = await drawer.boundingBox();
   expect(box).not.toBeNull();
   if (!box) return;
-  knownRegression(width <= 768, 'M03 (upstream SMRT shell)');
   if (width <= 768) {
     expect(box.x).toBeLessThanOrEqual(1);
     expect(box.x + box.width).toBeGreaterThanOrEqual(width - 1);
@@ -323,7 +315,6 @@ test('footer status chips stay inside the visible footer', async ({ page }) => {
   expect(outer).not.toBeNull();
   expect(inner).not.toBeNull();
   if (!outer || !inner) return;
-  knownRegression((page.viewportSize()?.width ?? 0) <= 390, 'M07');
   expect(inner.y).toBeGreaterThanOrEqual(outer.y);
   expect(inner.y + inner.height).toBeLessThanOrEqual(
     Math.min(outer.y + outer.height, page.viewportSize()?.height ?? 0) + 1,
