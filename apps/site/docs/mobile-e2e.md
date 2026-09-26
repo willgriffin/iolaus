@@ -20,7 +20,7 @@ happy-dom and does not provide this coverage.
 | Lane content passes horizontal swipes to the board | Swipe over lane content at usable sizes | Nested lane scroller traps horizontal touch input (M08) | Real pointer input; portrait and desktop control | E2E, expected failure; landscape first fails M02 |
 | Settings overlay uses mobile width | Open account/settings drawer | Reserved desktop rail width clips mobile panel (M03, SMRT) | Local owner, real upstream shell | E2E, expected failure on mobile |
 | Review actions remain on screen | Open fictional application review | Header actions overflow narrow viewport (M04) | Synthetic awaiting-review application | E2E, expected failure at narrow widths |
-| Filter controls fit | Open opportunity filters | Horizontal content overflow (M05) | Real form controls, no mocked layout | E2E, expected failure at 320/390px with fallback fonts |
+| Filter controls fit | Open opportunity filters | Horizontal content overflow (M05) | Real form controls, no mocked layout | E2E, expected failure at 320/390px; Linux fallback fonts also overflow the 420px drawer |
 | Application stages remain legible | Render the five stage labels | Adjacent label bounds overlap (M06) | Fictional application | E2E, expected failure at 320px |
 | Footer chips remain visible | Render status footer | Chips extend past fixed footer bounds (M07) | Real shell footer | E2E, expected failure at narrow widths |
 | Filters remain usable | Open filters, swipe to lower controls, close | Drawer traps scrolling or exceeds viewport | Real opportunity filters and synthetic records | E2E: `pnpm test:e2e` |
@@ -62,7 +62,7 @@ Projects: 390×844 Android portrait, 667×375 Android landscape, 320×568 narrow
 portrait, and 1280×800 desktop control. Chromium device emulation is not proof on
 a physical Android phone, Android WebView, or Safari. The suite covers the seven audited defects plus the newly reproduced M08, not every admin form or keyboard
 behavior; expand it alongside those fixes. Font requests are blocked, so these
-checks use local fallback fonts rather than depending on Google Fonts.
+checks use local fallback fonts rather than depending on Google Fonts. Linux and macOS font metrics differ; M05 is also expected at wider Linux viewports. Gesture helpers wait for scrolling to settle before the next interaction, because a tap during kinetic scrolling can be consumed to stop the scroll.
 
 The older checkout exposed a task-data HTTP 500 from sorting sensitive
 `CandidateProfile.name`. Current main already fixes this by querying neutral
@@ -80,4 +80,4 @@ On macOS Chromium against current main (SMRT 0.51.16), strict mode executes 44 s
 and 20 failed on the tracked M01–M08 defects, with no skipped tests. These are
 viewport/scenario counts, not 20 distinct bugs. Default mode marks precisely
 those existing failures as expected; it must not be described as a clean mobile
-UI audit. A passing annotation becomes an unexpected pass that fails CI.
+UI audit. A passing annotation becomes an unexpected pass that fails CI. Linux additionally reproduces M05 at landscape and desktop drawer widths (22 expected failures across the same 44 scenarios).
