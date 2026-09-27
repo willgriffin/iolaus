@@ -199,6 +199,10 @@ These are explicit operations an agent or Will can request:
   left nav and right dock — the verdicts live in the dialog's own footer, the
   card scrolls in the dialog body, and the page behind is scroll-locked. Esc and
   the close button leave; closing refreshes the list, so decided rows drop out.
+  On phones, the deck fills the available viewport without outer gutters or
+  nested card frames. The header and verdict controls remain visible while the
+  body scrolls, with safe-area padding and touch targets of at least 44px.
+  Desktop retains the inset dialog layout.
   `/admin/opportunities?triage=1[&triageSort=newest][&filters]` is the deep
   link, and the retired `/admin/opportunities/triage` route redirects to it, so
   old bookmarks and the agent docs still land in the deck.

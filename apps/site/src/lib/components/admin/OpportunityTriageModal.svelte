@@ -857,13 +857,14 @@ const shortlistHref = $derived.by(() => {
 
 <svelte:window onkeydown={handleKeydown} />
 
-<Modal
-  {open}
-  size="full"
-  closeOnBackdrop={false}
-  ariaLabel="Triage opportunities"
-  onClose={close}
->
+<div class="triage-shell">
+  <Modal
+    {open}
+    size="full"
+    closeOnBackdrop={false}
+    ariaLabel="Triage opportunities"
+    onClose={close}
+  >
   {#snippet header()}
     <div class="deck-head">
       <div class="sort-choice" role="group" aria-label="Queue order">
@@ -975,7 +976,8 @@ const shortlistHref = $derived.by(() => {
       {/each}
     </div>
   {/snippet}
-</Modal>
+  </Modal>
+</div>
 
 <style>
   .deck-head {
@@ -1274,6 +1276,96 @@ const shortlistHref = $derived.by(() => {
   .orb-hint {
     color: var(--smrt-color-on-surface-variant);
     font-size: 11px;
+  }
+
+  /*
+   * `Modal` intentionally has no component class hook. Keep the full-bleed
+   * treatment scoped to this deck's wrapper, so other full dialogs retain
+   * their desktop-sized presentation.
+   *
+   * The short, coarse-pointer branch catches phone landscape without changing
+   * a desktop's 1280 × 800 dialog.
+   */
+  @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+    .triage-shell :global(.modal.modal--full) {
+      align-items: stretch;
+      justify-content: stretch;
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    .triage-shell :global(.modal--full .modal__container) {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      max-width: 100vw;
+      max-height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .triage-shell :global(.modal--full .modal__body) {
+      min-height: 0;
+      padding:
+        12px
+        max(12px, env(safe-area-inset-right))
+        12px
+        max(12px, env(safe-area-inset-left));
+      overscroll-behavior: contain;
+    }
+
+    .triage-shell :global(.modal--full .modal__footer) {
+      padding:
+        8px
+        max(12px, env(safe-area-inset-right))
+        max(12px, env(safe-area-inset-bottom))
+        max(12px, env(safe-area-inset-left));
+    }
+
+    .deck-head {
+      gap: 8px;
+      padding:
+        max(8px, env(safe-area-inset-top))
+        max(12px, env(safe-area-inset-right))
+        8px
+        max(12px, env(safe-area-inset-left));
+    }
+
+    .sort-option,
+    .close {
+      min-height: 44px;
+    }
+
+    .sort-option {
+      padding: 0 10px;
+    }
+
+    .close {
+      padding: 0 10px;
+    }
+
+    .feedback,
+    .deep-dive {
+      margin-bottom: 8px;
+    }
+
+    .deck-actions {
+      gap: clamp(16px, 10vw, 48px);
+    }
+
+    .orb {
+      width: 56px;
+      height: 56px;
+    }
+
+    .orb.later {
+      width: 44px;
+      height: 44px;
+    }
+
+    .orb-hint {
+      display: none;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
