@@ -5,7 +5,7 @@ packages:
 # Prevent first-party packages from retaining an older unguarded AI SDK copy.
 # Remove only after all dependents require a protected release directly.
 overrides:
-  '@happyvertical/ai': 0.79.0
+  '@happyvertical/ai': 0.94.1
 
 # pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
 # package.json (overrides, onlyBuiltDependencies) are no longer honored.

@@ -53,6 +53,27 @@ describe('bounded opportunity scoring fixtures', () => {
     expect(material).toMatch(/^[a-f0-9]{64}$/);
     expect(trimmed?.input.fingerprint).not.toBe(material);
   });
+  it.each([
+    ['PostgreSQL', 'Postgres', 'supported'],
+    ['Java', 'JavaScript', 'gap'],
+    ['C', 'C++', 'gap'],
+  ])('matches %s against %s without substring collisions', async (requirement, skill, status) => {
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      requiredSkills: requirement,
+      descriptionRaw: `Qualifications\n${requirement} is required.`,
+    };
+    const request = await build({
+      ...clearAcceptScoringFixture,
+      opportunity,
+      prepared: prepareOpportunityPosting(opportunity),
+      evidenceSources: [
+        { id: 's1', kind: 'resume_skill', title: skill, text: skill },
+      ],
+    });
+    expect(request.evidenceMatrix[0].status).toBe(status);
+  });
+
   it('handles a configured clear accept deterministically', async () => {
     const request = await build(clearAcceptScoringFixture);
     const decision = preScoreOpportunity(request.input);

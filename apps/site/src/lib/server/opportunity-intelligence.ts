@@ -61,6 +61,8 @@ import {
   validatePreparedPostingForScoring,
 } from './opportunity-scoring.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
+import { evaluateSkillMatches } from './skill-decision-provider.js';
+import { prepareSkillMatching } from './skill-matching.js';
 import { getCollection } from './smrt.js';
 
 type MutableRecord = Record<string, unknown> & {
@@ -761,7 +763,6 @@ async function loadEvidenceSources(
   strict = false,
 ): Promise<EvidenceSource[]> {
   const organizationProfileId = stringValue(opportunity.organizationProfileId);
-  const opportunityId = stringValue(opportunity.id);
   const [
     factCandidates,
     achievements,
@@ -813,14 +814,9 @@ async function loadEvidenceSources(
   for (const candidate of factCandidates) {
     const targetEntityId = stringValue(candidate.targetEntityId);
     const targetEntityType = stringValue(candidate.targetEntityType);
-    if (
-      targetEntityId &&
-      targetEntityId !== opportunityId &&
-      targetEntityId !== organizationProfileId &&
-      targetEntityType !== 'CandidateProfile'
-    ) {
-      continue;
-    }
+    // Employer/opportunity facts and unattributed statements cannot establish
+    // candidate experience, even when a required technology appears in them.
+    if (targetEntityType !== 'CandidateProfile' || !targetEntityId) continue;
     sources.push({
       id: stringValue(candidate.id),
       kind: 'fact_candidate',
@@ -1260,6 +1256,31 @@ async function runScore(
         status: 'skipped',
       };
     }
+    const skillMatching = await evaluateSkillMatches(
+      prepareSkillMatching(
+        request.input.requirements.map((requirement) => requirement.value),
+        evidenceSources,
+      ),
+      {
+        agentRunId: options.agentRunId,
+        opportunityId,
+        contentFingerprint: scoreSourceFingerprint,
+        sourceCrawlId: options.sourceCrawlId,
+        sourceCrawlItemId: options.sourceCrawlItemId,
+        signal: options.signal,
+        store: options.governanceStore,
+      },
+    );
+    request = await buildBoundedOpportunityScoringRequest({
+      evidenceSources,
+      skillMatching,
+      inputTokenCeiling: policy.inputTokenCeiling,
+      model: resolveOpportunityIntelligenceProfile().model,
+      opportunity,
+      policy,
+      prepared: preparedValidation.prepared,
+    });
+    decision = preScoreOpportunity(request.input);
     let settings: AiProfileClient | null = null;
     if (decision.modelEligible && policy.modelEnabled) {
       settings = await resolveSettings(options, 'admin-opportunity-llm-score');
@@ -1296,6 +1317,7 @@ async function runScore(
           ? settings.aiClient.countTokens.bind(settings.aiClient)
           : undefined,
         evidenceSources,
+        skillMatching,
         inputTokenCeiling: policy.inputTokenCeiling,
         model: settings.model,
         opportunity,
@@ -1642,6 +1664,9 @@ async function runEvidence(
     evidenceSources,
   );
   const reason = parseOpportunityReasonJson(evaluationScore.reasonJson);
+  if (reason.scoring) {
+    evidenceMatrix.splice(0, evidenceMatrix.length, ...reason.evidenceMatrix);
+  }
   reason.evidenceMatrix = evidenceMatrix;
   reason.missingInfo = [
     ...new Set([
