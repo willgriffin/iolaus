@@ -215,10 +215,16 @@ These are explicit operations an agent or Will can request:
   is retried once those writes land.
 
   The dialog header carries exactly two things: a **sort chooser** and the close
-  button. The chooser is a segmented **Match %** / **Newest** control — score
-  descending or posted-date descending, the deck's only two orderings, both of
-  them sorts the shared filter model already supports. Anything else the
-  operator carried in from the list (salary, rating, best) normalises back to
+  button. The chooser offers match order and **Newest**. Match order puts
+  opportunities whose current evaluation says `reject` after all other
+  undecided opportunities, then sorts each group by score descending. This
+  prevents a contradictory legacy score (for example, 100 with `reject`) from
+  putting an unrelated role first. Rejected evaluations remain available for
+  human review, and this ordering never changes a saved score or decision.
+  Newest remains posted-date descending; ordinary list score sorting is numeric.
+  Only evaluations matching the current posting fingerprint affect ordering.
+  Local SQLite triage loads that score context before filtering and paging.
+  Anything else the operator carried in from the list (salary, rating, best) normalises back to
   Match %. The choice is remembered per viewer in `localStorage`, a deep link
   overrides the remembered one, and `job_search_next_triage_candidate` takes the
   same `sort` argument so an agent and an operator work the queue in the same

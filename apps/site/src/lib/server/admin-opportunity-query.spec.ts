@@ -158,6 +158,41 @@ describe('admin-opportunity-query', () => {
     expect(sql).toContain('ORDER BY latest.score ASC NULLS LAST');
   });
 
+  it('deprioritizes only explicit current rejects for score-sorted triage', async () => {
+    const { listOpportunityPageIds } = await import(
+      './admin-opportunity-query'
+    );
+
+    await listOpportunityPageIds({
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
+      limit: 25,
+      offset: 0,
+      reviewFilter: 'unsorted',
+      triageRejectDepriority: true,
+    });
+    const [triageSql] = mocks.query.mock.calls[0] ?? [];
+    expect(triageSql).toContain(
+      "CASE WHEN lower(btrim(COALESCE(latest.recommendation, ''))) = 'reject' THEN 1 ELSE 0 END ASC",
+    );
+    expect(triageSql).toContain('latest.score DESC NULLS LAST');
+    expect(triageSql).toContain('SELECT es.score, es.recommendation');
+    expect(triageSql).toMatch(
+      /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
+    );
+
+    mocks.query.mockClear();
+    await listOpportunityPageIds({
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
+      limit: 25,
+      offset: 0,
+      reviewFilter: 'unsorted',
+    });
+    const [browseSql] = mocks.query.mock.calls[0] ?? [];
+    expect(browseSql).not.toContain('CASE WHEN lower(btrim(');
+  });
+
   it('uses SQLite-compatible review normalization and score join locally', async () => {
     mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
     const { listOpportunityPageIds } = await import(
@@ -181,6 +216,61 @@ describe('admin-opportunity-query', () => {
     expect(sql).toContain('latest.id = (');
     expect(sql).not.toContain('LEFT JOIN LATERAL');
     expect(values).toContain('maybe');
+  });
+
+  it('uses SQLite recommendation normalization for triage ranking', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    const { listOpportunityPageIds } = await import(
+      './admin-opportunity-query'
+    );
+
+    await listOpportunityPageIds({
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
+      limit: 25,
+      offset: 0,
+      reviewFilter: 'unsorted',
+      triageRejectDepriority: true,
+    });
+
+    const [sql] = mocks.query.mock.calls[0] ?? [];
+    expect(sql).toContain(
+      "CASE WHEN lower(trim(COALESCE(latest.recommendation, ''))) = 'reject' THEN 1 ELSE 0 END ASC",
+    );
+    expect(sql).toContain('latest.score DESC NULLS LAST');
+  });
+
+  it('loads only fingerprint-current score context for bounded SQLite triage ids', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.query.mockResolvedValue({
+      rows: [
+        {
+          opportunityId: 'recommend-96',
+          recommendation: ' Recommend ',
+          score: 96,
+        },
+        { opportunityId: 'unrequested', recommendation: 'reject', score: 100 },
+      ],
+    });
+    const { listCurrentOpportunityScores } = await import(
+      './admin-opportunity-query'
+    );
+
+    const scores = await listCurrentOpportunityScores([
+      'recommend-96',
+      'outdated-reject',
+    ]);
+
+    expect(scores).toEqual(
+      new Map([['recommend-96', { recommendation: 'recommend', score: 96 }]]),
+    );
+    const [sql] = mocks.query.mock.calls[0] ?? [];
+    expect(sql).toContain('LEFT JOIN evaluation_scores latest');
+    expect(sql).toContain('latest.id = (');
+    expect(sql).toContain('WHERE CAST(o.id AS TEXT) IN ($1, $2)');
+    expect(sql).toMatch(
+      /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
+    );
   });
 
   it('creates query indexes concurrently on a timeout-bound pinned session', async () => {

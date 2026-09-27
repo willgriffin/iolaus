@@ -56,6 +56,8 @@ export type OpportunityQuery = {
   filters: OpportunityFilterState;
   reviewFilter: string;
   search?: string;
+  /** Triage keeps explicit machine rejects behind every other score-sorted row. */
+  triageRejectDepriority?: boolean;
 };
 
 export type LatestOpportunityRelatedContextRow = {
@@ -101,7 +103,7 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
       )`;
   }
   return `LEFT JOIN LATERAL (
-    SELECT es.score
+    SELECT es.score, es.recommendation
     FROM evaluation_scores es
     WHERE es.opportunity_id = CAST(o.id AS TEXT)
       AND COALESCE(es.source_content_fingerprint, '') =
@@ -109,6 +111,19 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
     ORDER BY es.updated_at DESC
     LIMIT 1
   ) latest ON TRUE`;
+}
+
+/** Match the persisted recommendation vocabulary without making unknown values rejects. */
+export function normalizeOpportunityRecommendation(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function rejectedRecommendationSql(dialect: OpportunityQueryDialect): string {
+  const normalized =
+    dialect === 'sqlite'
+      ? "lower(trim(COALESCE(latest.recommendation, '')))"
+      : "lower(btrim(COALESCE(latest.recommendation, '')))";
+  return `CASE WHEN ${normalized} = 'reject' THEN 1 ELSE 0 END`;
 }
 
 function latestApplicationJoinSql(dialect: OpportunityQueryDialect): string {
@@ -424,13 +439,21 @@ function opportunityStatusRankSql(): string {
 function orderBySql(
   sort: OpportunityFilterState['sort'],
   direction: OpportunityFilterState['sortDirection'],
+  options: {
+    dialect: OpportunityQueryDialect;
+    triageRejectDepriority?: boolean;
+  },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
   switch (sort) {
     case 'newest':
       return `COALESCE(o.posted_at, o.first_seen_at) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'score':
-      return `latest.score ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${
+        options.triageRejectDepriority
+          ? `${rejectedRecommendationSql(options.dialect)} ASC, `
+          : ''
+      }latest.score ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'salary':
       return `COALESCE(o.salary_max, o.salary_min) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'rating':
@@ -691,6 +714,7 @@ export async function listOpportunityPageIds({
   offset,
   reviewFilter,
   search,
+  triageRejectDepriority,
 }: OpportunityQuery & {
   limit: number;
   offset: number;
@@ -719,7 +743,11 @@ export async function listOpportunityPageIds({
     FROM opportunities o
     ${query.joins.join('\n')}
     ${query.whereSql}
-    ORDER BY ${orderBySql(filters.sort, filters.sortDirection)}
+    ORDER BY ${orderBySql(filters.sort, filters.sortDirection, {
+      dialect: opportunityQueryDialect(),
+      triageRejectDepriority:
+        triageRejectDepriority && filters.sort === 'score',
+    })}
     LIMIT ${limitPlaceholder}
     OFFSET ${offsetPlaceholder}`,
     ...query.values,
@@ -727,6 +755,54 @@ export async function listOpportunityPageIds({
   return rowsFromResult(result)
     .map((row) => row.id)
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Current evaluation score context for the bounded local triage collection.
+ *
+ * SQLite cannot order the collection rows by their later hydration values. The
+ * raw query selects one score whose fingerprint matches each opportunity's
+ * current source content, then the caller attaches only values for its bounded
+ * candidate ids before applying filters, ranking, and paging.
+ */
+export async function listCurrentOpportunityScores(
+  opportunityIds: readonly string[],
+): Promise<Map<string, { recommendation: string; score: number | null }>> {
+  const requestedIds = [...new Set(opportunityIds.filter(Boolean))];
+  const requestedIdSet = new Set(requestedIds);
+  const scores = new Map<
+    string,
+    { recommendation: string; score: number | null }
+  >();
+  if (requestedIds.length === 0) return scores;
+
+  const dialect = opportunityQueryDialect();
+  const db = await queryDatabase();
+  // Keep SQLite safely below its conservative bind-variable floor, while the
+  // local triage cap still bounds this to two small requests at most.
+  for (let start = 0; start < requestedIds.length; start += 500) {
+    const values: unknown[] = [];
+    const placeholders = requestedIds
+      .slice(start, start + 500)
+      .map((id) => pushParam(values, id))
+      .join(', ');
+    const result = await db.query(
+      `SELECT CAST(o.id AS TEXT) AS "opportunityId", latest.score, latest.recommendation
+      FROM opportunities o
+      ${latestScoreJoinSql(dialect)}
+      WHERE CAST(o.id AS TEXT) IN (${placeholders})`,
+      ...values,
+    );
+    for (const row of rowsFromResult(result)) {
+      const id = row.opportunityId;
+      if (typeof id !== 'string' || !requestedIdSet.has(id)) continue;
+      scores.set(id, {
+        recommendation: normalizeOpportunityRecommendation(row.recommendation),
+        score: typeof row.score === 'number' ? row.score : null,
+      });
+    }
+  }
+  return scores;
 }
 
 /**

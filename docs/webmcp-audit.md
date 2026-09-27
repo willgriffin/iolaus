@@ -58,13 +58,15 @@ Sixteen application-owned definitions provide the curated workflow surface:
   Its results and totals exclude `archived` rows unless the `status` filter names
   them, which its published description and `status` property say so an agent
   reading only the tool inventory cannot mistake a default total for the table.
-- `job_search_next_triage_candidate` returns the single highest-scoring
+- `job_search_next_triage_candidate` returns the next best-match
   undecided opportunity for one-at-a-time triage, with its queue position, the
   number remaining, and the offset it was served at. It runs the same filter
   model as the browse read under the triage preset — undecided only, archived
   excluded, expired and no-longer-seen postings dropped, and ordered by its
   `sort` argument, the same two orderings the deck offers (`score`, the default,
-  or `newest`) — so
+  or `newest`). Score order puts current `reject` evaluations last, with
+  descending scores within each group; unassessed postings remain ahead of
+  rejected ones. It does not write scores or decisions. Therefore
   the agent queue and the admin triage deck (a modal over
   `/admin/opportunities`; `?triage=1` opens it, and `/admin/opportunities/triage`
   redirects there) cannot diverge. It

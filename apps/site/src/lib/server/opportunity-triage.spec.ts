@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   attachOpportunityContext: vi.fn(async (records: unknown[]) => records),
   count: vi.fn(async () => 0),
   dbConfig: vi.fn(() => ({ type: 'postgres' })),
+  currentScores: vi.fn(async () => new Map()),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
   opportunities: vi.fn(async () => [] as Record<string, unknown>[]),
   pageIds: vi.fn(async () => [] as string[]),
@@ -16,7 +17,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./admin-opportunity-query', () => ({
   countOpportunityRecords: mocks.count,
+  listCurrentOpportunityScores: mocks.currentScores,
   listOpportunityPageIds: mocks.pageIds,
+  normalizeOpportunityRecommendation: (value: unknown) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : '',
 }));
 
 vi.mock('./admin-data', () => ({
@@ -47,6 +51,7 @@ describe('opportunity triage preset', () => {
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.currentScores.mockResolvedValue(new Map());
     mocks.opportunities.mockResolvedValue([]);
   });
 
@@ -128,6 +133,7 @@ describe('loadTriageQueue', () => {
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.currentScores.mockResolvedValue(new Map());
     mocks.opportunities.mockResolvedValue([]);
     mocks.attachOpportunityContext.mockImplementation(
       async (records: unknown[]) => records,
@@ -371,5 +377,136 @@ describe('nextTriageCandidate', () => {
     expect(result.total).toBe(1);
     expect(mocks.count).not.toHaveBeenCalled();
     expect(mocks.pageIds).not.toHaveBeenCalled();
+  });
+
+  it('puts current explicit rejects after recommended and unscored SQLite cards', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    // Reverse source order to prove queue order comes from the hydrated current
+    // score context, before filtering, ranking, and pagination.
+    mocks.opportunities.mockResolvedValue([
+      { id: 'reject-100', status: 'recommended', title: 'Reject 100' },
+      { id: 'unscored', status: 'recommended', title: 'Unscored' },
+      { id: 'recommend-96', status: 'recommended', title: 'Recommend 96' },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        ['reject-100', { recommendation: ' REJECT ', score: 100 }],
+        ['recommend-96', { recommendation: 'recommend', score: 96 }],
+      ]),
+    );
+
+    const firstPage = await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      limit: 2,
+    });
+    const lastCard = await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      limit: 1,
+      offset: 2,
+    });
+
+    expect(firstPage.candidates.map((record) => record.id)).toEqual([
+      'recommend-96',
+      'unscored',
+    ]);
+    expect(lastCard.candidates.map((record) => record.id)).toEqual([
+      'reject-100',
+    ]);
+    expect(mocks.currentScores).toHaveBeenCalledWith([
+      'reject-100',
+      'unscored',
+      'recommend-96',
+    ]);
+  });
+
+  it('does not treat an outdated score as a current SQLite reject', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      { id: 'current-reject', status: 'recommended', title: 'Current reject' },
+      {
+        id: 'outdated-reject',
+        status: 'recommended',
+        title: 'Outdated reject',
+      },
+    ]);
+    // The query helper excludes a score whose source-content fingerprint no
+    // longer matches, so it is absent rather than becoming a stale reject.
+    mocks.currentScores.mockResolvedValue(
+      new Map([['current-reject', { recommendation: 'reject', score: 1 }]]),
+    );
+
+    const queue = await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      limit: 2,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'outdated-reject',
+      'current-reject',
+    ]);
+  });
+
+  it('leaves SQLite newest triage ordering unchanged', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'newer-reject',
+        postedAt: '2026-01-02T00:00:00.000Z',
+        status: 'recommended',
+      },
+      {
+        id: 'older-recommend',
+        postedAt: '2026-01-01T00:00:00.000Z',
+        status: 'recommended',
+      },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        ['newer-reject', { recommendation: 'reject', score: 100 }],
+        ['older-recommend', { recommendation: 'recommend', score: 1 }],
+      ]),
+    );
+
+    const queue = await loadTriageQueue({
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'newest' },
+      limit: 2,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'newer-reject',
+      'older-recommend',
+    ]);
+  });
+
+  it('breaks equal unscored SQLite cards by update time and id', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    // Reversed source order must not leak into a tied, unscored score page.
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'z-unscored',
+        status: 'recommended',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'a-unscored',
+        status: 'recommended',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    mocks.currentScores.mockResolvedValue(new Map());
+
+    const queue = await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      limit: 2,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'a-unscored',
+      'z-unscored',
+    ]);
   });
 });

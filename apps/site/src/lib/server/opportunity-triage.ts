@@ -13,7 +13,9 @@ import {
 import { listAdminRecords, requireAdminResource } from './admin-data';
 import {
   countOpportunityRecords,
+  listCurrentOpportunityScores,
   listOpportunityPageIds,
+  normalizeOpportunityRecommendation,
 } from './admin-opportunity-query';
 import { attachOpportunityContext } from './admin-resource-route';
 import { getDbConfig } from './db.js';
@@ -141,6 +143,55 @@ function matchesTriageSearch(record: AdminRecord, search: string | undefined) {
   ].some((value) => value.toLowerCase().includes(needle));
 }
 
+function triageScoreRank(record: AdminRecord): number {
+  const score = record.latestScore;
+  return typeof score === 'number' ? score : Number.NEGATIVE_INFINITY;
+}
+
+function triageScoreTieBreak(left: AdminRecord, right: AdminRecord): number {
+  const updatedAtRank = (record: AdminRecord): number => {
+    const raw = record.updatedAt;
+    const timestamp =
+      raw instanceof Date
+        ? raw.getTime()
+        : typeof raw === 'number'
+          ? raw
+          : typeof raw === 'string'
+            ? Date.parse(raw)
+            : Number.NaN;
+    return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+  };
+  const leftRank = updatedAtRank(left);
+  const rightRank = updatedAtRank(right);
+  if (leftRank !== rightRank) return rightRank - leftRank;
+  return getString(left, 'id').localeCompare(getString(right, 'id'));
+}
+
+function sortSqliteTriage(
+  candidates: AdminRecord[],
+  filters: OpportunityFilterState,
+): AdminRecord[] {
+  if (filters.sort !== 'score') {
+    return sortOpportunities(candidates, filters.sort, filters.sortDirection);
+  }
+  return [...candidates].sort((left, right) => {
+    const tier =
+      Number(
+        normalizeOpportunityRecommendation(left.latestRecommendation) ===
+          'reject',
+      ) -
+      Number(
+        normalizeOpportunityRecommendation(right.latestRecommendation) ===
+          'reject',
+      );
+    if (tier !== 0) return tier;
+    const leftScore = triageScoreRank(left);
+    const rightScore = triageScoreRank(right);
+    if (leftScore !== rightScore) return rightScore - leftScore;
+    return triageScoreTieBreak(left, right);
+  });
+}
+
 async function loadSqliteTriageQueue({
   filters,
   hydrateContext,
@@ -160,10 +211,27 @@ async function loadSqliteTriageQueue({
       `Local triage is bounded to ${LOCAL_TRIAGE_RECORD_LIMIT - 1} opportunities; archive or deploy this data set before continuing.`,
     );
   }
-  const candidates = rows
-    .map((row) => JSON.parse(JSON.stringify(row)) as AdminRecord)
+  const records = rows.map(
+    (row) => JSON.parse(JSON.stringify(row)) as AdminRecord,
+  );
+  const currentScores = await listCurrentOpportunityScores(
+    records
+      .map((record) => record.id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  const candidates = records
+    .map((record) => {
+      const score = record.id ? currentScores.get(record.id) : undefined;
+      return {
+        ...record,
+        latestRecommendation: score?.recommendation ?? '',
+        latestScore: score?.score ?? null,
+      };
+    })
     .filter((record) => {
-      const review = getString(record, 'humanReviewStatus').toLowerCase();
+      const review = getString(record, 'humanReviewStatus')
+        .trim()
+        .toLowerCase();
       return (
         getString(record, 'status') !== 'archived' &&
         !DECISION_STATUSES.has(review) &&
@@ -171,11 +239,7 @@ async function loadSqliteTriageQueue({
         matchesOpportunity(record, filters, { hasSkill: () => false })
       );
     });
-  const ordered = sortOpportunities(
-    candidates,
-    filters.sort,
-    filters.sortDirection,
-  );
+  const ordered = sortSqliteTriage(candidates, filters);
   const total = ordered.length;
   const resolvedOffset = clampOffset(offset, total);
   const page = ordered.slice(resolvedOffset, resolvedOffset + limit);
@@ -221,6 +285,7 @@ export async function loadTriageQueue({
     filters: preset,
     reviewFilter: TRIAGE_REVIEW_FILTER,
     search: search?.trim() || undefined,
+    triageRejectDepriority: preset.sort === 'score',
   };
   const total = await countOpportunityRecords(query);
   const resolvedOffset = clampOffset(offset, total);
