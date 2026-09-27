@@ -14,7 +14,9 @@ candidate context: a support predicate and a supporting-source choice. Both
 must reach 0.85 before a semantic match counts as supported. This initial
 threshold is conservative policy, not a measured accuracy guarantee.
 
-A skill label alone cannot prove tenure, leadership or production experience.
+Each question quotes its requirement explicitly and candidate sources retain their
+evidence kind. Declared skills can establish capabilities directly provided by
+that technology. A skill label alone cannot prove tenure, leadership or production experience.
 The prompt distinguishes named technologies from merely related technologies
 and instructs the model to disregard instructions inside source text. A
 confident negative may become a gap; disagreement, low confidence or omitted
@@ -73,3 +75,21 @@ no SMRT upgrade or schema migration is required for this integration.
 Extraction still supplies atomic required/preferred skills. This change does
 not automatically infer unextracted qualification requirements or replace
 extraction, application prose generation or user approvals.
+
+### Live canary
+
+With `TYPESAFE_API_KEY` injected through the environment, run:
+
+```bash
+pnpm --filter @willgriffin/iolaus-site exec tsx scripts/skill-matching-live.ts
+```
+
+This explicitly invoked script makes 14 paid decision requests against synthetic
+fixtures, testing 34 judgments across original and reversed requirement/source
+inputs. It checks capability equivalence, distinct technologies, duration,
+negation and absent evidence; any unexpected support result or provider failure
+exits nonzero. Negative labels allow uncertainty, because insufficient evidence
+must not become an invented positive. It prints synthetic judgments and usage,
+never the credential or raw provider errors. These canaries catch regressions;
+they do not replace the labeled real-posting evaluation above. Matcher v2 binds
+each question to its quoted requirement and invalidates earlier fingerprints.

@@ -57,6 +57,41 @@ describe('skill matching', () => {
         .status,
     ).toBe('uncertain');
   });
+  it('binds each question to its requirement even when order changes', () => {
+    for (const requirements of [
+      ['Production Kubernetes operations', 'Ten years Kubernetes operations'],
+      ['Ten years Kubernetes operations', 'Production Kubernetes operations'],
+    ]) {
+      const prepared = prepareSkillMatching(requirements, [
+        source(
+          'Operated Kubernetes in production for four years',
+          'achievement',
+        ),
+      ]);
+      requirements.forEach((requirement, index) => {
+        for (const prefix of ['match', 'source']) {
+          expect(
+            prepared.request.questions[`${prefix}_${index}`].instructions,
+          ).toContain(JSON.stringify(requirement));
+        }
+      });
+      expect(prepared.exact.every((matches) => matches.length === 0)).toBe(
+        true,
+      );
+    }
+  });
+  it('preserves evidence kind so declared skills can establish capabilities', () => {
+    const prepared = prepareSkillMatching(
+      ['server-side JavaScript services'],
+      [source('Node.js'), source('Built Node.js APIs', 'achievement', 'a1')],
+    );
+    expect(prepared.request.state).toMatchObject({
+      candidates: [
+        { key: 'candidate_0', kind: 'resume_skill', text: 'Node.js' },
+        { key: 'candidate_1', kind: 'achievement', text: 'Built Node.js APIs' },
+      ],
+    });
+  });
   it('attributes semantic support to the selected candidate source', () => {
     const prepared = prepareSkillMatching(
       ['server-side JavaScript services'],
