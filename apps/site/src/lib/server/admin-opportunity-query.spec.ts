@@ -173,8 +173,9 @@ describe('admin-opportunity-query', () => {
     });
     const [triageSql] = mocks.query.mock.calls[0] ?? [];
     expect(triageSql).toContain(
-      "CASE WHEN lower(btrim(COALESCE(latest.recommendation, ''))) = 'reject' THEN 1 ELSE 0 END ASC",
+      "CASE WHEN lower(btrim(COALESCE(latest.recommendation, ''), '",
     );
+    expect(triageSql).toContain('\ufeff');
     expect(triageSql).toContain('latest.score DESC NULLS LAST');
     expect(triageSql).toContain('SELECT es.score, es.recommendation');
     expect(triageSql).toMatch(
@@ -235,8 +236,9 @@ describe('admin-opportunity-query', () => {
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain(
-      "CASE WHEN lower(trim(COALESCE(latest.recommendation, ''))) = 'reject' THEN 1 ELSE 0 END ASC",
+      "CASE WHEN lower(trim(COALESCE(latest.recommendation, ''), '",
     );
+    expect(sql).toContain('\ufeff');
     expect(sql).toContain('latest.score DESC NULLS LAST');
   });
 

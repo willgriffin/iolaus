@@ -75,6 +75,14 @@ async function createTables(
     dialect === 'postgres' ? 'pg_temp.opportunities' : 'opportunities';
   const scoreTable =
     dialect === 'postgres' ? 'pg_temp.evaluation_scores' : 'evaluation_scores';
+  const tabNewlineReject =
+    dialect === 'postgres'
+      ? "chr(9) || 'reject' || chr(10)"
+      : "char(9) || 'reject' || char(10)";
+  const nbspBomReject =
+    dialect === 'postgres'
+      ? "chr(160) || chr(65279) || 'reject' || chr(160)"
+      : "char(160) || char(65279) || 'reject' || char(160)";
   await database.query(`INSERT INTO ${opportunityTable}
     (id, status, human_review_status, source_content_fingerprint, updated_at, posted_at)
     VALUES
@@ -86,10 +94,10 @@ async function createTables(
   await database.query(`INSERT INTO ${scoreTable}
     (id, opportunity_id, source_content_fingerprint, updated_at, score, recommendation)
     VALUES
-    ('reject-100-current', 'reject-100', 'current-reject', '2026-01-06T00:00:00Z', 100, ' ReJeCt '),
+    ('reject-100-current', 'reject-100', 'current-reject', '2026-01-06T00:00:00Z', 100, ${tabNewlineReject}),
     ('recommend-96-current', 'recommend-96', 'current-recommend', '2026-01-06T00:00:00Z', 96, 'recommend'),
     ('unknown-90-current', 'unknown-90', 'current-unknown', '2026-01-06T00:00:00Z', 90, 'unknown'),
-    ('reject-20-current', 'reject-20', 'current-reject-low', '2026-01-06T00:00:00Z', 20, 'reject'),
+    ('reject-20-current', 'reject-20', 'current-reject-low', '2026-01-06T00:00:00Z', 20, ${nbspBomReject}),
     ('unscored-stale', 'unscored', 'stale-content', '2026-01-07T00:00:00Z', 98, 'reject')`);
 }
 

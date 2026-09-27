@@ -391,7 +391,7 @@ describe('nextTriageCandidate', () => {
     ]);
     mocks.currentScores.mockResolvedValue(
       new Map([
-        ['reject-100', { recommendation: ' REJECT ', score: 100 }],
+        ['reject-100', { recommendation: '\treject\n', score: 100 }],
         ['recommend-96', { recommendation: 'recommend', score: 96 }],
       ]),
     );
@@ -445,6 +445,34 @@ describe('nextTriageCandidate', () => {
     expect(queue.candidates.map((record) => record.id)).toEqual([
       'outdated-reject',
       'current-reject',
+    ]);
+  });
+
+  it('recognizes NBSP and BOM-wrapped SQLite machine rejects', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      { id: 'reject-20', status: 'recommended' },
+      { id: 'recommend-96', status: 'recommended' },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        [
+          'reject-20',
+          { recommendation: '\u00a0\ufeffreject\u00a0', score: 20 },
+        ],
+        ['recommend-96', { recommendation: 'recommend', score: 96 }],
+      ]),
+    );
+
+    const queue = await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      limit: 2,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'recommend-96',
+      'reject-20',
     ]);
   });
 
