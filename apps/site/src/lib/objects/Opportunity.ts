@@ -73,6 +73,15 @@ export class Opportunity extends SmrtObject {
   preparedPostingFingerprint = '';
   @field({ type: 'text' })
   preparedPostingJson = '{}';
+  /** Last reconciled material identity; automated scores must match this. */
+  @field({ type: 'text' })
+  scoringMaterialFingerprint = '';
+  @field({ type: 'text' })
+  scoringRefreshFingerprint = '';
+  @field({ type: 'integer' })
+  scoringRefreshAttempts = 0;
+  @field({ type: 'datetime', nullable: true })
+  scoringRefreshNextAttemptAt: Date | null = null;
   @field({ type: 'text' })
   sourceIntelligenceStatus = 'ineligible';
   @field({ type: 'text' })

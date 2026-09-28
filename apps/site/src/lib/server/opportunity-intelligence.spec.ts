@@ -5,6 +5,7 @@ import {
   parseOpportunityReasonJson,
   processOpportunityIntelligence,
   reasonJsonForScore,
+  scoringMaterialForOpportunity,
   statusForOpportunityRecommendation,
 } from './opportunity-intelligence';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
@@ -86,17 +87,46 @@ const mocks = vi.hoisted(() => ({
   recordAgentAudit: vi.fn(async () => ({ id: 'run-1' })),
   syncApplicationWorkflowTasks: vi.fn(async () => ({ created: 0 })),
   syncRecommendedOpportunityDecisionTasks: vi.fn(async () => ({ created: 0 })),
-  databaseUpdate: vi.fn(async () => ({ affected: 1 })),
+  databaseUpdate: vi.fn(
+    async (
+      _table: string,
+      _where: Record<string, unknown>,
+      _data: Record<string, unknown>,
+    ) => ({ affected: 1 }),
+  ),
+  databaseQuery: vi.fn(async (_sql: string, params: unknown[]) => {
+    const [opportunityId, sourceContentFingerprint, materialFingerprint] =
+      params.map(String);
+    const scores = mocks.collections.get('EvaluationScore')?.records ?? [];
+    const current = scores.find(
+      (score) =>
+        score.opportunityId === opportunityId &&
+        score.sourceContentFingerprint === sourceContentFingerprint &&
+        (Boolean(score.createdByProfileId) ||
+          materialFingerprint === '__legacy_current_score__' ||
+          (Boolean(materialFingerprint) &&
+            score.scoringMaterialFingerprint === materialFingerprint)),
+    );
+    return { rows: current ? [{ id: current.id }] : [] };
+  }),
 }));
 
 vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
-  resolveDatabase: vi.fn(async () => ({ update: mocks.databaseUpdate })),
+  resolveDatabase: vi.fn(async () => ({
+    query: mocks.databaseQuery,
+    update: mocks.databaseUpdate,
+  })),
 }));
 
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async (className: string) => {
     const found = mocks.collections.get(className);
+    if (
+      !found &&
+      ['Achievement', 'CandidateProfile', 'FactCandidate'].includes(className)
+    )
+      return collection();
     if (!found) throw new Error(`Missing collection ${className}`);
     return found;
   }),
@@ -417,6 +447,61 @@ describe('processOpportunityIntelligence', () => {
     expect(scores.records).toHaveLength(1);
   });
 
+  it.each([
+    '',
+    'different-material',
+  ])('refreshes a score with stale material identity %j despite identical request provenance', async (storedMaterial) => {
+    const opportunities = collection([
+      record({
+        descriptionRaw: 'Qualifications\nTypeScript is required.',
+        id: 'opp-1',
+        requiredSkills: 'TypeScript',
+        status: 'found',
+      }),
+    ]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-1', label: 'TypeScript' })]),
+    );
+    const aiClient = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({
+          confidence: 0.6,
+          recommendation: 'maybe',
+          score: 65,
+          summary: 'Review the fit.',
+        }),
+      })),
+    };
+
+    await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+    scores.records[0].scoringMaterialFingerprint = storedMaterial;
+    const second = await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(second.results[0]).toMatchObject({
+      status: 'processed',
+    });
+    expect(aiClient.chat).toHaveBeenCalledTimes(2);
+    expect(scores.records).toHaveLength(2);
+    expect(scores.records[1].scoringMaterialFingerprint).toBe(
+      opportunities.records[0].scoringMaterialFingerprint,
+    );
+    expect(scores.records[1].scoringMaterialFingerprint).not.toBe(
+      storedMaterial,
+    );
+  });
+
   it('does not overwrite a concurrent human status transition after scoring', async () => {
     const opportunity = record({
       descriptionRaw: 'Build agent workflow products.',
@@ -523,6 +608,110 @@ describe('processOpportunityIntelligence', () => {
         status: 'succeeded',
       }),
     );
+  });
+
+  it('discards a queued score when candidate material changes while it runs', async () => {
+    const opportunity = record({
+      descriptionRaw: 'Build agent workflow products.',
+      id: 'opp-1',
+      requiredSkills: 'TypeScript',
+      sourceContentFingerprint: 'fingerprint-v1',
+      status: 'found',
+      title: 'AI Platform Engineer',
+    });
+    const opportunities = collection([opportunity]);
+    const scores = collection();
+    const skill = record({ id: 'skill-1', label: 'TypeScript' });
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set('ResumeSkill', collection([skill]));
+    mocks.collections.set('FactCandidate', collection());
+    mocks.collections.set('Achievement', collection());
+    mocks.collections.set('CandidateProfile', collection());
+    const material = await scoringMaterialForOpportunity(opportunity as never);
+
+    const result = await processOpportunityIntelligence({
+      aiClient: {
+        chat: vi.fn(async () => {
+          skill.label = 'Rust';
+          return {
+            content: JSON.stringify({
+              confidence: 0.9,
+              recommendation: 'recommend',
+              score: 90,
+              summary: 'Strong fit.',
+            }),
+          };
+        }),
+      },
+      expectedScoringMaterialFingerprint: material?.fingerprint,
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(result).toMatchObject({ stale: true, status: 'skipped' });
+    expect(scores.records).toHaveLength(0);
+  });
+
+  it('does not apply recommendation side effects after a reconciler advances the target', async () => {
+    const opportunity = record({
+      descriptionRaw: 'Build agent workflow products. Requires TypeScript.',
+      id: 'opp-1',
+      requiredSkills: 'TypeScript',
+      status: 'found',
+      title: 'AI Platform Engineer',
+    });
+    const opportunities = collection([opportunity]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-1', label: 'TypeScript' })]),
+    );
+    const material = await scoringMaterialForOpportunity(opportunity as never);
+    opportunity.scoringMaterialFingerprint = material?.fingerprint;
+    mocks.databaseUpdate.mockImplementation(async (_table, where) => {
+      expect(where).toMatchObject({
+        scoring_material_fingerprint: material?.fingerprint,
+      });
+      // The reconciler advances its target after the pre-write read, before
+      // the conditional update reaches the database.
+      opportunity.scoringMaterialFingerprint = 'newer-material';
+      return {
+        affected:
+          where.scoring_material_fingerprint ===
+            opportunity.scoringMaterialFingerprint &&
+          opportunity.scoringMaterialFingerprint === material?.fingerprint
+            ? 1
+            : 0,
+      };
+    });
+
+    const result = await processOpportunityIntelligence({
+      aiClient: {
+        chat: vi.fn(async () => ({
+          content: JSON.stringify({
+            confidence: 0.9,
+            recommendation: 'recommend',
+            score: 90,
+            summary: 'Strong fit.',
+          }),
+        })),
+      },
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(result).toMatchObject({ stale: true, status: 'skipped' });
+    expect(opportunity).toMatchObject({
+      scoringMaterialFingerprint: 'newer-material',
+      status: 'found',
+    });
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
+    expect(mocks.databaseUpdate).toHaveBeenCalledOnce();
   });
 
   it.each([

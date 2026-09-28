@@ -17,6 +17,7 @@ import {
   OPPORTUNITY_SCORING_MAX_EXCERPT_LENGTH,
   OPPORTUNITY_SCORING_MAX_REQUIREMENTS,
   preScoreOpportunity,
+  scoringMaterialFingerprint,
   validatePreparedPostingForScoring,
 } from './opportunity-scoring.js';
 
@@ -32,6 +33,26 @@ async function build(fixture: OpportunityScoringFixture) {
 }
 
 describe('bounded opportunity scoring fixtures', () => {
+  it('keeps material freshness independent from model request trimming', async () => {
+    const fixture = maximumScoringInputFixture;
+    const material = scoringMaterialFingerprint({
+      evidenceSources: fixture.evidenceSources,
+      inputTokenCeiling: fixture.policy.inputTokenCeiling,
+      opportunity: fixture.opportunity,
+      policy: fixture.policy,
+      prepared: fixture.prepared,
+    });
+    const trimmed = await buildBoundedOpportunityScoringRequest({
+      evidenceSources: fixture.evidenceSources,
+      inputTokenCeiling: 1,
+      model: 'openai/gpt-5.6-luna',
+      opportunity: fixture.opportunity,
+      policy: { ...fixture.policy, inputTokenCeiling: 1 },
+      prepared: fixture.prepared,
+    }).catch(() => null);
+    expect(material).toMatch(/^[a-f0-9]{64}$/);
+    expect(trimmed?.input.fingerprint).not.toBe(material);
+  });
   it('handles a configured clear accept deterministically', async () => {
     const request = await build(clearAcceptScoringFixture);
     const decision = preScoreOpportunity(request.input);

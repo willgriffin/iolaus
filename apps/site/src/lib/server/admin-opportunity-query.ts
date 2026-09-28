@@ -87,6 +87,18 @@ function sqlStringArray(value: unknown): string[] {
 }
 
 function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
+  const currentScore = `COALESCE(es.source_content_fingerprint, '') =
+            COALESCE(o.source_content_fingerprint, '')
+          AND (
+            COALESCE(es.created_by_profile_id, '') <> ''
+            OR (
+              COALESCE(o.scoring_material_fingerprint, '') <> ''
+              AND COALESCE(es.scoring_material_fingerprint, '') =
+                COALESCE(o.scoring_material_fingerprint, '')
+            )
+          )`;
+  const scoreOrder = `CASE WHEN COALESCE(es.created_by_profile_id, '') <> '' THEN 0 ELSE 1 END,
+        es.updated_at DESC`;
   if (dialect === 'sqlite') {
     // SQLite has no LATERAL join. Its correlated subquery in the join
     // condition expresses the same one-current-score relation without
@@ -96,9 +108,8 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
         SELECT es.id
         FROM evaluation_scores es
         WHERE es.opportunity_id = CAST(o.id AS TEXT)
-          AND COALESCE(es.source_content_fingerprint, '') =
-            COALESCE(o.source_content_fingerprint, '')
-        ORDER BY es.updated_at DESC
+          AND ${currentScore}
+        ORDER BY ${scoreOrder}
         LIMIT 1
       )`;
   }
@@ -106,9 +117,8 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
     SELECT es.score, es.recommendation
     FROM evaluation_scores es
     WHERE es.opportunity_id = CAST(o.id AS TEXT)
-      AND COALESCE(es.source_content_fingerprint, '') =
-        COALESCE(o.source_content_fingerprint, '')
-    ORDER BY es.updated_at DESC
+      AND ${currentScore}
+    ORDER BY ${scoreOrder}
     LIMIT 1
   ) latest ON TRUE`;
 }
@@ -844,7 +854,16 @@ export async function listLatestOpportunityRelatedContext(
       WHERE es.opportunity_id = CAST(o.id AS TEXT)
         AND COALESCE(es.source_content_fingerprint, '') =
           COALESCE(o.source_content_fingerprint, '')
-      ORDER BY es.updated_at DESC
+        AND (
+          COALESCE(es.created_by_profile_id, '') <> ''
+          OR (
+            COALESCE(o.scoring_material_fingerprint, '') <> ''
+            AND COALESCE(es.scoring_material_fingerprint, '') =
+              COALESCE(o.scoring_material_fingerprint, '')
+          )
+        )
+      ORDER BY CASE WHEN COALESCE(es.created_by_profile_id, '') <> '' THEN 0 ELSE 1 END,
+        es.updated_at DESC
       LIMIT 1
     ) latest_score ON TRUE
     WHERE o.id = ANY($1)

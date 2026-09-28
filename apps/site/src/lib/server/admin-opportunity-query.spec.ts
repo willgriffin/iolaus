@@ -350,7 +350,7 @@ describe('admin-opportunity-query', () => {
     expect(scoreJoin).toContain(
       "COALESCE(es.source_content_fingerprint, '') =",
     );
-    expect(scoreJoin).toContain('ORDER BY es.updated_at DESC');
+    expect(scoreJoin).toContain('CASE WHEN COALESCE(es.created_by_profile_id');
   });
 
   it('repairs an invalid concurrent index before retrying it', async () => {

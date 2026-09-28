@@ -19,6 +19,9 @@ export class EvaluationScore extends SmrtObject {
   sourceContentFingerprint = '';
   @field({ type: 'integer' })
   sourceContentVersion = 0;
+  /** Stable, model-independent candidate/posting material identity. */
+  @field({ type: 'text' })
+  scoringMaterialFingerprint = '';
   @field({ type: 'text' })
   agentRunId = '';
   @field({ type: 'decimal', nullable: true })

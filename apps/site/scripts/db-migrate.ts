@@ -56,6 +56,7 @@ import { ensureSourceCrawlAccountingSchema } from '../src/lib/server/source-craw
 import { ensureSourceCrawlJobDedupe } from '../src/lib/server/source-crawl-job-schema.js';
 import { ensureAutoSubmitApplicationJobDedupe } from '../src/lib/server/auto-submit-application-job-schema.js';
 import { ensureOpportunityIntelligenceJobDedupe } from '../src/lib/server/opportunity-intelligence-job-schema.js';
+import { ensureOpportunityScoreRefreshSchedule } from '../src/lib/server/opportunity-score-refresh.js';
 import { ensureSourceProvenanceSchema } from '../src/lib/server/source-provenance.js';
 import { backfillSourceProviders } from '../src/lib/server/source-provider.js';
 import {
@@ -203,6 +204,7 @@ const {
   await ensureChangeFeedTableOnce(migration.db);
   await ensureSourceCrawlJobDedupe(migration.db);
   await ensureOpportunityIntelligenceJobDedupe(migration.db);
+  await ensureOpportunityScoreRefreshSchedule(migration.db);
   await ensureAutoSubmitApplicationJobDedupe(migration.db);
   const sourceSchedules = await syncAllSourceSchedules({ db: migration.db });
   const sourceCrawlAccountingSchema =

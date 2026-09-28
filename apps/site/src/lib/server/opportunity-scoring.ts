@@ -815,6 +815,24 @@ function initialScoringInput(options: {
   });
 }
 
+/**
+ * Stable freshness identity for the material used to score an opportunity.
+ *
+ * This deliberately stops before model-specific token counting/trimming. The
+ * final request fingerprint remains audit provenance; this one is safe for a
+ * scheduler to calculate without an AI client and changes whenever the exact
+ * selected candidate/posting/policy material changes.
+ */
+export function scoringMaterialFingerprint(options: {
+  evidenceSources: OpportunityScoringEvidenceSource[];
+  inputTokenCeiling: number;
+  opportunity: Record<string, unknown>;
+  policy: OpportunityScoringConfig;
+  prepared: PreparedPosting;
+}): string {
+  return initialScoringInput(options).fingerprint;
+}
+
 export function buildOpportunityScoringMessages(
   input: OpportunityScoringInput,
 ): AIMessage[] {

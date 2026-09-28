@@ -1,4 +1,5 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import type { JobExecutionContext } from '@happyvertical/smrt-jobs';
 
 @smrt({
   tableName: 'opportunity_intelligence_controls',
@@ -39,4 +40,17 @@ export class OpportunityIntelligenceControl extends SmrtObject {
   lastRequestAt: Date | null = null;
   @field({ type: 'datetime', nullable: true })
   openedAt: Date | null = null;
+  /** Lexical durable cursor for bounded saved-score reconciliation. */
+  @field({ type: 'text' })
+  scoreRefreshCursor = '';
+
+  async refreshSavedEvaluationScores(
+    _args: Record<string, never> = {},
+    _context?: JobExecutionContext,
+  ) {
+    const { reconcileSavedOpportunityScores } = await import(
+      '../server/opportunity-score-refresh.js'
+    );
+    return await reconcileSavedOpportunityScores(this as never);
+  }
 }
