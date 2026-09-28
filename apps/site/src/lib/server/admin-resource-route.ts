@@ -502,6 +502,14 @@ async function latestEvaluationScoresByOpportunity(
         : '',
     ]),
   );
+  const materialFingerprints = new Map(
+    opportunities.map((opportunity) => [
+      opportunity.id,
+      typeof opportunity.scoringMaterialFingerprint === 'string'
+        ? opportunity.scoringMaterialFingerprint
+        : '',
+    ]),
+  );
 
   let scoreCollection: Awaited<ReturnType<typeof getCollection>>;
   try {
@@ -529,6 +537,25 @@ async function latestEvaluationScoresByOpportunity(
       if (scoreFingerprint !== expectedFingerprint) {
         continue;
       }
+      const humanOwned =
+        typeof serialized.createdByProfileId === 'string' &&
+        serialized.createdByProfileId.trim().length > 0;
+      const materialFingerprint =
+        typeof serialized.scoringMaterialFingerprint === 'string'
+          ? serialized.scoringMaterialFingerprint
+          : '';
+      const expectedMaterialFingerprint =
+        materialFingerprints.get(opportunityId) ?? '';
+      if (
+        !humanOwned &&
+        typeof opportunities.find(
+          (opportunity) => opportunity.id === opportunityId,
+        )?.scoringMaterialFingerprint === 'string' &&
+        (!expectedMaterialFingerprint ||
+          materialFingerprint !== expectedMaterialFingerprint)
+      ) {
+        continue;
+      }
       const existing = latestScoreByOpportunity.get(opportunityId);
       const existingFingerprint =
         typeof existing?.sourceContentFingerprint === 'string'
@@ -542,7 +569,9 @@ async function latestEvaluationScoresByOpportunity(
         existingFingerprint === expectedFingerprint;
       if (
         opportunityId &&
-        (!existing || (exactCurrentVersion && !existingIsExactCurrentVersion))
+        (!existing ||
+          (humanOwned && !String(existing.createdByProfileId ?? '').trim()) ||
+          (exactCurrentVersion && !existingIsExactCurrentVersion))
       ) {
         latestScoreByOpportunity.set(opportunityId, serialized);
       }

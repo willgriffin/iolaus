@@ -404,7 +404,12 @@ async function localLatestOpportunityRelatedContext(
       opportunity &&
       !scoreByOpportunity.has(opportunityId) &&
       stringValue(score.sourceContentFingerprint) ===
-        stringValue(opportunity.sourceContentFingerprint)
+        stringValue(opportunity.sourceContentFingerprint) &&
+      (Boolean(stringValue(score.createdByProfileId)) ||
+        ((typeof opportunity.scoringMaterialFingerprint !== 'string' ||
+          Boolean(stringValue(opportunity.scoringMaterialFingerprint))) &&
+          stringValue(score.scoringMaterialFingerprint) ===
+            stringValue(opportunity.scoringMaterialFingerprint)))
     ) {
       scoreByOpportunity.set(opportunityId, score);
     }

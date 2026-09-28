@@ -43,6 +43,7 @@ async function createTables(
     status TEXT NOT NULL,
     human_review_status TEXT,
     source_content_fingerprint TEXT,
+    scoring_material_fingerprint TEXT,
     updated_at TIMESTAMP,
     posted_at TIMESTAMP,
     first_seen_at TIMESTAMP,
@@ -65,6 +66,8 @@ async function createTables(
     id TEXT PRIMARY KEY,
     opportunity_id TEXT NOT NULL,
     source_content_fingerprint TEXT,
+    scoring_material_fingerprint TEXT,
+    created_by_profile_id TEXT,
     updated_at TIMESTAMP,
     score REAL,
     recommendation TEXT
@@ -105,21 +108,21 @@ async function createTables(
       ? "chr(160) || chr(65279) || 'reject' || chr(160)"
       : "char(160) || char(65279) || 'reject' || char(160)";
   await database.query(`INSERT INTO ${opportunityTable}
-    (id, status, human_review_status, source_content_fingerprint, updated_at, posted_at)
+    (id, status, human_review_status, source_content_fingerprint, scoring_material_fingerprint, updated_at, posted_at)
     VALUES
-    ('reject-100', 'recommended', '', 'current-reject', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-    ('recommend-96', 'recommended', '', 'current-recommend', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
-    ('score-96-tie', 'recommended', '', 'current-score-tie', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
-    ('unscored', 'recommended', '', 'current-unscored', '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z'),
-    ('unknown-90', 'recommended', '', 'current-unknown', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z'),
-    ('reject-20', 'recommended', '', 'current-reject-low', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
-    ('matches-list-context', 'found', '', 'match-current', '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'),
-    ('wrong-skill', 'found', '', 'wrong-skill-current', '2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z'),
-    ('wrong-search', 'found', '', 'wrong-search-current', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
-    ('wrong-status', 'recommended', '', 'wrong-status-current', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
-    ('expired', 'found', '', 'expired-current', '2026-02-05T00:00:00Z', '2026-02-05T00:00:00Z'),
-    ('stale', 'found', '', 'stale-current', '2026-02-06T00:00:00Z', '2026-02-06T00:00:00Z'),
-    ('decided', 'found', 'apply', 'decided-current', '2026-02-07T00:00:00Z', '2026-02-07T00:00:00Z')`);
+    ('reject-100', 'recommended', '', 'current-reject', 'material', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+    ('recommend-96', 'recommended', '', 'current-recommend', 'material', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
+    ('score-96-tie', 'recommended', '', 'current-score-tie', 'material', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
+    ('unscored', 'recommended', '', 'current-unscored', 'material', '2026-01-03T00:00:00Z', '2026-01-03T00:00:00Z'),
+    ('unknown-90', 'recommended', '', 'current-unknown', 'material', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z'),
+    ('reject-20', 'recommended', '', 'current-reject-low', 'material', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z'),
+    ('matches-list-context', 'found', '', 'match-current', 'material', '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'),
+    ('wrong-skill', 'found', '', 'wrong-skill-current', 'material', '2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z'),
+    ('wrong-search', 'found', '', 'wrong-search-current', 'material', '2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'),
+    ('wrong-status', 'recommended', '', 'wrong-status-current', 'material', '2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z'),
+    ('expired', 'found', '', 'expired-current', 'material', '2026-02-05T00:00:00Z', '2026-02-05T00:00:00Z'),
+    ('stale', 'found', '', 'stale-current', 'material', '2026-02-06T00:00:00Z', '2026-02-06T00:00:00Z'),
+    ('decided', 'found', 'apply', 'decided-current', 'material', '2026-02-07T00:00:00Z', '2026-02-07T00:00:00Z')`);
   await database.query(`UPDATE ${opportunityTable}
     SET title = 'Platform Rust Engineer',
         description_summary = 'A platform role',
@@ -145,21 +148,21 @@ async function createTables(
   await database.query(`UPDATE ${opportunityTable}
     SET freshness = 'stale' WHERE id = 'stale'`);
   await database.query(`INSERT INTO ${scoreTable}
-    (id, opportunity_id, source_content_fingerprint, updated_at, score, recommendation)
+    (id, opportunity_id, source_content_fingerprint, scoring_material_fingerprint, created_by_profile_id, updated_at, score, recommendation)
     VALUES
-    ('reject-100-current', 'reject-100', 'current-reject', '2026-01-06T00:00:00Z', 100, ${tabNewlineReject}),
-    ('recommend-96-current', 'recommend-96', 'current-recommend', '2026-01-06T00:00:00Z', 96, 'recommend'),
-    ('score-96-tie-current', 'score-96-tie', 'current-score-tie', '2026-01-06T00:00:00Z', 96, 'recommend'),
-    ('unknown-90-current', 'unknown-90', 'current-unknown', '2026-01-06T00:00:00Z', 90, 'unknown'),
-    ('reject-20-current', 'reject-20', 'current-reject-low', '2026-01-06T00:00:00Z', 20, ${nbspBomReject}),
-    ('unscored-stale', 'unscored', 'stale-content', '2026-01-07T00:00:00Z', 98, 'reject'),
-    ('matches-list-context-score', 'matches-list-context', 'match-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('wrong-skill-score', 'wrong-skill', 'wrong-skill-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('wrong-search-score', 'wrong-search', 'wrong-search-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('wrong-status-score', 'wrong-status', 'wrong-status-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('expired-score', 'expired', 'expired-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('stale-score', 'stale', 'stale-current', '2026-02-08T00:00:00Z', 80, 'recommend'),
-    ('decided-score', 'decided', 'decided-current', '2026-02-08T00:00:00Z', 80, 'recommend')`);
+    ('reject-100-current', 'reject-100', 'current-reject', 'material', '', '2026-01-06T00:00:00Z', 100, ${tabNewlineReject}),
+    ('recommend-96-current', 'recommend-96', 'current-recommend', 'material', '', '2026-01-06T00:00:00Z', 96, 'recommend'),
+    ('score-96-tie-current', 'score-96-tie', 'current-score-tie', 'material', '', '2026-01-06T00:00:00Z', 96, 'recommend'),
+    ('unknown-90-current', 'unknown-90', 'current-unknown', 'material', '', '2026-01-06T00:00:00Z', 90, 'unknown'),
+    ('reject-20-current', 'reject-20', 'current-reject-low', 'material', '', '2026-01-06T00:00:00Z', 20, ${nbspBomReject}),
+    ('unscored-stale', 'unscored', 'stale-content', 'material', '', '2026-01-07T00:00:00Z', 98, 'reject'),
+    ('matches-list-context-score', 'matches-list-context', 'match-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('wrong-skill-score', 'wrong-skill', 'wrong-skill-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('wrong-search-score', 'wrong-search', 'wrong-search-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('wrong-status-score', 'wrong-status', 'wrong-status-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('expired-score', 'expired', 'expired-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('stale-score', 'stale', 'stale-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend'),
+    ('decided-score', 'decided', 'decided-current', 'material', '', '2026-02-08T00:00:00Z', 80, 'recommend')`);
 }
 
 function query(triageRejectDepriority = false) {

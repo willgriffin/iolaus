@@ -11,6 +11,8 @@ const LEGACY_OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX =
   'idx_smrt_jobs_opportunity_intelligence_active';
 const OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX =
   'idx_smrt_jobs_opportunity_intelligence_active_fingerprint';
+const OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX =
+  'idx_smrt_jobs_opportunity_intelligence_active_material';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
@@ -39,13 +41,14 @@ function sqlString(value: string): string {
 
 function expectedOpportunityIntelligenceActiveIndexDefinition(): string {
   return normalizeIndexDefinition(`
-    CREATE UNIQUE INDEX ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}
+    CREATE UNIQUE INDEX ${OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX}
       ON _smrt_jobs USING btree (
         queue,
         object_type,
         object_id,
         method,
-        (COALESCE(args ->> 'contentFingerprint', ''))
+        (COALESCE(args ->> 'contentFingerprint', '')),
+        (COALESCE(args ->> 'scoringMaterialFingerprint', ''))
       )
       WHERE status = ANY (ARRAY['pending', 'running'])
         AND queue = ${sqlString(OPPORTUNITY_INTELLIGENCE_QUEUE)}
@@ -60,7 +63,9 @@ async function applyOpportunityIntelligenceJobDedupe(
 ): Promise<void> {
   const installed = await getOpportunityIntelligenceJobDedupeStatus(db);
   if (installed.activeIndexNamed && !installed.activeIndexPresent) {
-    await db.query(`DROP INDEX ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}`);
+    await db.query(
+      `DROP INDEX ${OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX}`,
+    );
   }
 
   await db.query(
@@ -74,7 +79,8 @@ async function applyOpportunityIntelligenceJobDedupe(
               object_type,
               object_id,
               method,
-              COALESCE(args ->> 'contentFingerprint', '')
+              COALESCE(args ->> 'contentFingerprint', ''),
+              COALESCE(args ->> 'scoringMaterialFingerprint', '')
             ORDER BY priority DESC, run_at ASC, created_at ASC, id ASC
           ) AS duplicate_rank
         FROM _smrt_jobs
@@ -102,13 +108,14 @@ async function applyOpportunityIntelligenceJobDedupe(
   );
 
   await db.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}
+    CREATE UNIQUE INDEX IF NOT EXISTS ${OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX}
       ON _smrt_jobs (
         queue,
         object_type,
         object_id,
         method,
-        (COALESCE(args ->> 'contentFingerprint', ''))
+        (COALESCE(args ->> 'contentFingerprint', '')),
+        (COALESCE(args ->> 'scoringMaterialFingerprint', ''))
       )
       WHERE status IN ('pending', 'running')
         AND queue = ${sqlString(OPPORTUNITY_INTELLIGENCE_QUEUE)}
@@ -122,6 +129,9 @@ async function applyOpportunityIntelligenceJobDedupe(
   // own version while the older version remains auditable.
   await db.query(
     `DROP INDEX IF EXISTS ${LEGACY_OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}`,
+  );
+  await db.query(
+    `DROP INDEX IF EXISTS ${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX}`,
   );
 
   const attested = await getOpportunityIntelligenceJobDedupeStatus(db);
@@ -154,7 +164,7 @@ export async function getOpportunityIntelligenceJobDedupeStatus(
        AND table_namespace.nspname = current_schema()
        AND table_relation.relname = '_smrt_jobs'
        AND index_relation.relname = ?`,
-    [OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX],
+    [OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX],
   );
   const row = result.rows[0] as Record<string, unknown> | undefined;
   const activeIndexNamed = result.rows.length === 1;

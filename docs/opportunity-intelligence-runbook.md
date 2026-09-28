@@ -25,3 +25,20 @@ the generic simple adapter remains selected.
 
 Keep deployment-specific cohorts, incident records, gateway budgets, alert
 thresholds and operational rollout instructions outside the public source tree.
+
+## Saved evaluation freshness
+
+The schedule worker reconciles one bounded page of saved opportunities every
+minute. It derives a model-independent material fingerprint from the exact
+reviewed candidate evidence, skills, profile excerpts, prepared posting facts,
+and scoring policy selected for that opportunity. An automated evaluation is
+shown as current only when its source fingerprint and material fingerprint both
+match the reconciled target. Historical automated scores remain available for
+audit; source-current human evaluations remain authoritative.
+
+The reconciler uses a durable cursor, a 25-row page limit, and at most three
+one-shot attempts per material fingerprint with a 15-minute backoff. A changed
+source or candidate material fingerprint resets that bounded retry state. Jobs
+carry both source and material fences, so an in-flight result is discarded when
+either changes. Candidate reads fail closed: an unavailable evidence collection
+does not mark existing evaluations stale or enqueue a broad refresh.

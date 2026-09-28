@@ -41,6 +41,7 @@ export interface OpportunityIntelligenceJobArgs {
   contentFingerprint?: string;
   contentFingerprintVersion?: string;
   contentVersion?: number;
+  scoringMaterialFingerprint?: string;
   modes?: OpportunityIntelligenceMode | OpportunityIntelligenceMode[];
   reason?: string;
   sourceCrawlId?: string;
@@ -172,6 +173,7 @@ async function findActiveOpportunityIntelligenceJobInCollection(
   collection: OpportunityIntelligenceJobCollection,
   opportunityId: string,
   contentFingerprint = '',
+  scoringMaterialFingerprint = '',
 ): Promise<SmrtJob | null> {
   const jobs = await collection.list({
     ...(contentFingerprint ? {} : { limit: 1 }),
@@ -184,10 +186,14 @@ async function findActiveOpportunityIntelligenceJobInCollection(
       status: ['pending', 'running'],
     },
   });
-  if (!contentFingerprint) return jobs[0] ?? null;
+  if (!contentFingerprint && !scoringMaterialFingerprint)
+    return jobs[0] ?? null;
   return (
     jobs.find(
-      (job) => stringValue(job.args?.contentFingerprint) === contentFingerprint,
+      (job) =>
+        stringValue(job.args?.contentFingerprint) === contentFingerprint &&
+        stringValue(job.args?.scoringMaterialFingerprint) ===
+          scoringMaterialFingerprint,
     ) ?? null
   );
 }
@@ -196,6 +202,7 @@ export async function findActiveOpportunityIntelligenceJob(
   opportunityId: string,
   contentFingerprint = '',
   options: Pick<EnqueueOpportunityIntelligenceOptions, 'collection'> = {},
+  scoringMaterialFingerprint = '',
 ): Promise<SmrtJob | null> {
   const collection = (options.collection ??
     (await SmrtJobCollection.create({
@@ -205,6 +212,7 @@ export async function findActiveOpportunityIntelligenceJob(
     collection,
     opportunityId.trim(),
     contentFingerprint.trim(),
+    scoringMaterialFingerprint.trim(),
   );
 }
 
@@ -259,6 +267,7 @@ export async function enqueueOpportunityIntelligenceWithStatus(
     collection,
     normalizedOpportunityId,
     stringValue(resolvedArgs.contentFingerprint),
+    stringValue(resolvedArgs.scoringMaterialFingerprint),
   );
   if (existingJob) return { enqueued: false, job: existingJob };
 
@@ -297,6 +306,7 @@ export async function enqueueOpportunityIntelligenceWithStatus(
       collection,
       normalizedOpportunityId,
       stringValue(resolvedArgs.contentFingerprint),
+      stringValue(resolvedArgs.scoringMaterialFingerprint),
     );
     if (activeJob) return { enqueued: false, job: activeJob };
     throw error;
@@ -396,6 +406,9 @@ export async function runOpportunityIntelligenceJob(
       agentRunId,
       applicationId: stringValue(args.applicationId),
       expectedSourceContentFingerprint: expectedFingerprint,
+      expectedScoringMaterialFingerprint: stringValue(
+        args.scoringMaterialFingerprint,
+      ),
       governanceStore: dependencies.governanceStore,
       modes: args.modes ?? 'all',
       opportunityId,

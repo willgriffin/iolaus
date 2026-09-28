@@ -239,7 +239,7 @@ describe('opportunity intelligence jobs', () => {
               ? []
               : [
                   {
-                    index_definition: `CREATE UNIQUE INDEX idx_smrt_jobs_opportunity_intelligence_active_fingerprint ON public._smrt_jobs USING btree (queue, object_type, object_id, method, COALESCE((args ->> 'contentFingerprint'::text), ''::text)) WHERE ((status = ANY (ARRAY['pending'::text, 'running'::text])) AND (queue = 'opportunity-intelligence'::text) AND (object_type = '@willgriffin/iolaus-site:Opportunity'::text) AND (method = 'processIntelligence'::text) AND (object_id IS NOT NULL))`,
+                    index_definition: `CREATE UNIQUE INDEX idx_smrt_jobs_opportunity_intelligence_active_material ON public._smrt_jobs USING btree (queue, object_type, object_id, method, COALESCE((args ->> 'contentFingerprint'::text), ''::text), COALESCE((args ->> 'scoringMaterialFingerprint'::text), ''::text)) WHERE ((status = ANY (ARRAY['pending'::text, 'running'::text])) AND (queue = 'opportunity-intelligence'::text) AND (object_type = '@willgriffin/iolaus-site:Opportunity'::text) AND (method = 'processIntelligence'::text) AND (object_id IS NOT NULL))`,
                     is_ready: true,
                     is_unique: true,
                     is_valid: true,
@@ -252,15 +252,18 @@ describe('opportunity intelligence jobs', () => {
 
     await ensureOpportunityIntelligenceJobDedupe({ query } as never);
 
-    expect(query).toHaveBeenCalledTimes(5);
+    expect(query).toHaveBeenCalledTimes(6);
     expect(String(query.mock.calls[1]?.[0])).toContain(
       "COALESCE(args ->> 'contentFingerprint', '')",
     );
     expect(String(query.mock.calls[2]?.[0])).toContain(
-      'idx_smrt_jobs_opportunity_intelligence_active_fingerprint',
+      'idx_smrt_jobs_opportunity_intelligence_active_material',
     );
     expect(String(query.mock.calls[3]?.[0])).toContain(
       'DROP INDEX IF EXISTS idx_smrt_jobs_opportunity_intelligence_active',
+    );
+    expect(String(query.mock.calls[4]?.[0])).toContain(
+      'DROP INDEX IF EXISTS idx_smrt_jobs_opportunity_intelligence_active_fingerprint',
     );
   });
 

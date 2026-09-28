@@ -1,6 +1,6 @@
 import type { AIInterface, AIMessage, ChatOptions } from '@happyvertical/ai';
 import { resolveDatabase } from '@happyvertical/smrt-core';
-import type { User } from '@happyvertical/smrt-users';
+import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { applicationMaterialsAreLockedOrLeased } from '../objects/application-approval-scope.js';
 import {
   isActiveTaskStatus,
@@ -56,6 +56,7 @@ import {
   type OpportunityScoringEvidenceSource,
   type OpportunityScoringReason,
   preScoreOpportunity,
+  scoringMaterialFingerprint,
   scoringReason,
   validatePreparedPostingForScoring,
 } from './opportunity-scoring.js';
@@ -141,6 +142,8 @@ export interface OpportunityIntelligenceOptions {
   assertWriteAllowed?: () => void;
   baseUrl?: string;
   expectedSourceContentFingerprint?: string;
+  /** Fence a queued refresh to the reconciled candidate/posting material. */
+  expectedScoringMaterialFingerprint?: string;
   governanceStore?: OpportunityIntelligenceGovernanceStore;
   model?: string;
   modes: OpportunityIntelligenceMode | OpportunityIntelligenceMode[];
@@ -226,6 +229,7 @@ function opportunityIntelligenceProvenance(
   return compactRecord({
     contentFingerprint: options.expectedSourceContentFingerprint,
     contentVersion: options.sourceContentVersion,
+    scoringMaterialFingerprint: options.expectedScoringMaterialFingerprint,
     sourceCrawlId: options.sourceCrawlId,
     sourceCrawlItemId: options.sourceCrawlItemId,
     sourceId: options.sourceId,
@@ -464,10 +468,12 @@ async function collection(className: string): Promise<Collection> {
 async function optionalList(
   className: string,
   options?: Record<string, unknown>,
+  strict = false,
 ): Promise<MutableRecord[]> {
   try {
     return await (await collection(className)).list(options);
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }
@@ -752,6 +758,7 @@ function matchRequirement(
 
 async function loadEvidenceSources(
   opportunity: MutableRecord,
+  strict = false,
 ): Promise<EvidenceSource[]> {
   const organizationProfileId = stringValue(opportunity.organizationProfileId);
   const opportunityId = stringValue(opportunity.id);
@@ -762,23 +769,43 @@ async function loadEvidenceSources(
     profiles,
     companyResearch,
   ] = await Promise.all([
-    optionalList('FactCandidate', {
-      limit: 200,
-      orderBy: 'updated_at DESC',
-      where: { reviewStatus: 'accepted' },
-    }),
-    optionalList('Achievement', { limit: 200, orderBy: 'sortOrder ASC' }),
-    optionalList('ResumeSkill', { limit: 200, orderBy: 'sortOrder ASC' }),
-    optionalList('CandidateProfile', {
-      limit: 25,
-      orderBy: 'isDefault DESC, updated_at DESC',
-    }),
+    optionalList(
+      'FactCandidate',
+      {
+        limit: 200,
+        orderBy: 'updated_at DESC',
+        where: { reviewStatus: 'accepted' },
+      },
+      strict,
+    ),
+    optionalList(
+      'Achievement',
+      { limit: 200, orderBy: 'sortOrder ASC' },
+      strict,
+    ),
+    optionalList(
+      'ResumeSkill',
+      { limit: 200, orderBy: 'sortOrder ASC' },
+      strict,
+    ),
+    optionalList(
+      'CandidateProfile',
+      {
+        limit: 25,
+        orderBy: 'isDefault DESC, updated_at DESC',
+      },
+      strict,
+    ),
     organizationProfileId
-      ? optionalList('CompanyResearch', {
-          limit: 25,
-          orderBy: 'updated_at DESC',
-          where: { organizationProfileId },
-        })
+      ? optionalList(
+          'CompanyResearch',
+          {
+            limit: 25,
+            orderBy: 'updated_at DESC',
+            where: { organizationProfileId },
+          },
+          strict,
+        )
       : Promise.resolve([]),
   ]);
 
@@ -852,6 +879,35 @@ async function loadEvidenceSources(
   return sources.filter((source) => stringValue(source.text));
 }
 
+export async function scoringMaterialForOpportunity(
+  opportunity: MutableRecord,
+): Promise<{
+  fingerprint: string;
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+} | null> {
+  const preparedValidation = validatePreparedPostingForScoring({ opportunity });
+  if (preparedValidation.kind !== 'ready') return null;
+  const policy = resolveOpportunityScoringConfig();
+  const evidenceSources = candidateEvidence(
+    await loadEvidenceSources(opportunityWithSourceContent(opportunity), true),
+  );
+  return {
+    fingerprint: scoringMaterialFingerprint({
+      evidenceSources,
+      inputTokenCeiling: policy.inputTokenCeiling,
+      opportunity,
+      policy,
+      prepared: preparedValidation.prepared,
+    }),
+    sourceContentFingerprint: stringValue(opportunity.sourceContentFingerprint),
+    sourceContentVersion: Math.max(
+      0,
+      Math.trunc(numberValue(opportunity.sourceContentVersion) ?? 0),
+    ),
+  };
+}
+
 function buildEvidenceMatrix(
   opportunity: MutableRecord,
   sources: EvidenceSource[],
@@ -895,6 +951,93 @@ async function latestEvaluationScore(
           : {}),
       },
     }),
+  );
+}
+
+/**
+ * The raw latest-score helper above intentionally remains available to score
+ * idempotence. Consumers which present or derive from a score must instead
+ * select the current human decision, or an automated score that matches the
+ * opportunity's reconciled material snapshot.
+ */
+async function latestCurrentEvaluationScore(
+  opportunity: MutableRecord,
+  expectedSourceContentFingerprint = '',
+): Promise<MutableRecord | null> {
+  const opportunityId = stringValue(opportunity.id);
+  const sourceContentFingerprint =
+    expectedSourceContentFingerprint ||
+    stringValue(opportunity.sourceContentFingerprint);
+  if (!opportunityId) return null;
+  if (!sourceContentFingerprint)
+    return await latestEvaluationScore(opportunityId);
+  // Generated objects always carry this field. The sentinel only preserves
+  // compatibility with older in-memory callers until they load migrated data.
+  const materialFingerprint = Object.hasOwn(
+    opportunity,
+    'scoringMaterialFingerprint',
+  )
+    ? stringValue(opportunity.scoringMaterialFingerprint)
+    : '__legacy_current_score__';
+  const database =
+    getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+  const result = await database.query(
+    `SELECT CAST(id AS TEXT) AS id
+       FROM evaluation_scores
+      WHERE opportunity_id = ?
+        AND COALESCE(source_content_fingerprint, '') = ?
+        AND (
+          COALESCE(created_by_profile_id, '') <> ''
+          OR (
+            ? <> ''
+            AND COALESCE(scoring_material_fingerprint, '') = ?
+          )
+        )
+      ORDER BY CASE WHEN COALESCE(created_by_profile_id, '') <> '' THEN 0 ELSE 1 END,
+               updated_at DESC,
+               id DESC
+      LIMIT 1`,
+    [
+      opportunityId,
+      sourceContentFingerprint,
+      materialFingerprint,
+      materialFingerprint,
+    ],
+  );
+  const id = stringValue(result.rows[0]?.id);
+  return id ? await (await collection('EvaluationScore')).get(id) : null;
+}
+
+async function markCurrentScoringMaterial(
+  opportunity: MutableRecord,
+  sourceContentFingerprint: string,
+  materialFingerprint: string,
+): Promise<boolean> {
+  const database =
+    getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+  const result = await database.update(
+    'opportunities',
+    Object.fromEntries([
+      ['id', stringValue(opportunity.id)],
+      ['source_content_fingerprint', sourceContentFingerprint],
+      [
+        'scoring_material_fingerprint',
+        stringValue(opportunity.scoringMaterialFingerprint),
+      ],
+    ]),
+    { scoring_material_fingerprint: materialFingerprint },
+  );
+  if (result.affected > 0) {
+    await bumpOpportunityChangeFeed(database, [stringValue(opportunity.id)]);
+    opportunity.scoringMaterialFingerprint = materialFingerprint;
+    return true;
+  }
+  const current = await getOpportunity(stringValue(opportunity.id));
+  return (
+    Boolean(current) &&
+    stringValue(current?.sourceContentFingerprint) ===
+      sourceContentFingerprint &&
+    stringValue(current?.scoringMaterialFingerprint) === materialFingerprint
   );
 }
 
@@ -1050,6 +1193,25 @@ async function runScore(
     const evidenceSources = candidateEvidence(
       await loadEvidenceSources(opportunityWithSourceContent(opportunity)),
     );
+    const materialFingerprint = scoringMaterialFingerprint({
+      evidenceSources,
+      inputTokenCeiling: policy.inputTokenCeiling,
+      opportunity,
+      policy,
+      prepared: preparedValidation.prepared,
+    });
+    if (
+      stringValue(options.expectedScoringMaterialFingerprint) &&
+      materialFingerprint !==
+        stringValue(options.expectedScoringMaterialFingerprint)
+    ) {
+      return {
+        message: 'Skipped stale opportunity scoring material.',
+        mode: 'score',
+        skipReason: 'stale',
+        status: 'skipped',
+      };
+    }
     let request = await buildBoundedOpportunityScoringRequest({
       evidenceSources,
       inputTokenCeiling: policy.inputTokenCeiling,
@@ -1063,9 +1225,13 @@ async function runScore(
       opportunityId,
       scoreSourceFingerprint,
     );
-    if (existingScore && stringValue(existingScore.createdByProfileId)) {
+    const currentScore = await latestCurrentEvaluationScore(
+      opportunity,
+      scoreSourceFingerprint,
+    );
+    if (currentScore && stringValue(currentScore.createdByProfileId)) {
       return {
-        evaluationScoreId: stringValue(existingScore.id),
+        evaluationScoreId: stringValue(currentScore.id),
         message:
           'The current evaluation is human-owned; automation scoring was skipped.',
         mode: 'score',
@@ -1243,6 +1409,39 @@ async function runScore(
       };
     }
     if (currentOpportunity) opportunity = currentOpportunity;
+    const currentPrepared = validatePreparedPostingForScoring({
+      expectedSourceContentFingerprint: scoreSourceFingerprint,
+      expectedSourceContentVersion: scoreSourceVersion,
+      opportunity,
+    });
+    const currentMaterialFingerprint =
+      currentPrepared.kind === 'ready'
+        ? scoringMaterialFingerprint({
+            evidenceSources: candidateEvidence(
+              await loadEvidenceSources(
+                opportunityWithSourceContent(opportunity),
+              ),
+            ),
+            inputTokenCeiling: policy.inputTokenCeiling,
+            opportunity,
+            policy,
+            prepared: currentPrepared.prepared,
+          })
+        : '';
+    if (
+      !currentMaterialFingerprint ||
+      currentMaterialFingerprint !== materialFingerprint ||
+      (stringValue(options.expectedScoringMaterialFingerprint) &&
+        currentMaterialFingerprint !==
+          stringValue(options.expectedScoringMaterialFingerprint))
+    ) {
+      return {
+        message: 'Discarded stale opportunity scoring material.',
+        mode: 'score',
+        skipReason: 'stale',
+        status: 'skipped',
+      };
+    }
     const scoringProvenance = scoringReason({
       decision,
       model: modelInvoked ? settings?.model : '',
@@ -1276,6 +1475,7 @@ async function runScore(
       ),
       recommendation: score.recommendation,
       score: score.score,
+      scoringMaterialFingerprint: materialFingerprint,
       sourceContentFingerprint: scoreSourceFingerprint,
       sourceContentVersion: scoreSourceVersion,
       sourceCrawlId: stringValue(options.sourceCrawlId),
@@ -1310,6 +1510,22 @@ async function runScore(
         agentRunId: stringValue(run.id),
         evaluationScoreId: stringValue(evaluationScore.id),
         message: 'Discarded stale opportunity scoring results.',
+        mode: 'score',
+        skipReason: 'stale',
+        status: 'skipped',
+      };
+    }
+    if (
+      !(await markCurrentScoringMaterial(
+        opportunity,
+        scoreSourceFingerprint,
+        materialFingerprint,
+      ))
+    ) {
+      return {
+        agentRunId: stringValue(run.id),
+        evaluationScoreId: stringValue(evaluationScore.id),
+        message: 'Discarded stale opportunity scoring material.',
         mode: 'score',
         skipReason: 'stale',
         status: 'skipped',
@@ -1366,8 +1582,8 @@ async function runEvidence(
   options: OpportunityIntelligenceOptions,
 ): Promise<OpportunityIntelligenceStepResult> {
   const opportunityId = stringValue(opportunity.id);
-  const evaluationScore = await latestEvaluationScore(
-    opportunityId,
+  const evaluationScore = await latestCurrentEvaluationScore(
+    opportunity,
     stringValue(options.expectedSourceContentFingerprint),
   );
   if (!evaluationScore) {
@@ -1499,8 +1715,8 @@ async function runQuality(
   options: OpportunityIntelligenceOptions,
 ): Promise<OpportunityIntelligenceStepResult> {
   const opportunityId = stringValue(opportunity.id);
-  const evaluationScore = await latestEvaluationScore(
-    opportunityId,
+  const evaluationScore = await latestCurrentEvaluationScore(
+    opportunity,
     stringValue(options.expectedSourceContentFingerprint),
   );
   if (!evaluationScore) {
@@ -1792,8 +2008,8 @@ async function runResearch(
   options: OpportunityIntelligenceOptions,
 ): Promise<OpportunityIntelligenceStepResult> {
   const opportunityId = stringValue(opportunity.id);
-  const evaluationScore = await latestEvaluationScore(
-    opportunityId,
+  const evaluationScore = await latestCurrentEvaluationScore(
+    opportunity,
     stringValue(options.expectedSourceContentFingerprint),
   );
   const reason = parseOpportunityReasonJson(evaluationScore?.reasonJson);
@@ -2005,8 +2221,8 @@ async function runPlan(
       status: 'skipped',
     };
   }
-  const evaluationScore = await latestEvaluationScore(
-    opportunityId,
+  const evaluationScore = await latestCurrentEvaluationScore(
+    opportunity,
     stringValue(options.expectedSourceContentFingerprint),
   );
   const reason = parseOpportunityReasonJson(evaluationScore?.reasonJson);
@@ -2254,8 +2470,8 @@ async function processOpportunityIntelligenceInternal(
   const failed = results.filter((result) => result.status === 'error');
   const skipped = results.filter((result) => result.status === 'skipped');
   const stale = skipped.some((result) => result.skipReason === 'stale');
-  const latestScore = await latestEvaluationScore(
-    opportunityId,
+  const latestScore = await latestCurrentEvaluationScore(
+    opportunity,
     stringValue(options.expectedSourceContentFingerprint),
   );
   return {
