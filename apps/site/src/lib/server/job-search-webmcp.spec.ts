@@ -489,6 +489,13 @@ describe('job-search WebMCP service', () => {
           score: 70,
           sourceContentFingerprint: 'fixture-v1',
         }),
+        record({
+          createdByProfileId: 'profile-human',
+          id: 'score-human-older',
+          opportunityId: 'opp-1',
+          score: 10,
+          sourceContentFingerprint: 'fixture-v1',
+        }),
       ]),
     );
     mocks.collections.set(
