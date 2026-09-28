@@ -1075,11 +1075,13 @@ describe('admin-resource-route', () => {
     const records = [
       {
         id: 'opp-1',
+        scoringMaterialFingerprint: 'material-opp-1',
         sourceContentFingerprint: 'fingerprint-opp-1',
         title: 'Opportunity 1',
       },
       {
         id: 'opp-2',
+        scoringMaterialFingerprint: 'material-opp-2',
         sourceContentFingerprint: 'fingerprint-opp-2',
         title: 'Opportunity 2',
       },
@@ -1114,6 +1116,7 @@ describe('admin-resource-route', () => {
           id: 'score-opp-2-newer',
           opportunityId: 'opp-2',
           score: 92,
+          scoringMaterialFingerprint: 'material-opp-2',
           sourceContentFingerprint: 'fingerprint-opp-2',
           updated_at: '2026-01-02T00:00:00.000Z',
         },
@@ -1121,6 +1124,7 @@ describe('admin-resource-route', () => {
           id: 'score-opp-1',
           opportunityId: 'opp-1',
           score: 91,
+          scoringMaterialFingerprint: 'material-opp-1',
           sourceContentFingerprint: 'fingerprint-opp-1',
           updated_at: '2026-01-01T00:00:00.000Z',
         },
@@ -1140,8 +1144,10 @@ describe('admin-resource-route', () => {
         },
         {
           id: 'score-opp-2-older',
+          createdByProfileId: 'profile-human',
           opportunityId: 'opp-2',
           score: 72,
+          sourceContentFingerprint: 'fingerprint-opp-2',
           updated_at: '2025-12-31T00:00:00.000Z',
         },
       ],
@@ -1181,9 +1187,9 @@ describe('admin-resource-route', () => {
     expect(
       data.records.map((record) => [record.id, record.latestScore]),
     ).toEqual([
-      ['opp-2', 92],
+      ['opp-2', 72],
       ['opp-1', 91],
-      ['opp-4', 88],
+      ['opp-4', null],
       ['opp-3', null],
     ]);
     expect(evaluationScoreList).toHaveBeenCalled();

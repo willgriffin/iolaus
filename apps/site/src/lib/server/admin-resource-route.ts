@@ -548,9 +548,6 @@ async function latestEvaluationScoresByOpportunity(
         materialFingerprints.get(opportunityId) ?? '';
       if (
         !humanOwned &&
-        typeof opportunities.find(
-          (opportunity) => opportunity.id === opportunityId,
-        )?.scoringMaterialFingerprint === 'string' &&
         (!expectedMaterialFingerprint ||
           materialFingerprint !== expectedMaterialFingerprint)
       ) {

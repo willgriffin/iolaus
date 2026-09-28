@@ -402,14 +402,14 @@ async function localLatestOpportunityRelatedContext(
     if (
       opportunityId &&
       opportunity &&
-      !scoreByOpportunity.has(opportunityId) &&
       stringValue(score.sourceContentFingerprint) ===
         stringValue(opportunity.sourceContentFingerprint) &&
       (Boolean(stringValue(score.createdByProfileId)) ||
-        ((typeof opportunity.scoringMaterialFingerprint !== 'string' ||
-          Boolean(stringValue(opportunity.scoringMaterialFingerprint))) &&
+        (Boolean(stringValue(opportunity.scoringMaterialFingerprint)) &&
           stringValue(score.scoringMaterialFingerprint) ===
-            stringValue(opportunity.scoringMaterialFingerprint)))
+            stringValue(opportunity.scoringMaterialFingerprint))) &&
+      (Boolean(stringValue(score.createdByProfileId)) ||
+        !scoreByOpportunity.has(opportunityId))
     ) {
       scoreByOpportunity.set(opportunityId, score);
     }
