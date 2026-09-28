@@ -489,4 +489,41 @@ const facts = $derived(
       grid-template-columns: minmax(0, 1fr);
     }
   }
+
+  @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+    .triage-card {
+      gap: 20px;
+    }
+
+    .main {
+      gap: 16px;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .card-aside {
+      gap: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--smrt-color-outline-variant);
+    }
+
+    .panel {
+      gap: 8px;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .panel + .panel {
+      padding-top: 18px;
+      border-top: 1px solid var(--smrt-color-outline-variant);
+    }
+
+    .secondary-actions button {
+      min-height: 44px;
+    }
+  }
 </style>

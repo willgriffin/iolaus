@@ -373,3 +373,75 @@ test('short task pages allow the toolbar to scroll out of the way', async ({
     .toBeGreaterThan(before + 30);
   await expect(page.locator('.kanban-board')).toBeInViewport();
 });
+
+test('triage uses the mobile viewport and keeps scrolling and actions reachable', async ({
+  page,
+}, testInfo) => {
+  await page.goto(
+    '/admin/opportunities?triage=1&triageSort=score&q=Iolaus%20Triage',
+  );
+  const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
+  await expect(dialog).toBeVisible();
+  const card = dialog.locator('.triage-card');
+  await expect(card).toBeVisible();
+  const container = dialog.locator('.modal__container');
+  const body = dialog.locator('.modal__body');
+  await container.evaluate(async (element) => {
+    await Promise.all(
+      element.getAnimations().map((animation) => animation.finished),
+    );
+  });
+  await page.screenshot({ path: testInfo.outputPath('triage-top.png') });
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('Missing viewport');
+  const box = await container.boundingBox();
+  if (!box) throw new Error('Missing triage container');
+  const mobile = testInfo.project.name !== 'desktop-control';
+  if (mobile) {
+    expect(box.x).toBeCloseTo(0, 0);
+    expect(box.y).toBeCloseTo(0, 0);
+    expect(box.width).toBeCloseTo(viewport.width, 0);
+    expect(box.height).toBeCloseTo(viewport.height, 0);
+    const mainStyle = await card.locator('.main').evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { border: style.borderLeftWidth, padding: style.paddingLeft };
+    });
+    expect(mainStyle).toEqual({ border: '0px', padding: '0px' });
+  } else {
+    expect(box.x).toBeGreaterThan(0);
+    expect(box.y).toBeGreaterThan(0);
+    expect(box.width).toBeLessThan(viewport.width);
+  }
+  expect(
+    await body.evaluate((element) => element.scrollWidth - element.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  const close = dialog.getByRole('button', { name: 'Close triage' });
+  const later = dialog.getByRole('button', { name: 'Later', exact: true });
+  for (const control of [
+    close,
+    later,
+    dialog.getByRole('button', { name: 'Nope', exact: true }),
+    dialog.getByRole('button', { name: 'Dig deeper', exact: true }),
+  ]) {
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const bounds = await control.boundingBox();
+    if (mobile) expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  const originalCard = await card.getAttribute('aria-label');
+  const before = await body.evaluate((element) => element.scrollTop);
+  await swipe(page, body, 'up');
+  await expect
+    .poll(() => body.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(before + 30);
+  await expect(card).toHaveAttribute('aria-label', originalCard ?? '');
+  await expect(close).toBeInViewport({ ratio: 1 });
+  await expect(later).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: testInfo.outputPath('triage-scrolled.png') });
+  await later.tap();
+  await expect(card).not.toHaveAttribute('aria-label', originalCard ?? '');
+  await close.tap();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole('button', { name: 'Triage', exact: true }),
+  ).toBeInViewport();
+});

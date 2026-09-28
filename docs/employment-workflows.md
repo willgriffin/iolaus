@@ -199,6 +199,10 @@ These are explicit operations an agent or Will can request:
   left nav and right dock — the verdicts live in the dialog's own footer, the
   card scrolls in the dialog body, and the page behind is scroll-locked. Esc and
   the close button leave; closing refreshes the list, so decided rows drop out.
+  On phones, the deck fills the available viewport without outer gutters or
+  nested card frames. The header and verdict controls remain visible while the
+  body scrolls, with safe-area padding and touch targets of at least 44px.
+  Desktop retains the inset dialog layout.
   `/admin/opportunities?triage=1[&triageSort=newest][&filters]` is the deep
   link, and the retired `/admin/opportunities/triage` route redirects to it, so
   old bookmarks and the agent docs still land in the deck.
@@ -215,10 +219,16 @@ These are explicit operations an agent or Will can request:
   is retried once those writes land.
 
   The dialog header carries exactly two things: a **sort chooser** and the close
-  button. The chooser is a segmented **Match %** / **Newest** control — score
-  descending or posted-date descending, the deck's only two orderings, both of
-  them sorts the shared filter model already supports. Anything else the
-  operator carried in from the list (salary, rating, best) normalises back to
+  button. The chooser offers match order and **Newest**. Match order puts
+  opportunities whose current evaluation says `reject` after all other
+  undecided opportunities, then sorts each group by score descending. This
+  prevents a contradictory legacy score (for example, 100 with `reject`) from
+  putting an unrelated role first. Rejected evaluations remain available for
+  human review, and this ordering never changes a saved score or decision.
+  Newest remains posted-date descending; ordinary list score sorting is numeric.
+  Only evaluations matching the current posting fingerprint affect ordering.
+  Local SQLite triage loads that score context before filtering and paging.
+  Anything else the operator carried in from the list (salary, rating, best) normalises back to
   Match %. The choice is remembered per viewer in `localStorage`, a deep link
   overrides the remembered one, and `job_search_next_triage_candidate` takes the
   same `sort` argument so an agent and an operator work the queue in the same
