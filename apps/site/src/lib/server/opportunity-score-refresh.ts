@@ -138,6 +138,7 @@ async function reserveEnqueueAttempt(
   db: Database,
   opportunityId: string,
   fingerprint: string,
+  sourceContentFingerprint: string,
   now: Date,
 ): Promise<boolean> {
   const result = await db.query(
@@ -147,16 +148,43 @@ async function reserveEnqueueAttempt(
       WHERE id = ?
         AND scoring_material_fingerprint = ?
         AND scoring_refresh_fingerprint = ?
-        AND scoring_refresh_attempts < ?`,
+        AND COALESCE(source_content_fingerprint, '') = ?
+        AND scoring_refresh_attempts < ?
+        AND (
+          scoring_refresh_next_attempt_at IS NULL
+          OR scoring_refresh_next_attempt_at <= ?
+        )`,
     [
       new Date(now.getTime() + OPPORTUNITY_SCORE_REFRESH_RETRY_MS),
       opportunityId,
       fingerprint,
       fingerprint,
+      sourceContentFingerprint,
       OPPORTUNITY_SCORE_REFRESH_MAX_ATTEMPTS,
+      now,
     ],
   );
   return (result.rowCount ?? result.rows.length) > 0;
+}
+
+async function persistScoreRefreshCursor(
+  db: Database,
+  control: MutableRecord,
+  cursor: string,
+): Promise<void> {
+  const controlId = stringValue(control.id);
+  if (!controlId)
+    throw new Error('Opportunity intelligence control is unavailable.');
+  const result = await db.query(
+    `UPDATE opportunity_intelligence_controls
+        SET score_refresh_cursor = ?,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`,
+    [cursor, controlId],
+  );
+  if ((result.rowCount ?? result.rows.length) === 0)
+    throw new Error('Opportunity intelligence control is unavailable.');
+  control.scoreRefreshCursor = cursor;
 }
 
 export async function ensureOpportunityScoreRefreshSchedule(
@@ -218,7 +246,9 @@ export async function reconcileSavedOpportunityScores(
   const db = options.db ?? (await resolveDatabase(getDbConfig()));
   const now = options.now ?? new Date();
   const ids = await listPage(db, stringValue(control.scoreRefreshCursor));
-  const opportunities = (await getCollection('Opportunity')) as unknown as {
+  const opportunities = (await getCollection('Opportunity', {
+    db,
+  })) as unknown as {
     get: (id: string) => Promise<MutableRecord | null>;
   };
   let enqueued = 0;
@@ -256,7 +286,15 @@ export async function reconcileSavedOpportunityScores(
       // Reserve before enqueue so a crash cannot produce an unbounded stream
       // of duplicate work. A reservation with no job becomes retryable after
       // the same bounded backoff.
-      if (!(await reserveEnqueueAttempt(db, id, material.fingerprint, now))) {
+      if (
+        !(await reserveEnqueueAttempt(
+          db,
+          id,
+          material.fingerprint,
+          material.sourceContentFingerprint,
+          now,
+        ))
+      ) {
         skipped += 1;
         continue;
       }
@@ -281,9 +319,11 @@ export async function reconcileSavedOpportunityScores(
       skipped += 1;
     }
   }
-  control.scoreRefreshCursor =
-    ids.length < OPPORTUNITY_SCORE_REFRESH_PAGE_SIZE ? '' : (ids.at(-1) ?? '');
-  await control.save();
+  await persistScoreRefreshCursor(
+    db,
+    control,
+    ids.length < OPPORTUNITY_SCORE_REFRESH_PAGE_SIZE ? '' : (ids.at(-1) ?? ''),
+  );
   return {
     cursor: stringValue(control.scoreRefreshCursor),
     enqueued,

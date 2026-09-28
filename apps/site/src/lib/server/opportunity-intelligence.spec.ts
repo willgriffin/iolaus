@@ -116,6 +116,11 @@ vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async (className: string) => {
     const found = mocks.collections.get(className);
+    if (
+      !found &&
+      ['Achievement', 'CandidateProfile', 'FactCandidate'].includes(className)
+    )
+      return collection();
     if (!found) throw new Error(`Missing collection ${className}`);
     return found;
   }),
@@ -585,6 +590,67 @@ describe('processOpportunityIntelligence', () => {
 
     expect(result).toMatchObject({ stale: true, status: 'skipped' });
     expect(scores.records).toHaveLength(0);
+  });
+
+  it('does not apply recommendation side effects after a reconciler advances the target', async () => {
+    const opportunity = record({
+      descriptionRaw: 'Build agent workflow products. Requires TypeScript.',
+      id: 'opp-1',
+      requiredSkills: 'TypeScript',
+      status: 'found',
+      title: 'AI Platform Engineer',
+    });
+    const opportunities = collection([opportunity]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-1', label: 'TypeScript' })]),
+    );
+    const material = await scoringMaterialForOpportunity(opportunity as never);
+    opportunity.scoringMaterialFingerprint = material?.fingerprint;
+    mocks.databaseUpdate.mockImplementation(async (_table, where) => {
+      expect(where).toMatchObject({
+        scoring_material_fingerprint: material?.fingerprint,
+      });
+      // The reconciler advances its target after the pre-write read, before
+      // the conditional update reaches the database.
+      opportunity.scoringMaterialFingerprint = 'newer-material';
+      return {
+        affected:
+          where.scoring_material_fingerprint ===
+            opportunity.scoringMaterialFingerprint &&
+          opportunity.scoringMaterialFingerprint === material?.fingerprint
+            ? 1
+            : 0,
+      };
+    });
+
+    const result = await processOpportunityIntelligence({
+      aiClient: {
+        chat: vi.fn(async () => ({
+          content: JSON.stringify({
+            confidence: 0.9,
+            recommendation: 'recommend',
+            score: 90,
+            summary: 'Strong fit.',
+          }),
+        })),
+      },
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(result).toMatchObject({ stale: true, status: 'skipped' });
+    expect(opportunity).toMatchObject({
+      scoringMaterialFingerprint: 'newer-material',
+      status: 'found',
+    });
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
+    expect(mocks.databaseUpdate).toHaveBeenCalledOnce();
   });
 
   it.each([

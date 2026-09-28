@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listScores: vi.fn<() => Promise<Record<string, unknown>[]>>(async () => []),
   opportunity: new Map<string, Record<string, unknown>>(),
   query: vi.fn(),
+  collectionOptions: vi.fn(),
   scoreMaterial: vi.fn(async (opportunity: Record<string, unknown>) => ({
     fingerprint: `material-${opportunity.id}`,
     sourceContentFingerprint: opportunity.sourceContentFingerprint,
@@ -40,12 +41,15 @@ vi.mock('./opportunity-intelligence.js', () => ({
   scoringMaterialForOpportunity: mocks.scoreMaterial,
 }));
 vi.mock('./smrt.js', () => ({
-  getCollection: vi.fn(async (name: string) => {
-    if (name === 'Opportunity')
-      return { get: async (id: string) => mocks.opportunity.get(id) ?? null };
-    if (name === 'EvaluationScore') return { list: mocks.listScores };
-    return { list: async () => [mocks.control] };
-  }),
+  getCollection: vi.fn(
+    async (name: string, options?: Record<string, unknown>) => {
+      mocks.collectionOptions(name, options);
+      if (name === 'Opportunity')
+        return { get: async (id: string) => mocks.opportunity.get(id) ?? null };
+      if (name === 'EvaluationScore') return { list: mocks.listScores };
+      return { list: async () => [mocks.control] };
+    },
+  ),
 }));
 
 describe('saved opportunity score refresh', () => {
@@ -57,6 +61,7 @@ describe('saved opportunity score refresh', () => {
     mocks.listScores.mockResolvedValue([]);
     mocks.opportunity.clear();
     mocks.query.mockReset();
+    mocks.collectionOptions.mockClear();
     mocks.scoreMaterial.mockClear();
   });
 
@@ -93,7 +98,13 @@ describe('saved opportunity score refresh', () => {
     expect(mocks.query.mock.calls.map(([sql]) => String(sql))).toEqual(
       expect.arrayContaining([
         expect.stringContaining('scoring_material_fingerprint'),
+        expect.stringContaining('UPDATE opportunity_intelligence_controls'),
       ]),
+    );
+    expect(mocks.control.save).not.toHaveBeenCalled();
+    expect(mocks.collectionOptions).toHaveBeenCalledWith(
+      'Opportunity',
+      expect.objectContaining({ db: expect.anything() }),
     );
   });
 

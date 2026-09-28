@@ -1011,6 +1011,7 @@ async function latestCurrentEvaluationScore(
 async function markCurrentScoringMaterial(
   opportunity: MutableRecord,
   sourceContentFingerprint: string,
+  expectedMaterialFingerprint: string,
   materialFingerprint: string,
 ): Promise<boolean> {
   const database =
@@ -1020,10 +1021,7 @@ async function markCurrentScoringMaterial(
     Object.fromEntries([
       ['id', stringValue(opportunity.id)],
       ['source_content_fingerprint', sourceContentFingerprint],
-      [
-        'scoring_material_fingerprint',
-        stringValue(opportunity.scoringMaterialFingerprint),
-      ],
+      ['scoring_material_fingerprint', expectedMaterialFingerprint],
     ]),
     { scoring_material_fingerprint: materialFingerprint },
   );
@@ -1064,9 +1062,25 @@ async function latestApplication(
 export async function applyRecommendationSideEffects(options: {
   expectedSourceContentFingerprint?: string;
   expectedSourceContentVersion?: number;
+  expectedScoringMaterialFingerprint?: string;
   opportunity: MutableRecord;
   score: NormalizedOpportunityScore;
 }): Promise<boolean> {
+  const expected = stringValue(options.expectedSourceContentFingerprint);
+  const expectedMaterial = stringValue(
+    options.expectedScoringMaterialFingerprint,
+  );
+  const matchesFence = (current: MutableRecord | null): boolean =>
+    Boolean(current) &&
+    stringValue(current?.sourceContentFingerprint) === expected &&
+    stringValue(current?.scoringMaterialFingerprint) === expectedMaterial;
+  // Fence before deriving either a status write or downstream decision work.
+  // The SQL update below repeats the same predicates to close the write race.
+  const fencedOpportunity = await getOpportunity(
+    stringValue(options.opportunity.id),
+  );
+  if (!matchesFence(fencedOpportunity)) return false;
+  if (fencedOpportunity) options.opportunity = fencedOpportunity;
   const status = statusForOpportunityRecommendation({
     confidence: options.score.confidence,
     currentStatus: options.opportunity.status,
@@ -1074,13 +1088,13 @@ export async function applyRecommendationSideEffects(options: {
     score: options.score.score,
   });
   if (status) {
-    const expected = stringValue(options.expectedSourceContentFingerprint);
     const expectedVersion = Math.max(
       0,
       Math.trunc(numberValue(options.expectedSourceContentVersion) ?? 0),
     );
     const expectedStatus = stringValue(options.opportunity.status);
-    const database = await resolveDatabase(getDbConfig());
+    const database =
+      getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
     const result = await database.update(
       'opportunities',
       Object.fromEntries([
@@ -1089,6 +1103,7 @@ export async function applyRecommendationSideEffects(options: {
         ...(expectedVersion > 0
           ? ([['source_content_version', expectedVersion]] as const)
           : []),
+        ['scoring_material_fingerprint', expectedMaterial],
         ['status', expectedStatus],
       ]),
       Object.fromEntries([
@@ -1101,6 +1116,7 @@ export async function applyRecommendationSideEffects(options: {
       if (
         !current ||
         stringValue(current.sourceContentFingerprint) !== expected ||
+        stringValue(current.scoringMaterialFingerprint) !== expectedMaterial ||
         (expectedVersion > 0 &&
           Math.max(
             0,
@@ -1121,6 +1137,11 @@ export async function applyRecommendationSideEffects(options: {
     status === 'recommended' ||
     stringValue(options.opportunity.status) === 'recommended'
   ) {
+    if (
+      !matchesFence(await getOpportunity(stringValue(options.opportunity.id)))
+    ) {
+      return false;
+    }
     await syncRecommendedOpportunityDecisionTasks();
   } else if (status === 'found') {
     await syncRecommendedOpportunityDecisionTasks();
@@ -1409,6 +1430,9 @@ async function runScore(
       };
     }
     if (currentOpportunity) opportunity = currentOpportunity;
+    const expectedMaterialTarget = stringValue(
+      currentOpportunity?.scoringMaterialFingerprint,
+    );
     const currentPrepared = validatePreparedPostingForScoring({
       expectedSourceContentFingerprint: scoreSourceFingerprint,
       expectedSourceContentVersion: scoreSourceVersion,
@@ -1420,6 +1444,7 @@ async function runScore(
             evidenceSources: candidateEvidence(
               await loadEvidenceSources(
                 opportunityWithSourceContent(opportunity),
+                true,
               ),
             ),
             inputTokenCeiling: policy.inputTokenCeiling,
@@ -1431,6 +1456,8 @@ async function runScore(
     if (
       !currentMaterialFingerprint ||
       currentMaterialFingerprint !== materialFingerprint ||
+      (expectedMaterialTarget &&
+        expectedMaterialTarget !== materialFingerprint) ||
       (stringValue(options.expectedScoringMaterialFingerprint) &&
         currentMaterialFingerprint !==
           stringValue(options.expectedScoringMaterialFingerprint))
@@ -1502,6 +1529,7 @@ async function runScore(
     const sideEffectsApplied = await applyRecommendationSideEffects({
       expectedSourceContentFingerprint: scoreSourceFingerprint,
       expectedSourceContentVersion: scoreSourceVersion,
+      expectedScoringMaterialFingerprint: expectedMaterialTarget,
       opportunity,
       score,
     });
@@ -1519,6 +1547,7 @@ async function runScore(
       !(await markCurrentScoringMaterial(
         opportunity,
         scoreSourceFingerprint,
+        expectedMaterialTarget,
         materialFingerprint,
       ))
     ) {
