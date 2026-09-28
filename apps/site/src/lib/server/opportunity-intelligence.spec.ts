@@ -447,6 +447,61 @@ describe('processOpportunityIntelligence', () => {
     expect(scores.records).toHaveLength(1);
   });
 
+  it.each([
+    '',
+    'different-material',
+  ])('refreshes a score with stale material identity %j despite identical request provenance', async (storedMaterial) => {
+    const opportunities = collection([
+      record({
+        descriptionRaw: 'Qualifications\nTypeScript is required.',
+        id: 'opp-1',
+        requiredSkills: 'TypeScript',
+        status: 'found',
+      }),
+    ]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-1', label: 'TypeScript' })]),
+    );
+    const aiClient = {
+      chat: vi.fn(async () => ({
+        content: JSON.stringify({
+          confidence: 0.6,
+          recommendation: 'maybe',
+          score: 65,
+          summary: 'Review the fit.',
+        }),
+      })),
+    };
+
+    await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+    scores.records[0].scoringMaterialFingerprint = storedMaterial;
+    const second = await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(second.results[0]).toMatchObject({
+      status: 'processed',
+    });
+    expect(aiClient.chat).toHaveBeenCalledTimes(2);
+    expect(scores.records).toHaveLength(2);
+    expect(scores.records[1].scoringMaterialFingerprint).toBe(
+      opportunities.records[0].scoringMaterialFingerprint,
+    );
+    expect(scores.records[1].scoringMaterialFingerprint).not.toBe(
+      storedMaterial,
+    );
+  });
+
   it('does not overwrite a concurrent human status transition after scoring', async () => {
     const opportunity = record({
       descriptionRaw: 'Build agent workflow products.',

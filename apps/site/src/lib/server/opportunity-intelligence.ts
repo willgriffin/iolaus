@@ -1331,6 +1331,8 @@ async function runScore(
     if (
       existingScore &&
       !stringValue(existingScore.createdByProfileId) &&
+      stringValue(existingScore.scoringMaterialFingerprint) ===
+        materialFingerprint &&
       existingReason.scoring?.input.fingerprint === request.input.fingerprint &&
       existingReason.scoring.modelInvoked === modelInvoked &&
       existingReason.scoring.model === (modelInvoked ? settings?.model : '')
