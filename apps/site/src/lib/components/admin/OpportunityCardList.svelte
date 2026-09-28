@@ -175,7 +175,7 @@ let drawerOpen = $state(page.url.searchParams.has('facets'));
 let skillQuery = $state('');
 let skillSearchActive = $state(false);
 let filters = $state<OpportunityFilterState>(
-  filterStateFromSearchParams(page.url.searchParams),
+  filtersFromListSearchParams(page.url.searchParams),
 );
 let lastUrlSearch = $state(page.url.search);
 let preferencesReady = $state(false);
@@ -188,7 +188,7 @@ const candidateSkillMatcher = $derived(
 $effect(() => {
   if (page.url.search === lastUrlSearch) return;
   lastUrlSearch = page.url.search;
-  filters = filterStateFromSearchParams(page.url.searchParams);
+  filters = filtersFromListSearchParams(page.url.searchParams);
   drawerOpen = page.url.searchParams.has('facets');
 });
 
@@ -203,7 +203,8 @@ onMount(() => {
   const url = new URL(page.url);
   let changed = removeActionSearchParams(url.searchParams);
   const hasReviewParam = url.searchParams.has('review');
-  const hasSortParam = url.searchParams.has('sort');
+  const hasLegacyTriageSort = url.searchParams.has(TRIAGE_SORT_URL_PARAM);
+  const hasSortParam = url.searchParams.has('sort') || hasLegacyTriageSort;
 
   if (hasReviewParam) {
     rememberReviewFilter(activeReviewFilter);
@@ -217,6 +218,11 @@ onMount(() => {
 
   if (hasSortParam) {
     rememberSort(filters.sort);
+    if (hasLegacyTriageSort) {
+      url.searchParams.delete(TRIAGE_SORT_URL_PARAM);
+      writeFilterStateSearchParams(url.searchParams, filters);
+      changed = true;
+    }
   } else {
     const storedSort = readSortPreference();
     if (storedSort && storedSort !== filters.sort) {
@@ -270,6 +276,23 @@ function installOpportunityListRefreshListeners(): () => void {
     window.removeEventListener('focus', refresh);
     document.removeEventListener('visibilitychange', onVisibilityChange);
   };
+}
+
+/**
+ * `triageSort` was the retired deck-only ordering parameter. Keep old links
+ * useful by translating its two supported values into the list's sort state;
+ * a real list `sort` remains authoritative.
+ */
+function filtersFromListSearchParams(
+  params: URLSearchParams,
+): OpportunityFilterState {
+  const filters = filterStateFromSearchParams(params);
+  if (params.has('sort')) return filters;
+  const legacySort = params.get(TRIAGE_SORT_URL_PARAM);
+  if (legacySort === 'score' || legacySort === 'newest') {
+    return { ...filters, sort: legacySort, sortDirection: 'desc' };
+  }
+  return filters;
 }
 
 function hrefWithFilters(nextFilters: OpportunityFilterState): string {
@@ -446,8 +469,7 @@ function pageActionHref(actionName: string): string {
 }
 
 /**
- * Triage runs the same filter model under its own preset, over this list's
- * *current* filters: the list is the context and owns the filter, and the deck
+ * Triage runs the list's current filter and ordering, while the deck
  * is a modal popped over it. `page`, `offset`, and any pending form action are
  * list-only state, so they never reach the queue read.
  */
@@ -471,11 +493,6 @@ const triageSearch = $derived.by(() => {
  * deck out from under the operator.
  */
 let triageOpen = $state(untrack(() => isTriageDeepLink(page.url.searchParams)));
-/** Ordering named by the deep link, if it named one. */
-const triageInitialSort = untrack(() =>
-  page.url.searchParams.get(TRIAGE_SORT_URL_PARAM),
-);
-
 function openTriage(): void {
   triageOpen = true;
 }
@@ -874,7 +891,6 @@ const resultCountLabel = $derived.by(() => {
     bind:open={triageOpen}
     {candidateSkills}
     search={triageSearch}
-    initialSort={triageInitialSort}
     onClose={closeTriage}
   />
 

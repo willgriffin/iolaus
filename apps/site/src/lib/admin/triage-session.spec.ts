@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_TRIAGE_SORT,
   isTriageDeepLink,
-  normalizeTriageSort,
   TRIAGE_DIG_DEEPER_RATING,
   TRIAGE_PREFETCH_SIZE,
   TRIAGE_REJECT_RATING,
-  TRIAGE_SORT_LABELS,
-  TRIAGE_SORTS,
   triageCloseHref,
   triageDeckAcceptsKeys,
   triageDeckShowsEmpty,
@@ -42,22 +38,6 @@ describe('triage verdict ratings', () => {
     expect(triageVerdictRating(Number.NaN, 'digDeeper')).toBe(
       TRIAGE_DIG_DEEPER_RATING,
     );
-  });
-});
-
-describe('triage sort', () => {
-  it('offers match and recency, and defaults to match', () => {
-    expect(TRIAGE_SORTS).toEqual(['score', 'newest']);
-    expect(DEFAULT_TRIAGE_SORT).toBe('score');
-    expect(TRIAGE_SORT_LABELS.score).toBe('Match %');
-    expect(TRIAGE_SORT_LABELS.newest).toBe('Newest');
-  });
-
-  it('coerces anything else — including the list own sorts — back to match', () => {
-    expect(normalizeTriageSort('newest')).toBe('newest');
-    expect(normalizeTriageSort('salary')).toBe('score');
-    expect(normalizeTriageSort('best')).toBe('score');
-    expect(normalizeTriageSort(undefined)).toBe('score');
   });
 });
 
@@ -187,34 +167,11 @@ describe('triageSessionKey', () => {
   const base = {
     open: true,
     search: 'skill=Rust',
-    sort: 'score' as const,
-    sortReady: true,
   };
 
-  it('names no session until the stored ordering has been read', () => {
-    // No key, no session, no `?/triageQueue` read: the deck never fetches a
-    // window for an ordering the chooser does not yet show (#452).
-    expect(triageSessionKey({ ...base, sortReady: false })).toBeNull();
-  });
-
-  it('opens with exactly one session when the stored order is the default', () => {
-    // The read happens once the preference is in hand. A stored preference
-    // equal to the default produces the same key, so nothing restarts and the
-    // first read is the only read.
-    const first = triageSessionKey(base);
-    const afterDefaultPreference = triageSessionKey({
-      ...base,
-      sort: DEFAULT_TRIAGE_SORT,
-    });
-
-    expect(first).not.toBeNull();
-    expect(afterDefaultPreference).toBe(first);
-  });
-
-  it('restarts on a different remembered ordering, filter, or open', () => {
+  it('restarts when the list query or dialog state changes', () => {
     const first = triageSessionKey(base);
 
-    expect(triageSessionKey({ ...base, sort: 'newest' })).not.toBe(first);
     expect(triageSessionKey({ ...base, search: 'skill=Go' })).not.toBe(first);
     expect(triageSessionKey({ ...base, open: false })).not.toBe(first);
   });

@@ -122,61 +122,21 @@ export function triageDeckShowsEmpty(state: {
   return !state.loading && !state.hasCard && state.loadError === '';
 }
 
-/**
- * How the deck orders the queue: best match first, or most recently posted
- * first. Two choices and no more — this is a chooser above a card, not the
- * list's full sort menu — and both map onto sorts the shared filter model
- * already supports.
- */
-export const TRIAGE_SORTS = ['score', 'newest'] as const;
-
-export type TriageSort = (typeof TRIAGE_SORTS)[number];
-
-export const DEFAULT_TRIAGE_SORT: TriageSort = 'score';
-
-/** Operator-facing labels for the header's segmented control. */
-export const TRIAGE_SORT_LABELS: Record<TriageSort, string> = {
-  newest: 'Newest',
-  score: 'Match %',
-};
-
-/** Where the viewer's last sort choice is remembered. */
-export const TRIAGE_SORT_STORAGE_KEY = 'iolaus.admin.triage.sort';
-
 /** Deep-link parameter for the deck's ordering. */
 export const TRIAGE_SORT_URL_PARAM = 'triageSort';
-
-/** Coerce a stored, deep-linked, or inherited sort onto the two offered. */
-export function normalizeTriageSort(value: unknown): TriageSort {
-  return (
-    TRIAGE_SORTS.find((offered) => offered === value) ?? DEFAULT_TRIAGE_SORT
-  );
-}
 
 /** Deep link that opens the triage deck over the opportunity list. */
 /**
  * The session a queue read belongs to, or `null` while the deck may not read.
  *
- * Open, filter and ordering are the session boundary: a change to any of them
- * is a new deck, and the cards in hand were chosen by the old one.
- *
- * `sortReady` is what makes the first read the only read (issue #452). The
- * remembered ordering lives in `localStorage`, which does not exist until the
- * component has hydrated; a deck that started a session against the default
- * and restarted it a tick later issued two `?/triageQueue` reads on every
- * open — the second one even when the stored preference *was* the default, and
- * on production the operator waited through both. Returning `null` until the
- * preference has been read means no window is ever fetched for an ordering the
- * chooser does not yet show.
+ * Open and the list query are the session boundary. The list owns ordering;
+ * changing its URL produces a new queue without a separate deck preference.
  */
 export function triageSessionKey(options: {
   open: boolean;
   search: string;
-  sort: TriageSort;
-  sortReady: boolean;
-}): string | null {
-  if (!options.sortReady) return null;
-  return `${options.open}:${options.search}:${options.sort}`;
+}): string {
+  return `${options.open}:${options.search}`;
 }
 
 export const TRIAGE_URL_PARAM = 'triage';
@@ -184,7 +144,7 @@ export const TRIAGE_URL_PARAM = 'triage';
 /**
  * Whether a list URL asks for the deck to be open.
  *
- * `/admin/opportunities?triage=1[&triageSort=newest][&filters]` is the deep
+ * `/admin/opportunities?triage=1[&filters]` is the deep
  * link, and the redirect from the retired standalone route lands on it, so a
  * bookmark still opens the deck over the list it belongs to.
  */
@@ -196,7 +156,7 @@ export function isTriageDeepLink(params: URLSearchParams): boolean {
  * Where closing the deck leaves the operator.
  *
  * A deep-linked session has `?triage=1` in the URL: dropping it (and the
- * ordering that rode with it) re-runs the route, which refreshes the list as a
+ * legacy ordering that rode with it) re-runs the route, which refreshes the list as a
  * side effect. A session opened from the toolbar never touched the URL, so
  * there is nothing to navigate to and the list is refreshed in place
  * instead — `null` says so.

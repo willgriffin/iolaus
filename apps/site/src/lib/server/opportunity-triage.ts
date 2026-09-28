@@ -1,15 +1,12 @@
 import type { AdminRecord } from '$lib/admin/dock';
 import {
-  normalizeTriageSort,
-  type TriageSort,
-} from '$lib/admin/triage-session';
-import {
   filterStateFromSearchParams,
   getString,
   matchesOpportunity,
   type OpportunityFilterState,
   sortOpportunities,
 } from '$lib/opportunity-filters';
+import { createCandidateSkillMatcher } from '$lib/skill-matching';
 import { listAdminRecords, requireAdminResource } from './admin-data';
 import {
   countOpportunityRecords,
@@ -22,27 +19,9 @@ import { getDbConfig } from './db.js';
 import { getCollection } from './smrt.js';
 
 /**
- * One-at-a-time opportunity triage (issue #425).
- *
- * The queue is deliberately *not* a second query language: it is the existing
- * opportunity browse filter with a fixed preset applied on top, so the triage
- * view and the list can never disagree about what is decidable. The preset is
- * the whole policy:
- *
- * - `reviewFilter: 'unsorted'` — only rows with no recorded Apply/Maybe/Reject.
- * - `status: 'all'` — which is what makes the browse query drop archived rows
- *   (see `admin-opportunity-query`: the archived exclusion is applied exactly
- *   when no explicit status is named). Triage never inherits `status=archived`.
- * - `excludeExpired` / `excludeStale` — a closed or no-longer-seen posting is
- *   not worth a decision.
- * - `sortDirection: 'desc'`, over one of the two orderings the deck offers:
- *   `score` (best match first, the default) or `newest`. The query's own
- *   tiebreak (`updated_at DESC, id ASC`) makes either order stable, so a refill
- *   cannot re-serve a card that was just decided. Any other sort the operator
- *   carried in from the list is normalised back onto those two.
- *
- * Everything else — skills, comp, work mode, seniority, search — is inherited
- * from whatever filter state the operator carried in from the list.
+ * Browser triage uses the current list filters and order, adding only the
+ * undecided-review constraint. Agent callers retain the fixed active-posting
+ * preset below, with score/rejection priority or newest-first ordering.
  */
 
 /** Only opportunities with no recorded decision are triageable. */
@@ -67,7 +46,7 @@ const DECISION_STATUSES = new Set(['apply', 'maybe', 'reject']);
 /** Bounded undo history; only the most recent entry is ever offered. */
 export const TRIAGE_UNDO_STACK_LIMIT = 10;
 
-/** The filter dimensions triage owns outright, whatever the caller passed. */
+/** Default agent queue filters; browser list context does not apply them. */
 export const TRIAGE_FILTER_PRESET = {
   excludeExpired: true,
   excludeStale: true,
@@ -78,30 +57,31 @@ export const TRIAGE_FILTER_PRESET = {
 /**
  * Overlay the triage preset on an inherited filter state.
  *
- * `sort` is the one preset dimension the operator (or an agent) chooses, and
- * only between the deck's two orderings; anything else falls back to `score`.
+ * This is exclusively the agent-facing policy. Browser triage uses the list
+ * context verbatim, while still adding the undecided review constraint.
  */
 export function applyTriagePreset(
   filters: OpportunityFilterState,
-  sort?: TriageSort | string | null,
+  sort?: string | null,
 ): OpportunityFilterState {
   return {
     ...filters,
     ...TRIAGE_FILTER_PRESET,
-    sort: normalizeTriageSort(sort ?? filters.sort),
+    sort: (sort ?? filters.sort) === 'newest' ? 'newest' : 'score',
   };
 }
 
-/** Build the triage filter state from a route or tool URL's own parameters. */
+/** Build the browser triage state from the list URL's own parameters. */
 export function triageFiltersFromSearchParams(
   params: URLSearchParams,
 ): OpportunityFilterState {
-  const filters = filterStateFromSearchParams(params);
-  return applyTriagePreset(filters, params.get('sort') ?? filters.sort);
+  return filterStateFromSearchParams(params);
 }
 
 export interface TriageQueueRequest {
   candidateSkills?: readonly string[];
+  /** Browser triage inherits its list state; agents retain the fixed preset. */
+  context?: 'agent' | 'list';
   filters: OpportunityFilterState;
   /**
    * Attach the company, application, and score context the triage card
@@ -170,8 +150,9 @@ function triageScoreTieBreak(left: AdminRecord, right: AdminRecord): number {
 function sortSqliteTriage(
   candidates: AdminRecord[],
   filters: OpportunityFilterState,
+  triageRejectDepriority: boolean,
 ): AdminRecord[] {
-  if (filters.sort !== 'score') {
+  if (filters.sort !== 'score' || !triageRejectDepriority) {
     return sortOpportunities(candidates, filters.sort, filters.sortDirection);
   }
   return [...candidates].sort((left, right) => {
@@ -193,12 +174,18 @@ function sortSqliteTriage(
 }
 
 async function loadSqliteTriageQueue({
+  candidateSkills,
   filters,
   hydrateContext,
   limit,
   offset,
   search,
-}: TriageQueueRequest & { hydrateContext: boolean; limit: number }) {
+  triageRejectDepriority,
+}: TriageQueueRequest & {
+  hydrateContext: boolean;
+  limit: number;
+  triageRejectDepriority: boolean;
+}) {
   const opportunities = (await getCollection('Opportunity')) as unknown as {
     list: (options?: Record<string, unknown>) => Promise<unknown[]>;
   };
@@ -233,13 +220,16 @@ async function loadSqliteTriageQueue({
         .trim()
         .toLowerCase();
       return (
-        getString(record, 'status') !== 'archived' &&
+        (filters.status !== 'all' ||
+          getString(record, 'status') !== 'archived') &&
         !DECISION_STATUSES.has(review) &&
         matchesTriageSearch(record, search) &&
-        matchesOpportunity(record, filters, { hasSkill: () => false })
+        matchesOpportunity(record, filters, {
+          hasSkill: createCandidateSkillMatcher(candidateSkills ?? []),
+        })
       );
     });
-  const ordered = sortSqliteTriage(candidates, filters);
+  const ordered = sortSqliteTriage(candidates, filters, triageRejectDepriority);
   const total = ordered.length;
   const resolvedOffset = clampOffset(offset, total);
   const page = ordered.slice(resolvedOffset, resolvedOffset + limit);
@@ -263,29 +253,34 @@ async function loadSqliteTriageQueue({
  */
 export async function loadTriageQueue({
   candidateSkills = [],
+  context = 'agent',
   filters,
   hydrateContext = true,
   limit = TRIAGE_QUEUE_SIZE,
   offset = 0,
   search,
 }: TriageQueueRequest): Promise<TriageQueue> {
-  const preset = applyTriagePreset(filters);
+  const queueFilters =
+    context === 'agent' ? applyTriagePreset(filters) : filters;
+  const triageRejectDepriority =
+    context === 'agent' && queueFilters.sort === 'score';
   if (getDbConfig().type === 'sqlite') {
     return await loadSqliteTriageQueue({
       candidateSkills,
-      filters: preset,
+      filters: queueFilters,
       hydrateContext,
       limit,
       offset,
       search,
+      triageRejectDepriority,
     });
   }
   const query = {
     candidateSkills,
-    filters: preset,
+    filters: queueFilters,
     reviewFilter: TRIAGE_REVIEW_FILTER,
     search: search?.trim() || undefined,
-    triageRejectDepriority: preset.sort === 'score',
+    triageRejectDepriority,
   };
   const total = await countOpportunityRecords(query);
   const resolvedOffset = clampOffset(offset, total);

@@ -111,11 +111,17 @@ const resourceCollection = createSmrtCollection(resourceDefinition, {
 // `liveCollection` is browser-only. The route deliberately renders its cheap
 // shell during SSR; the browser binding owns the subsequent authenticated read.
 const resourceView = browser ? liveCollection(resourceCollection) : null;
-const hydratedRecords = $derived(
-  resourceView?.isReady
-    ? resourceView.rows.map((record) => ({ ...record }))
-    : currentData.records,
-);
+const hydratedRecords = $derived.by(() => {
+  if (!resourceView?.isReady) return currentData.records;
+  const rows = resourceView.rows.map((record) => ({ ...record }));
+  if (resourceSlug !== 'opportunities') return rows;
+  // A live collection is keyed by id, not by the server's page ordering.
+  // Keep the authoritative filtered page order while accepting live row data.
+  const byId = new Map(rows.map((record) => [record.id, record]));
+  return currentData.records.map((record) =>
+    record.id ? (byId.get(record.id) ?? record) : record,
+  );
+});
 const requestError = $derived(
   resourceView?.isError
     ? resourceView.error instanceof Error

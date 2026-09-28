@@ -194,7 +194,7 @@ These are explicit operations an agent or Will can request:
   accesses a browser session.
 - One-at-a-time triage is a **modal deck over the opportunity list**, opened
   from the list toolbar's Triage button and seeded with the list's *current*
-  filters: the list is the context and owns the filter. The deck is a native
+  filters and sorting: the list is the context and owns both. The deck is a native
   `<dialog>` inside the admin shell, so it never has to break out of the shell's
   left nav and right dock — the verdicts live in the dialog's own footer, the
   card scrolls in the dialog body, and the page behind is scroll-locked. Esc and
@@ -203,41 +203,36 @@ These are explicit operations an agent or Will can request:
   nested card frames. The header and verdict controls remain visible while the
   body scrolls, with safe-area padding and touch targets of at least 44px.
   Desktop retains the inset dialog layout.
-  `/admin/opportunities?triage=1[&triageSort=newest][&filters]` is the deep
+  `/admin/opportunities?triage=1[&filters]` is the deep
   link, and the retired `/admin/opportunities/triage` route redirects to it, so
   old bookmarks and the agent docs still land in the deck.
 
-  The queue is the undecided ("unseen") backlog under the triage preset, with
-  archived, expired, and no-longer-seen postings excluded. It is read through
-  the list route's own `triageQueue` action — `loadTriageQueue` verbatim, the
-  same preset the agent-facing read uses — a window at a time, prefetched ahead
-  of the operator. The advance is optimistic, so the read steps past both the
+  The browser queue is the undecided ("unseen") backlog under the list state:
+  every active list filter, all five sort modes, and either direction carry into
+  triage unchanged. It is read through the list route's own `triageQueue`
+  action a window at a time, prefetched ahead of the operator. Decided rows are
+  always excluded; archived, expired, and stale rows follow the explicit list
+  state. The advance is optimistic, so the read steps past both the
   rows the operator passed on and the verdicts still in the air: until a write
   commits the server still counts that row as undecided and still serves it at
   the front. For the same reason a short window only means end-of-queue when
   nothing is still in flight, and a window that came back entirely already-seen
   is retried once those writes land.
 
-  The dialog header carries exactly two things: a **sort chooser** and the close
-  button. The chooser offers match order and **Newest**. Match order puts
-  opportunities whose current evaluation says `reject` after all other
-  undecided opportunities, then sorts each group by score descending. This
-  prevents a contradictory legacy score (for example, 100 with `reject`) from
-  putting an unrelated role first. Rejected evaluations remain available for
-  human review, and this ordering never changes a saved score or decision.
-  Newest remains posted-date descending; ordinary list score sorting is numeric.
-  Only evaluations matching the current posting fingerprint affect ordering.
-  Local SQLite triage loads that score context before filtering and paging.
-  Anything else the operator carried in from the list (salary, rating, best) normalises back to
-  Match %. The choice is remembered per viewer in `localStorage`, a deep link
-  overrides the remembered one, and `job_search_next_triage_candidate` takes the
-  same `sort` argument so an agent and an operator work the queue in the same
-  order. Changing the ordering restarts the session, because the cards in hand
-  were chosen by the old one — and the restart claims the deck, so a read still
-  in flight for the ordering just left behind is discarded rather than filling
-  the new session with the previous order's window. The first session likewise
-  waits for the remembered preference to be read, so no window is ever ordered
-  by something the chooser does not say.
+  The list's live-data binding preserves the server page order, including
+  stable ties. SQLite queue sorting keeps missing values last in both
+  directions, matching the SQL list. Some pre-existing SQLite list filters
+  still use PostgreSQL-only expressions ([issue #114](https://github.com/willgriffin/iolaus/issues/114));
+  PostgreSQL supports the complete filter set.
+
+  The dialog header carries only the close button. There is no remembered deck
+  order or separate chooser. Legacy `triageSort=score|newest` links are
+  normalized to the equivalent list `sort` state, then the legacy parameter is
+  removed. Browser score ordering is numeric and does not de-prioritize a
+  rejected evaluation; current fingerprint-matching evaluations are used by
+  both PostgreSQL and SQLite. The agent-facing triage tool deliberately keeps
+  its default score-descending preset and reject de-priority unless an agent
+  explicitly chooses its supported recency sort.
 
   The deck shows **no counts**: no position, no remaining total, no session
   tally. A backlog in the thousands is discouraging as a number and useless as a

@@ -1734,6 +1734,7 @@ describe('triageQueueAction', () => {
     ];
     if (!call) throw new Error('Expected loadTriageQueue to be called');
     return call[0] as {
+      context?: 'agent' | 'list';
       filters: Record<string, unknown>;
       limit: number;
       offset: number;
@@ -1741,7 +1742,7 @@ describe('triageQueueAction', () => {
     };
   }
 
-  it('reads one window under the triage preset and its recorded posting checks', async () => {
+  it('reads one window under the list context and its recorded posting checks', async () => {
     const { triageQueueAction } = await import('./admin-resource-route');
 
     const result = await triageQueueAction(
@@ -1755,10 +1756,11 @@ describe('triageQueueAction', () => {
     const request = queueRequest();
     expect(request.limit).toBe(3);
     expect(request.offset).toBe(0);
+    expect(request.context).toBe('list');
     expect(request.filters.status).toBe('all');
-    expect(request.filters.sort).toBe('score');
-    expect(request.filters.excludeExpired).toBe(true);
-    expect(request.filters.excludeStale).toBe(true);
+    expect(request.filters.sort).toBe('best');
+    expect(request.filters.excludeExpired).toBe(false);
+    expect(request.filters.excludeStale).toBe(false);
     expect(result.total).toBe(3);
     expect(result.candidates).toHaveLength(1);
     // The verdict lives in the audit trail, not on the opportunity row, so the
@@ -1782,6 +1784,27 @@ describe('triageQueueAction', () => {
     expect(request.search).toBe('platform');
     expect(request.filters.skills).toEqual(['Rust']);
     expect(request.filters.workModes).toEqual(['remote']);
+  });
+
+  it('keeps all list ordering and exclusion filters in the queue request', async () => {
+    const { triageQueueAction } = await import('./admin-resource-route');
+
+    await triageQueueAction(
+      postForm('/admin/opportunities', {
+        search:
+          'status=archived&sort=rating&sortDirection=asc&excludeExpired=true&excludeStale=true&freshness=fresh',
+      }),
+    );
+
+    const request = queueRequest();
+    expect(request.filters).toMatchObject({
+      excludeExpired: true,
+      excludeStale: true,
+      freshness: 'fresh',
+      sort: 'rating',
+      sortDirection: 'asc',
+      status: 'archived',
+    });
   });
 
   it('ignores a non-numeric offset and caps an oversized window', async () => {

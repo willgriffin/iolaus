@@ -21,13 +21,11 @@ describe('OpportunityTriageModal shell', () => {
     expect(body).not.toContain('class="action-bar"');
   });
 
-  it('puts the sort chooser and the close button in the header, and nothing else', () => {
+  it('puts only the close button in the header', () => {
     const { body } = renderModal();
 
-    expect(body).toContain('aria-label="Queue order"');
-    expect(body).toContain('Match %');
-    expect(body).toContain('Newest');
     expect(body).toContain('aria-label="Close triage"');
+    expect(body).not.toContain('aria-label="Queue order"');
   });
 
   it('shows the operator no counts at all', () => {

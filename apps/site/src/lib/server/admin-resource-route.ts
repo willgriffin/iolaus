@@ -1659,9 +1659,8 @@ export async function verifyOpportunityPostingAction(
  *
  * The deck is a modal over this list, not a route of its own, so it has no page
  * load: it posts the list's own filter parameters here and gets one window of
- * the queue back. The read is `loadTriageQueue` verbatim — the same preset the
- * agent-facing `job_search_next_triage_candidate` reads — so the deck, the
- * list, and the agent can never disagree about what is decidable.
+ * the queue back. List context preserves those filters and their ordering;
+ * the shared queue adds the undecided constraint without the agent preset.
  */
 export async function triageQueueAction(request: Request) {
   const form = await request.formData();
@@ -1673,6 +1672,7 @@ export async function triageQueueAction(request: Request) {
   const offset = Number(stringValue(form.get('offset')));
   const queue = await loadTriageQueue({
     candidateSkills: candidateSkillSlugs(),
+    context: 'list',
     filters,
     limit:
       Number.isFinite(limit) && limit > 0

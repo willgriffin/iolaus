@@ -25,6 +25,59 @@ for (const id of [
   ).join('\n\n');
   await opportunity.save();
 }
+// Independent rows per viewport keep persisted decisions from leaking between projects.
+for (const [projectIndex, project] of [
+  'android-portrait',
+  'android-landscape',
+  'android-narrow',
+  'desktop-control',
+].entries()) {
+  const salaryBase = 100_000 + projectIndex * 200_000;
+  const variants = [
+    ...Array.from({ length: 6 }, (_, index) => ({
+      name: `Role ${index + 1}`,
+      salaryMin: salaryBase + index * 10_000,
+      status: 'found',
+      workMode: 'remote',
+      humanReviewStatus: 'needs_input',
+      // The list deliberately includes expired rows unless excluded by its filters.
+      expiresAt: index === 0 ? new Date('2020-01-01') : null,
+    })),
+    {
+      name: 'Compensation excluded',
+      salaryMin: 1,
+      status: 'found',
+      workMode: 'onsite',
+      humanReviewStatus: 'needs_input',
+    },
+    {
+      name: 'Status excluded',
+      salaryMin: salaryBase + 5_000,
+      status: 'recommended',
+      workMode: 'remote',
+      humanReviewStatus: 'needs_input',
+    },
+    {
+      name: 'Decided excluded',
+      salaryMin: salaryBase + 6_000,
+      status: 'found',
+      workMode: 'remote',
+      humanReviewStatus: 'reject',
+    },
+  ];
+  for (const variant of variants.reverse()) {
+    const record = await opportunities.create({
+      ...variant,
+      title: `Sequence ${project} ${variant.name}`,
+      descriptionRaw:
+        'Synthetic queue inheritance test. No employer or external action.',
+      currency: 'CAD',
+      requiredSkills: 'TypeScript',
+      postedAt: new Date('2026-01-01'),
+    });
+    await record.save();
+  }
+}
 const tasks = await getCollection('Task');
 for (let index = 0; index < 16; index += 1) {
   const task = await tasks.create({

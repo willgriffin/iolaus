@@ -274,6 +274,28 @@ describe('sortOpportunities', () => {
     },
   ];
 
+  for (const sort of ['newest', 'score', 'salary', 'rating'] as const) {
+    for (const direction of ['asc', 'desc'] as const) {
+      it(`${sort} ${direction} keeps missing values last and uses stable SQL tie breaks`, () => {
+        const shared = {
+          postedAt: '2026-01-01',
+          latestScore: 50,
+          salaryMin: 100,
+          humanRating: 4,
+        };
+        const rows: AdminRecord[] = [
+          { id: 'missing', updatedAt: '2026-03-01' },
+          { id: 'z', ...shared, updatedAt: '2026-02-01' },
+          { id: 'older', ...shared, updatedAt: '2026-01-01' },
+          { id: 'a', ...shared, updatedAt: '2026-02-01' },
+        ];
+        expect(
+          sortOpportunities(rows, sort, direction).map((row) => row.id),
+        ).toEqual(['a', 'z', 'older', 'missing']);
+      });
+    }
+  }
+
   it('best sort orders by status rank then score', () => {
     expect(sortOpportunities(records, 'best').map((r) => r.id)).toEqual([
       'b',
