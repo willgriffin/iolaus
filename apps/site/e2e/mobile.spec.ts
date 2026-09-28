@@ -378,7 +378,7 @@ test('triage uses the mobile viewport and keeps scrolling and actions reachable'
   page,
 }, testInfo) => {
   await page.goto(
-    '/admin/opportunities?triage=1&triageSort=score&q=Iolaus%20Triage',
+    '/admin/opportunities?triage=1&sort=score&sortDirection=desc&q=Iolaus%20Triage',
   );
   const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
   await expect(dialog).toBeVisible();
@@ -444,4 +444,111 @@ test('triage uses the mobile viewport and keeps scrolling and actions reachable'
   await expect(
     page.getByRole('button', { name: 'Triage', exact: true }),
   ).toBeInViewport();
+});
+
+test('triage inherits list filters and ascending salary through refills and decisions', async ({
+  page,
+}, testInfo) => {
+  const prefix = `Sequence ${testInfo.project.name}`;
+  const projectIndex = [
+    'android-portrait',
+    'android-landscape',
+    'android-narrow',
+    'desktop-control',
+  ].indexOf(testInfo.project.name);
+  const salaryBase = 100_000 + projectIndex * 200_000;
+  await page.addInitScript(() => {
+    localStorage.setItem('iolaus.admin.triage.sort', 'newest');
+  });
+  const params = new URLSearchParams({
+    q: prefix,
+    status: 'found',
+    salaryMin: String(salaryBase),
+    salaryMax: String(salaryBase + 50_000),
+    includeMissingComp: 'false',
+    sort: 'salary',
+    sortDirection: 'asc',
+    review: 'unsorted',
+  });
+  await page.goto(`/admin/opportunities?${params}`);
+  const titles = page.locator('.table-opportunity .title-link');
+  const expected = Array.from(
+    { length: 6 },
+    (_, index) => `${prefix} Role ${index + 1}`,
+  );
+  await expect(titles).toHaveText(expected);
+  await expect(page.getByLabel('Sort opportunities')).toHaveValue('salary');
+  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
+  const card = dialog.locator('.triage-card');
+  await expect(dialog.getByRole('group', { name: 'Queue order' })).toHaveCount(
+    0,
+  );
+  for (let index = 0; index < expected.length; index += 1) {
+    await expect(card).toHaveAttribute(
+      'aria-label',
+      `Triage card for ${expected[index]}`,
+    );
+    const action = index === 1 ? 'Nope' : 'Later';
+    const saved =
+      index === 1
+        ? page.waitForResponse(
+            (response) =>
+              response.request().method() === 'POST' &&
+              response.url().includes('/reviewOpportunity') &&
+              ![301, 302, 303, 307, 308].includes(response.status()),
+          )
+        : null;
+    await dialog.getByRole('button', { name: action, exact: true }).click();
+    if (saved) {
+      const response = await saved;
+      expect(response.ok(), await response.text()).toBe(true);
+    }
+  }
+  await expect(card).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Close triage' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(titles).toHaveText(expected.filter((_, index) => index !== 1));
+  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  await expect(card).toHaveAttribute(
+    'aria-label',
+    `Triage card for ${expected[0]}`,
+  );
+  await dialog.getByRole('button', { name: 'Later', exact: true }).click();
+  await expect(card).toHaveAttribute(
+    'aria-label',
+    `Triage card for ${expected[2]}`,
+  );
+});
+
+test('legacy triage sort links become list sorting and explicit list sort wins', async ({
+  page,
+}, testInfo) => {
+  const params = new URLSearchParams({
+    q: `Sequence ${testInfo.project.name}`,
+    triage: '1',
+    triageSort: 'newest',
+  });
+  await page.goto(`/admin/opportunities?${params}`);
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get('sort') === 'newest' &&
+      !url.searchParams.has('triageSort'),
+  );
+  const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
+  await expect(dialog.locator('.triage-card')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close triage' }).click();
+  await expect(page.getByLabel('Sort opportunities')).toHaveValue('newest');
+  params.set('sort', 'salary');
+  params.set('sortDirection', 'asc');
+  await page.goto(`/admin/opportunities?${params}`);
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get('sort') === 'salary' &&
+      url.searchParams.get('sortDirection') === 'asc' &&
+      !url.searchParams.has('triageSort'),
+  );
+  await expect(dialog.locator('.triage-card')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close triage' }).click();
+  await expect(page.getByLabel('Sort opportunities')).toHaveValue('salary');
 });

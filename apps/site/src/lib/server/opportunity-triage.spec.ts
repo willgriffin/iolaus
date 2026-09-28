@@ -79,33 +79,23 @@ describe('opportunity triage preset', () => {
     expect(filters.sortDirection).toBe('desc');
   });
 
-  it('honours the deck two orderings, whoever chose one', async () => {
+  it('keeps the agent-supported recency override', async () => {
     const { applyTriagePreset, triageFiltersFromSearchParams } = await triage();
 
-    // The deck's chooser, an agent's `sort` argument, and the deep link all
-    // arrive here, and all three see the same two orderings.
     expect(applyTriagePreset(DEFAULT_OPPORTUNITY_FILTERS, 'newest').sort).toBe(
       'newest',
     );
     expect(applyTriagePreset(DEFAULT_OPPORTUNITY_FILTERS, 'rating').sort).toBe(
       'score',
     );
-    expect(
-      triageFiltersFromSearchParams(new URLSearchParams('sort=newest')).sort,
-    ).toBe('newest');
-    // Descending stays the deck's own: newest first, best match first.
-    expect(
-      triageFiltersFromSearchParams(new URLSearchParams('sort=newest'))
-        .sortDirection,
-    ).toBe('desc');
   });
 
-  it('inherits every other filter dimension carried in from the list', async () => {
+  it('keeps every list filter and sort dimension verbatim for browser triage', async () => {
     const { triageFiltersFromSearchParams } = await triage();
 
     const filters = triageFiltersFromSearchParams(
       new URLSearchParams(
-        'skill=Rust&workMode=remote&seniority=staff&minScore=70&status=found&sort=salary',
+        'skill=Rust&workMode=remote&seniority=staff&minScore=70&status=found&sort=salary&sortDirection=asc&excludeExpired=true&excludeStale=true',
       ),
     );
 
@@ -113,8 +103,11 @@ describe('opportunity triage preset', () => {
     expect(filters.workModes).toEqual(['remote']);
     expect(filters.seniority).toBe('staff');
     expect(filters.minScore).toBe(70);
-    expect(filters.status).toBe('all');
-    expect(filters.sort).toBe('score');
+    expect(filters.status).toBe('found');
+    expect(filters.sort).toBe('salary');
+    expect(filters.sortDirection).toBe('asc');
+    expect(filters.excludeExpired).toBe(true);
+    expect(filters.excludeStale).toBe(true);
   });
 
   it('round-trips excludeStale through the shared filter search params', () => {
@@ -253,6 +246,339 @@ describe('loadTriageQueue', () => {
       expect.objectContaining({ search: undefined }),
     );
   });
+
+  it.each(
+    (['best', 'newest', 'score', 'salary', 'rating'] as const).flatMap((sort) =>
+      (['asc', 'desc'] as const).map((sortDirection) => ({
+        sort,
+        sortDirection,
+      })),
+    ),
+  )('keeps list $sort/$sortDirection query ordering without agent reject de-priority', async ({
+    sort,
+    sortDirection,
+  }) => {
+    const { loadTriageQueue } = await triage();
+    mocks.count.mockResolvedValue(0);
+
+    await loadTriageQueue({
+      context: 'list',
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
+    });
+
+    expect(mocks.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ sort, sortDirection }),
+        reviewFilter: 'unsorted',
+        triageRejectDepriority: false,
+      }),
+    );
+  });
+
+  it('applies inherited list filters to the SQLite queue before sorting', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'matches-list-context',
+        status: 'found',
+        title: 'Platform Rust Engineer',
+        descriptionSummary: 'Platform services',
+        requiredSkills: 'Rust, TypeScript',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+      {
+        id: 'wrong-skill',
+        status: 'found',
+        title: 'Platform Rust Engineer',
+        requiredSkills: 'Java',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+      {
+        id: 'wrong-search',
+        status: 'found',
+        title: 'Infrastructure Engineer',
+        requiredSkills: 'Rust',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+      {
+        id: 'wrong-status',
+        status: 'recommended',
+        title: 'Platform Rust Engineer',
+        requiredSkills: 'Rust',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+      {
+        id: 'expired',
+        status: 'found',
+        title: 'Platform Rust Engineer',
+        requiredSkills: 'Rust',
+        expiresAt: '2000-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+      {
+        id: 'stale',
+        status: 'found',
+        title: 'Platform Rust Engineer',
+        requiredSkills: 'Rust',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'stale',
+      },
+      {
+        id: 'decided',
+        humanReviewStatus: 'apply',
+        status: 'found',
+        title: 'Platform Rust Engineer',
+        requiredSkills: 'Rust',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        freshness: 'fresh',
+      },
+    ]);
+
+    const queue = await loadTriageQueue({
+      context: 'list',
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        excludeExpired: true,
+        excludeStale: true,
+        skills: ['Rust'],
+        status: 'found',
+      },
+      limit: 10,
+      search: 'platform',
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'matches-list-context',
+    ]);
+  });
+
+  it.each([
+    {
+      sort: 'best' as const,
+      sortDirection: 'asc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unknown-90',
+        'reject-20',
+        'unscored',
+      ],
+    },
+    {
+      sort: 'best' as const,
+      sortDirection: 'desc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unknown-90',
+        'reject-20',
+        'unscored',
+      ],
+    },
+    {
+      sort: 'newest' as const,
+      sortDirection: 'asc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unscored',
+        'unknown-90',
+        'reject-20',
+      ],
+    },
+    {
+      sort: 'newest' as const,
+      sortDirection: 'desc' as const,
+      expected: [
+        'reject-20',
+        'unknown-90',
+        'unscored',
+        'recommend-96',
+        'reject-100',
+      ],
+    },
+    {
+      sort: 'score' as const,
+      sortDirection: 'asc' as const,
+      expected: [
+        'reject-20',
+        'unknown-90',
+        'recommend-96',
+        'reject-100',
+        'unscored',
+      ],
+    },
+    {
+      sort: 'score' as const,
+      sortDirection: 'desc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unknown-90',
+        'reject-20',
+        'unscored',
+      ],
+    },
+    {
+      sort: 'salary' as const,
+      sortDirection: 'asc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unknown-90',
+        'unscored',
+        'reject-20',
+      ],
+    },
+    {
+      sort: 'salary' as const,
+      sortDirection: 'desc' as const,
+      expected: [
+        'reject-20',
+        'unscored',
+        'unknown-90',
+        'recommend-96',
+        'reject-100',
+      ],
+    },
+    {
+      sort: 'rating' as const,
+      sortDirection: 'asc' as const,
+      expected: [
+        'reject-100',
+        'recommend-96',
+        'unknown-90',
+        'unscored',
+        'reject-20',
+      ],
+    },
+    {
+      sort: 'rating' as const,
+      sortDirection: 'desc' as const,
+      expected: [
+        'reject-20',
+        'unscored',
+        'unknown-90',
+        'recommend-96',
+        'reject-100',
+      ],
+    },
+  ])('uses the SQLite list $sort/$sortDirection ordering', async ({
+    sort,
+    sortDirection,
+    expected,
+  }) => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'unscored',
+        humanRating: 4,
+        postedAt: '2026-01-03T00:00:00.000Z',
+        salaryMin: 400,
+        status: 'recommended',
+      },
+      {
+        id: 'reject-20',
+        humanRating: 5,
+        postedAt: '2026-01-05T00:00:00.000Z',
+        salaryMin: 500,
+        status: 'recommended',
+      },
+      {
+        id: 'recommend-96',
+        humanRating: 2,
+        postedAt: '2026-01-02T00:00:00.000Z',
+        salaryMin: 200,
+        status: 'recommended',
+      },
+      {
+        id: 'reject-100',
+        humanRating: 1,
+        postedAt: '2026-01-01T00:00:00.000Z',
+        salaryMin: 100,
+        status: 'recommended',
+      },
+      {
+        id: 'unknown-90',
+        humanRating: 3,
+        postedAt: '2026-01-04T00:00:00.000Z',
+        salaryMin: 300,
+        status: 'recommended',
+      },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        ['reject-100', { recommendation: 'reject', score: 100 }],
+        ['recommend-96', { recommendation: 'recommend', score: 96 }],
+        ['unknown-90', { recommendation: 'unknown', score: 90 }],
+        ['reject-20', { recommendation: 'reject', score: 20 }],
+      ]),
+    );
+
+    const queue = await loadTriageQueue({
+      context: 'list',
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
+      limit: 5,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual(expected);
+  });
+
+  it.each([
+    { sort: 'score' as const, sortDirection: 'asc' as const },
+    { sort: 'score' as const, sortDirection: 'desc' as const },
+    { sort: 'salary' as const, sortDirection: 'asc' as const },
+    { sort: 'salary' as const, sortDirection: 'desc' as const },
+  ])('keeps missing $sort values last and breaks tied values by update time then id ($sortDirection)', async ({
+    sort,
+    sortDirection,
+  }) => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      {
+        id: 'z-tie',
+        salaryMin: 100,
+        status: 'recommended',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'missing',
+        status: 'recommended',
+        updatedAt: '2026-02-01T00:00:00.000Z',
+      },
+      {
+        id: 'a-tie',
+        salaryMin: 100,
+        status: 'recommended',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        ['a-tie', { recommendation: 'recommend', score: 50 }],
+        ['z-tie', { recommendation: 'recommend', score: 50 }],
+      ]),
+    );
+
+    const queue = await loadTriageQueue({
+      context: 'list',
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
+      limit: 3,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'a-tie',
+      'z-tie',
+      'missing',
+    ]);
+  });
 });
 
 describe('nextTriageCandidate', () => {
@@ -261,6 +587,12 @@ describe('nextTriageCandidate', () => {
     mocks.attachOpportunityContext.mockImplementation(
       async (records: unknown[]) => records,
     );
+    mocks.count.mockResolvedValue(0);
+    mocks.currentScores.mockResolvedValue(new Map());
+    mocks.dbConfig.mockReturnValue({ type: 'postgres' });
+    mocks.listAdminRecords.mockResolvedValue([]);
+    mocks.opportunities.mockResolvedValue([]);
+    mocks.pageIds.mockResolvedValue([]);
   });
 
   it('reports one-based position and remaining count for an offset', async () => {
@@ -416,6 +748,32 @@ describe('nextTriageCandidate', () => {
     expect(mocks.currentScores).toHaveBeenCalledWith([
       'reject-100',
       'unscored',
+      'recommend-96',
+    ]);
+  });
+
+  it('keeps numeric score order for SQLite list-context triage', async () => {
+    const { loadTriageQueue } = await triage();
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue([
+      { id: 'recommend-96', status: 'recommended' },
+      { id: 'reject-100', status: 'recommended' },
+    ]);
+    mocks.currentScores.mockResolvedValue(
+      new Map([
+        ['reject-100', { recommendation: 'reject', score: 100 }],
+        ['recommend-96', { recommendation: 'recommend', score: 96 }],
+      ]),
+    );
+
+    const queue = await loadTriageQueue({
+      context: 'list',
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
+      limit: 2,
+    });
+
+    expect(queue.candidates.map((record) => record.id)).toEqual([
+      'reject-100',
       'recommend-96',
     ]);
   });

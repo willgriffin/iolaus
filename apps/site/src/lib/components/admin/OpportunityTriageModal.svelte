@@ -7,7 +7,6 @@ import {
 import Heart from '@lucide/svelte/icons/heart';
 import Star from '@lucide/svelte/icons/star';
 import X from '@lucide/svelte/icons/x';
-import { untrack } from 'svelte';
 import { deserialize } from '$app/forms';
 import type { AdminRecord } from '$lib/admin/dock';
 import {
@@ -20,13 +19,8 @@ import {
 } from '$lib/admin/triage-gestures';
 import type { TriagePreflight } from '$lib/admin/triage-preflight';
 import {
-  normalizeTriageSort,
   TRIAGE_PREFETCH_SIZE,
   TRIAGE_PREFETCH_THRESHOLD,
-  TRIAGE_SORT_LABELS,
-  TRIAGE_SORT_STORAGE_KEY,
-  TRIAGE_SORTS,
-  type TriageSort,
   triageDeckAcceptsKeys,
   triageDeckShowsEmpty,
   triageRefillOffset,
@@ -118,7 +112,6 @@ let {
   open = $bindable(false),
   candidateSkills = [],
   search = '',
-  initialSort = null,
   onClose,
 }: {
   /** Whether the deck is on screen. Owned by the list. */
@@ -126,8 +119,6 @@ let {
   candidateSkills?: string[];
   /** The list's current filter query string; the queue is seeded from it. */
   search?: string;
-  /** Ordering from the deep link, when one named it. */
-  initialSort?: string | null;
   /** Called on Esc and the close button. */
   onClose?: () => void;
 } = $props();
@@ -144,12 +135,6 @@ let skipped = $state(0);
 let decided = $state(0);
 let loading = $state(false);
 let loadError = $state('');
-/**
- * The deck's ordering, remembered per viewer across sessions. Seeded from the
- * deep link when it named one; the initial value is deliberately a snapshot,
- * because after that the chooser owns it.
- */
-let sort = $state<TriageSort>(untrack(() => normalizeTriageSort(initialSort)));
 let undoStack = $state<UndoEntry[]>([]);
 /** Blocks only the actions that need the card *in hand* — undo and verify. */
 let busy = $state(false);
@@ -190,13 +175,6 @@ let sessionKey = '';
  * rather than landing in the deck the operator is now looking at.
  */
 let sessionToken = 0;
-/**
- * Whether the remembered ordering has been read. The preference lives in
- * `localStorage`, which only exists after hydration, so the first session must
- * wait for it: starting one against the default and restarting it a tick later
- * would leave the first window ordered by something the chooser does not say.
- */
-let sortReady = $state(false);
 let refilling = false;
 /**
  * True once a window came back short: everything the filter still has for this
@@ -221,13 +199,9 @@ let lastRefillKey = '';
 /**
  * Where the deck puts the initial focus.
  *
- * `showModal()` focuses the first focusable descendant of the dialog, and that
- * is the header's first sort chip — a focused button owns Space and Enter, so
- * the deck's cheapest documented key would press the chooser instead of passing
- * on the card, and on a viewer whose remembered order is Newest the first Space
- * would flip the ordering and overwrite that preference. An inert anchor takes
- * the focus instead: every documented key works from the moment the deck opens,
- * and the chooser stays one Tab away.
+ * `showModal()` focuses the first focusable descendant of the dialog. An inert
+ * anchor takes focus instead, so every documented key works from the moment the
+ * deck opens rather than triggering the close button.
  */
 let focusAnchor = $state<HTMLDivElement | null>(null);
 
@@ -275,16 +249,10 @@ const exhausted = $derived(
 );
 
 /**
- * The queue read is the list's filter with the deck's ordering laid over it.
- * The deck offers two orderings and the list's own sort menu offers five, so a
- * list sorted by salary still triages by match — the chooser above the card is
- * the only thing that decides the order of the deck.
+ * The queue read is the list state verbatim. The list is the only filter and
+ * sort owner, so a salary-ascending list triages salary-ascending too.
  */
-const queueSearch = $derived.by(() => {
-  const params = new URLSearchParams(search);
-  params.set('sort', sort);
-  return params.toString();
-});
+const queueSearch = $derived(search);
 
 function str(record: AdminRecord, key: string): string {
   return getString(record, key);
@@ -295,8 +263,8 @@ function str(record: AdminRecord, key: string): string {
  * against whatever filter the list is showing now.
  */
 $effect(() => {
-  const key = triageSessionKey({ open, search, sort, sortReady });
-  if (key === null || key === sessionKey) return;
+  const key = triageSessionKey({ open, search });
+  if (key === sessionKey) return;
   sessionKey = key;
   if (open) startSession();
 });
@@ -813,39 +781,6 @@ function close(): void {
   onClose?.();
 }
 
-/**
- * Changing the ordering restarts the session against the same filter, because
- * the cards already in hand were chosen by the old order. The choice is
- * remembered per viewer, so the deck opens the way it was left.
- */
-function chooseSort(next: TriageSort): void {
-  if (next === sort) return;
-  sort = next;
-  try {
-    localStorage.setItem(TRIAGE_SORT_STORAGE_KEY, next);
-  } catch {
-    // A viewer with storage disabled just loses the preference.
-  }
-}
-
-/**
- * Seed the ordering from the viewer's last choice, unless the deep link named
- * one — an explicit link is a stronger signal than a remembered preference.
- */
-$effect(() => {
-  if (!initialSort) {
-    try {
-      const stored = localStorage.getItem(TRIAGE_SORT_STORAGE_KEY);
-      if (stored) sort = normalizeTriageSort(stored);
-    } catch {
-      // No storage, no preference.
-    }
-  }
-  // Only now may a session start: the ordering it reads is the one the chooser
-  // shows.
-  sortReady = true;
-});
-
 const shortlistHref = $derived.by(() => {
   const params = new URLSearchParams(search);
   params.set('review', 'maybe');
@@ -867,19 +802,6 @@ const shortlistHref = $derived.by(() => {
   >
   {#snippet header()}
     <div class="deck-head">
-      <div class="sort-choice" role="group" aria-label="Queue order">
-        {#each TRIAGE_SORTS as option}
-          <button
-            type="button"
-            class="sort-option"
-            class:selected={sort === option}
-            aria-pressed={sort === option}
-            onclick={() => chooseSort(option)}
-          >
-            {TRIAGE_SORT_LABELS[option]}
-          </button>
-        {/each}
-      </div>
       <button type="button" class="close" onclick={close} aria-label="Close triage">
         <X size={18} strokeWidth={2.4} /> Close
       </button>
@@ -989,41 +911,6 @@ const shortlistHref = $derived.by(() => {
     width: 100%;
     padding: 10px 16px;
     border-bottom: 1px solid var(--smrt-color-outline-variant);
-  }
-
-  .sort-choice {
-    display: inline-flex;
-    padding: 2px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 8px;
-    background: var(--smrt-color-surface);
-  }
-
-  .sort-option {
-    padding: 5px 14px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--smrt-color-on-surface-variant);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 800;
-    cursor: pointer;
-  }
-
-  .sort-option.selected {
-    background: var(--smrt-color-primary);
-    color: var(--smrt-color-on-primary);
-  }
-
-  .sort-option:not(.selected):hover,
-  .sort-option:not(.selected):focus-visible {
-    color: var(--smrt-color-primary);
-  }
-
-  .sort-option.selected:focus-visible {
-    outline: 2px solid var(--smrt-color-primary);
-    outline-offset: 2px;
   }
 
   .close {
@@ -1331,13 +1218,8 @@ const shortlistHref = $derived.by(() => {
         max(12px, env(safe-area-inset-left));
     }
 
-    .sort-option,
     .close {
       min-height: 44px;
-    }
-
-    .sort-option {
-      padding: 0 10px;
     }
 
     .close {

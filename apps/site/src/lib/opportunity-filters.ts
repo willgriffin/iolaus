@@ -401,44 +401,50 @@ export function sortOpportunities(
   sort: OpportunitySort,
   direction: OpportunitySortDirection = 'desc',
 ): AdminRecord[] {
-  const sorted = [...records];
-  const compare = (left: number, right: number): number =>
-    direction === 'asc' ? left - right : right - left;
-  switch (sort) {
-    case 'newest':
-      sorted.sort((a, b) => compare(postedRank(a), postedRank(b)));
-      break;
-    case 'score':
-      sorted.sort((a, b) =>
-        compare(
-          getNumber(a, 'latestScore') ?? -1,
-          getNumber(b, 'latestScore') ?? -1,
-        ),
-      );
-      break;
-    case 'salary':
-      sorted.sort((a, b) => compare(salaryRank(a), salaryRank(b)));
-      break;
-    case 'rating':
-      sorted.sort((a, b) =>
-        compare(
-          getNumber(a, 'humanRating') ?? -1,
-          getNumber(b, 'humanRating') ?? -1,
-        ),
-      );
-      break;
-    default:
-      sorted.sort((a, b) => {
-        const ra = statusRank(a);
-        const rb = statusRank(b);
-        if (ra !== rb) return ra - rb;
-        return (
-          (getNumber(b, 'latestScore') ?? -1) -
-          (getNumber(a, 'latestScore') ?? -1)
+  // Match the database list order: missing values last in both directions,
+  // then updated-at descending and id ascending for a stable refill boundary.
+  const compare = (left: number, right: number, order = direction): number => {
+    if (left === right) return 0;
+    if (!Number.isFinite(left)) return 1;
+    if (!Number.isFinite(right)) return -1;
+    return order === 'asc' ? left - right : right - left;
+  };
+  const score = (record: AdminRecord) =>
+    getNumber(record, 'latestScore') ?? Number.NEGATIVE_INFINITY;
+  return [...records].sort((left, right) => {
+    let primary: number;
+    switch (sort) {
+      case 'newest':
+        primary = compare(postedRank(left), postedRank(right));
+        break;
+      case 'score':
+        primary = compare(score(left), score(right));
+        break;
+      case 'salary':
+        primary = compare(salaryRank(left), salaryRank(right));
+        break;
+      case 'rating':
+        primary = compare(
+          getNumber(left, 'humanRating') ?? Number.NEGATIVE_INFINITY,
+          getNumber(right, 'humanRating') ?? Number.NEGATIVE_INFINITY,
         );
-      });
-  }
-  return sorted;
+        break;
+      default:
+        primary =
+          statusRank(left) - statusRank(right) ||
+          compare(score(left), score(right), 'desc');
+    }
+    if (primary) return primary;
+    const updated = compare(
+      getDate(left, 'updatedAt')?.getTime() ?? Number.NEGATIVE_INFINITY,
+      getDate(right, 'updatedAt')?.getTime() ?? Number.NEGATIVE_INFINITY,
+      'desc',
+    );
+    if (updated) return updated;
+    const leftId = getString(left, 'id');
+    const rightId = getString(right, 'id');
+    return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+  });
 }
 
 // Number of distinct filter dimensions that are narrowing the list. Drives the

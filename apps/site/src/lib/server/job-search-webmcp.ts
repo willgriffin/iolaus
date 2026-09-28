@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
-import { DEFAULT_TRIAGE_SORT, TRIAGE_SORTS } from '$lib/admin/triage-session';
 import {
   DEFAULT_OPPORTUNITY_FILTERS,
   matchesOpportunity,
@@ -43,6 +42,10 @@ type MutableRecord = Record<string, unknown> & {
   id?: string;
   save: () => Promise<void>;
 };
+
+/** The agent contract retains its focused queue choices independently of UI. */
+const AGENT_TRIAGE_SORTS = ['score', 'newest'] as const;
+const DEFAULT_AGENT_TRIAGE_SORT = 'score';
 
 type Collection = {
   create: (payload: Record<string, unknown>) => Promise<MutableRecord>;
@@ -690,9 +693,13 @@ export async function nextJobTriageCandidate(input: Record<string, unknown>) {
             ),
       workModes: workMode === 'all' ? [] : [workMode],
     },
-    // The same two orderings the admin deck offers, so an agent working the
-    // queue and an operator working it see the same cards in the same order.
-    enumValue(input.sort, TRIAGE_SORTS, DEFAULT_TRIAGE_SORT, 'sort'),
+    // Preserve the tool's score/newest contract independently of list sorting.
+    enumValue(
+      input.sort,
+      AGENT_TRIAGE_SORTS,
+      DEFAULT_AGENT_TRIAGE_SORT,
+      'sort',
+    ),
   );
 
   const result = await nextTriageCandidate({
