@@ -468,6 +468,68 @@ function runSuite(
         ]),
       );
     });
+
+    it('selects only material-current auto scores while preserving current human scores', async () => {
+      const opportunityTable =
+        config.type === 'postgres' ? 'pg_temp.opportunities' : 'opportunities';
+      const scoreTable =
+        config.type === 'postgres'
+          ? 'pg_temp.evaluation_scores'
+          : 'evaluation_scores';
+      await database.query(`INSERT INTO ${opportunityTable}
+        (id,status,human_review_status,source_content_fingerprint,scoring_material_fingerprint,title)
+        VALUES
+          ('selection-auto','archived','','selection-auto-source','selection-material','Material selection auto'),
+          ('selection-human','archived','','selection-human-source','selection-material','Material selection human'),
+          ('selection-stale-human','archived','','selection-stale-source','selection-material','Material selection stale human')`);
+      await database.query(`INSERT INTO ${scoreTable}
+        (id,opportunity_id,source_content_fingerprint,scoring_material_fingerprint,created_by_profile_id,updated_at,score,recommendation)
+        VALUES
+          ('selection-auto-matching','selection-auto','selection-auto-source','selection-material','','2026-03-01T00:00:00Z',60,'recommend'),
+          ('selection-auto-wrong-newer','selection-auto','selection-auto-source','wrong-material','','2026-03-03T00:00:00Z',100,'reject'),
+          ('selection-auto-legacy-newest','selection-auto','selection-auto-source','','','2026-03-04T00:00:00Z',99,'reject'),
+          ('selection-human-auto-newer','selection-human','selection-human-source','selection-material','','2026-03-04T00:00:00Z',99,'reject'),
+          ('selection-human-current','selection-human','selection-human-source','wrong-material','profile-1','2026-03-01T00:00:00Z',20,'recommend'),
+          ('selection-stale-human','selection-stale-human','stale-source','wrong-material','profile-1','2026-03-05T00:00:00Z',100,'reject')`);
+      const { listCurrentOpportunityScores, listOpportunityPageIds } =
+        await import('./admin-opportunity-query');
+      await expect(
+        listCurrentOpportunityScores([
+          'selection-auto',
+          'selection-human',
+          'selection-stale-human',
+        ]),
+      ).resolves.toEqual(
+        new Map([
+          ['selection-auto', { recommendation: 'recommend', score: 60 }],
+          ['selection-human', { recommendation: 'recommend', score: 20 }],
+          ['selection-stale-human', { recommendation: '', score: null }],
+        ]),
+      );
+      await expect(
+        listOpportunityPageIds({
+          ...query(),
+          filters: {
+            ...DEFAULT_OPPORTUNITY_FILTERS,
+            sort: 'score',
+            status: 'archived',
+          },
+          limit: 10,
+          offset: 0,
+        }),
+      ).resolves.toEqual([
+        'selection-auto',
+        'selection-human',
+        'selection-stale-human',
+      ]);
+      await database.query(`UPDATE ${opportunityTable}
+        SET scoring_material_fingerprint = '' WHERE id = 'selection-auto'`);
+      await expect(
+        listCurrentOpportunityScores(['selection-auto']),
+      ).resolves.toEqual(
+        new Map([['selection-auto', { recommendation: '', score: null }]]),
+      );
+    });
   });
 }
 

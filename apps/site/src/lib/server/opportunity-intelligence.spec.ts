@@ -87,7 +87,13 @@ const mocks = vi.hoisted(() => ({
   recordAgentAudit: vi.fn(async () => ({ id: 'run-1' })),
   syncApplicationWorkflowTasks: vi.fn(async () => ({ created: 0 })),
   syncRecommendedOpportunityDecisionTasks: vi.fn(async () => ({ created: 0 })),
-  databaseUpdate: vi.fn(async () => ({ affected: 1 })),
+  databaseUpdate: vi.fn(
+    async (
+      _table: string,
+      _where: Record<string, unknown>,
+      _data: Record<string, unknown>,
+    ) => ({ affected: 1 }),
+  ),
   databaseQuery: vi.fn(async (_sql: string, params: unknown[]) => {
     const [opportunityId, sourceContentFingerprint, materialFingerprint] =
       params.map(String);

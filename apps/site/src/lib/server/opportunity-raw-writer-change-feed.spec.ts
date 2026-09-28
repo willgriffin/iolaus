@@ -22,6 +22,19 @@ vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
 
 vi.mock('./db.js', () => ({ getDbConfig: vi.fn(() => ({})) }));
 
+vi.mock('./smrt.js', () => ({
+  getCollection: vi.fn(async () => ({
+    get: vi.fn(async (id: string) => ({
+      id,
+      sourceContentFingerprint: 'fingerprint',
+      sourceContentVersion: 3,
+      scoringMaterialFingerprint: '',
+      status: 'found',
+      save: async () => {},
+    })),
+  })),
+}));
+
 vi.mock('./application-workflow.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   syncRecommendedOpportunityDecisionTasks: vi.fn(async () => 0),

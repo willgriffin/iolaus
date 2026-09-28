@@ -42,3 +42,17 @@ source or candidate material fingerprint resets that bounded retry state. Jobs
 carry both source and material fences, so an in-flight result is discarded when
 either changes. Candidate reads fail closed: an unavailable evidence collection
 does not mark existing evaluations stale or enqueue a broad refresh.
+
+Freshness is eventual: for N previously scored, non-archived opportunities, a
+full scan takes approximately `ceil(N / 25)` minutes, plus queue time. Existing
+scores without a material fingerprint are hidden until refreshed. The migration
+registers one `opportunity-score-refresh` schedule; the schedule and task workers
+must both be running. Refresh uses the existing governed intelligence queue and
+cannot enable a stopped circuit or bypass its request/token/spend limits.
+
+After three failed attempts for unchanged material, inspect the opportunity's
+`scoringRefreshAttempts` / `scoringRefreshNextAttemptAt` fields and its score jobs.
+Resolve the provider/evidence error first. An operator can then reset those two
+retry fields to zero and null for the affected opportunity; the next scan will
+retry it. Historical scores are retained throughout. The executable validation
+contract is in [the freshness test matrix](opportunity-score-refresh-test-matrix.md).
