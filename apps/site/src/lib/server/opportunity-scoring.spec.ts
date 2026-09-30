@@ -104,6 +104,7 @@ describe('bounded opportunity scoring fixtures', () => {
 
   it.each([
     '5 years PostgreSQL',
+    '5-years PostgreSQL',
     'Production Kubernetes operations',
     'Engineering team leadership',
   ])('does not treat a qualified skill label as deterministic evidence for %s', async (requirement) => {
@@ -127,6 +128,29 @@ describe('bounded opportunity scoring fixtures', () => {
     });
 
     expect(request.evidenceMatrix[0]).toMatchObject({ status: 'gap' });
+  });
+
+  it('preserves reviewed experience for qualified requirements without semantic decisions', async () => {
+    const requirement = 'Production Kubernetes operations';
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      requiredSkills: requirement,
+      descriptionRaw: requirement,
+    };
+    const request = await build({
+      ...clearAcceptScoringFixture,
+      opportunity,
+      prepared: prepareOpportunityPosting(opportunity),
+      evidenceSources: [
+        {
+          id: 'a1',
+          kind: 'achievement',
+          title: requirement,
+          text: 'Led production Kubernetes operations for five years.',
+        },
+      ],
+    });
+    expect(request.evidenceMatrix[0].status).toBe('supported');
   });
 
   it('combines title and text evidence on token boundaries', async () => {

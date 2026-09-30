@@ -59,6 +59,7 @@ describe('skill matching', () => {
   });
   it.each([
     '5 years PostgreSQL',
+    '5-years PostgreSQL',
     'Production Kubernetes operations',
     'Engineering team leadership',
   ])('routes qualified skill labels through a decision for %s', (requirement) => {

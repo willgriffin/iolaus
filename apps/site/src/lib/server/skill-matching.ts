@@ -55,7 +55,7 @@ const explicitQualificationTerms = new Set([
 /** Qualifications need reviewed evidence, rather than an exact skill-label shortcut. */
 export function hasExplicitSkillQualification(requirement: string): boolean {
   return canonicalSkill(requirement)
-    .split(' ')
+    .split(/[^a-z0-9]+/)
     .some((term) => explicitQualificationTerms.has(term));
 }
 export function skillSourceKey(

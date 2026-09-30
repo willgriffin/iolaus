@@ -424,8 +424,12 @@ function rankedCandidateSources(
           )
           .map((source) => ({ ...source, text: source.text.slice(0, 180) }))
       : [];
-  if (hasExplicitSkillQualification(requirement.value)) return [];
   return sources
+    .filter(
+      (source) =>
+        source.kind !== 'resume_skill' ||
+        !hasExplicitSkillQualification(requirement.value),
+    )
     .map((source, index) => ({
       index,
       score: Math.max(
