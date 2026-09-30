@@ -467,6 +467,7 @@ describe('processOpportunityIntelligence', () => {
           evidenceCount: expect.any(Number),
           version: 'opportunity-scoring-input/v3',
         },
+        model: 'openai/gpt-6.1-sol',
         modelInvoked: true,
         outputSchemaVersion: 'opportunity-score-output/v1',
         promptVersion: 'opportunity-score/v5',

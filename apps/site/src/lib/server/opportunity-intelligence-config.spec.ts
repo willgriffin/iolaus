@@ -4,6 +4,7 @@ import {
   OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_HARD_MAX,
   OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
   opportunityIntelligenceEnabled,
+  pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
   resolveOpportunityIntelligenceEnqueueCap,
@@ -22,6 +23,27 @@ afterEach(() => {
 });
 
 describe('opportunity intelligence enqueue config', () => {
+  it('uses pinned model-specific GPT-6 prices and fails closed for unknown models', () => {
+    expect(pricingForOpportunityIntelligenceModel('openai/gpt-6-luna')).toEqual(
+      {
+        configured: true,
+        inputMicrosPerMillion: 100_000,
+        outputMicrosPerMillion: 500_000,
+      },
+    );
+    expect(
+      pricingForOpportunityIntelligenceModel('openai/gpt-6.1-sol'),
+    ).toEqual({
+      configured: true,
+      inputMicrosPerMillion: 2_000_000,
+      outputMicrosPerMillion: 10_000_000,
+    });
+    expect(
+      pricingForOpportunityIntelligenceModel('openai/gpt-6-astra'),
+    ).toMatchObject({
+      configured: false,
+    });
+  });
   it('fails closed for missing, malformed, or negative limits', () => {
     delete process.env[OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_ENV];
     expect(resolveOpportunityIntelligenceEnqueueCap()).toBe(0);

@@ -9,8 +9,7 @@ import {
 import {
   type AiProfileClient,
   resolveAiProfileClient,
-  resolveOpportunityIntelligenceAiProfileClient,
-  resolveOpportunityIntelligenceProfile,
+  resolveOpportunityIntelligenceScoringAiProfileClient,
 } from './ai-config.js';
 import {
   applicationUpdatesFromPayload,
@@ -505,7 +504,7 @@ async function resolveSettings(
     usageTags: { feature },
   };
   return defaultProfile === 'opportunity-intelligence'
-    ? await resolveOpportunityIntelligenceAiProfileClient(clientOptions)
+    ? await resolveOpportunityIntelligenceScoringAiProfileClient(clientOptions)
     : await resolveAiProfileClient(defaultProfile, clientOptions);
 }
 
@@ -546,10 +545,9 @@ async function requestJson(
   }
   const chatOptions: ChatOptions = {
     maxTokens: options.maxTokens,
-    reasoning: { maxTokens: 1_024 },
+    reasoning: { effort: 'low', maxTokens: 1_024 },
     responseFormat: { type: 'json_object' },
     signal: options.signal,
-    temperature: 0,
     timeout: settings.timeout,
   };
   if (settings.model) chatOptions.model = settings.model;
@@ -1232,7 +1230,7 @@ async function runScore(
     let request = await buildBoundedOpportunityScoringRequest({
       evidenceSources,
       inputTokenCeiling: policy.inputTokenCeiling,
-      model: resolveOpportunityIntelligenceProfile().model,
+      model: 'openai/gpt-6.1-sol',
       opportunity,
       policy,
       prepared: preparedValidation.prepared,
@@ -1275,7 +1273,7 @@ async function runScore(
       evidenceSources,
       skillMatching,
       inputTokenCeiling: policy.inputTokenCeiling,
-      model: resolveOpportunityIntelligenceProfile().model,
+      model: 'openai/gpt-6.1-sol',
       opportunity,
       policy,
       prepared: preparedValidation.prepared,

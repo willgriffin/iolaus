@@ -30,6 +30,22 @@ export const OPPORTUNITY_INTELLIGENCE_PROFILES = {
   },
 } as const;
 
+/** Pinned, non-interchangeable models for the paid intelligence paths. */
+export const OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES = {
+  extraction: {
+    apiKeyEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
+    model: 'openai/gpt-6-luna',
+    modelEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_EXTRACTION_MODEL',
+    profile: 'opportunity-intelligence-extraction',
+  },
+  scoring: {
+    apiKeyEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
+    model: 'openai/gpt-6.1-sol',
+    modelEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+    profile: 'opportunity-intelligence-scoring',
+  },
+} as const;
+
 export interface AiProfileClient {
   aiClient: Pick<AIInterface, 'chat'> &
     Partial<Pick<AIInterface, 'countTokens'>>;
@@ -95,6 +111,16 @@ const defaultAiPackageConfig: AiPackageConfig = {
       provider: 'bifrost',
       timeout: 105_000,
     },
+    'opportunity-intelligence-extraction': {
+      model: 'openai/gpt-6-luna',
+      provider: 'bifrost',
+      timeout: 105_000,
+    },
+    'opportunity-intelligence-scoring': {
+      model: 'openai/gpt-6.1-sol',
+      provider: 'bifrost',
+      timeout: 105_000,
+    },
   },
 };
 
@@ -103,6 +129,8 @@ const AI_USAGE_TAG_KEYS = ['app', 'environment', 'profile', 'feature'] as const;
 export const OPPORTUNITY_INTELLIGENCE_ALLOWED_MODELS = [
   'openai/gpt-5.6-luna',
   'zai/glm-4.7-flashx',
+  'openai/gpt-6-luna',
+  'openai/gpt-6.1-sol',
 ] as const;
 
 export function resolveOpportunityIntelligenceProfile(
@@ -436,6 +464,59 @@ export async function resolveOpportunityIntelligenceAiProfileClient(
 ): Promise<AiProfileClient | null> {
   return await resolveDedicatedOpportunityIntelligenceAiProfileClient(
     resolveOpportunityIntelligenceProfile(),
+    options,
+  );
+}
+
+async function resolvePinnedGpt6OpportunityIntelligenceProfile(
+  selected: (typeof OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES)[keyof typeof OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES],
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  if (options.aiClient && envValue('NODE_ENV') !== 'test') {
+    throw new Error(
+      'Injected opportunity-intelligence clients are test-only; production must use the dedicated Bifrost profile.',
+    );
+  }
+  const configuredModel = envValue(selected.modelEnv) || selected.model;
+  if (configuredModel !== selected.model) {
+    throw new Error(
+      `Opportunity intelligence model "${configuredModel}" is not the pinned ${selected.model}.`,
+    );
+  }
+  const {
+    apiKey: _apiKey,
+    baseUrl: _baseUrl,
+    model: _model,
+    timeout: _timeout,
+    ...profileOptions
+  } = options;
+  const resolved = await resolveAiProfileClient(selected.profile, {
+    ...profileOptions,
+    apiKey: envValue(selected.apiKeyEnv),
+    requireProfileApiKey: true,
+  });
+  if (resolved && resolved.model !== selected.model) {
+    throw new Error(
+      `Opportunity intelligence model "${resolved.model}" is not the pinned ${selected.model}.`,
+    );
+  }
+  return resolved;
+}
+
+export async function resolveOpportunityIntelligenceExtractionAiProfileClient(
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  return await resolvePinnedGpt6OpportunityIntelligenceProfile(
+    OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.extraction,
+    options,
+  );
+}
+
+export async function resolveOpportunityIntelligenceScoringAiProfileClient(
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  return await resolvePinnedGpt6OpportunityIntelligenceProfile(
+    OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring,
     options,
   );
 }
