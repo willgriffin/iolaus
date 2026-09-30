@@ -791,7 +791,7 @@ async function loadEvidenceSources(
       'CandidateProfile',
       {
         limit: 25,
-        orderBy: 'isDefault DESC, updated_at DESC',
+        orderBy: ['isDefault DESC', 'updated_at DESC'],
       },
       strict,
     ),

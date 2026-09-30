@@ -1,3 +1,4 @@
+import { SmrtCollection } from '@happyvertical/smrt-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bulkProcessOpportunityIntelligence,
@@ -75,6 +76,63 @@ function collection(records: MockRecord[] = []) {
     }),
     records,
   };
+}
+
+type OrderByOptions = {
+  orderBy?: string | string[];
+  where?: Record<string, unknown>;
+};
+
+function strictCandidateProfileCollection(records: MockRecord[] = []) {
+  const profiles = collection(records);
+  const buildOrderBySql = (
+    SmrtCollection.prototype as unknown as {
+      buildOrderBySql(
+        this: object,
+        orderBy: string | string[] | undefined,
+        fields: Record<string, unknown>,
+      ): string;
+    }
+  ).buildOrderBySql;
+  const parser = {
+    collectQueryableFieldNames: () => ({
+      readPermissionFieldNames: new Set<string>(),
+      sensitiveFieldNames: new Set<string>(),
+      skipFieldValidation: false,
+      validFieldNames: new Set(['id', 'is_default', 'updated_at']),
+    }),
+    getResolvedItemClassName: () => 'CandidateProfile',
+    getResolvedItemQualifiedName: () => 'CandidateProfile',
+    hasCustomPrimaryKey: () => false,
+    isOmittedCustomPrimaryKeySystemField: () => false,
+    toDbColumnName: (field: string) => field,
+  };
+  profiles.list.mockImplementation(
+    async ({ orderBy, where }: OrderByOptions = {}) => {
+      // Exercise the installed SMRT parser instead of duplicating its
+      // validation. A comma-separated string is one invalid order term.
+      buildOrderBySql.call(parser, orderBy, {
+        isDefault: { type: 'boolean' },
+      });
+      const selected = where
+        ? records.filter((item) => matchesWhere(item, where))
+        : [...records];
+      const terms = Array.isArray(orderBy) ? orderBy : [orderBy ?? ''];
+      return selected.sort((left, right) => {
+        for (const term of terms) {
+          const [field, direction] = term.split(/\s+/, 2);
+          const key = field === 'isDefault' ? 'isDefault' : field;
+          const leftValue = left[key];
+          const rightValue = right[key];
+          if (leftValue === rightValue) continue;
+          const ascending = direction !== 'DESC';
+          return (leftValue! > rightValue! ? 1 : -1) * (ascending ? 1 : -1);
+        }
+        return 0;
+      });
+    },
+  );
+  return profiles;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -268,6 +326,82 @@ describe('processOpportunityIntelligence', () => {
     mocks.databaseUpdate.mockResolvedValue({ affected: 1 });
     mocks.syncApplicationWorkflowTasks.mockClear();
     mocks.syncRecommendedOpportunityDecisionTasks.mockClear();
+  });
+
+  it('uses SMRT-supported profile order terms to retain defaults then newest profiles', async () => {
+    const opportunity = record({
+      descriptionRaw: 'Requires TypeScript.',
+      id: 'opp-1',
+      requiredSkills: 'TypeScript',
+      status: 'found',
+      title: 'AI Platform Engineer',
+    });
+    const profiles = strictCandidateProfileCollection([
+      record({
+        id: 'profile-default-old',
+        isDefault: true,
+        name: 'Default old',
+        summary: 'TypeScript default profile from 2025.',
+        updated_at: '2025-01-01T00:00:00.000Z',
+      }),
+      record({
+        id: 'profile-default-new',
+        isDefault: true,
+        name: 'Default newest',
+        summary: 'TypeScript default profile from 2026.',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      }),
+      ...[6, 5, 4, 3].map((month) =>
+        record({
+          id: `profile-regular-${month}`,
+          isDefault: false,
+          name: `Regular ${month}`,
+          summary: `TypeScript regular profile ${month}.`,
+          updated_at: `2026-0${month}-01T00:00:00.000Z`,
+        }),
+      ),
+    ]);
+    mocks.collections.set('Achievement', collection());
+    mocks.collections.set('CandidateProfile', profiles);
+    mocks.collections.set('FactCandidate', collection());
+    mocks.collections.set('ResumeSkill', collection());
+
+    const materialWithSixProfiles = await scoringMaterialForOpportunity(
+      opportunity as never,
+    );
+
+    expect(profiles.list).toHaveBeenCalledWith({
+      limit: 25,
+      orderBy: ['isDefault DESC', 'updated_at DESC'],
+    });
+    const listedProfiles = (await profiles.list.mock.results[0]?.value) as
+      | MockRecord[]
+      | undefined;
+    expect(listedProfiles?.map((profile) => profile.id)).toEqual([
+      'profile-default-new',
+      'profile-default-old',
+      'profile-regular-6',
+      'profile-regular-5',
+      'profile-regular-4',
+      'profile-regular-3',
+    ]);
+
+    mocks.collections.set(
+      'CandidateProfile',
+      strictCandidateProfileCollection(
+        profiles.records.slice(0, 5) as MockRecord[],
+      ),
+    );
+    const materialWithSelectedProfiles = await scoringMaterialForOpportunity(
+      opportunity as never,
+    );
+
+    // The sixth (oldest non-default) profile cannot change scoring material:
+    // loadEvidenceSources retains the default tier and only the newest
+    // remaining profiles through its five-profile cap.
+    expect(materialWithSixProfiles?.fingerprint).toBe(
+      materialWithSelectedProfiles?.fingerprint,
+    );
   });
 
   it('uses semantic skill evidence before scoring and preserves it through evidence refresh', async () => {
