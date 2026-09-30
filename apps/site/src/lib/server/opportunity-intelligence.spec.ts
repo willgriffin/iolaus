@@ -9,6 +9,7 @@ import {
   statusForOpportunityRecommendation,
 } from './opportunity-intelligence';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
+import { resolveSkillMatching } from './skill-matching.js';
 
 type MockRecord = Record<string, unknown> & {
   id: string;
@@ -77,6 +78,7 @@ function collection(records: MockRecord[] = []) {
 }
 
 const mocks = vi.hoisted(() => ({
+  evaluateSkillMatches: vi.fn(),
   collections: new Map<string, ReturnType<typeof collection>>(),
   cancelStaleOpportunityIntelligenceTasks: vi.fn(async () => 0),
   loadOpportunityDetails: vi.fn(async () => ({ status: 'resolved' })),
@@ -117,6 +119,10 @@ vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
     query: mocks.databaseQuery,
     update: mocks.databaseUpdate,
   })),
+}));
+
+vi.mock('./skill-decision-provider.js', () => ({
+  evaluateSkillMatches: mocks.evaluateSkillMatches,
 }));
 
 vi.mock('./smrt.js', () => ({
@@ -250,6 +256,8 @@ describe('processOpportunityIntelligence', () => {
     vi.unstubAllEnvs();
     vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MODEL_SCORING_ENABLED', 'true');
     mocks.collections.clear();
+    mocks.evaluateSkillMatches.mockReset();
+    mocks.evaluateSkillMatches.mockResolvedValue(undefined);
     mocks.cancelStaleOpportunityIntelligenceTasks.mockReset();
     mocks.cancelStaleOpportunityIntelligenceTasks.mockResolvedValue(0);
     mocks.loadOpportunityDetails.mockClear();
@@ -260,6 +268,145 @@ describe('processOpportunityIntelligence', () => {
     mocks.databaseUpdate.mockResolvedValue({ affected: 1 });
     mocks.syncApplicationWorkflowTasks.mockClear();
     mocks.syncRecommendedOpportunityDecisionTasks.mockClear();
+  });
+
+  it('uses semantic skill evidence before scoring and preserves it through evidence refresh', async () => {
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_CLEAR_ACCEPT_MIN_REQUIRED', '2');
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          title: 'Backend Engineer',
+          status: 'found',
+          requiredSkills: 'JavaScript\nPostgreSQL',
+          descriptionRaw:
+            'Qualifications\nJavaScript is required.\nPostgreSQL is required.',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([
+        record({ id: 'skill-1', label: 'Node.js' }),
+        record({ id: 'skill-2', label: 'Postgres' }),
+      ]),
+    );
+    const scores = collection();
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.evaluateSkillMatches.mockImplementation(async (prepared) =>
+      resolveSkillMatching(prepared, {
+        model: 'jev-test',
+        provenance: { provider: 'typesafe', model: 'jev-test' },
+        answers: {
+          match_0: { type: 'predicate', probability: 0.99 },
+          source_0: {
+            type: 'choice',
+            choice: 'candidate_0',
+            confidence: 0.99,
+            probabilities: { candidate_0: 0.99 },
+          },
+        },
+      }),
+    );
+    const aiClient = { chat: vi.fn() };
+    const semanticResult = await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score', 'evidence', 'quality'],
+      opportunityId: 'opp-1',
+    });
+    expect(semanticResult, JSON.stringify(semanticResult)).toMatchObject({
+      failed: 0,
+    });
+    expect(scores.records).toHaveLength(1);
+    expect(scores.records[0].recommendation).toBe('recommend');
+    expect(
+      parseOpportunityReasonJson(scores.records[0].reasonJson).evidenceMatrix,
+    ).toEqual([
+      expect.objectContaining({
+        requirement: 'JavaScript',
+        status: 'supported',
+        sources: [expect.objectContaining({ id: 'skill-1' })],
+      }),
+      expect.objectContaining({
+        requirement: 'PostgreSQL',
+        status: 'supported',
+        sources: [expect.objectContaining({ id: 'skill-2' })],
+      }),
+    ]);
+    expect(aiClient.chat).not.toHaveBeenCalled();
+  });
+
+  it('only supplies reviewed candidate facts, never employer facts, as skill evidence', async () => {
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          organizationProfileId: 'employer-1',
+          requiredSkills: 'Java',
+          descriptionRaw: 'Qualifications\nJava is required.',
+        }),
+      ]),
+    );
+    mocks.collections.set('EvaluationScore', collection());
+    mocks.collections.set(
+      'FactCandidate',
+      collection([
+        record({
+          id: 'employer-fact',
+          reviewStatus: 'accepted',
+          targetEntityType: 'Company',
+          targetEntityId: 'employer-1',
+          statement: 'Uses Java',
+        }),
+        record({
+          id: 'candidate-fact',
+          reviewStatus: 'accepted',
+          targetEntityType: 'CandidateProfile',
+          targetEntityId: 'candidate-1',
+          statement: 'Built Rust services',
+        }),
+      ]),
+    );
+    await processOpportunityIntelligence({
+      aiClient: { chat: vi.fn() },
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+    expect(
+      mocks.evaluateSkillMatches.mock.calls[0][0].candidates.map(
+        (source: { id: string }) => source.id,
+      ),
+    ).toEqual(['candidate-fact']);
+  });
+
+  it('does not save a score or recommendation on decision provider failure', async () => {
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          requiredSkills: 'Java',
+          descriptionRaw: 'Qualifications\nJava is required.',
+        }),
+      ]),
+    );
+    const scores = collection();
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.evaluateSkillMatches.mockRejectedValue(
+      new Error('Decision provider unavailable'),
+    );
+    const result = await processOpportunityIntelligence({
+      aiClient: { chat: vi.fn() },
+      modes: ['score'],
+      opportunityId: 'opp-1',
+    });
+    expect(result.failed).toBe(1);
+    expect(scores.records).toHaveLength(0);
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
   });
 
   it('scores, stores reasonJson evidence, and syncs recommendation tasks', async () => {
@@ -318,7 +465,7 @@ describe('processOpportunityIntelligence', () => {
       scoring: {
         input: {
           evidenceCount: expect.any(Number),
-          version: 'opportunity-scoring-input/v2',
+          version: 'opportunity-scoring-input/v3',
         },
         modelInvoked: true,
         outputSchemaVersion: 'opportunity-score-output/v1',

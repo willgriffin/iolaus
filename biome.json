@@ -4,6 +4,7 @@
     "includes": [
       "apps/*/src/**/*.{js,ts,tsx,jsx,svelte}",
       "apps/site/scripts/db-doctor.ts",
+      "apps/site/scripts/skill-matching-live.ts",
       "apps/site/scripts/db-export.ts",
       "apps/site/scripts/db-import.ts",
       "apps/site/scripts/db-reset-local.ts",

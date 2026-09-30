@@ -13,8 +13,15 @@ import {
   type PreparedPostingFact,
   type PreparedPostingSection,
 } from './opportunity-posting-preparation.js';
+import {
+  canonicalSkill,
+  hasExplicitSkillQualification,
+  prepareSkillMatching,
+  type SkillMatchingResult,
+  skillSourceKey,
+} from './skill-matching.js';
 
-export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v2';
+export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v3';
 export const OPPORTUNITY_SCORING_PROMPT_VERSION = 'opportunity-score/v5';
 export const OPPORTUNITY_SCORING_OUTPUT_SCHEMA_VERSION =
   'opportunity-score-output/v1';
@@ -76,6 +83,7 @@ export interface OpportunityScoringFactConflict {
 }
 
 export interface OpportunityScoringInput {
+  skillMatching?: SkillMatchingResult;
   candidateEvidence: OpportunityScoringCandidateEvidence[];
   conflicts: OpportunityScoringFactConflict[];
   evidenceCount: number;
@@ -99,6 +107,7 @@ export interface OpportunityScoringInput {
   };
   requirements: OpportunityScoringRequirement[];
   signals: {
+    uncertainRequiredCount?: number;
     conflictCount: number;
     gapRequiredCount: number;
     missingPostingExcerptCount: number;
@@ -300,12 +309,14 @@ function matchScore(requirement: string, source: string): number {
   const normalizedRequirement = normalizedMatchText(requirement);
   const normalizedSource = normalizedMatchText(source);
   if (!normalizedRequirement || !normalizedSource) return 0;
-  if (normalizedSource.includes(normalizedRequirement)) return 3;
+  const words = ` ${normalizedSource} `;
+  if (canonicalSkill(requirement) === canonicalSkill(source)) return 3;
+  if (words.includes(` ${normalizedRequirement} `)) return 3;
   const tokens = normalizedRequirement
     .split(' ')
     .filter((token) => token.length > 2);
   if (tokens.length === 0) return 0;
-  const matched = tokens.filter((token) => normalizedSource.includes(token));
+  const matched = tokens.filter((token) => words.includes(` ${token} `));
   if (matched.length === tokens.length) return 2;
   return matched.length / tokens.length >= 0.75 ? 1 : 0;
 }
@@ -399,12 +410,33 @@ function selectedRequirements(
 
 function rankedCandidateSources(
   requirement: OpportunityScoringRequirement,
+  requirementIndex: number,
   sources: OpportunityScoringEvidenceSource[],
+  skillMatching?: SkillMatchingResult,
 ): OpportunityScoringEvidenceSource[] {
+  const match = skillMatching?.matches[requirementIndex];
+  const assessed = match?.requirement === requirement.value ? match : undefined;
+  if (assessed)
+    return assessed.status === 'supported'
+      ? sources
+          .filter((source) =>
+            assessed.sourceKeys.includes(skillSourceKey(source)),
+          )
+          .map((source) => ({ ...source, text: source.text.slice(0, 180) }))
+      : [];
   return sources
+    .filter(
+      (source) =>
+        source.kind !== 'resume_skill' ||
+        !hasExplicitSkillQualification(requirement.value),
+    )
     .map((source, index) => ({
       index,
-      score: matchScore(requirement.value, `${source.title}\n${source.text}`),
+      score: Math.max(
+        matchScore(requirement.value, source.title),
+        matchScore(requirement.value, source.text),
+        matchScore(requirement.value, `${source.title} ${source.text}`),
+      ),
       source,
     }))
     .filter((candidate) => candidate.score > 0)
@@ -589,11 +621,31 @@ function finalizeInput(
     ...input,
     conflicts,
     evidenceCount,
-    signals: inputSignals({
-      candidateEvidence: input.candidateEvidence,
-      conflicts,
-      requirements: input.requirements,
-    }),
+    signals: {
+      ...inputSignals({
+        candidateEvidence: input.candidateEvidence,
+        conflicts,
+        requirements: input.requirements,
+      }),
+      ...(input.skillMatching
+        ? {
+            uncertainRequiredCount: input.requirements.filter(
+              (requirement, requirementIndex) => {
+                const match = input.skillMatching?.matches[requirementIndex];
+                return (
+                  requirement.kind === 'required' &&
+                  match?.requirement === requirement.value &&
+                  (match.status === 'uncertain' ||
+                    (match.status === 'supported' &&
+                      !input.candidateEvidence.some((evidence) =>
+                        evidence.requirementIds.includes(requirement.id),
+                      )))
+                );
+              },
+            ).length,
+          }
+        : {}),
+    },
   };
   return {
     ...withoutFingerprint,
@@ -691,6 +743,7 @@ export function validatePreparedPostingForScoring(options: {
 }
 
 function initialScoringInput(options: {
+  skillMatching?: SkillMatchingResult;
   evidenceSources: OpportunityScoringEvidenceSource[];
   inputTokenCeiling: number;
   opportunity: Record<string, unknown>;
@@ -715,10 +768,12 @@ function initialScoringInput(options: {
     string,
     OpportunityScoringCandidateEvidence
   >();
-  for (const requirement of requirements) {
+  for (const [requirementIndex, requirement] of requirements.entries()) {
     const matches = rankedCandidateSources(
       requirement,
+      requirementIndex,
       options.evidenceSources,
+      options.skillMatching,
     ).slice(0, OPPORTUNITY_SCORING_MAX_SOURCES_PER_REQUIREMENT);
     for (const source of matches) {
       const sourceKey = `${source.kind}:${source.id}`;
@@ -788,6 +843,7 @@ function initialScoringInput(options: {
     OPPORTUNITY_SCORING_MAX_EVIDENCE_COUNT - evidenceCount,
   );
   return finalizeInput({
+    ...(options.skillMatching ? { skillMatching: options.skillMatching } : {}),
     candidateEvidence,
     conflicts: [],
     limits: {
@@ -830,7 +886,19 @@ export function scoringMaterialFingerprint(options: {
   policy: OpportunityScoringConfig;
   prepared: PreparedPosting;
 }): string {
-  return initialScoringInput(options).fingerprint;
+  const input = initialScoringInput(options);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: 'opportunity-scoring-material/v2',
+        scoring: input.fingerprint,
+        candidateMatching: prepareSkillMatching(
+          input.requirements.map((requirement) => requirement.value),
+          options.evidenceSources,
+        ).fingerprint,
+      }),
+    )
+    .digest('hex');
 }
 
 export function buildOpportunityScoringMessages(
@@ -879,6 +947,7 @@ export function buildOpportunityScoringMessages(
 
 export async function buildBoundedOpportunityScoringRequest(options: {
   counter?: (text: string) => Promise<number>;
+  skillMatching?: SkillMatchingResult;
   evidenceSources: OpportunityScoringEvidenceSource[];
   inputTokenCeiling: number;
   minContextHeadroomRatio?: number;
@@ -946,6 +1015,8 @@ export function preScoreOpportunity(
   input: OpportunityScoringInput,
 ): OpportunityScoringPreScore {
   const { signals } = input;
+  if (signals.uncertainRequiredCount)
+    return { kind: 'missing_evidence', modelEligible: false, signals };
   if (signals.requiredCount === 0 || input.candidateEvidence.length === 0) {
     return { kind: 'missing_evidence', modelEligible: false, signals };
   }
