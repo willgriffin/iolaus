@@ -3,6 +3,7 @@ import type { DecisionResult } from '@happyvertical/ai';
 import { describe, expect, it } from 'vitest';
 import { clearAcceptScoringFixture } from './fixtures/opportunity-scoring.js';
 import {
+  attributableOpportunityScoringReasons,
   buildBoundedOpportunityScoringRequest,
   preScoreOpportunity,
 } from './opportunity-scoring.js';
@@ -247,5 +248,77 @@ describe('skill matching', () => {
       counter: async () => 100,
     });
     expect(preScoreOpportunity(request.input).kind).toBe('missing_evidence');
+  });
+
+  it('keeps attributable partial support advisory when another required skill is uncertain', async () => {
+    const fixture = clearAcceptScoringFixture;
+    const request = await buildBoundedOpportunityScoringRequest({
+      ...fixture,
+      evidenceSources: [source('TypeScript', 'resume_skill', 'typescript')],
+      skillMatching: {
+        version: 'skill-match/v3',
+        fingerprint: 'partial-support',
+        matches: [
+          {
+            requirement: 'TypeScript',
+            status: 'supported',
+            sourceKeys: ['resume_skill:typescript'],
+          },
+          { requirement: 'PostgreSQL', status: 'uncertain', sourceKeys: [] },
+        ],
+      },
+      model: 'test',
+      inputTokenCeiling: 4000,
+      counter: async () => 100,
+    });
+
+    expect(request.evidenceMatrix.map((entry) => entry.status)).toEqual([
+      'supported',
+      'uncertain',
+    ]);
+    expect(request.input.signals).toMatchObject({
+      gapRequiredCount: 0,
+      uncertainRequiredCount: 1,
+    });
+    expect(preScoreOpportunity(request.input)).toMatchObject({
+      kind: 'borderline',
+      modelEligible: true,
+    });
+    expect(
+      attributableOpportunityScoringReasons(request).missingInfo,
+    ).toContain(
+      'Candidate support for "PostgreSQL" remains uncertain and requires review.',
+    );
+  });
+
+  it('fails closed when context trimming removes supported semantic provenance', async () => {
+    const fixture = clearAcceptScoringFixture;
+    const request = await buildBoundedOpportunityScoringRequest({
+      ...fixture,
+      evidenceSources: [source('TypeScript', 'resume_skill', 'typescript')],
+      skillMatching: {
+        version: 'skill-match/v3',
+        fingerprint: 'lost-provenance',
+        matches: [
+          {
+            requirement: 'TypeScript',
+            status: 'supported',
+            sourceKeys: ['resume_skill:typescript'],
+          },
+          { requirement: 'PostgreSQL', status: 'gap', sourceKeys: [] },
+        ],
+      },
+      model: 'test',
+      inputTokenCeiling: 10000,
+      counter: async (text) =>
+        text.includes('"candidateEvidence":[{') ? 100_000 : 1,
+    });
+
+    expect(request.input.candidateEvidence).toEqual([]);
+    expect(request.input.signals.lostProvenanceRequiredCount).toBe(1);
+    expect(preScoreOpportunity(request.input)).toMatchObject({
+      kind: 'missing_evidence',
+      modelEligible: false,
+    });
   });
 });

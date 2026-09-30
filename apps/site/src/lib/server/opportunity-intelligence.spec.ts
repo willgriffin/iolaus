@@ -543,6 +543,71 @@ describe('processOpportunityIntelligence', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('bounds adversarial model output when required-skill support is partial and uncertain', async () => {
+    const opportunities = collection([
+      record({
+        descriptionRaw: 'Requires TypeScript and PostgreSQL.',
+        id: 'opp-partial',
+        requiredSkills: 'TypeScript\nPostgreSQL',
+        status: 'found',
+        title: 'AI Platform Engineer',
+      }),
+    ]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-typescript', label: 'TypeScript' })]),
+    );
+    mocks.evaluateSkillMatches.mockImplementation(async (prepared) =>
+      resolveSkillMatching(prepared, {
+        model: 'jev-test',
+        provenance: { provider: 'typesafe', model: 'jev-test' },
+        answers: {
+          match_1: { type: 'predicate', probability: 0.5 },
+          source_1: {
+            type: 'choice',
+            choice: 'uncertain',
+            confidence: 0.99,
+            probabilities: { uncertain: 0.99 },
+          },
+        },
+      }),
+    );
+    const result = await processOpportunityIntelligence({
+      aiClient: {
+        chat: vi.fn(async () => ({
+          content: JSON.stringify({
+            confidence: 0.99,
+            fitReasons: ['Candidate is an expert in PostgreSQL.'],
+            recommendation: 'recommend',
+            risks: ['No risks.'],
+            score: 99,
+            suggestedNextAction: 'Apply now.',
+            summary: 'Candidate definitively meets every requirement.',
+          }),
+        })),
+      },
+      modes: ['score'],
+      opportunityId: 'opp-partial',
+    });
+
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(scores.records[0]).toMatchObject({
+      recommendation: 'maybe',
+      summary:
+        'Bounded advisory score retained attributable support while required-skill evidence remains uncertain.',
+    });
+    const reason = parseOpportunityReasonJson(scores.records[0]?.reasonJson);
+    expect(reason.evidenceMatrix.map((entry) => entry.status)).toEqual([
+      'supported',
+      'uncertain',
+    ]);
+    expect(reason.fitReasons.join(' ')).not.toContain('PostgreSQL');
+    expect(reason.missingInfo.join(' ')).toContain('PostgreSQL');
+  });
+
   it('scores, stores reasonJson evidence, and syncs recommendation tasks', async () => {
     const opportunities = collection([
       record({
@@ -599,12 +664,12 @@ describe('processOpportunityIntelligence', () => {
       scoring: {
         input: {
           evidenceCount: expect.any(Number),
-          version: 'opportunity-scoring-input/v3',
+          version: 'opportunity-scoring-input/v4',
         },
         model: 'openai/gpt-6.1-sol',
         modelInvoked: true,
-        outputSchemaVersion: 'opportunity-score-output/v1',
-        promptVersion: 'opportunity-score/v5',
+        outputSchemaVersion: 'opportunity-score-output/v2',
+        promptVersion: 'opportunity-score/v6',
       },
     });
     expect(storedReason.scoring?.inputTokenCount).toBeLessThanOrEqual(

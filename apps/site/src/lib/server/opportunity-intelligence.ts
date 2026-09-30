@@ -99,7 +99,7 @@ export type OpportunityRecommendation =
 
 export interface OpportunityEvidenceMatch {
   requirement: string;
-  status: 'gap' | 'supported';
+  status: 'gap' | 'supported' | 'uncertain';
   sources: Array<{
     excerpt: string;
     id: string;
@@ -422,8 +422,9 @@ export function parseOpportunityReasonJson(
             title: stringValue(evidence.title),
           };
         }),
-        status:
-          stringValue(source.status) === 'supported' ? 'supported' : 'gap',
+        status: ['supported', 'uncertain'].includes(stringValue(source.status))
+          ? (stringValue(source.status) as 'supported' | 'uncertain')
+          : 'gap',
       };
     }),
     fitReasons: normalizeStringList(record.fitReasons),
@@ -1405,9 +1406,12 @@ async function runScore(
       );
       score = normalizeOpportunityScoreOutput(output);
       const attributable = attributableOpportunityScoringReasons(request);
-      score.fitReasons = [
-        ...new Set([...score.fitReasons, ...attributable.fitReasons]),
-      ];
+      const hasUncertainRequiredSkills = Boolean(
+        request.input.signals.uncertainRequiredCount,
+      );
+      score.fitReasons = hasUncertainRequiredSkills
+        ? attributable.fitReasons
+        : [...new Set([...score.fitReasons, ...attributable.fitReasons])];
       score.missingInfo = [
         ...new Set([...score.missingInfo, ...attributable.missingInfo]),
       ];
@@ -1417,6 +1421,20 @@ async function runScore(
           ...attributable.dataQualityWarnings,
         ]),
       ];
+      if (hasUncertainRequiredSkills) {
+        score = {
+          ...score,
+          confidence: Math.min(score.confidence, 0.5),
+          recommendation: 'maybe',
+          risks: [
+            'One or more required skills remain uncertain; a human must review the evidence.',
+          ],
+          suggestedNextAction:
+            'Review the uncertain required-skill evidence before making a decision.',
+          summary:
+            'Bounded advisory score retained attributable support while required-skill evidence remains uncertain.',
+        };
+      }
     } else {
       score = normalizeOpportunityScoreOutput(
         deterministicOpportunityScore(request, decision),

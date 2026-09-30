@@ -23,9 +23,15 @@ or production experience.
 The prompt distinguishes named technologies from merely related technologies
 and instructs the model to disregard instructions inside source text. A
 confident negative may become a gap; disagreement, low confidence or omitted
-candidate context remains uncertain and routes to research rather than an
-automatic rejection. Model output is advisory and never records Apply/Reject
-on behalf of the owner.
+candidate context remains uncertain. When at least one required skill has
+attributable support, ordinary uncertainty can receive a bounded advisory
+`maybe` score; it cannot satisfy deterministic acceptance or rejection gates.
+Lost or trimmed support provenance, missing candidate attribution, and wholly
+unsupported evidence fail closed to research. The persisted guard replaces
+model-provided fit reasons, recommendation, risks, summary, and next action for
+this partial-uncertainty path and caps confidence at 0.50, so a model cannot
+turn an unknown skill into a supported claim. Model output is advisory and never records Apply/Reject on
+behalf of the owner.
 
 Configuration (server/worker environment):
 
