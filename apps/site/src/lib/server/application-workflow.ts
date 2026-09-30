@@ -2278,21 +2278,85 @@ async function cancelActiveApplicationTasksForClosedPosting(
   if (!applicationId) return 0;
 
   const tasks = await collection('Task');
-  const records = await tasks.list({
-    limit: 200,
-    orderBy: 'updated_at DESC',
-    where: { applicationId },
-  });
   const now = new Date();
   let canceled = 0;
 
-  for (const task of records) {
-    if (!isActiveTaskStatus(task.status)) continue;
-    await markTaskCanceled(task, now, { kanbanColumn: 'rejected_archived' });
-    canceled += 1;
+  // Re-read the active set after each page. Cancelling changes each record's
+  // status, so this cannot skip older tasks when a completed-task history
+  // fills the first page.
+  while (true) {
+    const records = await tasks.list({
+      limit: 200,
+      orderBy: 'updated_at DESC',
+      where: { applicationId, status: activeTaskStatuses },
+    });
+    if (records.length === 0) break;
+
+    for (const task of records) {
+      await markTaskCanceled(task, now, {
+        kanbanColumn: 'rejected_archived',
+      });
+      canceled += 1;
+    }
   }
 
   return canceled;
+}
+
+async function runApplicationCleanupTransaction<T>(
+  action: (database: ResolvedDatabase) => Promise<T>,
+): Promise<T> {
+  const activeDatabase = lifecycleDatabase.getStore();
+  if (activeDatabase) return await action(activeDatabase);
+
+  const database =
+    getRequestScopedDatabase() ?? (await resolveDatabase(getDbConfig()));
+  if (!database.transaction) {
+    throw new Error(
+      'Application cleanup requires transactional database support.',
+    );
+  }
+  return await database.transaction(
+    async (transaction) =>
+      await lifecycleDatabase.run(
+        transaction,
+        async () => await action(transaction),
+      ),
+  );
+}
+
+/**
+ * Retire an application without deleting its material, approvals, or recorded
+ * submission evidence. This is intentionally a dedicated lifecycle action:
+ * generic editing can require an opportunity relation that old imported
+ * applications do not have, and can invalidate an approval while changing
+ * status. Every active task linked to the application is canceled so archived
+ * work cannot continue in the background.
+ */
+export async function archiveApplicationForCleanup(
+  application: Record<string, unknown>,
+): Promise<{ canceled: number; status: 'archived' }> {
+  return await runApplicationCleanupTransaction(async (database) => {
+    if (normalizeApplicationStatus(application.status) !== 'archived') {
+      if (
+        !(await commitApplicationIfCurrent(
+          application,
+          { status: 'archived' },
+          database,
+        ))
+      ) {
+        error(
+          409,
+          'Application changed while it was being archived. Reload and review the current application.',
+        );
+      }
+    }
+
+    return {
+      canceled: await cancelActiveApplicationTasksForClosedPosting(application),
+      status: 'archived',
+    };
+  });
 }
 
 export async function syncApplicationWorkflowTasks(
@@ -2441,20 +2505,7 @@ export async function archiveApplicationForClosedPosting(
 ): Promise<void> {
   const status = normalizeApplicationStatus(application.status);
   if (!postingClosureArchiveableApplicationStatuses.has(status)) return;
-
-  if (
-    !(await commitApplicationIfCurrent(
-      application,
-      { status: 'archived' },
-      lifecycleDatabase.getStore(),
-    ))
-  ) {
-    error(
-      409,
-      'Application changed while its closed posting was being archived. Reload and review the current application.',
-    );
-  }
-  await cancelActiveApplicationTasksForClosedPosting(application);
+  await archiveApplicationForCleanup(application);
 }
 
 export async function archiveApplicationsForClosedPosting(

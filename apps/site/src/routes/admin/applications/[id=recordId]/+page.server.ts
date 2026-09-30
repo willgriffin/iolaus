@@ -1,3 +1,5 @@
+import { redirect } from '@sveltejs/kit';
+import { archiveApplicationAction } from '$lib/server/admin-resource-route';
 import { generateApplicationPackage } from '$lib/server/application-package';
 import {
   addApplicationMaterialComments,
@@ -19,6 +21,10 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
+  archiveApplication: async ({ locals, params }) => {
+    await archiveApplicationAction(params.id, locals);
+    redirect(303, '/admin/applications?status=archived');
+  },
   addComments: async ({ locals, params, request }) => {
     return await addApplicationMaterialComments(
       params.id,

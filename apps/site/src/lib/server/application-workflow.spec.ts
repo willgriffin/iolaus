@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  archiveApplicationForCleanup,
   archiveApplicationForClosedPosting,
   cancelStaleOpportunityIntelligenceTasks,
   closeReviewTasksForArchivedOpportunities,
@@ -37,7 +38,9 @@ function matchesWhere(
   item: MockRecord,
   where: Record<string, unknown>,
 ): boolean {
-  return Object.entries(where).every(([key, value]) => item[key] === value);
+  return Object.entries(where).every(([key, value]) =>
+    Array.isArray(value) ? value.includes(item[key]) : item[key] === value,
+  );
 }
 
 function collection(records: MockRecord[] = []) {
@@ -53,10 +56,19 @@ function collection(records: MockRecord[] = []) {
     get: vi.fn(
       async (id: string) => records.find((item) => item.id === id) ?? null,
     ),
-    list: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => {
-      if (!where) return records;
-      return records.filter((item) => matchesWhere(item, where));
-    }),
+    list: vi.fn(
+      async ({
+        limit,
+        where,
+      }: {
+        limit?: number;
+        where?: Record<string, unknown>;
+      } = {}) => {
+        if (!where) return records;
+        const matching = records.filter((item) => matchesWhere(item, where));
+        return typeof limit === 'number' ? matching.slice(0, limit) : matching;
+      },
+    ),
     records,
   };
 }
@@ -1125,6 +1137,125 @@ describe('archiveApplicationForClosedPosting', () => {
 
     expect(application).toMatchObject({ status: 'submitted' });
     expect(mocks.databaseUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('archiveApplicationForCleanup', () => {
+  beforeEach(() => {
+    mocks.collections.clear();
+    mocks.databaseTransaction.mockClear();
+    mocks.databaseUpdate.mockReset();
+    mocks.databaseUpdate.mockResolvedValue({ affected: 1 });
+  });
+
+  it('archives an orphan approved application without clearing its approval or materials', async () => {
+    const application = record({
+      approvedAt: '2026-09-30T12:00:00.000Z',
+      approvedByUserId: 'owner-1',
+      id: 'orphan-approved',
+      packetAssetId: 'packet-1',
+      resumeAssetId: 'resume-1',
+      status: 'approved',
+    });
+    const activeTask = record({
+      applicationId: 'orphan-approved',
+      id: 'task-active',
+      status: 'open',
+      taskType: 'submit_application',
+    });
+    const completedTask = record({
+      applicationId: 'orphan-approved',
+      id: 'task-completed',
+      status: 'done',
+      taskType: 'prepare_application_packet',
+    });
+    const unrelatedTask = record({
+      applicationId: 'other-application',
+      id: 'task-unrelated',
+      status: 'open',
+      taskType: 'submit_application',
+    });
+    mocks.collections.set('Application', collection([application]));
+    mocks.collections.set(
+      'Task',
+      collection([activeTask, completedTask, unrelatedTask]),
+    );
+
+    const result = await archiveApplicationForCleanup(application);
+
+    expect(result).toEqual({ canceled: 1, status: 'archived' });
+    expect(application).toMatchObject({
+      approvedAt: '2026-09-30T12:00:00.000Z',
+      approvedByUserId: 'owner-1',
+      packetAssetId: 'packet-1',
+      resumeAssetId: 'resume-1',
+      status: 'archived',
+    });
+    expect(activeTask).toMatchObject({
+      kanbanColumn: 'rejected_archived',
+      status: 'canceled',
+    });
+    expect(completedTask.status).toBe('done');
+    expect(unrelatedTask.status).toBe('open');
+    expect(mocks.databaseTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('reconciles active tasks for an already archived application', async () => {
+    const application = record({ id: 'already-archived', status: 'archived' });
+    const activeTask = record({
+      applicationId: 'already-archived',
+      id: 'still-active',
+      status: 'open',
+    });
+    mocks.collections.set('Application', collection([application]));
+    mocks.collections.set('Task', collection([activeTask]));
+
+    await expect(archiveApplicationForCleanup(application)).resolves.toEqual({
+      canceled: 1,
+      status: 'archived',
+    });
+    expect(mocks.databaseUpdate).not.toHaveBeenCalled();
+    expect(activeTask.status).toBe('canceled');
+  });
+
+  it('cancels every active task even when more than one page is linked', async () => {
+    const application = record({ id: 'many-tasks', status: 'approved' });
+    const tasks = Array.from({ length: 201 }, (_, index) =>
+      record({
+        applicationId: 'many-tasks',
+        id: `task-${index}`,
+        status: 'open',
+      }),
+    );
+    mocks.collections.set('Application', collection([application]));
+    mocks.collections.set('Task', collection(tasks));
+
+    await expect(archiveApplicationForCleanup(application)).resolves.toEqual({
+      canceled: 201,
+      status: 'archived',
+    });
+    expect(tasks.every((task) => task.status === 'canceled')).toBe(true);
+  });
+
+  it('rolls back the archive when a linked task cannot be canceled', async () => {
+    const application = record({ id: 'rollback-archive', status: 'approved' });
+    const task = record({
+      applicationId: 'rollback-archive',
+      id: 'save-fails',
+      save: vi.fn(async () => {
+        throw new Error('task save failed');
+      }),
+      status: 'open',
+    });
+    const applications = collection([application]);
+    mocks.collections.set('Application', applications);
+    mocks.collections.set('Task', collection([task]));
+
+    await expect(archiveApplicationForCleanup(application)).rejects.toThrow(
+      'task save failed',
+    );
+    expect(mocks.databaseTransaction).toHaveBeenCalledOnce();
+    expect(applications.records[0]).toMatchObject({ status: 'approved' });
   });
 });
 

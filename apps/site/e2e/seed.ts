@@ -92,9 +92,57 @@ for (let index = 0; index < 16; index += 1) {
   });
   await task.save();
 }
+const applications = await getCollection('Application');
+const orphanApplication = await applications.create({
+  applyMethod: 'manual',
+  applicationInstructions:
+    'Fictional orphan cleanup fixture. It intentionally has no opportunity.',
+  notes: 'Retain this human note after archiving.',
+  status: 'draft',
+});
+await orphanApplication.save();
+const approvedApplication = await applications.create({
+  approvedAt: new Date('2026-09-30T12:00:00.000Z'),
+  approvedByUserId: 'synthetic-owner',
+  applicationInstructions:
+    'Fictional approved cleanup fixture. Never submit externally.',
+  opportunityId: fixture.opportunityId,
+  packetAssetId: 'fictional-packet-to-retain',
+  resumeAssetId: 'fictional-resume-to-retain',
+  status: 'approved',
+});
+await approvedApplication.save();
+const draftingApplication = await applications.create({
+  applicationInstructions:
+    'Fictional in-progress cleanup fixture. Never submit externally.',
+  opportunityId: fixture.opportunityId,
+  status: 'application_drafting',
+});
+await draftingApplication.save();
+for (const [applicationId, title] of [
+  [orphanApplication.id, 'Fictional orphan cleanup task'],
+  [approvedApplication.id, 'Fictional approved cleanup task'],
+  [draftingApplication.id, 'Fictional drafting cleanup task'],
+] as const) {
+  const task = await tasks.create({
+    applicationId,
+    description: 'Fictional local cleanup task. No external action exists.',
+    externalTaskId: `e2e-cleanup-${applicationId}`,
+    kanbanColumn: 'inbox',
+    status: 'open',
+    taskType: 'review_application',
+    title,
+  });
+  await task.save();
+}
 writeFileSync(
   process.env.IOLAUS_E2E_FIXTURE as string,
-  JSON.stringify(fixture),
+  JSON.stringify({
+    ...fixture,
+    approvedApplicationId: approvedApplication.id,
+    draftingApplicationId: draftingApplication.id,
+    orphanApplicationId: orphanApplication.id,
+  }),
   {
     mode: 0o600,
   },

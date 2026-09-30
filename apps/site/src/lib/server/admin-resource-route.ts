@@ -13,6 +13,7 @@ import {
 import type { AdminResource } from '$lib/admin/resources';
 import experienceData from '$lib/data/experience.json';
 import skillsData from '$lib/data/skills.json';
+import { applicationStatuses } from '$lib/objects/lifecycle';
 import {
   EMPTY_OPPORTUNITY_FILTER_OPTIONS,
   filterStateFromSearchParams,
@@ -43,6 +44,7 @@ import {
 } from './admin-opportunity-query';
 import {
   acceptOpportunityForApplication,
+  archiveApplicationForCleanup,
   ensureCompanyResearch,
   processRecommendationTask,
   syncRecommendedOpportunityDecisionTasks,
@@ -132,6 +134,12 @@ const createDraftApplicationOperations = [
   { action: 'create', collection: 'applications' },
   { action: 'update', collection: 'applications' },
   { action: 'read', collection: 'resumeassets' },
+  ...taskSyncOperations,
+] satisfies AdminOperation[];
+
+const archiveApplicationOperations = [
+  { action: 'read', collection: 'applications' },
+  { action: 'update', collection: 'applications' },
   ...taskSyncOperations,
 ] satisfies AdminOperation[];
 
@@ -960,10 +968,18 @@ export async function loadAdminResourcePageData(
   }
 
   const pageSize = DEFAULT_ADMIN_RECORD_PAGE_SIZE;
+  const applicationStatus = url.searchParams.get('status')?.trim();
   const recordWhere =
     resource.slug === 'tasks'
       ? taskWhereForFilters(taskOwnerFilter, taskStatusFilter)
-      : undefined;
+      : resource.slug === 'applications'
+        ? {
+            status:
+              applicationStatus === 'archived'
+                ? 'archived'
+                : applicationStatuses.filter((status) => status !== 'archived'),
+          }
+        : undefined;
   // The total and combo options are independent queries; load them
   // concurrently instead of serializing the round-trips.
   const [totalRecords, comboOptions] = await Promise.all([
@@ -1323,6 +1339,37 @@ export async function updateAdminResourceAction(
 ) {
   const resource = requireAdminResource(resourceSlug);
   return await updateAdminRecord(resource, await request.formData(), user);
+}
+
+/** Archive through the application lifecycle rather than generic CRUD. */
+export async function archiveApplicationAction(
+  applicationId: string,
+  locals: OwnerPrincipalLocals,
+) {
+  const id = stringValue(applicationId);
+  if (!id) error(404, 'Application not found');
+
+  return await runOwnerMutation(
+    locals,
+    'archiveApplication',
+    archiveApplicationOperations,
+    async () => {
+      const applications = await getCollection('Application');
+      const application = await applications.get(id);
+      if (!application) error(404, 'Application not found');
+
+      const result = await archiveApplicationForCleanup(
+        application as unknown as Record<string, unknown>,
+      );
+      return {
+        ...result,
+        message:
+          result.canceled === 0
+            ? 'Application archived. No active tasks required cancellation.'
+            : `Application archived and ${result.canceled} active task${result.canceled === 1 ? '' : 's'} canceled.`,
+      };
+    },
+  );
 }
 
 export async function deleteAdminResourceAction(
