@@ -234,7 +234,7 @@ function evidenceEntries(): EvidenceEntry[] {
 
 function evidenceGapCount(): number {
   return evidenceEntries().filter(
-    (entry) => stringFromValue(entry.status) !== 'supported',
+    (entry) => stringFromValue(entry.status) === 'gap',
   ).length;
 }
 
@@ -299,7 +299,14 @@ function displayDate(value: unknown): string {
 }
 
 function evidenceStatusLabel(status: unknown): string {
-  return stringFromValue(status) === 'supported' ? 'Supported' : 'Gap';
+  switch (stringFromValue(status)) {
+    case 'supported':
+      return 'Supported';
+    case 'gap':
+      return 'Gap';
+    default:
+      return 'Uncertain';
+  }
 }
 
 function evidenceStatusClass(status: unknown): string {
