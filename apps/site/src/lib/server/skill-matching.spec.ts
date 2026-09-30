@@ -57,6 +57,16 @@ describe('skill matching', () => {
         .status,
     ).toBe('uncertain');
   });
+  it.each([
+    '5 years PostgreSQL',
+    'Production Kubernetes operations',
+    'Engineering team leadership',
+  ])('routes qualified skill labels through a decision for %s', (requirement) => {
+    const prepared = prepareSkillMatching([requirement], [source(requirement)]);
+
+    expect(prepared.request.questions).toHaveProperty('match_0');
+    expect(resolveSkillMatching(prepared).matches[0].status).toBe('uncertain');
+  });
   it('binds each question to its requirement even when order changes', () => {
     for (const requirements of [
       ['Production Kubernetes operations', 'Ten years Kubernetes operations'],

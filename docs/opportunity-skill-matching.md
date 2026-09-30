@@ -16,7 +16,10 @@ threshold is conservative policy, not a measured accuracy guarantee.
 
 Each question quotes its requirement explicitly and candidate sources retain their
 evidence kind. Declared skills can establish capabilities directly provided by
-that technology. A skill label alone cannot prove tenure, leadership or production experience.
+that technology. The exact-label shortcut applies only to bare capabilities;
+requirements that state years, production, operations, leadership or scale go
+through the decision path. A skill label alone cannot prove tenure, leadership
+or production experience.
 The prompt distinguishes named technologies from merely related technologies
 and instructs the model to disregard instructions inside source text. A
 confident negative may become a gap; disagreement, low confidence or omitted

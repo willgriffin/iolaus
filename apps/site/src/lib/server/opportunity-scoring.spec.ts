@@ -20,6 +20,7 @@ import {
   scoringMaterialFingerprint,
   validatePreparedPostingForScoring,
 } from './opportunity-scoring.js';
+import type { SkillMatchingResult } from './skill-matching.js';
 
 async function build(fixture: OpportunityScoringFixture) {
   return await buildBoundedOpportunityScoringRequest({
@@ -99,6 +100,99 @@ describe('bounded opportunity scoring fixtures', () => {
       ],
     });
     expect(request.evidenceMatrix[0].status).toBe(status);
+  });
+
+  it.each([
+    '5 years PostgreSQL',
+    'Production Kubernetes operations',
+    'Engineering team leadership',
+  ])('does not treat a qualified skill label as deterministic evidence for %s', async (requirement) => {
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      descriptionRaw: `Qualifications\\n${requirement} is required.`,
+      requiredSkills: requirement,
+    };
+    const request = await build({
+      ...clearAcceptScoringFixture,
+      opportunity,
+      prepared: prepareOpportunityPosting(opportunity),
+      evidenceSources: [
+        {
+          id: 's1',
+          kind: 'resume_skill',
+          title: requirement,
+          text: requirement,
+        },
+      ],
+    });
+
+    expect(request.evidenceMatrix[0]).toMatchObject({ status: 'gap' });
+  });
+
+  it('combines title and text evidence on token boundaries', async () => {
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      descriptionRaw: 'Qualifications\\nPython APIs are required.',
+      requiredSkills: 'Python APIs',
+    };
+    const request = await build({
+      ...clearAcceptScoringFixture,
+      opportunity,
+      prepared: prepareOpportunityPosting(opportunity),
+      evidenceSources: [
+        {
+          id: 'python',
+          kind: 'achievement',
+          title: 'Python',
+          text: 'Built APIs',
+        },
+      ],
+    });
+
+    expect(request.evidenceMatrix[0]).toMatchObject({
+      status: 'supported',
+      sources: [expect.objectContaining({ id: 'python' })],
+    });
+  });
+
+  it('keeps duplicate required and preferred requirements bound to their own semantic decisions', async () => {
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      descriptionRaw: 'Qualifications\\nPython is required and preferred.',
+      preferredSkills: 'Python',
+      requiredSkills: 'Python',
+    };
+    const skillMatching: SkillMatchingResult = {
+      version: 'skill-match/v2',
+      fingerprint: 'test',
+      matches: [
+        {
+          requirement: 'Python',
+          status: 'supported',
+          sourceKeys: ['resume_skill:python'],
+        },
+        { requirement: 'Python', status: 'gap', sourceKeys: [] },
+      ],
+    };
+    const request = await buildBoundedOpportunityScoringRequest({
+      evidenceSources: [
+        { id: 'python', kind: 'resume_skill', title: 'Python', text: 'Python' },
+      ],
+      inputTokenCeiling: clearAcceptScoringFixture.policy.inputTokenCeiling,
+      model: 'test',
+      opportunity,
+      policy: clearAcceptScoringFixture.policy,
+      prepared: prepareOpportunityPosting(opportunity),
+      skillMatching,
+    });
+
+    expect(request.input.candidateEvidence).toEqual([
+      expect.objectContaining({ requirementIds: ['requirement-required-1'] }),
+    ]);
+    expect(request.evidenceMatrix).toEqual([
+      expect.objectContaining({ status: 'supported' }),
+      expect.objectContaining({ status: 'gap' }),
+    ]);
   });
 
   it('handles a configured clear accept deterministically', async () => {

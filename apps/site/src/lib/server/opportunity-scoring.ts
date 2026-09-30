@@ -15,6 +15,7 @@ import {
 } from './opportunity-posting-preparation.js';
 import {
   canonicalSkill,
+  hasExplicitSkillQualification,
   prepareSkillMatching,
   type SkillMatchingResult,
   skillSourceKey,
@@ -409,12 +410,12 @@ function selectedRequirements(
 
 function rankedCandidateSources(
   requirement: OpportunityScoringRequirement,
+  requirementIndex: number,
   sources: OpportunityScoringEvidenceSource[],
   skillMatching?: SkillMatchingResult,
 ): OpportunityScoringEvidenceSource[] {
-  const assessed = skillMatching?.matches.find(
-    (match) => match.requirement === requirement.value,
-  );
+  const match = skillMatching?.matches[requirementIndex];
+  const assessed = match?.requirement === requirement.value ? match : undefined;
   if (assessed)
     return assessed.status === 'supported'
       ? sources
@@ -423,12 +424,14 @@ function rankedCandidateSources(
           )
           .map((source) => ({ ...source, text: source.text.slice(0, 180) }))
       : [];
+  if (hasExplicitSkillQualification(requirement.value)) return [];
   return sources
     .map((source, index) => ({
       index,
       score: Math.max(
         matchScore(requirement.value, source.title),
         matchScore(requirement.value, source.text),
+        matchScore(requirement.value, `${source.title} ${source.text}`),
       ),
       source,
     }))
@@ -623,17 +626,18 @@ function finalizeInput(
       ...(input.skillMatching
         ? {
             uncertainRequiredCount: input.requirements.filter(
-              (requirement) =>
-                requirement.kind === 'required' &&
-                input.skillMatching?.matches.some(
-                  (match) =>
-                    match.requirement === requirement.value &&
-                    (match.status === 'uncertain' ||
-                      (match.status === 'supported' &&
-                        !input.candidateEvidence.some((evidence) =>
-                          evidence.requirementIds.includes(requirement.id),
-                        ))),
-                ),
+              (requirement, requirementIndex) => {
+                const match = input.skillMatching?.matches[requirementIndex];
+                return (
+                  requirement.kind === 'required' &&
+                  match?.requirement === requirement.value &&
+                  (match.status === 'uncertain' ||
+                    (match.status === 'supported' &&
+                      !input.candidateEvidence.some((evidence) =>
+                        evidence.requirementIds.includes(requirement.id),
+                      )))
+                );
+              },
             ).length,
           }
         : {}),
@@ -760,9 +764,10 @@ function initialScoringInput(options: {
     string,
     OpportunityScoringCandidateEvidence
   >();
-  for (const requirement of requirements) {
+  for (const [requirementIndex, requirement] of requirements.entries()) {
     const matches = rankedCandidateSources(
       requirement,
+      requirementIndex,
       options.evidenceSources,
       options.skillMatching,
     ).slice(0, OPPORTUNITY_SCORING_MAX_SOURCES_PER_REQUIREMENT);

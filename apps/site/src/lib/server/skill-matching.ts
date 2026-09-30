@@ -40,6 +40,24 @@ export function canonicalSkill(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ');
   return aliases[normalized] ?? normalized;
 }
+
+const explicitQualificationTerms = new Set([
+  'year',
+  'years',
+  'yrs',
+  'production',
+  'operation',
+  'operations',
+  'leadership',
+  'scale',
+]);
+
+/** Qualifications need reviewed evidence, rather than an exact skill-label shortcut. */
+export function hasExplicitSkillQualification(requirement: string): boolean {
+  return canonicalSkill(requirement)
+    .split(' ')
+    .some((term) => explicitQualificationTerms.has(term));
+}
 export function skillSourceKey(
   source: OpportunityScoringEvidenceSource,
 ): string {
@@ -50,6 +68,7 @@ export function exactSkillSources(
   requirement: string,
   sources: OpportunityScoringEvidenceSource[],
 ) {
+  if (hasExplicitSkillQualification(requirement)) return [];
   return sources.filter(
     (source) =>
       source.kind === 'resume_skill' &&
