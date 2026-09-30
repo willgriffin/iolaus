@@ -241,6 +241,19 @@ export function createAdminLiveInvalidationCapabilities(
   ];
 }
 
+/**
+ * Mark every mounted admin collection stale after a non-collection mutation.
+ *
+ * Opportunity sweep actions go through a SvelteKit form action instead of the
+ * collection's CRUD surface, so they do not receive its automatic related
+ * cache invalidation. Reuse the app-wide live subscriber here: it already
+ * knows every mounted physical table and its `invalidateAll()` path both marks
+ * the query stale and schedules the authorized list refetch.
+ */
+export function invalidateAdminResourceLists(): void {
+  getAdminLiveSubscriber()?.invalidateAll();
+}
+
 async function readJson(response: Response): Promise<unknown> {
   const payload = await response.json().catch(() => null);
   if (response.status === 401 && browser) {

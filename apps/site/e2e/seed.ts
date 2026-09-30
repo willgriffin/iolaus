@@ -7,8 +7,10 @@ import {
 
 assertSyntheticDemoFixtureEnabled();
 const fixture = await seedSyntheticDemoFixture();
+const sources = await getCollection('Source');
 // Long, synthetic descriptions exercise the triage body's real touch scrolling.
 const opportunities = await getCollection('Opportunity');
+const applications = await getCollection('Application');
 for (const id of [
   fixture.triageOpportunityId,
   fixture.triageFollowupOpportunityId,
@@ -24,6 +26,107 @@ for (const id of [
       `Fictional responsibility ${index + 1}: Build accessible software and dependable integrations. This synthetic posting is for mobile layout testing only; no employer or external action exists.`,
   ).join('\n\n');
   await opportunity.save();
+}
+// These rows drive the inactive-source sweep through the real SvelteKit action
+// and local database. Keep every label visibly fictional so the browser suite
+// cannot be mistaken for a live employment workflow.
+const activeSweepSource = await sources.create({
+  isActive: true,
+  name: 'Fictional active source — sweep E2E',
+  provider: 'manual',
+  refreshCadence: 'manual',
+  sourceRole: 'root',
+  type: 'manual',
+  url: 'https://example.invalid/iolaus-e2e-active-source',
+});
+await activeSweepSource.save();
+const activeSweepSourceId = activeSweepSource.id;
+if (!activeSweepSourceId)
+  throw new Error('Synthetic active sweep source is missing its id.');
+const sweepOpportunity = async (
+  title: string,
+  sourceId: string,
+  overrides: Record<string, unknown> = {},
+) => {
+  const record = await opportunities.create({
+    currency: 'CAD',
+    descriptionRaw:
+      'Fictional local browser test opportunity. No employer or external action exists.',
+    humanReviewStatus: 'needs_input',
+    lastSeenAt: new Date('2020-01-01T00:00:00.000Z'),
+    sourceId,
+    status: 'found',
+    title,
+    workMode: 'remote',
+    ...overrides,
+  });
+  await record.save();
+  return record;
+};
+const sweepNotSeenDaysByProject = {
+  'android-portrait': 120,
+  'android-landscape': 90,
+  'android-narrow': 60,
+  'desktop-control': 30,
+} as const;
+for (const [project, notSeenDays] of Object.entries(
+  sweepNotSeenDaysByProject,
+)) {
+  const inactiveSweepSource = await sources.create({
+    isActive: false,
+    name: `Fictional inactive source — sweep E2E ${project}`,
+    provider: 'manual',
+    refreshCadence: 'manual',
+    sourceRole: 'root',
+    type: 'manual',
+    url: `https://example.invalid/iolaus-e2e-inactive-source-${project}`,
+  });
+  await inactiveSweepSource.save();
+  const inactiveSweepSourceId = inactiveSweepSource.id;
+  if (!inactiveSweepSourceId)
+    throw new Error(`Synthetic sweep source ${project} is missing its id.`);
+  // Test projects share one local database. Descending thresholds make each
+  // project archive only its own eligible cohort, even after prior projects
+  // have completed their destructive confirmation.
+  const staleAt = new Date(Date.now() - (notSeenDays + 1) * 86_400_000);
+  await sweepOpportunity(
+    `Fictional sweep ${project} eligible`,
+    inactiveSweepSourceId,
+    { lastSeenAt: staleAt },
+  );
+  await sweepOpportunity(
+    `Fictional sweep ${project} active-source protected`,
+    activeSweepSourceId,
+    { lastSeenAt: staleAt },
+  );
+  await sweepOpportunity(
+    `Fictional sweep ${project} recently-seen protected`,
+    inactiveSweepSourceId,
+    {
+      lastSeenAt: new Date(),
+    },
+  );
+  await sweepOpportunity(
+    `Fictional sweep ${project} decided protected`,
+    inactiveSweepSourceId,
+    {
+      lastSeenAt: staleAt,
+      humanReviewStatus: 'reject',
+    },
+  );
+  const applicationProtectedOpportunity = await sweepOpportunity(
+    `Fictional sweep ${project} application-linked protected`,
+    inactiveSweepSourceId,
+    { lastSeenAt: staleAt },
+  );
+  const application = await applications.create({
+    applicationInstructions:
+      'Fictional local browser-test application. No submission is possible.',
+    applyMethod: 'manual',
+    opportunityId: applicationProtectedOpportunity.id,
+    status: 'awaiting_user',
+  });
+  await application.save();
 }
 // Independent rows per viewport keep persisted decisions from leaking between projects.
 for (const [projectIndex, project] of [
@@ -92,7 +195,6 @@ for (let index = 0; index < 16; index += 1) {
   });
   await task.save();
 }
-const applications = await getCollection('Application');
 const orphanApplication = await applications.create({
   applyMethod: 'manual',
   applicationInstructions:

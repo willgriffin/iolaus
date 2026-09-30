@@ -588,6 +588,31 @@ function enhanceSkillResumeToggle({ formData }: { formData: FormData }) {
   };
 }
 
+function enhanceInactiveOpportunitySweep() {
+  return async ({
+    result,
+    update,
+  }: {
+    result: { data?: unknown; type: string };
+    update: (options: {
+      invalidateAll?: boolean;
+      reset?: boolean;
+    }) => Promise<void>;
+  }) => {
+    await update({ invalidateAll: false, reset: false });
+    // The preview must remain read-only. Only a confirmed, successful apply
+    // invalidates the hydrated list cache so its rows and total update without
+    // a browser reload.
+    if (
+      result.type === 'success' &&
+      feedbackValue(result.data, 'applied') === true &&
+      typeof window !== 'undefined'
+    ) {
+      window.dispatchEvent(new Event(ADMIN_RESOURCE_REFRESH_EVENT));
+    }
+  };
+}
+
 function isDateColumn(key: string): boolean {
   return datetimeColumns.has(key) || key.endsWith('At');
 }
@@ -1107,7 +1132,7 @@ function taskMeta(record: AdminRecord): string {
 
 {#snippet opportunityBulkToolbar()}
   {#if isOpportunityResource}
-    <form use:enhance
+    <form use:enhance={enhanceInactiveOpportunitySweep}
       method="POST"
       action="?/previewInactiveOpportunitySweep"
       class="sweep-form"

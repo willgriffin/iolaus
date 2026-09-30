@@ -21,6 +21,7 @@ import {
   createAdminResourceFetchers,
   getAdminSmrtWebClient,
   getCachedAdminResourceListPayload,
+  invalidateAdminResourceLists,
   isHydratedAdminResourceSlug,
   rememberAdminResourceListPayload,
 } from './admin-resource-hydration';
@@ -174,7 +175,12 @@ $effect(() => {
 });
 
 onMount(() => {
-  const refresh = () => retryListLoad();
+  // Form actions outside the collection CRUD surface (for example the
+  // inactive-source sweep) emit this event after their mutation succeeds.
+  // `preload()` alone only observes the existing cache entry; invalidating
+  // through the shared live subscriber marks that entry stale and refetches
+  // the server-filtered page and its authoritative total.
+  const refresh = () => invalidateAdminResourceLists();
   window.addEventListener(ADMIN_RESOURCE_REFRESH_EVENT, refresh);
   return () =>
     window.removeEventListener(ADMIN_RESOURCE_REFRESH_EVENT, refresh);

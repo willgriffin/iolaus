@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
   return {
     bumpChangeFeed: vi.fn(async () => 0),
     closeReviewTasks: vi.fn(async () => 0),
+    dbConfig: vi.fn(() => ({ type: 'postgres' })),
     query,
     recordAgentAudit: vi.fn(),
     requestDatabase: vi.fn(),
@@ -33,7 +34,7 @@ vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: mocks.requestDatabase,
 }));
 
-vi.mock('./db.js', () => ({ getDbConfig: vi.fn(() => ({})) }));
+vi.mock('./db.js', () => ({ getDbConfig: mocks.dbConfig }));
 
 vi.mock('./change-feed.js', () => ({
   bumpOpportunityChangeFeed: mocks.bumpChangeFeed,
@@ -87,6 +88,8 @@ describe('opportunity-sweep', () => {
     mocks.transaction.mockClear();
     mocks.requestDatabase.mockReset();
     mocks.requestDatabase.mockReturnValue(undefined);
+    mocks.dbConfig.mockReset();
+    mocks.dbConfig.mockReturnValue({ type: 'postgres' });
     mocks.recordAgentAudit.mockReset();
     mocks.recordAgentAudit.mockResolvedValue({ id: 'agent-run-1' });
     mocks.closeReviewTasks.mockReset();
@@ -477,6 +480,34 @@ describe('opportunity-sweep', () => {
     expect(statements[updateIndex]).toContain(
       "d.opportunity_id = CAST(o.id AS TEXT) AND d.decision_by = 'owner'",
     );
+  });
+
+  it('keeps SQLite apply protections correlated to the updated opportunity', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    respondWith(2);
+    const { sweepInactiveSourceOpportunities } = await sweep();
+
+    await sweepInactiveSourceOpportunities({ dryRun: false, now: NOW });
+
+    const statements = mocks.query.mock.calls.map((call: unknown[]) =>
+      String(call[0]),
+    );
+    const lock = statements.find((sql) =>
+      sql.includes('SELECT o.id\n      FROM opportunities o'),
+    );
+    const update = statements.find((sql) =>
+      sql.trimStart().startsWith('UPDATE opportunities\n'),
+    );
+    expect(lock).not.toContain('FOR UPDATE');
+    expect(update).toContain('opportunities.source_id');
+    expect(update).toContain(
+      'a.opportunity_id = CAST(opportunities.id AS TEXT)',
+    );
+    expect(update).toContain(
+      'd.opportunity_id = CAST(opportunities.id AS TEXT)',
+    );
+    expect(update).not.toContain('ANY(');
+    expect(update).not.toContain('::text');
   });
 
   it('skips and reports a row that gained a protecting artifact after the preview', async () => {

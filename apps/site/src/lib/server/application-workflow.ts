@@ -950,8 +950,26 @@ export async function closeReviewTasksForArchivedOpportunities(options: {
   ];
   if (opportunityIds.length === 0) return 0;
   const reason = stringValue(options.archiveReason) || 'archived';
+  const sqlite = getDbConfig().type === 'sqlite';
   const result = (await options.database.query(
-    `UPDATE tasks
+    sqlite
+      ? `UPDATE tasks
+        SET status = 'canceled',
+            kanban_column = ?,
+            completed_at = ?,
+            blocker_owner_role = '',
+            blocker_reason = '',
+            description = trim(
+              coalesce(description, '') ||
+              '\n\nClosed automatically: the opportunity was archived (' ||
+              ? || ').'
+            ),
+            updated_at = CURRENT_TIMESTAMP
+      WHERE task_type = 'review_recommendation'
+        AND status IN (${activeTaskStatuses.map(() => '?').join(', ')})
+        AND opportunity_id IN (${opportunityIds.map(() => '?').join(', ')})
+      RETURNING id`
+      : `UPDATE tasks
         SET status = 'canceled',
             kanban_column = $1,
             completed_at = $2,
@@ -967,11 +985,21 @@ export async function closeReviewTasksForArchivedOpportunities(options: {
         AND status = ANY($4::text[])
         AND opportunity_id = ANY($5::text[])
       RETURNING id`,
-    AUTO_ARCHIVE_TASK_COLUMN,
-    options.now ?? new Date(),
-    reason,
-    [...activeTaskStatuses],
-    opportunityIds,
+    ...(sqlite
+      ? [
+          AUTO_ARCHIVE_TASK_COLUMN,
+          options.now ?? new Date(),
+          reason,
+          ...activeTaskStatuses,
+          ...opportunityIds,
+        ]
+      : [
+          AUTO_ARCHIVE_TASK_COLUMN,
+          options.now ?? new Date(),
+          reason,
+          [...activeTaskStatuses],
+          opportunityIds,
+        ]),
   )) as { rows?: unknown[] } | unknown[] | undefined;
   const rows = Array.isArray(result) ? result : (result?.rows ?? []);
   // Issue #459: this is a raw statement, so nothing feeds SMRT's change feed
