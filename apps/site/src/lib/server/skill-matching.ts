@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
 import type { OpportunityScoringEvidenceSource } from './opportunity-scoring.js';
 
-export const SKILL_MATCH_VERSION = 'skill-match/v2';
+export const SKILL_MATCH_VERSION = 'skill-match/v3';
 export const SKILL_MATCH_THRESHOLD = 0.85;
 export const SKILL_MATCH_MAX_SOURCES = 80;
 export interface SkillMatch {

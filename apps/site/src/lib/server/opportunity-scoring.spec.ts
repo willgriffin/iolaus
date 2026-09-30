@@ -187,7 +187,7 @@ describe('bounded opportunity scoring fixtures', () => {
       requiredSkills: 'Python',
     };
     const skillMatching: SkillMatchingResult = {
-      version: 'skill-match/v2',
+      version: 'skill-match/v3',
       fingerprint: 'test',
       matches: [
         {

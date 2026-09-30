@@ -51,7 +51,7 @@ fail the scoring step; they never produce a fabricated negative match.
 
 The app uses SDK/AI's public `decide()` contract directly inside its existing
 server workflow. SMRT database context and the governed request reservation
-remain unchanged. SDK/AI and its workspace override are pinned to 0.94.1;
+remain unchanged. SDK/AI and its workspace override are pinned to 0.96.1;
 no SMRT upgrade or schema migration is required for this integration.
 
 ## Evaluate and roll out
@@ -98,3 +98,11 @@ must not become an invented positive. It prints synthetic judgments and usage,
 never the credential or raw provider errors. These canaries catch regressions;
 they do not replace the labeled real-posting evaluation above. Matcher v2 binds
 each question to its quoted requirement and invalidates earlier fingerprints.
+
+Matcher v3 adopts the SDK compatibility policy for hundredth-rounded choice
+distributions with at most one percentage point of missing or excess mass.
+The adapter preserves selected choice, confidence, provider identity and usage;
+invalid keys, out-of-range values and larger mass errors still fail closed.
+The version change creates new governed request identities for a bounded
+operator retry after an earlier v2 rounding failure. It does not delete or
+reset historical request accounting, and does not automatically retry work.

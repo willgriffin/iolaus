@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DecisionResult } from '@happyvertical/ai';
 import { describe, expect, it } from 'vitest';
 import { clearAcceptScoringFixture } from './fixtures/opportunity-scoring.js';
@@ -9,6 +10,7 @@ import {
   canonicalSkill,
   prepareSkillMatching,
   resolveSkillMatching,
+  SKILL_MATCH_THRESHOLD,
 } from './skill-matching.js';
 
 const source = (text: string, kind = 'resume_skill', id = 's1') => ({
@@ -35,6 +37,28 @@ const answer = (
   },
 });
 describe('skill matching', () => {
+  it('gives the rounded-distribution adapter a new identity without changing evidence', () => {
+    const requirements = ['Python'];
+    const sources = [source('Python development experience')];
+    const prepared = prepareSkillMatching(requirements, sources);
+    const legacyFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          version: 'skill-match/v2',
+          threshold: SKILL_MATCH_THRESHOLD,
+          requirements,
+          sources,
+          request: prepared.request,
+        }),
+      )
+      .digest('hex');
+    expect(prepared.fingerprint).not.toBe(legacyFingerprint);
+    expect(resolveSkillMatching(prepared).version).toBe('skill-match/v3');
+    expect(prepareSkillMatching(requirements, sources).fingerprint).toBe(
+      prepared.fingerprint,
+    );
+  });
+
   it.each([
     ['Postgres', 'PostgreSQL'],
     ['k8s', 'Kubernetes'],

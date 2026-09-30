@@ -1,7 +1,7 @@
 {
   "schema": "iolaus-deployed-parity-inventory:v1",
   "dependencies": {
-    "lockfileSha256": "81e3a26f2fa20157e2dd42ea20776024df9300d0c2ff17b78fdeea6880a3b170",
+    "lockfileSha256": "d5ecfaa41db4373b5aa1ef978aa0aabbd8ae35ffeb88472133cb2a1e3727e296",
     "smrt": {
       "@happyvertical/smrt-agents": "0.51.31",
       "@happyvertical/smrt-app-runtime": "0.51.31",
@@ -1915,5 +1915,5 @@
       }
     ]
   },
-  "inventorySha256": "ad98d55e2f85acac06a054b8266e30f8b6a62808bdd6377c692207922360d2c8"
+  "inventorySha256": "56a6cfd5c686168742b8d13f027f0bd041ebd8c6b792d37a3fad68921b1f60df"
 }
