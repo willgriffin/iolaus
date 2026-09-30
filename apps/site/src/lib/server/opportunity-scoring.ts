@@ -15,6 +15,7 @@ import {
 } from './opportunity-posting-preparation.js';
 import {
   canonicalSkill,
+  prepareSkillMatching,
   type SkillMatchingResult,
   skillSourceKey,
 } from './skill-matching.js';
@@ -876,7 +877,19 @@ export function scoringMaterialFingerprint(options: {
   policy: OpportunityScoringConfig;
   prepared: PreparedPosting;
 }): string {
-  return initialScoringInput(options).fingerprint;
+  const input = initialScoringInput(options);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: 'opportunity-scoring-material/v2',
+        scoring: input.fingerprint,
+        candidateMatching: prepareSkillMatching(
+          input.requirements.map((requirement) => requirement.value),
+          options.evidenceSources,
+        ).fingerprint,
+      }),
+    )
+    .digest('hex');
 }
 
 export function buildOpportunityScoringMessages(

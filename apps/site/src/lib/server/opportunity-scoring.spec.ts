@@ -33,6 +33,33 @@ async function build(fixture: OpportunityScoringFixture) {
 }
 
 describe('bounded opportunity scoring fixtures', () => {
+  it('invalidates material freshness when semantic-only candidate evidence changes', () => {
+    const opportunity = {
+      ...clearAcceptScoringFixture.opportunity,
+      requiredSkills: 'PostgreSQL, server-side JavaScript',
+      descriptionRaw:
+        'Qualifications\nPostgreSQL and server-side JavaScript are required.',
+    };
+    const fingerprint = (skill: string) =>
+      scoringMaterialFingerprint({
+        evidenceSources: [
+          {
+            id: 's1',
+            kind: 'resume_skill',
+            title: 'PostgreSQL',
+            text: 'PostgreSQL',
+          },
+          { id: 's2', kind: 'resume_skill', title: skill, text: skill },
+        ],
+        inputTokenCeiling: clearAcceptScoringFixture.policy.inputTokenCeiling,
+        opportunity,
+        policy: clearAcceptScoringFixture.policy,
+        prepared: prepareOpportunityPosting(opportunity),
+      });
+    expect(fingerprint('Node.js')).not.toBe(fingerprint('Rust'));
+    expect(fingerprint('Node.js')).toBe(fingerprint('Node.js'));
+  });
+
   it('keeps material freshness independent from model request trimming', async () => {
     const fixture = maximumScoringInputFixture;
     const material = scoringMaterialFingerprint({

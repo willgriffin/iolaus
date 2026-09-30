@@ -66,7 +66,9 @@ no SMRT upgrade or schema migration is required for this integration.
    `opportunity-skill-match` request records for provenance and provider answers.
 4. Re-score existing machine-owned opportunities after enabling. Stored scores
    are not rewritten merely by deployment; fresh scoring fingerprints include
-   matcher version, candidate input and semantic results. Human-owned scores
+   matcher version, candidate input and semantic results. Material freshness also
+   includes all semantic candidate inputs, so changing a skill used only by
+   semantic matching invalidates cached scores and in-flight writes. Human-owned scores
    and review decisions remain authoritative. Then refresh triage.
 5. Broaden only after reviewing the labeled results. To disable, unset the
    enable flag and re-score the affected machine-owned sample using the
