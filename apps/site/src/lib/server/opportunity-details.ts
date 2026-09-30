@@ -3,8 +3,7 @@ import { resolveDatabase } from '@happyvertical/smrt-core';
 import type { User } from '@happyvertical/smrt-users';
 import {
   type AiProfileClient,
-  resolveOpportunityIntelligenceAiProfileClient,
-  resolveOpportunityIntelligenceProfile,
+  resolveOpportunityIntelligenceExtractionAiProfileClient,
 } from './ai-config.js';
 import { recordAgentAudit } from './application-workflow.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
@@ -422,7 +421,9 @@ async function opportunityLlmSettings(
       feature: 'admin-opportunity-llm-extraction',
     },
   };
-  return await resolveOpportunityIntelligenceAiProfileClient(clientOptions);
+  return await resolveOpportunityIntelligenceExtractionAiProfileClient(
+    clientOptions,
+  );
 }
 
 function unknownRecord(value: unknown): Record<string, unknown> {
@@ -2496,10 +2497,9 @@ async function requestOpportunityLlmExtraction(
     const invoke = async (requestId = '') => {
       const chatOptions: ChatOptions = {
         maxTokens: 2_048,
-        reasoning: { maxTokens: 1_024 },
+        reasoning: { effort: 'low', maxTokens: 1_024 },
         responseFormat: { type: 'json_object' },
         signal: options.signal,
-        temperature: 0,
         timeout: settings.timeout,
         ...(requestId ? { user: requestId } : {}),
       };
@@ -2605,22 +2605,13 @@ function opportunityLlmAuditInput(options: {
   request: OpportunityLlmExtractionOptions;
   settings?: OpportunityLlmSettings | null;
 }): Record<string, unknown> {
-  let selectedProfile: ReturnType<
-    typeof resolveOpportunityIntelligenceProfile
-  > | null = null;
-  try {
-    selectedProfile = resolveOpportunityIntelligenceProfile();
-  } catch {
-    // Audit prerequisite failures without weakening the fail-closed resolver.
-  }
   return compactRecord({
     contentFingerprint: options.request.expectedSourceContentFingerprint,
     contentVersion: options.request.sourceContentVersion,
-    model: options.settings?.model ?? selectedProfile?.model,
+    model: options.settings?.model ?? 'openai/gpt-6-luna',
     opportunityId: options.opportunityId,
     postingUrl: stringValue(options.opportunity?.postingUrl),
-    profile:
-      options.settings?.profile ?? selectedProfile?.profile ?? 'unconfigured',
+    profile: options.settings?.profile ?? 'opportunity-intelligence-extraction',
     provider: options.settings?.provider ?? 'bifrost',
     sourceCrawlId: options.request.sourceCrawlId,
     sourceCrawlItemId: options.request.sourceCrawlItemId,

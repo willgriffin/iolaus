@@ -48,6 +48,34 @@ export interface OpportunityIntelligenceBudgetConfig {
   run: { calls: number; inputTokens: number; spendMicros: number };
 }
 
+/** USD microdollars per million tokens, pinned to the approved GPT-6 profiles. */
+export const OPPORTUNITY_INTELLIGENCE_MODEL_PRICING = {
+  'openai/gpt-6.1-sol': {
+    inputMicrosPerMillion: 2_000_000,
+    outputMicrosPerMillion: 10_000_000,
+  },
+  'openai/gpt-6-luna': {
+    inputMicrosPerMillion: 100_000,
+    outputMicrosPerMillion: 500_000,
+  },
+} as const;
+
+export function pricingForOpportunityIntelligenceModel(
+  model: string,
+): OpportunityIntelligenceBudgetConfig['pricing'] {
+  const pricing =
+    OPPORTUNITY_INTELLIGENCE_MODEL_PRICING[
+      model as keyof typeof OPPORTUNITY_INTELLIGENCE_MODEL_PRICING
+    ];
+  return pricing
+    ? { configured: true, ...pricing }
+    : {
+        configured: false,
+        inputMicrosPerMillion: 0,
+        outputMicrosPerMillion: 0,
+      };
+}
+
 export interface OpportunityScoringConfig {
   clearAcceptMinRequired: number;
   clearRejectMinGaps: number;

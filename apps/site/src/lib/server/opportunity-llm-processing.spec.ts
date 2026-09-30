@@ -88,7 +88,7 @@ describe('processOpportunityWithLlm', () => {
     const { processOpportunityWithLlm } = await import('./opportunity-details');
     const result = await processOpportunityWithLlm('opp-1', {
       aiClient,
-      model: 'openai/gpt-5.6-luna',
+      model: 'openai/gpt-6-luna',
     });
 
     expect(collection.get).toHaveBeenCalledTimes(3);
@@ -122,9 +122,8 @@ describe('processOpportunityWithLlm', () => {
     expect(messages[1]?.content).toContain('Build AI workflow systems.');
     expect(chatOptions).toMatchObject({
       maxTokens: 2_048,
-      model: 'openai/gpt-5.6-luna',
-      reasoning: { maxTokens: 1_024 },
-      temperature: 0,
+      model: 'openai/gpt-6-luna',
+      reasoning: { effort: 'low', maxTokens: 1_024 },
     });
   });
 
@@ -157,7 +156,7 @@ describe('processOpportunityWithLlm', () => {
     const { processOpportunityWithLlm } = await import('./opportunity-details');
     const result = await processOpportunityWithLlm('opp-1', {
       aiClient,
-      profile: 'opportunity-intelligence-zai',
+      profile: 'opportunity-intelligence-extraction',
     });
 
     expect(result).toMatchObject({
@@ -167,14 +166,13 @@ describe('processOpportunityWithLlm', () => {
     const chatOptions = chatMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(chatOptions).toMatchObject({
       maxTokens: 2_048,
-      model: 'openai/gpt-5.6-luna',
-      temperature: 0,
+      model: 'openai/gpt-6-luna',
     });
     expect(recordAgentAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         input: expect.objectContaining({
-          model: 'openai/gpt-5.6-luna',
-          profile: 'opportunity-intelligence-fallback',
+          model: 'openai/gpt-6-luna',
+          profile: 'opportunity-intelligence-extraction',
           provider: 'bifrost',
         }),
       }),
@@ -223,7 +221,7 @@ describe('processOpportunityWithLlm', () => {
     const chatOptions = chatMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(chatOptions).toMatchObject({
       responseFormat: { type: 'json_object' },
-      temperature: 0,
+      reasoning: { effort: 'low', maxTokens: 1_024 },
     });
   });
 
@@ -543,7 +541,7 @@ describe('processOpportunityWithLlm', () => {
         input: expect.objectContaining({
           opportunityId: 'opp-1',
           postingUrl: 'https://example.com/jobs/staff-engineer',
-          profile: 'opportunity-intelligence-fallback',
+          profile: 'opportunity-intelligence-extraction',
           provider: 'bifrost',
         }),
         runType: 'opportunity_llm_extract',
@@ -587,7 +585,7 @@ describe('processOpportunityWithLlm', () => {
           'Opportunity needs captured posting text before LLM extraction can run.',
         input: expect.objectContaining({
           opportunityId: 'opp-1',
-          profile: 'opportunity-intelligence-fallback',
+          profile: 'opportunity-intelligence-extraction',
           provider: 'bifrost',
         }),
         runType: 'opportunity_llm_extract',

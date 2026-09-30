@@ -5,6 +5,7 @@ import { bumpOpportunityTableChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
   type OpportunityIntelligenceBudgetConfig,
+  pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
 } from './opportunity-intelligence-config.js';
@@ -792,6 +793,12 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     );
   }
   const config = options.config ?? resolveOpportunityIntelligenceBudgetConfig();
+  const modelPricing = pricingForOpportunityIntelligenceModel(
+    options.identity.model,
+  );
+  // GPT-6 production traffic always uses the pinned per-model rates. Retain
+  // injectable legacy pricing only for isolated compatibility tests.
+  const pricing = modelPricing.configured ? modelPricing : config.pricing;
   if (!config.enabled) {
     await safelyOpenCircuit(store, 'environment_kill_switch');
     throw new OpportunityIntelligenceGovernanceError(
@@ -799,7 +806,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
       'Opportunity intelligence is disabled.',
     );
   }
-  if (!config.pricing.configured) {
+  if (!pricing.configured) {
     await safelyOpenCircuit(store, 'pricing_missing');
     throw new OpportunityIntelligenceGovernanceError(
       'pricing_missing',
@@ -829,7 +836,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     reservedSpendMicros: reservedRequestSpendMicros({
       inputTokens: options.inputTokenCeiling,
       maxOutputTokens: options.maxOutputTokens,
-      pricing: config.pricing,
+      pricing,
     }),
   };
   if (reservation.reservedSpendMicros <= 0) {
@@ -870,7 +877,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
         ? invocationMetadata.get(error)
         : undefined;
     const actualSpendMicros = metadata?.usage
-      ? requestCostMicros(metadata.usage, config.pricing)
+      ? requestCostMicros(metadata.usage, pricing)
       : reservation.reservedSpendMicros;
     try {
       await store.complete(reservation, {
@@ -912,7 +919,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     );
   }
 
-  const actualSpendMicros = requestCostMicros(response.usage, config.pricing);
+  const actualSpendMicros = requestCostMicros(response.usage, pricing);
   try {
     await store.complete(reservation, {
       accountingBasis: 'actual',

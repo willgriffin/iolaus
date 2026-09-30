@@ -93,6 +93,37 @@ describe('AI config profiles', () => {
     );
   });
 
+  it('pins routine extraction to Luna and ambiguous scoring to Sol', async () => {
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
+      'dedicated-virtual-key',
+    );
+    const {
+      resolveOpportunityIntelligenceExtractionAiProfileClient,
+      resolveOpportunityIntelligenceScoringAiProfileClient,
+    } = await import('./ai-config');
+
+    await expect(
+      resolveOpportunityIntelligenceExtractionAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-extraction',
+    });
+    await expect(
+      resolveOpportunityIntelligenceScoringAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6.1-sol',
+      profile: 'opportunity-intelligence-scoring',
+    });
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6-astra',
+    );
+    await expect(
+      resolveOpportunityIntelligenceScoringAiProfileClient(),
+    ).rejects.toThrow('is not the pinned openai/gpt-6.1-sol');
+  });
+
   it('rejects injected opportunity-intelligence clients outside tests', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv(
