@@ -580,7 +580,9 @@ describe('processOpportunityIntelligence', () => {
         chat: vi.fn(async () => ({
           content: JSON.stringify({
             confidence: 0.99,
+            dataQualityWarnings: ['Candidate is an expert in PostgreSQL.'],
             fitReasons: ['Candidate is an expert in PostgreSQL.'],
+            missingInfo: ['Candidate is an expert in PostgreSQL.'],
             recommendation: 'recommend',
             risks: ['No risks.'],
             score: 99,
@@ -605,6 +607,7 @@ describe('processOpportunityIntelligence', () => {
       'uncertain',
     ]);
     expect(reason.fitReasons.join(' ')).not.toContain('PostgreSQL');
+    expect(reason.dataQualityWarnings.join(' ')).not.toContain('PostgreSQL');
     expect(reason.missingInfo.join(' ')).toContain('PostgreSQL');
   });
 

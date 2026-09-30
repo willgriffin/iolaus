@@ -1041,11 +1041,16 @@ export function preScoreOpportunity(
   if (signals.requiredCount === 0 || input.candidateEvidence.length === 0) {
     return { kind: 'missing_evidence', modelEligible: false, signals };
   }
-  const hasRequirementMatchedEvidence = input.candidateEvidence.some(
-    (evidence) => evidence.requirementIds.length > 0,
+  const hasRequiredMatchedEvidence = input.candidateEvidence.some((evidence) =>
+    evidence.requirementIds.some(
+      (requirementId) =>
+        input.requirements.find(
+          (requirement) => requirement.id === requirementId,
+        )?.kind === 'required',
+    ),
   );
   if (signals.conflictCount > 0) {
-    if (!hasRequirementMatchedEvidence) {
+    if (!hasRequiredMatchedEvidence) {
       return { kind: 'missing_evidence', modelEligible: false, signals };
     }
     return { kind: 'conflicting_evidence', modelEligible: true, signals };
@@ -1056,7 +1061,7 @@ export function preScoreOpportunity(
   ) {
     return { kind: 'clear_reject', modelEligible: false, signals };
   }
-  if (!hasRequirementMatchedEvidence) {
+  if (!hasRequiredMatchedEvidence) {
     return { kind: 'missing_evidence', modelEligible: false, signals };
   }
   if (

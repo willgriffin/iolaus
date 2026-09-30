@@ -1425,6 +1425,11 @@ async function runScore(
         score = {
           ...score,
           confidence: Math.min(score.confidence, 0.5),
+          dataQualityWarnings: [
+            ...attributable.dataQualityWarnings,
+            'One or more required skills remain uncertain; advisory output is bounded.',
+          ],
+          missingInfo: attributable.missingInfo,
           recommendation: 'maybe',
           risks: [
             'One or more required skills remain uncertain; a human must review the evidence.',

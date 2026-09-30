@@ -291,6 +291,37 @@ describe('skill matching', () => {
     );
   });
 
+  it('fails closed when only preferred evidence accompanies uncertain required skills', async () => {
+    const request = await buildBoundedOpportunityScoringRequest({
+      ...clearAcceptScoringFixture,
+      opportunity: {
+        ...clearAcceptScoringFixture.opportunity,
+        preferredSkills: 'Rust',
+      },
+      evidenceSources: [source('Rust', 'resume_skill', 'rust')],
+      skillMatching: {
+        version: 'skill-match/v3',
+        fingerprint: 'preferred-only-uncertain',
+        matches: [
+          { requirement: 'TypeScript', status: 'uncertain', sourceKeys: [] },
+          { requirement: 'PostgreSQL', status: 'uncertain', sourceKeys: [] },
+          {
+            requirement: 'Rust',
+            status: 'supported',
+            sourceKeys: ['resume_skill:rust'],
+          },
+        ],
+      },
+      model: 'test',
+      inputTokenCeiling: 4000,
+      counter: async () => 100,
+    });
+    expect(preScoreOpportunity(request.input)).toMatchObject({
+      kind: 'missing_evidence',
+      modelEligible: false,
+    });
+  });
+
   it('fails closed when context trimming removes supported semantic provenance', async () => {
     const fixture = clearAcceptScoringFixture;
     const request = await buildBoundedOpportunityScoringRequest({
