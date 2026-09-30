@@ -1,5 +1,6 @@
 <script lang="ts">
 import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+import Archive from '@lucide/svelte/icons/archive';
 import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
 import ExternalLink from '@lucide/svelte/icons/external-link';
 import MessageSquareText from '@lucide/svelte/icons/message-square-text';
@@ -237,6 +238,14 @@ $effect(() => {
           <button class="secondary-action" type="submit">
             <Package size={16} strokeWidth={2.2} />
             <span>{value(data.application, 'packetAssetId') ? 'Regenerate packet' : 'Generate packet'}</span>
+          </button>
+        </form>
+      {/if}
+      {#if applicationStatus !== 'archived'}
+        <form use:enhance method="POST" action="?/archiveApplication">
+          <button class="secondary-action" type="submit">
+            <Archive size={16} strokeWidth={2.2} />
+            <span>Archive application</span>
           </button>
         </form>
       {/if}

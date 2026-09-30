@@ -1524,6 +1524,10 @@ function taskMeta(record: AdminRecord): string {
         {onRetry}
       />
     {:else if isApplicationResource}
+      <nav class="application-list-filters" aria-label="Application status filter">
+        <a class:active={page.url.searchParams.get('status') !== 'archived'} href="/admin/applications">Active</a>
+        <a class:active={page.url.searchParams.get('status') === 'archived'} href="/admin/applications?status=archived">Archived</a>
+      </nav>
       {#if resourceActionFeedbackMessage}
         <p class={`resource-action-feedback ${resourceActionFeedbackTone}`}>
           {resourceActionFeedbackMessage}

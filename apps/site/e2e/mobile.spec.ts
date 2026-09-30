@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   test as base,
   expect,
@@ -136,6 +137,85 @@ test('authenticated admin routes render without application errors', async ({
     await expect(page.locator('.resource-action-feedback.error')).toHaveCount(
       0,
     );
+  }
+});
+
+test('archives orphan, approved, and in-progress applications through the dedicated cleanup action', async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== 'desktop-control',
+    'The shared local fixture is mutated by this lifecycle scenario once.',
+  );
+  const fixturePath = process.env.IOLAUS_E2E_FIXTURE;
+  if (!fixturePath) throw new Error('E2E cleanup fixture is missing');
+  const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
+    approvedApplicationId: string;
+    draftingApplicationId: string;
+    opportunityId: string;
+    orphanApplicationId: string;
+  };
+
+  await page.goto('/admin/applications');
+
+  const readRecord = async (resource: string, id: string) =>
+    await page.evaluate(
+      async ({ resource, id }) => {
+        const response = await fetch(`/api/${resource}/${id}`);
+        if (!response.ok) throw new Error(`Could not load ${resource}/${id}`);
+        return await response.json();
+      },
+      { resource, id },
+    );
+  const approvedBefore = await readRecord(
+    'applications',
+    fixture.approvedApplicationId,
+  );
+  const opportunityBefore = await readRecord(
+    'opportunities',
+    fixture.opportunityId,
+  );
+
+  for (const id of [
+    fixture.orphanApplicationId,
+    fixture.approvedApplicationId,
+    fixture.draftingApplicationId,
+  ]) {
+    await page.goto(`/admin/applications/${id}`);
+    await expect(
+      page.getByRole('button', { name: 'Archive application' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Archive application' }).click();
+    await expect(page).toHaveURL(/\/admin\/applications\/?\?status=archived/);
+  }
+
+  await page.goto('/admin/applications');
+  await expect(page.getByText('Untitled opportunity')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Archived', exact: true }).click();
+  await expect(page.getByText('Untitled opportunity')).toBeVisible();
+
+  const approvedAfter = await readRecord(
+    'applications',
+    fixture.approvedApplicationId,
+  );
+  expect(approvedAfter).toMatchObject({
+    approvedAt: approvedBefore.approvedAt,
+    approvedByUserId: approvedBefore.approvedByUserId,
+    packetAssetId: approvedBefore.packetAssetId,
+    resumeAssetId: approvedBefore.resumeAssetId,
+    status: 'archived',
+  });
+  expect(await readRecord('opportunities', fixture.opportunityId)).toEqual(
+    opportunityBefore,
+  );
+
+  await page.goto('/admin/tasks?status=canceled');
+  for (const title of [
+    'Fictional orphan cleanup task',
+    'Fictional approved cleanup task',
+    'Fictional drafting cleanup task',
+  ]) {
+    await expect(page.getByText(title, { exact: true })).toBeVisible();
   }
 });
 
