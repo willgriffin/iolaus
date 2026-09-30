@@ -180,6 +180,36 @@ const SWEEP_MATCH_SQL = `o.source_id <> ''
       WHERE d.opportunity_id = CAST(o.id AS TEXT) AND d.decision_by = 'owner'
     )`;
 
+function sqliteSweepMatchSql(outerAlias: 'o' | 'opportunities' = 'o'): string {
+  return `${outerAlias}.source_id <> ''
+    AND EXISTS (
+      SELECT 1 FROM sources s
+      WHERE CAST(s.id AS TEXT) = ${outerAlias}.source_id AND s.is_active IS NOT TRUE
+    )
+    AND ${outerAlias}.status IN (?, ?)
+    AND ${outerAlias}.last_seen_at IS NOT NULL
+    AND ${outerAlias}.last_seen_at < ?
+    AND COALESCE(lower(trim(${outerAlias}.human_review_status)), '') NOT IN (?, ?, ?)
+    AND NOT EXISTS (
+      SELECT 1 FROM applications a WHERE a.opportunity_id = CAST(${outerAlias}.id AS TEXT)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM decisions d
+      WHERE d.opportunity_id = CAST(${outerAlias}.id AS TEXT) AND d.decision_by = 'owner'
+    )`;
+}
+
+function sweepQueryParameters(
+  sqlite: boolean,
+  statuses: readonly string[],
+  cutoff: Date,
+  protectedReviewStatuses: readonly string[],
+): unknown[] {
+  return sqlite
+    ? [...statuses, cutoff.toISOString(), ...protectedReviewStatuses]
+    : [statuses, cutoff, protectedReviewStatuses];
+}
+
 function sweepFilter(
   notSeenDays: number,
   cutoff: Date,
@@ -232,14 +262,26 @@ export async function sweepInactiveSourceOpportunities(
   const statuses = [...SWEEPABLE_OPPORTUNITY_STATUSES];
   const protectedReviewStatuses = [...PROTECTED_REVIEW_STATUSES];
   const db = await sweepDatabase();
+  const sqlite = getDbConfig().type === 'sqlite';
+  const matchSql = sqlite ? sqliteSweepMatchSql() : SWEEP_MATCH_SQL;
+  // SQLite has no UPDATE target alias. Preserve explicit outer qualification
+  // with its table name so the application/decision subqueries remain
+  // correlated to the row being archived.
+  const sqliteUpdateMatchSql = sqlite
+    ? sqliteSweepMatchSql('opportunities')
+    : '';
+  const matchParameters = sweepQueryParameters(
+    sqlite,
+    statuses,
+    cutoff,
+    protectedReviewStatuses,
+  );
 
   const countResult = await db.query(
     `SELECT count(*) AS count
     FROM opportunities o
-    WHERE ${SWEEP_MATCH_SQL}`,
-    statuses,
-    cutoff,
-    protectedReviewStatuses,
+    WHERE ${matchSql}`,
+    ...matchParameters,
   );
   const count = countFromRows(rowsFromResult(countResult));
 
@@ -251,12 +293,10 @@ export async function sweepInactiveSourceOpportunities(
       o.source_id AS "sourceId",
       o.last_seen_at AS "lastSeenAt"
     FROM opportunities o
-    WHERE ${SWEEP_MATCH_SQL}
+    WHERE ${matchSql}
     ORDER BY o.last_seen_at ASC, o.id ASC
-    LIMIT $4`,
-    statuses,
-    cutoff,
-    protectedReviewStatuses,
+    LIMIT ${sqlite ? '?' : '$4'}`,
+    ...matchParameters,
     SWEEP_SAMPLE_SIZE,
   );
   const sample = rowsFromResult(sampleResult).map(sampleRow);
@@ -306,23 +346,19 @@ export async function sweepInactiveSourceOpportunities(
        * runs is invisible to that statement's snapshot, so a row that has just
        * become protected could still be archived `source_inactive`.
        *
-       * The apply is therefore two statements. This one takes a row lock on
+       * The apply is therefore two statements. PostgreSQL takes row locks on
        * the candidate set; `SKIP LOCKED` steps over anything another
-       * transaction is already writing rather than waiting on it, so a
-       * concurrent owner decision costs the sweep that row instead of blocking
-       * the sweep (or the owner). `FOR UPDATE OF o` locks only the opportunity
-       * rows — never the `sources`, `applications`, or `decisions` rows the
-       * predicate reads.
+       * transaction is already writing rather than waiting on it. SQLite has
+       * no row-lock syntax; its write transaction serializes the later update,
+       * whose fully-correlated predicate rechecks every protection.
        */
       const lockResult = await tx.query(
         `SELECT o.id
       FROM opportunities o
-      WHERE ${SWEEP_MATCH_SQL}
+      WHERE ${matchSql}
       ORDER BY o.id
-      FOR UPDATE OF o SKIP LOCKED`,
-        statuses,
-        cutoff,
-        protectedReviewStatuses,
+      ${sqlite ? '' : 'FOR UPDATE OF o SKIP LOCKED'}`,
+        ...matchParameters,
       );
       const lockedIds = rowsFromResult(lockResult)
         .map((row) => stringValue(row.id))
@@ -337,23 +373,44 @@ export async function sweepInactiveSourceOpportunities(
        */
       const updateResult = lockedIds.length
         ? await tx.query(
-            `UPDATE opportunities o
+            sqlite
+              ? `UPDATE opportunities
+      SET status = ?,
+        human_review_status = ?,
+        freshness = ?,
+        archive_reason = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE CAST(id AS TEXT) IN (${lockedIds.map(() => '?').join(', ')})
+        AND ${sqliteUpdateMatchSql}
+      RETURNING id`
+              : `UPDATE opportunities o
       SET status = $4,
         human_review_status = $5,
         freshness = $6,
         archive_reason = $7,
         updated_at = now()
       WHERE CAST(o.id AS TEXT) = ANY($8::text[])
-        AND ${SWEEP_MATCH_SQL}
+        AND ${matchSql}
       RETURNING o.id`,
-            statuses,
-            cutoff,
-            protectedReviewStatuses,
-            state.status,
-            state.humanReviewStatus,
-            state.freshness,
-            state.archiveReason,
-            lockedIds,
+            ...(sqlite
+              ? [
+                  state.status,
+                  state.humanReviewStatus,
+                  state.freshness,
+                  state.archiveReason,
+                  ...lockedIds,
+                  ...matchParameters,
+                ]
+              : [
+                  statuses,
+                  cutoff,
+                  protectedReviewStatuses,
+                  state.status,
+                  state.humanReviewStatus,
+                  state.freshness,
+                  state.archiveReason,
+                  lockedIds,
+                ]),
           )
         : { rows: [] };
       const archivedIds = rowsFromResult(updateResult).map((row) =>
