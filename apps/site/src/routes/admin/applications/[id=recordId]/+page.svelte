@@ -1613,7 +1613,7 @@ $effect(() => {
     overflow-wrap: anywhere;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 768px) {
     .review-header {
       flex-direction: column;
     }
