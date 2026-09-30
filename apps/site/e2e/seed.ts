@@ -40,6 +40,9 @@ const activeSweepSource = await sources.create({
   url: 'https://example.invalid/iolaus-e2e-active-source',
 });
 await activeSweepSource.save();
+const activeSweepSourceId = activeSweepSource.id;
+if (!activeSweepSourceId)
+  throw new Error('Synthetic active sweep source is missing its id.');
 const sweepOpportunity = async (
   title: string,
   sourceId: string,
@@ -79,30 +82,33 @@ for (const [project, notSeenDays] of Object.entries(
     url: `https://example.invalid/iolaus-e2e-inactive-source-${project}`,
   });
   await inactiveSweepSource.save();
+  const inactiveSweepSourceId = inactiveSweepSource.id;
+  if (!inactiveSweepSourceId)
+    throw new Error(`Synthetic sweep source ${project} is missing its id.`);
   // Test projects share one local database. Descending thresholds make each
   // project archive only its own eligible cohort, even after prior projects
   // have completed their destructive confirmation.
   const staleAt = new Date(Date.now() - (notSeenDays + 1) * 86_400_000);
   await sweepOpportunity(
     `Fictional sweep ${project} eligible`,
-    inactiveSweepSource.id,
+    inactiveSweepSourceId,
     { lastSeenAt: staleAt },
   );
   await sweepOpportunity(
     `Fictional sweep ${project} active-source protected`,
-    activeSweepSource.id,
+    activeSweepSourceId,
     { lastSeenAt: staleAt },
   );
   await sweepOpportunity(
     `Fictional sweep ${project} recently-seen protected`,
-    inactiveSweepSource.id,
+    inactiveSweepSourceId,
     {
       lastSeenAt: new Date(),
     },
   );
   await sweepOpportunity(
     `Fictional sweep ${project} decided protected`,
-    inactiveSweepSource.id,
+    inactiveSweepSourceId,
     {
       lastSeenAt: staleAt,
       humanReviewStatus: 'reject',
@@ -110,7 +116,7 @@ for (const [project, notSeenDays] of Object.entries(
   );
   const applicationProtectedOpportunity = await sweepOpportunity(
     `Fictional sweep ${project} application-linked protected`,
-    inactiveSweepSource.id,
+    inactiveSweepSourceId,
     { lastSeenAt: staleAt },
   );
   const application = await applications.create({
