@@ -74,6 +74,25 @@ function renderOpportunity(record: Record<string, unknown>) {
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('renders uncertain evidence separately from confirmed gaps', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      evidenceMatrix: [
+        { requirement: 'TypeScript', status: 'supported' },
+        { requirement: 'PostgreSQL', status: 'uncertain' },
+        { requirement: 'Kubernetes', status: 'gap' },
+      ],
+    });
+
+    expect(body).toContain('TypeScript</strong>');
+    expect(body).toContain('PostgreSQL</strong>');
+    expect(body).toContain('Kubernetes</strong>');
+    expect(body).toContain('>Supported</span>');
+    expect(body).toContain('>Uncertain</span>');
+    expect(body).toContain('>Gap</span>');
+    expect(body).toContain('1 evidence gaps');
+  });
+
   it('hosts the draft application form with its required fields', () => {
     const { body } = renderOpportunity({
       id: 'opp-1',

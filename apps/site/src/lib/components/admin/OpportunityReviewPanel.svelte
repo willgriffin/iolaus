@@ -247,7 +247,14 @@ function displayDetailValue(key: string): string {
 }
 
 function evidenceStatusLabel(status: unknown): string {
-  return stringifyValue(status) === 'supported' ? 'Supported' : 'Gap';
+  switch (stringifyValue(status)) {
+    case 'supported':
+      return 'Supported';
+    case 'gap':
+      return 'Gap';
+    default:
+      return 'Uncertain';
+  }
 }
 
 function evidenceStatusTone(status: unknown): string {

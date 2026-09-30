@@ -21,10 +21,10 @@ import {
   skillSourceKey,
 } from './skill-matching.js';
 
-export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v3';
-export const OPPORTUNITY_SCORING_PROMPT_VERSION = 'opportunity-score/v5';
+export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v4';
+export const OPPORTUNITY_SCORING_PROMPT_VERSION = 'opportunity-score/v6';
 export const OPPORTUNITY_SCORING_OUTPUT_SCHEMA_VERSION =
-  'opportunity-score-output/v1';
+  'opportunity-score-output/v2';
 export const OPPORTUNITY_SCORING_MAX_REQUIREMENTS = 8;
 export const OPPORTUNITY_SCORING_MAX_STRUCTURED_FACTS = 8;
 export const OPPORTUNITY_SCORING_MAX_EVIDENCE_COUNT = 20;
@@ -107,6 +107,7 @@ export interface OpportunityScoringInput {
   };
   requirements: OpportunityScoringRequirement[];
   signals: {
+    lostProvenanceRequiredCount?: number;
     uncertainRequiredCount?: number;
     conflictCount: number;
     gapRequiredCount: number;
@@ -120,7 +121,7 @@ export interface OpportunityScoringInput {
 
 export interface OpportunityScoringEvidenceMatch {
   requirement: string;
-  status: 'gap' | 'supported';
+  status: 'gap' | 'supported' | 'uncertain';
   sources: Array<{
     excerpt: string;
     id: string;
@@ -558,9 +559,12 @@ function factConflicts(
 }
 
 function evidenceMatrixForInput(
-  input: Pick<OpportunityScoringInput, 'candidateEvidence' | 'requirements'>,
+  input: Pick<
+    OpportunityScoringInput,
+    'candidateEvidence' | 'requirements' | 'skillMatching'
+  >,
 ): OpportunityScoringEvidenceMatch[] {
-  return input.requirements.map((requirement) => {
+  return input.requirements.map((requirement, index) => {
     const sources = input.candidateEvidence
       .filter((evidence) => evidence.requirementIds.includes(requirement.id))
       .slice(0, OPPORTUNITY_SCORING_MAX_SOURCES_PER_REQUIREMENT)
@@ -573,7 +577,14 @@ function evidenceMatrixForInput(
     return {
       requirement: requirement.value,
       sources,
-      status: sources.length > 0 ? 'supported' : 'gap',
+      status:
+        sources.length > 0
+          ? 'supported'
+          : input.skillMatching?.matches[index]?.requirement ===
+                requirement.value &&
+              input.skillMatching.matches[index]?.status !== 'gap'
+            ? 'uncertain'
+            : 'gap',
     };
   });
 }
@@ -581,7 +592,7 @@ function evidenceMatrixForInput(
 function inputSignals(
   input: Pick<
     OpportunityScoringInput,
-    'candidateEvidence' | 'conflicts' | 'requirements'
+    'candidateEvidence' | 'conflicts' | 'requirements' | 'skillMatching'
   >,
 ): OpportunityScoringInput['signals'] {
   const matrix = evidenceMatrixForInput(input);
@@ -626,6 +637,7 @@ function finalizeInput(
         candidateEvidence: input.candidateEvidence,
         conflicts,
         requirements: input.requirements,
+        skillMatching: input.skillMatching,
       }),
       ...(input.skillMatching
         ? {
@@ -635,11 +647,20 @@ function finalizeInput(
                 return (
                   requirement.kind === 'required' &&
                   match?.requirement === requirement.value &&
-                  (match.status === 'uncertain' ||
-                    (match.status === 'supported' &&
-                      !input.candidateEvidence.some((evidence) =>
-                        evidence.requirementIds.includes(requirement.id),
-                      )))
+                  match.status === 'uncertain'
+                );
+              },
+            ).length,
+            lostProvenanceRequiredCount: input.requirements.filter(
+              (requirement, requirementIndex) => {
+                const match = input.skillMatching?.matches[requirementIndex];
+                return (
+                  requirement.kind === 'required' &&
+                  match?.requirement === requirement.value &&
+                  match.status === 'supported' &&
+                  !input.candidateEvidence.some((evidence) =>
+                    evidence.requirementIds.includes(requirement.id),
+                  )
                 );
               },
             ).length,
@@ -890,7 +911,7 @@ export function scoringMaterialFingerprint(options: {
   return createHash('sha256')
     .update(
       JSON.stringify({
-        version: 'opportunity-scoring-material/v2',
+        version: 'opportunity-scoring-material/v3',
         scoring: input.fingerprint,
         candidateMatching: prepareSkillMatching(
           input.requirements.map((requirement) => requirement.value),
@@ -935,7 +956,7 @@ export function buildOpportunityScoringMessages(
           'Use score 0-100, confidence 0-1, and recommendation recommend|maybe|needs_research|reject.',
           'This request is eligible only because deterministic pre-scoring classified it as borderline or conflicting_evidence.',
           'When deterministicClassification is borderline or conflicting_evidence, recommendation must be maybe; preserve the distinction in score, confidence, reasons, risks, and suggested next action.',
-          'Cite supplied fact, requirement, and evidence ids in reasons. Treat unsupported required requirements as gaps.',
+          'Cite supplied fact, requirement, and evidence ids in reasons. Treat confirmed gaps as gaps; uncertain requirements remain unknown and must not be claimed as supported or rejected.',
           'Use maybe for bounded uncertainty such as partial required-skill support or attributable conflicting facts.',
           'Use needs_research only when critical source facts or candidate evidence are absent or unattributable, not for an ordinary bounded gap or attributable conflict.',
           'Do not make a final user decision.',
@@ -1015,16 +1036,21 @@ export function preScoreOpportunity(
   input: OpportunityScoringInput,
 ): OpportunityScoringPreScore {
   const { signals } = input;
-  if (signals.uncertainRequiredCount)
+  if (signals.lostProvenanceRequiredCount)
     return { kind: 'missing_evidence', modelEligible: false, signals };
   if (signals.requiredCount === 0 || input.candidateEvidence.length === 0) {
     return { kind: 'missing_evidence', modelEligible: false, signals };
   }
-  const hasRequirementMatchedEvidence = input.candidateEvidence.some(
-    (evidence) => evidence.requirementIds.length > 0,
+  const hasRequiredMatchedEvidence = input.candidateEvidence.some((evidence) =>
+    evidence.requirementIds.some(
+      (requirementId) =>
+        input.requirements.find(
+          (requirement) => requirement.id === requirementId,
+        )?.kind === 'required',
+    ),
   );
   if (signals.conflictCount > 0) {
-    if (!hasRequirementMatchedEvidence) {
+    if (!hasRequiredMatchedEvidence) {
       return { kind: 'missing_evidence', modelEligible: false, signals };
     }
     return { kind: 'conflicting_evidence', modelEligible: true, signals };
@@ -1035,11 +1061,12 @@ export function preScoreOpportunity(
   ) {
     return { kind: 'clear_reject', modelEligible: false, signals };
   }
-  if (!hasRequirementMatchedEvidence) {
+  if (!hasRequiredMatchedEvidence) {
     return { kind: 'missing_evidence', modelEligible: false, signals };
   }
   if (
     input.policy.clearAcceptMinRequired > 0 &&
+    !signals.uncertainRequiredCount &&
     signals.gapRequiredCount === 0 &&
     signals.supportedRequiredCount >= input.policy.clearAcceptMinRequired &&
     signals.missingPostingExcerptCount === 0
@@ -1147,6 +1174,12 @@ export function attributableOpportunityScoringReasons(
       entry.status === 'gap'
     );
   });
+  const uncertain = request.evidenceMatrix.filter((entry, index) => {
+    return (
+      request.input.requirements[index]?.kind === 'required' &&
+      entry.status === 'uncertain'
+    );
+  });
   return {
     dataQualityWarnings: request.input.conflicts.map(
       (conflict) =>
@@ -1156,14 +1189,20 @@ export function attributableOpportunityScoringReasons(
       const ids = entry.sources.map((source) => source.id).join(', ');
       return `Supported requirement "${entry.requirement}" with evidence ${ids}.`;
     }),
-    missingInfo: gaps.map((entry) => {
-      const requirement = request.input.requirements.find(
-        (candidate) => candidate.value === entry.requirement,
-      );
-      return requirement?.postingExcerpt
-        ? `No reviewed candidate evidence for "${entry.requirement}"; posting evidence ${requirement.postingExcerpt.id}.`
-        : `No reviewed candidate evidence or posting excerpt for "${entry.requirement}".`;
-    }),
+    missingInfo: [
+      ...gaps.map((entry) => {
+        const requirement = request.input.requirements.find(
+          (candidate) => candidate.value === entry.requirement,
+        );
+        return requirement?.postingExcerpt
+          ? `No reviewed candidate evidence for "${entry.requirement}"; posting evidence ${requirement.postingExcerpt.id}.`
+          : `No reviewed candidate evidence or posting excerpt for "${entry.requirement}".`;
+      }),
+      ...uncertain.map(
+        (entry) =>
+          `Candidate support for "${entry.requirement}" remains uncertain and requires review.`,
+      ),
+    ],
   };
 }
 

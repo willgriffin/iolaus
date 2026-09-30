@@ -332,7 +332,7 @@ describe('bounded opportunity scoring fixtures', () => {
     });
   });
 
-  it('keeps preferred-only evidence model-eligible when the reject gate is not met', async () => {
+  it('fails closed when only preferred evidence is attributable', async () => {
     const request = await build({
       ...preferredOnlyEvidenceScoringFixture,
       policy: {
@@ -342,8 +342,8 @@ describe('bounded opportunity scoring fixtures', () => {
     });
 
     expect(preScoreOpportunity(request.input)).toMatchObject({
-      kind: 'borderline',
-      modelEligible: true,
+      kind: 'missing_evidence',
+      modelEligible: false,
     });
   });
 
