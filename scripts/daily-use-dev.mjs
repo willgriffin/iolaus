@@ -48,7 +48,8 @@ for (const key of required) {
 if (env.SMRT_RUNTIME_PROFILE !== 'self-hosted') {
   throw new Error('Daily-use runtime must use SMRT_RUNTIME_PROFILE=self-hosted.');
 }
-const databaseName = decodeURIComponent(new URL(env.DATABASE_URL).pathname.replace(/^\/+|\/+$/gu, ''));
+const databaseUrl = new URL(env.DATABASE_URL);
+const databaseName = decodeURIComponent(databaseUrl.pathname.replace(/^\/+|\/+$/gu, ''));
 const databaseNamespace = env.SMRT_APP_ID.replaceAll('-', '_');
 if (databaseName !== databaseNamespace && !databaseName.startsWith(`${databaseNamespace}_`)) {
   throw new Error(`Daily-use PostgreSQL database must be named ${databaseNamespace} or begin with ${databaseNamespace}_.`);
@@ -61,7 +62,8 @@ env.PORT ||= '47292';
 env.SMRT_BACKGROUND_JOBS ||= 'false';
 env.TSX_TSCONFIG_PATH ||= join(root, 'apps', 'site', 'tsconfig.runtime.json');
 env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS = new URL(env.IOLAUS_PUBLIC_URL).hostname;
-const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseName, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
+const databaseTarget = `${databaseUrl.protocol}//${databaseUrl.username}@${databaseUrl.host}/${databaseName}`;
+const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseTarget, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
 
 function record() {
   if (!existsSync(recordPath)) return null;
@@ -123,6 +125,7 @@ else if (command === 'status') {
   console.log(JSON.stringify({ status: current ? 'running' : 'stopped', pid: current?.pid ?? null, configuration: current ? configuration : null, secretValuesIncluded: false }));
 }
 else if (command === 'backup') {
+  if (databaseName !== env.IOLAUS_POSTGRES_DATABASE || databaseUrl.hostname !== '127.0.0.1' || databaseUrl.port !== '54330') throw new Error('Daily backup DATABASE_URL must identify the configured local Compose PostgreSQL database.');
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const directory = resolve(env.IOLAUS_DAILY_BACKUP_DIR || '/Users/will/Work/willgriffin/local-ops/iolaus/backups', stamp);
   const partial = `${directory}.partial`;
