@@ -53,6 +53,13 @@ Keep end-to-end QA isolated from the daily database, private state directory,
 and MinIO bucket. `pnpm test:e2e` creates its own synthetic local fixture; it
 must never use the daily environment file or mutate restored job-search data.
 
+To restore a completed backup, create an isolated PostgreSQL database and
+empty isolated asset bucket first. Load `database.sql` with that target's
+`psql`, sync `assets/` into the isolated bucket using its private S3
+credentials, and compare database/object counts and hashes with
+`complete.json` and the source receipt. Do not restore directly into the
+daily-use database or bucket.
+
 `pnpm daily:start` derives Vite's only additional allowed host from
 `IOLAUS_PUBLIC_URL`; it does not allow arbitrary proxy host headers. It keeps
 the Vite backend on loopback while admitting the canonical Tailscale hostname.

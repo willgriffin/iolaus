@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
@@ -39,6 +39,8 @@ const required = [
   'IOLAUS_OIDC_SERVER_URL',
   'IOLAUS_OIDC_CLIENT_ID',
   'IOLAUS_OIDC_ADMIN_EMAILS',
+  'IOLAUS_POSTGRES_USER',
+  'IOLAUS_POSTGRES_DATABASE',
 ];
 for (const key of required) {
   if (!env[key]) throw new Error(`Private daily-use configuration requires ${key}.`);
@@ -100,15 +102,19 @@ else if (command === 'start') {
     const child = spawn(join(root, 'apps', 'site', 'node_modules', '.bin', 'vite'), ['dev', '--host', '127.0.0.1', '--port', env.PORT, '--strictPort'], { cwd: join(root, 'apps', 'site'), env, detached: true, stdio: ['ignore', descriptor, descriptor] });
     closeSync(descriptor); child.unref();
     const details = spawnSync('ps', ['-p', String(child.pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
+    if (!details) {
+      try { process.kill(child.pid, 'SIGTERM'); } catch {}
+      throw new Error('Daily-use Vite process did not provide a verifiable start time.');
+    }
     writeFileSync(recordPath, `${JSON.stringify({ pid: child.pid, start: details, configuration, instance: randomBytes(16).toString('hex') })}\n`, { mode: 0o600 });
-    await ready(child.pid);
+    try { await ready(child.pid); } catch (error) { try { process.kill(child.pid, 'SIGTERM'); } catch {} rmSync(recordPath, { force: true }); throw error; }
     console.log(JSON.stringify({ status: 'started', pid: child.pid, secretValuesIncluded: false }));
   }
 }
 else if (command === 'stop') {
   const current = record();
   if (!current) { rmSync(recordPath, { force: true }); console.log(JSON.stringify({ status: 'stopped', secretValuesIncluded: false })); }
-  else { process.kill(current.pid, 'SIGTERM'); rmSync(recordPath, { force: true }); console.log(JSON.stringify({ status: 'stopped', pid: current.pid, secretValuesIncluded: false })); }
+  else { process.kill(current.pid, 'SIGTERM'); for (let attempt = 0; attempt < 40; attempt += 1) { try { process.kill(current.pid, 0); } catch { rmSync(recordPath, { force: true }); console.log(JSON.stringify({ status: 'stopped', pid: current.pid, secretValuesIncluded: false })); process.exit(0); } await new Promise((done) => setTimeout(done, 250)); } throw new Error('Daily-use Vite process did not exit after SIGTERM; retain its record and inspect private state.'); }
 }
 else if (command === 'status') {
   const current = record();
@@ -117,21 +123,25 @@ else if (command === 'status') {
 else if (command === 'backup') {
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const directory = resolve(env.IOLAUS_DAILY_BACKUP_DIR || '/Users/will/Work/willgriffin/local-ops/iolaus/backups', stamp);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const partial = `${directory}.partial`;
+  mkdirSync(partial, { recursive: true, mode: 0o700 });
   const dump = spawnSync('docker', ['compose', '--env-file', envFile, '-f', 'docker-compose.daily.yml', 'exec', '-T', 'postgres', 'pg_dump', '-U', env.IOLAUS_POSTGRES_USER, env.IOLAUS_POSTGRES_DATABASE], { cwd: root, env, encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 });
   if (dump.status !== 0) throw new Error('PostgreSQL backup failed.');
-  writeFileSync(resolve(directory, 'database.sql'), dump.stdout, { mode: 0o600 });
+  writeFileSync(resolve(partial, 'database.sql'), dump.stdout, { mode: 0o600 });
   const storage = JSON.parse(env.RESUME_FILES_CONFIG_JSON);
   if (storage.type !== 's3' || !storage.bucket || !storage.endpoint || !storage.accessKeyId || !storage.secretAccessKey) {
     throw new Error('Daily backup requires the configured S3-compatible asset provider.');
   }
-  const assets = spawnSync('aws', ['s3', 'sync', `s3://${storage.bucket}`, resolve(directory, 'assets'), '--endpoint-url', storage.endpoint], {
+  const assets = spawnSync('aws', ['s3', 'sync', `s3://${storage.bucket}`, resolve(partial, 'assets'), '--endpoint-url', storage.endpoint], {
     cwd: root,
     env: { ...env, AWS_ACCESS_KEY_ID: storage.accessKeyId, AWS_SECRET_ACCESS_KEY: storage.secretAccessKey, AWS_DEFAULT_REGION: storage.region || 'us-east-1' },
     encoding: 'utf8',
   });
-  if (assets.status !== 0) throw new Error('S3 asset backup failed.');
-  spawnSync('chmod', ['-R', 'go-rwx', directory], { cwd: root, env, stdio: 'ignore' });
+  if (assets.status !== 0) throw new Error(`S3 asset backup failed; inspect private partial backup ${partial}.`);
+  const permissions = spawnSync('chmod', ['-R', 'go-rwx', partial], { cwd: root, env, stdio: 'ignore' });
+  if (permissions.status !== 0) throw new Error('Daily backup could not set private permissions.');
+  writeFileSync(resolve(partial, 'complete.json'), `${JSON.stringify({ schema: 1, databaseSha256: createHash('sha256').update(dump.stdout).digest('hex'), complete: true })}\n`, { mode: 0o600 });
+  renameSync(partial, directory);
   console.log(JSON.stringify({ status: 'backup-created', directory, recovery: 'Restore only into an isolated PostgreSQL target, then verify assets and database counts before cutover.', secretValuesIncluded: false }));
 }
-else throw new Error('Usage: daily-use-dev.mjs up|down|migrate|dev|doctor');
+else throw new Error('Usage: daily-use-dev.mjs up|down|migrate|dev|doctor|start|stop|status|backup');
