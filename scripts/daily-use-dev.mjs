@@ -132,6 +132,7 @@ else if (command === 'backup') {
   if (storage.type !== 's3' || !storage.bucket || !storage.endpoint || !storage.accessKeyId || !storage.secretAccessKey) {
     throw new Error('Daily backup requires the configured S3-compatible asset provider.');
   }
+  mkdirSync(resolve(partial, 'assets'), { recursive: true, mode: 0o700 });
   const assets = spawnSync('aws', ['s3', 'sync', `s3://${storage.bucket}`, resolve(partial, 'assets'), '--endpoint-url', storage.endpoint], {
     cwd: root,
     env: { ...env, AWS_ACCESS_KEY_ID: storage.accessKeyId, AWS_SECRET_ACCESS_KEY: storage.secretAccessKey, AWS_DEFAULT_REGION: storage.region || 'us-east-1' },
