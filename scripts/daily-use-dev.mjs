@@ -112,6 +112,16 @@ else if (command === 'backup') {
   const dump = spawnSync('docker', ['compose', '--env-file', envFile, '-f', 'docker-compose.daily.yml', 'exec', '-T', 'postgres', 'pg_dump', '-U', env.IOLAUS_POSTGRES_USER, env.IOLAUS_POSTGRES_DATABASE], { cwd: root, env, encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 });
   if (dump.status !== 0) throw new Error('PostgreSQL backup failed.');
   writeFileSync(resolve(directory, 'database.sql'), dump.stdout, { mode: 0o600 });
+  const storage = JSON.parse(env.RESUME_FILES_CONFIG_JSON);
+  if (storage.type !== 's3' || !storage.bucket || !storage.endpoint || !storage.accessKey || !storage.secretKey) {
+    throw new Error('Daily backup requires the configured S3-compatible asset provider.');
+  }
+  const assets = spawnSync('aws', ['s3', 'sync', `s3://${storage.bucket}`, resolve(directory, 'assets'), '--endpoint-url', storage.endpoint], {
+    cwd: root,
+    env: { ...env, AWS_ACCESS_KEY_ID: storage.accessKey, AWS_SECRET_ACCESS_KEY: storage.secretKey, AWS_DEFAULT_REGION: storage.region || 'us-east-1' },
+    encoding: 'utf8',
+  });
+  if (assets.status !== 0) throw new Error('S3 asset backup failed.');
   console.log(JSON.stringify({ status: 'backup-created', directory, recovery: 'Restore only into an isolated PostgreSQL target, then verify assets and database counts before cutover.', secretValuesIncluded: false }));
 }
 else throw new Error('Usage: daily-use-dev.mjs up|down|migrate|dev|doctor');
