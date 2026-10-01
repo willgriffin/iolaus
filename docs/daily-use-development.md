@@ -23,11 +23,35 @@ instance uses `iolaus_willgriffin_daily`. Use the canonical target URL
 callback `https://mac.tail8e7e73.ts.net:8443/auth/oidc/callback` before remote
 login. The root operator owns that callback and proxy configuration.
 
-Start durable dependencies with `pnpm daily:up`, apply migrations with
-`pnpm daily:migrate`, then start the editable server with `pnpm daily:dev`.
-Run `pnpm daily:doctor` before use. `pnpm daily:down` stops containers without
-deleting named volumes. Keep background jobs disabled until provider limits and
-human approval settings have been reviewed.
+For daily use, start durable dependencies with `pnpm daily:up`, apply
+migrations with `pnpm daily:migrate`, run `pnpm daily:doctor`, then use the
+managed server lifecycle:
+
+```sh
+pnpm daily:start
+pnpm daily:status
+pnpm daily:stop
+pnpm daily:backup
+```
+
+`daily:start` is idempotent and waits for loopback health. `daily:status` and
+`daily:stop` operate only on the recorded process with its original start time
+and configuration fingerprint; they refuse a mismatched record instead of
+stopping another process. `daily:backup` writes a timestamped PostgreSQL dump
+and S3 object snapshot under the private backup root. Restore only into an
+isolated PostgreSQL target, restore the matching object snapshot, verify counts
+and hashes, then make an explicit cutover decision. `pnpm daily:down` stops
+containers without deleting named volumes. Use `pnpm daily:dev` only for a
+foreground edit session, not as the daily-use service contract.
+
+The launcher starts no background jobs. Keep them disabled until provider
+limits and human approval settings have been reviewed. The service runs while
+this Mac is awake and logged in; after a reboot or sleep, resume it with
+`pnpm daily:up` and `pnpm daily:start` after checking `pnpm daily:status`.
+
+Keep end-to-end QA isolated from the daily database, private state directory,
+and MinIO bucket. `pnpm test:e2e` creates its own synthetic local fixture; it
+must never use the daily environment file or mutate restored job-search data.
 
 `pnpm daily:start` derives Vite's only additional allowed host from
 `IOLAUS_PUBLIC_URL`; it does not allow arbitrary proxy host headers. It keeps
