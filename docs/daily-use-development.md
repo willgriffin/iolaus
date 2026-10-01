@@ -29,6 +29,10 @@ Run `pnpm daily:doctor` before use. `pnpm daily:down` stops containers without
 deleting named volumes. Keep background jobs disabled until provider limits and
 human approval settings have been reviewed.
 
+`pnpm daily:start` derives Vite's only additional allowed host from
+`IOLAUS_PUBLIC_URL`; it does not allow arbitrary proxy host headers. It keeps
+the Vite backend on loopback while admitting the canonical Tailscale hostname.
+
 The supported logical portability command currently carries filesystem assets
 only. Do not use `pnpm app:export` for an S3-backed source. A one-time S3 to
 S3 handover needs a separately reviewed read-only database dump, object mirror,

@@ -58,6 +58,7 @@ env.HOST = '127.0.0.1';
 env.PORT ||= '47292';
 env.SMRT_BACKGROUND_JOBS ||= 'false';
 env.TSX_TSCONFIG_PATH ||= join(root, 'apps', 'site', 'tsconfig.runtime.json');
+env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS = new URL(env.IOLAUS_PUBLIC_URL).hostname;
 const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseName, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
 
 function record() {
