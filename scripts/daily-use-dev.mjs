@@ -3,7 +3,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const root = process.cwd();
 const command = process.argv[2] || 'doctor';
@@ -88,7 +88,7 @@ else if (command === 'start') {
   if (current) console.log(JSON.stringify({ status: 'running', pid: current.pid, secretValuesIncluded: false }));
   else {
     const descriptor = openSync(logPath, 'a', 0o600);
-    const child = spawn('pnpm', ['--filter', '@willgriffin/iolaus-site', 'dev', '--host', '127.0.0.1', '--port', env.PORT], { cwd: root, env, detached: true, stdio: ['ignore', descriptor, descriptor] });
+    const child = spawn(join(root, 'apps', 'site', 'node_modules', '.bin', 'vite'), ['dev', '--host', '127.0.0.1', '--port', env.PORT], { cwd: join(root, 'apps', 'site'), env, detached: true, stdio: ['ignore', descriptor, descriptor] });
     closeSync(descriptor); child.unref();
     const details = spawnSync('ps', ['-p', String(child.pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
     writeFileSync(recordPath, `${JSON.stringify({ pid: child.pid, start: details, configuration, instance: randomBytes(16).toString('hex') })}\n`, { mode: 0o600 });
@@ -122,6 +122,7 @@ else if (command === 'backup') {
     encoding: 'utf8',
   });
   if (assets.status !== 0) throw new Error('S3 asset backup failed.');
+  spawnSync('chmod', ['-R', 'go-rwx', directory], { cwd: root, env, stdio: 'ignore' });
   console.log(JSON.stringify({ status: 'backup-created', directory, recovery: 'Restore only into an isolated PostgreSQL target, then verify assets and database counts before cutover.', secretValuesIncluded: false }));
 }
 else throw new Error('Usage: daily-use-dev.mjs up|down|migrate|dev|doctor');
