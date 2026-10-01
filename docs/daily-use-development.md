@@ -25,3 +25,8 @@ Start durable dependencies with `pnpm daily:up`, apply migrations with
 Run `pnpm daily:doctor` before use. `pnpm daily:down` stops containers without
 deleting named volumes. Keep background jobs disabled until provider limits and
 human approval settings have been reviewed.
+
+The supported logical portability command currently carries filesystem assets
+only. Do not use `pnpm app:export` for an S3-backed source. A one-time S3 to
+S3 handover needs a separately reviewed read-only database dump, object mirror,
+and hash/count verification receipt before the canonical target is started.
