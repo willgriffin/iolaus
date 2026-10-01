@@ -15,8 +15,11 @@ Required values are `SMRT_RUNTIME_PROFILE=self-hosted`, `SMRT_APP_ID`,
 
 `SMRT_APP_ID` must equal the `application` field in the supported export bundle
 that will be imported. Do not choose a new app ID and then import production
-data: the importer rejects that mismatch to protect tenant identity. Use the
-canonical target URL `https://mac.tail8e7e73.ts.net:8443` and register its
+data: the importer rejects that mismatch to protect tenant identity. Its
+PostgreSQL database must use the corresponding underscore namespace:
+`iolaus_willgriffin` or `iolaus_willgriffin_<operator-suffix>`; this daily
+instance uses `iolaus_willgriffin_daily`. Use the canonical target URL
+`https://mac.tail8e7e73.ts.net:8443` and register its
 callback `https://mac.tail8e7e73.ts.net:8443/auth/oidc/callback` before remote
 login. The root operator owns that callback and proxy configuration.
 

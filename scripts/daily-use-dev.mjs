@@ -46,13 +46,19 @@ for (const key of required) {
 if (env.SMRT_RUNTIME_PROFILE !== 'self-hosted') {
   throw new Error('Daily-use runtime must use SMRT_RUNTIME_PROFILE=self-hosted.');
 }
+const databaseName = decodeURIComponent(new URL(env.DATABASE_URL).pathname.replace(/^\/+|\/+$/gu, ''));
+const databaseNamespace = env.SMRT_APP_ID.replaceAll('-', '_');
+if (databaseName !== databaseNamespace && !databaseName.startsWith(`${databaseNamespace}_`)) {
+  throw new Error(`Daily-use PostgreSQL database must be named ${databaseNamespace} or begin with ${databaseNamespace}_.`);
+}
 if (env.HOST && env.HOST !== '127.0.0.1') {
   throw new Error('Daily-use app backend must bind only to 127.0.0.1.');
 }
 env.HOST = '127.0.0.1';
 env.PORT ||= '47292';
 env.SMRT_BACKGROUND_JOBS ||= 'false';
-const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: new URL(env.DATABASE_URL).pathname, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
+env.TSX_TSCONFIG_PATH ||= join(root, 'apps', 'site', 'tsconfig.runtime.json');
+const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseName, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
 
 function record() {
   if (!existsSync(recordPath)) return null;
