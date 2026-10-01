@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${IOLAUS_POSTGRES_DATABASE:?set in private env}
+      POSTGRES_USER: ${IOLAUS_POSTGRES_USER:?set in private env}
+      POSTGRES_PASSWORD: ${IOLAUS_POSTGRES_PASSWORD:?set in private env}
+    ports:
+      - '127.0.0.1:${IOLAUS_POSTGRES_PORT:-54330}:5432'
+    volumes:
+      - iolaus-daily-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${IOLAUS_MINIO_ROOT_USER:?set in private env}
+      MINIO_ROOT_PASSWORD: ${IOLAUS_MINIO_ROOT_PASSWORD:?set in private env}
+    ports:
+      - '127.0.0.1:${IOLAUS_MINIO_PORT:-9000}:9000'
+      - '127.0.0.1:${IOLAUS_MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - iolaus-daily-minio:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  iolaus-daily-postgres:
+  iolaus-daily-minio:
