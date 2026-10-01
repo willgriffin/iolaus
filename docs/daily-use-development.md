@@ -37,8 +37,15 @@ pnpm daily:backup
 `daily:start` is idempotent and waits for loopback health. `daily:status` and
 `daily:stop` operate only on the recorded process with its original start time
 and configuration fingerprint; they refuse a mismatched record instead of
-stopping another process. `daily:backup` writes a timestamped PostgreSQL dump
-and S3 object snapshot under the private backup root. Restore only into an
+stopping another process. Blank stored start times also fail closed and retain
+the record for inspection. The fingerprint binds the PostgreSQL protocol,
+user, host, port, and database without storing its password; PostgreSQL URI
+query overrides for host, port, user, or password are rejected.
+
+`daily:backup` requires `DATABASE_URL` to identify the local Compose database
+at `127.0.0.1` and `IOLAUS_POSTGRES_PORT` (default `54330`), with the database
+matching `IOLAUS_POSTGRES_DATABASE`, before invoking Docker. It writes a
+timestamped PostgreSQL dump and S3 object snapshot under the private backup root. Restore only into an
 isolated PostgreSQL target, restore the matching object snapshot, verify counts
 and hashes, then make an explicit cutover decision. `pnpm daily:down` stops
 containers without deleting named volumes. Use `pnpm daily:dev` only for a
