@@ -49,6 +49,9 @@ if (env.SMRT_RUNTIME_PROFILE !== 'self-hosted') {
   throw new Error('Daily-use runtime must use SMRT_RUNTIME_PROFILE=self-hosted.');
 }
 const databaseUrl = new URL(env.DATABASE_URL);
+for (const key of ['host', 'port', 'user', 'password']) {
+  if (databaseUrl.searchParams.has(key)) throw new Error(`DATABASE_URL must not override PostgreSQL ${key} through query parameters.`);
+}
 const databaseName = decodeURIComponent(databaseUrl.pathname.replace(/^\/+|\/+$/gu, ''));
 const databaseNamespace = env.SMRT_APP_ID.replaceAll('-', '_');
 if (databaseName !== databaseNamespace && !databaseName.startsWith(`${databaseNamespace}_`)) {
@@ -125,7 +128,7 @@ else if (command === 'status') {
   console.log(JSON.stringify({ status: current ? 'running' : 'stopped', pid: current?.pid ?? null, configuration: current ? configuration : null, secretValuesIncluded: false }));
 }
 else if (command === 'backup') {
-  if (databaseName !== env.IOLAUS_POSTGRES_DATABASE || databaseUrl.hostname !== '127.0.0.1' || databaseUrl.port !== '54330') throw new Error('Daily backup DATABASE_URL must identify the configured local Compose PostgreSQL database.');
+  if (databaseName !== env.IOLAUS_POSTGRES_DATABASE || databaseUrl.hostname !== '127.0.0.1' || databaseUrl.port !== (env.IOLAUS_POSTGRES_PORT || '54330')) throw new Error('Daily backup DATABASE_URL must identify the configured local Compose PostgreSQL database.');
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const directory = resolve(env.IOLAUS_DAILY_BACKUP_DIR || '/Users/will/Work/willgriffin/local-ops/iolaus/backups', stamp);
   const partial = `${directory}.partial`;
