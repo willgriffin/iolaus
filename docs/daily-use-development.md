@@ -56,8 +56,9 @@ must never use the daily environment file or mutate restored job-search data.
 To restore a completed backup, create an isolated PostgreSQL database and
 empty isolated asset bucket first. Load `database.sql` with that target's
 `psql`, sync `assets/` into the isolated bucket using its private S3
-credentials, and compare database/object counts and hashes with
-`complete.json` and the source receipt. Do not restore directly into the
+credentials, and compare the database checksum and object count in
+`complete.json` with the restored target. Inspect or remove a failed
+`*.partial` backup only after confirming it is not needed for diagnosis. Do not restore directly into the
 daily-use database or bucket.
 
 `pnpm daily:start` derives Vite's only additional allowed host from

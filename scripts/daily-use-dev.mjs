@@ -76,7 +76,7 @@ function record() {
 
 async function ready(pid) {
   const url = `http://127.0.0.1:${env.PORT}/api/_runtime/health`;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     try { const response = await fetch(url); if (response.status === 200) return; } catch {}
     try { process.kill(pid, 0); } catch { throw new Error('Daily-use Vite process exited before health became ready.'); }
     await new Promise((done) => setTimeout(done, 250));
@@ -140,7 +140,9 @@ else if (command === 'backup') {
   if (assets.status !== 0) throw new Error(`S3 asset backup failed; inspect private partial backup ${partial}.`);
   const permissions = spawnSync('chmod', ['-R', 'go-rwx', partial], { cwd: root, env, stdio: 'ignore' });
   if (permissions.status !== 0) throw new Error('Daily backup could not set private permissions.');
-  writeFileSync(resolve(partial, 'complete.json'), `${JSON.stringify({ schema: 1, databaseSha256: createHash('sha256').update(dump.stdout).digest('hex'), complete: true })}\n`, { mode: 0o600 });
+  const assetCount = spawnSync('find', [resolve(partial, 'assets'), '-type', 'f'], { encoding: 'utf8' });
+  if (assetCount.status !== 0) throw new Error('Daily backup could not inventory S3 assets.');
+  writeFileSync(resolve(partial, 'complete.json'), `${JSON.stringify({ schema: 1, databaseSha256: createHash('sha256').update(dump.stdout).digest('hex'), assetObjects: assetCount.stdout.trim().split('\n').filter(Boolean).length, complete: true })}\n`, { mode: 0o600 });
   renameSync(partial, directory);
   console.log(JSON.stringify({ status: 'backup-created', directory, recovery: 'Restore only into an isolated PostgreSQL target, then verify assets and database counts before cutover.', secretValuesIncluded: false }));
 }
