@@ -66,7 +66,9 @@ const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SM
 function record() {
   if (!existsSync(recordPath)) return null;
   const value = JSON.parse(readFileSync(recordPath, 'utf8'));
-  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string') return null;
+  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string' || !value.start.trim()) {
+    throw new Error('Daily-use process record has no verifiable start time; retain it and inspect private state.');
+  }
   const check = spawnSync('ps', ['-p', String(value.pid), '-o', 'lstart=,command='], { encoding: 'utf8' });
   if (check.status !== 0) return null;
   if (!check.stdout.includes(value.start) || !check.stdout.includes('vite')) throw new Error('Daily-use process record does not identify the live process; retain it and inspect private state.');
