@@ -52,14 +52,16 @@ if (env.HOST && env.HOST !== '127.0.0.1') {
 env.HOST = '127.0.0.1';
 env.PORT ||= '47292';
 env.SMRT_BACKGROUND_JOBS ||= 'false';
-const configuration = createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(env).filter(([key]) => !/(SECRET|PASSWORD|KEY)/u.test(key)).sort(([a], [b]) => a.localeCompare(b))))).digest('hex');
+const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: new URL(env.DATABASE_URL).pathname, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
 
 function record() {
   if (!existsSync(recordPath)) return null;
   const value = JSON.parse(readFileSync(recordPath, 'utf8'));
-  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string' || value.configuration !== configuration) return null;
+  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string') return null;
   const check = spawnSync('ps', ['-p', String(value.pid), '-o', 'lstart=,command='], { encoding: 'utf8' });
-  if (check.status !== 0 || !check.stdout.includes(value.start) || !check.stdout.includes('vite')) return null;
+  if (check.status !== 0) return null;
+  if (!check.stdout.includes(value.start) || !check.stdout.includes('vite')) throw new Error('Daily-use process record does not identify the live process; retain it and inspect private state.');
+  if (value.configuration !== configuration) throw new Error('Daily-use process configuration changed while it is live; stop it from the matching configuration first.');
   return value;
 }
 
@@ -88,7 +90,7 @@ else if (command === 'start') {
   if (current) console.log(JSON.stringify({ status: 'running', pid: current.pid, secretValuesIncluded: false }));
   else {
     const descriptor = openSync(logPath, 'a', 0o600);
-    const child = spawn(join(root, 'apps', 'site', 'node_modules', '.bin', 'vite'), ['dev', '--host', '127.0.0.1', '--port', env.PORT], { cwd: join(root, 'apps', 'site'), env, detached: true, stdio: ['ignore', descriptor, descriptor] });
+    const child = spawn(join(root, 'apps', 'site', 'node_modules', '.bin', 'vite'), ['dev', '--host', '127.0.0.1', '--port', env.PORT, '--strictPort'], { cwd: join(root, 'apps', 'site'), env, detached: true, stdio: ['ignore', descriptor, descriptor] });
     closeSync(descriptor); child.unref();
     const details = spawnSync('ps', ['-p', String(child.pid), '-o', 'lstart='], { encoding: 'utf8' }).stdout.trim();
     writeFileSync(recordPath, `${JSON.stringify({ pid: child.pid, start: details, configuration, instance: randomBytes(16).toString('hex') })}\n`, { mode: 0o600 });
@@ -113,12 +115,12 @@ else if (command === 'backup') {
   if (dump.status !== 0) throw new Error('PostgreSQL backup failed.');
   writeFileSync(resolve(directory, 'database.sql'), dump.stdout, { mode: 0o600 });
   const storage = JSON.parse(env.RESUME_FILES_CONFIG_JSON);
-  if (storage.type !== 's3' || !storage.bucket || !storage.endpoint || !storage.accessKey || !storage.secretKey) {
+  if (storage.type !== 's3' || !storage.bucket || !storage.endpoint || !storage.accessKeyId || !storage.secretAccessKey) {
     throw new Error('Daily backup requires the configured S3-compatible asset provider.');
   }
   const assets = spawnSync('aws', ['s3', 'sync', `s3://${storage.bucket}`, resolve(directory, 'assets'), '--endpoint-url', storage.endpoint], {
     cwd: root,
-    env: { ...env, AWS_ACCESS_KEY_ID: storage.accessKey, AWS_SECRET_ACCESS_KEY: storage.secretKey, AWS_DEFAULT_REGION: storage.region || 'us-east-1' },
+    env: { ...env, AWS_ACCESS_KEY_ID: storage.accessKeyId, AWS_SECRET_ACCESS_KEY: storage.secretAccessKey, AWS_DEFAULT_REGION: storage.region || 'us-east-1' },
     encoding: 'utf8',
   });
   if (assets.status !== 0) throw new Error('S3 asset backup failed.');
