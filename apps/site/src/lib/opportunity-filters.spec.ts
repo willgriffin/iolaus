@@ -361,25 +361,47 @@ describe('sortOpportunities', () => {
     ]);
   });
 
-  it('prioritizes current Canada compatibility within the existing best-fit status rank', () => {
-    const unknown = eligibilityRecord('A general role', {
+  it('keeps current generic profile eligibility ranking within an existing best-fit status rank', () => {
+    const unknown = eligibilityRecord('unknown', {
       id: 'unknown',
       status: 'found',
       latestScore: 90,
+      assessmentProjection: {
+        eligibilityBucket: 'unknown',
+        sourceStatus: 'current',
+        ranking: { eligibilityPriority: 2, fitScore: 90 },
+      },
     });
-    const canada = eligibilityRecord('Location: Canada', {
-      id: 'canada',
+    const eligible = eligibilityRecord('eligible', {
+      id: 'eligible',
       status: 'found',
       latestScore: 10,
+      assessmentProjection: {
+        eligibilityBucket: 'eligible',
+        sourceStatus: 'current',
+        ranking: { eligibilityPriority: 0, fitScore: 10 },
+      },
+    });
+    const conflicting = eligibilityRecord('conflicting', {
+      id: 'conflicting',
+      status: 'found',
+      latestScore: 100,
+      assessmentProjection: {
+        eligibilityBucket: 'conflicting',
+        sourceStatus: 'current',
+        ranking: { eligibilityPriority: 3, fitScore: 100 },
+      },
     });
     expect(
-      sortOpportunities([unknown, canada], 'best').map((record) => record.id),
-    ).toEqual(['canada', 'unknown']);
-    expect(
-      sortOpportunities([unknown, canada], 'eligibility').map(
+      sortOpportunities([unknown, conflicting, eligible], 'best').map(
         (record) => record.id,
       ),
-    ).toEqual(['canada', 'unknown']);
+    ).toEqual(['eligible', 'unknown', 'conflicting']);
+    expect(
+      sortOpportunities([unknown, conflicting, eligible], 'eligibility').map(
+        (record) => record.id,
+      ),
+    ).toEqual(['eligible', 'unknown', 'conflicting']);
   });
 
   it('newest sort orders by posted date desc', () => {

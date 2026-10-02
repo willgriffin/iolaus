@@ -1715,6 +1715,11 @@ describe('processOpportunityIntelligence', () => {
       opportunityId: 'opp-1',
       profile: 'opportunity-intelligence-zai',
       runLifecycleMutation,
+      workspaceSubject: {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
     });
 
     expect(result).toMatchObject({ status: 'processed' });
@@ -1737,6 +1742,11 @@ describe('processOpportunityIntelligence', () => {
     });
     expect(mocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
       applications.records[0],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
     );
   });
 
@@ -1859,6 +1869,11 @@ describe('processOpportunityIntelligence', () => {
         modes: ['plan'],
         opportunityId: 'opp-1',
         runLifecycleMutation,
+        workspaceSubject: {
+          profileId: 'profile-1',
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+        },
       }),
     ).rejects.toThrow('lifecycle lock lost');
 

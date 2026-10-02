@@ -43,7 +43,12 @@ describe('opportunity assessment projection', () => {
     const projection = projectOpportunityAssessment(
       assessment,
       {
-        authorizedWorkCountries: [],
+        authorizedWorkCountries: [
+          {
+            country: { code: 'CA', label: 'Canada' },
+            scope: 'country',
+          },
+        ],
         citizenships: [{ code: 'CA', label: 'Canada' }],
         sponsorshipRequired: 'unknown',
         targetWorkCountry: { code: 'CA', label: 'Canada' },
@@ -94,7 +99,12 @@ describe('opportunity assessment projection', () => {
 
   it('reranks the same stored assessment when a local preference changes', () => {
     const candidate = {
-      authorizedWorkCountries: [],
+      authorizedWorkCountries: [
+        {
+          country: { code: 'CA', label: 'Canada' },
+          scope: 'country' as const,
+        },
+      ],
       citizenships: [{ code: 'CA', label: 'Canada' }],
       sponsorshipRequired: 'unknown' as const,
       targetWorkCountry: { code: 'CA', label: 'Canada' },

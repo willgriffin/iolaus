@@ -71,7 +71,8 @@ vi.mock('./private-workspace.js', () => ({
 vi.mock('./resume-data.js', () => ({
   loadWorkspaceCandidateEvidence: vi.fn(async (subject: unknown) => ({
     candidate: {
-      authorizedWorkCountriesJson: '[]',
+      authorizedWorkCountriesJson:
+        '[{"country":{"code":"CA","label":"Canada"},"scope":"country"}]',
       citizenshipsJson: '[{"code":"CA","label":"Canada"}]',
       residenceCountryJson: '{}',
       sponsorshipRequired: 'unknown',
