@@ -1,5 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { type APIRequestContext, test as base, expect } from '@playwright/test';
+import {
+  type APIRequestContext,
+  type BrowserContextOptions,
+  test as base,
+  expect,
+} from '@playwright/test';
 
 // This exercises a real browser, native cookie sessions and the MCP HTTP route.
 // The controlled link renderer models host navigation only; external ChatGPT /
@@ -120,10 +125,15 @@ test('dedicated MCP review link authenticates the browser without approving or s
     fullPage: true,
   });
 
-  for (const [actor, storageState] of [
+  const foreignAuth = process.env.IOLAUS_E2E_FOREIGN_AUTH;
+  if (!foreignAuth) throw new Error('E2E foreign session missing');
+  const deniedActors: Array<
+    [string, NonNullable<BrowserContextOptions['storageState']>]
+  > = [
     ['anonymous', { cookies: [], origins: [] }],
-    ['foreign', process.env.IOLAUS_E2E_FOREIGN_AUTH as string],
-  ] as const) {
+    ['foreign', foreignAuth],
+  ];
+  for (const [actor, storageState] of deniedActors) {
     const deniedContext = await browser.newContext({ baseURL, storageState });
     try {
       const denied = await deniedContext.request.get(destination, {

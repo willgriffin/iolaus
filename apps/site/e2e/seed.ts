@@ -58,7 +58,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     };
   };
   const recordReview = async (
-    opportunityId: string | undefined,
+    opportunityId: string | null | undefined,
     status: string,
   ) => {
     if (!opportunityId)
@@ -202,7 +202,14 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     'desktop-control',
   ].entries()) {
     const salaryBase = 100_000 + projectIndex * 200_000;
-    const variants = [
+    const variants: Array<{
+      name: string;
+      salaryMin: number;
+      status: string;
+      workMode: string;
+      expiresAt?: Date | null;
+      humanReviewStatus?: 'reject';
+    }> = [
       ...Array.from({ length: 6 }, (_, index) => ({
         name: `Role ${index + 1}`,
         salaryMin: salaryBase + index * 10_000,
