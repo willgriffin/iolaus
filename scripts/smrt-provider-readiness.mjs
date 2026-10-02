@@ -260,7 +260,10 @@ async function defaultDependencies(component) {
     return { getAuth: auth.getAuth };
   }
   if (component === 'assets') {
-    const s3 = await import(filesRequire().resolve('@aws-sdk/client-s3'));
+    // The SDK publishes a CommonJS entrypoint. Loading it through the same
+    // package-scoped require keeps Vite SSR from treating its absolute native
+    // dependency path as an application module.
+    const s3 = filesRequire()('@aws-sdk/client-s3');
     return {
       HeadBucketCommand: s3.HeadBucketCommand,
       S3Client: s3.S3Client,
