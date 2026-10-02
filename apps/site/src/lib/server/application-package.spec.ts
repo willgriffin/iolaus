@@ -1,11 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  bulkUpdateOpportunityReviews,
-  createDraftApplicationForOpportunity,
-  generateApplicationPackage,
+  createDraftApplicationForOpportunity as createDraft,
+  generateApplicationPackage as generatePackage,
   normalizeOpportunityRating,
-  updateOpportunityReview,
+  updateOpportunityReview as updateReview,
+  bulkUpdateOpportunityReviews as updateReviews,
 } from './application-package';
+
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
+const generateApplicationPackage = (
+  applicationId: string,
+  options: Record<string, unknown> = {},
+) => generatePackage(applicationId, { ...options, subject });
+
+const createDraftApplicationForOpportunity = (
+  options: Record<string, unknown>,
+) => createDraft({ ...options, subject });
+
+const updateOpportunityReview = (options: Record<string, unknown>) =>
+  updateReview({ ...options, subject });
+
+const bulkUpdateOpportunityReviews = (options: Record<string, unknown>) =>
+  updateReviews({ ...options, subject });
 
 type MockRecord = Record<string, unknown> & {
   id: string;
@@ -16,6 +37,9 @@ function record(data: Record<string, unknown>): MockRecord {
   return {
     id: String(data.id ?? 'record-1'),
     save: vi.fn(async () => {}),
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     ...data,
   } as MockRecord;
 }
@@ -255,6 +279,7 @@ function enableCoverLetterGeneration() {
   resumeAssets?.records.push(
     record({
       id: 'resume-default',
+      isPublished: true,
       markdownPath: 'published/resume.md',
       title: 'Published resume',
     }),
@@ -297,6 +322,7 @@ describe('opportunity review and draft applications', () => {
       collection([record({ id: 'opp-1', title: 'AI Engineer' })]),
     );
     mocks.collections.set('Application', collection());
+    mocks.collections.set('ResumeAsset', collection());
     mocks.commitApplicationIfCurrent.mockReset();
     mocks.commitApplicationIfCurrent.mockImplementation(
       async (application, updates) => {
@@ -404,6 +430,10 @@ describe('opportunity review and draft applications', () => {
 
   it('creates a draft application with default resume and no generated cover letter', async () => {
     const opportunity = mocks.collections.get('Opportunity')?.records[0];
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([record({ id: 'resume-default', isPublished: true })]),
+    );
 
     const result = await createDraftApplicationForOpportunity({
       coverLetterMode: 'none',
@@ -644,6 +674,10 @@ describe('generateApplicationPackage', () => {
     ]);
     mocks.collections.set('CandidateProfile', candidateProfiles);
     mocks.collections.set(
+      'ResumeAsset',
+      collection([record({ id: 'resume-default', isPublished: true })]),
+    );
+    mocks.collections.set(
       'Application',
       collection([
         record({
@@ -657,7 +691,9 @@ describe('generateApplicationPackage', () => {
 
     const result = await generateApplicationPackage('app-1');
 
-    const packet = mocks.collections.get('ResumeAsset')?.records[0];
+    const packet = mocks.collections
+      .get('ResumeAsset')
+      ?.records.find((asset) => asset.assetType === 'application_packet');
     expect(packet).toMatchObject({
       assetType: 'application_packet',
       status: 'generated',
@@ -703,10 +739,7 @@ describe('generateApplicationPackage', () => {
         status: 'succeeded',
       }),
     );
-    expect(candidateProfiles.list).toHaveBeenCalledWith({
-      limit: 50,
-      orderBy: 'updated_at DESC',
-    });
+    expect(candidateProfiles.list).not.toHaveBeenCalled();
   });
 
   it('keeps a SmrtObject accessor id in the packet concurrency fence', async () => {
@@ -886,7 +919,7 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) =>
-        entityType === 'CandidateProfile' && entityId === 'candidate-1'
+        entityType === 'CandidateProfile' && entityId === subject.profileId
           ? [{ factId: 'candidate-active' }]
           : [],
     );
@@ -1348,7 +1381,7 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) =>
-        entityType === 'CandidateProfile' && entityId === 'candidate-1'
+        entityType === 'CandidateProfile' && entityId === subject.profileId
           ? [{ factId: 'candidate-active' }]
           : [],
     );
@@ -1432,7 +1465,10 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) => {
-        if (entityType === 'CandidateProfile' && entityId === 'candidate-1') {
+        if (
+          entityType === 'CandidateProfile' &&
+          entityId === subject.profileId
+        ) {
           return [
             { factId: 'candidate-active' },
             { factId: 'candidate-pending' },
@@ -1698,5 +1734,24 @@ describe('generateApplicationPackage', () => {
       status = (thrown as { status?: number }).status;
     }
     expect(status).toBe(404);
+  });
+
+  it('does not generate a package for an application in another profile', async () => {
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          candidateProfileId: 'profile-other',
+          id: 'app-other-profile',
+          opportunityId: 'opp-1',
+          resumeMode: 'default',
+        }),
+      ]),
+    );
+
+    await expect(
+      generateApplicationPackage('app-other-profile'),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.fsWrite).not.toHaveBeenCalled();
   });
 });

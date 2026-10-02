@@ -1,12 +1,22 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'application_material_comments',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Review remarks can expose a candidate's application package and private
+  // feedback. Only the subject-bound review service may access them.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class ApplicationMaterialComment extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text' })
+  ownerUserId = '';
+  @field({ type: 'text' })
+  candidateProfileId = '';
   @field({ type: 'text' })
   applicationId = '';
   @field({ type: 'text' })

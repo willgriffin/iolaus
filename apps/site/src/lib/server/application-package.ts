@@ -32,10 +32,14 @@ import {
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import { parseRequiredAnswers } from './auto-submit-eligibility.js';
 import {
-  getPublishedResumeAsset,
-  getResumeTailoringConfig,
-  type ResumeRecord,
-} from './resume-data.js';
+  createPrivateRecord,
+  getPrivateRecord,
+  listPrivateRecords,
+  privateRecordWhere,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import { getResumeTailoringConfig, type ResumeRecord } from './resume-data.js';
 import { getResumeFilesystem } from './resume-files.js';
 import { commitResumeVariantIfCurrent } from './resume-variant-concurrency.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
@@ -424,13 +428,15 @@ async function tailoringOptionsForResumeVariant(variant: MutableRecord) {
 async function findResumeVariantForApplication(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
-  const collection = await getCollection('ResumeVariant');
   const resumeVariantId = stringValue(application.resumeVariantId);
   if (resumeVariantId) {
-    const variant = (await collection.get(
+    const variant = (await getPrivateRecord(
+      'ResumeVariant',
       resumeVariantId,
-    )) as unknown as MutableRecord | null;
+      subject,
+    )) as MutableRecord | null;
     if (!variant) {
       error(404, 'Resume variant not found.');
     }
@@ -440,11 +446,11 @@ async function findResumeVariantForApplication(
 
   const applicationId = stringValue(application.id);
   if (applicationId) {
-    const variants = (await collection.list({
+    const variants = (await listPrivateRecords('ResumeVariant', subject, {
       limit: 25,
       orderBy: 'updated_at DESC',
       where: { applicationId },
-    })) as unknown as MutableRecord[];
+    })) as MutableRecord[];
     const variant = variants.find((candidate) =>
       resumeVariantCanAttach(candidate, application, opportunity),
     );
@@ -455,11 +461,11 @@ async function findResumeVariantForApplication(
 
   const opportunityId = stringValue(opportunity.id);
   if (!opportunityId) return null;
-  const variants = (await collection.list({
+  const variants = (await listPrivateRecords('ResumeVariant', subject, {
     limit: 25,
     orderBy: 'updated_at DESC',
     where: { opportunityId },
-  })) as unknown as MutableRecord[];
+  })) as MutableRecord[];
   return (
     variants.find((variant) =>
       resumeVariantCanAttach(variant, application, opportunity),
@@ -535,21 +541,22 @@ function assertResumeVariantCompatible(
 async function getOrCreateResumeVariantForApplication(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<{
   persistedState: Record<string, unknown> | null;
   variant: MutableRecord;
 }> {
-  const collection = await getCollection('ResumeVariant');
   const existing = await findResumeVariantForApplication(
     application,
     opportunity,
+    subject,
   );
   const persistedState = existing ? jsonRecord(existing) : null;
   const variant =
     existing ??
-    ((await collection.create({
+    ((await createPrivateRecord('ResumeVariant', subject, {
       status: 'draft',
-    })) as unknown as MutableRecord);
+    })) as MutableRecord);
   const variantId = stringValue(variant.id);
   const existingOutputSlug = stringValue(variant.outputSlug);
   if (variantId) application.resumeVariantId = variantId;
@@ -692,8 +699,10 @@ export async function updateOpportunityReview(options: {
   humanReviewStatus: string;
   opportunityId: string;
   reviewedByProfileId?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
   const status = stringValue(options.humanReviewStatus);
   if (
     status &&
@@ -702,10 +711,11 @@ export async function updateOpportunityReview(options: {
     error(400, 'Invalid opportunity review status.');
   }
 
-  const collection = await getCollection('Opportunity');
-  const opportunity = (await collection.get(
+  const opportunity = (await getPrivateRecord(
+    'Opportunity',
     options.opportunityId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Opportunity not found.');
   }
@@ -732,8 +742,10 @@ export async function bulkUpdateOpportunityReviews(options: {
   humanReviewStatus: string;
   opportunityIds: string[];
   reviewedByProfileId?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
   const status = stringValue(options.humanReviewStatus);
   if (!status) {
     error(400, 'Bulk review status is required.');
@@ -746,16 +758,17 @@ export async function bulkUpdateOpportunityReviews(options: {
     error(400, 'Select at least one opportunity.');
   }
 
-  const collection = await getCollection('Opportunity');
   const ratingOverride = stringValue(options.humanRating);
   const notesOverride = stringValue(options.humanReviewNotes);
   const reviewedByProfileId = stringValue(options.reviewedByProfileId);
   const records: Record<string, unknown>[] = [];
 
   for (const opportunityId of opportunityIds) {
-    const opportunity = (await collection.get(
+    const opportunity = (await getPrivateRecord(
+      'Opportunity',
       opportunityId,
-    )) as unknown as MutableRecord | null;
+      subject,
+    )) as MutableRecord | null;
     if (!opportunity) {
       error(404, 'Opportunity not found.');
     }
@@ -771,6 +784,7 @@ export async function bulkUpdateOpportunityReviews(options: {
         opportunityId,
         reviewedByProfileId:
           reviewedByProfileId || stringValue(opportunity.reviewedByProfileId),
+        subject,
         user: options.user,
       }),
     );
@@ -792,12 +806,15 @@ export async function createDraftApplicationForOpportunity(options: {
   preflightOverrideReason?: string;
   requiredAnswers?: string;
   resumeMode?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
-  const opportunityCollection = await getCollection('Opportunity');
-  const opportunity = (await opportunityCollection.get(
+  const subject = requireWorkspaceSubject(options.subject);
+  const opportunity = (await getPrivateRecord(
+    'Opportunity',
     options.opportunityId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Opportunity not found.');
   }
@@ -832,20 +849,38 @@ export async function createDraftApplicationForOpportunity(options: {
         const opportunity = (await opportunities.get(
           stringValue(currentOpportunity.id),
         )) as unknown as MutableRecord | null;
-        if (!opportunity) error(404, 'Opportunity not found.');
+        if (
+          !opportunity ||
+          !Object.entries(privateRecordWhere(subject)).every(
+            ([key, value]) => opportunity[key] === value,
+          )
+        ) {
+          error(404, 'Opportunity not found.');
+        }
         const existing = (await applicationCollection.list({
           limit: 1,
           orderBy: 'updated_at DESC',
-          where: { opportunityId: options.opportunityId },
+          where: {
+            opportunityId: options.opportunityId,
+            ...privateRecordWhere(subject),
+          },
         })) as unknown as MutableRecord[];
         const existingApplication = existing[0];
         const application =
           existingApplication ??
           ((await applicationCollection.create(
-            {},
+            privateRecordWhere(subject),
           )) as unknown as MutableRecord);
         const publishedResume =
-          resumeMode === 'default' ? await getPublishedResumeAsset() : null;
+          resumeMode === 'default'
+            ? ((
+                await listPrivateRecords('ResumeAsset', subject, {
+                  limit: 1,
+                  orderBy: 'updated_at DESC',
+                  where: { isPublished: true },
+                })
+              )[0] as ResumeRecord | undefined)
+            : null;
         const resumeAssetId =
           resumeMode === 'default'
             ? (publishedResume?.id ?? stringValue(application.resumeAssetId))
@@ -922,7 +957,10 @@ export async function createDraftApplicationForOpportunity(options: {
   });
 }
 
-async function linkedFactSubjects(opportunity: MutableRecord) {
+async function linkedFactSubjects(
+  opportunity: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const subjects: Array<{ entityId: string; entityType: string }> = [];
   const opportunityId = stringValue(opportunity.id);
   const organizationProfileId = stringValue(opportunity.organizationProfileId);
@@ -934,24 +972,10 @@ async function linkedFactSubjects(opportunity: MutableRecord) {
     subjects.push({ entityId: organizationProfileId, entityType: 'Profile' });
   }
 
-  const candidateProfiles = (await (
-    await getCollection('CandidateProfile')
-  ).list({
-    limit: 50,
-    orderBy: 'updated_at DESC',
-  })) as unknown as MutableRecord[];
-  const orderedProfiles = candidateProfiles
-    .sort(
-      (left, right) =>
-        Number(Boolean(right.isDefault)) - Number(Boolean(left.isDefault)),
-    )
-    .slice(0, 5);
-  for (const profile of orderedProfiles) {
-    const profileId = stringValue(profile.id);
-    if (profileId) {
-      subjects.push({ entityId: profileId, entityType: 'CandidateProfile' });
-    }
-  }
+  subjects.push({
+    entityId: subject.profileId,
+    entityType: 'CandidateProfile',
+  });
 
   if (organizationProfileId) {
     const companyResearch = (await (
@@ -971,23 +995,26 @@ async function linkedFactSubjects(opportunity: MutableRecord) {
   return subjects;
 }
 
-async function factsForApplication(opportunity: MutableRecord) {
+async function factsForApplication(
+  opportunity: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const facts = await getCollection('Fact');
   const smrtOptions = getRequestScopedSmrtOptions();
   const subjects = await FactSubjectCollection.create(smrtOptions);
   const evidences = await FactEvidenceCollection.create(smrtOptions);
   const factIds = new Set<string>();
   const candidateFactIds = new Set<string>();
-  for (const subject of await linkedFactSubjects(opportunity)) {
+  for (const factSubject of await linkedFactSubjects(opportunity, subject)) {
     const links = await subjects.getForEntity(
-      subject.entityType,
-      subject.entityId,
+      factSubject.entityType,
+      factSubject.entityId,
     );
     for (const link of links) {
       const factId = stringValue(link.factId);
       if (!factId) continue;
       factIds.add(factId);
-      if (subject.entityType === 'CandidateProfile') {
+      if (factSubject.entityType === 'CandidateProfile') {
         candidateFactIds.add(factId);
       }
     }
@@ -1440,6 +1467,7 @@ function buildApplicationPacketMarkdown(options: {
 async function generateApplicationPacketAsset(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
   assertWriteAllowed: () => void,
 ) {
   const generatedAt = new Date();
@@ -1447,7 +1475,7 @@ async function generateApplicationPacketAsset(
   const opportunityId = stringValue(opportunity.id);
   const title = `Application packet - ${stringValue(opportunity.title) || opportunityId}`;
   const companyResearch = await companyResearchForOpportunity(opportunity);
-  const factEntries = await factsForApplication(opportunity);
+  const factEntries = await factsForApplication(opportunity, subject);
   const verifiedCandidateFacts = verifiedCandidateFactEntries(factEntries);
   const sourceUrls = packetSourceUrls({
     application,
@@ -1484,10 +1512,11 @@ async function generateApplicationPacketAsset(
   // database-visible asset unless the lifecycle gate is still held once that
   // external work returns.
   await assertMaterialArtifactWriteAllowed(artifacts, assertWriteAllowed);
-  const assetCollection = await getCollection('ResumeAsset');
-  const packetAsset = (await assetCollection.create(
+  const packetAsset = (await createPrivateRecord(
+    'ResumeAsset',
+    subject,
     {},
-  )) as unknown as MutableRecord;
+  )) as MutableRecord;
 
   Object.assign(packetAsset, {
     applicationId,
@@ -1609,6 +1638,7 @@ async function generateCoverLetterProse(
 async function generateCoverLetterAsset(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
   signal?: AbortSignal,
   assertWriteAllowed?: () => void,
 ) {
@@ -1616,7 +1646,7 @@ async function generateCoverLetterAsset(
   const applicationId = stringValue(application.id);
   const opportunityId = stringValue(opportunity.id);
   const title = `Cover letter - ${stringValue(opportunity.title) || opportunityId}`;
-  const factEntries = await factsForApplication(opportunity);
+  const factEntries = await factsForApplication(opportunity, subject);
   const candidateFactEntries = verifiedCandidateFactEntries(factEntries);
   const prose = await generateCoverLetterProse(
     opportunity,
@@ -1696,8 +1726,7 @@ async function generateCoverLetterAsset(
   if (assertWriteAllowed) {
     await assertMaterialArtifactWriteAllowed(artifacts, assertWriteAllowed);
   }
-  const assetCollection = await getCollection('ResumeAsset');
-  const asset = (await assetCollection.create({
+  const asset = (await createPrivateRecord('ResumeAsset', subject, {
     applicationId,
     assetType: 'cover_letter',
     generatedAt: now,
@@ -1719,7 +1748,7 @@ async function generateCoverLetterAsset(
     pdfPath: artifacts.pdfPath,
     textPath: artifacts.textPath,
     title,
-  })) as unknown as MutableRecord;
+  })) as MutableRecord;
   assertWriteAllowed?.();
   await asset.save();
   if (assertWriteAllowed) {
@@ -1737,22 +1766,26 @@ export async function generateApplicationPackage(
   options: {
     preflightOverrideReason?: string;
     signal?: AbortSignal;
+    subject: WorkspaceSubject;
     user?: Pick<User, 'id'> | null;
-  } = {},
+  },
 ) {
-  const applicationCollection = await getCollection('Application');
-  const opportunityCollection = await getCollection('Opportunity');
-  const application = (await applicationCollection.get(
+  const subject = requireWorkspaceSubject(options.subject);
+  const application = (await getPrivateRecord(
+    'Application',
     applicationId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
 
   const opportunityId = stringValue(application.opportunityId);
-  const opportunity = (await opportunityCollection.get(
+  const opportunity = (await getPrivateRecord(
+    'Opportunity',
     opportunityId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Application opportunity not found.');
   }
@@ -1767,7 +1800,7 @@ export async function generateApplicationPackage(
       generateApplicationPackageAfterPreflight({
         applicationId,
         currentOpportunity,
-        request: options,
+        request: { ...options, subject },
       }),
     user: options.user,
   });
@@ -1785,14 +1818,17 @@ async function generateApplicationPackageAfterPreflight(options: {
   request: {
     preflightOverrideReason?: string;
     signal?: AbortSignal;
+    subject: WorkspaceSubject;
     user?: Pick<User, 'id'> | null;
   };
 }) {
   assertOpportunityLifecycleLockIsActive();
-  const applicationCollection = await getCollection('Application');
-  const application = (await applicationCollection.get(
+  const subject = requireWorkspaceSubject(options.request.subject);
+  const application = (await getPrivateRecord(
+    'Application',
     options.applicationId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
@@ -1822,9 +1858,11 @@ async function generateApplicationPackageAfterPreflight(options: {
       runLifecycleMutation: runOpportunityLifecycleTransaction,
       signal: options.request.signal,
     });
-    const plannedApplication = (await applicationCollection.get(
+    const plannedApplication = (await getPrivateRecord(
+      'Application',
       stringValue(application.id),
-    )) as unknown as MutableRecord | null;
+      subject,
+    )) as MutableRecord | null;
     if (plannedApplication) {
       Object.assign(application, plannedApplication);
       restoreMaterialAssetIds(application, existingMaterialAssetIds);
@@ -1859,8 +1897,13 @@ async function generateApplicationPackageAfterPreflight(options: {
       stringValue(application.resumeMode) === 'default' &&
       !stringValue(application.resumeAssetId)
     ) {
-      const published =
-        (await getPublishedResumeAsset()) as ResumeRecord | null;
+      const published = (
+        await listPrivateRecords('ResumeAsset', subject, {
+          limit: 1,
+          orderBy: 'updated_at DESC',
+          where: { isPublished: true },
+        })
+      )[0] as ResumeRecord | undefined;
       assertOpportunityLifecycleLockIsActive();
       application.resumeAssetId = published?.id ?? '';
     } else if (stringValue(application.resumeMode) === 'generate_tailored') {
@@ -1868,6 +1911,7 @@ async function generateApplicationPackageAfterPreflight(options: {
       const resumeVariant = await getOrCreateResumeVariantForApplication(
         application,
         opportunity,
+        subject,
       );
       const { persistedState, variant } = resumeVariant;
       if (persistedState) {
@@ -1884,6 +1928,7 @@ async function generateApplicationPackageAfterPreflight(options: {
         tailoringName: tailoringOptions.tailoringName,
         tailoringSlug: tailoringOptions.tailoringSlug,
         targetOpportunityId: opportunityId,
+        subject,
       });
       trackGeneratedMaterialAsset(
         cleanupLedger,
@@ -1909,6 +1954,7 @@ async function generateApplicationPackageAfterPreflight(options: {
       const asset = await generateCoverLetterAsset(
         application,
         opportunity,
+        subject,
         options.request.signal,
         assertOpportunityLifecycleLockIsActive,
       );
@@ -1939,7 +1985,10 @@ async function generateApplicationPackageAfterPreflight(options: {
           const { seedApplicationAnswersFromCandidateProfile } = await import(
             './candidate-answers.js'
           );
-          await seedApplicationAnswersFromCandidateProfile(application);
+          await seedApplicationAnswersFromCandidateProfile(
+            application,
+            subject,
+          );
         } catch {
           // Leave answers untouched when profile/library facts can't be read.
         }
@@ -1953,6 +2002,7 @@ async function generateApplicationPackageAfterPreflight(options: {
     const packetAsset = await generateApplicationPacketAsset(
       application,
       opportunity,
+      subject,
       assertOpportunityLifecycleLockIsActive,
     );
     trackGeneratedMaterialAsset(cleanupLedger, packetAsset);

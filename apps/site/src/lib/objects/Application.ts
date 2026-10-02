@@ -1,14 +1,24 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
 import type { JobExecutionContext } from '@happyvertical/smrt-jobs';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 import type { AutoSubmitApplicationJobArgs } from '../server/auto-submit-application-job.js';
 
 @smrt({
   tableName: 'applications',
-  api: { include: ['list', 'get', 'create', 'update'] },
-  cli: { include: ['list', 'get', 'create', 'update'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Applications include personal answers and approval records. They travel
+  // only through owner-scoped workflows, never generic generated resources.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class Application extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text' })
+  ownerUserId = '';
+  @field({ type: 'text' })
+  candidateProfileId = '';
   @field({ type: 'text' })
   opportunityId = '';
   @field({ type: 'text' })

@@ -1,11 +1,37 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  approveApplicationForSubmission,
-  finalApplicationApprovalMaterialsAreCurrent,
-  loadApplicationReviewPageData,
-  markApplicationMaterialReviewed,
-  requestApplicationMaterialTweaks,
+  approveApplicationForSubmission as approveApplicationForSubject,
+  finalApplicationApprovalMaterialsAreCurrent as finalApprovalForSubject,
+  loadApplicationReviewPageData as loadReviewForSubject,
+  markApplicationMaterialReviewed as markReviewedForSubject,
+  requestApplicationMaterialTweaks as requestTweaksForSubject,
 } from './application-review';
+
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
+const loadApplicationReviewPageData = (applicationId: string) =>
+  loadReviewForSubject(applicationId, subject);
+const finalApplicationApprovalMaterialsAreCurrent = (applicationId: string) =>
+  finalApprovalForSubject(applicationId, subject);
+const requestApplicationMaterialTweaks = (
+  applicationId: string,
+  request: Request,
+  _actor?: { id?: string },
+) => requestTweaksForSubject(applicationId, request, subject);
+const markApplicationMaterialReviewed = (
+  applicationId: string,
+  request: Request,
+  _actor?: { id?: string },
+) => markReviewedForSubject(applicationId, request, subject);
+const approveApplicationForSubmission = (
+  applicationId: string,
+  request: Request,
+  _actor?: { id?: string },
+) => approveApplicationForSubject(applicationId, request, subject);
 
 type MockRecord = Record<string, unknown> & {
   id: string;
@@ -14,8 +40,11 @@ type MockRecord = Record<string, unknown> & {
 
 function record(data: Record<string, unknown>): MockRecord {
   return {
+    candidateProfileId: subject.profileId,
     id: String(data.id ?? 'record-1'),
+    ownerUserId: subject.userId,
     save: vi.fn(async () => {}),
+    tenantId: subject.tenantId,
     ...data,
   } as MockRecord;
 }
@@ -123,6 +152,20 @@ describe('application review materials', () => {
     mocks.collections.set('Opportunity', collection());
     mocks.collections.set('ResumeVariant', collection());
     mocks.collections.set('Task', collection());
+  });
+
+  it('does not load another candidate profile’s application review', async () => {
+    mocks.collections.set(
+      'Application',
+      collection([record({ id: 'app-private', status: 'awaiting_user' })]),
+    );
+
+    await expect(
+      loadReviewForSubject('app-private', {
+        ...subject,
+        profileId: 'profile-foreign',
+      }),
+    ).rejects.toMatchObject({ status: 404 });
   });
 
   it('clones reused resume assets into application-owned derivatives before review', async () => {
@@ -566,7 +609,7 @@ describe('application review materials', () => {
     );
   });
 
-  it('loads review data when direct application lookup misses a serialized id', async () => {
+  it('does not broaden an application lookup when its owned ID lookup misses', async () => {
     const applications = collection([
       record({
         applicationInstructions: 'Review the packet.',
@@ -579,30 +622,10 @@ describe('application review materials', () => {
     mocks.collections.set('Application', applications);
     mocks.collections.set('ResumeAsset', collection());
 
-    const data = await loadApplicationReviewPageData(
-      'sample-application-packet',
-    );
-
-    expect(data.application).toMatchObject({
-      id: 'sample-application-packet',
-      status: 'awaiting_user',
-    });
-    const answersMaterial = data.materials.find(
-      (item) => item.materialType === 'answers',
-    );
-    expect(answersMaterial).toMatchObject({
-      materialRecordId: 'sample-application-packet',
-    });
-    expect(answersMaterial?.body).toContain('Instructions: Review the packet.');
-    // The fingerprint digest closes the gap between the readable rendering
-    // and the exact stored schema/answers payloads.
-    expect(answersMaterial?.body).toMatch(
-      /Answers fingerprint digest: [0-9a-f]{64}$/,
-    );
-    expect(applications.list).toHaveBeenCalledWith({
-      limit: 1000,
-      orderBy: 'updated_at DESC',
-    });
+    await expect(
+      loadApplicationReviewPageData('sample-application-packet'),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(applications.list).not.toHaveBeenCalled();
   });
 
   it('saves material comments and moves applications back to drafting for tweaks', async () => {

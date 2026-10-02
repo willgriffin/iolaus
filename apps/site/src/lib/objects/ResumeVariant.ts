@@ -1,12 +1,20 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'resume_variants',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class ResumeVariant extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text' })
+  ownerUserId = '';
+  @field({ type: 'text' })
+  candidateProfileId = '';
   @field({ type: 'text' })
   applicationId = '';
   @field({ type: 'text' })
@@ -15,8 +23,6 @@ export class ResumeVariant extends SmrtObject {
   opportunityId = '';
   @field({ type: 'text' })
   companyId = '';
-  @field({ type: 'text' })
-  candidateProfileId = '';
   @field({ type: 'text' })
   resumeAssetId = '';
   @field({ type: 'text' })

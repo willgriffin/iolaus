@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   candidateFactState,
-  DEFAULT_CANDIDATE_PROFILE_ID,
   isCandidateResumeAssetSelectable,
   saveCandidateOnboarding,
 } from './candidate-onboarding.js';
+
+const subject = {
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
 
 type Row = Record<string, unknown> & { id: string; save: () => Promise<void> };
 
@@ -92,7 +96,9 @@ describe('saveCandidateOnboarding', () => {
         assetType: 'resume',
         candidateProfileId: '',
         id: 'resume-1',
+        ownerUserId: subject.userId,
         save: async () => undefined,
+        tenantId: subject.tenantId,
       },
     ];
   });
@@ -131,6 +137,7 @@ describe('saveCandidateOnboarding', () => {
         resumeAssetId: 'resume-1',
         saveVoluntaryDemographics: true,
       },
+      subject,
       collections(),
     );
 
@@ -154,20 +161,26 @@ describe('saveCandidateOnboarding', () => {
       }),
     ]);
     expect(assetRows[0].candidateProfileId).toBe(profileRows[0].id);
+    expect(profileRows[0]).toMatchObject({
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    });
   });
 
-  it('uses one stable identity for the canonical first-run profile', async () => {
-    await saveCandidateOnboarding({ firstName: 'Ada' }, collections());
-    expect(profileRows[0]?.id).toBe(DEFAULT_CANDIDATE_PROFILE_ID);
+  it('uses the generated profile identity for a first-run profile', async () => {
+    await saveCandidateOnboarding({ firstName: 'Ada' }, subject, collections());
+    expect(profileRows[0]?.id).toBeTruthy();
   });
 
   it('does not store voluntary demographics without explicit consent and is restart-idempotent', async () => {
     await saveCandidateOnboarding(
       { demographics: { race: 'Example' }, firstName: 'Ada' },
+      subject,
       collections(),
     );
     await saveCandidateOnboarding(
       { email: 'ada@example.invalid', firstName: 'Ada', lastName: 'Lovelace' },
+      { ...subject, profileId: profileRows[0].id },
       collections(),
     );
 
@@ -181,6 +194,7 @@ describe('saveCandidateOnboarding', () => {
     await expect(
       saveCandidateOnboarding(
         { email: 'ada@example.invalid', resumeAssetId: 'missing-resume' },
+        subject,
         collections(),
       ),
     ).rejects.toThrow('Select an existing resume asset');
@@ -194,11 +208,61 @@ describe('saveCandidateOnboarding', () => {
     await expect(
       saveCandidateOnboarding(
         { email: 'ada@example.invalid', resumeAssetId: 'resume-1' },
+        subject,
         collections(),
       ),
     ).rejects.toThrow('belongs to another profile');
 
     expect(profileRows).toEqual([]);
     expect(assetRows[0].candidateProfileId).toBe('other-profile');
+  });
+
+  it('rejects malformed subjects before querying or writing shared rows', async () => {
+    await expect(
+      saveCandidateOnboarding(
+        { firstName: 'Ada' },
+        { ...subject, tenantId: '  ' },
+        collections(),
+      ),
+    ).rejects.toThrow('tenant ID');
+    expect(profileRows).toEqual([]);
+  });
+
+  it('isolates profile and reusable answers across user and tenant subjects', async () => {
+    await saveCandidateOnboarding(
+      {
+        firstName: 'Ada',
+        reusableAnswers: [
+          { label: 'Work authorization', saveForReuse: true, value: 'Canada' },
+        ],
+      },
+      subject,
+      collections(),
+    );
+    await saveCandidateOnboarding(
+      {
+        firstName: 'Grace',
+        reusableAnswers: [
+          { label: 'Work authorization', saveForReuse: true, value: 'US' },
+        ],
+      },
+      { tenantId: 'tenant-2', userId: 'user-2' },
+      collections(),
+    );
+    expect(profileRows).toHaveLength(2);
+    expect(answerRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerUserId: 'user-1',
+          tenantId: 'tenant-1',
+          value: 'Canada',
+        }),
+        expect.objectContaining({
+          ownerUserId: 'user-2',
+          tenantId: 'tenant-2',
+          value: 'US',
+        }),
+      ]),
+    );
   });
 });

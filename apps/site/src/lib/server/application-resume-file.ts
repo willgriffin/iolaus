@@ -1,10 +1,15 @@
 import { safePdfFilename } from './http-headers.js';
 import {
+  getPrivateRecord,
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import {
   CURRENT_RESUME_PDF_BASENAME,
   getResumeFilesystem,
   PUBLIC_RESUME_PDF_FILENAME,
 } from './resume-files.js';
-import { getCollection } from './smrt.js';
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -30,16 +35,19 @@ export interface ApplicationResumePdf {
 
 export async function applicationResumePdfFile(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<ApplicationResumePdf | null> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  if (!recordOwnedBySubject(application, verifiedSubject)) return null;
   const resumeAssetId = stringValue(application.resumeAssetId);
   if (!resumeAssetId) return null;
 
   try {
-    const resumeAssets = await getCollection('ResumeAsset');
-    const asset = (await resumeAssets.get(resumeAssetId)) as Record<
-      string,
-      unknown
-    > | null;
+    const asset = await getPrivateRecord(
+      'ResumeAsset',
+      resumeAssetId,
+      verifiedSubject,
+    );
     const pdfPath = stringValue(asset?.pdfPath);
     if (!pdfPath) return null;
     return {
@@ -53,14 +61,16 @@ export async function applicationResumePdfFile(
 
 export async function applicationResumePdfPath(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<string> {
-  return (await applicationResumePdfFile(application))?.pdfPath ?? '';
+  return (await applicationResumePdfFile(application, subject))?.pdfPath ?? '';
 }
 
 export async function applicationResumePdfExists(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<boolean> {
-  const pdfPath = await applicationResumePdfPath(application);
+  const pdfPath = await applicationResumePdfPath(application, subject);
   if (!pdfPath) return false;
 
   try {

@@ -18,7 +18,44 @@ import { createHash } from 'node:crypto';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import type { AtsFormSchema } from './ats/types.js';
 import { parseRequiredAnswers } from './auto-submit-eligibility.js';
+import type { CandidateOnboardingSubject } from './candidate-onboarding.js';
 import { getCollection } from './smrt.js';
+
+function requireCandidateAnswerSubject(
+  subject: CandidateOnboardingSubject,
+): Required<CandidateOnboardingSubject> {
+  const requireId = (value: unknown, label: string) => {
+    if (typeof value !== 'string') {
+      throw new Error(`A valid candidate ${label} is required.`);
+    }
+    const id = value.trim();
+    if (
+      !id ||
+      id.length > 160 ||
+      [...id].some((character) => character.charCodeAt(0) < 32)
+    ) {
+      throw new Error(`A valid candidate ${label} is required.`);
+    }
+    return id;
+  };
+  return {
+    profileId: requireId(subject?.profileId, 'profile ID'),
+    tenantId: requireId(subject?.tenantId, 'tenant ID'),
+    userId: requireId(subject?.userId, 'user ID'),
+  };
+}
+
+function candidateAnswerScope(subject: Required<CandidateOnboardingSubject>) {
+  return {
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  };
+}
+
+function candidateProfileScope(subject: Required<CandidateOnboardingSubject>) {
+  return { ownerUserId: subject.userId, tenantId: subject.tenantId };
+}
 
 /** Profile facts that may seed ATS identity/contact questions. */
 export interface CandidateProfileFacts {
@@ -251,8 +288,10 @@ export interface ApplicationSeedSummary {
  */
 export async function seedApplicationAnswersFromCandidateProfile(
   application: Record<string, unknown>,
+  subject: CandidateOnboardingSubject,
 ): Promise<ApplicationSeedSummary> {
   const empty: ApplicationSeedSummary = { seeded: 0, seededFrom: {} };
+  const scope = requireCandidateAnswerSubject(subject);
   const schema = parseAtsFormSchema(application.requiredQuestionsJson);
   if (!schema) return empty;
 
@@ -260,17 +299,18 @@ export async function seedApplicationAnswersFromCandidateProfile(
   const profileRecords = (await profiles.list({
     limit: 100,
     orderBy: 'updated_at DESC',
-    where: { active: true },
+    where: { ...candidateProfileScope(scope), active: true },
   })) as unknown as Record<string, unknown>[];
-  const profile = selectSeedingProfile(profileRecords);
-  const libraryProfileKey = stringValue(profile?.profileKey) || 'default';
+  const profile =
+    profileRecords.find((row) => stringValue(row.id) === scope.profileId) ??
+    null;
 
   const answersCollection = await getCollection('CandidateAnswer');
   const reusableAnswers = reusableAnswersFromLibrary(
     ((await answersCollection.list({
       limit: 500,
       orderBy: 'updated_at DESC',
-      where: { profileKey: libraryProfileKey, active: true },
+      where: { ...candidateAnswerScope(scope), active: true },
     })) as unknown as Record<string, unknown>[]) ?? [],
   );
 
@@ -438,7 +478,10 @@ export interface ApplicationAnswersEditorState {
  * newest active). Keeping one source of truth prevents identity facts and
  * reusable answers from coming from different profiles.
  */
-export async function resolveLibraryProfileKey(): Promise<string> {
+export async function resolveLibraryProfileKey(
+  subject: CandidateOnboardingSubject,
+): Promise<string> {
+  const scope = requireCandidateAnswerSubject(subject);
   const profiles = (await getCollection('CandidateProfile')) as unknown as {
     list: (
       options?: Record<string, unknown>,
@@ -447,9 +490,12 @@ export async function resolveLibraryProfileKey(): Promise<string> {
   const rows = await profiles.list({
     limit: 100,
     orderBy: 'updated_at DESC',
-    where: { active: true },
+    where: { ...candidateProfileScope(scope), active: true },
   });
-  return stringValue(selectSeedingProfile(rows)?.profileKey) || 'default';
+  const profile = rows.find((row) => stringValue(row.id) === scope.profileId);
+  if (!profile)
+    throw new Error('The selected candidate profile is unavailable.');
+  return stringValue(profile.profileKey);
 }
 
 /**
@@ -461,7 +507,9 @@ export async function resolveLibraryProfileKey(): Promise<string> {
  */
 export async function loadApplicationAnswersEditorState(
   application: Record<string, unknown>,
+  subject: CandidateOnboardingSubject,
 ): Promise<ApplicationAnswersEditorState> {
+  const scope = requireCandidateAnswerSubject(subject);
   const schema = parseAtsFormSchema(application.requiredQuestionsJson);
   if (!schema) {
     return { ats: '', hasSchema: false, questions: [], reusableAnswerCount: 0 };
@@ -475,10 +523,10 @@ export async function loadApplicationAnswersEditorState(
   const profileRows = await profiles.list({
     limit: 100,
     orderBy: 'updated_at DESC',
-    where: { active: true },
+    where: { ...candidateProfileScope(scope), active: true },
   });
-  const profile = selectSeedingProfile(profileRows);
-  const libraryProfileKey = stringValue(profile?.profileKey) || 'default';
+  const profile =
+    profileRows.find((row) => stringValue(row.id) === scope.profileId) ?? null;
 
   const answersCollection = (await getCollection(
     'CandidateAnswer',
@@ -490,7 +538,7 @@ export async function loadApplicationAnswersEditorState(
   const libraryRows = await answersCollection.list({
     limit: 500,
     orderBy: 'updated_at DESC',
-    where: { profileKey: libraryProfileKey, active: true },
+    where: { ...candidateAnswerScope(scope), active: true },
   });
   const reusableAnswers = reusableAnswersFromLibrary(libraryRows);
 

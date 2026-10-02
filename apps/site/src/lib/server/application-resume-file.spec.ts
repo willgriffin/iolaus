@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({
   exists: vi.fn(async (_path: string) => true),
 }));
 
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async () => ({
     get: async (id: string) => mocks.assets.get(id) ?? null,
@@ -31,22 +37,49 @@ describe('application resume file resolution', () => {
 
   it('uses the selected application resume PDF rather than a global fallback', async () => {
     mocks.assets.set('resume-app-1', {
+      candidateProfileId: subject.profileId,
       id: 'resume-app-1',
+      ownerUserId: subject.userId,
       pdfBasename: 'resume.pdf',
       pdfPath: 'application-packages/app-1/resume.pdf',
+      tenantId: subject.tenantId,
     });
 
     await expect(
-      applicationResumePdfFile({ resumeAssetId: 'resume-app-1' }),
+      applicationResumePdfFile(
+        {
+          ...subject,
+          resumeAssetId: 'resume-app-1',
+          ownerUserId: subject.userId,
+          candidateProfileId: subject.profileId,
+        },
+        subject,
+      ),
     ).resolves.toEqual({
       filename: 'resume.pdf',
       pdfPath: 'application-packages/app-1/resume.pdf',
     });
     await expect(
-      applicationResumePdfPath({ resumeAssetId: 'resume-app-1' }),
+      applicationResumePdfPath(
+        {
+          ...subject,
+          resumeAssetId: 'resume-app-1',
+          ownerUserId: subject.userId,
+          candidateProfileId: subject.profileId,
+        },
+        subject,
+      ),
     ).resolves.toBe('application-packages/app-1/resume.pdf');
     await expect(
-      applicationResumePdfExists({ resumeAssetId: 'resume-app-1' }),
+      applicationResumePdfExists(
+        {
+          ...subject,
+          resumeAssetId: 'resume-app-1',
+          ownerUserId: subject.userId,
+          candidateProfileId: subject.profileId,
+        },
+        subject,
+      ),
     ).resolves.toBe(true);
     expect(mocks.exists).toHaveBeenCalledWith(
       'application-packages/app-1/resume.pdf',
@@ -54,8 +87,48 @@ describe('application resume file resolution', () => {
   });
 
   it('fails closed when there is no selected resume PDF', async () => {
-    await expect(applicationResumePdfPath({})).resolves.toBe('');
-    await expect(applicationResumePdfExists({})).resolves.toBe(false);
+    await expect(
+      applicationResumePdfPath(
+        {
+          ...subject,
+          ownerUserId: subject.userId,
+          candidateProfileId: subject.profileId,
+        },
+        subject,
+      ),
+    ).resolves.toBe('');
+    await expect(
+      applicationResumePdfExists(
+        {
+          ...subject,
+          ownerUserId: subject.userId,
+          candidateProfileId: subject.profileId,
+        },
+        subject,
+      ),
+    ).resolves.toBe(false);
     expect(mocks.exists).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve another profile's selected asset from its opaque ID", async () => {
+    mocks.assets.set('resume-other-profile', {
+      candidateProfileId: 'profile-other',
+      id: 'resume-other-profile',
+      ownerUserId: subject.userId,
+      pdfPath: 'application-packages/other/resume.pdf',
+      tenantId: subject.tenantId,
+    });
+
+    await expect(
+      applicationResumePdfFile(
+        {
+          candidateProfileId: subject.profileId,
+          ownerUserId: subject.userId,
+          resumeAssetId: 'resume-other-profile',
+          tenantId: subject.tenantId,
+        },
+        subject,
+      ),
+    ).resolves.toBeNull();
   });
 });

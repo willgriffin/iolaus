@@ -10,7 +10,6 @@ import type { ResumeAsset } from '../objects/ResumeAsset.js';
 import {
   type CandidateOnboardingCollections,
   claimResumeAssetAtomically,
-  DEFAULT_CANDIDATE_PROFILE_ID,
   persistCandidateOnboarding,
 } from './candidate-onboarding.js';
 import { getCollection } from './smrt.js';
@@ -40,6 +39,8 @@ function isConcurrentWriteConflict(error: unknown): boolean {
       /Revision conflict/.test(error.message))
   );
 }
+
+const subject = { tenantId: 'tenant-fixture', userId: 'user-fixture' };
 
 describe('Candidate onboarding persistence', () => {
   const databases: DatabaseInterface[] = [];
@@ -85,7 +86,7 @@ describe('Candidate onboarding persistence', () => {
     }
 
     const save = async (database: DatabaseInterface, firstName: string) => {
-      return await persistCandidateOnboarding({ firstName }, {
+      return await persistCandidateOnboarding({ firstName }, subject, {
         candidateAnswers: await getCollection<CandidateAnswer>(
           'CandidateAnswer',
           { db: database },
@@ -146,7 +147,10 @@ describe('Candidate onboarding persistence', () => {
       where: { profileKey: 'default' },
     });
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.id).toBe(DEFAULT_CANDIDATE_PROFILE_ID);
+    expect(rows[0]).toMatchObject({
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    });
   });
 
   it('atomically assigns a resume across independent SQLite handles, rolls back the loser, and permits owner replay', async () => {
@@ -180,14 +184,20 @@ describe('Candidate onboarding persistence', () => {
     });
     const firstProfile = await profiles.create({
       name: 'Fictional first contender',
+      ownerUserId: subject.userId,
       profileKey: 'fixture-first',
+      tenantId: subject.tenantId,
     });
     const secondProfile = await profiles.create({
       name: 'Fictional second contender',
+      ownerUserId: subject.userId,
       profileKey: 'fixture-second',
+      tenantId: subject.tenantId,
     });
     const asset = await assets.create({
       assetType: 'resume',
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
       title: 'Synthetic concurrency resume',
     });
     const assetId = requiredId(asset);
@@ -203,11 +213,10 @@ describe('Candidate onboarding persistence', () => {
       return await transaction.call(handle, async (transaction) => {
         const profileId = requiredId(profile);
         await beforeClaim?.();
-        const claimed = await claimResumeAssetAtomically(
-          transaction,
-          assetId,
+        const claimed = await claimResumeAssetAtomically(transaction, assetId, {
+          ...subject,
           profileId,
-        );
+        });
         if (!claimed) {
           throw new Error(
             'Resume asset was already claimed by another profile.',
@@ -298,11 +307,10 @@ describe('Candidate onboarding persistence', () => {
         if (!persisted) throw new Error('Fixture profile is unavailable.');
         persisted.summary = `attempt-${requiredId(loser.profile)}`;
         await persisted.save();
-        const claimed = await claimResumeAssetAtomically(
-          transaction,
-          assetId,
-          requiredId(loser.profile),
-        );
+        const claimed = await claimResumeAssetAtomically(transaction, assetId, {
+          ...subject,
+          profileId: requiredId(loser.profile),
+        });
         if (!claimed) {
           throw new Error(
             'Resume asset was already claimed by another profile.',
@@ -332,11 +340,10 @@ describe('Candidate onboarding persistence', () => {
       winnerTransaction.call(
         database,
         async (transaction) =>
-          await claimResumeAssetAtomically(
-            transaction,
-            assetId,
-            requiredId(winner.profile),
-          ),
+          await claimResumeAssetAtomically(transaction, assetId, {
+            ...subject,
+            profileId: requiredId(winner.profile),
+          }),
       ),
     ).resolves.toBe(true);
   });

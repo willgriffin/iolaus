@@ -57,6 +57,17 @@ export interface CandidateOnboardingInput {
   workAuthorization?: string;
 }
 
+/**
+ * The only authority accepted by private candidate persistence.  Callers must
+ * resolve this from the authenticated request; profile selection is never
+ * inferred from a global/default row.
+ */
+export interface CandidateOnboardingSubject {
+  tenantId: string;
+  userId: string;
+  profileId?: string;
+}
+
 type MutableRecord = Record<string, unknown> & {
   id?: string;
   save: () => Promise<void>;
@@ -80,6 +91,58 @@ type TransactionalOnboardingDatabase = OnboardingDatabase & {
   ) => Promise<T>;
 };
 
+const MAX_SUBJECT_ID_LENGTH = 160;
+
+function requiredSubjectId(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`A valid candidate ${label} is required.`);
+  }
+  const id = value.trim();
+  if (
+    !id ||
+    id.length > MAX_SUBJECT_ID_LENGTH ||
+    [...id].some((character) => character.charCodeAt(0) < 32)
+  ) {
+    throw new Error(`A valid candidate ${label} is required.`);
+  }
+  return id;
+}
+
+/** Reject malformed or partial scope before any collection query or mutation. */
+export function requireCandidateOnboardingSubject(
+  subject: CandidateOnboardingSubject,
+): CandidateOnboardingSubject {
+  return {
+    tenantId: requiredSubjectId(subject?.tenantId, 'tenant ID'),
+    userId: requiredSubjectId(subject?.userId, 'user ID'),
+    ...(subject?.profileId === undefined
+      ? {}
+      : { profileId: requiredSubjectId(subject.profileId, 'profile ID') }),
+  };
+}
+
+function requireCandidateProfileSubject(
+  subject: CandidateOnboardingSubject,
+): Required<CandidateOnboardingSubject> {
+  const verified = requireCandidateOnboardingSubject(subject);
+  return {
+    ...verified,
+    profileId: requiredSubjectId(verified.profileId, 'profile ID'),
+  };
+}
+
+function subjectWhere(subject: Required<CandidateOnboardingSubject>) {
+  return {
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  };
+}
+
+function profileWhere(subject: CandidateOnboardingSubject) {
+  return { ownerUserId: subject.userId, tenantId: subject.tenantId };
+}
+
 /**
  * Claim an unowned resume in a single conditional write. The predicate is
  * deliberately re-evaluated by the database at write time, rather than
@@ -88,20 +151,26 @@ type TransactionalOnboardingDatabase = OnboardingDatabase & {
 export async function claimResumeAssetAtomically(
   database: Pick<OnboardingDatabase, 'query'>,
   assetId: string,
-  profileId: string,
+  subject: CandidateOnboardingSubject,
 ): Promise<boolean> {
+  const scope = requireCandidateProfileSubject(subject);
+  const id = requiredSubjectId(assetId, 'resume asset ID');
   const result = await database.query(
     `UPDATE resume_assets
        SET candidate_profile_id = ?
      WHERE id = ?
        AND asset_type = 'resume'
+       AND tenant_id = ?
+       AND owner_user_id = ?
        AND (candidate_profile_id IS NULL
          OR candidate_profile_id = ''
          OR candidate_profile_id = ?)
    RETURNING id`,
-    profileId,
-    assetId,
-    profileId,
+    scope.profileId,
+    id,
+    scope.tenantId,
+    scope.userId,
+    scope.profileId,
   );
   return Array.isArray(result.rows) && result.rows.length === 1;
 }
@@ -265,19 +334,23 @@ async function defaultCollections(
 
 async function findDefaultProfile(
   collection: Collection,
+  subject: CandidateOnboardingSubject,
 ): Promise<MutableRecord | null> {
+  if (!subject.profileId) return null;
   const rows = await collection.list({
     limit: 100,
     orderBy: 'updated_at DESC',
-    where: { profileKey: PROFILE_KEY },
+    where: profileWhere(subject),
   });
-  return rows.find((row) => row.active !== false) ?? rows[0] ?? null;
+  return (
+    rows.find((row) => stringValue(row.id, 160) === subject.profileId) ?? null
+  );
 }
 
 async function saveExplicitReusableAnswer(options: {
   collection: Collection;
   label: string;
-  profileKey: string;
+  subject: Required<CandidateOnboardingSubject>;
   value: string;
 }): Promise<void> {
   const label = stringValue(options.label, 500);
@@ -288,7 +361,7 @@ async function saveExplicitReusableAnswer(options: {
   const existing = await options.collection.list({
     limit: 500,
     orderBy: 'updated_at DESC',
-    where: { profileKey: options.profileKey },
+    where: subjectWhere(options.subject),
   });
   const matching = existing.filter(
     (row) => reusableAnswerLabelKey(row) === labelKey,
@@ -310,7 +383,8 @@ async function saveExplicitReusableAnswer(options: {
       active: true,
       label,
       labelKey,
-      profileKey: options.profileKey,
+      ...subjectWhere(options.subject),
+      profileKey: PROFILE_KEY,
       provenance: 'explicit_reusable_answer',
       revokedForReuseAt: null,
       savedForReuseAt: now,
@@ -333,10 +407,11 @@ async function selectResumeAsset(options: {
   claimResumeAsset?: AtomicResumeAssetClaim;
   collection: Collection;
   profile: MutableRecord;
+  subject: Required<CandidateOnboardingSubject>;
 }): Promise<string> {
   const id = stringValue(options.assetId, 160);
   if (!id) return '';
-  const profileId = stringValue(options.profile.id, 160);
+  const profileId = options.subject.profileId;
   if (options.claimResumeAsset) {
     if (!profileId || !(await options.claimResumeAsset(id, profileId))) {
       throw new Error(
@@ -352,6 +427,12 @@ async function selectResumeAsset(options: {
     );
   }
   const owner = stringValue(asset.candidateProfileId, 160);
+  if (
+    stringValue(asset.tenantId, 160) !== options.subject.tenantId ||
+    stringValue(asset.ownerUserId, 160) !== options.subject.userId
+  ) {
+    throw new Error('The selected resume asset belongs to another profile.');
+  }
   if (owner && profileId && owner !== profileId) {
     throw new Error('The selected resume asset belongs to another profile.');
   }
@@ -370,7 +451,7 @@ async function selectResumeAsset(options: {
 async function validateResumeAssetSelection(options: {
   assetId: string;
   collection: Collection;
-  profileId?: string;
+  subject: Required<CandidateOnboardingSubject>;
 }): Promise<void> {
   const id = stringValue(options.assetId, 160);
   if (!id) return;
@@ -381,7 +462,13 @@ async function validateResumeAssetSelection(options: {
     );
   }
   const owner = stringValue(asset.candidateProfileId, 160);
-  const profileId = stringValue(options.profileId, 160);
+  if (
+    stringValue(asset.tenantId, 160) !== options.subject.tenantId ||
+    stringValue(asset.ownerUserId, 160) !== options.subject.userId
+  ) {
+    throw new Error('The selected resume asset belongs to another profile.');
+  }
+  const profileId = options.subject.profileId;
   if (owner && owner !== profileId) {
     throw new Error('The selected resume asset belongs to another profile.');
   }
@@ -394,8 +481,10 @@ async function validateResumeAssetSelection(options: {
  */
 export async function persistCandidateOnboarding(
   input: CandidateOnboardingInput,
+  subject: CandidateOnboardingSubject,
   collections: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
+  const scope = requireCandidateOnboardingSubject(subject);
   const key = profileKey(input.profileKey);
   const facts = candidateFactState(input);
   const now = new Date();
@@ -432,19 +521,23 @@ export async function persistCandidateOnboarding(
     workAuthorization: stringValue(input.workAuthorization),
   };
 
-  const profile = await findDefaultProfile(collections.candidateProfiles);
+  const profile = await findDefaultProfile(
+    collections.candidateProfiles,
+    scope,
+  );
   if (!collections.claimResumeAsset) {
     await validateResumeAssetSelection({
       assetId: selectedResumeAssetId,
       collection: collections.resumeAssets,
-      profileId: profile?.id,
+      subject: scope,
     });
   }
   const savedProfile = profile
     ? Object.assign(profile, profileValues)
     : await collections.candidateProfiles.create({
         active: true,
-        id: DEFAULT_CANDIDATE_PROFILE_ID,
+        ownerUserId: scope.userId,
+        tenantId: scope.tenantId,
         ...profileValues,
       });
   const selectedAsset = await selectResumeAsset({
@@ -452,6 +545,10 @@ export async function persistCandidateOnboarding(
     claimResumeAsset: collections.claimResumeAsset,
     collection: collections.resumeAssets,
     profile: savedProfile,
+    subject: requireCandidateProfileSubject({
+      ...scope,
+      profileId: stringValue(savedProfile.id, 160),
+    }),
   });
   await savedProfile.save();
 
@@ -465,7 +562,10 @@ export async function persistCandidateOnboarding(
     await saveExplicitReusableAnswer({
       collection: collections.candidateAnswers,
       label,
-      profileKey: key,
+      subject: requireCandidateProfileSubject({
+        ...scope,
+        profileId: stringValue(savedProfile.id, 160),
+      }),
       value,
     });
     savedForReuse += 1;
@@ -485,10 +585,15 @@ export async function persistCandidateOnboarding(
  */
 export async function saveCandidateOnboarding(
   input: CandidateOnboardingInput,
+  subject: CandidateOnboardingSubject,
   suppliedCollections?: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
   if (suppliedCollections) {
-    return await persistCandidateOnboarding(input, suppliedCollections);
+    return await persistCandidateOnboarding(
+      input,
+      subject,
+      suppliedCollections,
+    );
   }
 
   const options = getRequestScopedSmrtOptions();
@@ -503,8 +608,11 @@ export async function saveCandidateOnboarding(
     const collections = await defaultCollections(
       { db: transaction },
       async (assetId, profileId) =>
-        await claimResumeAssetAtomically(transaction, assetId, profileId),
+        await claimResumeAssetAtomically(transaction, assetId, {
+          ...subject,
+          profileId,
+        }),
     );
-    return await persistCandidateOnboarding(input, collections);
+    return await persistCandidateOnboarding(input, subject, collections);
   });
 }

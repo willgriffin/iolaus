@@ -23,7 +23,13 @@ vi.mock('./smrt.js', () => ({
     if (!found) throw new Error(`Missing collection ${className}`);
     return {
       list: async (options: Record<string, unknown> = {}) => {
-        let rows = [...found.records];
+        let rows = found.records.map((record) => ({
+          candidateProfileId: 'profile-1',
+          ...(className === 'CandidateProfile' ? { id: 'profile-1' } : {}),
+          ownerUserId: 'user-1',
+          tenantId: 'tenant-1',
+          ...record,
+        }));
         const where = options.where as Record<string, unknown> | undefined;
         if (where) {
           rows = rows.filter((row) =>
@@ -70,6 +76,12 @@ const fullFacts = {
   location: 'Boulder, CO',
   phone: '+1 303 555 0123',
   workAuthorization: 'US citizen; no sponsorship needed',
+};
+
+const candidateSubject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
 };
 
 function schemaJson(schema: AtsFormSchema): string {
@@ -509,8 +521,10 @@ describe('seedApplicationAnswersFromCandidateProfile', () => {
       requiredQuestionsJson: schemaJson(schema),
     };
 
-    const result =
-      await seedApplicationAnswersFromCandidateProfile(application);
+    const result = await seedApplicationAnswersFromCandidateProfile(
+      application,
+      candidateSubject,
+    );
 
     expect(result.seeded).toBe(1);
     const answers = JSON.parse(String(application.requiredAnswersJson));
@@ -559,8 +573,10 @@ describe('seedApplicationAnswersFromCandidateProfile', () => {
       ),
     };
 
-    const result =
-      await seedApplicationAnswersFromCandidateProfile(application);
+    const result = await seedApplicationAnswersFromCandidateProfile(
+      application,
+      candidateSubject,
+    );
 
     expect(result.seeded).toBe(1);
     expect(result.seededFrom.q_cover).toBe('library');
@@ -574,8 +590,10 @@ describe('seedApplicationAnswersFromCandidateProfile', () => {
       requiredAnswersJson: '{}',
       requiredQuestionsJson: '',
     };
-    const result =
-      await seedApplicationAnswersFromCandidateProfile(application);
+    const result = await seedApplicationAnswersFromCandidateProfile(
+      application,
+      candidateSubject,
+    );
     expect(result.seeded).toBe(0);
     expect(application.requiredAnswersJson).toBe('{}');
   });
@@ -601,8 +619,10 @@ describe('seedApplicationAnswersFromCandidateProfile', () => {
       ),
     };
 
-    const result =
-      await seedApplicationAnswersFromCandidateProfile(application);
+    const result = await seedApplicationAnswersFromCandidateProfile(
+      application,
+      candidateSubject,
+    );
 
     expect(result.seeded).toBe(0);
     expect(application.requiredAnswersJson).toBe(stored);
@@ -639,34 +659,37 @@ describe('loadApplicationAnswersEditorState', () => {
       ],
     });
 
-    const state = await loadApplicationAnswersEditorState({
-      requiredAnswersJson: JSON.stringify({
-        first_name: 'Alex',
-      }),
-      requiredQuestionsJson: schemaJson(
-        greenhouseSchema([
-          {
-            id: 'first_name',
-            label: 'First Name',
-            required: true,
-            type: 'input_text',
-          },
-          { id: 'phone', label: 'Phone', required: true, type: 'input_text' },
-          {
-            id: 'q_cover',
-            label: 'Why this role?',
-            required: true,
-            type: 'textarea',
-          },
-          {
-            id: 'resume',
-            label: 'Resume',
-            required: true,
-            type: 'input_file',
-          },
-        ]),
-      ),
-    });
+    const state = await loadApplicationAnswersEditorState(
+      {
+        requiredAnswersJson: JSON.stringify({
+          first_name: 'Alex',
+        }),
+        requiredQuestionsJson: schemaJson(
+          greenhouseSchema([
+            {
+              id: 'first_name',
+              label: 'First Name',
+              required: true,
+              type: 'input_text',
+            },
+            { id: 'phone', label: 'Phone', required: true, type: 'input_text' },
+            {
+              id: 'q_cover',
+              label: 'Why this role?',
+              required: true,
+              type: 'textarea',
+            },
+            {
+              id: 'resume',
+              label: 'Resume',
+              required: true,
+              type: 'input_file',
+            },
+          ]),
+        ),
+      },
+      candidateSubject,
+    );
 
     expect(state.hasSchema).toBe(true);
     expect(state.ats).toBe('greenhouse');
@@ -723,21 +746,24 @@ describe('loadApplicationAnswersEditorState', () => {
       ],
     });
 
-    const state = await loadApplicationAnswersEditorState({
-      requiredAnswersJson: JSON.stringify({
-        q_cover: 'Tailored application-specific answer.',
-      }),
-      requiredQuestionsJson: schemaJson(
-        greenhouseSchema([
-          {
-            id: 'q_cover',
-            label: 'Why this role?',
-            required: true,
-            type: 'textarea',
-          },
-        ]),
-      ),
-    });
+    const state = await loadApplicationAnswersEditorState(
+      {
+        requiredAnswersJson: JSON.stringify({
+          q_cover: 'Tailored application-specific answer.',
+        }),
+        requiredQuestionsJson: schemaJson(
+          greenhouseSchema([
+            {
+              id: 'q_cover',
+              label: 'Why this role?',
+              required: true,
+              type: 'textarea',
+            },
+          ]),
+        ),
+      },
+      candidateSubject,
+    );
 
     expect(state.questions[0]).toMatchObject({
       answered: true,
@@ -748,11 +774,13 @@ describe('loadApplicationAnswersEditorState', () => {
     });
   });
 
-  it('prefers the designated default profile over the newest active record', async () => {
+  it('loads only the explicitly selected candidate profile', async () => {
     mocks.collections.set('CandidateProfile', {
       records: [
         {
           active: true,
+          candidateProfileId: 'profile-other',
+          id: 'profile-other',
           email: 'other@example.com',
           name: 'Other Person',
           profileKey: 'alt',
@@ -760,6 +788,8 @@ describe('loadApplicationAnswersEditorState', () => {
         },
         {
           active: true,
+          candidateProfileId: candidateSubject.profileId,
+          id: candidateSubject.profileId,
           email: 'will@example.com',
           firstName: 'Example',
           isDefault: true,
@@ -771,14 +801,17 @@ describe('loadApplicationAnswersEditorState', () => {
     });
     mocks.collections.set('CandidateAnswer', { records: [] });
 
-    const state = await loadApplicationAnswersEditorState({
-      requiredAnswersJson: '{}',
-      requiredQuestionsJson: schemaJson(
-        greenhouseSchema([
-          { id: 'email', label: 'Email', required: true, type: 'input_text' },
-        ]),
-      ),
-    });
+    const state = await loadApplicationAnswersEditorState(
+      {
+        requiredAnswersJson: '{}',
+        requiredQuestionsJson: schemaJson(
+          greenhouseSchema([
+            { id: 'email', label: 'Email', required: true, type: 'input_text' },
+          ]),
+        ),
+      },
+      candidateSubject,
+    );
 
     expect(state.questions[0]).toMatchObject({
       source: 'profile',
@@ -787,10 +820,13 @@ describe('loadApplicationAnswersEditorState', () => {
   });
 
   it('returns an empty state without a schema', async () => {
-    const state = await loadApplicationAnswersEditorState({
-      requiredAnswersJson: '{}',
-      requiredQuestionsJson: '',
-    });
+    const state = await loadApplicationAnswersEditorState(
+      {
+        requiredAnswersJson: '{}',
+        requiredQuestionsJson: '',
+      },
+      candidateSubject,
+    );
     expect(state).toEqual({
       ats: '',
       hasSchema: false,

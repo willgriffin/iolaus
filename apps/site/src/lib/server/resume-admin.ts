@@ -6,6 +6,10 @@ import { error } from '@sveltejs/kit';
 import type { TailoringConfig } from '@willgriffin/iolaus-resume';
 import { getDbConfig } from './db.js';
 import {
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import {
   getPublishedResumeAsset,
   getResumeTailoringConfig,
   listResumeAssets,
@@ -32,6 +36,8 @@ interface GenerateResumeAssetOptions {
   failureNote?: string;
   filesystem?: FilesystemInterface;
   sourcePath?: string;
+  /** Required when this creates an application-owned private artifact. */
+  subject?: WorkspaceSubject;
   targetOpportunityId?: string;
   tailoring?: TailoringConfig;
   tailoringId?: string;
@@ -320,6 +326,11 @@ export function nextPublishedAssetStates(
 export async function generateResumeAsset(
   options: GenerateResumeAssetOptions = {},
 ) {
+  // An application packet can never create a tenant-only asset: the same
+  // owner/profile key must be written atomically with its artifact metadata.
+  const subject = options.applicationId
+    ? requireWorkspaceSubject(options.subject as WorkspaceSubject)
+    : null;
   const source = await loadPublishedResumeSource();
   const tailoringRecord = options.tailoringId
     ? await getResumeTailoringConfig(options.tailoringId)
@@ -345,6 +356,13 @@ export async function generateResumeAsset(
     slug: `resume-${randomUUID()}`,
     sourcePath: options.sourcePath ?? 'admin',
     status: 'generated',
+    ...(subject
+      ? {
+          candidateProfileId: subject.profileId,
+          ownerUserId: subject.userId,
+          tenantId: subject.tenantId,
+        }
+      : {}),
     targetOpportunityId: stringValue(options.targetOpportunityId),
     tailoringId,
     title,
