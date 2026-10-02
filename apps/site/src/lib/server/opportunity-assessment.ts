@@ -7,14 +7,14 @@ import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
  * projection. Neither citizenship nor an absent resume excerpt is legal or
  * employment-authorisation evidence.
  */
-export const OPPORTUNITY_ASSESSMENT_VERSION = 'opportunity-assessment/v5';
+export const OPPORTUNITY_ASSESSMENT_VERSION = 'opportunity-assessment/v6';
 /** Bump when deterministic local ranking semantics change. */
 export const OPPORTUNITY_ASSESSMENT_RANKING_VERSION =
   'opportunity-assessment-ranking/v2';
 export const OPPORTUNITY_ASSESSMENT_CONFIDENCE = 0.85;
 /** Semantic catalog and question layout identity, separate from local preferences. */
 export const OPPORTUNITY_ASSESSMENT_INPUT_PACK_VERSION =
-  'structured-evidence/v5';
+  'structured-evidence/v6';
 
 export type AssessmentScope = 'candidate' | 'posting';
 export type AssessmentDimension =
@@ -38,6 +38,13 @@ export interface OpportunityAssessmentSource {
   recordId?: string;
   sourceLineEnd?: number;
   sourceLineStart?: number;
+  /** Exact UTF-16 source spans, retained privately rather than repeating text. */
+  sourceSpans?: Array<{
+    clauseId: string;
+    start: number;
+    end: number;
+    hash: string;
+  }>;
 }
 
 /** ISO 3166-1 alpha-2 code plus an explicit display label. */
@@ -86,6 +93,8 @@ export interface OpportunityAssessmentRequirement {
   text: string;
   /** Exact structured posting sources that supplied this extracted requirement. */
   postingSourceIds?: string[];
+  /** Source audit classification; unknown must not fall back to private inference. */
+  auditedImportance?: 'required' | 'preferred' | 'unknown';
 }
 
 export interface OpportunityAssessmentRequirementResult {
@@ -102,6 +111,7 @@ export interface OpportunityAssessmentCitation {
   kind: string;
   recordId?: string;
   sectionId?: string;
+  sourceSpans?: OpportunityAssessmentSource['sourceSpans'];
 }
 
 export interface OpportunityAssessmentCitationScope {
@@ -123,6 +133,8 @@ export interface OpportunityAssessmentResult {
   postingMaterial: {
     sourceContentFingerprint: string;
     sourceContentVersion: number;
+    /** Exact current source-only verified clause ledger and audit identity. */
+    requirementCoverageFingerprint?: string;
   };
   provenance?: DecisionResult['provenance'];
   requirements: OpportunityAssessmentRequirementResult[];
@@ -517,7 +529,8 @@ function requestQuestions(
 function fixedRequirementImportance(
   requirement: OpportunityAssessmentRequirement,
   posting: OpportunityAssessmentSource[],
-): 'required' | 'preferred' | undefined {
+): 'required' | 'preferred' | 'unknown' | undefined {
+  if (requirement.auditedImportance) return requirement.auditedImportance;
   if (requirement.postingSourceIds?.length !== 1) return undefined;
   const source = posting.find(
     (entry) => entry.id === requirement.postingSourceIds?.[0],
@@ -585,6 +598,17 @@ function requirementQuestions(
 /** Hard ceilings shared by preparation and the pre-governance provider gate. */
 export const OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES = 64 * 1_024;
 export const OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS = 20_000;
+/** Existing approved private run reservation, including response tokens. */
+export const OPPORTUNITY_ASSESSMENT_MAX_RESERVED_TOKENS = 80_000;
+
+export function opportunityAssessmentRunReservationLimit(): number {
+  const value = process.env.OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT;
+  return value === undefined
+    ? OPPORTUNITY_ASSESSMENT_MAX_RESERVED_TOKENS
+    : /^\d+$/u.test(value) && Number.isSafeInteger(Number(value))
+      ? Math.min(Number(value), OPPORTUNITY_ASSESSMENT_MAX_RESERVED_TOKENS)
+      : 0;
+}
 
 /** Reserve the full typed response shape, including every choice distribution. */
 export function assessmentDecisionOutputTokenCeiling(
@@ -635,7 +659,10 @@ export function prepareOpportunityAssessment(input: {
     preparedPosting.sources,
     preparedCandidate.sources,
   );
-  if (requirements.length)
+  if (
+    requirements.length &&
+    !input.postingMaterial.requirementCoverageFingerprint
+  )
     dimensionQuestions.requirements_complete = {
       type: 'predicate',
       instructions:
@@ -655,6 +682,7 @@ export function prepareOpportunityAssessment(input: {
       kind: source.kind,
       ...(source.recordId ? { recordId: source.recordId } : {}),
       ...(source.sectionId ? { sectionId: source.sectionId } : {}),
+      ...(source.sourceSpans ? { sourceSpans: source.sourceSpans } : {}),
     })),
   ];
   const sourceKinds = [
@@ -757,11 +785,13 @@ export function prepareOpportunityAssessment(input: {
         count,
       ),
     };
+    const requestBytes = Buffer.byteLength(JSON.stringify(request), 'utf8');
+    const reservedOutput = assessmentDecisionOutputTokenCeiling(request);
     return (
-      Buffer.byteLength(JSON.stringify(request), 'utf8') <=
-        OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES &&
-      assessmentDecisionOutputTokenCeiling(request) <=
-        OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS
+      requestBytes <= OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES &&
+      reservedOutput <= OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS &&
+      requestBytes + reservedOutput <=
+        opportunityAssessmentRunReservationLimit()
     );
   };
   let lower = 0;
@@ -1071,12 +1101,15 @@ export function resolveOpportunityAssessment(
     }
   }
   const requirementCompleteness =
-    result && prepared.requirements.length
+    result &&
+    prepared.requirements.length &&
+    !prepared.postingMaterial.requirementCoverageFingerprint
       ? result.answers.requirements_complete
       : undefined;
   if (
     result &&
     prepared.requirements.length &&
+    !prepared.postingMaterial.requirementCoverageFingerprint &&
     requirementCompleteness?.type !== 'predicate'
   )
     throw new Error('Malformed requirements_complete decision answer.');

@@ -108,3 +108,60 @@ A fitting byte count alone is insufficient: a zero-offer requirement scope
 now rejects before governance/provider invocation. Useful-scope regressions
 assert explicit matching skill IDs and relevant profile/narrative source IDs for
 every requirement rather than imposing an arbitrary universal citation count.
+
+## Lossless source coverage contract (v6)
+
+The v5 forensic audit found nine partially retained clauses among eighteen headed
+role clauses. The source extraction now proposes lossless statements against an
+exhaustive manifest of exact native raw posting spans, including About-role/team
+context. Spans use JavaScript UTF-16 offsets; IDs, hashes and reciprocal mappings
+are checked against the unchanged native source. Required/preferred importance
+must be independently verified as explicit; otherwise it remains unknown. The
+v4 audit reserves a bounded optional classification question scope while keeping
+every semantic clause coverage question. Under-threshold, conflicting or
+unoffered importance stays unknown, and private classification cannot promote it.
+Unknown or malformed coverage
+stops before an audit or private matching call.
+
+The v4 audit retains full raw source plus keyed literal clause and requirement
+records. Every question explicitly binds its source key and mapped requirement
+keys; the recorded prior audit remains accounted under its original identity.
+Each source clause receives an independent literal coverage predicate. Material
+clauses must retain every qualifier in their mapped statements. An explicitly
+pending body context with no mapped rows remains structurally incomplete; audit
+admission alone cannot complete it. Its independent literal predicate must prove
+that no material qualification, duty, role context or constraint was omitted.
+The original disposition, empty mapping and full raw clause stay intact, and
+private readiness requires the exact recorded global verdict at least 0.85. A nonrequirement
+label cannot establish an exclusion: the verifier independently checks that the
+exact clause contains no material role criterion. All predicates must reach the
+existing 0.85 threshold. The cache lives in the existing prepared posting JSON,
+contains no candidate material, and binds the source, preparation, extraction,
+ledger and actual governed request identities. A private request also checks the
+completed global governance output; injected audit JSON cannot unlock it.
+
+The existing source extraction/audit lifecycle admits its aggregate request,
+token and spend reservations before its first provider call. Each Luna stage
+counts its governed input ceiling plus its output reservation, rather than its
+smaller observed input count. Private matching also checks the total input-plus-
+output reservation against the configured run limit before billing. Private matching
+uses the separately recorded, current verified source cache. Combined modes that
+exceed their aggregate budget decline; they cannot silently split work across
+AgentRuns. Missing coverage returns a machine-readable source prerequisite and
+dedupe key. Automatic dependency scheduling is verified separately from an
+operator executing the recorded source prerequisite followed by a fresh private
+job. A changed coverage audit fingerprint changes the private material identity.
+An unchanged source with an independently recorded semantic negative or paid
+failed provider identity cannot re-bill. A revoked actor who never reached the
+provider does not establish a shared negative cache entry.
+
+| Behavior | Positive evidence | Failure evidence | Validation |
+| --- | --- | --- | --- |
+| Exact source coverage | Full literal clause and qualifiers, reciprocal native spans/IDs | Missing/duplicate/changed clause or summary-only source | coverage module/provider specs |
+| Independent semantic audit | Every clause probability at least 0.85 | Partial 0.84, missing/malformed answer, unsupported exclusion | coverage provider specs |
+| Audit authority | Current completed global provider output matches the cache | Forged JSON, foreign/private receipt, stale extraction/source | provider receipt and input specs |
+| Prebilling private prerequisite | Verified cache fingerprint enters private request/job identity | Missing receipt rejects before governance/provider | assessment provider and dependency specs |
+| Aggregate source admission | Every extraction chunk and audit reserve counted within limits | Over-budget tokens/calls/spend reject before first provider | source extraction/provider lifecycle specs |
+
+Executable validation and native exact preflight remain external snapshot/operator
+checkpoints; this matrix does not claim an unexecuted paid canary succeeded.

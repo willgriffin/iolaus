@@ -36,6 +36,7 @@ import {
   buildOpportunityAssessmentPostingInput,
   opportunityAssessmentSubjectMaterialFingerprint,
   selectOpportunityAssessmentCandidateSources,
+  verifiedOpportunityRequirementCoverage,
 } from './opportunity-assessment-input.js';
 import {
   hasOpportunityAssessment,
@@ -55,6 +56,8 @@ import {
   countOpportunityInputTokens,
   inputTokenCeilingForModel,
 } from './opportunity-posting-preparation.js';
+import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
+import { hasRecordedRequirementCoverageAudit } from './opportunity-requirement-coverage-provider.js';
 import {
   attributableOpportunityScoringReasons,
   buildBoundedOpportunityScoringRequest,
@@ -202,6 +205,12 @@ interface OpportunityIntelligenceStepResult {
   mode: Exclude<OpportunityIntelligenceMode, 'all'>;
   skipReason?: 'prerequisite' | 'stale';
   status: 'error' | 'processed' | 'skipped';
+  sourceDependency?: {
+    kind: 'requirement_coverage';
+    sourceContentFingerprint: string;
+    sourceContentVersion: number;
+    dedupeKey: string;
+  };
 }
 
 interface EvidenceSource extends OpportunityScoringEvidenceSource {}
@@ -1246,9 +1255,36 @@ async function runAssessment(
     };
   }
   try {
+    const verifiedCoverage =
+      verifiedOpportunityRequirementCoverage(opportunity);
+    if (
+      !verifiedCoverage ||
+      !(await hasRecordedRequirementCoverageAudit(
+        opportunityId,
+        requirementCoverageContextForOpportunity(opportunity),
+        verifiedCoverage.ledger,
+      ))
+    ) {
+      return {
+        message:
+          'The current posting needs a separately recorded source extraction and clause coverage audit before private matching.',
+        mode: 'assessment',
+        skipReason: 'prerequisite',
+        status: 'skipped',
+        sourceDependency: {
+          kind: 'requirement_coverage',
+          sourceContentFingerprint: sourceFingerprint,
+          sourceContentVersion: sourceVersion,
+          dedupeKey: `requirement-coverage/v1:${opportunityId}:${sourceFingerprint}:${sourceVersion}`,
+        },
+      };
+    }
     const evidence = await loadWorkspaceCandidateEvidence(subject);
     const candidate = candidateWorkEligibilityFromProfile(evidence.candidate);
-    const posting = buildOpportunityAssessmentPostingInput(opportunity);
+    const posting = buildOpportunityAssessmentPostingInput(
+      opportunity,
+      verifiedCoverage,
+    );
     const selectedCandidateSources =
       selectOpportunityAssessmentCandidateSources(
         evidence.evidence,
@@ -1262,6 +1298,7 @@ async function runAssessment(
       postingMaterial: {
         sourceContentFingerprint: sourceFingerprint,
         sourceContentVersion: sourceVersion,
+        requirementCoverageFingerprint: verifiedCoverage.fingerprint,
       },
       postingSources: posting.postingSources,
       postingCoverageTruncated: posting.postingCoverageTruncated,
@@ -1272,6 +1309,7 @@ async function runAssessment(
         candidateMaterialFingerprint: evidence.fingerprint,
         sourceContentFingerprint: sourceFingerprint,
         sourceContentVersion: sourceVersion,
+        requirementCoverageFingerprint: verifiedCoverage.fingerprint,
         subject,
       });
     if (
@@ -1316,6 +1354,10 @@ async function runAssessment(
       store: options.governanceStore,
       subjectFingerprint: privateMaterialFingerprint,
       workspaceSubject: subject,
+      requirementCoverage: {
+        context: requirementCoverageContextForOpportunity(opportunity),
+        ledger: verifiedCoverage.ledger,
+      },
     });
     if (!assessment) {
       return {
@@ -1345,7 +1387,9 @@ async function runAssessment(
             0,
             Math.trunc(numberValue(current.sourceContentVersion) ?? 0),
           ) !== sourceVersion ||
-          currentEvidence.fingerprint !== evidence.fingerprint
+          currentEvidence.fingerprint !== evidence.fingerprint ||
+          verifiedOpportunityRequirementCoverage(current)?.fingerprint !==
+            verifiedCoverage.fingerprint
         ) {
           return {
             message: 'Discarded stale private opportunity assessment material.',

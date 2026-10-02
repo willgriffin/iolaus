@@ -60,7 +60,7 @@ import { loadOpportunityDetails } from './opportunity-details';
 import { verifiedOpportunityEligibilityProjection } from './opportunity-eligibility-refresh';
 import { parseOpportunityReasonJson } from './opportunity-intelligence';
 import {
-  enqueueOpportunityIntelligence,
+  enqueueOpportunityIntelligenceWithStatus,
   isOpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job';
 import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
@@ -1533,9 +1533,11 @@ export async function processOpportunityWithLlmAction(
   const subject = requireCandidateWorkspaceSubject(
     workspaceSubjectFromLocals(locals),
   );
-  let job: Awaited<ReturnType<typeof enqueueOpportunityIntelligence>>;
+  let result: Awaited<
+    ReturnType<typeof enqueueOpportunityIntelligenceWithStatus>
+  >;
   try {
-    job = await runOwnerMutation(
+    result = await runOwnerMutation(
       locals,
       'processOpportunityWithLlm',
       workspaceWorkflowOperation('assessment.execute'),
@@ -1543,7 +1545,7 @@ export async function processOpportunityWithLlmAction(
         await withVerifiedWorkspaceSubject(
           subject,
           async () =>
-            await enqueueOpportunityIntelligence(
+            await enqueueOpportunityIntelligenceWithStatus(
               stringValue(form.get('opportunityId')),
               { modes: 'assessment' },
             ),
@@ -1559,8 +1561,13 @@ export async function processOpportunityWithLlmAction(
     throw cause;
   }
   return {
-    jobId: job.id,
-    message: `Opportunity intelligence queued as job ${job.id}.`,
+    jobId: result.job.id,
+    message:
+      result.stage === 'source_preparation'
+        ? 'Source preparation queued. Your private assessment will follow after the posting coverage is verified.'
+        : `Private assessment queued as job ${result.job.id}.`,
+    sourceDependency: result.sourceDependency,
+    stage: result.stage,
     status: 'queued',
   };
 }

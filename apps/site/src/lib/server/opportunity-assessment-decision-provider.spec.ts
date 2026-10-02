@@ -6,18 +6,71 @@ import {
   OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
   preflightOpportunityAssessmentRequest,
 } from './opportunity-assessment-decision-provider.js';
+import { buildRequirementCoverageSource } from './opportunity-requirement-coverage.js';
+import {
+  prepareRequirementCoverageAudit,
+  requirementCoverageClauseQuestionKey,
+  resolveRequirementCoverageAudit,
+} from './opportunity-requirement-coverage-provider.js';
 
 const mocks = vi.hoisted(() => ({
   capabilities: vi.fn(),
   decide: vi.fn(),
   execute: vi.fn(),
   getAI: vi.fn(),
+  recorded: vi.fn(),
 }));
 
 vi.mock('@happyvertical/ai', () => ({ getAI: mocks.getAI }));
 vi.mock('./opportunity-intelligence-governance.js', () => ({
   executeGovernedOpportunityIntelligenceRequest: mocks.execute,
 }));
+vi.mock(
+  './opportunity-requirement-coverage-provider.js',
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('./opportunity-requirement-coverage-provider.js')
+    >()),
+    hasRecordedRequirementCoverageAudit: mocks.recorded,
+  }),
+);
+
+const coverageContext = {
+  sourceText: 'Platform work',
+  sourceFingerprint: 'posting-v1',
+  sourceVersion: 1,
+  extractionFingerprint: 'extract-v1',
+};
+const coverageLedger = buildRequirementCoverageSource(coverageContext);
+coverageLedger.requirements = [
+  {
+    id: 'r1',
+    text: 'Platform work',
+    clauseIds: [coverageLedger.clauses[0]!.id],
+    importance: 'unknown',
+  },
+];
+coverageLedger.dispositions = [
+  {
+    clauseId: coverageLedger.clauses[0]!.id,
+    type: 'role_duty',
+    requirementIds: ['r1'],
+  },
+];
+coverageLedger.audit = resolveRequirementCoverageAudit(
+  prepareRequirementCoverageAudit(coverageContext, coverageLedger),
+  {
+    model: 'jev-test',
+    provenance: { model: 'jev-test', provider: 'typesafe' },
+    answers: {
+      [requirementCoverageClauseQuestionKey(0, 'mapped')]: {
+        type: 'predicate',
+        probability: 0.9,
+      },
+    },
+  } satisfies import('@happyvertical/ai').DecisionResult,
+  'source-receipt-1',
+);
 
 const prepared = prepareOpportunityAssessment({
   candidate: {
@@ -39,6 +92,7 @@ const prepared = prepareOpportunityAssessment({
   postingMaterial: {
     sourceContentFingerprint: 'posting-v1',
     sourceContentVersion: 1,
+    requirementCoverageFingerprint: coverageLedger.audit.fingerprint,
   },
   postingSources: [
     {
@@ -119,6 +173,7 @@ describe('opportunity assessment decision provider', () => {
     });
     mocks.capabilities.mockResolvedValue({ decisions: true });
     mocks.execute.mockImplementation(async (options) => options.invoke());
+    mocks.recorded.mockResolvedValue(true);
     mocks.decide.mockResolvedValue({
       answers: answers(),
       model: 'jev-test',
@@ -136,6 +191,7 @@ describe('opportunity assessment decision provider', () => {
       opportunityId: 'opportunity-1',
       subjectFingerprint: 'opaque-subject-v1',
       workspaceSubject,
+      requirementCoverage: { context: coverageContext, ledger: coverageLedger },
     });
     expect(mocks.execute).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,6 +212,53 @@ describe('opportunity assessment decision provider', () => {
     expect(
       assessmentDecisionOutputTokenCeiling(prepared.request),
     ).toBeGreaterThan(1_024);
+  });
+
+  it('rejects the total private reservation before billing even when each wire ceiling fits', async () => {
+    const baseline = preflightOpportunityAssessmentRequest(prepared);
+    vi.stubEnv(
+      'OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT',
+      String(baseline.reservedTokens - 1),
+    );
+    expect(preflightOpportunityAssessmentRequest(prepared)).toMatchObject({
+      fits: false,
+      reason: 'run_reservation',
+      reservedTokens: baseline.reservedTokens,
+    });
+    await expect(
+      evaluateOpportunityAssessment(prepared, {
+        agentRunId: 'run-1',
+        contentFingerprint: 'posting-v1',
+        opportunityId: 'opportunity-1',
+        subjectFingerprint: 'subject',
+        workspaceSubject,
+        requirementCoverage: {
+          context: coverageContext,
+          ledger: coverageLedger,
+        },
+      }),
+    ).rejects.toThrow('run limit');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
+  });
+
+  it('does not reserve a candidate request without a recorded source audit', async () => {
+    mocks.recorded.mockResolvedValue(false);
+    await expect(
+      evaluateOpportunityAssessment(prepared, {
+        agentRunId: 'run-1',
+        contentFingerprint: 'posting-v1',
+        opportunityId: 'opportunity-1',
+        subjectFingerprint: 'subject',
+        workspaceSubject,
+        requirementCoverage: {
+          context: coverageContext,
+          ledger: coverageLedger,
+        },
+      }),
+    ).rejects.toThrow('recorded current source clause');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
   });
 
   it('does not invoke a provider while disabled', async () => {

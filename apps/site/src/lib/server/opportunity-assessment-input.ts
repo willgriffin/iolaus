@@ -4,6 +4,36 @@ import {
   type OpportunityAssessmentRequirement,
   type OpportunityAssessmentSource,
 } from './opportunity-assessment.js';
+import {
+  type CoverageLedger,
+  requirementCoverageContextForOpportunity,
+} from './opportunity-requirement-coverage.js';
+import { validateVerifiedRequirementCoverage } from './opportunity-requirement-coverage-provider.js';
+
+/** Only the current native source cache can satisfy the private prerequisite. */
+export function verifiedOpportunityRequirementCoverage(
+  opportunity: Record<string, unknown>,
+): { ledger: CoverageLedger; fingerprint: string } | undefined {
+  try {
+    const prepared: unknown = JSON.parse(text(opportunity.preparedPostingJson));
+    if (
+      !prepared ||
+      typeof prepared !== 'object' ||
+      !('requirementCoverage' in prepared)
+    )
+      return undefined;
+    const ledger = prepared.requirementCoverage as CoverageLedger;
+    const result = validateVerifiedRequirementCoverage(
+      requirementCoverageContextForOpportunity(opportunity),
+      ledger,
+    );
+    return result.complete && result.fingerprint
+      ? { ledger, fingerprint: result.fingerprint }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -23,6 +53,7 @@ function textList(value: unknown): string[] {
 /** Full raw posting plus atomic structured fields; no redundant signal excerpts. */
 export function buildOpportunityAssessmentPostingInput(
   opportunity: Record<string, unknown>,
+  verified?: { ledger: CoverageLedger; fingerprint: string },
 ): {
   postingSources: OpportunityAssessmentSource[];
   postingCoverageTruncated: boolean;
@@ -53,7 +84,9 @@ export function buildOpportunityAssessmentPostingInput(
         title: field,
       });
   }
-  const raw = text(opportunity.descriptionRaw);
+  const raw = verified
+    ? requirementCoverageContextForOpportunity(opportunity).sourceText
+    : text(opportunity.descriptionRaw);
   const description = raw || text(opportunity.descriptionSummary);
   if (description)
     postingSources.push({
@@ -63,6 +96,39 @@ export function buildOpportunityAssessmentPostingInput(
       title: raw ? 'Full posting' : 'Posting summary (partial)',
     });
   const requirements: OpportunityAssessmentRequirement[] = [];
+  if (verified) {
+    for (const requirement of verified.ledger.requirements) {
+      const importance = verified.ledger.audit!.importance[requirement.id]!;
+      const id = `${opportunityId}:coverage:${requirement.id}`;
+      const clauses = requirement.clauseIds.map(
+        (clauseId) =>
+          verified.ledger.clauses.find((clause) => clause.id === clauseId)!,
+      );
+      postingSources.push({
+        id,
+        kind: 'posting_requirement',
+        text:
+          importance === 'unknown'
+            ? requirement.text
+            : `${importance}: ${requirement.text}`,
+        title: 'Lossless role statement',
+        recordId: opportunityId,
+        sourceSpans: clauses.map((clause) => ({
+          clauseId: clause.id,
+          start: clause.spanStart,
+          end: clause.spanEnd,
+          hash: clause.hash,
+        })),
+      });
+      requirements.push({
+        id,
+        text: requirement.text,
+        postingSourceIds: [id],
+        auditedImportance: importance,
+      });
+    }
+    return { postingSources, requirements, postingCoverageTruncated: !raw };
+  }
   for (const [field, importance] of [
     ['requiredSkills', 'required'],
     ['preferredSkills', 'preferred'],
@@ -161,6 +227,7 @@ export function opportunityAssessmentSubjectMaterialFingerprint(input: {
   candidateMaterialFingerprint: string;
   sourceContentFingerprint: string;
   sourceContentVersion: number;
+  requirementCoverageFingerprint?: string;
   subject: { profileId: string; tenantId: string; userId: string };
 }): string {
   return createHash('sha256')
@@ -170,6 +237,12 @@ export function opportunityAssessmentSubjectMaterialFingerprint(input: {
         candidateMaterialFingerprint: input.candidateMaterialFingerprint,
         sourceContentFingerprint: input.sourceContentFingerprint,
         sourceContentVersion: input.sourceContentVersion,
+        ...(input.requirementCoverageFingerprint
+          ? {
+              requirementCoverageFingerprint:
+                input.requirementCoverageFingerprint,
+            }
+          : {}),
         subject: {
           profileId: input.subject.profileId,
           tenantId: input.subject.tenantId,

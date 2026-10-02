@@ -165,6 +165,36 @@ function completeAnswers(values: Record<string, [string, string]>) {
 }
 
 describe('opportunity assessment contract', () => {
+  it('keeps audited unknown importance uncertain without private classification fallback', () => {
+    const request = prepared({
+      postingMaterial: {
+        sourceContentFingerprint: 'posting-v1',
+        sourceContentVersion: 1,
+        requirementCoverageFingerprint: 'verified-audit-v2',
+      },
+      requirements: [
+        {
+          id: 'duty-1',
+          text: 'Platform work',
+          postingSourceIds: ['posting-3'],
+          auditedImportance: 'unknown',
+        },
+      ],
+    });
+    expect(request.request.questions.r0_required).toBeUndefined();
+    expect(request.request.questions.r0_preferred).toBeUndefined();
+    const answers = completeAnswers({});
+    for (const key of Object.keys(request.request.questions).filter((key) =>
+      key.endsWith('_supports'),
+    ))
+      answers[key] = { type: 'predicate', probability: 0.95 };
+    const result = resolveOpportunityAssessment(
+      request,
+      decision(answers, request),
+    );
+    expect(result.requirements[0]!.importance).toBe('uncertain');
+    expect(result.requirements[0]!.support).toBe('supported');
+  });
   it('instructs JEV to treat an explicit target-country alternative as allowed', () => {
     const question = prepared().request.questions.location_access_value;
     expect(question?.type).toBe('choice');

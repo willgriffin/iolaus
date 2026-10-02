@@ -1,5 +1,9 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
-import type { JobExecutionContext } from '@happyvertical/smrt-jobs';
+import {
+  backgroundEligible,
+  type JobExecutionContext,
+} from '@happyvertical/smrt-jobs';
+import type { OpportunityAssessmentDependencyJobArgs } from '../server/opportunity-assessment-dependency-job.js';
 import type { OpportunityIntelligenceJobArgs } from '../server/opportunity-intelligence-job.js';
 
 @smrt({
@@ -168,6 +172,7 @@ export class Opportunity extends SmrtObject {
     return super.save(options);
   }
 
+  @backgroundEligible()
   async processIntelligence(
     args: OpportunityIntelligenceJobArgs = {},
     context?: JobExecutionContext,
@@ -218,6 +223,49 @@ export class Opportunity extends SmrtObject {
         return await runOpportunityIntelligenceJob(this, args, runnerContext, {
           workspaceSubject: subject,
         });
+      },
+    );
+  }
+
+  /**
+   * Prepare only the source-backed requirement coverage needed by one
+   * candidate-owned assessment. The job module keeps all provider work free of
+   * candidate evidence, then re-enters a fresh principal context before it
+   * queues the private assessment continuation.
+   */
+  @backgroundEligible()
+  async prepareAssessmentCoverage(
+    args: OpportunityAssessmentDependencyJobArgs = {},
+    context?: JobExecutionContext,
+  ) {
+    const { runOpportunityAssessmentDependencyJob } = await import(
+      '../server/opportunity-assessment-dependency-job.js'
+    );
+    const {
+      assertJobTenantMatchesRuntimeWorkspaceSubject,
+      requireActiveRunnerExecutionContext,
+      runAsResolvedJobWorkspaceSubject,
+    } = await import('../server/job-workspace-subject.js');
+    const runnerContext = requireActiveRunnerExecutionContext(context);
+    return await runAsResolvedJobWorkspaceSubject(
+      args,
+      async (subject, run) => {
+        assertJobTenantMatchesRuntimeWorkspaceSubject(
+          runnerContext.job,
+          subject,
+        );
+        await run.assertOperation('opportunities', 'read');
+        const { workspaceWorkflowOperation } = await import(
+          '../server/workspace-workflow-capabilities.js'
+        );
+        const operation = workspaceWorkflowOperation('assessment.execute');
+        await run.assertOperation(operation.collection, operation.action);
+        return await runOpportunityAssessmentDependencyJob(
+          this as unknown as Record<string, unknown>,
+          args,
+          runnerContext,
+          subject,
+        );
       },
     );
   }

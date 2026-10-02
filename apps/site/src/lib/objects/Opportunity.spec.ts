@@ -13,6 +13,12 @@ const { runOpportunityIntelligenceJob } = vi.hoisted(() => ({
     status: 'processed',
   })),
 }));
+const { runOpportunityAssessmentDependencyJob } = vi.hoisted(() => ({
+  runOpportunityAssessmentDependencyJob: vi.fn(async () => ({
+    message: 'Prepared source coverage.',
+    status: 'prepared',
+  })),
+}));
 
 vi.mock('../server/opportunity-intelligence-job.js', async (importOriginal) => {
   const actual =
@@ -24,6 +30,9 @@ vi.mock('../server/opportunity-intelligence-job.js', async (importOriginal) => {
     runOpportunityIntelligenceJob,
   };
 });
+vi.mock('../server/opportunity-assessment-dependency-job.js', () => ({
+  runOpportunityAssessmentDependencyJob,
+}));
 
 describe('Opportunity TaskRunner loading', () => {
   beforeEach(() => {
@@ -67,5 +76,16 @@ describe('Opportunity TaskRunner loading', () => {
       opportunity.processIntelligence(args, context),
     ).rejects.toThrow('active TaskRunner execution context');
     expect(runOpportunityIntelligenceJob).not.toHaveBeenCalled();
+  });
+
+  it('keeps assessment coverage preparation behind the same authentic runner seam', async () => {
+    const opportunity = new Opportunity();
+    opportunity.id = 'opp-1';
+    const context = { job: { tenantId: 'tenant-1' } } as never;
+
+    await expect(
+      opportunity.prepareAssessmentCoverage({}, context),
+    ).rejects.toThrow('active TaskRunner execution context');
+    expect(runOpportunityAssessmentDependencyJob).not.toHaveBeenCalled();
   });
 });

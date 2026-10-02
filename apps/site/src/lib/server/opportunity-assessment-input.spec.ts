@@ -3,9 +3,188 @@ import {
   buildOpportunityAssessmentPostingInput,
   opportunityAssessmentSubjectMaterialFingerprint,
   selectOpportunityAssessmentCandidateSources,
+  verifiedOpportunityRequirementCoverage,
 } from './opportunity-assessment-input.js';
+import {
+  buildRequirementCoverageSource,
+  requirementCoverageContextForOpportunity,
+} from './opportunity-requirement-coverage.js';
+import {
+  prepareRequirementCoverageAudit,
+  requirementCoverageClauseQuestionKey,
+  resolveRequirementCoverageAudit,
+} from './opportunity-requirement-coverage-provider.js';
 
 describe('opportunity assessment input', () => {
+  it('never sends proposed hard labels for low-confidence or unoffered source importance', () => {
+    for (const descriptionRaw of [
+      'Platform reliability and service-mesh diagnosis.',
+      `Required ${'production tooling '.repeat(700)}`,
+    ]) {
+      const opportunity = {
+        id: 'role-1',
+        descriptionRaw,
+        sourceContentFingerprint: 'source-importance',
+        sourceContentVersion: 1,
+        preparedPostingFingerprint: 'prepared-1',
+        preparedPostingJson: '{}',
+        requiredSkills: ['Unverified taxonomy label'],
+      };
+      const context = requirementCoverageContextForOpportunity(opportunity);
+      const ledger = buildRequirementCoverageSource(context);
+      ledger.requirements = [
+        {
+          id: 'r1',
+          text: descriptionRaw.trim(),
+          clauseIds: [ledger.clauses[0]!.id],
+          importance: 'required',
+        },
+      ];
+      ledger.dispositions = [
+        {
+          clauseId: ledger.clauses[0]!.id,
+          type: 'material_requirement',
+          requirementIds: ['r1'],
+        },
+      ];
+      const request = prepareRequirementCoverageAudit(context, ledger);
+      const result = {
+        answers: Object.fromEntries(
+          Object.keys(request.request.questions).map((key) => [
+            key,
+            {
+              type: 'predicate',
+              probability: key.startsWith('importance_') ? 0.84 : 0.95,
+            },
+          ]),
+        ),
+      } as import('@happyvertical/ai').DecisionResult;
+      ledger.audit = resolveRequirementCoverageAudit(
+        request,
+        result,
+        'recorded-source-importance',
+      );
+      opportunity.preparedPostingJson = JSON.stringify({
+        requirementCoverage: ledger,
+      });
+      const verified = verifiedOpportunityRequirementCoverage(opportunity)!;
+      const posting = buildOpportunityAssessmentPostingInput(
+        opportunity,
+        verified,
+      );
+      expect(posting.requirements[0]!.auditedImportance).toBe('unknown');
+      expect(
+        posting.postingSources
+          .filter((source) => source.kind === 'posting_requirement')
+          .map((source) => source.text),
+      ).toEqual([descriptionRaw.trim()]);
+      expect(verified.fingerprint).toBe(ledger.audit.fingerprint);
+    }
+  });
+  it('consumes only current lossless requirements and preserves exact clause attribution', () => {
+    const opportunity = {
+      id: 'role-1',
+      descriptionRaw:
+        'Diagnose failures across a service mesh and prevent recurrence.',
+      sourceContentFingerprint: 'source-1',
+      sourceContentVersion: 1,
+      preparedPostingFingerprint: 'prepared-1',
+      preparedPostingJson: '{}',
+      requiredSkills: ['Distributed Systems'],
+    };
+    const context = requirementCoverageContextForOpportunity(opportunity);
+    const ledger = buildRequirementCoverageSource(context);
+    const clause = ledger.clauses[0]!;
+    ledger.requirements = [
+      {
+        id: 'full-duty',
+        text: clause.text,
+        clauseIds: [clause.id],
+        importance: 'unknown',
+      },
+    ];
+    ledger.dispositions = [
+      { clauseId: clause.id, type: 'role_duty', requirementIds: ['full-duty'] },
+    ];
+    ledger.audit = resolveRequirementCoverageAudit(
+      prepareRequirementCoverageAudit(context, ledger),
+      {
+        model: 'jev-test',
+        provenance: { model: 'jev-test', provider: 'typesafe' },
+        answers: {
+          [requirementCoverageClauseQuestionKey(0, 'mapped')]: {
+            type: 'predicate',
+            probability: 0.9,
+          },
+        },
+      } satisfies import('@happyvertical/ai').DecisionResult,
+      'receipt-1',
+    );
+    opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: ledger,
+    });
+    const verified = verifiedOpportunityRequirementCoverage(opportunity)!;
+    expect(verified.fingerprint).toBe(ledger.audit.fingerprint);
+    const posting = buildOpportunityAssessmentPostingInput(
+      opportunity,
+      verified,
+    );
+    expect(posting.requirements.map((row) => row.text)).toEqual([clause.text]);
+    const rendered = {
+      ...opportunity,
+      descriptionRaw: 'Rendered abbreviated description.',
+      sourceContentJson: JSON.stringify({
+        descriptionRaw: opportunity.descriptionRaw,
+      }),
+    };
+    expect(
+      buildOpportunityAssessmentPostingInput(
+        rendered,
+        verified,
+      ).postingSources.find((source) => source.kind === 'posting_description')
+        ?.text,
+    ).toBe(context.sourceText);
+    expect(
+      posting.postingSources.find(
+        (source) => source.kind === 'posting_requirement',
+      )?.sourceSpans,
+    ).toEqual([
+      {
+        clauseId: clause.id,
+        start: clause.spanStart,
+        end: clause.spanEnd,
+        hash: clause.hash,
+      },
+    ]);
+    expect(
+      verifiedOpportunityRequirementCoverage({
+        ...opportunity,
+        descriptionRaw: `${opportunity.descriptionRaw}!`,
+      }),
+    ).toBeUndefined();
+    expect(
+      verifiedOpportunityRequirementCoverage({
+        ...opportunity,
+        preparedPostingFingerprint: 'prepared-2',
+      }),
+    ).toBeUndefined();
+    expect(
+      opportunityAssessmentSubjectMaterialFingerprint({
+        candidateMaterialFingerprint: 'candidate',
+        sourceContentFingerprint: 'source-1',
+        sourceContentVersion: 1,
+        requirementCoverageFingerprint: verified.fingerprint,
+        subject: { tenantId: 'tenant', userId: 'user', profileId: 'profile' },
+      }),
+    ).not.toBe(
+      opportunityAssessmentSubjectMaterialFingerprint({
+        candidateMaterialFingerprint: 'candidate',
+        sourceContentFingerprint: 'source-1',
+        sourceContentVersion: 1,
+        subject: { tenantId: 'tenant', userId: 'user', profileId: 'profile' },
+      }),
+    );
+  });
   it('keeps the full raw posting and attributed structured requirements', () => {
     const prepared = buildOpportunityAssessmentPostingInput({
       descriptionRaw: `Remote Canada. ${'x'.repeat(25_000)}`,

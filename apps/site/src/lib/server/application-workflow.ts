@@ -1553,7 +1553,7 @@ export async function runOpportunityLifecycleTransaction<T>(
   });
 }
 
-async function withOpportunityLifecycleLock<T>(
+export async function withOpportunityLifecycleLock<T>(
   opportunityId: string,
   action: () => Promise<T>,
 ): Promise<T> {

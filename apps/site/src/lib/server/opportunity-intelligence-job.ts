@@ -14,7 +14,15 @@ import {
   runtimeWorkspaceSubjectFromJobArgs,
   withRuntimeWorkspaceSubject,
 } from './job-workspace-subject.js';
-import { opportunityAssessmentSubjectMaterialFingerprint } from './opportunity-assessment-input.js';
+import {
+  enqueueOpportunityAssessmentCoverage,
+  OpportunityAssessmentDependencyEnqueueError,
+  type OpportunityAssessmentSourceDependency,
+} from './opportunity-assessment-dependency-job.js';
+import {
+  opportunityAssessmentSubjectMaterialFingerprint,
+  verifiedOpportunityRequirementCoverage,
+} from './opportunity-assessment-input.js';
 import {
   type OpportunityIntelligenceMode,
   type OpportunityIntelligenceOptions,
@@ -32,6 +40,11 @@ import {
   OPPORTUNITY_INTELLIGENCE_QUEUE,
   OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
 } from './opportunity-intelligence-job-schema.js';
+import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
+import {
+  hasRecordedRequirementCoverageAudit,
+  requirementCoverageSourceDependencyFingerprint,
+} from './opportunity-requirement-coverage-provider.js';
 import { OPPORTUNITY_SOURCE_CONTENT_FINGERPRINT_VERSION } from './opportunity-source-content.js';
 import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 import { getCollection } from './smrt.js';
@@ -62,10 +75,13 @@ export interface OpportunityIntelligenceJobArgs
 export interface OpportunityIntelligenceEnqueueResult {
   enqueued: boolean;
   job: SmrtJob;
+  sourceDependency?: OpportunityAssessmentSourceDependency;
+  stage?: 'source_preparation' | 'private_assessment';
 }
 
 interface OpportunityIntelligenceJobCollection {
   create: (data: SmrtJobData) => Promise<SmrtJob>;
+  enqueueJob?: (data: SmrtJobData) => Promise<SmrtJob>;
   list: (options?: {
     limit?: number;
     orderBy?: string | string[];
@@ -120,6 +136,16 @@ interface OpportunityJobTarget {
   sourceContentFingerprint?: unknown;
   sourceContentVersion?: unknown;
   sourceId?: unknown;
+  toJSON?: () => Record<string, unknown>;
+}
+
+/** Native objects expose their public source fields through SMRT serialization. */
+function opportunitySourceRecord(
+  opportunity: OpportunityJobTarget,
+): Record<string, unknown> {
+  return typeof opportunity.toJSON === 'function'
+    ? opportunity.toJSON()
+    : Object.fromEntries(Object.entries(opportunity));
 }
 
 function stringValue(value: unknown): string {
@@ -194,8 +220,13 @@ async function requireOpportunity(
 
 export function isOpportunityIntelligenceEnqueueError(
   error: unknown,
-): error is OpportunityIntelligenceEnqueueError {
-  return error instanceof OpportunityIntelligenceEnqueueError;
+): error is
+  | OpportunityIntelligenceEnqueueError
+  | OpportunityAssessmentDependencyEnqueueError {
+  return (
+    error instanceof OpportunityIntelligenceEnqueueError ||
+    error instanceof OpportunityAssessmentDependencyEnqueueError
+  );
 }
 
 async function findActiveOpportunityIntelligenceJobInCollection(
@@ -281,10 +312,50 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
 ): Promise<OpportunityIntelligenceEnqueueResult> {
   const envelopedArgs = withRuntimeWorkspaceSubject(args);
   const subject = runtimeWorkspaceSubjectFromJobArgs(envelopedArgs);
-  const [evidence, opportunity] = await Promise.all([
-    loadWorkspaceCandidateEvidence(subject),
-    requireOpportunity(opportunityId.trim(), options),
-  ]);
+  const requestedModes = Array.isArray(args.modes) ? args.modes : [args.modes];
+  if (requestedModes.length === 1 && requestedModes[0] === 'extract') {
+    // Explicit source-only/operator work is not an assessment intent. The
+    // native wrapper retains its shared-mode restriction for this path.
+    return await enqueueOpportunityIntelligenceInternal(
+      opportunityId,
+      envelopedArgs,
+      options,
+      subject,
+    );
+  }
+  const opportunity = await requireOpportunity(opportunityId.trim(), options);
+  const sourceRecord = opportunitySourceRecord(opportunity);
+  const coverage = verifiedOpportunityRequirementCoverage(sourceRecord);
+  if (
+    !coverage ||
+    !(await hasRecordedRequirementCoverageAudit(
+      opportunityId.trim(),
+      requirementCoverageContextForOpportunity(sourceRecord),
+      coverage.ledger,
+    ))
+  ) {
+    const enqueueJob = options.collection?.enqueueJob;
+    if (options.collection && !enqueueJob) {
+      throw new Error(
+        'Source preparation requires native job enqueue capability.',
+      );
+    }
+    return await enqueueOpportunityAssessmentCoverage(opportunityId, args, {
+      ...options,
+      ...(options.collection && enqueueJob
+        ? {
+            collection: {
+              enqueueJob: enqueueJob.bind(options.collection),
+              list: options.collection.list.bind(options.collection),
+            },
+          }
+        : { collection: undefined }),
+    });
+  }
+  // Candidate evidence is loaded only after the recorded global prerequisite
+  // is current; source preparation jobs never capture this material.
+  const evidence = await loadWorkspaceCandidateEvidence(subject);
+  const requirementCoverageFingerprint = coverage.fingerprint;
   const subjectMaterialFingerprint =
     opportunityAssessmentSubjectMaterialFingerprint({
       candidateMaterialFingerprint: evidence.fingerprint,
@@ -292,9 +363,12 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
         opportunity.sourceContentFingerprint,
       ),
       sourceContentVersion: positiveInteger(opportunity.sourceContentVersion),
+      ...(requirementCoverageFingerprint
+        ? { requirementCoverageFingerprint }
+        : {}),
       subject,
     });
-  return await enqueueOpportunityIntelligenceInternal(
+  const result = await enqueueOpportunityIntelligenceInternal(
     opportunityId,
     {
       ...envelopedArgs,
@@ -305,6 +379,7 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
     options,
     subject,
   );
+  return { ...result, stage: 'private_assessment' };
 }
 
 async function enqueueOpportunityIntelligenceInternal(
@@ -328,8 +403,18 @@ async function enqueueOpportunityIntelligenceInternal(
   const currentVersion = positiveInteger(opportunity.sourceContentVersion);
   const requestedFingerprint = stringValue(args.contentFingerprint);
   const requestedVersion = positiveInteger(args.contentVersion);
+  const modes = Array.isArray(args.modes) ? args.modes : [args.modes];
+  const sourceOnlyExtraction = modes.length === 1 && modes[0] === 'extract';
   const resolvedArgs: OpportunityIntelligenceJobArgs = {
     ...args,
+    ...(sourceOnlyExtraction
+      ? {
+          scoringMaterialFingerprint:
+            requirementCoverageSourceDependencyFingerprint(
+              opportunitySourceRecord(opportunity),
+            ),
+        }
+      : {}),
     ...(currentFingerprint || requestedFingerprint
       ? {
           contentFingerprint: currentFingerprint || requestedFingerprint,
@@ -368,7 +453,7 @@ async function enqueueOpportunityIntelligenceInternal(
   }
 
   try {
-    const job = await collection.create({
+    const data: SmrtJobData = {
       args: {
         ...resolvedArgs,
         modes: resolvedArgs.modes ?? 'all',
@@ -384,8 +469,22 @@ async function enqueueOpportunityIntelligenceInternal(
       priority: 80,
       queue: OPPORTUNITY_INTELLIGENCE_QUEUE,
       runAt: options.now ?? new Date(),
+      ...(runtimeWorkspaceSubject
+        ? { tenantId: runtimeWorkspaceSubject.tenantId }
+        : {}),
       timeout: OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
-    });
+    };
+
+    // The native enqueue path enforces the tenant's in-flight limit. Only
+    // explicitly injected legacy test collections use create/save.
+    if (collection.enqueueJob) {
+      const job = await collection.enqueueJob(data);
+      return { enqueued: true, job };
+    }
+    if (!options.collection) {
+      throw new Error('Native job enqueue capability is unavailable.');
+    }
+    const job = await collection.create(data);
 
     if (!('id' in job) || !job.id) {
       (job as SmrtObject).id = randomUUID();

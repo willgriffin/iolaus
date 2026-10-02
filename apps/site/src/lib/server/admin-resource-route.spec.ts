@@ -79,7 +79,8 @@ vi.mock('./admin-data', () => ({
 }));
 
 vi.mock('./opportunity-intelligence-job', () => ({
-  enqueueOpportunityIntelligence: mocks.enqueueOpportunityIntelligence,
+  enqueueOpportunityIntelligenceWithStatus:
+    mocks.enqueueOpportunityIntelligence,
   isOpportunityIntelligenceEnqueueError:
     mocks.isOpportunityIntelligenceEnqueueError,
 }));
@@ -351,7 +352,11 @@ describe('admin-resource-route', () => {
     });
     mocks.enqueueOpportunityIntelligence.mockImplementation(async () => {
       expect(getCurrentWorkspaceSubject()).toEqual(workspaceSubject);
-      return { id: 'assessment-job-1' };
+      return {
+        enqueued: true,
+        job: { id: 'assessment-job-1' },
+        stage: 'private_assessment',
+      };
     });
     const result = await processOpportunityAction(
       postForm('/admin/opportunities/opp-1', {
@@ -366,8 +371,46 @@ describe('admin-resource-route', () => {
     });
     expect(result).toMatchObject({
       jobId: 'assessment-job-1',
+      stage: 'private_assessment',
       status: 'queued',
     });
+  });
+
+  it('reports source preparation pending without claiming private assessment was queued', async () => {
+    const { processOpportunityAction } = await import('./admin-resource-route');
+    mocks.collections.set('CandidateProfile', {
+      get: vi.fn(async () => ({
+        active: true,
+        id: workspaceSubject.profileId,
+        ownerUserId: workspaceSubject.userId,
+        tenantId: workspaceSubject.tenantId,
+      })),
+      list: vi.fn(async () => []),
+    });
+    const sourceDependency = {
+      kind: 'requirement_coverage',
+      sourceContentFingerprint: 'source-fp',
+      sourceContentVersion: 1,
+      dedupeKey: 'requirement-coverage/v1:opp-1:source-fp:1',
+    };
+    mocks.enqueueOpportunityIntelligence.mockResolvedValue({
+      enqueued: true,
+      job: { id: 'source-job-1' },
+      sourceDependency,
+      stage: 'source_preparation',
+    });
+    const result = await processOpportunityAction(
+      postForm('/admin/opportunities/opp-1', { opportunityId: 'opp-1' }),
+      ownerLocals(),
+    );
+    expect(result).toMatchObject({
+      jobId: 'source-job-1',
+      sourceDependency,
+      stage: 'source_preparation',
+      status: 'queued',
+    });
+    expect(result.message).toContain('Source preparation queued');
+    expect(result.message).toContain('will follow');
   });
 
   it('denies detail assessment without its native workflow permission', async () => {

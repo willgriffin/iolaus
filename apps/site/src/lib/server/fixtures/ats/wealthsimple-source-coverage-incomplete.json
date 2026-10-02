@@ -1,0 +1,543 @@
+{
+  "provenance": {
+    "source": "Wealthsimple public Staff Software Developer Production Engineering posting",
+    "captureContract": "requirement-coverage-source/v3-chat4096",
+    "observed": "25 requirements,42 dispositions; missing r26/r27 and5 unsupported exclusions"
+  },
+  "providerProposal": {
+    "title": "Staff Software Developer, Production Engineering",
+    "locationNotes": "Remote (Canada); Canada",
+    "locations": [
+      "Remote (Canada)",
+      "Canada"
+    ],
+    "descriptionSummary": "Staff-level Production Engineering role focused on improving reliability across critical flows, preventing incidents, reducing mitigation time, and influencing reliability practices across platform and product teams.",
+    "applyInstructions": "Apply on the company site",
+    "requiredSkills": [
+      "backend systems",
+      "distributed architecture",
+      "load testing",
+      "capacity planning",
+      "Kubernetes",
+      "Helm",
+      "Argo"
+    ],
+    "preferredSkills": [],
+    "responsibilities": [
+      "Improve the platform to prevent incidents by designing and driving adoption of guardrails, sensible defaults, and engineering standards.",
+      "Build tooling to reduce incident mitigation time, including contributing to an in-house AI-assisted incident response product.",
+      "Own investigation and follow-through on load test findings and translate results into reliability improvements across critical flows.",
+      "Influence platform and product engineering teams through architecture and readiness reviews, coaching service owners, and driving scalable reliability practices.",
+      "Identify recurring failure patterns and design platform-level fixes.",
+      "Contribute to reliability syncs with product engineering on incident themes, critical-flow risks, and high-leverage initiatives."
+    ],
+    "qualifications": [
+      "8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work.",
+      "Demonstrated track record of improving reliability at scale across multiple teams.",
+      "Strong proficiency in backend systems and distributed architecture, including diagnosing complex failure modes across a service mesh.",
+      "Experience with load testing and capacity planning, and ability to translate findings into engineering improvements.",
+      "Proven ability to influence engineering teams and drive adoption of standards and practices without direct authority.",
+      "Familiarity with Kubernetes, Helm, Argo and modern deployment tooling.",
+      "Strong written and verbal communication, including presenting findings and recommendations to engineering teams and senior leadership."
+    ],
+    "domainTags": [
+      "financial technology",
+      "production engineering",
+      "reliability engineering"
+    ],
+    "roleTags": [
+      "software engineering",
+      "platform engineering",
+      "site reliability engineering"
+    ],
+    "employmentType": "full_time",
+    "seniority": "staff",
+    "workMode": "remote",
+    "applyMethod": "company_site",
+    "requirementCoverage": {
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "The Production Engineering team sits within Platform Experience, on the boundary between Platform and Product. Our mandate is to raise reliability across Wealthsimple’s most critical flows — reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements. We measure ourselves against two targets: 99.9% uptime on critical flows, and fewer than 1% of weekly active users experiencing errors in the app.",
+          "clauseIds": [
+            "c5"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r2",
+          "text": "This is a new role — one that doesn’t yet exist at Wealthsimple — and it’s a meaningful one.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r3",
+          "text": "As a Staff Software Developer on Production Engineering, you’ll bring senior technical leadership to the work of making Wealthsimple more reliable at scale.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r4",
+          "text": "You’ll work across platform and product teams, identify the highest-leverage reliability problems, and build solutions that don’t just fix the immediate issue but raise the floor for everyone.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r5",
+          "text": "This isn’t a role where you sit in one corner of the codebase. It’s a role where you shape how engineering gets done across the company.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r6",
+          "text": "Improve the platform to prevent incidents — designing and driving adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services",
+          "clauseIds": [
+            "c9"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r7",
+          "text": "Build tooling that reduces time to mitigation when incidents occur, including contributing to our in-house product on AI-assisted incident response",
+          "clauseIds": [
+            "c10"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r8",
+          "text": "Own the investigation and follow-through on load test findings — translating results into concrete reliability improvements across critical flows",
+          "clauseIds": [
+            "c11"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r9",
+          "text": "Work across platform and product engineering teams as a technical influencer — participating in architecture and readiness reviews, coaching service owners, and driving adoption of scalable reliability practices",
+          "clauseIds": [
+            "c12"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r10",
+          "text": "Identify recurring failure patterns and design platform-level fixes that prevent them from showing up again in a different service",
+          "clauseIds": [
+            "c13"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r11",
+          "text": "Contribute to the team’s reliability syncs with product engineering, helping align on incident themes, critical-flow risks, and the next highest-leverage initiatives",
+          "clauseIds": [
+            "c14"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r12",
+          "text": "8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work",
+          "clauseIds": [
+            "c16"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r13",
+          "text": "Demonstrated track record of improving reliability at scale — reducing incidents, building guardrails, or driving operational standards across multiple teams",
+          "clauseIds": [
+            "c17"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r14",
+          "text": "Strong proficiency in backend systems and distributed architecture; you can diagnose complex failure modes across a service mesh",
+          "clauseIds": [
+            "c18"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r15",
+          "text": "Experience with load testing and capacity planning, and the ability to translate findings into concrete engineering improvements",
+          "clauseIds": [
+            "c19"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r16",
+          "text": "Proven ability to work across engineering teams as a technical influencer — driving adoption of standards and practices without direct authority",
+          "clauseIds": [
+            "c20"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r17",
+          "text": "Familiarity with Kubernetes, Helm, Argo and modern deployment tooling",
+          "clauseIds": [
+            "c21"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r18",
+          "text": "Strong written and verbal communication — comfortable presenting findings and recommendations to both engineering teams and senior leadership",
+          "clauseIds": [
+            "c22"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r19",
+          "text": "You think in systems — you’re not looking for the fix, you’re looking for what caused the problem and how to make sure it doesn’t happen elsewhere",
+          "clauseIds": [
+            "c24"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r20",
+          "text": "You’re comfortable working without direct authority; you build credibility through the quality of your thinking and the clarity of your recommendations",
+          "clauseIds": [
+            "c25"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r21",
+          "text": "You hold a high bar for operational excellence without making it someone else’s problem to catch up to — you bring people along",
+          "clauseIds": [
+            "c26"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r22",
+          "text": "You’re energised by ambiguity, not slowed down by it; you know how to prioritise when everything feels urgent",
+          "clauseIds": [
+            "c27"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r23",
+          "text": "You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance",
+          "clauseIds": [
+            "c28"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r24",
+          "text": "We are a hybrid team with over 1,500 employees across North America. The people are one of the best parts of working here: you'll collaborate with incredibly talented, curious, and driven teammates who are deeply committed to doing great work.",
+          "clauseIds": [
+            "c35"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r25",
+          "text": "Technology & Innovation at Wealthsimple: We move quickly and build thoughtfully. That means we're always looking for better ways to work — whether that's new tools, AI, or rethinking how we approach a problem. We don't expect you to have all the answers, but we do expect curiosity and a willingness to evolve alongside the products we're building.",
+          "clauseIds": [
+            "c38"
+          ],
+          "importance": "unknown"
+        }
+      ],
+      "dispositions": [
+        {
+          "clauseId": "c0",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c1",
+          "type": "role_context",
+          "requirementIds": [
+            "r26"
+          ]
+        },
+        {
+          "clauseId": "c2",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "navigation_label"
+        },
+        {
+          "clauseId": "c3",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c4",
+          "type": "role_context",
+          "requirementIds": [
+            "r27"
+          ]
+        },
+        {
+          "clauseId": "c5",
+          "type": "role_context",
+          "requirementIds": [
+            "r1"
+          ]
+        },
+        {
+          "clauseId": "c6",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c7",
+          "type": "role_context",
+          "requirementIds": [
+            "r2",
+            "r3",
+            "r4",
+            "r5"
+          ]
+        },
+        {
+          "clauseId": "c8",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c9",
+          "type": "role_duty",
+          "requirementIds": [
+            "r6"
+          ]
+        },
+        {
+          "clauseId": "c10",
+          "type": "role_duty",
+          "requirementIds": [
+            "r7"
+          ]
+        },
+        {
+          "clauseId": "c11",
+          "type": "role_duty",
+          "requirementIds": [
+            "r8"
+          ]
+        },
+        {
+          "clauseId": "c12",
+          "type": "role_duty",
+          "requirementIds": [
+            "r9"
+          ]
+        },
+        {
+          "clauseId": "c13",
+          "type": "role_duty",
+          "requirementIds": [
+            "r10"
+          ]
+        },
+        {
+          "clauseId": "c14",
+          "type": "role_duty",
+          "requirementIds": [
+            "r11"
+          ]
+        },
+        {
+          "clauseId": "c15",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c16",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r12"
+          ]
+        },
+        {
+          "clauseId": "c17",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r13"
+          ]
+        },
+        {
+          "clauseId": "c18",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r14"
+          ]
+        },
+        {
+          "clauseId": "c19",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r15"
+          ]
+        },
+        {
+          "clauseId": "c20",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r16"
+          ]
+        },
+        {
+          "clauseId": "c21",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r17"
+          ]
+        },
+        {
+          "clauseId": "c22",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r18"
+          ]
+        },
+        {
+          "clauseId": "c23",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c24",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r19"
+          ]
+        },
+        {
+          "clauseId": "c25",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r20"
+          ]
+        },
+        {
+          "clauseId": "c26",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r21"
+          ]
+        },
+        {
+          "clauseId": "c27",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r22"
+          ]
+        },
+        {
+          "clauseId": "c28",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r23"
+          ]
+        },
+        {
+          "clauseId": "c29",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c30",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c31",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c32",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c33",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c34",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c35",
+          "type": "role_context",
+          "requirementIds": [
+            "r24"
+          ]
+        },
+        {
+          "clauseId": "c36",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c37",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "section_heading"
+        },
+        {
+          "clauseId": "c38",
+          "type": "role_context",
+          "requirementIds": [
+            "r25"
+          ]
+        },
+        {
+          "clauseId": "c39",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "equal_opportunity_statement"
+        },
+        {
+          "clauseId": "c40",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        },
+        {
+          "clauseId": "c41",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit"
+        }
+      ]
+    }
+  }
+}

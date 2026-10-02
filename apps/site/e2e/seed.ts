@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { renderHtmlToPdf } from '@happyvertical/pdf';
 import { executeAsPrincipal } from '@happyvertical/smrt-agents';
+import { resolveDatabase } from '@happyvertical/smrt-core';
 import { withSystemContext } from '@happyvertical/smrt-tenancy';
 import {
   DEFAULT_ROLE_SLUGS,
@@ -14,7 +15,13 @@ import {
   UserStatus,
 } from '@happyvertical/smrt-users';
 import { saveCandidateOnboarding } from '../src/lib/server/candidate-onboarding.js';
-import { getSmrtOptions } from '../src/lib/server/db.js';
+import { getDbConfig, getSmrtOptions } from '../src/lib/server/db.js';
+import {
+  ensureOpportunityIntelligenceControl,
+  ensureOpportunityIntelligenceGovernanceSchema,
+  setOpportunityIntelligenceControl,
+} from '../src/lib/server/opportunity-intelligence-governance.js';
+import { ensureOpportunityIntelligenceJobDedupe } from '../src/lib/server/opportunity-intelligence-job-schema.js';
 import { fingerprintOpportunitySourceContent } from '../src/lib/server/opportunity-source-content.js';
 import { getResumeFilesystem } from '../src/lib/server/resume-files.js';
 import { getCollection } from '../src/lib/server/smrt.js';
@@ -26,6 +33,20 @@ import {
 import { resolveWorkspaceSubjectForProfile } from '../src/lib/server/workspace-subject.js';
 
 assertSyntheticDemoFixtureEnabled();
+if (process.env.IOLAUS_E2E_SOURCE_COVERAGE === '1') {
+  // Explicit fixture migration, before any queued workflow. Runtime workers
+  // receive no database argument and only verify this installed native index.
+  const db = await resolveDatabase(getDbConfig());
+  await ensureOpportunityIntelligenceJobDedupe(db);
+  await ensureOpportunityIntelligenceGovernanceSchema(db);
+  await ensureOpportunityIntelligenceControl();
+  await setOpportunityIntelligenceControl({
+    enabled: true,
+    reason: 'fictional_local_browser_qa',
+    inputTokenThreshold: 1_000_000,
+    requestThreshold: 100,
+  });
+}
 const sessionCookieName = process.env.IOLAUS_E2E_SESSION_COOKIE_NAME;
 if (!sessionCookieName)
   throw new Error('E2E native server session cookie name missing.');
@@ -71,6 +92,10 @@ await withSyntheticDemoOwnerContext(async (identity) => {
   });
   await publishedFixture.save();
   const applyingOpportunities: Record<string, string> = {};
+  const sourceCoverageOpportunities: Record<
+    string,
+    Record<string, string>
+  > = {};
   const publicOpportunities = await getCollection('Opportunity');
   for (const project of [
     'android-portrait',
@@ -105,6 +130,41 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     if (!opportunity.id)
       throw new Error('Applying readiness opportunity missing id.');
     applyingOpportunities[project] = opportunity.id;
+    if (process.env.IOLAUS_E2E_SOURCE_COVERAGE === '1') {
+      sourceCoverageOpportunities[project] = {};
+      for (const [scenario, marker] of [
+        ['ready', ''],
+        ['provider-failure', '[qa:source-provider-failure]'],
+        ['audit-malformed', '[qa:source-audit-malformed]'],
+      ] as const) {
+        const sourceContent = {
+          title: `Source coverage ${project} ${scenario} fictional engineer`,
+          descriptionRaw: [
+            'Requirements',
+            `You must build TypeScript interfaces for this fictional ${project} local QA role. ${marker}`.trim(),
+          ].join('\n'),
+          workMode: 'remote',
+          employmentType: 'full_time',
+          postedAt: '2020-01-01T00:00:00.000Z',
+        };
+        const posting = await publicOpportunities.create({
+          ...sourceContent,
+          // Keep this dedicated workflow fixture outside Overview's new-posting
+          // window so its eventual private scores do not alter independent QA.
+          firstSeenAt: new Date('2020-01-01T00:00:00.000Z'),
+          postedAt: new Date('2020-01-01T00:00:00.000Z'),
+          status: 'found',
+          sourceContentJson: JSON.stringify(sourceContent),
+          sourceContentFingerprint:
+            fingerprintOpportunitySourceContent(sourceContent),
+          sourceContentVersion: 1,
+        });
+        await posting.save();
+        if (!posting.id)
+          throw new Error('Fictional source coverage posting missing its id');
+        sourceCoverageOpportunities[project][scenario] = posting.id;
+      }
+    }
   }
   const ownership = {
     tenantId: subject.tenantId,
@@ -440,6 +500,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     JSON.stringify({
       ...fixture,
       applyingOpportunities,
+      sourceCoverageOpportunities,
       approvedApplicationId: approvedApplication.id,
       draftingApplicationId: draftingApplication.id,
       orphanApplicationId: orphanApplication.id,

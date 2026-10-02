@@ -457,7 +457,14 @@ export function createOpportunityDataSurfaceAdapter(
       if (!result.enqueued) {
         throw new OpportunitySelectionError('already_queued');
       }
-      return { enqueued: true };
+      return {
+        enqueued: true,
+        jobId: result.job.id ?? null,
+        sourceDependency: result.sourceDependency
+          ? { ...result.sourceDependency }
+          : null,
+        stage: result.stage ?? null,
+      };
     },
   };
 

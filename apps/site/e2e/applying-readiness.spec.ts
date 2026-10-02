@@ -1,4 +1,7 @@
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 import {
   type APIRequestContext,
   test as base,
@@ -8,6 +11,7 @@ import {
   type TestInfo,
 } from '@playwright/test';
 import { attachRuntimeFailure } from './evidence.js';
+import type { SourceCoverageProviderEvent } from './source-coverage-provider.js';
 
 const test = base.extend<{ localNetwork: undefined }>({
   // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture dependencies are destructured.
@@ -669,5 +673,416 @@ test('Overview separates pending matches from scores and keeps private tasks in 
     );
   } finally {
     await foreign.close();
+  }
+});
+
+interface CoverageInspection {
+  jobs: Array<{
+    id: string;
+    method: string;
+    status: string;
+    tenant_id: string;
+    args: string | Record<string, unknown>;
+    last_error: string | null;
+  }>;
+  receipts: Array<Record<string, unknown>>;
+  assessments: Array<Record<string, unknown>>;
+  posting: {
+    sourceContentFingerprint: string;
+    sourceContentVersion: number;
+    preparedPostingJson: string;
+  };
+  coverage: { status: string; reason?: string };
+  nativeDedupeIndex: boolean;
+}
+
+async function coverageRuntime(
+  mode: 'inspect' | 'service' | 'revise',
+  id: string,
+): Promise<CoverageInspection> {
+  const environmentPath = process.env.IOLAUS_E2E_RUNTIME_ENVIRONMENT;
+  if (!environmentPath)
+    throw new Error('Source coverage requires its opt-in isolated runtime');
+  const environment = JSON.parse(
+    readFileSync(environmentPath, 'utf8'),
+  ) as NodeJS.ProcessEnv;
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      resolve('node_modules/tsx/dist/cli.mjs'),
+      resolve('e2e/source-coverage-runtime.ts'),
+      mode,
+      id,
+    ],
+    { env: environment, timeout: 160_000, maxBuffer: 20_000_000 },
+  );
+  const line = stdout
+    .split('\n')
+    .reverse()
+    .find((line) => line.startsWith('IOLAUS_E2E_RESULT:'));
+  if (!line) throw new Error('Native fixture inspection result missing');
+  return JSON.parse(
+    line.slice('IOLAUS_E2E_RESULT:'.length),
+  ) as CoverageInspection;
+}
+
+function coverageEvents(): SourceCoverageProviderEvent[] {
+  const path = process.env.IOLAUS_E2E_PROVIDER_EVENTS;
+  if (!path) throw new Error('Source coverage provider event path missing');
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as SourceCoverageProviderEvent);
+}
+
+function actionData(result: { data: unknown }): Record<string, unknown> {
+  if (typeof result.data !== 'string')
+    return result.data as Record<string, unknown>;
+  // Enhanced SvelteKit actions use devalue references. This action contract has
+  // only plain JSON primitives; decode those without importing browser aliases.
+  const values = JSON.parse(result.data) as unknown[];
+  // Values stored in the flat table are scalars, not references. Object fields
+  // hold references into that table, so resolve each referenced scalar once.
+  const resolveValue = (index: unknown): unknown => {
+    if (typeof index !== 'number') return index;
+    if (index < 0) return undefined;
+    const value = values[index];
+    if (Array.isArray(value)) return value.map(resolveValue);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, resolveValue(item)]),
+      );
+    return value;
+  };
+  return resolveValue(0) as Record<string, unknown>;
+}
+
+function coverageFixture(project: string, scenario: string) {
+  const fixture = JSON.parse(
+    readFileSync(process.env.IOLAUS_E2E_FIXTURE as string, 'utf8'),
+  ) as {
+    sourceCoverageOpportunities: Record<string, Record<string, string>>;
+    tenantId: string;
+    userId: string;
+    profileId: string;
+  };
+  const id = fixture.sourceCoverageOpportunities[project]?.[scenario];
+  if (!id) throw new Error('Opt-in fictional source coverage posting missing');
+  return { ...fixture, id };
+}
+
+async function assessCoverage(page: Page) {
+  return actionData(
+    await action(
+      page,
+      page.getByRole('button', { name: 'Assess', exact: true }),
+      'processOpportunity',
+    ),
+  );
+}
+
+function expectSourceOnly(receipts: CoverageInspection['receipts']) {
+  const source = receipts.filter(
+    (row) =>
+      String(row.feature).startsWith('opportunity-extraction') ||
+      row.feature === 'opportunity-source-requirement-coverage',
+  );
+  expect(source.length).toBeGreaterThan(0);
+  for (const row of source) {
+    expect(row.tenant_id ?? '').toBe('');
+    expect(row.owner_user_id ?? '').toBe('');
+    expect(row.candidate_profile_id ?? '').toBe('');
+    expect(String(row.output_json)).not.toMatch(
+      /Jordan Example|jordan\.example|Foreign QA Candidate|candidateMaterialFingerprint/,
+    );
+  }
+}
+
+test('source coverage action creates native source and fresh private jobs, reuses verified cache, and fences stale and foreign assessments', async ({
+  page,
+  browser,
+  baseURL,
+}, testInfo) => {
+  test.skip(
+    process.env.IOLAUS_E2E_SOURCE_COVERAGE !== '1',
+    'Explicit isolated source-coverage transport opt-in required',
+  );
+  test.setTimeout(360_000);
+  const fixture = coverageFixture(testInfo.project.name, 'ready');
+  const id = fixture.id;
+  await page.goto(`/admin/opportunities/${id}/`);
+  const assessment = page.getByRole('region', {
+    name: 'Your opportunity assessment',
+  });
+  await expect(
+    assessment.getByText('Unknown', { exact: true }).first(),
+  ).toBeVisible();
+  const before = await coverageRuntime('inspect', id);
+  expect(before.coverage.status).toBe('missing');
+  expect(before.assessments).toHaveLength(0);
+  const initial = await assessCoverage(page);
+  expect(initial.stage).toBe('source_preparation');
+  expect(initial.status).toBe('queued');
+  expect(initial.sourceDependency).toMatchObject({
+    kind: 'requirement_coverage',
+    sourceContentFingerprint: before.posting.sourceContentFingerprint,
+    sourceContentVersion: before.posting.sourceContentVersion,
+  });
+  await expect(
+    page.getByText(
+      /Source preparation queued\. Your private assessment will follow/,
+    ),
+  ).toBeVisible();
+  await expect(assessment).not.toContainText('Match score:');
+  const queued = await coverageRuntime('inspect', id);
+  expect(queued.nativeDedupeIndex).toBe(true);
+  expect(queued.jobs).toHaveLength(1);
+  expect(queued.jobs[0]).toMatchObject({
+    id: initial.jobId,
+    method: 'prepareAssessmentCoverage',
+    status: 'pending',
+    tenant_id: fixture.tenantId,
+  });
+  const duplicate = await assessCoverage(page);
+  expect(duplicate.jobId).toBe(initial.jobId);
+  expect((await coverageRuntime('inspect', id)).jobs).toHaveLength(1);
+  await screenshot(
+    page,
+    testInfo,
+    'source-01-actionable-prerequisite-no-score',
+  );
+  const start = coverageEvents().length;
+  const serviced = await coverageRuntime('service', id);
+  await testInfo.attach('source-native-chain-before-assertions', {
+    body: Buffer.from(JSON.stringify(serviced, null, 2)),
+    contentType: 'application/json',
+  });
+  await testInfo.attach('source-provider-events-before-assertions', {
+    body: Buffer.from(JSON.stringify(coverageEvents(), null, 2)),
+    contentType: 'application/json',
+  });
+  expect(serviced.coverage.status).toBe('ready');
+  expect(
+    serviced.jobs.filter((job) => job.method === 'prepareAssessmentCoverage'),
+  ).toHaveLength(1);
+  expect(
+    serviced.jobs.filter((job) => job.method === 'processIntelligence'),
+  ).toHaveLength(1);
+  expect(
+    serviced.jobs.every((job) => job.status === 'completed'),
+    JSON.stringify(serviced.jobs),
+  ).toBe(true);
+  expect(serviced.assessments).toHaveLength(1);
+  expect(serviced.assessments[0]).toMatchObject({
+    tenant_id: fixture.tenantId,
+    owner_user_id: fixture.userId,
+    candidate_profile_id: fixture.profileId,
+    source_content_fingerprint: before.posting.sourceContentFingerprint,
+    source_content_version: 1,
+  });
+  expectSourceOnly(serviced.receipts);
+  const publicCache = JSON.stringify({
+    preparedPostingJson: serviced.posting.preparedPostingJson,
+    sourceOutputs: serviced.receipts
+      .filter((row) => row.feature !== 'opportunity-assessment')
+      .map((row) => row.output_json),
+  });
+  for (const privateIdentity of [
+    fixture.tenantId,
+    fixture.userId,
+    fixture.profileId,
+  ]) {
+    expect(publicCache).not.toContain(privateIdentity);
+  }
+  const events = coverageEvents().slice(start);
+  expect(events.map((event) => event.kind)).toEqual([
+    'source_extraction',
+    'source_audit',
+    'private_assessment',
+  ]);
+  for (const event of events.filter(
+    (event) => event.kind !== 'private_assessment',
+  )) {
+    expect(JSON.stringify(event.request)).not.toMatch(
+      /Jordan Example|jordan\.example|Foreign QA Candidate|candidateMaterialFingerprint/,
+    );
+    for (const privateIdentity of [
+      fixture.tenantId,
+      fixture.userId,
+      fixture.profileId,
+    ]) {
+      expect(JSON.stringify(event.request)).not.toContain(privateIdentity);
+    }
+  }
+  await page.reload();
+  await expect(assessment.getByText('Current', { exact: true })).toBeVisible();
+  await assessment.scrollIntoViewIfNeeded();
+  await screenshot(
+    page,
+    testInfo,
+    'source-02-native-current-private-assessment',
+  );
+  await testInfo.attach('source-native-chain', {
+    body: Buffer.from(JSON.stringify(serviced, null, 2)),
+    contentType: 'application/json',
+  });
+  const cachedStart = coverageEvents().length;
+  const cached = await assessCoverage(page);
+  expect(cached.stage).toBe('private_assessment');
+  expect(cached.sourceDependency).toBeUndefined();
+  const fast = await coverageRuntime('service', id);
+  expect(fast.coverage.status).toBe('ready');
+  expect(
+    fast.jobs.filter((job) => job.method === 'prepareAssessmentCoverage'),
+  ).toHaveLength(1);
+  expect(
+    coverageEvents()
+      .slice(cachedStart)
+      .some((event) => event.kind !== 'private_assessment'),
+  ).toBe(false);
+
+  const foreign = await browser.newContext({
+    baseURL,
+    storageState: process.env.IOLAUS_E2E_FOREIGN_AUTH,
+  });
+  try {
+    const foreignPage = await foreign.newPage();
+    await foreignPage.goto(`/admin/opportunities/${id}/`);
+    const foreignAssessment = foreignPage.getByRole('region', {
+      name: 'Your opportunity assessment',
+    });
+    await expect(
+      foreignAssessment.getByText('Unknown', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(foreignAssessment).not.toContainText('Match score:');
+    await expect(foreignAssessment).not.toContainText(
+      'Current for this posting',
+    );
+    await expect(
+      foreignAssessment.getByText('Current', { exact: true }),
+    ).toHaveCount(0);
+    await foreignAssessment.scrollIntoViewIfNeeded();
+    await screenshot(
+      foreignPage,
+      testInfo,
+      'source-03-foreign-assessment-absent',
+    );
+  } finally {
+    await foreign.close();
+  }
+
+  // Change the owner profile through the real browser workflow. Global source
+  // proof survives; the private result becomes stale before a fresh assessment.
+  await page.goto('/admin/onboarding');
+  await page
+    .getByLabel('Professional summary', { exact: true })
+    .fill(
+      `Fictional changed candidate ${testInfo.project.name}; no external applications.`,
+    );
+  await action(
+    page,
+    page.getByRole('button', { name: 'Save private setup', exact: true }),
+    'save',
+  );
+  await page.goto(`/admin/opportunities/${id}/`);
+  await expect(
+    assessment.getByText('Unknown', { exact: true }).first(),
+  ).toBeVisible();
+  const profileStart = coverageEvents().length;
+  expect((await assessCoverage(page)).stage).toBe('private_assessment');
+  const freshProfile = await coverageRuntime('service', id);
+  expect(freshProfile.assessments.length).toBeGreaterThan(1);
+  expect(
+    coverageEvents()
+      .slice(profileStart)
+      .map((event) => event.kind),
+  ).toEqual(['private_assessment']);
+  expect(freshProfile.posting.preparedPostingJson).toBe(
+    serviced.posting.preparedPostingJson,
+  );
+  await page.reload();
+  await expect(assessment.getByText('Current', { exact: true })).toBeVisible();
+  await coverageRuntime('revise', id);
+  await page.reload();
+  await expect(
+    assessment.getByText('Unknown', { exact: true }).first(),
+  ).toBeVisible();
+  await expect(assessment).not.toContainText('Match score:');
+  const revised = await assessCoverage(page);
+  expect(revised.stage).toBe('source_preparation');
+  expect(revised.sourceDependency).toMatchObject({ sourceContentVersion: 2 });
+  await assessment.scrollIntoViewIfNeeded();
+  await screenshot(
+    page,
+    testInfo,
+    'source-04-source-revision-removes-stale-score',
+  );
+  const freshSource = await coverageRuntime('service', id);
+  expect(freshSource.coverage.status).toBe('ready');
+  expect(
+    freshSource.assessments.some(
+      (row) => Number(row.source_content_version) === 2,
+    ),
+  ).toBe(true);
+  await page.reload();
+  await expect(assessment.getByText('Current', { exact: true })).toBeVisible();
+  await testInfo.attach('source-native-currentness', {
+    body: Buffer.from(JSON.stringify(freshSource, null, 2)),
+    contentType: 'application/json',
+  });
+});
+
+test('source coverage failed provider and malformed audit block private continuation and repeated provider work', async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.IOLAUS_E2E_SOURCE_COVERAGE !== '1',
+    'Explicit isolated source-coverage transport opt-in required',
+  );
+  test.setTimeout(240_000);
+  for (const scenario of ['provider-failure', 'audit-malformed']) {
+    const { id } = coverageFixture(testInfo.project.name, scenario);
+    await page.goto(`/admin/opportunities/${id}/`);
+    expect((await assessCoverage(page)).stage).toBe('source_preparation');
+    const outcome = await coverageRuntime('service', id);
+    await testInfo.attach(`source-${scenario}-before-assertions`, {
+      body: Buffer.from(JSON.stringify(outcome, null, 2)),
+      contentType: 'application/json',
+    });
+    await testInfo.attach(`source-${scenario}-provider-events`, {
+      body: Buffer.from(JSON.stringify(coverageEvents(), null, 2)),
+      contentType: 'application/json',
+    });
+    expect(outcome.assessments).toHaveLength(0);
+    expect(
+      outcome.jobs.filter((job) => job.method === 'processIntelligence'),
+    ).toHaveLength(0);
+    expect(outcome.coverage.status).not.toBe('ready');
+    const count = coverageEvents().length;
+    await page.reload();
+    const assessment = page.getByRole('region', {
+      name: 'Your opportunity assessment',
+    });
+    await expect(
+      assessment.getByText('Unknown', { exact: true }).first(),
+    ).toBeVisible();
+    await expect(assessment).not.toContainText('Match score:');
+    const response = await action(
+      page,
+      page.getByRole('button', { name: 'Assess', exact: true }),
+      'processOpportunity',
+    );
+    expect(actionData(response).status).toBe('error');
+    expect(coverageEvents()).toHaveLength(count);
+    expect((await coverageRuntime('inspect', id)).jobs).toHaveLength(1);
+    await screenshot(
+      page,
+      testInfo,
+      `source-${scenario}-blocked-no-private-score`,
+    );
+    await testInfo.attach(`source-${scenario}-native-state`, {
+      body: Buffer.from(JSON.stringify(outcome, null, 2)),
+      contentType: 'application/json',
+    });
   }
 });

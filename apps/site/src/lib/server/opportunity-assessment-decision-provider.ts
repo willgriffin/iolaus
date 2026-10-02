@@ -9,6 +9,7 @@ import {
   OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS,
   OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
   OPPORTUNITY_ASSESSMENT_VERSION,
+  opportunityAssessmentRunReservationLimit,
   type PreparedOpportunityAssessment,
   resolveOpportunityAssessment,
 } from './opportunity-assessment.js';
@@ -17,6 +18,14 @@ import {
   executeGovernedOpportunityIntelligenceRequest,
   type OpportunityIntelligenceGovernanceStore,
 } from './opportunity-intelligence-governance.js';
+import type {
+  CoverageLedger,
+  RequirementCoverageContext,
+} from './opportunity-requirement-coverage.js';
+import {
+  hasRecordedRequirementCoverageAudit,
+  validateVerifiedRequirementCoverage,
+} from './opportunity-requirement-coverage-provider.js';
 import type { WorkspaceSubject } from './private-workspace.js';
 
 export {
@@ -38,10 +47,16 @@ export function preflightOpportunityAssessmentRequest(
 ): {
   requestBytes: number;
   maxOutputTokens: number;
+  reservedTokens: number;
+  runReservationLimit: number;
   offeredSupportPredicates: number;
   offeredContradictionPredicates: number;
   fits: boolean;
-  reason?: 'request_bytes' | 'output_reservation' | 'citation_scope';
+  reason?:
+    | 'request_bytes'
+    | 'output_reservation'
+    | 'citation_scope'
+    | 'run_reservation';
 } {
   const requestBytes = Buffer.byteLength(
     JSON.stringify(prepared.request),
@@ -50,20 +65,26 @@ export function preflightOpportunityAssessmentRequest(
   const maxOutputTokens = assessmentDecisionOutputTokenCeiling(
     prepared.request,
   );
+  const reservedTokens = requestBytes + maxOutputTokens;
+  const runReservationLimit = opportunityAssessmentRunReservationLimit();
   const reason =
     requestBytes > OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES
       ? 'request_bytes'
       : maxOutputTokens > OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS
         ? 'output_reservation'
-        : prepared.requirements.length > 0 &&
-            prepared.citationScopes.some(
-              (scope) => scope.candidateKeys.length === 0,
-            )
-          ? 'citation_scope'
-          : undefined;
+        : reservedTokens > runReservationLimit
+          ? 'run_reservation'
+          : prepared.requirements.length > 0 &&
+              prepared.citationScopes.some(
+                (scope) => scope.candidateKeys.length === 0,
+              )
+            ? 'citation_scope'
+            : undefined;
   return {
     requestBytes,
     maxOutputTokens,
+    reservedTokens,
+    runReservationLimit,
     offeredSupportPredicates: Object.keys(prepared.request.questions).filter(
       (key) => /^r\d+_c\d+_supports$/u.test(key),
     ).length,
@@ -102,6 +123,10 @@ export async function evaluateOpportunityAssessment(
     subjectFingerprint: string;
     /** Server-resolved tuple; never supplied by the model or browser. */
     workspaceSubject: WorkspaceSubject;
+    requirementCoverage?: {
+      context: RequirementCoverageContext;
+      ledger: CoverageLedger;
+    };
   },
 ) {
   if (process.env.OPPORTUNITY_ASSESSMENT_DECISIONS_ENABLED !== 'true')
@@ -153,11 +178,31 @@ export async function evaluateOpportunityAssessment(
         ? `Complete opportunity assessment request is ${preflight.requestBytes} bytes, above the ${OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES}-byte limit.`
         : preflight.reason === 'citation_scope'
           ? 'No candidate citation scope is available for every role requirement within the assessment limits.'
-          : `Complete opportunity assessment response reservation is ${preflight.maxOutputTokens} tokens, above the ${OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS}-token limit.`,
+          : preflight.reason === 'run_reservation'
+            ? `Complete private assessment reserves ${preflight.reservedTokens} tokens, above the ${preflight.runReservationLimit}-token run limit.`
+            : `Complete opportunity assessment response reservation is ${preflight.maxOutputTokens} tokens, above the ${OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS}-token limit.`,
     );
   }
   const estimatedInputTokens = preflight.requestBytes;
   const maxOutputTokens = preflight.maxOutputTokens;
+  const sourceCoverage = options.requirementCoverage;
+  if (
+    !sourceCoverage ||
+    sourceCoverage.context.sourceFingerprint !== options.contentFingerprint ||
+    validateVerifiedRequirementCoverage(
+      sourceCoverage.context,
+      sourceCoverage.ledger,
+    ).fingerprint !== prepared.postingMaterial.requirementCoverageFingerprint ||
+    !(await hasRecordedRequirementCoverageAudit(
+      options.opportunityId,
+      sourceCoverage.context,
+      sourceCoverage.ledger,
+    ))
+  ) {
+    throw new Error(
+      'A recorded current source clause coverage audit is required before private matching.',
+    );
+  }
   const { output } =
     await executeGovernedOpportunityIntelligenceRequest<DecisionResult>({
       config,

@@ -1,10 +1,165 @@
 import { describe, expect, it, vi } from 'vitest';
 import vanta from './fixtures/ats/vanta-developer-experience.json';
 import {
+  buildOpportunityLlmExtractionMessages,
   extractSkillListingsFromDescription,
   normalizeOpportunityLlmExtraction,
+  preflightOpportunityRequirementCoverageExtraction,
   resolveOpportunityDetails,
 } from './opportunity-details';
+import {
+  pricingForOpportunityIntelligenceModel,
+  reservedRequestSpendMicros,
+} from './opportunity-intelligence-config.js';
+import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
+import {
+  buildRequirementCoverageSource,
+  requirementCoverageContextForOpportunity,
+} from './opportunity-requirement-coverage.js';
+
+describe('source extraction reservation admission', () => {
+  it('requests only coverage while retaining full raw clauses and explicit validated heading aliases', () => {
+    const opportunity = {
+      descriptionRaw:
+        'About the team\nHold a high bar for quality and security.\nSkills you bring\nFamiliarity with Kubernetes, Helm and Argo.',
+      sourceContentFingerprint: 'public-source',
+      sourceContentVersion: 1,
+    };
+    const coverage = buildRequirementCoverageSource(
+      requirementCoverageContextForOpportunity(opportunity),
+    );
+    const messages = buildOpportunityLlmExtractionMessages(
+      opportunity,
+      coverage,
+    );
+    const user = String(messages[1].content);
+    expect(user).toContain(
+      'only these keys when the posting supports them: requirementCoverage.',
+    );
+    expect(String(messages[0].content)).toContain('ONLY requirementCoverage');
+    expect(String(messages[0].content)).toContain(
+      'Every referenced requirement ID must have a defined requirement row',
+    );
+    expect(String(messages[0].content)).toContain(
+      'Familiarity with Kubernetes',
+    );
+    const payload = JSON.parse(
+      user.slice(user.indexOf('provenance:\n') + 'provenance:\n'.length),
+    );
+    expect(
+      payload.sourceClauses.map((row: { text: string }) => row.text),
+    ).toEqual(coverage.clauses.map((row) => row.text));
+    expect(payload.headingClauseIds).toEqual(['c0']);
+    expect(payload.sourceClauses[2]).toMatchObject({
+      id: 'c2',
+      text: 'Skills you bring',
+    });
+    expect(String(messages[0].content)).toContain(
+      'section_heading ONLY for supplied headingClauseIds',
+    );
+    const display = normalizeOpportunityLlmExtraction({
+      requirementCoverage: { requirements: [], dispositions: [] },
+    });
+    expect(display).not.toHaveProperty('responsibilities');
+    expect(display).not.toHaveProperty('qualifications');
+    expect(display).not.toHaveProperty('descriptionSummary');
+  });
+  it('declines token and spend limits that fit counted input but cannot cover durable reservations', async () => {
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MAX_INPUT_TOKENS', '6000');
+    try {
+      const opportunity = {
+        id: 'source-reservation-regression',
+        title: 'Staff Platform Engineer',
+        descriptionRaw:
+          'About the team\nWork across platform and product.\nRequirements\nMust improve reliability using Kubernetes, Helm and Argo.',
+        sourceContentFingerprint: 'current-source',
+        sourceContentVersion: 1,
+      };
+      const prepared = prepareOpportunityPosting(opportunity);
+      const pricing =
+        pricingForOpportunityIntelligenceModel('openai/gpt-6-luna');
+      const options = {
+        model: 'openai/gpt-6-luna',
+        counter: async () => 1,
+        auditPricing: pricing,
+      };
+      const plan = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        prepared,
+        options,
+      );
+      expect(plan.admitted).toBe(true);
+      expect(plan.chunks).toHaveLength(1);
+      const chunk = plan.chunks[0];
+      expect(chunk.inputTokenCount).toBeLessThan(chunk.inputTokenCeiling);
+      expect(chunk.inputTokenCeiling).toBe(6000);
+      expect(plan.preflight.reservedTokens).toBe(
+        chunk.inputTokenCeiling +
+          plan.maxOutputTokens +
+          plan.auditReservation.reservedTokens,
+      );
+      for (const clause of plan.sourceCoverage.clauses)
+        expect(plan.messages[0][1].content).toContain(
+          JSON.stringify(clause.text),
+        );
+      const countedTokenBudget =
+        chunk.inputTokenCount +
+        plan.maxOutputTokens +
+        plan.auditReservation.reservedTokens +
+        1;
+      const tokenLimited =
+        await preflightOpportunityRequirementCoverageExtraction(
+          opportunity,
+          prepared,
+          {
+            ...options,
+            limits: {
+              calls: 4,
+              inputTokens: countedTokenBudget,
+              spendMicros: 100000,
+            },
+          },
+        );
+      expect(tokenLimited.sourceReady).toBe(true);
+      expect(tokenLimited.preflight.fits).toBe(false);
+      expect(tokenLimited.admitted).toBe(false);
+      const countedSpend =
+        reservedRequestSpendMicros({
+          inputTokens: chunk.inputTokenCount,
+          maxOutputTokens: plan.maxOutputTokens,
+          pricing,
+        }) +
+        reservedRequestSpendMicros({
+          inputTokens: plan.auditReservation.requestBytes,
+          maxOutputTokens: plan.auditReservation.maxOutputTokens,
+          pricing,
+        });
+      if (plan.reservedSpendMicros === null)
+        throw new Error('Missing fixture pricing');
+      expect(countedSpend).toBeLessThan(plan.reservedSpendMicros);
+      const spendLimited =
+        await preflightOpportunityRequirementCoverageExtraction(
+          opportunity,
+          prepared,
+          {
+            ...options,
+            limits: {
+              calls: 4,
+              inputTokens: 80000,
+              spendMicros: Math.floor(
+                (countedSpend + plan.reservedSpendMicros) / 2,
+              ),
+            },
+          },
+        );
+      expect(spendLimited.preflight.fits).toBe(true);
+      expect(spendLimited.spendFits).toBe(false);
+      expect(spendLimited.admitted).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
