@@ -8,6 +8,7 @@ import {
 } from '$lib/opportunity-filters';
 import { getDbConfig } from './db.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
+import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
 import type { WorkspaceSubject } from './workspace-subject.js';
 
 /** Hidden from every default listing; selectable through an explicit filter. */
@@ -744,17 +745,109 @@ function opportunityStatusRankSql(): string {
   END`;
 }
 
+export type CurrentCitedOpportunitySupport = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection: OpportunityPartialAssessmentProjection;
+};
+
+/** Replay only owned saved partials against uncached sources; never hydrate the posting corpus. */
+export async function loadCurrentCitedOpportunitySupport(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentCitedOpportunitySupport>> {
+  const [
+    { listPrivateRecords },
+    { OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION },
+    { loadCurrentPartialOpportunityAssessmentProjections },
+    { getCollection },
+  ] = await Promise.all([
+    import('./private-workspace.js'),
+    import('./opportunity-assessment-partial.js'),
+    import('./opportunity-assessment-partial-projection.js'),
+    import('./smrt.js'),
+  ]);
+  const rows = await listPrivateRecords('OpportunityAssessment', subject, {
+    where: {
+      status: 'partial',
+      contractVersion: OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+    },
+  });
+  const ids = [
+    ...new Set(
+      rows
+        .map((row) => row.opportunityId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const result = new Map<string, CurrentCitedOpportunitySupport>();
+  if (!ids.length) return result;
+  const collection = await getCollection('Opportunity');
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const native = await collection.get({ id }, { cache: false });
+        if (!native) continue;
+        const opportunity = native.toJSON() as Record<string, unknown>;
+        const fingerprint = opportunity.sourceContentFingerprint;
+        const version = opportunity.sourceContentVersion;
+        if (
+          opportunity.id !== id ||
+          typeof fingerprint !== 'string' ||
+          !fingerprint ||
+          !Number.isSafeInteger(version) ||
+          Number(version) < 0
+        )
+          continue;
+        const projections =
+          await loadCurrentPartialOpportunityAssessmentProjections({
+            opportunities: [opportunity],
+            subject,
+          });
+        const projection = projections.get(id);
+        if (projection)
+          result.set(id, {
+            sourceContentFingerprint: fingerprint,
+            sourceContentVersion: Number(version),
+            projection,
+          });
+      }
+    }),
+  );
+  return result;
+}
+
+function citedSupportSql(
+  support: Map<string, CurrentCitedOpportunitySupport>,
+  values: unknown[],
+): string {
+  if (!support.size) return 'NULL';
+  const branches = [...support]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
+      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
+      THEN ${pushParam(values, current.projection.supportedCriterionCount)}`,
+    );
+  return `CASE ${branches.join('\n')} ELSE NULL END`;
+}
+
 function orderBySql(
   sort: OpportunityFilterState['sort'],
   direction: OpportunityFilterState['sortDirection'],
   options: {
     dialect: OpportunityQueryDialect;
     triageRejectDepriority?: boolean;
+    citedSupport?: string;
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
   const assessableFit = `CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END`;
   switch (sort) {
+    case 'cited_support':
+      return `${options.citedSupport ?? 'NULL'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'eligibility':
       return `latest_assessment.eligibility_priority ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'newest':
@@ -1117,6 +1210,13 @@ export async function listOpportunityPageIds({
       latestReviewJoinSql(dialect, workspaceSubject, query.values),
     );
   }
+  const citedSupport =
+    filters.sort === 'cited_support'
+      ? citedSupportSql(
+          await loadCurrentCitedOpportunitySupport(workspaceSubject),
+          query.values,
+        )
+      : undefined;
   const limitPlaceholder = pushParam(query.values, limit);
   const offsetPlaceholder = pushParam(query.values, offset);
   const sql = `SELECT o.id
@@ -1125,6 +1225,7 @@ export async function listOpportunityPageIds({
     ${query.whereSql}
     ORDER BY ${orderBySql(filters.sort, filters.sortDirection, {
       dialect,
+      citedSupport,
       triageRejectDepriority:
         triageRejectDepriority && filters.sort === 'score',
     })}

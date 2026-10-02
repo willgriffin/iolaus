@@ -617,3 +617,92 @@ describe('opportunity filter query params', () => {
     ]);
   });
 });
+
+function citedProjection(
+  supported: number,
+  assessed = supported || 1,
+  unresolved = 2,
+) {
+  return {
+    version: 'opportunity-assessment-partial-projection/v1',
+    mode: 'partial',
+    sourceStatus: 'current',
+    supportedCriterionCount: supported,
+    criterionCount: assessed,
+    unresolvedSourceClauseCount: unresolved,
+    requirements: Array.from({ length: assessed }, (_, i) => ({
+      id: `criterion-${i}`,
+      text: 'Maintain APIs.',
+      support: i < supported ? 'supported' : 'uncertain',
+      postingCitations: [
+        { excerpt: 'Maintain APIs.', clauseId: 'clause', start: 0, end: 13 },
+      ],
+      candidateCitations: [],
+    })),
+  };
+}
+
+describe('cited support order', () => {
+  const rows = [
+    {
+      id: 'cache-only',
+      latestScore: 100,
+      assessmentJson: JSON.stringify(citedProjection(50)),
+    },
+    {
+      id: 'stale',
+      updatedAt: '2026-10-02',
+      partialAssessmentProjection: {
+        ...citedProjection(20),
+        sourceStatus: 'stale',
+      },
+    },
+    { id: 'zero', partialAssessmentProjection: citedProjection(0) },
+    {
+      id: 'three',
+      latestScore: 1,
+      partialAssessmentProjection: citedProjection(3, 23, 17),
+    },
+    {
+      id: 'a-four',
+      updatedAt: '2026-10-01',
+      partialAssessmentProjection: citedProjection(4, 30, 25),
+    },
+    {
+      id: 'z-four',
+      updatedAt: '2026-10-01',
+      partialAssessmentProjection: citedProjection(4, 4, 0),
+    },
+  ];
+  it('groups current cited support ahead of unavailable proof without using scores, ratios or unresolved counts', () => {
+    expect(sortOpportunities(rows, 'cited_support').map((r) => r.id)).toEqual([
+      'a-four',
+      'z-four',
+      'three',
+      'zero',
+      'stale',
+      'cache-only',
+    ]);
+    expect(rows[0]!.id).toBe('cache-only');
+  });
+  it('keeps unavailable proof last in ascending order and retains current zero support', () => {
+    expect(
+      sortOpportunities(rows, 'cited_support', 'asc').map((r) => r.id),
+    ).toEqual(['zero', 'three', 'a-four', 'z-four', 'stale', 'cache-only']);
+  });
+  it('round-trips the independent server sort through URLs and persisted filter normalization', () => {
+    const state = filters({ sort: 'cited_support', sortDirection: 'asc' });
+    const params = new URLSearchParams('triage=1&skill=Rust');
+    writeFilterStateSearchParams(params, state);
+    expect(params.get('sort')).toBe('cited_support');
+    expect(params.get('triage')).toBe('1');
+    expect(filterStateFromSearchParams(params)).toMatchObject({
+      sort: 'cited_support',
+      sortDirection: 'asc',
+    });
+    expect(normalizeFilterState(state)).toMatchObject({
+      sort: 'cited_support',
+    });
+    expect(countActiveFilters(state)).toBe(0);
+  });
+});

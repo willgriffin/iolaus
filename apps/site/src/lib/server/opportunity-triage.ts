@@ -11,6 +11,7 @@ import { listAdminRecords, requireAdminResource } from './admin-data';
 import {
   countOpportunityRecords,
   listOpportunityPageIds,
+  loadCurrentCitedOpportunitySupport,
   normalizeOpportunityRecommendation,
   type WorkspaceOpportunityQuery,
 } from './admin-opportunity-query';
@@ -257,17 +258,21 @@ async function loadSqliteTriageQueue({
   const opportunityIds = records
     .map((record) => record.id)
     .filter((id): id is string => typeof id === 'string');
-  const [assessmentProjections, reviewOverlays] = await Promise.all([
-    loadCurrentOpportunityAssessmentProjections({
-      opportunities: records.map((record) => ({
-        id: record.id,
-        sourceContentFingerprint: record.sourceContentFingerprint,
-        sourceContentVersion: record.sourceContentVersion,
-      })),
-      subject,
-    }),
-    loadCurrentOpportunityReviewOverlays({ opportunityIds, subject }),
-  ]);
+  const [assessmentProjections, reviewOverlays, citedSupport] =
+    await Promise.all([
+      loadCurrentOpportunityAssessmentProjections({
+        opportunities: records.map((record) => ({
+          id: record.id,
+          sourceContentFingerprint: record.sourceContentFingerprint,
+          sourceContentVersion: record.sourceContentVersion,
+        })),
+        subject,
+      }),
+      loadCurrentOpportunityReviewOverlays({ opportunityIds, subject }),
+      filters.sort === 'cited_support'
+        ? loadCurrentCitedOpportunitySupport(subject)
+        : Promise.resolve(new Map()),
+    ]);
   const candidates = records
     .map((record) => {
       const assessmentProjection = record.id
@@ -276,10 +281,21 @@ async function loadSqliteTriageQueue({
       const reviewOverlay = record.id
         ? (reviewOverlays.get(record.id) ?? null)
         : null;
+      const currentSupport = record.id
+        ? citedSupport.get(record.id)
+        : undefined;
+      const partialAssessmentProjection =
+        currentSupport &&
+        currentSupport.sourceContentFingerprint ===
+          record.sourceContentFingerprint &&
+        currentSupport.sourceContentVersion === record.sourceContentVersion
+          ? currentSupport.projection
+          : null;
       const ranking = assessmentRanking(assessmentProjection);
       return {
         ...record,
         assessmentProjection,
+        partialAssessmentProjection,
         humanRating: reviewOverlay?.humanRating ?? null,
         humanReviewNotes: reviewOverlay?.humanReviewNotes ?? '',
         humanReviewStatus: reviewOverlay?.humanReviewStatus ?? '',

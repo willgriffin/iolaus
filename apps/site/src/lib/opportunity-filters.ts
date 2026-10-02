@@ -5,6 +5,7 @@ import {
   compareAssessmentEligibility,
   matchesAssessmentEligibility,
 } from '$lib/opportunity-assessment-projection';
+import { getCurrentPartialOpportunityAssessmentProjection } from '$lib/opportunity-partial-projection';
 
 // Status ordering for the default "best fit" sort — active/early stages first,
 // terminal last. Shared with the list component so sort and grouping agree.
@@ -34,6 +35,7 @@ export const DECISION_REVIEW_STATUSES = ['apply', 'maybe', 'reject'] as const;
 export type OpportunitySort =
   | 'best'
   | 'eligibility'
+  | 'cited_support'
   | 'newest'
   | 'score'
   | 'salary'
@@ -449,6 +451,16 @@ export function sortOpportunities(
           right.assessmentProjection,
         );
         break;
+      case 'cited_support':
+        primary = compare(
+          getCurrentPartialOpportunityAssessmentProjection(
+            left.partialAssessmentProjection,
+          )?.supportedCriterionCount ?? Number.NEGATIVE_INFINITY,
+          getCurrentPartialOpportunityAssessmentProjection(
+            right.partialAssessmentProjection,
+          )?.supportedCriterionCount ?? Number.NEGATIVE_INFINITY,
+        );
+        break;
       case 'score':
         primary = compare(score(left), score(right));
         break;
@@ -600,6 +612,7 @@ export function normalizeFilterState(raw: unknown): OpportunityFilterState {
   if (
     input.sort === 'best' ||
     input.sort === 'eligibility' ||
+    input.sort === 'cited_support' ||
     input.sort === 'newest' ||
     input.sort === 'score' ||
     input.sort === 'salary' ||

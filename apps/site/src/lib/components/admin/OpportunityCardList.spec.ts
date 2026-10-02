@@ -358,3 +358,27 @@ it('retains current full-assessment messaging when partial evidence is also pres
   expect(body).not.toContain('Overall fit not yet established');
   expect(body).not.toContain('Partial assessment');
 });
+
+it('offers a separate Cited support sort and column while showing assessed and unresolved counts', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'cited',
+        title: 'Engineer',
+        partialAssessmentProjection: partialEvidence,
+      },
+      {
+        id: 'unknown',
+        title: 'Unknown role',
+        assessmentJson: JSON.stringify(partialEvidence),
+      },
+    ],
+  });
+  expect(body).toContain('value="cited_support"');
+  expect(body).toContain('Cited support');
+  expect(body).toContain('1 supported criterion of 1 assessed');
+  expect(body).toContain('2 unresolved source clauses');
+  expect(body).toContain('No current cited support assessment');
+  expect(body).toContain('No overall fit conclusion.');
+  expect(body).not.toContain('100%');
+});

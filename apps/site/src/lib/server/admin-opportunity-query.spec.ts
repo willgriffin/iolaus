@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   query: vi.fn(),
   requestDatabase: vi.fn(),
   scopedQuery: vi.fn(),
+  privatePartials: vi.fn(),
+  source: vi.fn(),
+  partialProjections: vi.fn(),
 }));
 
 const WORKSPACE_SUBJECT = {
@@ -27,8 +30,26 @@ vi.mock('./db.js', () => ({
   getDbConfig: mocks.dbConfig,
 }));
 
+vi.mock('./private-workspace.js', () => ({
+  listPrivateRecords: mocks.privatePartials,
+}));
+vi.mock('./opportunity-assessment-partial.js', () => ({
+  OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION: 'opportunity-assessment-partial/v1',
+}));
+vi.mock('./opportunity-assessment-partial-projection.js', () => ({
+  loadCurrentPartialOpportunityAssessmentProjections: mocks.partialProjections,
+}));
+vi.mock('./smrt.js', () => ({
+  getCollection: async () => ({ get: mocks.source }),
+}));
+
 describe('admin-opportunity-query', () => {
   beforeEach(() => {
+    mocks.privatePartials.mockReset();
+    mocks.privatePartials.mockResolvedValue([]);
+    mocks.source.mockReset();
+    mocks.partialProjections.mockReset();
+    mocks.partialProjections.mockResolvedValue(new Map());
     mocks.dbConfig.mockReset();
     mocks.dbConfig.mockReturnValue({});
     mocks.query.mockReset();
@@ -37,6 +58,155 @@ describe('admin-opportunity-query', () => {
     mocks.requestDatabase.mockReturnValue(undefined);
     mocks.scopedQuery.mockReset();
     mocks.scopedQuery.mockResolvedValue({ rows: [] });
+  });
+
+  for (const sortDirection of ['asc', 'desc'] as const) {
+    it(`orders validated support ${sortDirection} before SQLite page slicing, pinning source identity and putting absent proof last`, async () => {
+      const db = await getDatabase({
+        type: 'sqlite',
+        url: ':memory:',
+        cache: false,
+      });
+      mocks.requestDatabase.mockReturnValue(db);
+      mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+      mocks.privatePartials.mockResolvedValue(
+        ['seven', 'zero', 'stale', 'forged'].map((opportunityId) => ({
+          opportunityId,
+        })),
+      );
+      mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+        toJSON: () => ({
+          id,
+          sourceContentFingerprint: `fp-${id}`,
+          sourceContentVersion: 1,
+        }),
+      }));
+      mocks.partialProjections.mockImplementation(
+        async ({ opportunities }: { opportunities: Array<{ id: string }> }) => {
+          const id = opportunities[0].id;
+          return id === 'forged'
+            ? new Map()
+            : new Map([
+                [id, { supportedCriterionCount: id === 'zero' ? 0 : 7 }],
+              ]);
+        },
+      );
+      try {
+        await db.query(
+          'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+        );
+        for (const id of ['seven', 'zero', 'stale', 'forged', 'missing']) {
+          await db.query(
+            'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+            id,
+            'found',
+            '2026-10-02',
+            `fp-${id}`,
+            id === 'stale' ? 2 : 1,
+          );
+        }
+        const { listOpportunityPageIds } = await import(
+          './admin-opportunity-query'
+        );
+        const query = {
+          candidateSkills: [],
+          filters: {
+            ...DEFAULT_OPPORTUNITY_FILTERS,
+            sort: 'cited_support' as const,
+            sortDirection,
+          },
+          reviewFilter: 'all',
+          workspaceSubject: WORKSPACE_SUBJECT,
+        };
+        const first = await listOpportunityPageIds({
+          ...query,
+          limit: 2,
+          offset: 0,
+        });
+        const rest = await listOpportunityPageIds({
+          ...query,
+          limit: 3,
+          offset: 2,
+        });
+        expect(first).toEqual(
+          sortDirection === 'asc' ? ['zero', 'seven'] : ['seven', 'zero'],
+        );
+        expect(rest).toEqual(['forged', 'missing', 'stale']);
+        expect(mocks.privatePartials).toHaveBeenCalledWith(
+          'OpportunityAssessment',
+          WORKSPACE_SUBJECT,
+          {
+            where: {
+              status: 'partial',
+              contractVersion: 'opportunity-assessment-partial/v1',
+            },
+          },
+        );
+        expect(mocks.source).not.toHaveBeenCalledWith(
+          { id: 'missing' },
+          expect.anything(),
+        );
+        expect(mocks.source).toHaveBeenCalledWith(
+          { id: 'seven' },
+          { cache: false },
+        );
+      } finally {
+        await db.close?.();
+      }
+    });
+  }
+
+  it('replays only deduplicated saved partial selectors with at most four simultaneous native proof reads', async () => {
+    const ids = Array.from({ length: 9 }, (_, index) => `opp-${index}`);
+    mocks.privatePartials.mockResolvedValue(
+      [...ids, ids[0], ''].map((opportunityId) => ({ opportunityId })),
+    );
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+      toJSON: () => ({
+        id,
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: 1,
+      }),
+    }));
+    let active = 0;
+    let maximum = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.partialProjections.mockImplementation(async () => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active--;
+      return new Map(); // Foreign/stale/unreplayable receipts contribute no count.
+    });
+    const { loadCurrentCitedOpportunitySupport } = await import(
+      './admin-opportunity-query'
+    );
+    const pending = loadCurrentCitedOpportunitySupport(WORKSPACE_SUBJECT);
+    await vi.waitFor(() => expect(active).toBe(4));
+    release();
+    expect(await pending).toEqual(new Map());
+    expect(maximum).toBe(4);
+    expect(mocks.source).toHaveBeenCalledTimes(ids.length);
+    expect(mocks.partialProjections).toHaveBeenCalledTimes(ids.length);
+  });
+
+  it('does not hydrate partial source records for ordinary list ordering', async () => {
+    const { listOpportunityPageIds } = await import(
+      './admin-opportunity-query'
+    );
+    await listOpportunityPageIds({
+      candidateSkills: [],
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
+      limit: 10,
+      offset: 0,
+    });
+    expect(mocks.privatePartials).not.toHaveBeenCalled();
+    expect(mocks.source).not.toHaveBeenCalled();
   });
 
   for (const dialect of ['sqlite', 'postgres'] as const) {

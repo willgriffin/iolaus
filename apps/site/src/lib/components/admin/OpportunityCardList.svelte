@@ -126,6 +126,7 @@ const SORT_STORAGE_KEY = 'iolaus.admin.opportunities.sort';
 const OPPORTUNITY_SORT_VALUES: readonly OpportunitySort[] = [
   'best',
   'eligibility',
+  'cited_support',
   'newest',
   'score',
   'salary',
@@ -158,6 +159,13 @@ const tableColumns: DataTableColumn<AdminRecord>[] = [
     align: 'right',
     minWidth: '6rem',
     sortable: true,
+  },
+  {
+    id: 'citedSupport',
+    label: 'Cited support',
+    minWidth: '12rem',
+    sortable: true,
+    responsive: { priority: 1 },
   },
   { id: 'status', label: 'Status', minWidth: '7rem' },
   {
@@ -824,6 +832,7 @@ const resultCountLabel = $derived.by(() => {
       >
         <option value="best">Best fit</option>
         <option value="eligibility">Eligibility for your work location</option>
+        <option value="cited_support">Cited support</option>
         <option value="newest">Newest</option>
         <option value="score">AI score</option>
         <option value="salary">Salary</option>
@@ -920,8 +929,13 @@ const resultCountLabel = $derived.by(() => {
       <span class="badge neutral" title={getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
         <Sparkles size={12} strokeWidth={2.4} /> {scoreLabel(record)}
       </span>
-      <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
       <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
+    {:else if column.id === 'citedSupport'}
+      {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
+        <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
+      {:else}
+        <span class="table-meta">No current cited support assessment</span>
+      {/if}
     {:else if column.id === 'status'}
       <span class={`badge ${toneFor(str(record, 'status'))}`}>
         {humanize(str(record, 'status'), 'unknown')}

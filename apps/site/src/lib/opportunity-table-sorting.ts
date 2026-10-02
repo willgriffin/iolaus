@@ -6,6 +6,7 @@ import type {
 
 const COLUMN_SORTS = {
   score: 'score',
+  citedSupport: 'cited_support',
   compensation: 'salary',
 } as const satisfies Record<string, OpportunitySort>;
 

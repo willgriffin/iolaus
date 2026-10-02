@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   })),
   attachOpportunityContext: vi.fn(async (records: unknown[]) => records),
   count: vi.fn(async () => 0),
+  citedSupport: vi.fn(async () => new Map()),
   dbConfig: vi.fn(() => ({ type: 'postgres' })),
   currentScores: vi.fn(async (_ids: string[]) => new Map()),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./admin-opportunity-query', () => ({
   countOpportunityRecords: mocks.count,
   listOpportunityPageIds: mocks.pageIds,
+  loadCurrentCitedOpportunitySupport: mocks.citedSupport,
   normalizeOpportunityRecommendation: (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : '',
 }));
@@ -103,6 +105,7 @@ describe('opportunity triage preset', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockClear();
     mocks.count.mockResolvedValue(0);
+    mocks.citedSupport.mockResolvedValue(new Map());
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
@@ -112,6 +115,77 @@ describe('opportunity triage preset', () => {
     mocks.reviewOverlays.mockResolvedValue(new Map());
     installProjectionFromLegacyScoreFixture();
   });
+
+  for (const sortDirection of ['asc', 'desc'] as const) {
+    it(`ranks current cited support ${sortDirection} before SQLite triage slices a page`, async () => {
+      mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+      const partial = (supported: number) => ({
+        version: 'opportunity-assessment-partial-projection/v1',
+        mode: 'partial',
+        sourceStatus: 'current',
+        criterionCount: 7,
+        supportedCriterionCount: supported,
+        unresolvedSourceClauseCount: 15,
+        requirements: Array.from({ length: 7 }, (_, index) => ({
+          id: `r${index}`,
+          text: `Requirement ${index}`,
+          support: index < supported ? 'supported' : 'uncertain',
+          postingCitations: [],
+          candidateCitations: [],
+        })),
+      });
+      mocks.opportunities.mockResolvedValue(
+        ['missing', 'stale', 'seven', 'zero'].map((id) => ({
+          id,
+          status: 'found',
+          sourceContentFingerprint: `fp-${id}`,
+          sourceContentVersion: id === 'stale' ? 2 : 1,
+          updatedAt: '2026-10-02',
+          partialAssessmentProjection: partial(7),
+          supportedCriterionCount: 99,
+        })),
+      );
+      mocks.citedSupport.mockResolvedValue(
+        new Map(
+          ['stale', 'seven', 'zero'].map((id) => [
+            id,
+            {
+              sourceContentFingerprint: `fp-${id}`,
+              sourceContentVersion: 1,
+              projection: partial(id === 'zero' ? 0 : 7),
+            },
+          ]),
+        ),
+      );
+      const { loadTriageQueue } = await triage();
+      const request = {
+        context: 'list' as const,
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          sort: 'cited_support' as const,
+          sortDirection,
+        },
+        hydrateContext: false,
+        workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      };
+      const first = await loadTriageQueue({ ...request, limit: 2, offset: 0 });
+      const rest = await loadTriageQueue({ ...request, limit: 2, offset: 2 });
+      expect(first.candidates.map((row) => row.id)).toEqual(
+        sortDirection === 'asc' ? ['zero', 'seven'] : ['seven', 'zero'],
+      );
+      expect(rest.candidates.map((row) => row.id)).toEqual([
+        'missing',
+        'stale',
+      ]);
+      expect(
+        rest.candidates.every(
+          (row) => row.partialAssessmentProjection === null,
+        ),
+      ).toBe(true);
+      expect(first.total).toBe(4);
+      expect(mocks.citedSupport).toHaveBeenCalledWith(TEST_WORKSPACE_SUBJECT);
+    });
+  }
 
   it('forces the undecided, unarchived, unexpired, unstale, score-ordered queue', async () => {
     const { applyTriagePreset, TRIAGE_REVIEW_FILTER } = await triage();
