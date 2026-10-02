@@ -67,6 +67,68 @@ describe('private workspace ownership helpers', () => {
     ).resolves.toBeNull();
   });
 
+  it('returns the selected owned profile without requiring a self-reference', async () => {
+    const profile = {
+      id: owner.profileId,
+      ownerUserId: owner.userId,
+      tenantId: owner.tenantId,
+    };
+    mocks.records.set(owner.profileId, profile);
+
+    await expect(
+      getPrivateRecord('CandidateProfile', owner.profileId, owner),
+    ).resolves.toEqual(profile);
+  });
+
+  it.each([
+    ['profile', { id: 'profile-foreign' }],
+    ['user', { ownerUserId: 'user-foreign' }],
+    ['tenant', { tenantId: 'tenant-foreign' }],
+  ])('rejects a selected profile with a foreign %s even when its adapter leaks it', async (_label, foreign) => {
+    mocks.records.set(owner.profileId, {
+      id: owner.profileId,
+      ownerUserId: owner.userId,
+      tenantId: owner.tenantId,
+      ...foreign,
+    });
+
+    await expect(
+      getPrivateRecord('CandidateProfile', owner.profileId, owner),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects a different requested profile even when the same tenant and user own it', async () => {
+    mocks.records.set('profile-other', {
+      id: 'profile-other',
+      ownerUserId: owner.userId,
+      tenantId: owner.tenantId,
+    });
+
+    await expect(
+      getPrivateRecord('CandidateProfile', 'profile-other', owner),
+    ).resolves.toBeNull();
+  });
+
+  it('still requires the complete ownership tuple for private child records', async () => {
+    const asset = {
+      id: owner.profileId,
+      ownerUserId: owner.userId,
+      tenantId: owner.tenantId,
+    };
+    mocks.records.set(owner.profileId, asset);
+
+    await expect(
+      getPrivateRecord('ResumeAsset', owner.profileId, owner),
+    ).resolves.toBeNull();
+    mocks.records.set(owner.profileId, {
+      ...asset,
+      candidateProfileId: owner.profileId,
+    });
+    await expect(
+      getPrivateRecord('ResumeAsset', owner.profileId, owner),
+    ).resolves.toMatchObject(privateRecordWhere(owner));
+  });
+
   it('adds the immutable ownership predicate and defensively filters faulty list adapters', async () => {
     const own = { ...privateRecordWhere(owner), id: 'application-a' };
     const foreign = {

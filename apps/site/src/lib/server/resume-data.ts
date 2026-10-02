@@ -31,6 +31,7 @@ import skillsData from '../data/skills.json';
 import { isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
+  candidateProfileWhere,
   getPrivateRecord,
   privateRecordWhere,
   requireWorkspaceSubject,
@@ -146,6 +147,18 @@ const PRIVATE_RESUME_COLLECTIONS = new Set([
   'SkillGroup',
   'SkillGroupMember',
 ]);
+
+/**
+ * CandidateProfile is the selected root; all other resume records are children.
+ */
+function privateResumeReadWhere(
+  className: string,
+  subject: WorkspaceSubject,
+): Record<string, unknown> {
+  return className === 'CandidateProfile'
+    ? { id: subject.profileId, ...candidateProfileWhere(subject) }
+    : privateRecordWhere(subject);
+}
 
 export interface CandidateEvidenceSource {
   id: string;
@@ -796,7 +809,7 @@ async function listRecords(
     limit: 1000,
     orderBy,
     ...(scopedSubject && PRIVATE_RESUME_COLLECTIONS.has(className)
-      ? { where: privateRecordWhere(scopedSubject) }
+      ? { where: privateResumeReadWhere(className, scopedSubject) }
       : {}),
   });
   return JSON.parse(JSON.stringify(records)) as ResumeRecord[];
@@ -830,7 +843,7 @@ async function loadRecordSpec<K extends string>(
             limit: readLimit ?? 1000,
             orderBy,
             ...(scopedSubject && PRIVATE_RESUME_COLLECTIONS.has(className)
-              ? { where: privateRecordWhere(scopedSubject) }
+              ? { where: privateResumeReadWhere(className, scopedSubject) }
               : {}),
           },
         },

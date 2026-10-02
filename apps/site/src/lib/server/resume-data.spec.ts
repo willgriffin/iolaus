@@ -43,6 +43,7 @@ import type {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  candidateProfileWhere: vi.fn(),
   executeCollectionReadPlan: vi.fn(),
   getCurrentSessionPermissionContext: vi.fn(),
   getCurrentTenant: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock('./app-config.js', () => ({
 }));
 
 vi.mock('./private-workspace.js', () => ({
+  candidateProfileWhere: mocks.candidateProfileWhere,
   getPrivateRecord: mocks.getPrivateRecord,
   privateRecordWhere: mocks.privateRecordWhere,
   requireWorkspaceSubject: mocks.requireWorkspaceSubject,
@@ -126,6 +128,11 @@ beforeEach(() => {
   mocks.isSharedHosted.mockReturnValue(false);
   mocks.loadPublishedResumeStamp.mockReset();
   mocks.loadPublishedResumeStamp.mockResolvedValue('stamp-1');
+  mocks.candidateProfileWhere.mockReset();
+  mocks.candidateProfileWhere.mockImplementation((subject) => ({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  }));
   mocks.privateRecordWhere.mockReset();
   mocks.privateRecordWhere.mockImplementation((subject) => ({
     candidateProfileId: subject.profileId,
@@ -1169,11 +1176,81 @@ describe('workspace candidate evidence', () => {
       ownerUserId: 'user-a',
       tenantId: 'tenant-a',
     });
+    expect(plan.profiles.options.where).toEqual({
+      id: 'profile-a',
+      ownerUserId: 'user-a',
+      tenantId: 'tenant-a',
+    });
     expect(plan.skillGroups.options.where).toEqual(
       plan.experiences.options.where,
     );
     expect(plan.companies.options.where).toBeUndefined();
     expect(plan.tags.options.where).toBeUndefined();
+  });
+
+  it('keeps concurrent profile roots separate from their private child rows', async () => {
+    const otherSubject = {
+      profileId: 'profile-b',
+      tenantId: 'tenant-b',
+      userId: 'user-b',
+    };
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+
+    await Promise.all([
+      loadNormalizedResumeSource(undefined, subject),
+      loadNormalizedResumeSource(undefined, otherSubject),
+    ]);
+
+    const plans = mocks.executeCollectionReadPlan.mock.calls.map(
+      ([plan]) => plan as Record<string, { options: Record<string, unknown> }>,
+    );
+    expect(plans).toHaveLength(2);
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          experiences: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                candidateProfileId: 'profile-a',
+                ownerUserId: 'user-a',
+                tenantId: 'tenant-a',
+              },
+            }),
+          }),
+          profiles: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                id: 'profile-a',
+                ownerUserId: 'user-a',
+                tenantId: 'tenant-a',
+              },
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          experiences: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                candidateProfileId: 'profile-b',
+                ownerUserId: 'user-b',
+                tenantId: 'tenant-b',
+              },
+            }),
+          }),
+          profiles: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                id: 'profile-b',
+                ownerUserId: 'user-b',
+                tenantId: 'tenant-b',
+              },
+            }),
+          }),
+        }),
+      ]),
+    );
   });
 
   it('rejects unbound private reads in shared hosted mode', async () => {

@@ -103,7 +103,8 @@ export function recordOwnedBySubject(
 }
 
 /**
- * Fetch by opaque id and re-check all three ownership columns. TenantScoped
+ * Fetch by opaque id and re-check ownership. CandidateProfile owns the selected
+ * profile id itself; private child rows carry all three ownership columns. TenantScoped
  * filters the tenant automatically; this closes the same-tenant multi-user
  * gap and protects code paths whose collection `get()` ignores a `where`.
  */
@@ -114,9 +115,21 @@ export async function getPrivateRecord(
   options: PrivateCollectionOptions = {},
 ): Promise<PrivateRecord | null> {
   const recordId = requiredId(id, 'record ID');
+  const verified = requireWorkspaceSubject(subject);
+  if (className === 'CandidateProfile' && recordId !== verified.profileId) {
+    return null;
+  }
   const collection = await privateCollection(className, options);
   const record = await collection.get(recordId);
-  return recordOwnedBySubject(record, subject) ? record : null;
+  if (className === 'CandidateProfile') {
+    return record?.id === recordId &&
+      Object.entries(candidateProfileWhere(verified)).every(
+        ([key, value]) => record[key] === value,
+      )
+      ? record
+      : null;
+  }
+  return recordOwnedBySubject(record, verified) ? record : null;
 }
 
 /** Merge a caller filter with the non-overridable tenant/user/profile key. */
