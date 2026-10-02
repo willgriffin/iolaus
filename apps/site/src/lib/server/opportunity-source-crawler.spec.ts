@@ -1,6 +1,7 @@
 import type { Link, SpiderAdapter } from '@happyvertical/spider';
 import type { AdapterContext } from '@happyvertical/spider/platform';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import elastic from './fixtures/ats/elastic-principal-ai-engineer.json';
 import vanta from './fixtures/ats/vanta-developer-experience.json';
 import { fingerprintOpportunitySourceContent } from './opportunity-source-content';
 import {
@@ -5778,6 +5779,41 @@ it('records Contra login diagnostics when the authenticated source returns no ca
 });
 
 describe('job-board adapter engine', () => {
+  it('routes Elastic duplicate gh_jid URLs to the official board and preserves the posting identity', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL) =>
+      String(input).endsWith('/boards/elastic')
+        ? jsonResponse(elastic.board)
+        : jsonResponse({ jobs: [elastic.posting] }),
+    );
+
+    const candidates = await discoverOpportunityCandidates(
+      { url: elastic.sourceUrl },
+      { fetchImpl },
+    );
+
+    expect(fetchImpl.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://boards-api.greenhouse.io/v1/boards/elastic/jobs?content=true',
+      'https://boards-api.greenhouse.io/v1/boards/elastic',
+    ]);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      companyName: 'Elastic',
+      externalId: '8223688',
+      canonicalUrl: elastic.sourceUrl,
+      postingUrl: elastic.sourceUrl,
+      title: elastic.posting.title,
+      locationNotes: 'Canada',
+      rawJson: elastic.posting,
+      resolvedDetail: {
+        status: 'resolved',
+        provider: 'greenhouse',
+        companyName: 'Elastic',
+        locations: ['Canada'],
+        descriptionRaw: expect.stringContaining('context engineering systems'),
+      },
+    });
+  });
+
   it('detects greenhouse, ashby, and lever boards by URL, not generic pages', async () => {
     expect(
       (await detectJobBoard('https://boards.greenhouse.io/example'))?.type,

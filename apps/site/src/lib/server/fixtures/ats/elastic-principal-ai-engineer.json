@@ -1,0 +1,16 @@
+{
+  "capturedAt": "2026-10-02T11:23:21.226413+00:00",
+  "sourceUrl": "https://jobs.elastic.co/jobs?gh_jid=8223688&gh_jid=8223688",
+  "redirectUrl": "https://jobs.elastic.co/jobs/engineering/canada/principal-ai-engineer-context-agents-and-context/8223688?gh_jid=8223688",
+  "apiUrl": "https://boards-api.greenhouse.io/v1/boards/elastic/jobs/8223688",
+  "board": { "name": "Elastic" },
+  "fixtureNotes": "Official identity and location captured from the public Greenhouse API. Description is paraphrased for a focused routing fixture; no expiry, remote eligibility, or work-rights facts are inferred.",
+  "posting": {
+    "id": 8223688,
+    "title": "Principal AI Engineer - Context - Agents and Context",
+    "absolute_url": "https://jobs.elastic.co/jobs?gh_jid=8223688&gh_jid=8223688",
+    "updated_at": "2026-10-01T12:57:36-04:00",
+    "location": { "name": "Canada" },
+    "content": "<p>Build context engineering systems and AI agents on the Elastic platform. Develop production software for retrieval, evaluation, and orchestration, working with engineering partners on reliable distributed services.</p><h3>Requirements</h3><ul><li>Experience delivering AI systems and strong software engineering skills.</li><li>Knowledge of search, retrieval, and distributed systems.</li></ul>"
+  }
+}

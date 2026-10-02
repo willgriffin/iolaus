@@ -1078,6 +1078,7 @@ function greenhouseJobToken(url: URL): string {
 function knownGreenhouseBoardToken(url: URL): string {
   const host = url.hostname.toLowerCase();
   const brandedGreenhouseBoards: Record<string, string> = {
+    'jobs.elastic.co': 'elastic',
     'databricks.com': 'databricks',
     'www.databricks.com': 'databricks',
     'fivetran.com': 'fivetran',
