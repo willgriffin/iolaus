@@ -83,10 +83,12 @@ function record() {
 
 async function ready(pid) {
   const url = `http://127.0.0.1:${env.PORT}/api/_runtime/health`;
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    try { const response = await fetch(url); if (response.status === 200) return; } catch {}
+  const deadline = performance.now() + 60_000;
+  while (performance.now() < deadline) {
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    try { const response = await fetch(url, { signal: AbortSignal.timeout(Math.min(1000, remaining)) }); if (response.status === 200) return; } catch {}
     try { process.kill(pid, 0); } catch { throw new Error('Daily-use Vite process exited before health became ready.'); }
-    await new Promise((done) => setTimeout(done, 250));
+    await new Promise((done) => setTimeout(done, Math.max(1, Math.min(250, deadline - performance.now()))));
   }
   throw new Error(`Daily-use Vite process did not become ready at ${url}.`);
 }

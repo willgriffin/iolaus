@@ -34,7 +34,8 @@ pnpm daily:stop
 pnpm daily:backup
 ```
 
-`daily:start` is idempotent and waits for loopback health. `daily:status` and
+`daily:start` is idempotent and waits up to 60 seconds for loopback health,
+with individual health requests capped at one second. `daily:status` and
 `daily:stop` operate only on the recorded process with its original start time
 and configuration fingerprint; they refuse a mismatched record instead of
 stopping another process. Blank stored start times also fail closed and retain

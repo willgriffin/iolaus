@@ -12,7 +12,11 @@ const defaultDatabase = 'postgresql://user:password@127.0.0.1:54330/iolaus_willg
 
 function fixture(t, overrides = {}) {
   const state = mkdtempSync(join(tmpdir(), 'iolaus-guard-synthetic-'));
-  t.after(() => rmSync(state, { recursive: true, force: true }));
+  t.after(() => {
+    const pidFile = join(state, 'child.pid');
+    if (existsSync(pidFile)) { try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGTERM'); } catch {} }
+    rmSync(state, { recursive: true, force: true });
+  });
   const values = {
     SMRT_RUNTIME_PROFILE: 'self-hosted',
     SMRT_APP_ID: 'iolaus-willgriffin',
@@ -41,7 +45,7 @@ function fixture(t, overrides = {}) {
     Object.assign(values, overrides);
     writeFileSync(envFile, Object.entries(values).map(([key, value]) => `${key}=${value}`).join('\n'), { mode: 0o600 });
   };
-  return { state, update, run: (command) => execFileSync(process.execPath, [script, command], { cwd: state, env, encoding: 'utf8', stdio: 'pipe' }) };
+  return { state, update, run: (command, extraEnv = {}) => execFileSync(process.execPath, [script, command], { cwd: state, env: { ...env, ...extraEnv }, encoding: 'utf8', stdio: 'pipe', timeout: 10_000 }) };
 
 }
 
@@ -101,7 +105,7 @@ test('backup admits matching default and custom Compose ports', async (t) => {
   }
 });
 
-async function runningFixture(t) {
+async function ownedRuntime(t, stalled = false) {
   const fixtureState = fixture(t);
   const listener = createServer();
   await new Promise((done) => listener.listen(0, '127.0.0.1', done));
@@ -112,19 +116,46 @@ async function runningFixture(t) {
   mkdirSync(viteBin, { recursive: true });
   writeFileSync(join(viteBin, 'vite'), `#!${process.execPath}
 import { createServer } from 'node:http';
-createServer((_request, response) => { response.writeHead(200); response.end('synthetic health'); }).listen(Number(process.env.PORT), '127.0.0.1');
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(join(fixtureState.state, 'child.pid'))}, String(process.pid));
+createServer((_request, response) => { ${stalled ? '' : "response.writeHead(200); response.end('synthetic health');"} }).listen(Number(process.env.PORT), '127.0.0.1');
 `, { mode: 0o700 });
   // Only this fixture's owned child is signalled, including when an assertion fails.
-  let pid;
-  t.after(() => { if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} } });
-  try { pid = JSON.parse(fixtureState.run('start')).pid; }
-  finally {
-    const path = join(fixtureState.state, 'vite-process.json');
-    if (!pid && existsSync(path)) pid = JSON.parse(readFileSync(path, 'utf8')).pid;
-  }
-  assert.equal(JSON.parse(fixtureState.run('status')).status, 'running');
+  t.after(() => {
+    const path = join(fixtureState.state, 'child.pid');
+    if (existsSync(path)) { try { process.kill(Number(readFileSync(path, 'utf8')), 'SIGTERM'); } catch {} }
+  });
   return fixtureState;
 }
+
+async function runningFixture(t) {
+  const value = await ownedRuntime(t);
+  assert.equal(JSON.parse(value.run('start')).status, 'started');
+  assert.equal(JSON.parse(value.run('status')).status, 'running');
+  return value;
+}
+
+test('stalled readiness requests abort within the overall deadline and discard failed process state', async (t) => {
+  const { state, run } = await ownedRuntime(t, true);
+  const preload = join(state, 'readiness-clock.mjs');
+  // Advance only the test's monotonic clock after the first real stalled HTTP request aborts.
+  writeFileSync(preload, `let elapsed = 0;
+Object.defineProperty(globalThis.performance, 'now', { value: () => elapsed });
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (...args) => {
+  try { return await originalFetch(...args); }
+  finally { if (args[1]?.signal?.aborted) elapsed = 60_001; }
+};
+`);
+  assert.throws(() => run('start', { NODE_OPTIONS: `--import=${preload}` }), /did not become ready/u);
+  assert.equal(existsSync(join(state, 'vite-process.json')), false);
+  const pid = Number(readFileSync(join(state, 'child.pid'), 'utf8'));
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try { process.kill(pid, 0); } catch { return; }
+    await new Promise((done) => setTimeout(done, 25));
+  }
+  assert.fail('Owned failed-readiness child remained alive after SIGTERM');
+});
 
 test('live process fingerprint rejects changes to PostgreSQL target identity', async (t) => {
   for (const [name, database] of Object.entries({
