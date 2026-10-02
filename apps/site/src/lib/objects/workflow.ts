@@ -1,6 +1,6 @@
 export const taskAssigneeRoleDefinitions = [
   { label: 'User', value: 'owner' },
-  { label: 'Hermes', value: 'hermes' },
+  { label: 'Agent', value: 'hermes' },
   { label: 'Automation', value: 'automation' },
 ] as const;
 
@@ -163,7 +163,7 @@ export const submissionMethods = submissionMethodDefinitions.map(
 export const submittedByRoleDefinitions = [
   { label: 'User', value: 'owner' },
   { label: 'Agent with approval', value: 'agent_with_approval' },
-  { label: 'Hermes', value: 'hermes' },
+  { label: 'Agent', value: 'hermes' },
   { label: 'Automation', value: 'automation' },
   { label: 'Other', value: 'other' },
 ] as const;
@@ -179,6 +179,7 @@ export function isActiveTaskStatus(status: unknown): boolean {
 }
 
 export function workflowLabel(value: unknown): string {
+  if (value === 'hermes') return 'Agent';
   return String(value ?? '')
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());

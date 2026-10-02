@@ -99,7 +99,13 @@ function isChecked(field: ResourceField): boolean {
 function selectOptions(field: ResourceField) {
   return (field.options ?? []).map((option) => ({
     value: option,
-    label: option,
+    label:
+      option === 'hermes' &&
+      ['assigneeRole', 'blockerOwnerRole', 'submittedByRole'].includes(
+        field.key,
+      )
+        ? 'Agent'
+        : option,
   }));
 }
 

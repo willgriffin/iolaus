@@ -1,7 +1,7 @@
 <script lang="ts">
-import AdminResourcePage from '$lib/components/admin/AdminResourcePage.svelte';
+import AdminOverview from '$lib/components/admin/AdminOverview.svelte';
 
 let { data } = $props();
 </script>
 
-<AdminResourcePage {data} />
+<AdminOverview overview={data.overview} />
