@@ -222,24 +222,37 @@ describe('OpportunityCardList bulk selection summary', () => {
   });
 });
 
-describe('OpportunityCardList row expansion', () => {
-  it('keeps the upstream expander button and its aria wiring', () => {
-    // Expansion state is seeded client-side by DataTable, so SSR renders every
-    // row collapsed; the chevron is CSS-only on the upstream button.
+describe('OpportunityCardList one-opportunity review rows', () => {
+  it('uses accessible upstream row activation without an expansion column', () => {
     const { body } = renderList();
-
-    const buttons =
-      body.match(/<button[^>]*data-table__expand-button[^>]*>/g) ?? [];
-    expect(buttons).toHaveLength(2);
-    for (const button of buttons) {
-      expect(button).toContain('aria-expanded="false"');
-      expect(button).toMatch(/aria-controls="[^"]+"/);
-    }
-    expect(body).toContain('aria-label="Expand Staff engineer"');
-    expect(body).toContain('aria-label="Expand Platform lead"');
+    expect(body).not.toContain('data-table__expand-button');
+    expect(body).not.toContain('Expand Staff engineer');
+    expect(body).not.toContain('opportunity-expanded');
+    expect(body).toContain('data-table__row--interactive');
+    expect(body).toMatch(/<tr[^>]*tabindex="0"/);
+    expect(body).toMatch(
+      /<span class="title-link(?:\s+[^"\s]+)*">[\s\S]*?Staff engineer/,
+    );
   });
 
-  it('does not render the relocated workflow forms for collapsed rows', () => {
+  it('keeps external posting navigation and checkbox selection outside row review', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'opp-1',
+          title: 'Staff engineer',
+          postingUrl: 'https://employer.example/jobs/1',
+        },
+      ],
+      onSelectedIdsChange: () => undefined,
+    });
+    expect(body).toContain('href="https://employer.example/jobs/1"');
+    expect(body).toContain('aria-label="View posting"');
+    expect(body).toContain('aria-label="Select Staff engineer"');
+    expect(body).not.toContain('data-table__expand-button');
+  });
+
+  it('does not duplicate application and fact forms in the row view', () => {
     const { body } = renderList();
 
     expect(body).not.toContain('createDraftApplication');

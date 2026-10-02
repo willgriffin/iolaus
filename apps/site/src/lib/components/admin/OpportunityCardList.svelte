@@ -9,13 +9,10 @@ import ExternalLink from '@lucide/svelte/icons/external-link';
 import Heart from '@lucide/svelte/icons/heart';
 import Layers from '@lucide/svelte/icons/layers';
 import MapPin from '@lucide/svelte/icons/map-pin';
-import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Sparkles from '@lucide/svelte/icons/sparkles';
-import Star from '@lucide/svelte/icons/star';
 import X from '@lucide/svelte/icons/x';
 import { onMount, type Snippet, untrack } from 'svelte';
-import { enhance } from '$app/forms';
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import type { AdminRecord } from '$lib/admin/dock';
@@ -43,7 +40,6 @@ import {
   type OpportunityFilterOptions,
   type OpportunityFilterState,
   type OpportunitySort,
-  parseSkillList,
   getString as str,
   writeFilterStateSearchParams,
 } from '$lib/opportunity-filters';
@@ -51,10 +47,8 @@ import {
   filtersForOpportunityTableSort,
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
-import { createCandidateSkillMatcher } from '$lib/skill-matching';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
-import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
 
 type WorkflowOption = { label: string; value: string };
 type SignalFilterKey =
@@ -72,7 +66,6 @@ let {
   filterOptions,
   reviewFilters,
   reviewStatuses,
-  reviewedByProfileId = '',
   selectedIds = new Set<string>(),
   onSelectedIdsChange,
   allMatchingSelected = false,
@@ -80,7 +73,6 @@ let {
   onSelectAllMatching,
   onClearSelection,
   dockSelectedId = null,
-  onSelectRecord,
   toolbar,
   loading = false,
   refreshing = false,
@@ -178,7 +170,6 @@ const tableModes = {
   sorting: 'manual',
 } as const;
 
-let expanded = $state<Set<string | number>>(new Set());
 let drawerOpen = $state(page.url.searchParams.has('facets'));
 let skillQuery = $state('');
 let skillSearchActive = $state(false);
@@ -188,10 +179,6 @@ let filters = $state<OpportunityFilterState>(
 let lastUrlSearch = $state(page.url.search);
 let preferencesReady = $state(false);
 let lastRefreshAt = 0;
-
-const candidateSkillMatcher = $derived(
-  createCandidateSkillMatcher(candidateSkills ?? []),
-);
 
 $effect(() => {
   if (page.url.search === lastUrlSearch) return;
@@ -469,13 +456,6 @@ function removeActionSearchParams(params: URLSearchParams): boolean {
   return removed;
 }
 
-function pageActionHref(actionName: string): string {
-  const url = new URL(page.url);
-  removeActionSearchParams(url.searchParams);
-  url.searchParams.set(`/${actionName}`, '');
-  return `${url.pathname}${url.search}${url.hash}`;
-}
-
 /**
  * Triage runs the list's current filter and ordering, while the deck
  * is a modal popped over it. `page`, `offset`, and any pending form action are
@@ -501,7 +481,9 @@ const triageSearch = $derived.by(() => {
  * deck out from under the operator.
  */
 let triageOpen = $state(untrack(() => isTriageDeepLink(page.url.searchParams)));
+let singleOpportunity = $state<AdminRecord | null>(null);
 function openTriage(): void {
+  singleOpportunity = null;
   triageOpen = true;
 }
 
@@ -512,6 +494,10 @@ function openTriage(): void {
  */
 function closeTriage(): void {
   triageOpen = false;
+  if (singleOpportunity) {
+    singleOpportunity = null;
+    return;
+  }
   const href = triageCloseHref(new URL(page.url));
   if (href !== null) {
     void goto(href, {
@@ -675,71 +661,6 @@ function eligibilityLabel(record: AdminRecord): string {
   return bucket ? assessmentEligibilityLabels[bucket] : 'Unknown';
 }
 
-function boolField(record: AdminRecord, key: string): boolean {
-  const value = record[key];
-  return value === true || value === 'true';
-}
-
-function optionalBooleanLabel(record: AdminRecord, key: string): string {
-  const value = record[key];
-  if (value === true || value === 'true') return 'Yes';
-  if (value === false || value === 'false') return 'No';
-  return 'Unknown';
-}
-
-function dateField(record: AdminRecord, key: string): string {
-  const raw = str(record, key);
-  if (!raw) return '';
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime())
-    ? ''
-    : date.toLocaleString(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      });
-}
-
-function lineItems(record: AdminRecord, key: string): string[] {
-  return str(record, key)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-// A scalar field worth showing in the detail facts grid: non-empty and not an
-// "unknown" sentinel.
-function hasFact(record: AdminRecord, key: string): boolean {
-  const value = str(record, key).trim();
-  return value !== '' && value !== 'unknown';
-}
-
-type HalfFill = 'empty' | 'mine' | 'yours' | 'both';
-
-// AI score (0–100) mapped onto the 0–10 star scale, rounded to half-star steps.
-function aiRatingTen(record: AdminRecord): number | null {
-  const assessment = getOpportunityAssessmentProjection(
-    record.assessmentProjection,
-  );
-  return assessment.matchReadiness === 'assessable'
-    ? Math.round(assessment.fitScore / 10)
-    : null;
-}
-
-// Who fills a given half-star point (1–10): the human rating (mine, blue), the
-// AI rating (yours, yellow), both (green = agreement), or neither.
-function halfFill(
-  point: number,
-  mine: number | null,
-  yours: number | null,
-): HalfFill {
-  const m = mine !== null && mine >= point;
-  const y = yours !== null && yours >= point;
-  if (m && y) return 'both';
-  if (m) return 'mine';
-  if (y) return 'yours';
-  return 'empty';
-}
-
 function toneFor(status: string): string {
   const text = status.trim().toLowerCase();
   if (
@@ -758,16 +679,6 @@ function toneFor(status: string): string {
   if (['archived', 'closed', 'reject', 'rejected', 'skip'].includes(text))
     return 'tone-negative';
   return 'tone-neutral';
-}
-
-function skillList(record: AdminRecord, key: string): string[] {
-  return parseSkillList(str(record, key));
-}
-
-// A required skill is "have" if it matches a reviewed candidate skill, an alias,
-// or a curated achievement title/tag such as "Hybrid Cloud Infrastructure".
-function hasSkill(skill: string): boolean {
-  return candidateSkillMatcher(skill);
 }
 
 function isApplyableUrl(url: string): boolean {
@@ -830,7 +741,14 @@ function handleSelectionChange(ids: Set<string | number>): void {
 
 function handleRowClick(record: AdminRecord): void {
   if (!record.id) return;
-  onSelectRecord?.(record);
+  singleOpportunity = record;
+  triageOpen = true;
+}
+
+function refreshAfterSingleDecision(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(ADMIN_RESOURCE_REFRESH_EVENT));
+  }
 }
 
 const bulkSelectionCount = $derived(selectedIds.size);
@@ -928,7 +846,9 @@ const resultCountLabel = $derived.by(() => {
     bind:open={triageOpen}
     {candidateSkills}
     search={triageSearch}
+    {singleOpportunity}
     onClose={closeTriage}
+    onDecision={refreshAfterSingleDecision}
   />
 
   {#snippet tableToolbar()}
@@ -966,18 +886,14 @@ const resultCountLabel = $derived.by(() => {
   {/snippet}
 
   {#snippet opportunityCell({ column, row: record }: { column: DataTableColumn<AdminRecord>; row: AdminRecord })}
-    {@const oppId = str(record, 'id')}
     {@const posting = postingUrlFor(record)}
     {#if column.id === 'opportunity'}
       <div class="table-opportunity">
-        <a
+        <span
           class="title-link"
-          href={`/admin/opportunities/${encodeURIComponent(oppId)}`}
-          target="_blank"
-          rel="noreferrer noopener"
         >
           {str(record, 'title') || 'Untitled opportunity'}
-        </a>
+        </span>
         <span class="eligibility-label" title="Eligibility for your active work-location profile">
           {eligibilityLabel(record)}
         </span>
@@ -1004,208 +920,6 @@ const resultCountLabel = $derived.by(() => {
     {/if}
   {/snippet}
 
-  {#snippet expandedOpportunity({ row: record }: { row: AdminRecord })}
-    {@const oppId = str(record, 'id')}
-    {@const eligibility = getOpportunityAssessmentProjection(record.assessmentProjection)}
-    {@const required = skillList(record, 'requiredSkills')}
-    {@const preferred = skillList(record, 'preferredSkills')}
-    {@const currentStatus = str(record, 'humanReviewStatus')}
-    {@const rating = num(record, 'humanRating')}
-    {@const aiTen = aiRatingTen(record)}
-    <div class="opportunity-expanded">
-      {#if required.length || preferred.length}
-          <div class="skills" aria-label="Required and preferred skills">
-            {#each required as skill}
-              <span class="chip" class:have={hasSkill(skill)} title={hasSkill(skill) ? 'You have this' : 'Not in your skills'}>{skill}</span>
-            {/each}
-            {#each preferred as skill}
-              <span class="chip preferred" class:have={hasSkill(skill)} title={`Preferred — ${hasSkill(skill) ? 'you have this' : 'not in your skills'}`}>{skill}</span>
-            {/each}
-          </div>
-        {/if}
-
-      <div class="card-detail">
-            <section>
-              <h4>Job description</h4>
-              {#if str(record, 'descriptionRaw')}
-                <pre>{str(record, 'descriptionRaw')}</pre>
-              {:else}
-                <p class="muted">No job description was captured from the source.</p>
-              {/if}
-            </section>
-
-            <section>
-              <div class="section-head">
-                <h4><Sparkles size={13} strokeWidth={2.2} /> Assessment summary</h4>
-                <form use:enhance method="POST" action="?/processOpportunity" class="inline-form">
-                  <input type="hidden" name="opportunityId" value={oppId} />
-                  <button
-                    type="submit"
-                    class="refresh-btn"
-                    aria-label="Refresh assessment"
-                    title="Assess this posting for your selected candidate profile"
-                  >
-                    <RefreshCw size={14} strokeWidth={2.2} />
-                  </button>
-                </form>
-              </div>
-              {#if eligibility.sourceStatus === 'current'}
-                <p class="summary">{eligibility.reason}</p>
-              {:else}
-                <p class="muted">No current profile assessment is available — refresh to assess this posting.</p>
-              {/if}
-            </section>
-
-            {#if lineItems(record, 'responsibilities').length}
-              <section>
-                <h4>Responsibilities</h4>
-                <ul class="detail-list">
-                  {#each lineItems(record, 'responsibilities') as item}<li>{item}</li>{/each}
-                </ul>
-              </section>
-            {/if}
-
-            {#if lineItems(record, 'qualifications').length}
-              <section>
-                <h4>Qualifications</h4>
-                <ul class="detail-list">
-                  {#each lineItems(record, 'qualifications') as item}<li>{item}</li>{/each}
-                </ul>
-              </section>
-            {/if}
-
-            {#if str(record, 'applyInstructions')}
-              <section>
-                <h4>Apply instructions</h4>
-                <p class="summary">{str(record, 'applyInstructions')}</p>
-              </section>
-            {/if}
-
-            {#if str(record, 'locationNotes')}
-              <section>
-                <h4>Location notes</h4>
-                <p class="summary">{str(record, 'locationNotes')}</p>
-              </section>
-            {/if}
-
-            <section>
-              <h4>Eligibility for your work location</h4>
-              <p class="summary">{eligibility.reason || eligibilityLabel(record)}</p>
-              <p class="summary">{assessmentMatchReadinessLabel(eligibility)}</p>
-              {#each assessmentCoverageMessages(eligibility) as message}
-                <p class="muted">{message}</p>
-              {/each}
-              {#if eligibility.sourceStatus !== 'current'}
-                <p class="muted">No current profile assessment is available for this posting.</p>
-              {/if}
-            </section>
-
-            <section>
-              <h4>Details</h4>
-              <dl class="facts-grid">
-                {#if hasFact(record, 'employmentType')}
-                  <div class="fact"><dt>Employment type</dt><dd>{humanize(str(record, 'employmentType'))}</dd></div>
-                {/if}
-                {#if hasFact(record, 'seniority')}
-                  <div class="fact"><dt>Seniority</dt><dd>{humanize(str(record, 'seniority'))}</dd></div>
-                {/if}
-                {#if hasFact(record, 'locations')}
-                  <div class="fact"><dt>Locations</dt><dd>{str(record, 'locations')}</dd></div>
-                {/if}
-                {#if hasFact(record, 'applyMethod')}
-                  <div class="fact"><dt>Apply method</dt><dd>{humanize(str(record, 'applyMethod'))}</dd></div>
-                {/if}
-                {#if hasFact(record, 'freshness')}
-                  <div class="fact"><dt>Freshness</dt><dd>{humanize(str(record, 'freshness'))}</dd></div>
-                {/if}
-                <div class="fact"><dt>Relocation supported</dt><dd>{boolField(record, 'relocationSupported') ? 'Yes' : 'No'}</dd></div>
-                <div class="fact"><dt>Visa or EOR posting signal</dt><dd>{optionalBooleanLabel(record, 'visaOrEorPossible')}</dd></div>
-                <div class="fact"><dt>Greenfield signal</dt><dd>{boolField(record, 'greenfieldSignal') ? 'Yes' : 'No'}</dd></div>
-                <div class="fact"><dt>Founder signal</dt><dd>{boolField(record, 'founderSignal') ? 'Yes' : 'No'}</dd></div>
-                {#if dateField(record, 'reviewedAt')}
-                  <div class="fact"><dt>Reviewed at</dt><dd>{dateField(record, 'reviewedAt')}</dd></div>
-                {/if}
-                {#if dateField(record, 'firstSeenAt')}
-                  <div class="fact"><dt>First seen</dt><dd>{dateField(record, 'firstSeenAt')}</dd></div>
-                {/if}
-                {#if dateField(record, 'lastSeenAt')}
-                  <div class="fact"><dt>Last seen</dt><dd>{dateField(record, 'lastSeenAt')}</dd></div>
-                {/if}
-              </dl>
-            </section>
-
-            <OpportunityWorkflowForms
-              {record}
-              draftApplicationAction={pageActionHref('createDraftApplication')}
-              factIntakeAction={pageActionHref('createFactIntake')}
-              compact
-            />
-
-            <section>
-              <h4><Star size={13} strokeWidth={2.2} /> Your rating</h4>
-              <form use:enhance method="POST" action="?/reviewOpportunity" class="rating-form" aria-label="Rating">
-                <input type="hidden" name="opportunityId" value={oppId} />
-                <input type="hidden" name="humanReviewStatus" value={currentStatus} />
-                <input type="hidden" name="reviewedByProfileId" value={reviewedByProfileId} />
-                <div
-                  class="stars"
-                  role="group"
-                  aria-label="Rating out of 5 (half-star steps). Blue = your rating, yellow = AI, green = agreement."
-                >
-                  {#each Array(5) as _, i}
-                    {@const leftPoint = i * 2 + 1}
-                    {@const rightPoint = i * 2 + 2}
-                    {@const leftFill = halfFill(leftPoint, rating, aiTen)}
-                    {@const rightFill = halfFill(rightPoint, rating, aiTen)}
-                    <span class="star-slot">
-                      <span class="star-layer base"><Star size={18} strokeWidth={2} fill="none" /></span>
-                      <span class={`star-layer half left fill-${leftFill}`}><Star size={18} strokeWidth={2} fill="currentColor" /></span>
-                      <span class={`star-layer half right fill-${rightFill}`}><Star size={18} strokeWidth={2} fill="currentColor" /></span>
-                      <button type="submit" name="humanRating" value={leftPoint} class="half-btn left" aria-label={`Rate ${leftPoint} of 10`} title={`Rate ${leftPoint}/10`}></button>
-                      <button type="submit" name="humanRating" value={rightPoint} class="half-btn right" aria-label={`Rate ${rightPoint} of 10`} title={`Rate ${rightPoint}/10`}></button>
-                    </span>
-                  {/each}
-                </div>
-              </form>
-              <p class="rating-legend">
-                <span class="swatch mine"></span> your rating
-                <span class="swatch yours"></span> AI
-                <span class="swatch both"></span> you agree
-              </p>
-            </section>
-      </div>
-
-        <div class="card-actions">
-          <form use:enhance method="POST" action={pageActionHref('reviewOpportunity')} class="decision-form">
-            <input type="hidden" name="opportunityId" value={oppId} />
-            <input type="hidden" name="humanRating" value={rating ?? ''} />
-            <input type="hidden" name="reviewedByProfileId" value={reviewedByProfileId} />
-            <label class="sr-only" for={`preflight-override-${oppId}`}>
-              Reason to override an inconclusive posting check
-            </label>
-            <input
-              id={`preflight-override-${oppId}`}
-              name="preflightOverrideReason"
-              placeholder="Only if you personally verified an inconclusive posting"
-            />
-            {#each reviewStatuses as status}
-              <button
-                type="submit"
-                name="humanReviewStatus"
-                value={status.value}
-                formaction={status.value === 'apply' ? pageActionHref('acceptOpportunity') : undefined}
-                class={`decision ${status.className}`}
-                class:primary={status.value === 'apply'}
-                class:active={currentStatus === status.value}
-                title={status.value === 'apply' ? 'Apply — starts the application process' : status.label}
-              >
-                {status.label}
-              </button>
-            {/each}
-          </form>
-        </div>
-    </div>
-  {/snippet}
 
   <DataTable
     data={visibleRecords}
@@ -1231,15 +945,12 @@ const resultCountLabel = $derived.by(() => {
     pageSize={pagination.pageSize}
     totalRows={pagination.totalRecords}
     onPageChange={navigateToPage}
-    bind:expanded
-    canExpand={() => true}
     rowLabel={(record) => str(record, 'title') || 'Untitled opportunity'}
     caption="Opportunities"
     stickyHeader
     hoverable
     dense
     cell={opportunityCell}
-    expandedContent={expandedOpportunity}
   />
 
   {#if drawerOpen}
@@ -1954,295 +1665,6 @@ const resultCountLabel = $derived.by(() => {
     white-space: nowrap;
   }
 
-  .skills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .chip {
-    padding: 2px 9px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 999px;
-    background: var(--smrt-color-surface-container);
-    color: var(--smrt-color-on-surface-variant);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .chip.have {
-    border-color: var(--smrt-color-success);
-    background: var(--smrt-color-success-container);
-    color: var(--smrt-color-on-success-container);
-  }
-
-  .chip.preferred {
-    border-style: dashed;
-  }
-
-  .card-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 16px;
-    padding-top: 4px;
-  }
-
-  .decision-form {
-    display: inline-flex;
-    gap: 6px;
-  }
-
-  .decision {
-    min-height: 30px;
-    padding: 0 12px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    font: inherit;
-    font-weight: 800;
-    color: var(--smrt-color-on-surface);
-    cursor: pointer;
-  }
-
-  /* Apply is a commitment, not a triage verdict — give it a standing primary
-     accent so it reads as the action even before it's the active status. */
-  .decision.primary {
-    border-color: var(--smrt-color-success);
-    color: var(--smrt-color-success);
-  }
-
-  .decision.accept.active {
-    border-color: var(--smrt-color-success);
-    background: var(--smrt-color-success);
-    color: var(--smrt-color-on-success);
-  }
-
-  .decision.maybe.active {
-    border-color: var(--smrt-color-warning);
-    background: var(--smrt-color-warning);
-    color: var(--smrt-color-on-warning);
-  }
-
-  .decision.reject.active {
-    border-color: var(--smrt-color-error);
-    background: var(--smrt-color-error);
-    color: var(--smrt-color-on-error);
-  }
-
-  .stars {
-    display: inline-flex;
-    gap: 2px;
-  }
-
-  .star-slot {
-    position: relative;
-    display: inline-flex;
-    width: 18px;
-    height: 18px;
-  }
-
-  /* Stacked star glyphs: a neutral outline base, then the two clipped halves
-     coloured by who fills them. Transparent half-buttons sit on top for input. */
-  .star-layer {
-    position: absolute;
-    inset: 0;
-    display: inline-flex;
-    pointer-events: none;
-  }
-
-  .star-layer.base {
-    color: var(--smrt-color-on-surface-variant);
-  }
-
-  .half.left {
-    clip-path: inset(0 50% 0 0);
-  }
-
-  .half.right {
-    clip-path: inset(0 0 0 50%);
-  }
-
-  .fill-empty {
-    color: transparent;
-  }
-
-  .fill-mine {
-    color: var(--smrt-color-primary);
-  }
-
-  .fill-yours {
-    color: var(--smrt-color-warning);
-  }
-
-  .fill-both {
-    color: var(--smrt-color-success);
-  }
-
-  .half-btn {
-    position: absolute;
-    top: 0;
-    width: 50%;
-    height: 100%;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    cursor: pointer;
-  }
-
-  .half-btn.left {
-    left: 0;
-  }
-
-  .half-btn.right {
-    right: 0;
-  }
-
-  .half-btn:hover {
-    background: color-mix(in srgb, var(--smrt-color-primary) 18%, transparent);
-    border-radius: 2px;
-  }
-
-  .card-detail {
-    display: grid;
-    gap: 14px;
-    padding-top: 6px;
-  }
-
-  .section-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 6px;
-  }
-
-  .section-head h4 {
-    margin: 0;
-  }
-
-  .inline-form {
-    display: inline-flex;
-  }
-
-  .refresh-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px;
-    border: 0;
-    background: transparent;
-    color: var(--smrt-color-on-surface-variant);
-    cursor: pointer;
-  }
-
-  .refresh-btn:hover {
-    color: var(--smrt-color-primary);
-  }
-
-  .detail-list {
-    margin: 0;
-    padding-left: 18px;
-    color: var(--smrt-color-on-surface);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .detail-list li {
-    margin: 2px 0;
-  }
-
-  .facts-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 8px 16px;
-    margin: 0;
-  }
-
-  .facts-grid .fact {
-    display: grid;
-    gap: 1px;
-  }
-
-  .facts-grid dt {
-    color: var(--smrt-color-on-surface-variant);
-    font: 800 11px/1.3 var(--smrt-font-family-mono, monospace);
-    text-transform: uppercase;
-  }
-
-  .facts-grid dd {
-    margin: 0;
-    color: var(--smrt-color-on-surface);
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .rating-legend {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 14px;
-    margin: 8px 0 0;
-    color: var(--smrt-color-on-surface-variant);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .rating-legend .swatch {
-    display: inline-block;
-    width: 11px;
-    height: 11px;
-    margin-right: 4px;
-    border-radius: 3px;
-    vertical-align: -1px;
-  }
-
-  .rating-legend .swatch.mine {
-    background: var(--smrt-color-primary);
-  }
-
-  .rating-legend .swatch.yours {
-    background: var(--smrt-color-warning);
-  }
-
-  .rating-legend .swatch.both {
-    background: var(--smrt-color-success);
-  }
-
-  .card-detail h4 {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0 0 6px;
-    color: var(--smrt-color-on-surface);
-    font: var(--smrt-typography-title-medium-font);
-  }
-
-  .card-detail pre {
-    max-height: 360px;
-    margin: 0;
-    overflow: auto;
-    padding: 12px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 8px;
-    background: var(--smrt-color-surface-container);
-    color: var(--smrt-color-on-surface);
-    font: 13px/1.5 var(--smrt-font-family-mono, monospace);
-    white-space: pre-wrap;
-  }
-
-  .card-detail .summary {
-    margin: 0;
-    color: var(--smrt-color-on-surface);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .muted {
-    margin: 0;
-    color: var(--smrt-color-on-surface-variant);
-    font-style: italic;
-  }
-
   .tone-positive { color: var(--smrt-color-on-success-container); }
   .tone-amber { color: var(--smrt-color-on-warning-container); }
   .tone-negative { color: var(--smrt-color-on-error-container); }
@@ -2302,44 +1724,6 @@ const resultCountLabel = $derived.by(() => {
     flex: 1 1 auto;
     justify-content: flex-end;
     min-width: 0;
-  }
-
-  /* Row expander: reuse the upstream button (keeps aria-expanded/aria-controls)
-     but draw a chevron instead of the bordered +/− circle. */
-  .card-list-wrap :global(.data-table__expand-button) {
-    position: relative;
-    border: 0;
-    border-radius: 6px;
-    color: transparent;
-    font-size: 0;
-    line-height: 0;
-  }
-
-  .card-list-wrap :global(.data-table__expand-button::after) {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 8px;
-    height: 8px;
-    border-right: 2px solid var(--smrt-color-on-surface-variant);
-    border-bottom: 2px solid var(--smrt-color-on-surface-variant);
-    transform: translate(-50%, -65%) rotate(-45deg);
-    transition: transform 140ms ease;
-  }
-
-  .card-list-wrap :global(.data-table__expand-button:hover),
-  .card-list-wrap :global(.data-table__expand-button:focus-visible) {
-    background: var(--smrt-color-surface-container);
-  }
-
-  .card-list-wrap :global(.data-table__expand-button:hover::after),
-  .card-list-wrap :global(.data-table__expand-button:focus-visible::after) {
-    border-color: var(--smrt-color-on-surface);
-  }
-
-  .card-list-wrap :global(.data-table__expand-button[aria-expanded='true']::after) {
-    transform: translate(-50%, -30%) rotate(45deg);
   }
 
   /* De-emphasised focus bar while a bulk selection is active. */
