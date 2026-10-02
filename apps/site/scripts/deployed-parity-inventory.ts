@@ -35,6 +35,25 @@ function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 }
 
+function installedSmrtDependencyVersion(name: string): string {
+  let cursor = dirname(fileURLToPath(import.meta.resolve(name)));
+  for (;;) {
+    const manifestPath = resolve(cursor, 'package.json');
+    try {
+      const manifest = readJson(manifestPath);
+      if (manifest.name === name) return String(manifest.version ?? '');
+    } catch {
+      // Continue toward the package root. A malformed unrelated manifest is
+      // not evidence that the resolved package is unavailable.
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) {
+      throw new Error(`${name} could not be resolved from the installation.`);
+    }
+    cursor = parent;
+  }
+}
+
 function releasedSmrtDependencies(): Record<string, string> {
   const dependencies = new Map<string, string>();
   for (const path of [
@@ -49,14 +68,23 @@ function releasedSmrtDependencies(): Record<string, string> {
       }
       for (const [name, version] of Object.entries(entries)) {
         if (!name.startsWith('@happyvertical/smrt')) continue;
-        if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/u.test(version)) {
-          throw new Error(`${name} must be pinned to a released semantic version.`);
+        if (typeof version !== 'string') {
+          throw new Error(`${name} must declare a released dependency source.`);
+        }
+        const installedVersion = version.startsWith('file:')
+          ? installedSmrtDependencyVersion(name)
+          : version;
+        if (!/^\d+\.\d+\.\d+$/u.test(installedVersion)) {
+          throw new Error(
+            `${name} must resolve to a released semantic version; ` +
+              `declared source is ${version}.`,
+          );
         }
         const previous = dependencies.get(name);
-        if (previous && previous !== version) {
+        if (previous && previous !== installedVersion) {
           throw new Error(`${name} resolves to conflicting released versions.`);
         }
-        dependencies.set(name, version);
+        dependencies.set(name, installedVersion);
       }
     }
   }
@@ -72,35 +100,13 @@ function installedSmrtDependencies(
 ): Record<string, string> {
   const installed = new Map<string, string>();
   for (const [name, expectedVersion] of Object.entries(expected)) {
-    let cursor = dirname(fileURLToPath(import.meta.resolve(name)));
-    for (;;) {
-      const manifestPath = resolve(cursor, 'package.json');
-      try {
-        const manifest = readJson(manifestPath);
-        if (manifest.name === name) {
-          const version = String(manifest.version ?? '');
-          if (version !== expectedVersion) {
-            throw new Error(
-              `${name} is installed at ${version}, expected ${expectedVersion}.`,
-            );
-          }
-          installed.set(name, version);
-          break;
-        }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.startsWith(`${name} is installed at`)
-        ) {
-          throw error;
-        }
-      }
-      const parent = dirname(cursor);
-      if (parent === cursor) {
-        throw new Error(`${name} could not be resolved from the installation.`);
-      }
-      cursor = parent;
+    const version = installedSmrtDependencyVersion(name);
+    if (version !== expectedVersion) {
+      throw new Error(
+        `${name} is installed at ${version}, expected ${expectedVersion}.`,
+      );
     }
+    installed.set(name, version);
   }
   return Object.fromEntries(installed);
 }
