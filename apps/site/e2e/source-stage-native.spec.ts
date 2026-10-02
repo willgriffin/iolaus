@@ -30,6 +30,7 @@ interface Snapshot {
   evaluationScores: Json[];
   tasks: Json[];
   coverage: { status: string; reason?: string };
+  eligibility?: { evidence: Json; sourceContext: Json };
   partial?: {
     mode: string;
     fingerprint: string;
@@ -45,6 +46,7 @@ interface Result {
   selectedRequestId: string;
   afterExtraction: Snapshot;
   exact?: {
+    inputFingerprint?: string;
     request: { state: Json; questions: Record<string, Json> };
     preflight: {
       fits: boolean;
@@ -540,6 +542,171 @@ test('native completed extraction resumes one decomposed evidence request on the
   expect(result.verified?.complete).toBe(false);
   noPrivateWrites(result);
 });
+
+test('native V3 eligibility resumes the completed GLOBAL extraction on its original lifecycle', async ({
+  baseURL: _baseURL,
+}, info) => {
+  const result = await nativeStage('eligibility-fitting', info);
+  actualCheckpoint(result);
+  if (!result.exact) throw new Error('V3 exact request missing');
+  expect(result.refusal).toBe('');
+  expect(result.exact.preflight.fits).toBe(true);
+  expect(result.providerEvents.map((row) => row.kind)).toEqual([
+    'extraction',
+    'audit',
+  ]);
+  const decision = result.providerEvents[1];
+  expect(decision.request.model).toBe('jev-latest');
+  expect(decision.job).toMatchObject({
+    id: result.final.jobs[1].id,
+    method: 'prepareAssessmentCoverage',
+    status: 'running',
+  });
+  expect(decision.request.state).toEqual(result.exact.request.state);
+  expect(decision.request.questions).toEqual(
+    Object.fromEntries(
+      Object.entries(result.exact.request.questions).map(([key, value]) => [
+        key,
+        value.type === 'predicate' ? { ...value, type: 'noul' } : value,
+      ]),
+    ),
+  );
+  expect(Object.keys(result.exact.request.questions)).toContain(
+    'source_eligibility__coverage__authorization',
+  );
+  expect(result.final.jobs[1]).toMatchObject({
+    status: 'completed',
+    attempts: 1,
+  });
+  expect(parsed(result.final.jobs[1].args).sourceCoverageStage).toMatchObject({
+    stage: 'evidence_completed_extraction',
+    auditContract: 'requirement-evidence-audit/v3-source-eligibility',
+    extractionRequestId: result.selectedRequestId,
+  });
+  expect(result.final.requests).toHaveLength(2);
+  expect(result.final.requests[1]).toMatchObject({
+    feature: 'opportunity-source-requirement-evidence',
+    status: 'succeeded',
+    accounting_basis: 'actual',
+  });
+  expect(
+    new Set(result.final.requests.map((row) => row.agent_run_id)).size,
+  ).toBe(1);
+  expect(
+    result.final.agentRuns.filter(
+      (row) => Number(row.intelligence_actual_calls) > 0,
+    ),
+  ).toHaveLength(1);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) =>
+        sum +
+        Number(row.reserved_input_tokens) +
+        Number(row.requested_max_output_tokens),
+      0,
+    ),
+  ).toBe(result.exact.preflight.reservedTokens);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) =>
+        sum +
+        Number(row.reserved_input_tokens) +
+        Number(row.requested_max_output_tokens),
+      0,
+    ),
+  ).toBeLessThanOrEqual(80_000);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) => sum + Number(row.reserved_spend_micros),
+      0,
+    ),
+  ).toBeLessThanOrEqual(100_000);
+  const audit =
+    result.final.record.preparedPostingJson.requirementCoverageEvidenceAudit;
+  expect(audit).toMatchObject({
+    version: 'requirement-evidence-audit/v3-source-eligibility',
+    requestId: result.final.requests[1].request_id,
+    inputFingerprint: result.exact.inputFingerprint,
+  });
+  expect(
+    result.final.receipts.find(
+      (row) => row.owner_request_id === audit?.requestId,
+    ),
+  ).toMatchObject({
+    feature: 'opportunity-source-requirement-evidence',
+    status: 'completed',
+    model: 'jev-latest',
+    output_schema_version: 'requirement-evidence-audit/v3-source-eligibility',
+  });
+  expect(result.final.eligibility).toMatchObject({
+    evidence: {
+      version: 'source-eligibility-facts/v1',
+      requestId: audit?.requestId,
+      aggregateFingerprint: result.exact.inputFingerprint,
+      sourceContentFingerprint: result.final.record.sourceContentFingerprint,
+      sourceContentVersion: result.final.record.sourceContentVersion,
+      coverage: { authorization: true, geography: true, workArrangement: true },
+    },
+    sourceContext: {
+      sourceContentFingerprint: result.final.record.sourceContentFingerprint,
+      sourceContentVersion: result.final.record.sourceContentVersion,
+    },
+  });
+  expect(String(result.final.eligibility?.sourceContext.sourceText)).toContain(
+    'Remote role.',
+  );
+  expect(result.final.eligibility?.evidence.facts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'remote_available',
+        citations: expect.arrayContaining([
+          expect.objectContaining({
+            clauseId: expect.any(String),
+            hash: expect.any(String),
+          }),
+        ]),
+      }),
+    ]),
+  );
+  expect(
+    result.final.record.preparedPostingJson.requirementCoverage?.audit,
+  ).toBeUndefined();
+  expect(
+    result.final.record.preparedPostingJson.requirementCoverage?.requirements,
+  ).toEqual(
+    result.afterExtraction.record.preparedPostingJson.requirementCoverage
+      ?.requirements,
+  );
+  expect(result.verified?.complete).toBe(false);
+  noPrivateWrites(result);
+});
+
+for (const variant of ['stale', 'foreign']) {
+  test(`native V3 eligibility denies ${variant} source authority before provider transport`, async ({
+    baseURL: _baseURL,
+  }, info) => {
+    const result = await nativeStage(`eligibility-${variant}`, info);
+    actualCheckpoint(result);
+    expect(result.providerEvents.slice(result.retryEventStart)).toHaveLength(0);
+    expect(result.final.requests).toHaveLength(1);
+    expect(result.final.eligibility).toBeUndefined();
+    expect(
+      result.final.record.preparedPostingJson.requirementCoverageEvidenceAudit,
+    ).toBeUndefined();
+    if (variant === 'stale') {
+      expect(result.final.jobs[1]).toMatchObject({
+        status: 'failed',
+        attempts: 1,
+      });
+      expect(result.final.jobs[1].last_error).toMatch(/source.*not current/i);
+    } else {
+      expect(result.refusal).toMatch(/receipt|unattested|accounting|contract/i);
+      expect(result.final.jobs).toHaveLength(1);
+    }
+    expect(result.verified?.complete).toBe(false);
+    expect(result.final.assessments).toHaveLength(0);
+  });
+}
 
 for (const variant of [
   'oversize',

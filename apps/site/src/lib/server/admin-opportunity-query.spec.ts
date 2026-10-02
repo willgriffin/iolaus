@@ -1,6 +1,7 @@
 import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
+import type { WorkspaceOpportunityQuery } from './admin-opportunity-query';
 
 const mocks = vi.hoisted(() => ({
   dbConfig: vi.fn(() => ({})),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   privatePartials: vi.fn(),
   source: vi.fn(),
   partialProjections: vi.fn(),
+  sourceEligibility: vi.fn(),
 }));
 
 const WORKSPACE_SUBJECT = {
@@ -39,6 +41,13 @@ vi.mock('./opportunity-assessment-partial.js', () => ({
 vi.mock('./opportunity-assessment-partial-projection.js', () => ({
   loadCurrentPartialOpportunityAssessmentProjections: mocks.partialProjections,
 }));
+vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
+  REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION:
+    'requirement-evidence-audit/v3-source-eligibility',
+}));
+vi.mock('./opportunity-source-eligibility-projection.js', () => ({
+  loadCurrentSourceEligibilityProjections: mocks.sourceEligibility,
+}));
 vi.mock('./smrt.js', () => ({
   getCollection: async () => ({ get: mocks.source }),
 }));
@@ -50,6 +59,8 @@ describe('admin-opportunity-query', () => {
     mocks.source.mockReset();
     mocks.partialProjections.mockReset();
     mocks.partialProjections.mockResolvedValue(new Map());
+    mocks.sourceEligibility.mockReset();
+    mocks.sourceEligibility.mockResolvedValue(new Map());
     mocks.dbConfig.mockReset();
     mocks.dbConfig.mockReturnValue({});
     mocks.query.mockReset();
@@ -208,6 +219,266 @@ describe('admin-opportunity-query', () => {
     expect(mocks.privatePartials).not.toHaveBeenCalled();
     expect(mocks.source).not.toHaveBeenCalled();
   });
+
+  it('executes SQLite source eligibility filtering before COUNT/PAGE slicing and falls back to current full proof after source drift', async () => {
+    const db = await getDatabase({
+      type: 'sqlite',
+      url: ':memory:',
+      cache: false,
+    });
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.requestDatabase.mockReturnValue({
+      query: async (sql: string, ...values: unknown[]) =>
+        sql.includes('SELECT DISTINCT r.opportunity_id')
+          ? {
+              rows: ['actual', 'changed-version', 'changed-fp', 'forged'].map(
+                (id) => ({ id }),
+              ),
+            }
+          : db.query(sql, ...values),
+    });
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+      toJSON: () => ({
+        id,
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: 1,
+      }),
+    }));
+    mocks.sourceEligibility.mockImplementation(
+      async ({ opportunities }: { opportunities: Array<{ id: string }> }) => {
+        const id = opportunities[0].id;
+        return id === 'forged'
+          ? new Map()
+          : new Map([
+              [
+                id,
+                {
+                  eligibilityBucket: 'eligible',
+                  sourceStatus: 'current',
+                  reason: 'Actual replay',
+                  unresolvedConstraintFactKeys: [],
+                },
+              ],
+            ]);
+      },
+    );
+    try {
+      await db.query(
+        'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+      );
+      await db.query(
+        'CREATE TABLE opportunity_assessments (id TEXT PRIMARY KEY, opportunity_id TEXT, status TEXT, contract_version TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, candidate_material_fingerprint TEXT, preferences_fingerprint TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, eligibility_bucket TEXT, eligibility_priority INTEGER, updated_at TEXT)',
+      );
+      for (const id of [
+        'actual',
+        'changed-version',
+        'changed-fp',
+        'forged',
+        'full',
+      ]) {
+        const fp = id === 'changed-fp' ? 'new-fp' : `fp-${id}`;
+        const version = id === 'changed-version' ? 2 : 1;
+        await db.query(
+          'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+          id,
+          'found',
+          '2026-10-02',
+          fp,
+          version,
+        );
+        if (['changed-version', 'changed-fp', 'full'].includes(id))
+          await db.query(
+            'INSERT INTO opportunity_assessments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            `assessment-${id}`,
+            id,
+            'current',
+            'opportunity-assessment/v6',
+            fp,
+            version,
+            'candidate-a',
+            'preferences-a',
+            WORKSPACE_SUBJECT.tenantId,
+            WORKSPACE_SUBJECT.userId,
+            WORKSPACE_SUBJECT.profileId,
+            id === 'full' ? 'eligible' : 'sponsorship_possible',
+            id === 'full' ? 0 : 1,
+            '2026-10-02',
+          );
+      }
+      const {
+        countOpportunityRecords,
+        listOpportunityPageIds,
+        listOpportunityMatchingIds,
+      } = await import('./admin-opportunity-query');
+      const query: WorkspaceOpportunityQuery = {
+        candidateSkills: [],
+        assessmentCandidateMaterialFingerprint: 'candidate-a',
+        assessmentPreferencesFingerprint: 'preferences-a',
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          eligibilityBuckets: ['eligible'],
+          sort: 'eligibility' as const,
+        },
+        reviewFilter: 'all',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(await countOpportunityRecords(query)).toBe(2);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 0 }),
+      ).toEqual(['actual']);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 1 }),
+      ).toEqual(['full']);
+      expect(
+        (await listOpportunityMatchingIds(query, { limit: 501 })).map(
+          (row) => row.id,
+        ),
+      ).toEqual(['actual', 'full']);
+      expect(
+        await countOpportunityRecords({
+          ...query,
+          filters: {
+            ...query.filters,
+            eligibilityBuckets: ['sponsorship_possible'],
+          },
+        }),
+      ).toBe(2);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it('nominates only public actual v3 receipts, never trusts their scalars, and bounds native eligibility replay to four', async () => {
+    const ids = Array.from({ length: 9 }, (_, index) => `source-${index}`);
+    mocks.query.mockResolvedValue({
+      rows: [...ids, ids[0]].map((id) => ({
+        id,
+        eligibilityBucket: 'eligible',
+      })),
+    });
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+      toJSON: () => ({
+        id,
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: 1,
+      }),
+    }));
+    let active = 0;
+    let maximum = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.sourceEligibility.mockImplementation(async () => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active--;
+      return new Map();
+    });
+    const { loadCurrentSourceOpportunityEligibility } = await import(
+      './admin-opportunity-query'
+    );
+    const pending = loadCurrentSourceOpportunityEligibility(WORKSPACE_SUBJECT);
+    await vi.waitFor(() => expect(active).toBe(4));
+    release();
+    expect(await pending).toEqual(new Map());
+    expect(maximum).toBe(4);
+    expect(mocks.source).toHaveBeenCalledTimes(ids.length);
+    expect(mocks.source).toHaveBeenCalledWith({ id: ids[0] }, { cache: false });
+    expect(mocks.sourceEligibility).toHaveBeenCalledWith({
+      opportunities: [expect.objectContaining({ id: ids[0] })],
+      subject: WORKSPACE_SUBJECT,
+    });
+    const [sql, ...values] = mocks.query.mock.calls[0];
+    expect(sql).toContain("q.accounting_basis = 'actual'");
+    expect(sql).toContain('q.actual_total_tokens > 0');
+    expect(sql).toContain("COALESCE(q.candidate_profile_id, '') = ''");
+    expect(values).toEqual([
+      'opportunity-source-requirement-evidence',
+      'requirement-evidence-audit/v3-source-eligibility',
+      'typesafe-opportunity-source-evidence',
+    ]);
+  });
+
+  for (const sortDirection of ['asc', 'desc'] as const) {
+    it(`uses the same source/profile bucket CASE for COUNT and PAGE filters and ${sortDirection} eligibility order before slicing`, async () => {
+      mocks.query.mockImplementation(async (sql: string) => ({
+        rows: sql.includes('SELECT DISTINCT r.opportunity_id')
+          ? [{ id: 'actual-source' }]
+          : sql.includes('COUNT(*)')
+            ? [{ count: 1 }]
+            : [{ id: 'actual-source' }],
+      }));
+      mocks.source.mockResolvedValue({
+        toJSON: () => ({
+          id: 'actual-source',
+          sourceContentFingerprint: 'actual-fp',
+          sourceContentVersion: 3,
+          postingEligibilityJson:
+            '{"eligibilityBucket":"location_restriction"}',
+        }),
+      });
+      mocks.sourceEligibility.mockResolvedValue(
+        new Map([
+          [
+            'actual-source',
+            {
+              eligibilityBucket: 'eligible',
+              sourceStatus: 'current',
+              reason: 'Native replay',
+              unresolvedConstraintFactKeys: [],
+            },
+          ],
+        ]),
+      );
+      const {
+        countOpportunityRecords,
+        listOpportunityPageIds,
+        listOpportunityMatchingIds,
+      } = await import('./admin-opportunity-query');
+      const query: WorkspaceOpportunityQuery = {
+        candidateSkills: [],
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          eligibilityBuckets: ['eligible'],
+          sort: 'eligibility' as const,
+          sortDirection,
+        },
+        reviewFilter: 'all',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(await countOpportunityRecords(query)).toBe(1);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 0 }),
+      ).toEqual(['actual-source']);
+      await listOpportunityMatchingIds(query, { limit: 501 });
+      const main = mocks.query.mock.calls.filter(([sql]) =>
+        sql.includes('FROM opportunities o'),
+      );
+      expect(main).toHaveLength(3);
+      for (const [sql, ...values] of main) {
+        expect(sql).toContain('AND o.source_content_fingerprint =');
+        expect(sql).toContain('AND o.source_content_version =');
+        expect(sql).toContain(
+          "ELSE COALESCE(latest_assessment.eligibility_bucket, 'unknown') END",
+        );
+        expect(values).toEqual(
+          expect.arrayContaining(['actual-source', 'actual-fp', 3, 'eligible']),
+        );
+        expect(sql).not.toContain('posting_eligibility_json');
+      }
+      const [pageSql, ...pageValues] = main[1];
+      expect(pageSql).toContain(
+        'ELSE latest_assessment.eligibility_priority END',
+      );
+      expect(pageSql).toContain(
+        `${sortDirection.toUpperCase()} NULLS LAST, o.updated_at DESC, o.id ASC`,
+      );
+      expect(pageValues).toEqual(expect.arrayContaining([0]));
+      expect(pageSql).not.toContain('fit_score ELSE NULL END');
+    });
+  }
 
   for (const dialect of ['sqlite', 'postgres'] as const) {
     it.runIf(

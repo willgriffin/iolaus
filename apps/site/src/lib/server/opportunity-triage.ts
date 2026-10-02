@@ -12,6 +12,7 @@ import {
   countOpportunityRecords,
   listOpportunityPageIds,
   loadCurrentCitedOpportunitySupport,
+  loadCurrentSourceOpportunityEligibility,
   normalizeOpportunityRecommendation,
   type WorkspaceOpportunityQuery,
 } from './admin-opportunity-query';
@@ -258,26 +259,41 @@ async function loadSqliteTriageQueue({
   const opportunityIds = records
     .map((record) => record.id)
     .filter((id): id is string => typeof id === 'string');
-  const [assessmentProjections, reviewOverlays, citedSupport] =
-    await Promise.all([
-      loadCurrentOpportunityAssessmentProjections({
-        opportunities: records.map((record) => ({
-          id: record.id,
-          sourceContentFingerprint: record.sourceContentFingerprint,
-          sourceContentVersion: record.sourceContentVersion,
-        })),
-        subject,
-      }),
-      loadCurrentOpportunityReviewOverlays({ opportunityIds, subject }),
-      filters.sort === 'cited_support'
-        ? loadCurrentCitedOpportunitySupport(subject)
-        : Promise.resolve(new Map()),
-    ]);
+  const [
+    assessmentProjections,
+    sourceEligibilityProjections,
+    reviewOverlays,
+    citedSupport,
+  ] = await Promise.all([
+    loadCurrentOpportunityAssessmentProjections({
+      opportunities: records.map((record) => ({
+        id: record.id,
+        sourceContentFingerprint: record.sourceContentFingerprint,
+        sourceContentVersion: record.sourceContentVersion,
+      })),
+      subject,
+    }),
+    loadCurrentSourceOpportunityEligibility(subject),
+    loadCurrentOpportunityReviewOverlays({ opportunityIds, subject }),
+    filters.sort === 'cited_support'
+      ? loadCurrentCitedOpportunitySupport(subject)
+      : Promise.resolve(new Map()),
+  ]);
   const candidates = records
     .map((record) => {
       const assessmentProjection = record.id
         ? (assessmentProjections.get(record.id) ?? null)
         : null;
+      const sourceEligibility = record.id
+        ? sourceEligibilityProjections.get(record.id)
+        : undefined;
+      const sourceEligibilityProjection =
+        sourceEligibility &&
+        sourceEligibility.sourceContentFingerprint ===
+          record.sourceContentFingerprint &&
+        sourceEligibility.sourceContentVersion === record.sourceContentVersion
+          ? sourceEligibility.projection
+          : null;
       const reviewOverlay = record.id
         ? (reviewOverlays.get(record.id) ?? null)
         : null;
@@ -295,6 +311,7 @@ async function loadSqliteTriageQueue({
       return {
         ...record,
         assessmentProjection,
+        sourceEligibilityProjection,
         partialAssessmentProjection,
         humanRating: reviewOverlay?.humanRating ?? null,
         humanReviewNotes: reviewOverlay?.humanReviewNotes ?? '',

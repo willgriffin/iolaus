@@ -9,6 +9,7 @@ import {
 import { getDbConfig } from './db.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
 import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
+import type { SourceEligibilityUiProjection } from './opportunity-source-eligibility-projection.js';
 import type { WorkspaceSubject } from './workspace-subject.js';
 
 /** Hidden from every default listing; selectable through an explicit filter. */
@@ -521,9 +522,11 @@ function filterWhereSql({
   filters,
   search,
   values,
+  sourceEligibility,
 }: Pick<OpportunityQuery, 'candidateSkills' | 'filters' | 'search'> & {
   dialect: OpportunityQueryDialect;
   values: unknown[];
+  sourceEligibility?: Map<string, CurrentSourceOpportunityEligibility>;
 }): { needsAssessment: boolean; needsReview: boolean; where: string[] } {
   const where: string[] = [];
   let needsAssessment = false;
@@ -690,8 +693,8 @@ function filterWhereSql({
       needsAssessment = true;
       predicates.push(
         dialect === 'sqlite'
-          ? `COALESCE(latest_assessment.eligibility_bucket, 'unknown') IN (${assessmentBuckets.map((bucket) => pushParam(values, bucket)).join(', ')})`
-          : `COALESCE(latest_assessment.eligibility_bucket, 'unknown') = ANY(${pushParam(values, assessmentBuckets)}::text[])`,
+          ? `${sourceEligibilityBucketSql(sourceEligibility ?? new Map(), values)} IN (${assessmentBuckets.map((bucket) => pushParam(values, bucket)).join(', ')})`
+          : `${sourceEligibilityBucketSql(sourceEligibility ?? new Map(), values)} = ANY(${pushParam(values, assessmentBuckets)}::text[])`,
       );
     }
     if (predicates.length > 0) where.push(`(${predicates.join(' OR ')})`);
@@ -755,6 +758,7 @@ export type CurrentCitedOpportunitySupport = {
 export async function loadCurrentCitedOpportunitySupport(
   subject: WorkspaceSubject,
 ): Promise<Map<string, CurrentCitedOpportunitySupport>> {
+  if (!hasCandidateWorkspaceSubject(subject)) return new Map();
   const [
     { listPrivateRecords },
     { OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION },
@@ -818,6 +822,140 @@ export async function loadCurrentCitedOpportunitySupport(
   return result;
 }
 
+export type CurrentSourceOpportunityEligibility = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection: SourceEligibilityUiProjection;
+};
+
+/** Public receipt rows nominate IDs only; native replay and the active profile decide eligibility. */
+export async function loadCurrentSourceOpportunityEligibility(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentSourceOpportunityEligibility>> {
+  if (!hasCandidateWorkspaceSubject(subject)) return new Map();
+  const [
+    { REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION },
+    { loadCurrentSourceEligibilityProjections },
+    { getCollection },
+  ] = await Promise.all([
+    import('./opportunity-requirement-coverage-provider.js'),
+    import('./opportunity-source-eligibility-projection.js'),
+    import('./smrt.js'),
+  ]);
+  const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const selectors = await queryOpportunitySql(
+    db,
+    dialect,
+    `SELECT DISTINCT r.opportunity_id AS id
+    FROM opportunity_intelligence_results r JOIN opportunity_intelligence_requests q
+    ON q.request_id = r.owner_request_id AND q.idempotency_key = r.idempotency_key
+      AND q.opportunity_id = r.opportunity_id AND q.agent_run_id = r.agent_run_id
+      AND q.content_fingerprint = r.content_fingerprint AND q.input_fingerprint = r.input_fingerprint
+      AND q.feature = r.feature AND q.model = r.model AND q.profile = r.profile
+    WHERE r.feature = $1 AND r.output_schema_version = $2 AND r.profile = $3
+      AND r.prompt_version = r.output_schema_version AND r.prepared_payload_version = r.output_schema_version
+      AND r.status = 'completed' AND q.status = 'succeeded' AND q.accounting_basis = 'actual'
+      AND q.actual_total_tokens > 0
+      AND COALESCE(r.tenant_id, '') = '' AND COALESCE(r.owner_user_id, '') = '' AND COALESCE(r.candidate_profile_id, '') = ''
+      AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = '' AND COALESCE(q.candidate_profile_id, '') = ''
+    ORDER BY r.opportunity_id ASC`,
+    [
+      'opportunity-source-requirement-evidence',
+      REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+      'typesafe-opportunity-source-evidence',
+    ],
+  );
+  const ids = [
+    ...new Set(
+      rowsFromResult(selectors)
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const result = new Map<string, CurrentSourceOpportunityEligibility>();
+  if (!ids.length) return result;
+  const collection = await getCollection('Opportunity');
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const native = await collection.get({ id }, { cache: false });
+        if (!native) continue;
+        const opportunity = native.toJSON() as Record<string, unknown>;
+        const fingerprint = opportunity.sourceContentFingerprint;
+        const version = opportunity.sourceContentVersion;
+        if (
+          opportunity.id !== id ||
+          typeof fingerprint !== 'string' ||
+          !fingerprint ||
+          !Number.isSafeInteger(version) ||
+          Number(version) < 1
+        )
+          continue;
+        const projections = await loadCurrentSourceEligibilityProjections({
+          opportunities: [opportunity],
+          subject,
+        });
+        const projection = projections.get(id);
+        if (projection)
+          result.set(id, {
+            sourceContentFingerprint: fingerprint,
+            sourceContentVersion: Number(version),
+            projection,
+          });
+      }
+    }),
+  );
+  return result;
+}
+
+function sourceEligibilityBucketSql(
+  source: Map<string, CurrentSourceOpportunityEligibility>,
+  values: unknown[],
+): string {
+  const fallback = "COALESCE(latest_assessment.eligibility_bucket, 'unknown')";
+  if (!source.size) return fallback;
+  const branches = [...source]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
+      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
+      THEN ${pushParam(values, current.projection.eligibilityBucket)}`,
+    );
+  return `CASE ${branches.join('\n')} ELSE ${fallback} END`;
+}
+
+function sourceEligibilityPrioritySql(
+  source: Map<string, CurrentSourceOpportunityEligibility>,
+  values: unknown[],
+): string {
+  const priorities = {
+    eligible: 0,
+    sponsorship_possible: 1,
+    unknown: 2,
+    conflicting: 3,
+    location_restriction: 4,
+  };
+  const branches = [...source]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
+      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
+      THEN ${pushParam(values, priorities[current.projection.eligibilityBucket])}`,
+    );
+  return `CASE ${branches.join('\n')} ELSE latest_assessment.eligibility_priority END`;
+}
+
+function needsSourceEligibility(filters: OpportunityFilterState): boolean {
+  return (
+    filters.sort === 'eligibility' || filters.eligibilityBuckets.length > 0
+  );
+}
+
 function citedSupportSql(
   support: Map<string, CurrentCitedOpportunitySupport>,
   values: unknown[],
@@ -841,6 +979,7 @@ function orderBySql(
     dialect: OpportunityQueryDialect;
     triageRejectDepriority?: boolean;
     citedSupport?: string;
+    sourceEligibilityPriority?: string;
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
@@ -849,7 +988,7 @@ function orderBySql(
     case 'cited_support':
       return `${options.citedSupport ?? 'NULL'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'eligibility':
-      return `latest_assessment.eligibility_priority ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'newest':
       return `COALESCE(o.posted_at, o.first_seen_at) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'score':
@@ -870,6 +1009,10 @@ function orderBySql(
 export function createOpportunityWhereSql(
   query: OpportunityQuery,
   dialect: OpportunityQueryDialect = 'postgres',
+  sourceEligibility: Map<
+    string,
+    CurrentSourceOpportunityEligibility
+  > = new Map(),
 ): {
   joins: string[];
   values: unknown[];
@@ -888,6 +1031,7 @@ export function createOpportunityWhereSql(
     filters: query.filters,
     search: query.search,
     values,
+    sourceEligibility,
   });
   const joins: string[] = [];
   if (filters.needsAssessment) {
@@ -1056,7 +1200,10 @@ export async function listOpportunityMatchingIds(
   if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return [];
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
-  const built = createOpportunityWhereSql(query, dialect);
+  const sourceEligibility = query.filters.eligibilityBuckets.length
+    ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
+    : new Map();
+  const built = createOpportunityWhereSql(query, dialect, sourceEligibility);
   const limitPlaceholder = pushParam(built.values, limit);
   const sql = `SELECT o.id, o.updated_at AS "updatedAt"
     FROM opportunities o
@@ -1133,7 +1280,14 @@ export async function countOpportunityRecords(
   if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return 0;
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
-  const { joins, values, whereSql } = createOpportunityWhereSql(query, dialect);
+  const sourceEligibility = query.filters.eligibilityBuckets.length
+    ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
+    : new Map();
+  const { joins, values, whereSql } = createOpportunityWhereSql(
+    query,
+    dialect,
+    sourceEligibility,
+  );
   const result = await queryOpportunitySql(
     db,
     dialect,
@@ -1165,6 +1319,9 @@ export async function listOpportunityPageIds({
   if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
+  const sourceEligibility = needsSourceEligibility(filters)
+    ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
+    : new Map();
   const query = createOpportunityWhereSql(
     {
       candidateSkills,
@@ -1176,6 +1333,7 @@ export async function listOpportunityPageIds({
       workspaceSubject,
     },
     dialect,
+    sourceEligibility,
   );
   const needsAssessmentForSort =
     filters.sort === 'best' ||
@@ -1210,6 +1368,10 @@ export async function listOpportunityPageIds({
       latestReviewJoinSql(dialect, workspaceSubject, query.values),
     );
   }
+  const sourceEligibilityPriority =
+    filters.sort === 'eligibility' && sourceEligibility.size
+      ? sourceEligibilityPrioritySql(sourceEligibility, query.values)
+      : undefined;
   const citedSupport =
     filters.sort === 'cited_support'
       ? citedSupportSql(
@@ -1226,6 +1388,7 @@ export async function listOpportunityPageIds({
     ORDER BY ${orderBySql(filters.sort, filters.sortDirection, {
       dialect,
       citedSupport,
+      sourceEligibilityPriority,
       triageRejectDepriority:
         triageRejectDepriority && filters.sort === 'score',
     })}

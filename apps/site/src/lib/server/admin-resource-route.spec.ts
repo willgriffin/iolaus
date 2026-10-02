@@ -52,6 +52,9 @@ const mocks = vi.hoisted(() => {
       assessmentPreferencesFingerprint: 'preferences-test',
     })),
     loadCurrentOpportunityReviewOverlays: vi.fn(async () => new Map()),
+    loadCurrentOpportunityVideoRequirementsProjections: vi.fn(
+      async () => new Map(),
+    ),
     latestPostingPreflightStatus: vi.fn(async (id: string) => ({
       checkedAt: '2026-09-01T00:00:00.000Z',
       reason: 'http_ok',
@@ -107,6 +110,11 @@ vi.mock('./opportunity-assessment-partial-projection', () => ({
 vi.mock('./opportunity-review-overlay', () => ({
   loadCurrentOpportunityReviewOverlays:
     mocks.loadCurrentOpportunityReviewOverlays,
+}));
+
+vi.mock('./opportunity-video-requirements-projection', () => ({
+  loadCurrentOpportunityVideoRequirementsProjections:
+    mocks.loadCurrentOpportunityVideoRequirementsProjections,
 }));
 
 vi.mock('./application-workflow', () => ({
@@ -322,6 +330,10 @@ describe('admin-resource-route', () => {
     });
     mocks.loadCurrentOpportunityReviewOverlays.mockReset();
     mocks.loadCurrentOpportunityReviewOverlays.mockResolvedValue(new Map());
+    mocks.loadCurrentOpportunityVideoRequirementsProjections.mockReset();
+    mocks.loadCurrentOpportunityVideoRequirementsProjections.mockResolvedValue(
+      new Map(),
+    );
     mocks.listAdminRecords.mockReset();
     mocks.listComboOptions.mockReset();
     mocks.listOpportunityFilterOptions.mockReset();
@@ -1159,6 +1171,50 @@ describe('admin-resource-route', () => {
       subject,
     });
     expect(record?.assessmentProjection).toEqual(projection);
+  });
+
+  it('attaches only the current persisted video projection and keeps absent or stale receipts unknown', async () => {
+    const opportunity = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'source-v1',
+      sourceContentVersion: 1,
+      title: 'Platform Engineer',
+    };
+    const required = {
+      version: 'opportunity-video-requirements/v2',
+      provenance: { model: 'jev-test', provider: 'typesafe' },
+      recordedSubmission: { status: 'required', evidence: [] },
+      liveInterview: { status: 'unknown', evidence: [] },
+    };
+    mocks.loadCurrentOpportunityVideoRequirementsProjections.mockResolvedValueOnce(
+      new Map([['opp-1', required]]),
+    );
+
+    const { attachOpportunityContext } = await import('./admin-resource-route');
+    const [persisted] = await attachOpportunityContext([opportunity], {
+      includeActivity: false,
+    });
+    expect(
+      mocks.loadCurrentOpportunityVideoRequirementsProjections,
+    ).toHaveBeenCalledWith([opportunity]);
+    expect(persisted?.videoRequirements).toEqual(required);
+
+    const [unknown] = await attachOpportunityContext([opportunity], {
+      includeActivity: false,
+    });
+    expect(unknown?.videoRequirements).toMatchObject({
+      recordedSubmission: { status: 'unknown' },
+      liveInterview: { status: 'unknown' },
+    });
+
+    const [stale] = await attachOpportunityContext(
+      [{ ...opportunity, sourceContentVersion: 2 }],
+      { includeActivity: false },
+    );
+    expect(stale?.videoRequirements).toMatchObject({
+      recordedSubmission: { status: 'unknown' },
+      liveInterview: { status: 'unknown' },
+    });
   });
 
   it('attaches current private partial evidence separately and clears it on a stale reload', async () => {

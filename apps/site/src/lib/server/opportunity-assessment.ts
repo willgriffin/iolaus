@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
+import {
+  type CountryReference,
+  normalizeCountryReference,
+} from './country-reference.js';
+
+export type { CountryReference } from './country-reference.js';
 
 /**
  * This is deliberately separate from the legacy Canada-only projection. It
@@ -45,12 +51,6 @@ export interface OpportunityAssessmentSource {
     end: number;
     hash: string;
   }>;
-}
-
-/** ISO 3166-1 alpha-2 code plus an explicit display label. */
-export interface CountryReference {
-  code: string;
-  label: string;
 }
 
 /** Conditional or employer-limited authorization cannot prove a country match. */
@@ -274,13 +274,12 @@ function fingerprint(value: unknown): string {
 }
 
 function normalizeCountry(value: CountryReference): CountryReference {
-  const code = text(value?.code).toUpperCase();
-  const label = text(value?.label);
-  if (!/^[A-Z]{2}$/.test(code) || !label || label.length > 120)
+  const normalized = normalizeCountryReference(value);
+  if (!normalized)
     throw new Error(
       'Country values require an ISO alpha-2 code and display label.',
     );
-  return { code, label };
+  return normalized;
 }
 
 function normalizeCountryList(values: CountryReference[]): CountryReference[] {

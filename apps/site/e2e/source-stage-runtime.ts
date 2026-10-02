@@ -13,8 +13,10 @@ import {
   preflightRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareRequirementEvidenceAudit,
+  prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
+  readVerifiedOpportunitySourceEligibilityEvidence,
   validateVerifiedRequirementCoverage,
 } from '../src/lib/server/opportunity-requirement-coverage-provider.js';
 import { enqueueOpportunityRequirementCoverageSourceStage } from '../src/lib/server/opportunity-requirement-coverage-source-stage-job.js';
@@ -66,12 +68,16 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
 const scenario = process.argv[2];
 const privateStage = scenario.startsWith('private-');
 const privateVariant = privateStage ? scenario.slice('private-'.length) : '';
-const evidenceStage = privateStage || scenario.startsWith('evidence-');
+const eligibilityStage = scenario.startsWith('eligibility-');
+const evidenceStage =
+  privateStage || scenario.startsWith('evidence-') || eligibilityStage;
 const variant = privateStage
   ? 'fitting'
-  : evidenceStage
-    ? scenario.slice('evidence-'.length)
-    : scenario;
+  : eligibilityStage
+    ? scenario.slice('eligibility-'.length)
+    : evidenceStage
+      ? scenario.slice('evidence-'.length)
+      : scenario;
 if (
   (privateStage &&
     !['fitting', 'stale-source', 'stale-candidate', 'foreign-proof'].includes(
@@ -199,6 +205,7 @@ const snapshot = async () => {
     tasks: await rows('tasks', 'id'),
     coverage: await readRecordedRequirementCoverageOutcome(id, record),
     partial: await readPartialOpportunityRequirementEvidence(record),
+    eligibility: await readVerifiedOpportunitySourceEligibilityEvidence(record),
   };
 };
 async function service() {
@@ -265,12 +272,18 @@ try {
     const prepared = JSON.parse(String(record.preparedPostingJson));
     const context = requirementCoverageContextForOpportunity(record);
     if (evidenceStage) {
-      const audit = prepareRequirementEvidenceAudit(
-        context,
-        prepared.requirementCoverage,
-      );
+      const audit = eligibilityStage
+        ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+            context,
+            prepared.requirementCoverage,
+          )
+        : prepareRequirementEvidenceAudit(
+            context,
+            prepared.requirementCoverage,
+          );
       exact = {
         request: audit.request,
+        inputFingerprint: audit.inputFingerprint,
         preflight: preflightRequirementEvidenceAudit(audit, {
           calls: 1,
           reservedTokens: 10096,
@@ -321,6 +334,12 @@ try {
                   ? 'evidence_completed_extraction'
                   : 'audit_completed_extraction',
                 extractionRequestId: selectedRequestId,
+                ...(eligibilityStage
+                  ? {
+                      evidenceVersion:
+                        'requirement-evidence-audit/v3-source-eligibility' as const,
+                    }
+                  : {}),
               },
         ),
     );

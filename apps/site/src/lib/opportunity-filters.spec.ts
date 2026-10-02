@@ -267,6 +267,32 @@ describe('matchesOpportunity', () => {
     ).toBe(true);
   });
 
+  it('uses a current source eligibility projection without treating it as a fit score', () => {
+    const record: AdminRecord = {
+      assessmentProjection: null,
+      sourceEligibilityProjection: {
+        eligibilityBucket: 'eligible',
+        reason: 'Current source fact.',
+        sourceStatus: 'current',
+        unresolvedConstraintFactKeys: [],
+      },
+    };
+    expect(
+      matchesOpportunity(
+        record,
+        filters({ eligibilityBuckets: ['eligible'] }),
+        matchAll,
+      ),
+    ).toBe(true);
+    expect(
+      matchesOpportunity(
+        record,
+        filters({ eligibilityBuckets: ['unknown'] }),
+        matchAll,
+      ),
+    ).toBe(false);
+  });
+
   it('filters explicit fresh freshness mode', () => {
     expect(
       matchesOpportunity(

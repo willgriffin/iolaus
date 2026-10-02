@@ -6,6 +6,9 @@ import {
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 
 export const REQUIREMENT_COVERAGE_VERSION = 'requirement-coverage/v1';
+/** A separate read view for exact introductory duty links in an actual extraction. */
+export const RECOVERABLE_PARTIAL_COVERAGE_VERSION =
+  'requirement-coverage-partial-recovery/v1-intro-duty-link';
 export const REQUIREMENT_COVERAGE_REPAIR_VERSION =
   'requirement-coverage-repair/v1-delta4096';
 export const REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION =
@@ -84,6 +87,20 @@ export interface CoverageLedger {
     deterministicHeadingClauseIds: string[];
     fingerprint: string;
   };
+}
+
+export interface RecoverablePartialCoverage {
+  version: typeof RECOVERABLE_PARTIAL_COVERAGE_VERSION;
+  /** Fingerprint of the original native extraction ledger, excluding audit cache. */
+  originalLedgerFingerprint: string;
+  /** All original source clauses and atomic rows, with only invalid links removed. */
+  ledger: CoverageLedger;
+  unresolvedClauses: Array<{
+    clauseId: string;
+    originalRequirementIds: string[];
+    reason: 'nonreciprocal_introductory_duty_link';
+  }>;
+  fingerprint: string;
 }
 
 export interface CoverageRepairProvenance {
@@ -984,5 +1001,140 @@ function validateCoverageStructure(
     errors,
     uncoveredClauseIds: [...uncovered],
     pendingContextClauseIds,
+  };
+}
+
+/**
+ * A partial-only read view for a narrow extraction mistake: a colon-ended
+ * introductory duty links to a row whose literal citation is solely the next
+ * bullet. The intro stays explicitly unresolved; its link cannot certify the
+ * row, and the original extraction ledger remains unchanged and unverified.
+ * Callers must independently attest the actual current GLOBAL extraction
+ * receipt and compare its original ledger fingerprint before using this view.
+ */
+export function recoverPartialRequirementCoverageFromCompletedExtraction(
+  context: RequirementCoverageContext,
+  original: CoverageLedger,
+): RecoverablePartialCoverage | undefined {
+  if (
+    context.extractionContract !== 'current' ||
+    original.audit !== undefined ||
+    original.repair !== undefined
+  )
+    return undefined;
+  const admission = validateRequirementCoverageAuditAdmission(
+    context,
+    original,
+  );
+  if (
+    admission.structuralComplete ||
+    !admission.errors.length ||
+    admission.pendingContextClauseIds.length
+  )
+    return undefined;
+
+  const unresolvedClauses: RecoverablePartialCoverage['unresolvedClauses'] = [];
+  const expectedErrors: string[] = [];
+  for (const [index, clause] of original.clauses.entries()) {
+    const disposition = original.dispositions[index];
+    if (disposition?.clauseId !== clause.id) return undefined;
+    for (const requirementId of disposition.requirementIds) {
+      const row = original.requirements.find(
+        (candidate) => candidate.id === requirementId,
+      );
+      if (row?.clauseIds.includes(clause.id)) continue;
+      const next = original.clauses[index + 1];
+      const nextDisposition = original.dispositions[index + 1];
+      if (
+        !row ||
+        disposition.type !== 'role_duty' ||
+        disposition.requirementIds.length !== 1 ||
+        disposition.exclusionRule !== undefined ||
+        disposition.auditPending !== undefined ||
+        clause.kind !== 'body' ||
+        !/^[^\n•-][^\n]*:$/u.test(clause.text) ||
+        !next ||
+        next.kind !== 'body' ||
+        next.section !== clause.section ||
+        next.spanStart <= clause.spanEnd ||
+        !/^[-•]\s+\S/u.test(next.text) ||
+        row.clauseIds.length !== 1 ||
+        row.clauseIds[0] !== next.id ||
+        nextDisposition?.clauseId !== next.id ||
+        nextDisposition.type !== 'role_duty' ||
+        !nextDisposition.requirementIds.includes(requirementId)
+      )
+        return undefined;
+      unresolvedClauses.push({
+        clauseId: clause.id,
+        originalRequirementIds: [requirementId],
+        reason: 'nonreciprocal_introductory_duty_link',
+      });
+      expectedErrors.push(
+        `Broken reciprocal requirement mapping: ${clause.id}/${requirementId}.`,
+      );
+    }
+  }
+  if (
+    !unresolvedClauses.length ||
+    admission.errors.length !== expectedErrors.length ||
+    admission.errors.some((error) => !expectedErrors.includes(error)) ||
+    admission.uncoveredClauseIds.length !== unresolvedClauses.length ||
+    admission.uncoveredClauseIds.some(
+      (id) => !unresolvedClauses.some((entry) => entry.clauseId === id),
+    )
+  )
+    return undefined;
+
+  const unresolvedIds = new Set(
+    unresolvedClauses.map((entry) => entry.clauseId),
+  );
+  const ledger: CoverageLedger = {
+    ...original,
+    clauses: original.clauses.map((clause) => ({ ...clause })),
+    requirements: original.requirements.map((row) => ({
+      ...row,
+      clauseIds: [...row.clauseIds],
+    })),
+    dispositions: original.dispositions.map((row) => ({
+      ...row,
+      requirementIds: unresolvedIds.has(row.clauseId)
+        ? []
+        : [...row.requirementIds],
+    })),
+  };
+  const recoveredAdmission = validateRequirementCoverageAuditAdmission(
+    context,
+    ledger,
+  );
+  if (
+    recoveredAdmission.structuralComplete ||
+    recoveredAdmission.errors.length !== unresolvedClauses.length ||
+    recoveredAdmission.errors.some(
+      (error) =>
+        !unresolvedClauses.some(
+          (entry) =>
+            error ===
+            `Material source clause has no lossless mapped requirement: ${entry.clauseId}.`,
+        ),
+    )
+  )
+    return undefined;
+  const { audit: _audit, ...originalMaterial } = original;
+  const originalLedgerFingerprint = hash(JSON.stringify(originalMaterial));
+  const version = RECOVERABLE_PARTIAL_COVERAGE_VERSION;
+  return {
+    version,
+    originalLedgerFingerprint,
+    ledger,
+    unresolvedClauses,
+    fingerprint: hash(
+      JSON.stringify({
+        version,
+        originalLedgerFingerprint,
+        ledger,
+        unresolvedClauses,
+      }),
+    ),
   };
 }

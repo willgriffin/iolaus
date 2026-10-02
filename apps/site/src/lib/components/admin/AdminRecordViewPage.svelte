@@ -30,6 +30,7 @@ import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
 import ResourceFormFields from './ResourceFormFields.svelte';
+import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 type AdminRecord = Record<string, unknown> & { id?: string };
 type ViewLinkAction = {
@@ -1015,6 +1016,7 @@ $effect(() => {
         <p>{assessmentProjection.reason || 'Assessment needs clarification.'}</p>
         <p>{hasCurrentAssessment ? 'Current for this posting and your selected candidate profile.' : 'Run Assess to assess this posting against your selected candidate profile.'}</p>
       {/if}
+      <SourceOpportunityEligibility projection={data.record.sourceEligibilityProjection} sourceContentFingerprint={data.record.sourceContentFingerprint} sourceContentVersion={data.record.sourceContentVersion} />
       <PartialOpportunityEvidence projection={data.record.partialAssessmentProjection} />
       <OpportunityVideoRequirements requirements={data.record.videoRequirements} />
     </section>

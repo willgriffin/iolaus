@@ -290,3 +290,60 @@ it('retains current full-assessment messaging when partial evidence is also pres
   expect(body).not.toContain('Overall fit not yet established');
   expect(body).not.toContain('Partial assessment');
 });
+
+const sourceConditionalEligibility = {
+  sourceStatus: 'current',
+  sourceContentFingerprint: 'conditional-source',
+  sourceContentVersion: 3,
+  eligibilityBucket: 'location_restriction',
+  reason: 'This role requires working in the United States.',
+  conditionalPaths: [
+    {
+      kind: 'sponsorship',
+      status: 'offered',
+      facts: [
+        {
+          key: 'sponsorship_offered',
+          citations: [
+            {
+              quote: 'We offer visa sponsorship.',
+              start: 20,
+              end: 46,
+              hash: 'attested-hash',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  unresolvedConstraintFactKeys: [],
+};
+
+it('shows the current posting restriction and sponsorship statement separately without granting authorization', () => {
+  const { body } = renderCard({
+    id: 'conditional',
+    title: 'US role',
+    sourceContentFingerprint: 'conditional-source',
+    sourceContentVersion: 3,
+    sourceEligibilityProjection: sourceConditionalEligibility,
+  });
+  expect(body).toContain('Posting work-location eligibility:');
+  expect(body).toContain('Location or authorization restriction');
+  expect(body).toContain('Sponsorship stated for this role');
+  expect(body).toContain('We offer visa sponsorship.');
+  expect(body).not.toContain('Eligible for your work location');
+  expect(body).not.toContain('Canada eligible');
+});
+
+it('hides cached conditional paths when the captured posting has changed on reload', () => {
+  const { body } = renderCard({
+    id: 'conditional-stale',
+    title: 'US role',
+    sourceContentFingerprint: 'refreshed-source',
+    sourceContentVersion: 4,
+    sourceEligibilityProjection: sourceConditionalEligibility,
+  });
+  expect(body).not.toContain('Posting work-location eligibility:');
+  expect(body).not.toContain('Sponsorship stated for this role');
+  expect(body).not.toContain('We offer visa sponsorship.');
+});

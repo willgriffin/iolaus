@@ -44,10 +44,13 @@ import {
   preflightRequirementCoverageAudit,
   preflightRequirementCoverageLifecycle,
   preflightRequirementEvidenceAudit,
+  prepareCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
-  prepareRequirementEvidenceAudit,
+  prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
+  readVerifiedOpportunitySourceEligibilityEvidence,
   requirementCoverageLedgerFingerprint,
   requirementCoverageSourceDependencyFingerprint,
   validateVerifiedRequirementCoverage,
@@ -58,10 +61,27 @@ import { requireSourceCrawlOperator } from './source-crawl-operator.js';
 
 export const SOURCE_COVERAGE_STAGE_JOB_CONTRACT =
   'native-source-coverage-stage/v1';
+export type SourceRequirementEvidenceVersion =
+  | typeof REQUIREMENT_EVIDENCE_AUDIT_VERSION
+  | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION;
 export type SourceCoverageStageSelection =
   | { stage: 'extract' }
   | { stage: 'audit_completed_extraction'; extractionRequestId: string }
-  | { stage: 'evidence_completed_extraction'; extractionRequestId: string };
+  | {
+      stage: 'evidence_completed_extraction';
+      extractionRequestId: string;
+      evidenceVersion?: SourceRequirementEvidenceVersion;
+    };
+function sourceRequirementEvidenceVersion(
+  value: unknown,
+): SourceRequirementEvidenceVersion {
+  if (
+    value !== REQUIREMENT_EVIDENCE_AUDIT_VERSION &&
+    value !== REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+  )
+    throw new Error('Source evidence audit contract is not current.');
+  return value;
+}
 type Row = Record<string, unknown>;
 type ReceiptDatabase = {
   query: (sql: string, params: unknown[]) => Promise<{ rows: Row[] }>;
@@ -275,6 +295,7 @@ export function preflightCompletedOpportunityRequirementEvidenceAudit(
   attested: AttestedCompletedSourceExtraction,
   options: {
     auditPricing: OpportunityIntelligenceBudgetConfig['pricing'];
+    auditContract?: SourceRequirementEvidenceVersion;
     limits?: OpportunityIntelligenceBudgetConfig['run'];
   },
 ) {
@@ -292,10 +313,22 @@ export function preflightCompletedOpportunityRequirementEvidenceAudit(
     );
   const limits =
     options.limits ?? resolveOpportunityIntelligenceBudgetConfig().run;
-  const preparedAudit = prepareRequirementEvidenceAudit(
-    attested.context,
-    attested.ledger,
+  // The composite factory is immutable and only adds video questions when the
+  // captured source has exact nominated clauses. This keeps the original
+  // evidence call authoritative for both coverage and video requirements.
+  const version = sourceRequirementEvidenceVersion(
+    options.auditContract ?? REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   );
+  const preparedAudit =
+    version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+      ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+          attested.context,
+          attested.ledger,
+        )
+      : prepareCompositeRequirementEvidenceAudit(
+          attested.context,
+          attested.ledger,
+        );
   const exact = preflightRequirementEvidenceAudit(
     preparedAudit,
     history,
@@ -365,6 +398,12 @@ export async function enqueueOpportunityRequirementCoverageSourceStage(
 ): Promise<SmrtJob> {
   identifier(opportunityId);
   requireSourceCrawlOperator();
+  const evidenceVersion =
+    selection.stage === 'evidence_completed_extraction'
+      ? sourceRequirementEvidenceVersion(
+          selection.evidenceVersion ?? REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+        )
+      : undefined;
   const args = withRuntimeWorkspaceSubject({});
   const subject = runtimeWorkspaceSubjectFromJobArgs(args);
   return await withOpportunityLifecycleLock(
@@ -427,7 +466,7 @@ export async function enqueueOpportunityRequirementCoverageSourceStage(
                 contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
                 stage: selection.stage,
                 ...(selection.stage === 'evidence_completed_extraction'
-                  ? { auditContract: REQUIREMENT_EVIDENCE_AUDIT_VERSION }
+                  ? { auditContract: evidenceVersion }
                   : {}),
                 ...(completed
                   ? {
@@ -457,6 +496,7 @@ interface SourceStageDependencies {
   audit?: typeof evaluateRequirementCoverageAudit;
   evidenceAudit?: typeof evaluateRequirementEvidenceAudit;
   readEvidence?: typeof readPartialOpportunityRequirementEvidence;
+  readEligibility?: typeof readVerifiedOpportunitySourceEligibilityEvidence;
   runFresh?: typeof runAsRevalidatedJobWorkspaceSubject;
   requireOperator?: typeof requireSourceCrawlOperator;
   withLock?: typeof withOpportunityLifecycleLock;
@@ -551,11 +591,10 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
           throw new Error(
             'Source stage requires an explicit native operator intent.',
           );
-        if (
-          intent.stage === 'evidence_completed_extraction' &&
-          intent.auditContract !== REQUIREMENT_EVIDENCE_AUDIT_VERSION
-        )
-          throw new Error('Source evidence audit contract is not current.');
+        const evidenceVersion =
+          intent.stage === 'evidence_completed_extraction'
+            ? sourceRequirementEvidenceVersion(intent.auditContract)
+            : undefined;
         const attest =
           dependencies.attest ?? attestCompletedOpportunitySourceExtraction;
         const completed =
@@ -688,6 +727,7 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
               };
               const plan =
                 preflightCompletedOpportunityRequirementEvidenceAudit(actual, {
+                  auditContract: evidenceVersion,
                   limits: resolveOpportunityIntelligenceBudgetConfig().run,
                   auditPricing: {
                     configured: true,
@@ -731,6 +771,7 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
               )({ ...current, preparedPostingJson });
               if (
                 !nativeEvidence ||
+                nativeEvidence.audit.version !== evidenceVersion ||
                 nativeEvidence.audit.requestId !== evidence.requestId ||
                 nativeEvidence.audit.fingerprint !== evidence.fingerprint ||
                 nativeEvidence.audit.inputFingerprint !==
@@ -741,11 +782,69 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 throw new Error(
                   'Completed source evidence lacks its exact native GLOBAL actual receipt.',
                 );
+              if (
+                evidenceVersion ===
+                REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+              ) {
+                const eligibility = await (
+                  dependencies.readEligibility ??
+                  readVerifiedOpportunitySourceEligibilityEvidence
+                )({ ...current, preparedPostingJson });
+                if (
+                  !eligibility ||
+                  eligibility.evidence.requestId !== evidence.requestId ||
+                  eligibility.evidence.aggregateFingerprint !==
+                    plan.preparedAudit.inputFingerprint ||
+                  eligibility.evidence.sourceContentFingerprint !==
+                    actual.context.sourceFingerprint ||
+                  eligibility.evidence.sourceContentVersion !==
+                    actual.context.sourceVersion ||
+                  eligibility.sourceContext.sourceContentFingerprint !==
+                    actual.context.sourceFingerprint ||
+                  eligibility.sourceContext.sourceContentVersion !==
+                    actual.context.sourceVersion ||
+                  eligibility.sourceContext.sourceText !==
+                    actual.context.sourceText
+                ) {
+                  throw new Error(
+                    'Completed source eligibility lacks its exact current native GLOBAL aggregate receipt.',
+                  );
+                }
+              }
+              const video = nativeEvidence.audit.video;
+              if (
+                video &&
+                (video.compositeInputFingerprint !==
+                  plan.preparedAudit.inputFingerprint ||
+                  video.sourceContentFingerprint !==
+                    actual.context.sourceFingerprint ||
+                  video.sourceContentVersion !== actual.context.sourceVersion ||
+                  video.videoRequirements.source.sourceContentFingerprint !==
+                    actual.context.sourceFingerprint ||
+                  video.videoRequirements.source.sourceContentVersion !==
+                    actual.context.sourceVersion)
+              )
+                throw new Error(
+                  'Completed source video evidence is not current for its exact composite receipt.',
+                );
+              const persistedPosting = JSON.stringify({
+                ...existing,
+                requirementCoverage: actual.ledger,
+                requirementCoverageEvidenceAudit: evidence,
+                // `readEvidence` replayed the actual GLOBAL receipt against the
+                // current source. Never publish the diagnostic/provider result
+                // itself as a video claim.
+                ...(video
+                  ? {
+                      opportunityVideoRequirements: video,
+                    }
+                  : {}),
+              });
               const saved = await persist(
                 opportunityId,
                 actual.context.sourceFingerprint,
                 {
-                  preparedPostingJson,
+                  preparedPostingJson: persistedPosting,
                   preparedPostingFingerprint: actual.posting.fingerprint,
                   preparedPostingVersion: actual.posting.version,
                   updated_at: new Date(),

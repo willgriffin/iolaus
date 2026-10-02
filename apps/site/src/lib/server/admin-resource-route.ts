@@ -66,8 +66,10 @@ import {
 } from './opportunity-intelligence-job';
 import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { opportunityWithSourceContent } from './opportunity-source-content';
+import { loadCurrentSourceEligibilityProjections } from './opportunity-source-eligibility-projection.js';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep';
 import { analyzeOpportunityVideoRequirements } from './opportunity-video-requirements';
+import { loadCurrentOpportunityVideoRequirementsProjections } from './opportunity-video-requirements-projection';
 import {
   isOwnerAuthorityDenial,
   type OwnerPrincipalLocals,
@@ -356,8 +358,10 @@ export async function attachOpportunityContext(
     agentRuns,
     companies,
     assessmentProjections,
+    sourceEligibilityProjections,
     partialAssessmentProjections,
     reviewOverlays,
+    videoRequirementsByOpportunity,
   ] = await Promise.all([
     subject
       ? listPrivateRecords('Application', subject, {
@@ -400,6 +404,12 @@ export async function attachOpportunityContext(
         })
       : Promise.resolve(new Map<string, unknown>()),
     subject
+      ? loadCurrentSourceEligibilityProjections({
+          opportunities: records,
+          subject,
+        })
+      : Promise.resolve(new Map()),
+    subject
       ? loadCurrentPartialOpportunityAssessmentProjections({
           opportunities: records,
           subject,
@@ -411,6 +421,7 @@ export async function attachOpportunityContext(
           subject,
         })
       : Promise.resolve(new Map<string, unknown>()),
+    loadCurrentOpportunityVideoRequirementsProjections(records),
   ]);
 
   const companyById = new Map<string, AdminRecord>();
@@ -482,17 +493,27 @@ export async function attachOpportunityContext(
       assessmentProjection: record.id
         ? (assessmentProjections.get(record.id) ?? null)
         : null,
-      videoRequirements: analyzeOpportunityVideoRequirements(
-        String(opportunityWithSourceContent(record).descriptionRaw ?? ''),
-        {
-          sourceContentFingerprint:
-            typeof record.sourceContentFingerprint === 'string'
-              ? record.sourceContentFingerprint
-              : undefined,
-          sourceContentVersion:
-            Number(record.sourceContentVersion) || undefined,
-        },
-      ),
+      // Kept independent from a full assessment: source eligibility cannot
+      // imply a candidate fit score, but it is eligible for profile-safe
+      // list/triage filters while its GLOBAL receipt is current.
+      sourceEligibilityProjection: record.id
+        ? (sourceEligibilityProjections.get(record.id) ?? null)
+        : null,
+      videoRequirements:
+        (record.id
+          ? (videoRequirementsByOpportunity.get(record.id) ?? null)
+          : null) ??
+        analyzeOpportunityVideoRequirements(
+          String(opportunityWithSourceContent(record).descriptionRaw ?? ''),
+          {
+            sourceContentFingerprint:
+              typeof record.sourceContentFingerprint === 'string'
+                ? record.sourceContentFingerprint
+                : undefined,
+            sourceContentVersion:
+              Number(record.sourceContentVersion) || undefined,
+          },
+        ),
       partialAssessmentProjection: record.id
         ? (partialAssessmentProjections.get(record.id) ?? null)
         : null,

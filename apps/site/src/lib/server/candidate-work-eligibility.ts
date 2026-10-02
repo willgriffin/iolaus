@@ -1,7 +1,11 @@
+import {
+  type CountryReference,
+  normalizeCountryReference,
+  normalizeCountryReferences,
+} from './country-reference.js';
 import type {
   CandidateWorkAuthorization,
   CandidateWorkEligibility,
-  CountryReference,
 } from './opportunity-assessment.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -27,23 +31,11 @@ function parse(value: unknown): unknown {
 
 /** Accept only an explicit ISO alpha-2 code paired with a human label. */
 function country(value: unknown): CountryReference | undefined {
-  const source = record(value);
-  const code = text(source?.code).toUpperCase();
-  const label = text(source?.label);
-  if (!/^[A-Z]{2}$/.test(code) || !label || label.length > 120)
-    return undefined;
-  return { code, label };
+  return normalizeCountryReference(value);
 }
 
 function countries(value: unknown): CountryReference[] {
-  const unique = new Map<string, CountryReference>();
-  for (const entry of Array.isArray(value) ? value : []) {
-    const next = country(entry);
-    if (next && !unique.has(next.code)) unique.set(next.code, next);
-  }
-  return [...unique.values()].sort((left, right) =>
-    left.code.localeCompare(right.code),
-  );
+  return normalizeCountryReferences(value);
 }
 
 function authorizations(value: unknown): CandidateWorkAuthorization[] {

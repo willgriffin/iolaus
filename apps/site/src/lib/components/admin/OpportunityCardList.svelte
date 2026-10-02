@@ -53,6 +53,7 @@ import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte'
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
+import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 type WorkflowOption = { label: string; value: string };
 type SignalFilterKey =
@@ -921,6 +922,7 @@ const resultCountLabel = $derived.by(() => {
           </a>
         {/if}
       </div>
+      <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} compact />
     {:else if column.id === 'company'}
       <span class="table-meta"><Building2 size={13} strokeWidth={2.2} /> {companyLabel(record)}</span>
     {:else if column.id === 'location'}

@@ -359,7 +359,7 @@ export function matchesOpportunity(
   if (filters.eligibilityBuckets.length > 0) {
     if (
       !matchesAssessmentEligibility(
-        record.assessmentProjection,
+        record.sourceEligibilityProjection ?? record.assessmentProjection,
         filters.eligibilityBuckets,
       )
     )
@@ -447,8 +447,8 @@ export function sortOpportunities(
         break;
       case 'eligibility':
         primary = compareAssessmentEligibility(
-          left.assessmentProjection,
-          right.assessmentProjection,
+          left.sourceEligibilityProjection ?? left.assessmentProjection,
+          right.sourceEligibilityProjection ?? right.assessmentProjection,
         );
         break;
       case 'cited_support':
@@ -477,8 +477,8 @@ export function sortOpportunities(
         primary =
           statusRank(left) - statusRank(right) ||
           compareAssessmentEligibility(
-            left.assessmentProjection,
-            right.assessmentProjection,
+            left.sourceEligibilityProjection ?? left.assessmentProjection,
+            right.sourceEligibilityProjection ?? right.assessmentProjection,
           ) ||
           compare(score(left), score(right), 'desc');
     }

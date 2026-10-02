@@ -6,6 +6,10 @@ import {
   normalizeAnswerLabel,
   reusableAnswerLabelKey,
 } from './candidate-answers.js';
+import {
+  countryReferenceFromCode,
+  normalizeCountryReferences,
+} from './country-reference.js';
 import { getDbConfig } from './db.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
@@ -267,25 +271,13 @@ function stringValue(value: unknown, maximum = MAX_FACT_LENGTH): string {
   return text;
 }
 
-function countryReference(
-  value: unknown,
-): { code: string; label: string } | undefined {
-  const code = stringValue(value, 8).toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return undefined;
-  const label = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
-  return label ? { code, label } : undefined;
+function countryReference(value: unknown) {
+  return countryReferenceFromCode(stringValue(value, 8));
 }
 
-function countryReferences(
-  values: string[] | undefined,
-): Array<{ code: string; label: string }> {
-  const unique = new Map<string, { code: string; label: string }>();
-  for (const value of values ?? []) {
-    const next = countryReference(value);
-    if (next && !unique.has(next.code)) unique.set(next.code, next);
-  }
-  return [...unique.values()].sort((left, right) =>
-    left.code.localeCompare(right.code),
+function countryReferences(values: string[] | undefined) {
+  return normalizeCountryReferences(
+    (values ?? []).map((value) => countryReference(value)),
   );
 }
 

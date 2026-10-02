@@ -22,6 +22,7 @@ import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte'
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
+import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 /**
  * One triage card: the job description is the body, on the left; the right
@@ -182,6 +183,7 @@ const facts = $derived(
           <p class="muted">{message}</p>
         {/each}
       {/if}
+      <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} />
       <PartialOpportunityEvidence projection={record.partialAssessmentProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>

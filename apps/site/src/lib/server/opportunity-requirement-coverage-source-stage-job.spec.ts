@@ -1,3 +1,4 @@
+import type { DecisionResult } from '@happyvertical/ai';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
 import type { JobExecutionContext, SmrtJob } from '@happyvertical/smrt-jobs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +13,7 @@ import {
   type PreparedRequirementEvidenceAudit,
   partialRequirementEvidenceFromAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   requirementCoverageLedgerFingerprint,
   resolveRequirementCoverageAudit,
   resolveRequirementEvidenceAudit,
@@ -76,11 +78,11 @@ const subject = {
   userId: 'user-1',
   profileId: 'profile-1',
 };
-function fixture() {
+function fixture(descriptionRaw = 'Requirements\nBuild reliable software.') {
   const opportunity: Record<string, unknown> = {
     id: 'opportunity-1',
     title: 'Source stage role',
-    descriptionRaw: 'Requirements\nBuild reliable software.',
+    descriptionRaw,
     sourceContentFingerprint: 'source-1',
     sourceContentVersion: 1,
   };
@@ -552,7 +554,7 @@ describe('native staged source job fences', () => {
       '1',
     );
     const audit: typeof import('./opportunity-requirement-coverage-provider.js').evaluateRequirementCoverageAudit =
-      vi.fn(async (prepared: PreparedRequirementEvidenceAudit) => {
+      vi.fn(async (prepared) => {
         const result = resolveRequirementCoverageAudit(
           prepared,
           {
@@ -658,7 +660,7 @@ describe('native staged source job fences', () => {
       | ReturnType<typeof partialRequirementEvidenceFromAudit>
       | undefined;
     const evidenceAudit: typeof import('./opportunity-requirement-coverage-provider.js').evaluateRequirementEvidenceAudit =
-      vi.fn(async (prepared) => {
+      vi.fn(async (prepared: PreparedRequirementEvidenceAudit) => {
         const audit = resolveRequirementEvidenceAudit(
           prepared,
           {
@@ -740,6 +742,285 @@ describe('native staged source job fences', () => {
     expect(j.deps.startRun).not.toHaveBeenCalled();
     if (caseName !== 'contract')
       expect(j.job.args.sourcePreparationAgentRunId).toBe('original-run');
+  });
+  it.each([
+    'published',
+    'missing-eligibility',
+    'foreign-eligibility',
+    'stale-eligibility-context',
+    'budget',
+  ])('explicit V3 native evidence enforces %s against the original lifecycle', async (caseName) => {
+    const f = fixture('Requirements\nBuild reliable software in Canada.');
+    const completed = await attestCompletedOpportunitySourceExtraction(
+      f.opportunity,
+      'native-request-1',
+      f.db,
+    );
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      retained: 'original-checkpoint',
+      requirementCoverage: completed.ledger,
+    });
+    const originalJson = f.opportunity.preparedPostingJson;
+    if (caseName === 'budget')
+      completed.reservation = {
+        calls: 2,
+        reservedTokens: 79999,
+        spendMicros: 99999,
+      };
+    const j = jobFixture(f.opportunity, {
+      contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
+      stage: 'evidence_completed_extraction',
+      auditContract: REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+      extractionRequestId: completed.requestId,
+      extractionInputFingerprint: completed.context.extractionFingerprint,
+      ledgerFingerprint: completed.ledgerFingerprint,
+    });
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION', '1');
+    vi.stubEnv(
+      'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+      '1',
+    );
+    let recorded:
+      | ReturnType<typeof partialRequirementEvidenceFromAudit>
+      | undefined;
+    const evidenceAudit: NonNullable<Dependencies['evidenceAudit']> = vi.fn(
+      async (
+        prepared: PreparedRequirementEvidenceAudit,
+        options: Parameters<NonNullable<Dependencies['evidenceAudit']>>[1],
+      ) => {
+        expect(prepared.version).toBe(
+          REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+        );
+        expect(prepared.sourceEligibility).toBeDefined();
+        expect(options.agentRunId).toBe('original-run');
+        expect(options.historicalReservation).toEqual(completed.reservation);
+        const answers: DecisionResult['answers'] = Object.fromEntries(
+          Object.entries(prepared.request.questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? {
+                  type: 'choice',
+                  choice: 'none',
+                  confidence: 1,
+                  probabilities: Object.fromEntries(
+                    Object.keys(question.criteria).map((choice) => [
+                      choice,
+                      choice === 'none' ? 1 : 0,
+                    ]),
+                  ),
+                }
+              : {
+                  type: 'predicate',
+                  probability:
+                    key.startsWith('source_eligibility__') &&
+                    !key.startsWith('source_eligibility__coverage__')
+                      ? 0.1
+                      : 0.999,
+                },
+          ]),
+        );
+        const audit = resolveRequirementEvidenceAudit(
+          prepared,
+          {
+            model: 'jev-test',
+            provenance: { model: 'jev-test', provider: 'typesafe' },
+            answers,
+          },
+          'native-v3-request',
+        );
+        recorded = partialRequirementEvidenceFromAudit(prepared, audit);
+        return audit;
+      },
+    );
+    const readEligibility: NonNullable<Dependencies['readEligibility']> = vi.fn(
+      async () => {
+        if (
+          caseName === 'missing-eligibility' ||
+          !recorded?.audit.sourceEligibility
+        )
+          return undefined;
+        return {
+          evidence: {
+            ...recorded.audit.sourceEligibility,
+            ...(caseName === 'foreign-eligibility'
+              ? { requestId: 'foreign-request' }
+              : {}),
+          },
+          sourceContext: {
+            sourceText: completed.context.sourceText,
+            sourceContentFingerprint: completed.context.sourceFingerprint,
+            sourceContentVersion:
+              caseName === 'stale-eligibility-context'
+                ? 2
+                : completed.context.sourceVersion,
+          },
+        };
+      },
+    );
+    const update = vi.fn(
+      async (_id: string, _fp: string, updates: Record<string, unknown>) => {
+        Object.assign(f.opportunity, updates);
+        return true;
+      },
+    );
+    const result = runOpportunityRequirementCoverageSourceStageJob(
+      'opportunity-1',
+      j.context,
+      subject,
+      {
+        ...j.deps,
+        attest: vi.fn(async () => completed),
+        evidenceAudit,
+        readEvidence: vi.fn(async () => recorded),
+        readEligibility,
+        transaction: async <T>(work: (db: TransactionDatabase) => Promise<T>) =>
+          await work({} as TransactionDatabase),
+        update,
+      },
+    );
+    if (caseName === 'published') {
+      await expect(result).resolves.toMatchObject({ status: 'processed' });
+      expect(readEligibility).toHaveBeenCalledOnce();
+      expect(update).toHaveBeenCalledOnce();
+      const saved = JSON.parse(String(f.opportunity.preparedPostingJson));
+      expect(saved.retained).toBe('original-checkpoint');
+      expect(saved.requirementCoverage.audit).toBeUndefined();
+      expect(saved.requirementCoverageEvidenceAudit).toMatchObject({
+        version: REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+        requestId: 'native-v3-request',
+        sourceEligibility: {
+          requestId: 'native-v3-request',
+          sourceContentFingerprint: 'source-1',
+          sourceContentVersion: 1,
+        },
+      });
+    } else {
+      await expect(result).rejects.toThrow();
+      expect(update).not.toHaveBeenCalled();
+      expect(f.opportunity.preparedPostingJson).toBe(originalJson);
+    }
+    if (caseName === 'budget') {
+      expect(evidenceAudit).not.toHaveBeenCalled();
+      expect(readEligibility).not.toHaveBeenCalled();
+    } else expect(evidenceAudit).toHaveBeenCalledOnce();
+    expect(j.deps.extract).not.toHaveBeenCalled();
+    expect(j.deps.audit).not.toHaveBeenCalled();
+    expect(j.deps.startRun).not.toHaveBeenCalled();
+  });
+  it('persists a video finding only from the attested composite GLOBAL receipt', async () => {
+    const f = fixture(
+      'Requirements\nBuild reliable software. You must submit a recorded video introduction with your application.',
+    );
+    const completed = await attestCompletedOpportunitySourceExtraction(
+      f.opportunity,
+      'native-request-1',
+      f.db,
+    );
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: completed.ledger,
+    });
+    const j = jobFixture(f.opportunity, {
+      contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
+      stage: 'evidence_completed_extraction',
+      auditContract: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      extractionRequestId: completed.requestId,
+      extractionInputFingerprint: completed.context.extractionFingerprint,
+      ledgerFingerprint: completed.ledgerFingerprint,
+    });
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION', '1');
+    vi.stubEnv(
+      'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+      '1',
+    );
+    let recorded:
+      | ReturnType<typeof partialRequirementEvidenceFromAudit>
+      | undefined;
+    const evidenceAudit: typeof import('./opportunity-requirement-coverage-provider.js').evaluateRequirementEvidenceAudit =
+      vi.fn(async (prepared: PreparedRequirementEvidenceAudit) => {
+        expect(prepared.video?.keys).toBeDefined();
+        const answers: Record<string, unknown> = Object.fromEntries(
+          Object.entries(prepared.bindings).map(([key]) => [
+            key,
+            { type: 'predicate', probability: 0.999 },
+          ]),
+        );
+        const recordingClause = prepared.video?.prepared.clauses.find(
+          (clause) => clause.quote.includes('recorded video introduction'),
+        );
+        if (!recordingClause)
+          throw new Error('Expected exact nominated recording clause.');
+        expect(
+          prepared.video?.prepared.sourceText.slice(
+            recordingClause.spanStart,
+            recordingClause.spanEnd,
+          ),
+        ).toBe(recordingClause.quote);
+        for (const [aggregate, leaf] of Object.entries(
+          prepared.video?.keys ?? {},
+        )) {
+          const isRequiredRecording =
+            leaf === 'recorded_application_video_required';
+          const isRequiredRecordingEvidence =
+            leaf === 'recorded_application_video_required_evidence';
+          answers[aggregate] = leaf.endsWith('_evidence')
+            ? {
+                type: 'choice',
+                choice: isRequiredRecordingEvidence
+                  ? recordingClause.id
+                  : 'none',
+                confidence: 0.999,
+              }
+            : {
+                type: 'predicate',
+                probability: isRequiredRecording ? 0.999 : 0.1,
+              };
+        }
+        const audit = resolveRequirementEvidenceAudit(
+          prepared,
+          {
+            model: 'jev-test',
+            provenance: { model: 'jev-test', provider: 'typesafe' },
+            answers: answers as DecisionResult['answers'],
+          },
+          'native-evidence-request',
+        );
+        recorded = partialRequirementEvidenceFromAudit(prepared, audit);
+        return audit;
+      });
+    const update = vi.fn(
+      async (_id: string, _fp: string, updates: Record<string, unknown>) => {
+        Object.assign(f.opportunity, updates);
+        return true;
+      },
+    );
+    const result = await runOpportunityRequirementCoverageSourceStageJob(
+      'opportunity-1',
+      j.context,
+      subject,
+      {
+        ...j.deps,
+        attest: vi.fn(async () => completed),
+        evidenceAudit,
+        readEvidence: vi.fn(async () => recorded),
+        transaction: async <T>(work: (db: TransactionDatabase) => Promise<T>) =>
+          await work({} as TransactionDatabase),
+        update,
+      },
+    );
+
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(evidenceAudit).toHaveBeenCalledOnce();
+    const saved = JSON.parse(String(f.opportunity.preparedPostingJson));
+    expect(saved.opportunityVideoRequirements).toMatchObject({
+      requestId: 'native-evidence-request',
+      compositeInputFingerprint: expect.any(String),
+      sourceContentFingerprint: 'source-1',
+      sourceContentVersion: 1,
+      videoRequirements: {
+        recordedSubmission: { status: 'required' },
+        liveInterview: { status: 'unknown' },
+      },
+    });
   });
   it('excess historical reservation retains unverified checkpoint, reuses original run and makes zero provider calls', async () => {
     const f = fixture();

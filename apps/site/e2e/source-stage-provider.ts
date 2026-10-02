@@ -147,17 +147,61 @@ export async function startSourceStageProvider(
           key.endsWith('_support'),
         );
         const rejectedSupport = supportKeys.at(-1);
+        const eligibilityClauses = Array.isArray(
+          object(body.state).sourceEligibilityClauses,
+        )
+          ? (object(body.state).sourceEligibilityClauses as Json[])
+          : [];
         const answers = Object.fromEntries(
           Object.entries(questions).map(([key, value]) => {
-            if (object(value).type !== 'noul')
-              throw new Error('Exact v6 predicate wire contract required');
+            const question = object(value);
+            if (question.type === 'choice') {
+              if (
+                !key.startsWith('source_eligibility__') ||
+                !key.endsWith('__evidence')
+              )
+                throw new Error('Unexpected fictional stage choice');
+              const criteria = object(question.criteria);
+              const witness =
+                key === 'source_eligibility__remote_available__evidence'
+                  ? eligibilityClauses.find(
+                      (row) => row.text === 'Remote role.',
+                    )?.id
+                  : undefined;
+              const selected =
+                typeof witness === 'string' && Object.hasOwn(criteria, witness)
+                  ? witness
+                  : 'none';
+              if (!Object.hasOwn(criteria, selected))
+                throw new Error('Native eligibility choice options missing');
+              return [
+                key,
+                {
+                  type: 'choice',
+                  choice: selected,
+                  confidence: 1,
+                  probabilities: Object.fromEntries(
+                    Object.keys(criteria).map((candidate) => [
+                      candidate,
+                      candidate === selected ? 1 : 0,
+                    ]),
+                  ),
+                },
+              ];
+            }
+            if (question.type !== 'noul')
+              throw new Error('Exact source predicate wire contract required');
             return [
               key,
               {
                 type: 'noul',
-                noul:
-                  key.endsWith('_contains_candidate_criterion') ||
-                  (options.partialEvidence && key.endsWith('_criterion'))
+                noul: key.startsWith('source_eligibility__')
+                  ? key.startsWith('source_eligibility__coverage__') ||
+                    key === 'source_eligibility__remote_available'
+                    ? 0.99
+                    : 0.01
+                  : key.endsWith('_contains_candidate_criterion') ||
+                      (options.partialEvidence && key.endsWith('_criterion'))
                     ? 0.01
                     : options.partialEvidence && key === rejectedSupport
                       ? 0.2

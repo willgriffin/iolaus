@@ -109,6 +109,42 @@ export function getOpportunityAssessmentProjection(
   };
 }
 
+/**
+ * A current source-eligibility fact can drive eligibility filters before a
+ * full candidate assessment exists. It intentionally carries no fit score and
+ * therefore cannot make score sorting or stars look authoritative.
+ */
+export function getOpportunityEligibilityProjection(
+  assessment?: unknown,
+): OpportunityAssessmentProjection {
+  const full = getOpportunityAssessmentProjection(assessment);
+  if (full.sourceStatus === 'current') return full;
+  if (
+    !assessment ||
+    typeof assessment !== 'object' ||
+    Array.isArray(assessment)
+  )
+    return full;
+  const value = assessment as Record<string, unknown>;
+  const bucket = value.eligibilityBucket;
+  if (
+    value.sourceStatus !== 'current' ||
+    !ASSESSMENT_ELIGIBILITY_BUCKETS.includes(
+      bucket as AssessmentEligibilityBucket,
+    )
+  )
+    return full;
+  return {
+    buckets: [bucket as AssessmentEligibilityBucket],
+    sourceStatus: 'current',
+    matchReadiness: 'unknown',
+    coverage: null,
+    eligibilityPriority: priority[bucket as AssessmentEligibilityBucket],
+    fitScore: 0,
+    reason: typeof value.reason === 'string' ? value.reason : '',
+  };
+}
+
 function consistentAssessmentReadiness(
   value: unknown,
   coverage: OpportunityAssessmentProjection['coverage'],
@@ -189,7 +225,7 @@ export function matchesAssessmentEligibility(
   return (
     selected.length === 0 ||
     selected.some((bucket) =>
-      getOpportunityAssessmentProjection(assessment).buckets.includes(bucket),
+      getOpportunityEligibilityProjection(assessment).buckets.includes(bucket),
     )
   );
 }
@@ -198,8 +234,8 @@ export function compareAssessmentEligibility(
   left: unknown,
   right: unknown,
 ): number {
-  const a = getOpportunityAssessmentProjection(left);
-  const b = getOpportunityAssessmentProjection(right);
+  const a = getOpportunityEligibilityProjection(left);
+  const b = getOpportunityEligibilityProjection(right);
   return (
     a.eligibilityPriority - b.eligibilityPriority ||
     (a.matchReadiness === 'assessable' && b.matchReadiness === 'assessable'

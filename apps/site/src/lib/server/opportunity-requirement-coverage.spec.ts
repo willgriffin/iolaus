@@ -12,12 +12,14 @@ import {
   mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
   prepareRequirementCoverageRepair,
+  RECOVERABLE_PARTIAL_COVERAGE_VERSION,
   REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
   REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
   REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION,
   REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION,
   type RequirementCoverageContext,
   type RequirementCoverageExtractionContract,
+  recoverPartialRequirementCoverageFromCompletedExtraction,
   requirementCoverageContextForOpportunity,
   requirementCoverageExtractionClauses,
   validatePreparedRequirementCoverageRepair,
@@ -787,6 +789,146 @@ describe('exact source requirement coverage', () => {
         preparedPostingFingerprint: 'changed',
       }).extractionFingerprint,
     ).not.toBe(first.extractionFingerprint);
+  });
+});
+
+describe('partial-only introductory duty recovery', () => {
+  function actualShape() {
+    const sourceText = [
+      'What you’ll do',
+      'Ship new capabilities users love:',
+      '- Design and ship new Command skills.',
+      'Own the LLM layer:',
+      '- Maintain and evolve Command prompt architecture.',
+      'Build quality in:',
+      '- Write and expand Command eval harness.',
+    ].join('\n');
+    const context: RequirementCoverageContext = {
+      extractionContract: 'current',
+      sourceText,
+      sourceFingerprint: 'actual-current-source',
+      sourceVersion: 1,
+      extractionFingerprint: 'actual-current-extraction',
+      preparedFingerprint: 'actual-current-prepared',
+    };
+    const ledger = buildRequirementCoverageSource(context);
+    for (const [intro, bullet, id] of [
+      [1, 2, 'r4'],
+      [3, 4, 'r10'],
+      [5, 6, 'r16'],
+    ] as const) {
+      const cited = ledger.clauses[bullet]!;
+      ledger.requirements.push({
+        id,
+        text: cited.text.slice(2),
+        clauseIds: [cited.id],
+        importance: 'unknown',
+      });
+      ledger.dispositions[intro] = {
+        clauseId: ledger.clauses[intro]!.id,
+        type: 'role_duty',
+        requirementIds: [id],
+      };
+      ledger.dispositions[bullet] = {
+        clauseId: cited.id,
+        type: 'role_duty',
+        requirementIds: [id],
+      };
+    }
+    return { context, ledger };
+  }
+
+  it('retains every exact clause and row while exposing only extra intro links as unresolved', () => {
+    const { context, ledger } = actualShape();
+    const original = structuredClone(ledger);
+    const strict = validateRequirementCoverageAuditAdmission(context, ledger);
+    expect(strict.errors).toHaveLength(3);
+    expect(strict.uncoveredClauseIds).toEqual([
+      ledger.clauses[1]!.id,
+      ledger.clauses[3]!.id,
+      ledger.clauses[5]!.id,
+    ]);
+    const recovered = recoverPartialRequirementCoverageFromCompletedExtraction(
+      context,
+      ledger,
+    );
+    expect(recovered).toMatchObject({
+      version: RECOVERABLE_PARTIAL_COVERAGE_VERSION,
+      unresolvedClauses: [
+        { clauseId: ledger.clauses[1]!.id, originalRequirementIds: ['r4'] },
+        { clauseId: ledger.clauses[3]!.id, originalRequirementIds: ['r10'] },
+        { clauseId: ledger.clauses[5]!.id, originalRequirementIds: ['r16'] },
+      ],
+    });
+    expect(
+      recovered?.unresolvedClauses.every(
+        (row) => row.reason === 'nonreciprocal_introductory_duty_link',
+      ),
+    ).toBe(true);
+    expect(recovered?.ledger.clauses).toEqual(ledger.clauses);
+    expect(recovered?.ledger.requirements).toEqual(ledger.requirements);
+    expect(
+      recovered?.ledger.dispositions.map((row) => row.requirementIds),
+    ).toEqual([[], [], ['r4'], [], ['r10'], [], ['r16']]);
+    expect(recovered?.originalLedgerFingerprint).toBe(
+      createHash('sha256').update(JSON.stringify(ledger)).digest('hex'),
+    );
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(context, ledger)
+        ?.fingerprint,
+    ).toBe(recovered?.fingerprint);
+    expect(
+      validateRequirementCoverageAuditAdmission(context, recovered?.ledger)
+        .structuralComplete,
+    ).toBe(false);
+    expect(ledger).toEqual(original);
+  });
+
+  it('refuses missing rows, ambiguous links, altered source spans, and unrelated reciprocal faults', () => {
+    const { context, ledger } = actualShape();
+    const missing = structuredClone(ledger);
+    missing.requirements = missing.requirements.filter(
+      (row) => row.id !== 'r4',
+    );
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(
+        context,
+        missing,
+      ),
+    ).toBeUndefined();
+
+    const ambiguous = structuredClone(ledger);
+    ambiguous.dispositions[1]!.requirementIds.push('r10');
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(
+        context,
+        ambiguous,
+      ),
+    ).toBeUndefined();
+
+    const forgedSpan = structuredClone(ledger);
+    forgedSpan.clauses[2]!.spanStart += 1;
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(
+        context,
+        forgedSpan,
+      ),
+    ).toBeUndefined();
+
+    const unrelated = structuredClone(ledger);
+    unrelated.dispositions[2]!.requirementIds.push('r10');
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(
+        context,
+        unrelated,
+      ),
+    ).toBeUndefined();
+    expect(
+      recoverPartialRequirementCoverageFromCompletedExtraction(
+        { ...context, extractionContract: 'paid-v4-coverage-only4096' },
+        ledger,
+      ),
+    ).toBeUndefined();
   });
 });
 

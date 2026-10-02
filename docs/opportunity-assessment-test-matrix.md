@@ -223,6 +223,36 @@ retains the full native clause, UTF-16 span and hash and prevents full coverage.
 Context is certified only at raw probability at most 0.15; headings use native
 proof, never invented model probabilities. Importance remains unknown.
 
+The current `requirement-evidence-audit/v2-row-relevance` path instead requires
+independent literal support and applicant relevance for each accepted row, both
+at least 0.85. A rejected company-context sibling leaves its exact clause
+unresolved without suppressing a separately verified applicant criterion.
+Whole-clause recall remains independent. Explicit v1 replay preserves its
+original request, answer layout and fingerprints; old receipts do not acquire
+invented relevance answers. An optional video section is hashed before transport,
+uses reserved keys, and retains its original typed answers and exact citations.
+
+The explicit `requirement-evidence-audit/v3-source-eligibility` aggregate adds
+public source facts without changing the default v2 request. Native raw text
+nominates canonical countries and exact witness choices; nominations alone are
+not facts. A fact needs both an affirmative predicate and a selected offered
+witness at least 0.85. Country overflow withholds scope coverage. The three
+geography, authorization and work-arrangement scope checks remain independent;
+incomplete coverage cannot affirm private eligibility. The reader reconstructs
+the entire result from a current, succeeded GLOBAL request/result with positive
+actual usage. Persisted JSON, old v1/v2 receipts, and diagnostic results cannot
+supply source eligibility facts. Candidate comparison remains private.
+
+The explicit `requirement-evidence-audit/v4-reciprocal-uncertainty` path admits
+only the native helper's narrowly recognized broken introductory-duty links.
+All original rows and literal clauses remain intact. Those introductions are
+retained with their original IDs and exact spans as unresolved source mappings,
+not converted to context or certified by another row. The evaluator requires a
+fresh completed GLOBAL extraction attestation matching the original request,
+ledger, AgentRun and historical reservations before governance. The reader
+independently checks that original receipt as well as the actual v4 audit.
+The default strict full audit and prior v1/v2/v3 request layouts stay unchanged.
+
 `partialAssessmentEvidence` is an explicit server opt-in. The partial reader
 requires the new canonical feature/schema's completed GLOBAL request/result,
 actual positive accounted usage and current source identity; diagnostic TEMP

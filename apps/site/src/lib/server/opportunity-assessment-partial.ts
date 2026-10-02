@@ -21,7 +21,9 @@ import {
 import {
   type PartialOpportunityRequirementEvidence,
   partialRequirementEvidenceFromAudit,
+  prepareCompositeRequirementEvidenceAudit,
   prepareRequirementEvidenceAudit,
+  prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   readPartialOpportunityRequirementEvidence,
 } from './opportunity-requirement-coverage-provider.js';
 import {
@@ -173,10 +175,21 @@ export function preparePartialOpportunityAssessment(input: {
   )
     throw new Error('Candidate evidence identities must be unique.');
   const canonicalEvidence = partialRequirementEvidenceFromAudit(
-    prepareRequirementEvidenceAudit(
-      input.evidence.context,
-      input.evidence.ledger,
-    ),
+    input.evidence.audit.sourceEligibility
+      ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+          input.evidence.context,
+          input.evidence.ledger,
+        )
+      : input.evidence.audit.video
+        ? prepareCompositeRequirementEvidenceAudit(
+            input.evidence.context,
+            input.evidence.ledger,
+          )
+        : prepareRequirementEvidenceAudit(
+            input.evidence.context,
+            input.evidence.ledger,
+            { version: input.evidence.audit.version },
+          ),
     input.evidence.audit,
   );
   if (

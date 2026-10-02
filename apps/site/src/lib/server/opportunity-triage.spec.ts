@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   attachOpportunityContext: vi.fn(async (records: unknown[]) => records),
   count: vi.fn(async () => 0),
   citedSupport: vi.fn(async () => new Map()),
+  sourceEligibility: vi.fn(async () => new Map()),
   dbConfig: vi.fn(() => ({ type: 'postgres' })),
   currentScores: vi.fn(async (_ids: string[]) => new Map()),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -26,6 +27,7 @@ vi.mock('./admin-opportunity-query', () => ({
   countOpportunityRecords: mocks.count,
   listOpportunityPageIds: mocks.pageIds,
   loadCurrentCitedOpportunitySupport: mocks.citedSupport,
+  loadCurrentSourceOpportunityEligibility: mocks.sourceEligibility,
   normalizeOpportunityRecommendation: (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : '',
 }));
@@ -106,6 +108,7 @@ describe('opportunity triage preset', () => {
     for (const mock of Object.values(mocks)) mock.mockClear();
     mocks.count.mockResolvedValue(0);
     mocks.citedSupport.mockResolvedValue(new Map());
+    mocks.sourceEligibility.mockResolvedValue(new Map());
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
@@ -186,6 +189,56 @@ describe('opportunity triage preset', () => {
       expect(mocks.citedSupport).toHaveBeenCalledWith(TEST_WORKSPACE_SUBJECT);
     });
   }
+
+  it('uses sparse source/profile eligibility before SQLite filter and page selection, rejecting changed source identities and forged scalars', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue(
+      ['current', 'stale', 'forged'].map((id) => ({
+        id,
+        status: 'found',
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: id === 'stale' ? 2 : 1,
+        sourceEligibilityProjection: {
+          eligibilityBucket: 'eligible',
+          sourceStatus: 'current',
+        },
+      })),
+    );
+    mocks.sourceEligibility.mockResolvedValue(
+      new Map(
+        ['current', 'stale'].map((id) => [
+          id,
+          {
+            sourceContentFingerprint: `fp-${id}`,
+            sourceContentVersion: 1,
+            projection: {
+              eligibilityBucket: 'eligible',
+              sourceStatus: 'current',
+              reason: 'Actual source/profile replay',
+              unresolvedConstraintFactKeys: [],
+            },
+          },
+        ]),
+      ),
+    );
+    const { loadTriageQueue } = await triage();
+    const result = await loadTriageQueue({
+      context: 'list',
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        eligibilityBuckets: ['eligible'],
+        sort: 'eligibility',
+      },
+      hydrateContext: false,
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      limit: 1,
+    });
+    expect(result.total).toBe(1);
+    expect(result.candidates.map((row) => row.id)).toEqual(['current']);
+    expect(mocks.sourceEligibility).toHaveBeenCalledWith(
+      TEST_WORKSPACE_SUBJECT,
+    );
+  });
 
   it('forces the undecided, unarchived, unexpired, unstale, score-ordered queue', async () => {
     const { applyTriagePreset, TRIAGE_REVIEW_FILTER } = await triage();
