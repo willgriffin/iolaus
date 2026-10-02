@@ -9,6 +9,10 @@ vi.mock('./resume-data', () => ({
 }));
 
 beforeEach(() => {
+  Reflect.deleteProperty(
+    globalThis,
+    Symbol.for('iolaus.published-resume-prime.v1'),
+  );
   vi.resetModules();
   mocks.getCachedPublishedResume.mockReset();
 });
@@ -18,6 +22,46 @@ async function freshPrime() {
 }
 
 describe('startPublishedResumePrime', () => {
+  it('preserves completed readiness across module reloads without another warm load', async () => {
+    mocks.getCachedPublishedResume.mockResolvedValue(undefined);
+    const original = await freshPrime();
+    original.startPublishedResumePrime();
+    await vi.waitFor(() =>
+      expect(original.isPublishedResumePrimeSettled()).toBe(true),
+    );
+
+    vi.resetModules();
+    const reloaded = await freshPrime();
+
+    expect(reloaded.isPublishedResumePrimeSettled()).toBe(true);
+    reloaded.startPublishedResumePrime();
+    expect(mocks.getCachedPublishedResume).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps reloaded readers unready until the original stalled prime reaches its deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getCachedPublishedResume.mockReturnValue(new Promise(() => {}));
+      const original = await freshPrime();
+      original.startPublishedResumePrime(20_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      vi.resetModules();
+      const reloaded = await freshPrime();
+      reloaded.startPublishedResumePrime(20_000);
+      expect(reloaded.isPublishedResumePrimeSettled()).toBe(false);
+      expect(mocks.getCachedPublishedResume).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(reloaded.isPublishedResumePrimeSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reloaded.isPublishedResumePrimeSettled()).toBe(true);
+      expect(original.isPublishedResumePrimeSettled()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is not settled before the warm load finishes', async () => {
     let release: () => void = () => {};
     mocks.getCachedPublishedResume.mockReturnValue(

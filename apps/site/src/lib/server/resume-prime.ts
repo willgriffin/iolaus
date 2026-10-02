@@ -20,21 +20,31 @@ import { describeStartupFailure } from './startup-readiness.js';
  */
 const PRIME_DEADLINE_MS = 20_000;
 
-let primeStarted = false;
-let primeSettled = false;
+const primeStateKey = Symbol.for('iolaus.published-resume-prime.v1');
+type PrimeState = { started: boolean; settled: boolean };
+const processState = globalThis as typeof globalThis & {
+  [primeStateKey]?: PrimeState;
+};
+// Vite can reload this module without rerunning server init. Both the original
+// warm-up and reloaded health readers must keep observing the same state.
+processState[primeStateKey] ??= {
+  started: false,
+  settled: false,
+};
+const primeState = processState[primeStateKey];
 
 export function startPublishedResumePrime(
   deadlineMs = PRIME_DEADLINE_MS,
   log: Pick<Console, 'info'> = console,
 ): void {
-  if (primeStarted) return;
-  primeStarted = true;
+  if (primeState.started) return;
+  primeState.started = true;
 
   const startedAt = Date.now();
   log.info('[startup] resume prime started');
   const settle = (outcome: string) => {
-    if (primeSettled) return;
-    primeSettled = true;
+    if (primeState.settled) return;
+    primeState.settled = true;
     log.info(
       `[startup] resume prime settled: ${outcome} in ${Date.now() - startedAt}ms`,
     );
@@ -58,5 +68,5 @@ export function startPublishedResumePrime(
 }
 
 export function isPublishedResumePrimeSettled(): boolean {
-  return primeSettled;
+  return primeState.settled;
 }
