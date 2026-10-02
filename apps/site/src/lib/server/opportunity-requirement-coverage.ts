@@ -6,6 +6,8 @@ import {
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 
 export const REQUIREMENT_COVERAGE_VERSION = 'requirement-coverage/v1';
+export const REQUIREMENT_COVERAGE_REPAIR_VERSION =
+  'requirement-coverage-repair/v1-delta4096';
 export const REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION =
   'requirement-coverage-source/v4-coverage-only4096';
 export const REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION = `${OPPORTUNITY_EXTRACTION_PROMPT_VERSION}/requirement-coverage-v3-only4096`;
@@ -39,6 +41,7 @@ export interface CoverageDisposition {
     | 'material_requirement'
     | 'role_duty'
     | 'role_context'
+    | 'source_context'
     | 'nonrequirement'
     | 'unknown';
   requirementIds: string[];
@@ -55,8 +58,9 @@ export interface CoverageLedger {
   clauses: PostingClause[];
   requirements: CoverageRequirement[];
   dispositions: CoverageDisposition[];
+  repair?: CoverageRepairProvenance;
   audit?: {
-    version: 'requirement-coverage-audit/v4-keyed-binding';
+    version: 'requirement-coverage-audit/v5-candidate-criteria';
     ledgerFingerprint: string;
     sourceFingerprint: string;
     extractionFingerprint: string;
@@ -64,8 +68,263 @@ export interface CoverageLedger {
     probabilities: Record<string, number>;
     importance: Record<string, 'required' | 'preferred' | 'unknown'>;
     importanceProbabilities: Record<string, number>;
+    deterministicHeadingClauseIds: string[];
     fingerprint: string;
   };
+}
+
+export interface CoverageRepairProvenance {
+  version: typeof REQUIREMENT_COVERAGE_REPAIR_VERSION;
+  baseExtractionFingerprint: string;
+  baseLedgerFingerprint: string;
+  baseRequestId: string;
+  feedbackAuditFingerprint: string;
+  feedbackRequestId: string;
+  targetClauseIds: string[];
+  inputFingerprint: string;
+  inputTokenCeiling: number;
+  maxOutputTokens: number;
+  removedRequirementIds: string[];
+}
+export interface RequirementCoverageRepairFeedback {
+  sourceFingerprint: string;
+  sourceVersion: number;
+  extractionFingerprint: string;
+  auditInputFingerprint: string;
+  requestId: string;
+  probabilities: Record<string, number>;
+}
+export interface PreparedRequirementCoverageRepair {
+  context: RequirementCoverageContext;
+  base: CoverageLedger;
+  provenance: CoverageRepairProvenance;
+}
+
+/** Recheck a server-attested preparation against fresh canonical source before
+ * reserving a provider request; a changed target or base cannot reuse its key.
+ */
+export function validatePreparedRequirementCoverageRepair(
+  context: RequirementCoverageContext,
+  prepared: PreparedRequirementCoverageRepair,
+): boolean {
+  const p = prepared.provenance;
+  if (
+    !validateRequirementCoverageAuditAdmission(context, prepared.base)
+      .structuralComplete ||
+    prepared.context.sourceText !== context.sourceText ||
+    prepared.context.extractionFingerprint !== context.extractionFingerprint ||
+    p.version !== REQUIREMENT_COVERAGE_REPAIR_VERSION ||
+    p.baseExtractionFingerprint !== context.extractionFingerprint ||
+    p.inputTokenCeiling !== 6000 ||
+    p.maxOutputTokens !== 4096 ||
+    !identifiers(p.targetClauseIds) ||
+    !p.targetClauseIds.length ||
+    p.targetClauseIds.some(
+      (id) =>
+        !prepared.base.clauses.some(
+          (clause) => clause.id === id && clause.kind === 'body',
+        ),
+    ) ||
+    !identifier(p.baseRequestId) ||
+    !identifier(p.feedbackRequestId) ||
+    !identifier(p.feedbackAuditFingerprint) ||
+    p.removedRequirementIds.length
+  )
+    return false;
+  const { audit: _audit, ...baseMaterial } = prepared.base;
+  const seed = {
+    version: p.version,
+    sourceFingerprint: context.sourceFingerprint,
+    sourceVersion: context.sourceVersion,
+    preparedFingerprint: context.preparedFingerprint,
+    baseExtractionFingerprint: context.extractionFingerprint,
+    baseLedgerFingerprint: hash(JSON.stringify(baseMaterial)),
+    baseRequestId: p.baseRequestId,
+    feedbackAuditFingerprint: p.feedbackAuditFingerprint,
+    feedbackRequestId: p.feedbackRequestId,
+    targetClauseIds: p.targetClauseIds,
+    inputTokenCeiling: p.inputTokenCeiling,
+    maxOutputTokens: p.maxOutputTokens,
+  };
+  return (
+    p.baseLedgerFingerprint === seed.baseLedgerFingerprint &&
+    p.inputFingerprint === hash(JSON.stringify(seed))
+  );
+}
+
+/** Pure preparation, not receipt authority. The runtime must first resolve the
+ * completed global base request and failed literal audit from native storage.
+ */
+export function prepareRequirementCoverageRepair(
+  context: RequirementCoverageContext,
+  base: CoverageLedger,
+  baseRequestId: string,
+  feedback: RequirementCoverageRepairFeedback,
+  targetClauseIds: string[],
+  delivery: { inputTokenCeiling: number; maxOutputTokens: number },
+): PreparedRequirementCoverageRepair {
+  if (
+    !validateRequirementCoverageAuditAdmission(context, base)
+      .structuralComplete ||
+    !identifier(baseRequestId) ||
+    !identifier(feedback.requestId) ||
+    !identifier(feedback.auditInputFingerprint) ||
+    feedback.sourceFingerprint !== context.sourceFingerprint ||
+    feedback.sourceVersion !== context.sourceVersion ||
+    feedback.extractionFingerprint !== context.extractionFingerprint ||
+    base.clauses.some(
+      (clause) =>
+        clause.kind === 'body' &&
+        !Object.hasOwn(feedback.probabilities, clause.id),
+    ) ||
+    !identifiers(targetClauseIds) ||
+    !targetClauseIds.length ||
+    targetClauseIds.some(
+      (id) =>
+        !base.clauses.some(
+          (clause) => clause.id === id && clause.kind === 'body',
+        ),
+    ) ||
+    delivery.inputTokenCeiling !== 6000 ||
+    delivery.maxOutputTokens !== 4096
+  ) {
+    throw new Error(
+      'Source repair requires exact current source, base receipt, feedback identity and bounded body targets.',
+    );
+  }
+  for (const [id, probability] of Object.entries(feedback.probabilities)) {
+    if (
+      !base.clauses.some((clause) => clause.id === id) ||
+      !Number.isFinite(probability) ||
+      probability < 0 ||
+      probability > 1
+    )
+      throw new Error('Invalid source repair literal audit feedback.');
+  }
+  const { audit: _audit, ...baseMaterial } = base;
+  const seed = {
+    version:
+      REQUIREMENT_COVERAGE_REPAIR_VERSION as typeof REQUIREMENT_COVERAGE_REPAIR_VERSION,
+    sourceFingerprint: context.sourceFingerprint,
+    sourceVersion: context.sourceVersion,
+    preparedFingerprint: context.preparedFingerprint,
+    baseExtractionFingerprint: context.extractionFingerprint,
+    baseLedgerFingerprint: hash(JSON.stringify(baseMaterial)),
+    baseRequestId,
+    feedbackAuditFingerprint: feedback.auditInputFingerprint,
+    feedbackRequestId: feedback.requestId,
+    targetClauseIds,
+    ...delivery,
+  };
+  return {
+    context: structuredClone(context),
+    base: structuredClone(base),
+    provenance: {
+      ...seed,
+      inputFingerprint: hash(JSON.stringify(seed)),
+      removedRequirementIds: [],
+    },
+  };
+}
+
+/** A delta cannot rewrite surviving paid rows or silently drop non-target data.
+ * Explicitly removed context rows remain in the immutable original receipt;
+ * the independent audit must certify the complete merged candidate meaning.
+ */
+export function mergeRequirementCoverageRepair(
+  prepared: PreparedRequirementCoverageRepair,
+  output: unknown,
+): CoverageLedger {
+  const root = record(output);
+  const proposal = record(root?.requirementCoverage);
+  if (
+    !root ||
+    Object.keys(root).some((key) => key !== 'requirementCoverage') ||
+    !proposal ||
+    Object.keys(proposal).some(
+      (key) =>
+        !['requirements', 'dispositions', 'removedRequirementIds'].includes(
+          key,
+        ),
+    ) ||
+    !Array.isArray(proposal.requirements) ||
+    !Array.isArray(proposal.dispositions) ||
+    !identifiers(proposal.removedRequirementIds)
+  )
+    throw new Error('Invalid bounded source repair schema.');
+  const targets = new Set(prepared.provenance.targetClauseIds);
+  const delta = buildRequirementCoverage(prepared.context, [proposal]);
+  const baseIds = new Set(prepared.base.requirements.map((row) => row.id));
+  if (
+    delta.requirements.some(
+      (row) =>
+        !record(row) ||
+        !identifier(row.id) ||
+        !identifiers(row.clauseIds) ||
+        baseIds.has(row.id) ||
+        row.clauseIds.some((id) => !targets.has(id)),
+    )
+  )
+    throw new Error(
+      'Source repair cannot replace paid rows or introduce non-target requirements.',
+    );
+  const aliases = new Map(
+    prepared.base.clauses.map((clause, index) => [`c${index}`, clause.id]),
+  );
+  const explicitIds = proposal.dispositions.map((entry) => {
+    const row = record(entry);
+    return typeof row?.clauseId === 'string'
+      ? (aliases.get(row.clauseId) ?? row.clauseId)
+      : '';
+  });
+  if (!identifiers(explicitIds))
+    throw new Error('Source repair dispositions must be explicit and unique.');
+  const changed = delta.dispositions.filter((row) =>
+    explicitIds.includes(row.clauseId),
+  );
+  if (
+    changed.length !== proposal.dispositions.length ||
+    changed.some((row) => !targets.has(row.clauseId) || row.type === 'unknown')
+  )
+    throw new Error(
+      'Source repair cannot change non-target or unresolved dispositions.',
+    );
+  const changedIds = new Set(changed.map((row) => row.clauseId));
+  const removed = new Set(proposal.removedRequirementIds);
+  for (const id of removed) {
+    const row = prepared.base.requirements.find((entry) => entry.id === id);
+    if (
+      !row ||
+      row.clauseIds.some(
+        (clauseId) => !targets.has(clauseId) || !changedIds.has(clauseId),
+      ) ||
+      changed.some((entry) => entry.requirementIds.includes(id))
+    )
+      throw new Error(
+        'Context reclassification must be explicit and confined to updated source targets.',
+      );
+  }
+  const ledger: CoverageLedger = {
+    ...structuredClone(prepared.base),
+    audit: undefined,
+    requirements: [
+      ...prepared.base.requirements.filter((row) => !removed.has(row.id)),
+      ...delta.requirements,
+    ],
+    dispositions: prepared.base.dispositions.map(
+      (row) => changed.find((entry) => entry.clauseId === row.clauseId) ?? row,
+    ),
+    repair: { ...prepared.provenance, removedRequirementIds: [...removed] },
+  };
+  const validation = validateRequirementCoverageAuditAdmission(
+    prepared.context,
+    ledger,
+  );
+  if (!validation.structuralComplete)
+    throw new Error(
+      `Source repair is incomplete: ${validation.errors.join(' ')}`,
+    );
+  return ledger;
 }
 
 /** Derive identity from captured/native source fields, never from a ledger. */
@@ -112,6 +371,64 @@ export function requirementCoverageExtractionClauses(ledger: CoverageLedger) {
     id: `c${index}`,
     text: clause.text,
   }));
+}
+
+/** Native heading evidence, never a fabricated semantic probability. Every
+ * field must match the exact captured source before any heading is certified.
+ */
+export function canonicalHeadingClauseIds(
+  context: RequirementCoverageContext,
+  value: unknown,
+): string[] {
+  const ledger = record(value);
+  const canonical = buildRequirementCoverageSource(context);
+  const clauses = ledger?.clauses;
+  const dispositions = ledger?.dispositions;
+  if (
+    !ledger ||
+    ledger.version !== canonical.version ||
+    ledger.sourceFingerprint !== canonical.sourceFingerprint ||
+    ledger.sourceVersion !== canonical.sourceVersion ||
+    ledger.extractionFingerprint !== canonical.extractionFingerprint ||
+    ledger.preparedFingerprint !== canonical.preparedFingerprint ||
+    !Array.isArray(clauses) ||
+    clauses.length !== canonical.clauses.length ||
+    !identifier(context.sourceFingerprint) ||
+    !identifier(context.extractionFingerprint) ||
+    !Number.isSafeInteger(context.sourceVersion) ||
+    context.sourceVersion < 1 ||
+    canonical.clauses.some((clause, index) => {
+      const stored = record(clauses[index]);
+      return (
+        !stored ||
+        Object.keys(clause).some(
+          (key) => stored[key] !== clause[key as keyof PostingClause],
+        )
+      );
+    })
+  )
+    return [];
+  return canonical.clauses
+    .filter(
+      (clause) =>
+        clause.kind === 'heading' &&
+        HEADING.test(literalTextForPostingClause(clause)) &&
+        Array.isArray(dispositions) &&
+        dispositions.filter((row) => record(row)?.clauseId === clause.id)
+          .length === 1 &&
+        dispositions.some((row) => {
+          const disposition = record(row);
+          return (
+            disposition?.clauseId === clause.id &&
+            disposition.type === 'nonrequirement' &&
+            disposition.exclusionRule === 'section_heading' &&
+            Array.isArray(disposition.requirementIds) &&
+            disposition.requirementIds.length === 0 &&
+            disposition.auditPending === undefined
+          );
+        }),
+    )
+    .map((clause) => clause.id);
 }
 
 function hash(text: string): string {
@@ -546,6 +863,7 @@ function validateCoverageStructure(
         'material_requirement',
         'role_duty',
         'role_context',
+        'source_context',
         'nonrequirement',
         'unknown',
       ].includes(String(type)) ||
@@ -560,6 +878,13 @@ function validateCoverageStructure(
         !validExclusion(clause, disposition.exclusionRule)
       ) {
         fail(`Unsupported nonrequirement exclusion: ${clause.id}.`);
+        continue;
+      }
+    } else if (type === 'source_context') {
+      if (disposition.requirementIds.length) {
+        fail(
+          `Source context must not create candidate requirement rows: ${clause.id}.`,
+        );
         continue;
       }
     } else if (

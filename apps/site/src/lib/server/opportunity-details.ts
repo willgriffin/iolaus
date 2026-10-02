@@ -34,6 +34,7 @@ import {
 } from './opportunity-intelligence-governance.js';
 import {
   buildBoundedPreparedPostingChunks,
+  countOpportunityInputTokens,
   mergeOpportunityExtractionChunks,
   type PreparedPosting,
   type PreparedPostingChunk,
@@ -44,11 +45,15 @@ import {
   buildRequirementCoverage,
   buildRequirementCoverageSource,
   type CoverageLedger,
+  mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
+  type PreparedRequirementCoverageRepair,
   REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
   REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_REPAIR_VERSION,
   requirementCoverageContextForOpportunity,
   requirementCoverageExtractionClauses,
+  validatePreparedRequirementCoverageRepair,
   validateRequirementCoverageAuditAdmission,
 } from './opportunity-requirement-coverage.js';
 import {
@@ -57,6 +62,7 @@ import {
   preflightRequirementCoverageLifecycle,
   prepareRequirementCoverageAudit,
   requirementCoverageAuditReservationCeiling,
+  validateVerifiedRequirementCoverage,
 } from './opportunity-requirement-coverage-provider.js';
 import {
   fingerprintOpportunitySourceContent,
@@ -2599,6 +2605,405 @@ export function buildOpportunityLlmExtractionMessages(
 
 export const OPPORTUNITY_REQUIREMENT_COVERAGE_EXTRACTION_MAX_OUTPUT_TOKENS =
   AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS;
+
+/** Complete captured raw plus only reviewed repair targets and their paid rows.
+ * The delta is a proposal; it never certifies source or candidate readiness.
+ */
+export function buildOpportunityRequirementCoverageRepairMessages(
+  prepared: PreparedRequirementCoverageRepair,
+): AIMessage[] {
+  const aliases = new Map(
+    prepared.base.clauses.map((clause, index) => [clause.id, `c${index}`]),
+  );
+  return [
+    {
+      role: 'system',
+      content: [
+        'Repair only the target clauses against the complete captured source. Return ONLY JSON requirementCoverage with requirements, dispositions, and removedRequirementIds.',
+        'requirements contains NEW atomic candidate qualifications, duties or selection constraints only. Never repeat or rewrite paid rows. Preserve every qualifier, alternative, threshold and condition. Each new row has a fresh repair_rN id, literal text, clauseIds using supplied cN keys, and importance required/preferred only when explicit; otherwise unknown.',
+        'dispositions contains only changed targets, with clauseId, type, requirementIds. Use material_requirement or role_duty for candidate criteria; retain genuine existing candidate IDs plus new IDs reciprocally. Use source_context with EMPTY requirementIds for literal company/team/benefit context that contains no candidate qualification, duty or selection constraint. Keep conditional benefits and their exceptions together; never infer candidate Canada eligibility from benefits.',
+        'removedRequirementIds lists ONLY existing context-only rows explicitly reclassified in changed targets. Do not remove real candidate criteria. Existing raw context remains captured verbatim even where it is not a candidate requirement.',
+        'Do not invent qualifications from company marketing or benefits, convert headings into criteria, drop constraints, or alter unrelated clauses. A low audit probability is feedback, not permission to change meaning. Return no addition where existing rows fully retain candidate meaning. All merged body clauses require independent source audit before private assessment.',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        source: prepared.context.sourceText,
+        targets: prepared.provenance.targetClauseIds.map((id) => {
+          const clause = prepared.base.clauses.find(
+            (entry) => entry.id === id,
+          )!;
+          const disposition = prepared.base.dispositions.find(
+            (entry) => entry.clauseId === id,
+          )!;
+          return {
+            clauseId: aliases.get(id),
+            text: clause.text,
+            type: disposition.type,
+            existingRequirements: disposition.requirementIds.map(
+              (requirementId) => {
+                const row = prepared.base.requirements.find(
+                  (entry) => entry.id === requirementId,
+                )!;
+                return [row.id, row.text, row.importance];
+              },
+            ),
+          };
+        }),
+      }),
+    },
+  ];
+}
+
+/** Pure whole-plan reservation. Historical base reservations are explicit,
+ * never hidden by giving repair/audit a fresh independent allowance.
+ */
+export async function preflightOpportunityRequirementCoverageRepair(
+  prepared: PreparedRequirementCoverageRepair,
+  options: {
+    model: string;
+    counter?: (text: string) => Promise<number>;
+    baseReservation: {
+      calls: number;
+      reservedTokens: number;
+      spendMicros: number;
+    };
+    limits?: OpportunityIntelligenceBudgetConfig['run'];
+    auditPricing?: OpportunityIntelligenceBudgetConfig['pricing'];
+  },
+) {
+  const messages = buildOpportunityRequirementCoverageRepairMessages(prepared);
+  const inputTokenCount = await countOpportunityInputTokens(
+    messages,
+    options.model,
+    options.counter,
+  );
+  const inputTokenCeiling = prepared.provenance.inputTokenCeiling;
+  const maxOutputTokens = AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS;
+  const auditReservation = requirementCoverageAuditReservationCeiling(
+    prepared.context.sourceText,
+    prepared.base.clauses.length,
+  );
+  const limits = options.limits ?? {
+    calls: 4,
+    inputTokens: 80_000,
+    spendMicros: 100_000,
+  };
+  if (
+    !Number.isSafeInteger(options.baseReservation.calls) ||
+    options.baseReservation.calls < 0 ||
+    !Number.isSafeInteger(options.baseReservation.reservedTokens) ||
+    options.baseReservation.reservedTokens < 0 ||
+    !Number.isSafeInteger(options.baseReservation.spendMicros) ||
+    options.baseReservation.spendMicros < 0
+  )
+    throw new Error(
+      'Source repair requires an explicit valid historical base reservation.',
+    );
+  const baseReservation = {
+    calls: Math.max(1, options.baseReservation.calls),
+    reservedTokens: Math.max(
+      6000 + AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
+      options.baseReservation.reservedTokens,
+    ),
+  };
+  const preflight = preflightRequirementCoverageLifecycle(
+    [
+      baseReservation,
+      { calls: 1, reservedTokens: inputTokenCeiling + maxOutputTokens },
+      auditReservation,
+    ],
+    {
+      calls: Math.min(4, limits.calls),
+      inputTokens: Math.min(80_000, limits.inputTokens),
+    },
+  );
+  const pricing = pricingForOpportunityIntelligenceModel(options.model);
+  const reservedSpendMicros =
+    pricing.configured && options.auditPricing?.configured
+      ? Math.max(
+          options.baseReservation.spendMicros,
+          reservedRequestSpendMicros({
+            inputTokens: 6000,
+            maxOutputTokens: AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
+            pricing,
+          }),
+        ) +
+        reservedRequestSpendMicros({
+          inputTokens: inputTokenCeiling,
+          maxOutputTokens,
+          pricing,
+        }) +
+        reservedRequestSpendMicros({
+          inputTokens: auditReservation.requestBytes,
+          maxOutputTokens: auditReservation.maxOutputTokens,
+          pricing: options.auditPricing,
+        })
+      : null;
+  const spendFits =
+    reservedSpendMicros !== null &&
+    reservedSpendMicros <= Math.min(100_000, limits.spendMicros);
+  return {
+    messages,
+    inputTokenCount,
+    inputTokenCeiling,
+    maxOutputTokens,
+    auditReservation,
+    preflight,
+    reservedSpendMicros,
+    spendFits,
+    admitted:
+      inputTokenCount <= Math.floor(inputTokenCeiling * 0.8) &&
+      maxOutputTokens === prepared.provenance.maxOutputTokens &&
+      preflight.fits &&
+      spendFits,
+  };
+}
+
+export interface OpportunityRequirementCoverageRepairOptions
+  extends OpportunityLlmExtractionOptions {
+  agentRunId: string;
+  expectedSourceContentFingerprint: string;
+  sourceContentVersion: number;
+  fencedOpportunityUpdate: NonNullable<
+    OpportunityLlmExtractionOptions['fencedOpportunityUpdate']
+  >;
+  assertCurrentAuthority: () => Promise<void>;
+  baseReservation: {
+    calls: number;
+    reservedTokens: number;
+    spendMicros: number;
+  };
+}
+
+/** Source-only runtime. Its caller holds the existing lifecycle lock and attests
+ * the native global base/feedback receipts; no candidate material enters here.
+ */
+export async function processOpportunityRequirementCoverageRepair(
+  opportunityId: string,
+  preparedRepair: PreparedRequirementCoverageRepair,
+  options: OpportunityRequirementCoverageRepairOptions,
+): Promise<
+  OpportunityLlmResult & {
+    coverageComplete?: boolean;
+    repairInputFingerprint?: string;
+  }
+> {
+  if (
+    options.aiClient ||
+    !options.agentRunId ||
+    !options.expectedSourceContentFingerprint ||
+    !Number.isSafeInteger(options.sourceContentVersion) ||
+    options.sourceContentVersion < 1 ||
+    !options.fencedOpportunityUpdate ||
+    !options.assertCurrentAuthority
+  )
+    throw new Error(
+      'Source repair requires a native source run, fresh authority and source/version write fence.',
+    );
+  options.signal?.throwIfAborted();
+  await options.assertCurrentAuthority();
+  const collection = await getCollection('Opportunity');
+  const opportunity = (await collection.get(
+    { id: opportunityId },
+    { cache: false },
+  )) as unknown as MutableRecord | null;
+  if (!opportunityMatchesExpectedFingerprint(opportunity, options))
+    return {
+      status: 'skipped',
+      stale: true,
+      opportunityId,
+      message: 'Skipped stale source repair.',
+    };
+  const posting = prepareOpportunityPosting(
+    opportunityWithSourceContent(opportunity!),
+  );
+  const context = requirementCoverageContextForOpportunity({
+    ...opportunity,
+    preparedPostingFingerprint: posting.fingerprint,
+  });
+  if (!validatePreparedRequirementCoverageRepair(context, preparedRepair))
+    throw new Error(
+      'Source repair preparation no longer matches the attested current base and request identity.',
+    );
+  let existing: Record<string, unknown>;
+  try {
+    existing = JSON.parse(
+      stringValue(opportunity?.preparedPostingJson) || '{}',
+    );
+  } catch {
+    throw new Error(
+      'Source repair cannot overwrite malformed prepared posting history.',
+    );
+  }
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing))
+    throw new Error(
+      'Source repair requires an additive prepared posting object.',
+    );
+  const settings = await opportunityLlmSettings(options);
+  if (!settings || !process.env.TYPESAFE_API_KEY?.trim())
+    throw new Error(
+      'Configure both dedicated source repair and coverage audit providers before admission.',
+    );
+  const price = (key: string) => {
+    const value = process.env[key];
+    if (!value || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
+      throw new Error(`Configure ${key} before source repair.`);
+    return Number(value);
+  };
+  const auditPricing = {
+    configured: true,
+    inputMicrosPerMillion: price(
+      'OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION',
+    ),
+    outputMicrosPerMillion: price(
+      'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+    ),
+  };
+  const plan = await preflightOpportunityRequirementCoverageRepair(
+    preparedRepair,
+    {
+      model: settings.model,
+      counter: settings.aiClient.countTokens?.bind(settings.aiClient),
+      baseReservation: options.baseReservation,
+      limits: resolveOpportunityIntelligenceBudgetConfig().run,
+      auditPricing,
+    },
+  );
+  if (!plan.admitted)
+    throw new Error(
+      'Complete source repair, historical base and audit exceed the admitted lifecycle ceiling.',
+    );
+  await options.assertCurrentAuthority();
+  const repaired = await executeGovernedOpportunityIntelligenceRequest({
+    estimatedInputTokens: plan.inputTokenCount,
+    inputTokenCeiling: plan.inputTokenCeiling,
+    maxOutputTokens: plan.maxOutputTokens,
+    identity: {
+      agentRunId: options.agentRunId,
+      contentFingerprint: context.sourceFingerprint,
+      feature: 'opportunity-source-requirement-repair',
+      inputFingerprint: preparedRepair.provenance.inputFingerprint,
+      model: settings.model,
+      opportunityId,
+      outputSchemaVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+      promptVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+      profile: settings.profile,
+      preparedPayloadVersion: posting.version,
+      sourceCrawlId: options.sourceCrawlId,
+      sourceCrawlItemId: options.sourceCrawlItemId,
+    },
+    signal: options.signal,
+    store: options.governanceStore,
+    invoke: async (requestId = '') => {
+      const response = await settings.aiClient.chat(plan.messages, {
+        model: settings.model,
+        maxTokens: plan.maxOutputTokens,
+        reasoning: { effort: 'low', maxTokens: 1024 },
+        responseFormat: { type: 'json_object' },
+        signal: options.signal,
+        timeout: settings.timeout,
+        ...(requestId ? { user: requestId } : {}),
+      });
+      const metadata = response as unknown as Record<string, unknown>;
+      const providerRequestId =
+        stringValue(
+          metadata.providerRequestId ?? metadata.requestId ?? metadata.id,
+        ) || requestId;
+      try {
+        if (
+          response.finishReason === 'length' ||
+          response.finishReason === 'content_filter'
+        )
+          throw new Error('Source repair output was incomplete or filtered.');
+        return {
+          output: requireJsonObjectFromText(
+            stringValue(response.content),
+            'Source repair',
+          ),
+          providerRequestId,
+          usage: response.usage,
+        };
+      } catch (error) {
+        throw attachOpportunityIntelligenceInvocationMetadata(error, {
+          providerRequestId,
+          usage: response.usage,
+        });
+      }
+    },
+  });
+  const ledger = mergeRequirementCoverageRepair(
+    preparedRepair,
+    repaired.output,
+  );
+  const persist = async () => {
+    options.signal?.throwIfAborted();
+    await options.assertCurrentAuthority();
+    return options.fencedOpportunityUpdate(
+      opportunityId,
+      context.sourceFingerprint,
+      {
+        preparedPostingJson: JSON.stringify({
+          ...existing,
+          requirementCoverage: ledger,
+        }),
+        preparedPostingFingerprint: posting.fingerprint,
+        preparedPostingVersion: posting.version,
+        updated_at: new Date(),
+      },
+      context.sourceVersion,
+    );
+  };
+  if (!(await persist()))
+    return {
+      status: 'skipped',
+      stale: true,
+      opportunityId,
+      message: 'Discarded stale source repair.',
+    };
+  const audit = prepareRequirementCoverageAudit(context, ledger);
+  const exact = preflightRequirementCoverageAudit(audit);
+  if (
+    !exact.fits ||
+    exact.requestBytes > plan.auditReservation.requestBytes ||
+    exact.maxOutputTokens > plan.auditReservation.maxOutputTokens
+  )
+    throw new Error(
+      'Merged source audit exceeds its whole-plan admitted reservation.',
+    );
+  await options.assertCurrentAuthority();
+  ledger.audit = await evaluateRequirementCoverageAudit(audit, {
+    agentRunId: options.agentRunId,
+    opportunityId,
+    contentFingerprint: context.sourceFingerprint,
+    signal: options.signal,
+    store: options.governanceStore,
+    sourceCrawlId: options.sourceCrawlId,
+    sourceCrawlItemId: options.sourceCrawlItemId,
+  });
+  if (!(await persist()))
+    return {
+      status: 'skipped',
+      stale: true,
+      opportunityId,
+      message: 'Discarded stale source repair audit.',
+    };
+  const complete = validateVerifiedRequirementCoverage(
+    context,
+    ledger,
+  ).complete;
+  return {
+    status: 'processed',
+    opportunityId,
+    coverageComplete: complete,
+    repairInputFingerprint: preparedRepair.provenance.inputFingerprint,
+    updatedFields: ['preparedPostingJson'],
+    message: complete
+      ? 'Source repair and independent coverage audit completed.'
+      : 'Source repair captured; independent coverage remains incomplete.',
+  };
+}
 
 /** Provider-free source plan, also used by the actual extraction lifecycle. */
 export async function preflightOpportunityRequirementCoverageExtraction(

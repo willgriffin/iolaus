@@ -1,23 +1,234 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as sourceAiConfig from './ai-config.js';
 import vanta from './fixtures/ats/vanta-developer-experience.json';
 import {
   buildOpportunityLlmExtractionMessages,
+  buildOpportunityRequirementCoverageRepairMessages,
   extractSkillListingsFromDescription,
   normalizeOpportunityLlmExtraction,
   preflightOpportunityRequirementCoverageExtraction,
+  preflightOpportunityRequirementCoverageRepair,
+  processOpportunityRequirementCoverageRepair,
   resolveOpportunityDetails,
 } from './opportunity-details';
 import {
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
 } from './opportunity-intelligence-config.js';
+import * as sourceGovernance from './opportunity-intelligence-governance.js';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import {
   buildRequirementCoverageSource,
+  prepareRequirementCoverageRepair,
   requirementCoverageContextForOpportunity,
 } from './opportunity-requirement-coverage.js';
+import * as sourceCoverageProvider from './opportunity-requirement-coverage-provider.js';
+import * as sourceSmrt from './smrt.js';
 
 describe('source extraction reservation admission', () => {
+  it('refuses injected clients and stops a revoked post-repair principal before cache persistence or audit', async () => {
+    const opportunity = {
+      id: 'source-opportunity',
+      descriptionRaw: 'Requirements\nCuriosity.',
+      sourceContentFingerprint: 'current-source',
+      sourceContentVersion: 1,
+      preparedPostingJson: JSON.stringify({ existingDisplay: 'preserve' }),
+    };
+    const posting = prepareOpportunityPosting(opportunity);
+    const context = requirementCoverageContextForOpportunity({
+      ...opportunity,
+      preparedPostingFingerprint: posting.fingerprint,
+    });
+    const base = buildRequirementCoverageSource(context);
+    base.dispositions = base.dispositions.map((row) =>
+      row.clauseId === base.clauses[1].id
+        ? { ...row, type: 'source_context' }
+        : row,
+    );
+    const prepared = prepareRequirementCoverageRepair(
+      context,
+      base,
+      'native-base-request',
+      {
+        sourceFingerprint: context.sourceFingerprint,
+        sourceVersion: context.sourceVersion,
+        extractionFingerprint: context.extractionFingerprint,
+        auditInputFingerprint: 'native-negative-feedback',
+        requestId: 'native-feedback-request',
+        probabilities: Object.fromEntries(
+          base.clauses.map((row) => [row.id, 0.5]),
+        ),
+      },
+      [base.clauses[1].id],
+      { inputTokenCeiling: 6000, maxOutputTokens: 4096 },
+    );
+    const persist = vi.fn(async () => true);
+    let assertions = 0;
+    const options = {
+      agentRunId: 'native-source-run',
+      expectedSourceContentFingerprint: context.sourceFingerprint,
+      sourceContentVersion: 1,
+      fencedOpportunityUpdate: persist,
+      assertCurrentAuthority: vi.fn(async () => {
+        if (++assertions >= 3) throw new Error('Principal revoked');
+      }),
+      baseReservation: { calls: 1, reservedTokens: 10096, spendMicros: 0 },
+    };
+    await expect(
+      processOpportunityRequirementCoverageRepair(opportunity.id, prepared, {
+        ...options,
+        aiClient: { chat: vi.fn() } as never,
+      }),
+    ).rejects.toThrow('fresh authority');
+    const get = vi.fn(async () => opportunity);
+    const chat = vi.fn();
+    const governance = vi
+      .spyOn(sourceGovernance, 'executeGovernedOpportunityIntelligenceRequest')
+      .mockImplementation(
+        async () =>
+          ({
+            output: {
+              requirementCoverage: {
+                requirements: [
+                  {
+                    id: 'repair_r1',
+                    text: 'Curiosity.',
+                    clauseIds: ['c1'],
+                    importance: 'unknown',
+                  },
+                ],
+                dispositions: [
+                  {
+                    clauseId: 'c1',
+                    type: 'material_requirement',
+                    requirementIds: ['repair_r1'],
+                  },
+                ],
+                removedRequirementIds: [],
+              },
+            },
+          }) as never,
+      );
+    const audit = vi.spyOn(
+      sourceCoverageProvider,
+      'evaluateRequirementCoverageAudit',
+    );
+    vi.spyOn(sourceSmrt, 'getCollection').mockResolvedValue({ get } as never);
+    vi.spyOn(
+      sourceAiConfig,
+      'resolveOpportunityIntelligenceExtractionAiProfileClient',
+    ).mockResolvedValue({
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-extraction',
+      timeout: 1000,
+      aiClient: { chat, countTokens: vi.fn(async () => 2000) },
+    } as never);
+    vi.stubEnv('TYPESAFE_API_KEY', 'loopback-test-key');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT', '4');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT', '80000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS', '100000');
+    vi.stubEnv(
+      'OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION',
+      '37500',
+    );
+    vi.stubEnv(
+      'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+      '37500',
+    );
+    try {
+      await expect(
+        processOpportunityRequirementCoverageRepair(
+          opportunity.id,
+          prepared,
+          options,
+        ),
+      ).rejects.toThrow('Principal revoked');
+      expect(governance).toHaveBeenCalledTimes(1);
+      expect(governance.mock.calls[0][0].identity).toMatchObject({
+        feature: 'opportunity-source-requirement-repair',
+        inputFingerprint: prepared.provenance.inputFingerprint,
+      });
+      expect(governance.mock.calls[0][0].maxOutputTokens).toBe(4096);
+      expect(persist).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+      expect(opportunity.preparedPostingJson).toBe(
+        JSON.stringify({ existingDisplay: 'preserve' }),
+      );
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+  it('plans a full-source repair without resetting the historical base reservation', async () => {
+    const context = requirementCoverageContextForOpportunity({
+      descriptionRaw:
+        'About the team\nWe build financial software.\nRequirements\nCuriosity and willingness to evolve.',
+      sourceContentFingerprint: 'captured-source',
+      sourceContentVersion: 1,
+    });
+    const base = buildRequirementCoverageSource(context);
+    base.dispositions = base.dispositions.map((row) =>
+      base.clauses.find((clause) => clause.id === row.clauseId)?.kind === 'body'
+        ? { ...row, type: 'source_context' }
+        : row,
+    );
+    const target = base.clauses[3].id;
+    const prepared = prepareRequirementCoverageRepair(
+      context,
+      base,
+      'completed-base',
+      {
+        sourceFingerprint: context.sourceFingerprint,
+        sourceVersion: context.sourceVersion,
+        extractionFingerprint: context.extractionFingerprint,
+        auditInputFingerprint: 'failed-literal-audit',
+        requestId: 'actual-audit-request',
+        probabilities: Object.fromEntries(
+          base.clauses.map((row) => [row.id, 0.5]),
+        ),
+      },
+      [target],
+      { inputTokenCeiling: 6000, maxOutputTokens: 4096 },
+    );
+    const messages =
+      buildOpportunityRequirementCoverageRepairMessages(prepared);
+    const payload = JSON.parse(String(messages[1].content));
+    expect(payload.source).toBe(context.sourceText);
+    expect(payload.targets).toHaveLength(1);
+    expect(payload.targets[0].text).toBe(base.clauses[3].text);
+    expect(String(messages[0].content)).toContain(
+      'Never repeat or rewrite paid rows',
+    );
+    const pricing = pricingForOpportunityIntelligenceModel('openai/gpt-6-luna');
+    const options = {
+      model: 'openai/gpt-6-luna',
+      baseReservation: { calls: 0, reservedTokens: 0, spendMicros: 0 },
+      auditPricing: pricing,
+    };
+    const plan = await preflightOpportunityRequirementCoverageRepair(
+      prepared,
+      options,
+    );
+    expect(plan.maxOutputTokens).toBe(4096);
+    expect(plan.inputTokenCeiling).toBe(6000);
+    expect(plan.preflight.calls).toBe(3);
+    expect(plan.preflight.reservedTokens).toBe(
+      2 * (6000 + 4096) + plan.auditReservation.reservedTokens,
+    );
+    expect(plan.admitted).toBe(true);
+    const declined = await preflightOpportunityRequirementCoverageRepair(
+      prepared,
+      {
+        ...options,
+        limits: {
+          calls: 4,
+          inputTokens: plan.preflight.reservedTokens - 1,
+          spendMicros: 100_000,
+        },
+      },
+    );
+    expect(declined.admitted).toBe(false);
+  });
   it('requests only coverage while retaining full raw clauses and explicit validated heading aliases', () => {
     const opportunity = {
       descriptionRaw:

@@ -7,10 +7,14 @@ import {
   buildRequirementCoverage,
   buildRequirementCoverageSource,
   type CoverageLedger,
+  canonicalHeadingClauseIds,
+  mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
+  prepareRequirementCoverageRepair,
   type RequirementCoverageContext,
   requirementCoverageContextForOpportunity,
   requirementCoverageExtractionClauses,
+  validatePreparedRequirementCoverageRepair,
   validateRequirementCoverage,
   validateRequirementCoverageAuditAdmission,
 } from './opportunity-requirement-coverage.js';
@@ -65,6 +69,191 @@ function completeLedger(ctx = context): CoverageLedger {
   return ledger;
 }
 describe('exact source requirement coverage', () => {
+  it('repairs exact source context and omitted criteria while preserving the paid base and scoped retirement provenance', () => {
+    const base = normalizeRequirementCoverageForAudit(
+      context,
+      buildRequirementCoverage(context, [capturedPending.providerProposal]),
+    );
+    const before = structuredClone(base);
+    const targets = [4, 5, 33, 35, 36, 38].map(
+      (index) => base.clauses[index].id,
+    );
+    const prepared = prepareRequirementCoverageRepair(
+      context,
+      base,
+      'actual-completed-base',
+      {
+        sourceFingerprint: context.sourceFingerprint,
+        sourceVersion: context.sourceVersion,
+        extractionFingerprint: context.extractionFingerprint,
+        auditInputFingerprint: 'actual-negative-audit',
+        requestId: 'actual-audit-request',
+        probabilities: Object.fromEntries(
+          base.clauses.map((row) => [row.id, 0.5]),
+        ),
+      },
+      targets,
+      { inputTokenCeiling: 6000, maxOutputTokens: 4096 },
+    );
+    const output = {
+      requirementCoverage: {
+        requirements: [
+          {
+            id: 'repair_r1',
+            text: 'Curiosity.',
+            clauseIds: ['c38'],
+            importance: 'unknown',
+          },
+          {
+            id: 'repair_r2',
+            text: 'Willingness to evolve alongside the products Wealthsimple is building.',
+            clauseIds: ['c38'],
+            importance: 'unknown',
+          },
+        ],
+        removedRequirementIds: ['r1', 'r49', 'r50'],
+        dispositions: [
+          { clauseId: 'c4', type: 'source_context', requirementIds: [] },
+          {
+            clauseId: 'c5',
+            type: 'role_duty',
+            requirementIds: ['r2', 'r3', 'r4'],
+          },
+          { clauseId: 'c33', type: 'source_context', requirementIds: [] },
+          { clauseId: 'c35', type: 'source_context', requirementIds: [] },
+          { clauseId: 'c36', type: 'source_context', requirementIds: [] },
+          {
+            clauseId: 'c38',
+            type: 'material_requirement',
+            requirementIds: ['repair_r1', 'repair_r2'],
+          },
+        ],
+      },
+    };
+    const merged = mergeRequirementCoverageRepair(prepared, output);
+    expect(validatePreparedRequirementCoverageRepair(context, prepared)).toBe(
+      true,
+    );
+    const changedSeed = structuredClone(prepared);
+    changedSeed.provenance.targetClauseIds.pop();
+    expect(
+      validatePreparedRequirementCoverageRepair(context, changedSeed),
+    ).toBe(false);
+    expect(prepared.provenance.baseExtractionFingerprint).toBe(
+      context.extractionFingerprint,
+    );
+    expect(prepared.provenance.inputFingerprint).not.toBe(
+      context.extractionFingerprint,
+    );
+    expect(() =>
+      prepareRequirementCoverageRepair(
+        { ...context, sourceVersion: context.sourceVersion + 1 },
+        base,
+        prepared.provenance.baseRequestId,
+        {
+          sourceFingerprint: context.sourceFingerprint,
+          sourceVersion: context.sourceVersion,
+          extractionFingerprint: context.extractionFingerprint,
+          auditInputFingerprint: 'actual-negative-audit',
+          requestId: 'actual-audit-request',
+          probabilities: Object.fromEntries(
+            base.clauses.map((row) => [row.id, 0.5]),
+          ),
+        },
+        targets,
+        { inputTokenCeiling: 6000, maxOutputTokens: 4096 },
+      ),
+    ).toThrow('exact current source');
+    expect(base).toEqual(before);
+    expect(merged.clauses).toEqual(base.clauses);
+    expect(merged.requirements).toHaveLength(49);
+    expect(
+      merged.requirements.filter((row) => !row.id.startsWith('repair_')),
+    ).toEqual(
+      base.requirements.filter((row) => !['r1', 'r49', 'r50'].includes(row.id)),
+    );
+    expect(merged.repair).toMatchObject({
+      baseExtractionFingerprint: context.extractionFingerprint,
+      baseRequestId: 'actual-completed-base',
+      feedbackAuditFingerprint: 'actual-negative-audit',
+      removedRequirementIds: ['r1', 'r49', 'r50'],
+    });
+    expect(
+      validateRequirementCoverage(context, merged).structuralComplete,
+    ).toBe(true);
+    expect(merged.audit).toBeUndefined();
+    const overwrite = structuredClone(output);
+    overwrite.requirementCoverage.requirements[0].id = 'r2';
+    expect(() => mergeRequirementCoverageRepair(prepared, overwrite)).toThrow(
+      'cannot replace paid rows',
+    );
+    const unrelated = structuredClone(output);
+    unrelated.requirementCoverage.removedRequirementIds.push('r26');
+    expect(() => mergeRequirementCoverageRepair(prepared, unrelated)).toThrow(
+      'confined to updated source targets',
+    );
+    const lostDuty = structuredClone(output);
+    lostDuty.requirementCoverage.dispositions[1].requirementIds = ['r3', 'r4'];
+    expect(() => mergeRequirementCoverageRepair(prepared, lostDuty)).toThrow(
+      'incomplete',
+    );
+    const proposedCriterionLoss = structuredClone(output);
+    proposedCriterionLoss.requirementCoverage.removedRequirementIds.push('r2');
+    proposedCriterionLoss.requirementCoverage.dispositions[1].requirementIds = [
+      'r3',
+      'r4',
+    ];
+    const stillUnverified = mergeRequirementCoverageRepair(
+      prepared,
+      proposedCriterionLoss,
+    );
+    expect(stillUnverified.audit).toBeUndefined();
+    expect(stillUnverified.clauses[5].text).toContain('reducing incidents');
+  });
+  it('retains source context verbatim without candidate rows and requires canonical heading evidence', () => {
+    const ledger = normalizeRequirementCoverageForAudit(
+      context,
+      buildRequirementCoverage(context, [capturedPending.providerProposal]),
+    );
+    const pending = ledger.dispositions.find((row) => row.auditPending)!;
+    Object.assign(pending, { type: 'source_context', auditPending: undefined });
+    expect(
+      validateRequirementCoverage(context, ledger).structuralComplete,
+    ).toBe(true);
+    expect(ledger.requirements).toHaveLength(50);
+    expect(
+      ledger.clauses.find((row) => row.id === pending.clauseId)?.text,
+    ).toContain('quality, security, and scalability');
+    expect(canonicalHeadingClauseIds(context, ledger)).toEqual(
+      ledger.clauses
+        .filter((row) => row.kind === 'heading')
+        .map((row) => row.id),
+    );
+    const forged = structuredClone(ledger);
+    forged.clauses[0].kind = 'heading';
+    expect(canonicalHeadingClauseIds(context, forged)).toEqual([]);
+    const mappedHeading = structuredClone(ledger);
+    const heading = mappedHeading.clauses.find(
+      (row) => row.kind === 'heading',
+    )!;
+    Object.assign(
+      mappedHeading.dispositions.find((row) => row.clauseId === heading.id)!,
+      { type: 'material_requirement', requirementIds: ['forged-heading-row'] },
+    );
+    expect(canonicalHeadingClauseIds(context, mappedHeading)).not.toContain(
+      heading.id,
+    );
+    pending.requirementIds = ['r1'];
+    expect(
+      validateRequirementCoverageAuditAdmission(context, ledger).errors,
+    ).toContain(
+      `Source context must not create candidate requirement rows: ${pending.clauseId}.`,
+    );
+    expect(
+      validateRequirementCoverageAuditAdmission(context, ledger)
+        .structuralComplete,
+    ).toBe(false);
+  });
   it('admits the actual V4 proposal only for independent audit while retaining its unmapped context', () => {
     const original = buildRequirementCoverage(context, [
       capturedPending.providerProposal,

@@ -97,7 +97,36 @@ export function buildOpportunityAssessmentPostingInput(
     });
   const requirements: OpportunityAssessmentRequirement[] = [];
   if (verified) {
+    const candidateCriterionIds = new Set(
+      verified.ledger.dispositions
+        .filter(
+          (row) =>
+            row.type !== 'source_context' && row.type !== 'nonrequirement',
+        )
+        .flatMap((row) => row.requirementIds),
+    );
+    // Exact context clauses already occur in the full posting. Preserve their
+    // canonical attribution on that source instead of sending duplicate text.
+    const descriptionSource = postingSources.find(
+      (source) => source.kind === 'posting_description',
+    );
+    if (descriptionSource) {
+      descriptionSource.sourceSpans = verified.ledger.dispositions
+        .filter((row) => row.type === 'source_context')
+        .map((disposition) => {
+          const clause = verified.ledger.clauses.find(
+            (row) => row.id === disposition.clauseId,
+          )!;
+          return {
+            clauseId: clause.id,
+            start: clause.spanStart,
+            end: clause.spanEnd,
+            hash: clause.hash,
+          };
+        });
+    }
     for (const requirement of verified.ledger.requirements) {
+      if (!candidateCriterionIds.has(requirement.id)) continue;
       const importance = verified.ledger.audit!.importance[requirement.id]!;
       const id = `${opportunityId}:coverage:${requirement.id}`;
       const clauses = requirement.clauseIds.map(

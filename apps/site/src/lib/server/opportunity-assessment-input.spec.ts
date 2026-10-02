@@ -81,6 +81,111 @@ describe('opportunity assessment input', () => {
       expect(verified.fingerprint).toBe(ledger.audit.fingerprint);
     }
   });
+  it('retains exact context without candidate rows or duplicate text and retires a mixed-clause context row', () => {
+    const descriptionRaw = [
+      'Our infrastructure team serves four million customers. Diagnose service-mesh failures and prevent recurrence.',
+      'Employees may work abroad for 90 days, except roles with regulatory restrictions.',
+      'Applicants must reside in Canada and hold current work authorization.',
+    ].join('\n');
+    const opportunity = {
+      id: 'role-context',
+      descriptionRaw,
+      sourceContentFingerprint: 'context-source',
+      sourceContentVersion: 1,
+      preparedPostingFingerprint: 'context-prepared',
+      preparedPostingJson: '{}',
+    };
+    const context = requirementCoverageContextForOpportunity(opportunity);
+    const ledger = buildRequirementCoverageSource(context);
+    const [mixed, benefits, eligibility] = ledger.clauses;
+    const historicalRequirements = [
+      {
+        id: 'company-fact',
+        text: 'Our infrastructure team serves four million customers.',
+        clauseIds: [mixed!.id],
+        importance: 'unknown' as const,
+      },
+      {
+        id: 'duty',
+        text: 'Diagnose service-mesh failures and prevent recurrence.',
+        clauseIds: [mixed!.id],
+        importance: 'unknown' as const,
+      },
+      {
+        id: 'eligibility',
+        text: eligibility!.text,
+        clauseIds: [eligibility!.id],
+        importance: 'unknown' as const,
+      },
+    ];
+    // A current source repair may retire the descriptive row; paid historical
+    // proposal records stay unchanged and are not reused as verified criteria.
+    ledger.requirements = historicalRequirements.filter(
+      (row) => row.id !== 'company-fact',
+    );
+    ledger.dispositions = [
+      { clauseId: mixed!.id, type: 'role_duty', requirementIds: ['duty'] },
+      { clauseId: benefits!.id, type: 'source_context', requirementIds: [] },
+      {
+        clauseId: eligibility!.id,
+        type: 'material_requirement',
+        requirementIds: ['eligibility'],
+      },
+    ];
+    const prepared = prepareRequirementCoverageAudit(context, ledger);
+    ledger.audit = resolveRequirementCoverageAudit(
+      prepared,
+      {
+        model: 'jev-test',
+        provenance: { model: 'jev-test', provider: 'typesafe' },
+        answers: Object.fromEntries(
+          Object.keys(prepared.request.questions).map((key) => [
+            key,
+            { type: 'predicate', probability: 0.95 },
+          ]),
+        ),
+      } satisfies import('@happyvertical/ai').DecisionResult,
+      'context-repair-receipt',
+    );
+    opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: ledger,
+    });
+    const verified = verifiedOpportunityRequirementCoverage(opportunity)!;
+    expect(verified).toBeDefined();
+    const posting = buildOpportunityAssessmentPostingInput(
+      opportunity,
+      verified,
+    );
+    expect(posting.requirements.map((row) => row.text)).toEqual([
+      'Diagnose service-mesh failures and prevent recurrence.',
+      eligibility!.text,
+    ]);
+    const fullSource = posting.postingSources.find(
+      (row) => row.kind === 'posting_description',
+    )!;
+    expect(fullSource.text).toBe(descriptionRaw);
+    expect(fullSource.sourceSpans).toEqual([
+      {
+        clauseId: benefits!.id,
+        start: benefits!.spanStart,
+        end: benefits!.spanEnd,
+        hash: benefits!.hash,
+      },
+    ]);
+    expect(
+      posting.postingSources.filter((row) => row.text.includes('90 days')),
+    ).toHaveLength(1);
+    expect(
+      posting.postingSources.filter(
+        (row) => row.kind === 'posting_requirement',
+      ),
+    ).toHaveLength(2);
+    expect(historicalRequirements.map((row) => row.id)).toEqual([
+      'company-fact',
+      'duty',
+      'eligibility',
+    ]);
+  });
   it('consumes only current lossless requirements and preserves exact clause attribution', () => {
     const opportunity = {
       id: 'role-1',

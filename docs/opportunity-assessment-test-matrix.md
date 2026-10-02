@@ -117,28 +117,39 @@ exhaustive manifest of exact native raw posting spans, including About-role/team
 context. Spans use JavaScript UTF-16 offsets; IDs, hashes and reciprocal mappings
 are checked against the unchanged native source. Required/preferred importance
 must be independently verified as explicit; otherwise it remains unknown. The
-v4 audit reserves a bounded optional classification question scope while keeping
+v5 audit reserves a bounded optional classification question scope while keeping
 every semantic clause coverage question. Under-threshold, conflicting or
 unoffered importance stays unknown, and private classification cannot promote it.
 Unknown or malformed coverage
 stops before an audit or private matching call.
 
-The v4 audit retains full raw source plus keyed literal clause and requirement
-records. Every question explicitly binds its source key and mapped requirement
-keys; the recorded prior audit remains accounted under its original identity.
-Each source clause receives an independent literal coverage predicate. Material
-clauses must retain every qualifier in their mapped statements. An explicitly
-pending body context with no mapped rows remains structurally incomplete; audit
-admission alone cannot complete it. Its independent literal predicate must prove
-that no material qualification, duty, role context or constraint was omitted.
-The original disposition, empty mapping and full raw clause stay intact, and
-private readiness requires the exact recorded global verdict at least 0.85. A nonrequirement
-label cannot establish an exclusion: the verifier independently checks that the
-exact clause contains no material role criterion. All predicates must reach the
-existing 0.85 threshold. The cache lives in the existing prepared posting JSON,
-contains no candidate material, and binds the source, preparation, extraction,
-ledger and actual governed request identities. A private request also checks the
-completed global governance output; injected audit JSON cannot unlock it.
+The v5 source audit distinguishes applicant criteria from descriptive source
+context. Candidate qualifications, duties and applicant authorization, residence
+or selection restrictions must be retained in mapped rows, and every mapped row
+must itself be a candidate criterion. Company/team facts and employment or
+benefit program terms, with their scope and exceptions, remain exact source
+context. A current, separately recorded repair may explicitly retire a context
+row while preserving its original paid proposal receipt.
+
+Every body clause receives a keyed independent literal predicate at the existing
+0.85 threshold. A context label alone proves nothing. Exact canonical headings
+with native span/hash/grammar and unmapped heading dispositions use deterministic
+proof; no synthetic confidence value is recorded. Clause literals and order stay
+in the request. Redundant raw source is omitted only when native spans exhaust
+all non-whitespace source content; any non-whitespace gap retains full raw text.
+Private matching uses only verified candidate rows and preserves context clause
+attribution on its full posting source without duplicating their text.
+
+The cache lives in existing prepared posting JSON, contains no candidate
+material, and binds source, preparation, extraction, repair, ledger and actual
+governed request identities. Private readiness requires the completed global
+provider output matching that exact audit; injected JSON cannot unlock it.
+
+The pre-repair audit reservation serializes the actual native clause structure
+and shared policy, then reserves the validator's maximum legal row, mapping-key
+and escaped-text counts plus the bounded optional importance scope. The actual
+post-repair request must fit that prior reservation and all unchanged byte,
+output, call and aggregate token limits before the audit can bill.
 
 The existing source extraction/audit lifecycle admits its aggregate request,
 token and spend reservations before its first provider call. Each Luna stage
@@ -158,7 +169,7 @@ provider does not establish a shared negative cache entry.
 | Behavior | Positive evidence | Failure evidence | Validation |
 | --- | --- | --- | --- |
 | Exact source coverage | Full literal clause and qualifiers, reciprocal native spans/IDs | Missing/duplicate/changed clause or summary-only source | coverage module/provider specs |
-| Independent semantic audit | Every clause probability at least 0.85 | Partial 0.84, missing/malformed answer, unsupported exclusion | coverage provider specs |
+| Independent semantic audit | Every body verdict at least 0.85; exact native heading proof | Partial 0.84, missing/malformed answer, unsupported exclusion | coverage provider specs |
 | Audit authority | Current completed global provider output matches the cache | Forged JSON, foreign/private receipt, stale extraction/source | provider receipt and input specs |
 | Prebilling private prerequisite | Verified cache fingerprint enters private request/job identity | Missing receipt rejects before governance/provider | assessment provider and dependency specs |
 | Aggregate source admission | Every extraction chunk and audit reserve counted within limits | Over-budget tokens/calls/spend reject before first provider | source extraction/provider lifecycle specs |
