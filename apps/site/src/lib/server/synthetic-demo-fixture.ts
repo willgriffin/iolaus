@@ -1,7 +1,21 @@
 import type { FilesystemInterface } from '@happyvertical/files';
+import { executeAsPrincipal } from '@happyvertical/smrt-agents';
+import {
+  MembershipCollection,
+  MembershipStatus,
+  UserCollection,
+} from '@happyvertical/smrt-users';
 import { applicationRuntime } from './application-runtime.js';
+import { requireCandidateOnboardingSubject } from './candidate-onboarding.js';
+import { getSmrtOptions } from './db.js';
 import { getResumeFilesystem } from './resume-files.js';
 import { getCollection } from './smrt.js';
+import {
+  resolveWorkspaceSubjectForProfile,
+  verifyWorkspaceSubject,
+  type WorkspaceSubject,
+} from './workspace-subject.js';
+import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
 const FIXTURE_PREFIX = 'iolaus-demo-fictional';
 const FIXTURE_RESUME_BASE_PATH = `generated-resumes/${FIXTURE_PREFIX}/resume`;
@@ -70,6 +84,9 @@ export interface SyntheticDemoFixtureCollections {
 
 export interface SyntheticDemoFixtureResult {
   applicationId: string;
+  profileId: string;
+  tenantId: string;
+  userId: string;
   crawlId: string;
   created: boolean;
   opportunityId: string;
@@ -84,6 +101,8 @@ export interface SyntheticDemoFixtureOptions {
    * touching the local runtime asset store.
    */
   filesystem?: FixtureFilesystem;
+  /** Tests provide an explicit identity; production resolves a live native owner. */
+  subject?: WorkspaceSubject;
 }
 
 function stringValue(value: unknown): string {
@@ -100,24 +119,17 @@ function syntheticResumeHtml(markdown: string): string {
 
 async function writeSyntheticResumeArtifacts(
   filesystem: FixtureFilesystem,
+  basePath: string,
 ): Promise<void> {
   await Promise.all([
+    filesystem.write(`${basePath}.md`, FIXTURE_RESUME_MARKDOWN, {
+      createParents: true,
+    }),
+    filesystem.write(`${basePath}.txt`, FIXTURE_RESUME_MARKDOWN, {
+      createParents: true,
+    }),
     filesystem.write(
-      `${FIXTURE_RESUME_BASE_PATH}.md`,
-      FIXTURE_RESUME_MARKDOWN,
-      {
-        createParents: true,
-      },
-    ),
-    filesystem.write(
-      `${FIXTURE_RESUME_BASE_PATH}.txt`,
-      FIXTURE_RESUME_MARKDOWN,
-      {
-        createParents: true,
-      },
-    ),
-    filesystem.write(
-      `${FIXTURE_RESUME_BASE_PATH}.html`,
+      `${basePath}.html`,
       syntheticResumeHtml(FIXTURE_RESUME_MARKDOWN),
       { createParents: true },
     ),
@@ -208,6 +220,71 @@ async function defaultCollections(): Promise<SyntheticDemoFixtureCollections> {
   };
 }
 
+/** Resolve an existing local owner; the selector never creates or grants authority. */
+export async function withSyntheticDemoOwnerContext<T>(
+  work: (subject: WorkspaceSubject) => Promise<T>,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<T> {
+  assertSyntheticDemoFixtureEnabled(environment);
+  const email = environment.IOLAUS_DEMO_OWNER_EMAIL?.trim();
+  if (!email)
+    throw new Error(
+      'IOLAUS_DEMO_OWNER_EMAIL must select an existing authenticated local owner.',
+    );
+  const options = getSmrtOptions();
+  const users = await UserCollection.create(options);
+  const user = await users.findByEmail(email);
+  if (!user?.id || !user.isActive())
+    throw new Error(
+      'Demo owner is unavailable. Complete local owner setup first.',
+    );
+  const memberships = await MembershipCollection.create(options);
+  const active = await memberships.list({
+    limit: 2,
+    where: { userId: user.id, status: MembershipStatus.ACTIVE },
+  });
+  if (active.length !== 1 || !active[0]?.tenantId)
+    throw new Error(
+      'Demo owner must have exactly one live native workspace membership.',
+    );
+  const tenantId = active[0].tenantId;
+  return await executeAsPrincipal(
+    {
+      ...options,
+      action: 'demo.fixture.seed',
+      onBehalfOfUserId: user.id,
+      postgresRls: false,
+      principal: { allowedTools: [], runAsUserId: user.id, tenantId },
+    },
+    async (run) => {
+      const subject = await verifyWorkspaceSubject({ user, tenantId });
+      if (!subject)
+        throw new Error('Demo owner workspace could not be verified.');
+      const operation = workspaceWorkflowOperation('profile.manage');
+      await run.assertOperation(operation.collection, operation.action);
+      return await work(subject);
+    },
+  );
+}
+
+function ownedCollection(
+  collection: Collection,
+  scope: Record<string, unknown>,
+): Collection {
+  return {
+    create: async (payload) =>
+      await collection.create({ ...payload, ...scope }),
+    list: async (options = {}) =>
+      await collection.list({
+        ...options,
+        where: {
+          ...(options.where as Record<string, unknown> | undefined),
+          ...scope,
+        },
+      }),
+  };
+}
+
 /**
  * Seed one complete, visibly fictional local workflow for demo and QA. It
  * creates no files, contacts no employer, and reuses the same records on
@@ -220,10 +297,51 @@ export async function seedSyntheticDemoFixture(
   options: SyntheticDemoFixtureOptions = {},
 ): Promise<SyntheticDemoFixtureResult> {
   assertSyntheticDemoFixtureEnabled(environment);
-  const collections = suppliedCollections ?? (await defaultCollections());
+  if (!suppliedCollections) {
+    return await withSyntheticDemoOwnerContext(async (subject) => {
+      // An explicit profile selector must prove ownership in native storage.
+      const verified = options.subject?.profileId
+        ? await resolveWorkspaceSubjectForProfile(options.subject.profileId)
+        : subject;
+      return await seedSyntheticDemoFixture(
+        await defaultCollections(),
+        environment,
+        {
+          ...options,
+          subject: verified,
+          filesystem: options.filesystem ?? (await getResumeFilesystem()),
+        },
+      );
+    }, environment);
+  }
+  const subject = requireCandidateOnboardingSubject(
+    options.subject as WorkspaceSubject,
+  );
+  const ownerScope = {
+    tenantId: subject.tenantId,
+    ownerUserId: subject.userId,
+  };
+  const collections = { ...suppliedCollections };
+  collections.candidateProfiles = ownedCollection(
+    collections.candidateProfiles,
+    ownerScope,
+  );
+  if (
+    subject.profileId &&
+    !(
+      await collections.candidateProfiles.list({
+        limit: 1,
+        where: { id: subject.profileId },
+      })
+    )[0]
+  ) {
+    throw new Error('The selected demo profile is unavailable.');
+  }
   const profile = await findOrCreate(
     collections.candidateProfiles,
-    { profileKey: `${FIXTURE_PREFIX}-candidate` },
+    subject.profileId
+      ? { id: subject.profileId }
+      : { profileKey: `${FIXTURE_PREFIX}-candidate` },
     {
       active: true,
       email: 'jordan.example@demo.invalid',
@@ -241,6 +359,23 @@ export async function seedSyntheticDemoFixture(
       title: 'Fictional Staff Software Engineer',
     },
   );
+  if (subject.profileId && profile.created)
+    throw new Error('The selected demo profile is unavailable.');
+  const profileId = stringValue(profile.record.id);
+  if (!profileId) throw new Error('Demo profile is missing its id.');
+  const privateScope = { ...ownerScope, candidateProfileId: profileId };
+  for (const name of [
+    'agentRuns',
+    'applicationMaterialComments',
+    'applications',
+    'candidateAnswers',
+    'decisions',
+    'resumeAssets',
+    'tasks',
+  ] as const) {
+    collections[name] = ownedCollection(collections[name], privateScope);
+  }
+  const basePath = `${FIXTURE_RESUME_BASE_PATH}-${subject.tenantId}-${subject.userId}-${profileId}`;
   const company = await findOrCreate(
     collections.companies,
     { companyKey: `${FIXTURE_PREFIX}-company` },
@@ -291,7 +426,6 @@ export async function seedSyntheticDemoFixture(
         'Lead platform work for a fictional local-first employment workspace, making agent-assisted job search reliable and understandable.',
       employmentType: 'full_time',
       externalId: `${FIXTURE_PREFIX}-opportunity`,
-      humanReviewStatus: 'apply',
       locationNotes: 'Remote within Canada (fictional local demo)',
       locations: 'Canada',
       postingUrl: 'https://example.invalid/iolaus-demo-posting',
@@ -327,14 +461,12 @@ export async function seedSyntheticDemoFixture(
         'Build the reviewable job-triage experience that helps people make informed decisions with an agent.',
       employmentType: 'full_time',
       externalId: `${FIXTURE_PREFIX}-triage-opportunity`,
-      humanReviewStatus: 'needs_input',
       firstSeenAt: new Date('2026-09-03T00:02:00.000Z'),
       freshness: 'fresh',
       lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
       locationNotes:
         'Remote in Canada or the United States (fictional local demo)',
       locations: 'Canada\nUnited States',
-      organizationProfileId: stringValue(profile.record.id),
       postingUrl: 'https://example.invalid/iolaus-demo-triage-posting',
       preferredSkills: 'WebMCP\nUX research\nData visualization',
       qualifications:
@@ -373,12 +505,10 @@ export async function seedSyntheticDemoFixture(
       externalId: `${FIXTURE_PREFIX}-triage-followup-opportunity`,
       firstSeenAt: new Date('2026-09-03T00:00:00.000Z'),
       freshness: 'fresh',
-      humanReviewStatus: 'needs_input',
       lastSeenAt: new Date('2026-09-03T00:01:00.000Z'),
       locationNotes:
         'Remote within North American time zones (fictional local demo)',
       locations: 'Canada\nUnited States',
-      organizationProfileId: stringValue(profile.record.id),
       postingUrl: 'https://example.invalid/iolaus-demo-triage-followup-posting',
       preferredSkills: 'WebMCP\nObservability\nDistributed systems',
       qualifications:
@@ -484,9 +614,9 @@ export async function seedSyntheticDemoFixture(
     assetType: 'resume',
     candidateProfileId: stringValue(profile.record.id),
     generatedAt: new Date('2026-09-03T00:01:00.000Z'),
-    generatedPath: FIXTURE_RESUME_BASE_PATH,
-    htmlPath: `${FIXTURE_RESUME_BASE_PATH}.html`,
-    markdownPath: `${FIXTURE_RESUME_BASE_PATH}.md`,
+    generatedPath: basePath,
+    htmlPath: `${basePath}.html`,
+    markdownPath: `${basePath}.md`,
     notes:
       'Generated fictional demo resume. Local review only; no real candidate data or submission use.',
     // Keep the original stable key so prior local demos receive this safe
@@ -495,7 +625,7 @@ export async function seedSyntheticDemoFixture(
     pdfBasename: '',
     pdfPath: '',
     status: 'generated',
-    textPath: `${FIXTURE_RESUME_BASE_PATH}.txt`,
+    textPath: `${basePath}.txt`,
     title: 'Fictional demo resume — generated text',
   };
   const resume = await findOrCreate(
@@ -514,7 +644,7 @@ export async function seedSyntheticDemoFixture(
     options.filesystem ??
     (suppliedCollections ? undefined : await getResumeFilesystem());
   if (filesystem) {
-    await writeSyntheticResumeArtifacts(filesystem);
+    await writeSyntheticResumeArtifacts(filesystem, basePath);
   }
   await findOrCreate(
     collections.candidateAnswers,
@@ -604,6 +734,9 @@ export async function seedSyntheticDemoFixture(
   );
 
   return {
+    profileId,
+    tenantId: subject.tenantId,
+    userId: subject.userId,
     applicationId: stringValue(application.record.id),
     created:
       profile.created ||

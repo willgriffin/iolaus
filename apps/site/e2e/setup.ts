@@ -51,6 +51,8 @@ export default async function setup() {
     SMRT_BACKGROUND_JOBS: 'false',
     IOLAUS_ENABLE_DEMO_FIXTURES: '1',
     IOLAUS_E2E_FIXTURE: join(root, 'fixture.json'),
+    IOLAUS_DEMO_OWNER_EMAIL: 'mobile-qa@example.invalid',
+    IOLAUS_E2E_FOREIGN_AUTH: join(root, 'foreign-auth.json'),
     HOST: '127.0.0.1',
     PORT: String(port),
     ORIGIN: origin,
@@ -166,7 +168,6 @@ export default async function setup() {
       'db:status',
     ]);
     await site('scripts/demo-permissions.ts');
-    await site('e2e/seed.ts');
     await startServer();
     const handoff = JSON.parse(
       readFileSync(join(stateRoot, 'onboarding.json'), 'utf8'),
@@ -192,6 +193,8 @@ export default async function setup() {
     } finally {
       await api.dispose();
     }
+    // Owner setup and native membership must exist before private fixtures.
+    await site('e2e/seed.ts');
     const health = await fetch(`${origin}/api/admin-resources/tasks`, {
       headers: {
         cookie: JSON.parse(readFileSync(join(root, 'auth.json'), 'utf8'))
@@ -210,6 +213,7 @@ export default async function setup() {
       'E2E runtime ready: build, db:migrate, db:status, synthetic seed and authenticated task data passed.',
     );
     process.env.IOLAUS_E2E_ORIGIN = origin;
+    process.env.IOLAUS_E2E_FOREIGN_AUTH = environment.IOLAUS_E2E_FOREIGN_AUTH;
     process.env.IOLAUS_E2E_AUTH = join(root, 'auth.json');
     process.env.IOLAUS_E2E_FIXTURE = environment.IOLAUS_E2E_FIXTURE;
     return () => cleanup(true);

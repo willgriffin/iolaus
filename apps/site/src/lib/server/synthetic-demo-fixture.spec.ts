@@ -33,6 +33,9 @@ describe('synthetic demo fixture', () => {
     IOLAUS_ENABLE_DEMO_FIXTURES: '1',
     NODE_ENV: 'development',
   };
+  const subject = { tenantId: 'demo-tenant', userId: 'demo-owner' };
+  const resumePath =
+    'generated-resumes/iolaus-demo-fictional/resume-demo-tenant-demo-owner-fixture-1';
   let rows: Record<string, Row[]>;
   let fixtureFiles: Map<string, string | Buffer>;
 
@@ -97,13 +100,53 @@ describe('synthetic demo fixture', () => {
     ).toThrow(/outside the local runtime profile/);
   });
 
+  it('rejects missing identity before touching storage', async () => {
+    await expect(
+      seedSyntheticDemoFixture(collections(), environment),
+    ).rejects.toThrow(/tenant ID/);
+    expect(Object.values(rows).flat()).toHaveLength(0);
+  });
+
+  it('never reuses private rows or resume files from another owner', async () => {
+    const first = await seedSyntheticDemoFixture(collections(), environment, {
+      subject,
+      filesystem: fixtureFilesystem(),
+    });
+    const other = await seedSyntheticDemoFixture(collections(), environment, {
+      subject: { tenantId: 'other-tenant', userId: 'other-owner' },
+      filesystem: fixtureFilesystem(),
+    });
+    expect(other.profileId).not.toBe(first.profileId);
+    expect(other.applicationId).not.toBe(first.applicationId);
+    expect(rows.opportunities).toHaveLength(3);
+    expect(rows.applications).toHaveLength(2);
+    expect(
+      new Set(rows.resumeAssets.map((row) => row.generatedPath)).size,
+    ).toBe(2);
+  });
+
+  it('rejects a foreign profile selector before creating private records', async () => {
+    const other = await seedSyntheticDemoFixture(collections(), environment, {
+      subject: { tenantId: 'other-tenant', userId: 'other-owner' },
+    });
+    const before = Object.values(rows).flat().length;
+    await expect(
+      seedSyntheticDemoFixture(collections(), environment, {
+        subject: { ...subject, profileId: other.profileId },
+      }),
+    ).rejects.toThrow(/selected demo profile/);
+    expect(Object.values(rows).flat()).toHaveLength(before);
+  });
+
   it('creates a complete fictional workflow exactly once', async () => {
     const filesystem = fixtureFilesystem();
     const first = await seedSyntheticDemoFixture(collections(), environment, {
       filesystem,
+      subject,
     });
     const second = await seedSyntheticDemoFixture(collections(), environment, {
       filesystem,
+      subject,
     });
 
     expect(first.created).toBe(true);
@@ -157,7 +200,6 @@ describe('synthetic demo fixture', () => {
       expect.arrayContaining([
         expect.objectContaining({
           freshness: 'fresh',
-          humanReviewStatus: 'needs_input',
           requiredSkills: expect.stringContaining('TypeScript'),
           salaryMin: expect.any(Number),
         }),
@@ -186,22 +228,42 @@ describe('synthetic demo fixture', () => {
       value: expect.stringContaining('Fictional demo answer'),
     });
     expect(rows.resumeAssets[0]).toMatchObject({
-      generatedPath: 'generated-resumes/iolaus-demo-fictional/resume',
-      markdownPath: 'generated-resumes/iolaus-demo-fictional/resume.md',
+      generatedPath: resumePath,
+      markdownPath: `${resumePath}.md`,
       pdfPath: '',
       status: 'generated',
-      textPath: 'generated-resumes/iolaus-demo-fictional/resume.txt',
+      textPath: `${resumePath}.txt`,
       title: 'Fictional demo resume — generated text',
     });
-    expect(
-      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.md'),
-    ).toContain('Fictional Staff Software Engineer');
-    expect(
-      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.txt'),
-    ).toContain('must never be submitted to an employer');
-    expect(
-      fixtureFiles.get('generated-resumes/iolaus-demo-fictional/resume.html'),
-    ).toContain('<pre>');
+    expect(fixtureFiles.get(`${resumePath}.md`)).toContain(
+      'Fictional Staff Software Engineer',
+    );
+    expect(fixtureFiles.get(`${resumePath}.txt`)).toContain(
+      'must never be submitted to an employer',
+    );
+    expect(fixtureFiles.get(`${resumePath}.html`)).toContain('<pre>');
     expect(rows.opportunities[0].organizationProfileId).toBeFalsy();
+    for (const name of [
+      'agentRuns',
+      'applicationMaterialComments',
+      'applications',
+      'candidateAnswers',
+      'decisions',
+      'resumeAssets',
+      'tasks',
+    ]) {
+      for (const row of rows[name])
+        expect(row).toMatchObject({
+          tenantId: subject.tenantId,
+          ownerUserId: subject.userId,
+          candidateProfileId: rows.candidateProfiles[0].id,
+        });
+    }
+    for (const row of rows.opportunities) {
+      expect(row.humanReviewStatus).toBeUndefined();
+      expect(row.ownerUserId).toBeUndefined();
+      expect(row.candidateProfileId).toBeUndefined();
+    }
+    expect(rows.decisions[0].decision).toBe('accept_to_apply');
   });
 });
