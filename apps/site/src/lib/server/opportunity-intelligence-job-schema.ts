@@ -1,4 +1,8 @@
-import { resolveDatabase } from '@happyvertical/smrt-core';
+import {
+  classifyDatabaseError,
+  detectEngine,
+  resolveDatabase,
+} from '@happyvertical/smrt-core';
 import { getDbConfig } from './db.js';
 
 export const OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE =
@@ -15,7 +19,20 @@ const OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX =
   'idx_smrt_jobs_opportunity_intelligence_active_material';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
-type QueryableDatabase = Pick<SmrtDatabase, 'query'>;
+type QueryableDatabase = Pick<SmrtDatabase, 'query'> &
+  Partial<Pick<SmrtDatabase, 'url'>>;
+
+function dedupeIndexDialect(db: QueryableDatabase): 'postgres' | 'sqlite' {
+  // Native database handles expose their connection URL. Query-only catalog
+  // doubles retain the existing PostgreSQL contract.
+  const dialect = db.url ? detectEngine(db.url) : 'postgres';
+  if (dialect !== 'postgres' && dialect !== 'sqlite') {
+    throw new Error(
+      'Opportunity-intelligence job dedupe dialect is unsupported.',
+    );
+  }
+  return dialect;
+}
 
 function normalizeIndexDefinition(value: unknown): string {
   return String(value ?? '')
@@ -51,6 +68,25 @@ function expectedOpportunityIntelligenceActiveIndexDefinition(): string {
         (COALESCE(args ->> 'scoringMaterialFingerprint', ''))
       )
       WHERE status = ANY (ARRAY['pending', 'running'])
+        AND queue = ${sqlString(OPPORTUNITY_INTELLIGENCE_QUEUE)}
+        AND object_type = ${sqlString(OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE)}
+        AND method = ${sqlString(OPPORTUNITY_INTELLIGENCE_METHOD)}
+        AND object_id IS NOT NULL
+  `);
+}
+
+function expectedSqliteOpportunityIntelligenceActiveIndexDefinition(): string {
+  return normalizeIndexDefinition(`
+    CREATE UNIQUE INDEX ${OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX}
+      ON _smrt_jobs (
+        queue,
+        object_type,
+        object_id,
+        method,
+        (COALESCE(args ->> 'contentFingerprint', '')),
+        (COALESCE(args ->> 'scoringMaterialFingerprint', ''))
+      )
+      WHERE status IN ('pending', 'running')
         AND queue = ${sqlString(OPPORTUNITY_INTELLIGENCE_QUEUE)}
         AND object_type = ${sqlString(OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE)}
         AND method = ${sqlString(OPPORTUNITY_INTELLIGENCE_METHOD)}
@@ -145,6 +181,28 @@ async function applyOpportunityIntelligenceJobDedupe(
 export async function getOpportunityIntelligenceJobDedupeStatus(
   db: QueryableDatabase,
 ): Promise<{ activeIndexNamed: boolean; activeIndexPresent: boolean }> {
+  if (dedupeIndexDialect(db) === 'sqlite') {
+    const result = await db.query(
+      `SELECT sql AS index_definition FROM sqlite_master
+       WHERE type = 'index' AND tbl_name = '_smrt_jobs' AND name = ?`,
+      [OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX],
+    );
+    const activeIndexNamed = result.rows.length === 1;
+    if (!activeIndexNamed) {
+      return { activeIndexNamed: false, activeIndexPresent: false };
+    }
+    const indexes = await db.query('PRAGMA index_list("_smrt_jobs")');
+    const index = indexes.rows.find(
+      (row) => row.name === OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX,
+    );
+    const activeIndexPresent = Boolean(
+      index?.unique === 1 &&
+        index.partial === 1 &&
+        normalizeIndexDefinition(result.rows[0]?.index_definition) ===
+          expectedSqliteOpportunityIntelligenceActiveIndexDefinition(),
+    );
+    return { activeIndexNamed, activeIndexPresent };
+  }
   const result = await db.query(
     `SELECT
        indexes.indisunique AS is_unique,
@@ -211,24 +269,12 @@ export async function ensureOpportunityIntelligenceJobDedupe(
 export function isOpportunityIntelligenceActiveJobConflict(
   error: unknown,
 ): boolean {
-  const values: string[] = [];
-  let cursor: unknown = error;
-
-  while (cursor && typeof cursor === 'object') {
-    const record = cursor as Record<string, unknown>;
-    for (const key of ['code', 'constraint', 'message']) {
-      const value = record[key];
-      if (typeof value === 'string') values.push(value);
-    }
-    cursor = record.cause;
-  }
-
-  return (
-    values.some((value) =>
-      /(?:^|\b)(?:code\s*[=:]\s*)?23505(?:\b|$)/i.test(value),
-    ) &&
-    values.some((value) =>
-      value.includes(OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX),
-    )
+  const classified = classifyDatabaseError(error);
+  if (classified.kind !== 'unique_violation') return false;
+  const values = [classified.constraint ?? '', ...classified.driverMessages];
+  return values.some((value) =>
+    new RegExp(
+      `(?:^|[^a-zA-Z0-9_])(?:${OPPORTUNITY_INTELLIGENCE_MATERIAL_ACTIVE_JOB_INDEX}|${OPPORTUNITY_INTELLIGENCE_ACTIVE_JOB_INDEX})(?:$|[^a-zA-Z0-9_])`,
+    ).test(value),
   );
 }
