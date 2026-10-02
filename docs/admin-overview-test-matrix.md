@@ -5,6 +5,9 @@ tenant/user/profile tuple. Overdue actionable work comes first, followed by
 user decisions and review, work in progress, other user tasks, agent work, and
 blocked work. Completed and canceled tasks are omitted. There is no stored
 task priority field; the ordering uses existing workflow columns and due dates.
+Open work without a specific action signal uses the neutral **Open task** label.
+Application packet titles ending with an internal application ID display the
+owned opportunity's title and company instead, without modifying stored tasks.
 
 Best new opportunities use the existing source-current assessment query and
 the active profile's eligibility and preference fingerprints. Expired and
@@ -22,6 +25,7 @@ values remain unchanged for existing records, filters, and integrations.
 | --- | --- | --- | --- | --- | --- | --- |
 | Verified route authority | Open `/admin` | Hook subject passed to loader | Missing hook subject prevents reads | Authenticated request locals; no mutation/transaction | SvelteKit; no client profile selector | `admin-root-route.spec.ts` |
 | Task isolation | Two users in one tenant | Each sees own profile tasks | Adapter-returned other-user rows removed | Native `listPrivateRecords` ownership predicate/post-filter | Engine-neutral collection API; SQLite/Postgres use existing helper | `admin-overview.spec.ts` |
+| Packet task display context | Packet title ends with application ID | Owned application resolves role/company title | Foreign application cannot supply display context; stored title unchanged | Native subject-scoped application read and existing opportunity context | Read-only; no new SQL/provider calls | `admin-overview.spec.ts` |
 | Task action priority | Overdue/review/agent/blocked tasks | Overdue and user review lead | Finished work omitted; blocked follows actionable work | Pure presentation; no database | No external contract | `overview.spec.ts` |
 | Current match semantics | New untriaged posting | Current complete score shown | Stale/missing/incomplete/out-of-range score unavailable | Existing scoped assessment fingerprints/query/projection | Existing cross-dialect query; no new SQL | Both overview specs |
 | Existing application exclusion | Draft plus needs-input review | Application remains in workflow | Draft not relisted as new opportunity | Existing subject-scoped application hydration | Read-only; no provider calls | Both overview specs |

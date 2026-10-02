@@ -37,6 +37,67 @@ export async function loadAdminOverview(
     pendingOpportunities: [],
   };
   const resource = requireAdminResource('opportunities');
+  const displayedTaskIds = new Set(overview.tasks.map((task) => task.id));
+  const displayedTasks = tasks.filter((task) =>
+    displayedTaskIds.has(String(task.id)),
+  );
+  const applicationIds = [
+    ...new Set(
+      displayedTasks.flatMap((task) =>
+        typeof task.applicationId === 'string' && task.applicationId
+          ? [task.applicationId]
+          : [],
+      ),
+    ),
+  ];
+  if (applicationIds.length) {
+    const applications = await listPrivateRecords('Application', subject, {
+      where: { 'id in': applicationIds },
+      limit: applicationIds.length,
+    });
+    const opportunityIds = [
+      ...new Set(
+        applications.flatMap((application) =>
+          typeof application.opportunityId === 'string' &&
+          application.opportunityId
+            ? [application.opportunityId]
+            : [],
+        ),
+      ),
+    ];
+    const applicationById = new Map(
+      applications.map((application) => [application.id, application]),
+    );
+    const postings = opportunityIds.length
+      ? await attachOpportunityContext(
+          await listAdminRecords(resource, {
+            where: { 'id in': opportunityIds },
+            limit: opportunityIds.length,
+          }),
+          { includeActivity: false, workspaceSubject: subject },
+        )
+      : [];
+    const postingById = new Map(
+      postings.map((posting) => [posting.id, posting]),
+    );
+    for (const task of overview.tasks) {
+      const record = displayedTasks.find(
+        (candidate) => candidate.id === task.id,
+      );
+      const application = applicationById.get(record?.applicationId);
+      const posting = postingById.get(application?.opportunityId as string);
+      if (
+        posting &&
+        typeof posting.title === 'string' &&
+        posting.title.trim() &&
+        typeof record?.applicationId === 'string' &&
+        task.title.endsWith(record.applicationId)
+      ) {
+        const context = `${posting.title}${posting.companyName ? ` · ${posting.companyName}` : ''}`;
+        task.title = `${task.title.slice(0, -record.applicationId.length)}${context}`;
+      }
+    }
+  }
   // Keep startup work bounded. Continue past existing applications rather than
   // letting a needs_input review make an active draft look like a new posting.
   for (const pending of [false, true]) {

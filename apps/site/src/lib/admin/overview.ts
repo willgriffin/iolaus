@@ -94,7 +94,7 @@ export function prioritizeOverviewTasks(
         'Needs your action',
         'In progress',
         'Your next task',
-        'Agent or automation',
+        'Open task',
         'Blocked',
       ][taskRank(record, now)],
       dueAt: text(record, 'dueAt'),

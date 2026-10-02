@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getCollection: vi.fn(),
   taskList: vi.fn(),
+  applicationList: vi.fn(),
   listAdminRecords: vi.fn(),
   listOpportunityPageIds: vi.fn(),
   attachOpportunityContext: vi.fn(),
@@ -67,7 +68,10 @@ const assessment = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.getCollection.mockResolvedValue({ list: mocks.taskList });
+  mocks.getCollection.mockImplementation(async (className) => ({
+    list: className === 'Application' ? mocks.applicationList : mocks.taskList,
+  }));
+  mocks.applicationList.mockResolvedValue([]);
   mocks.taskList.mockResolvedValue(
     [subjectA, subjectB].map((subject) => ({
       id: `task-${subject.userId}`,
@@ -99,6 +103,68 @@ beforeEach(() => {
 });
 
 describe('subject-scoped admin overview', () => {
+  it('labels an application packet task with its owned opportunity without modifying stored task text', async () => {
+    const task = {
+      id: 'packet-task',
+      title: 'Review application packet: application-a',
+      status: 'open',
+      applicationId: 'application-a',
+      tenantId: subjectA.tenantId,
+      ownerUserId: subjectA.userId,
+      candidateProfileId: subjectA.profileId,
+    };
+    mocks.taskList.mockResolvedValue([task]);
+    mocks.applicationList.mockResolvedValue([
+      {
+        id: 'application-a',
+        opportunityId: 'new',
+        tenantId: subjectA.tenantId,
+        ownerUserId: subjectA.userId,
+        candidateProfileId: subjectA.profileId,
+      },
+    ]);
+    expect((await loadAdminOverview(subjectA)).tasks[0].title).toBe(
+      'Review application packet: Engineer',
+    );
+    expect(task.title).toBe('Review application packet: application-a');
+    expect(mocks.applicationList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          'id in': ['application-a'],
+          tenantId: 'tenant',
+          ownerUserId: 'user-a',
+          candidateProfileId: 'profile-a',
+        },
+      }),
+    );
+  });
+
+  it('never derives a task display title from a foreign application returned by an adapter', async () => {
+    mocks.taskList.mockResolvedValue([
+      {
+        id: 'packet-task',
+        title: 'Review application packet: application-b',
+        status: 'open',
+        applicationId: 'application-b',
+        tenantId: subjectA.tenantId,
+        ownerUserId: subjectA.userId,
+        candidateProfileId: subjectA.profileId,
+      },
+    ]);
+    mocks.applicationList.mockResolvedValue([
+      {
+        id: 'application-b',
+        opportunityId: 'new',
+        tenantId: subjectB.tenantId,
+        ownerUserId: subjectB.userId,
+        candidateProfileId: subjectB.profileId,
+      },
+    ]);
+    expect((await loadAdminOverview(subjectA)).tasks[0].title).toBe(
+      'Review application packet: application-b',
+    );
+  });
+
   it('retains native task ownership and never leaks another user task from an adapter', async () => {
     const a = await loadAdminOverview(subjectA);
     const b = await loadAdminOverview(subjectB);

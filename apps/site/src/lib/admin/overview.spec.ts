@@ -57,6 +57,7 @@ describe('overview presentation', () => {
     expect(tasks[0].priority).toBe('Overdue');
     expect(tasks[1].priority).toBe('Needs your action');
     expect(tasks[2].assignee).toBe('Agent');
+    expect(tasks[2].priority).toBe('Open task');
   });
 
   it('renders Agent labels without changing stored role values', () => {
