@@ -19,6 +19,7 @@ import {
   normalizeApplicationStatus,
   toOpportunityStatus,
 } from '../objects/lifecycle.js';
+import { getOpportunityEligibility } from '../opportunity-eligibility.js';
 import { resolveWritingAiProfileClient } from './ai-config.js';
 import { isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
@@ -32,6 +33,7 @@ import {
 } from './application-workflow.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import { parseRequiredAnswers } from './auto-submit-eligibility.js';
+import { verifiedOpportunityEligibilityProjection } from './opportunity-eligibility-refresh.js';
 import {
   loadCurrentOpportunityReviewOverlays,
   recordPrivateOpportunityReview,
@@ -403,10 +405,13 @@ function applyResumeVariantOverrides(
   return config;
 }
 
-async function tailoringOptionsForResumeVariant(variant: MutableRecord) {
+async function tailoringOptionsForResumeVariant(
+  variant: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const tailoringId = stringValue(variant.tailoringConfigId);
   const tailoringRecord = tailoringId
-    ? await getResumeTailoringConfig(tailoringId)
+    ? await getResumeTailoringConfig(tailoringId, subject)
     : null;
   if (tailoringId && !tailoringRecord) {
     error(400, 'Resume variant tailoring config not found.');
@@ -1170,6 +1175,41 @@ function linkedContextFactLines(
   );
 }
 
+/** Default model booleans do not establish employer immigration support. */
+function packetVisaOrEorEvidence(opportunity: MutableRecord): string {
+  // Recompute from fingerprint-verified captured posting source. Historical
+  // booleans and self-authored derived eligibility JSON are never evidence.
+  const eligibility = getOpportunityEligibility({
+    ...opportunity,
+    ...verifiedOpportunityEligibilityProjection(opportunity),
+  });
+  const kinds = new Set(eligibility.assertions.map(({ kind }) => kind));
+  const sponsorshipOffered = kinds.has('sponsorship_offered');
+  const sponsorshipDenied = kinds.has('sponsorship_denied');
+  const eorOffered = kinds.has('eor_offered');
+  const eorDenied = kinds.has('eor_denied');
+  const sponsorship = kinds.has('conditional_sponsorship')
+    ? 'Unknown (conditional posting evidence)'
+    : sponsorshipOffered && sponsorshipDenied
+      ? 'Unknown (conflicting posting evidence)'
+      : sponsorshipOffered
+        ? 'yes (explicit posting evidence)'
+        : sponsorshipDenied
+          ? 'no (explicit posting evidence)'
+          : 'Unknown';
+  const eor =
+    eorOffered && eorDenied
+      ? 'Unknown (conflicting posting evidence)'
+      : eorOffered
+        ? 'yes (explicit posting evidence)'
+        : eorDenied
+          ? 'no (explicit posting evidence)'
+          : 'Unknown';
+  if (sponsorship === 'Unknown' && eor === 'Unknown') return 'Unknown';
+  // A visa denial cannot establish an EOR denial, or the reverse.
+  return `Visa sponsorship: ${sponsorship}; EOR: ${eor}`;
+}
+
 function buildApplicationPacketMarkdown(options: {
   application: MutableRecord;
   companyResearch: MutableRecord[];
@@ -1245,12 +1285,14 @@ function buildApplicationPacketMarkdown(options: {
   addDetail(
     compensationFacts,
     'Visa/EOR possible',
-    opportunity.visaOrEorPossible,
+    packetVisaOrEorEvidence(opportunity),
   );
   addDetail(
     compensationFacts,
     'Relocation supported',
-    opportunity.relocationSupported,
+    // The posting source contract has no verified relocation assertion.
+    // A default boolean (including true) cannot establish this employer fact.
+    'Unknown',
   );
   addDetail(compensationFacts, 'Application due at', application.dueAt);
 
@@ -1913,7 +1955,10 @@ async function generateApplicationPackageAfterPreflight(options: {
       } else {
         trackNewResumeVariant(cleanupLedger, variant);
       }
-      const tailoringOptions = await tailoringOptionsForResumeVariant(variant);
+      const tailoringOptions = await tailoringOptionsForResumeVariant(
+        variant,
+        subject,
+      );
       const asset = await generateResumeAsset({
         applicationId: stringValue(application.id),
         assertWriteAllowed: assertOpportunityLifecycleLockIsActive,

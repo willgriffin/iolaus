@@ -6,6 +6,7 @@ import {
   updateOpportunityReview as updateReview,
   bulkUpdateOpportunityReviews as updateReviews,
 } from './application-package';
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 
 const subject = {
   profileId: 'profile-1',
@@ -714,6 +715,110 @@ describe('generateApplicationPackage', () => {
     mocks.syncApplicationWorkflowTasks.mockClear();
     mocks.assertOpportunityLifecycleLockIsActive.mockReset();
     mocks.assertOpportunityLifecycleLockIsActive.mockImplementation(() => {});
+  });
+
+  it.each([
+    {
+      name: 'default false fields without captured source',
+      source: '',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'legacy true fields without captured source',
+      source: '',
+      validFingerprint: true,
+      visaBoolean: true,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'business sponsor without immigration evidence',
+      source: 'Your Executive Sponsor provides strategic support.',
+      validFingerprint: true,
+      visaBoolean: true,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'explicit visa denial leaves EOR unknown',
+      source: 'We do not offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: no (explicit posting evidence); EOR: Unknown',
+    },
+    {
+      name: 'explicit visa offer overrides legacy false',
+      source: 'We offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: yes (explicit posting evidence); EOR: Unknown',
+    },
+    {
+      name: 'tampered fingerprint cannot establish denial',
+      source: 'We do not offer visa sponsorship.',
+      validFingerprint: false,
+      visaBoolean: false,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'contradictory immigration clauses stay uncertain',
+      source: 'We offer visa sponsorship. We do not offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: Unknown (conflicting posting evidence); EOR: Unknown',
+    },
+  ])('keeps packet employer support source-grounded: $name', async ({
+    source,
+    validFingerprint,
+    visaBoolean,
+    expectedVisa,
+  }) => {
+    const sourceContent = { descriptionRaw: source };
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          title: 'AI Engineer',
+          visaOrEorPossible: visaBoolean,
+          relocationSupported: visaBoolean,
+          ...(source
+            ? {
+                sourceContentJson: JSON.stringify(sourceContent),
+                sourceContentFingerprint: validFingerprint
+                  ? fingerprintOpportunitySourceContent(sourceContent)
+                  : 'tampered',
+                sourceContentVersion: 1,
+              }
+            : {}),
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-eligibility-packet',
+          opportunityId: 'opp-1',
+          resumeMode: 'none',
+          coverLetterMode: 'none',
+        }),
+      ]),
+    );
+    await generateApplicationPackage('app-eligibility-packet');
+    const markdown = mocks.fsWrite.mock.calls.find(
+      ([path]) =>
+        typeof path === 'string' &&
+        path.includes('/packet-') &&
+        path.endsWith('.md'),
+    )?.[1];
+    expect(markdown).toContain(`- Visa/EOR possible: ${expectedVisa}`);
+    expect(markdown).toContain('- Relocation supported: Unknown');
+    expect(markdown).not.toContain('- Visa/EOR possible: no');
+    expect(markdown).not.toContain('- Relocation supported: no');
   });
 
   it('auto-fills the published resume for a default-resume application', async () => {
