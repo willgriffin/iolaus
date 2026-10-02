@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AdminRecord } from '$lib/admin/dock';
+import { opportunityEligibilityProjection } from '$lib/opportunity-eligibility';
 import {
   collectOpportunityOptions,
   countActiveFilters,
@@ -21,6 +22,19 @@ function filters(
 
 const matchAll = { hasSkill: () => true };
 const matchNone = { hasSkill: () => false };
+
+function eligibilityRecord(
+  descriptionRaw: string,
+  overrides: AdminRecord = {},
+): AdminRecord {
+  const source = {
+    sourceContentFingerprint: 'source-fingerprint',
+    sourceContentVersion: 1,
+    sourceContentJson: JSON.stringify({ descriptionRaw }),
+    descriptionRaw,
+  };
+  return { ...source, ...opportunityEligibilityProjection(source), ...overrides };
+}
 
 describe('parseSkillList', () => {
   it('splits, trims, and dedupes case-insensitively', () => {
@@ -210,6 +224,23 @@ describe('matchesOpportunity', () => {
     ).toBe(false);
   });
 
+  it('matches any selected current eligibility bucket and keeps stale evidence unknown', () => {
+    const canada = eligibilityRecord('Location: Canada');
+    const sponsor = eligibilityRecord('We offer visa sponsorship.');
+    const stale = eligibilityRecord('Location: Canada', {
+      sourceContentFingerprint: 'new-source-fingerprint',
+    });
+    const selected = filters({
+      eligibilityBuckets: ['canada_eligible', 'sponsorship_possible'],
+    });
+    expect(matchesOpportunity(canada, selected, matchAll)).toBe(true);
+    expect(matchesOpportunity(sponsor, selected, matchAll)).toBe(true);
+    expect(matchesOpportunity(stale, selected, matchAll)).toBe(false);
+    expect(
+      matchesOpportunity(stale, filters({ eligibilityBuckets: ['unknown'] }), matchAll),
+    ).toBe(true);
+  });
+
   it('filters explicit fresh freshness mode', () => {
     expect(
       matchesOpportunity(
@@ -301,6 +332,19 @@ describe('sortOpportunities', () => {
       'b',
       'c',
       'a',
+    ]);
+  });
+
+  it('prioritizes current Canada compatibility within the existing best-fit status rank', () => {
+    const unknown = eligibilityRecord('A general role', { id: 'unknown', status: 'found', latestScore: 90 });
+    const canada = eligibilityRecord('Location: Canada', { id: 'canada', status: 'found', latestScore: 10 });
+    expect(sortOpportunities([unknown, canada], 'best').map((record) => record.id)).toEqual([
+      'canada',
+      'unknown',
+    ]);
+    expect(sortOpportunities([unknown, canada], 'eligibility').map((record) => record.id)).toEqual([
+      'canada',
+      'unknown',
     ]);
   });
 
@@ -464,11 +508,12 @@ describe('opportunity filter query params', () => {
         sort: 'score',
         employmentTypes: ['full_time', 'contract'],
         workModes: ['remote', 'hybrid'],
+        eligibilityBuckets: ['canada_eligible', 'unknown'],
       }),
     );
 
     expect(params.toString()).toBe(
-      'review=apply&page=3&fit=have&skill=SvelteKit&skill=TypeScript&salaryMin=100000&includeMissingComp=false&postedWithinDays=30&excludeExpired=true&employmentType=full_time&employmentType=contract&workMode=remote&workMode=hybrid&minScore=70&sort=score',
+      'review=apply&page=3&fit=have&skill=SvelteKit&skill=TypeScript&salaryMin=100000&includeMissingComp=false&postedWithinDays=30&excludeExpired=true&employmentType=full_time&employmentType=contract&workMode=remote&workMode=hybrid&eligibilityBucket=canada_eligible&eligibilityBucket=unknown&minScore=70&sort=score',
     );
     expect(filterStateFromSearchParams(params)).toMatchObject({
       excludeExpired: true,
@@ -481,6 +526,7 @@ describe('opportunity filter query params', () => {
       sort: 'score',
       employmentTypes: ['full_time', 'contract'],
       workModes: ['remote', 'hybrid'],
+      eligibilityBuckets: ['canada_eligible', 'unknown'],
     });
 
     writeFilterStateSearchParams(params, DEFAULT_OPPORTUNITY_FILTERS);

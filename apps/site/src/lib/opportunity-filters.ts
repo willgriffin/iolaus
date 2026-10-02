@@ -1,4 +1,10 @@
 import type { AdminRecord } from '$lib/admin/dock';
+import {
+  ELIGIBILITY_BUCKETS,
+  eligibilityRank,
+  getOpportunityEligibility,
+  type EligibilityBucket,
+} from '$lib/opportunity-eligibility';
 
 // Status ordering for the default "best fit" sort — active/early stages first,
 // terminal last. Shared with the list component so sort and grouping agree.
@@ -25,7 +31,13 @@ export const OPPORTUNITY_STATUS_ORDER = [
  */
 export const DECISION_REVIEW_STATUSES = ['apply', 'maybe', 'reject'] as const;
 
-export type OpportunitySort = 'best' | 'newest' | 'score' | 'salary' | 'rating';
+export type OpportunitySort =
+  | 'best'
+  | 'eligibility'
+  | 'newest'
+  | 'score'
+  | 'salary'
+  | 'rating';
 export type OpportunitySortDirection = 'asc' | 'desc';
 
 export type FitFilter = 'all' | 'have' | 'gaps';
@@ -45,6 +57,8 @@ export interface OpportunityFilterState {
   freshness: string;
   employmentTypes: string[];
   workModes: string[];
+  /** Current posting eligibility buckets. Multiple selected buckets match OR. */
+  eligibilityBuckets: EligibilityBucket[];
   seniority: string;
   relocationOnly: boolean;
   visaOnly: boolean;
@@ -73,6 +87,7 @@ export const DEFAULT_OPPORTUNITY_FILTERS: OpportunityFilterState = {
   freshness: 'all',
   employmentTypes: [],
   workModes: [],
+  eligibilityBuckets: [],
   seniority: 'all',
   relocationOnly: false,
   visaOnly: false,
@@ -101,6 +116,7 @@ const OPPORTUNITY_FILTER_PARAM_KEYS = [
   'freshness',
   'employmentType',
   'workMode',
+  'eligibilityBucket',
   'seniority',
   'relocationOnly',
   'visaOnly',
@@ -338,6 +354,12 @@ export function matchesOpportunity(
   )
     return false;
 
+  if (filters.eligibilityBuckets.length > 0) {
+    const buckets = getOpportunityEligibility(record).buckets;
+    if (!filters.eligibilityBuckets.some((bucket) => buckets.includes(bucket)))
+      return false;
+  }
+
   if (
     filters.seniority !== 'all' &&
     getString(record, 'seniority') !== filters.seniority
@@ -417,6 +439,9 @@ export function sortOpportunities(
       case 'newest':
         primary = compare(postedRank(left), postedRank(right));
         break;
+      case 'eligibility':
+        primary = compare(eligibilityRank(left), eligibilityRank(right), 'asc');
+        break;
       case 'score':
         primary = compare(score(left), score(right));
         break;
@@ -432,6 +457,7 @@ export function sortOpportunities(
       default:
         primary =
           statusRank(left) - statusRank(right) ||
+          compare(eligibilityRank(left), eligibilityRank(right), 'asc') ||
           compare(score(left), score(right), 'desc');
     }
     if (primary) return primary;
@@ -470,6 +496,7 @@ export function countActiveFilters(filters: OpportunityFilterState): number {
   if (filters.freshness !== 'all') count++;
   if (filters.employmentTypes.length > 0) count++;
   if (filters.workModes.length > 0) count++;
+  if (filters.eligibilityBuckets.length > 0) count++;
   if (filters.seniority !== 'all') count++;
   if (filters.relocationOnly) count++;
   if (filters.visaOnly) count++;
@@ -528,6 +555,10 @@ export function normalizeFilterState(raw: unknown): OpportunityFilterState {
     input.employmentType,
   );
   base.workModes = stringArrayOr(input.workModes, input.workMode);
+  base.eligibilityBuckets = stringArrayOr(input.eligibilityBuckets).filter(
+    (bucket): bucket is EligibilityBucket =>
+      ELIGIBILITY_BUCKETS.includes(bucket as EligibilityBucket),
+  );
   base.seniority = stringOr(input.seniority, 'all');
   base.relocationOnly = boolOr(input.relocationOnly, false);
   base.visaOnly = boolOr(input.visaOnly, false);
@@ -539,6 +570,7 @@ export function normalizeFilterState(raw: unknown): OpportunityFilterState {
   base.maxScore = numberOrNull(input.maxScore);
   if (
     input.sort === 'best' ||
+    input.sort === 'eligibility' ||
     input.sort === 'newest' ||
     input.sort === 'score' ||
     input.sort === 'salary' ||
@@ -595,6 +627,7 @@ export function filterStateFromSearchParams(
     status: params.get('status') ?? undefined,
     visaOnly: trueFromSearchParam(params, 'visaOnly'),
     workModes: params.getAll('workMode'),
+    eligibilityBuckets: params.getAll('eligibilityBucket'),
   });
 }
 
@@ -645,6 +678,9 @@ export function writeFilterStateSearchParams(
   }
   for (const workMode of normalized.workModes) {
     params.append('workMode', workMode);
+  }
+  for (const bucket of normalized.eligibilityBuckets) {
+    params.append('eligibilityBucket', bucket);
   }
   if (normalized.seniority !== DEFAULT_OPPORTUNITY_FILTERS.seniority)
     params.set('seniority', normalized.seniority);

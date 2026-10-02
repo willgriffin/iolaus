@@ -10,6 +10,15 @@ import { getDbConfig } from './db.js';
 
 /** Hidden from every default listing; selectable through an explicit filter. */
 const ARCHIVED_OPPORTUNITY_STATUS = 'archived';
+const ELIGIBILITY_FLAG_BY_BUCKET: Record<string, number> = {
+  canada_eligible: 1,
+  sponsorship_possible: 2,
+  us_residence_required: 4,
+  incompatible: 8,
+  conflicting: 16,
+  unknown: 32,
+};
+const ELIGIBILITY_DERIVABLE_FLAGS = '1, 2, 3, 8, 10, 12, 14, 16, 32';
 const OPPORTUNITY_INDEX_BUILD_LOCK_TIMEOUT = '15s';
 const OPPORTUNITY_INDEX_BUILD_STATEMENT_TIMEOUT = '15min';
 const OPPORTUNITY_QUERY_INDEXES = [
@@ -290,10 +299,12 @@ function candidateSkillMatchSql(candidatePlaceholder: string): string {
 
 function filterWhereSql({
   candidateSkills,
+  dialect,
   filters,
   search,
   values,
 }: Pick<OpportunityQuery, 'candidateSkills' | 'filters' | 'search'> & {
+  dialect: OpportunityQueryDialect;
   values: unknown[];
 }): { needsScore: boolean; where: string[] } {
   const where: string[] = [];
@@ -402,12 +413,44 @@ function filterWhereSql({
   const employmentTypes = normalizeQueryTerms(filters.employmentTypes);
   if (employmentTypes.length > 0) {
     where.push(
-      `o.employment_type = ANY(${pushParam(values, employmentTypes)}::text[])`,
+      dialect === 'sqlite'
+        ? `o.employment_type IN (${employmentTypes.map((value) => pushParam(values, value)).join(', ')})`
+        : `o.employment_type = ANY(${pushParam(values, employmentTypes)}::text[])`,
     );
   }
   const workModes = normalizeQueryTerms(filters.workModes);
   if (workModes.length > 0) {
-    where.push(`o.work_mode = ANY(${pushParam(values, workModes)}::text[])`);
+    where.push(
+      dialect === 'sqlite'
+        ? `o.work_mode IN (${workModes.map((value) => pushParam(values, value)).join(', ')})`
+        : `o.work_mode = ANY(${pushParam(values, workModes)}::text[])`,
+    );
+  }
+  const eligibilityBuckets = normalizeQueryTerms(
+    filters.eligibilityBuckets,
+  ).filter((bucket) => bucket in ELIGIBILITY_FLAG_BY_BUCKET);
+  if (eligibilityBuckets.length > 0) {
+    // Eligibility belongs to a specific source snapshot. A stale binding, an
+    // empty source fingerprint, or an invalid bit mask is always Unknown;
+    // never let legacy scores or a stale assertion create a positive match.
+    const currentFlags = `CASE
+      WHEN COALESCE(o.source_content_fingerprint, '') <> ''
+        AND COALESCE(o.source_content_fingerprint, '') = COALESCE(o.eligibility_source_fingerprint, '')
+        AND COALESCE(o.source_content_version, 0) = COALESCE(o.eligibility_source_version, 0)
+        AND o.eligibility_flags IN (${ELIGIBILITY_DERIVABLE_FLAGS})
+      THEN o.eligibility_flags
+      ELSE ${ELIGIBILITY_FLAG_BY_BUCKET.unknown}
+    END`;
+    const selectedFlags = eligibilityBuckets.map(
+      (bucket) => ELIGIBILITY_FLAG_BY_BUCKET[bucket],
+    );
+    where.push(
+      `(${selectedFlags
+        .map(
+          (flag) => `(${currentFlags} & ${pushParam(values, flag)}) <> 0`,
+        )
+        .join(' OR ')})`,
+    );
   }
   if (filters.seniority !== 'all') {
     where.push(`o.seniority = ${pushParam(values, filters.seniority)}`);
@@ -459,7 +502,24 @@ function orderBySql(
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
+  const eligibilityRank = `CASE
+    WHEN COALESCE(o.source_content_fingerprint, '') <> ''
+      AND COALESCE(o.source_content_fingerprint, '') = COALESCE(o.eligibility_source_fingerprint, '')
+      AND COALESCE(o.source_content_version, 0) = COALESCE(o.eligibility_source_version, 0)
+      AND o.eligibility_flags IN (${ELIGIBILITY_DERIVABLE_FLAGS})
+    THEN CASE
+      WHEN (o.eligibility_flags & ${ELIGIBILITY_FLAG_BY_BUCKET.canada_eligible}) <> 0 THEN 1
+      WHEN (o.eligibility_flags & ${ELIGIBILITY_FLAG_BY_BUCKET.sponsorship_possible}) <> 0 THEN 2
+      WHEN (o.eligibility_flags & ${ELIGIBILITY_FLAG_BY_BUCKET.us_residence_required}) <> 0 THEN 3
+      WHEN (o.eligibility_flags & ${ELIGIBILITY_FLAG_BY_BUCKET.conflicting}) <> 0 THEN 5
+      WHEN (o.eligibility_flags & ${ELIGIBILITY_FLAG_BY_BUCKET.incompatible}) <> 0 THEN 6
+      ELSE 4
+    END
+    ELSE 4
+  END`;
   switch (sort) {
+    case 'eligibility':
+      return `${eligibilityRank} ${sqlDirection}, o.updated_at DESC, o.id ASC`;
     case 'newest':
       return `COALESCE(o.posted_at, o.first_seen_at) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'score':
@@ -473,7 +533,7 @@ function orderBySql(
     case 'rating':
       return `o.human_rating ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     default:
-      return `${opportunityStatusRankSql()} ASC, latest.score DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${opportunityStatusRankSql()} ASC, ${eligibilityRank} ASC, latest.score DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   }
 }
 
@@ -489,6 +549,7 @@ export function createOpportunityWhereSql(
   const review = reviewWhereSql(query.reviewFilter, values, dialect);
   const filters = filterWhereSql({
     candidateSkills: query.candidateSkills,
+    dialect,
     filters: query.filters,
     search: query.search,
     values,
@@ -591,6 +652,7 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
     ['freshness', filters.freshness],
     ['employmentTypes', list(filters.employmentTypes)],
     ['workModes', list(filters.workModes)],
+    ['eligibilityBuckets', list(filters.eligibilityBuckets)],
     ['seniority', filters.seniority],
     ['relocationOnly', filters.relocationOnly],
     ['visaOnly', filters.visaOnly],

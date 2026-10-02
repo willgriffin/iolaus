@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { AIMessage } from '@happyvertical/ai';
 import {
+  getOpportunityEligibility,
+  type EligibilityAssertion,
+  type EligibilityBucket,
+} from '../opportunity-eligibility.js';
+import {
   OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
   type OpportunityScoringConfig,
 } from './opportunity-intelligence-config.js';
@@ -21,8 +26,8 @@ import {
   skillSourceKey,
 } from './skill-matching.js';
 
-export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v4';
-export const OPPORTUNITY_SCORING_PROMPT_VERSION = 'opportunity-score/v6';
+export const OPPORTUNITY_SCORING_INPUT_VERSION = 'opportunity-scoring-input/v5';
+export const OPPORTUNITY_SCORING_PROMPT_VERSION = 'opportunity-score/v7';
 export const OPPORTUNITY_SCORING_OUTPUT_SCHEMA_VERSION =
   'opportunity-score-output/v2';
 export const OPPORTUNITY_SCORING_MAX_REQUIREMENTS = 8;
@@ -30,6 +35,7 @@ export const OPPORTUNITY_SCORING_MAX_STRUCTURED_FACTS = 8;
 export const OPPORTUNITY_SCORING_MAX_EVIDENCE_COUNT = 20;
 export const OPPORTUNITY_SCORING_MAX_EXCERPT_LENGTH = 180;
 export const OPPORTUNITY_SCORING_MAX_SOURCES_PER_REQUIREMENT = 2;
+export const OPPORTUNITY_SCORING_MAX_ELIGIBILITY_ASSERTIONS = 4;
 
 export interface OpportunityScoringEvidenceSource {
   id: string;
@@ -82,6 +88,21 @@ export interface OpportunityScoringFactConflict {
   values: Array<boolean | number | string>;
 }
 
+/**
+ * A bounded copy of explicit employer-posting clauses. It is deliberately
+ * separate from candidate evidence: it never establishes a candidate's work
+ * authorization or makes a legal conclusion.
+ */
+export interface OpportunityScoringPostingEligibility {
+  assertions: EligibilityAssertion[];
+  buckets: EligibilityBucket[];
+  flags: number;
+  reason: string;
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  status: 'current' | 'invalid' | 'missing' | 'stale';
+}
+
 export interface OpportunityScoringInput {
   skillMatching?: SkillMatchingResult;
   candidateEvidence: OpportunityScoringCandidateEvidence[];
@@ -99,6 +120,7 @@ export interface OpportunityScoringInput {
     OpportunityScoringConfig,
     'clearAcceptMinRequired' | 'clearRejectMinGaps' | 'modelEnabled'
   >;
+  postingEligibility: OpportunityScoringPostingEligibility;
   prepared: {
     fingerprint: string;
     sourceContentFingerprint: string;
@@ -255,6 +277,37 @@ function boundedText(value: unknown, maximum: number): string {
   const text = stringValue(value).replace(/\s+/g, ' ');
   if (text.length <= maximum) return text;
   return `${text.slice(0, Math.max(0, maximum - 3)).trimEnd()}...`;
+}
+
+function postingEligibilityForOpportunity(
+  opportunity: Record<string, unknown>,
+  prepared: PreparedPosting,
+): OpportunityScoringPostingEligibility {
+  const eligibility = getOpportunityEligibility(opportunity);
+  const assertions =
+    eligibility.status === 'current'
+      ? eligibility.assertions
+          .slice(0, OPPORTUNITY_SCORING_MAX_ELIGIBILITY_ASSERTIONS)
+          .map((assertion) => ({
+            ...assertion,
+            excerpt: boundedText(
+              assertion.excerpt,
+              OPPORTUNITY_SCORING_MAX_EXCERPT_LENGTH,
+            ),
+            ...(assertion.condition
+              ? { condition: boundedText(assertion.condition, 180) }
+              : {}),
+          }))
+      : [];
+  return {
+    assertions,
+    buckets: eligibility.buckets,
+    flags: eligibility.flags,
+    reason: boundedText(eligibility.reason, 240),
+    sourceContentFingerprint: prepared.provenance.sourceContentFingerprint,
+    sourceContentVersion: prepared.provenance.sourceContentVersion,
+    status: eligibility.status,
+  };
 }
 
 function boundedRelevantText(
@@ -626,6 +679,7 @@ function finalizeInput(
   const evidenceCount =
     input.candidateEvidence.length +
     input.structuredFacts.length +
+    input.postingEligibility.assertions.length +
     input.requirements.filter((requirement) => requirement.postingExcerpt)
       .length;
   const withoutFingerprint = {
@@ -701,6 +755,13 @@ function cloneInputForTrimming(
       ...entry,
       evidence: { ...entry.evidence },
     })),
+    postingEligibility: {
+      ...rest.postingEligibility,
+      assertions: rest.postingEligibility.assertions.map((assertion) => ({
+        ...assertion,
+      })),
+      buckets: [...rest.postingEligibility.buckets],
+    },
   };
 }
 
@@ -771,8 +832,12 @@ function initialScoringInput(options: {
   policy: OpportunityScoringConfig;
   prepared: PreparedPosting;
 }): OpportunityScoringInput {
+  const postingEligibility = postingEligibilityForOpportunity(
+    options.opportunity,
+    options.prepared,
+  );
   const requirements = selectedRequirements(options.opportunity);
-  let evidenceCount = 0;
+  let evidenceCount = postingEligibility.assertions.length;
   for (const requirement of requirements) {
     const excerpt = sectionExcerptForRequirement(
       requirement,
@@ -879,6 +944,7 @@ function initialScoringInput(options: {
       clearRejectMinGaps: options.policy.clearRejectMinGaps,
       modelEnabled: options.policy.modelEnabled,
     },
+    postingEligibility,
     prepared: {
       fingerprint: options.prepared.fingerprint,
       sourceContentFingerprint:
@@ -933,6 +999,7 @@ export function buildOpportunityScoringMessages(
         `Opportunity scoring contract ${OPPORTUNITY_SCORING_PROMPT_VERSION}.`,
         'Use only the supplied versioned structured facts and attributable excerpts.',
         'Do not infer candidate experience or posting requirements that are not represented by an exact reference.',
+        'Posting eligibility is sourced only from current, explicit employer-posting clauses. It does not establish a candidate work authorization, residency, immigration status, or legal eligibility.',
         'Return one JSON object only with no Markdown or prose outside the object.',
       ].join(' '),
     },
@@ -1000,6 +1067,8 @@ export async function buildBoundedOpportunityScoringRequest(options: {
     const mutable = cloneInputForTrimming(input);
     if (mutable.structuredFacts.length > 0) {
       mutable.structuredFacts.pop();
+    } else if (mutable.postingEligibility.assertions.length > 0) {
+      mutable.postingEligibility.assertions.pop();
     } else {
       const excerptRequirement = [...mutable.requirements]
         .reverse()

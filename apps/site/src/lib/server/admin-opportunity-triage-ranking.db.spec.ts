@@ -9,6 +9,7 @@ import {
   vi,
 } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
+import type { EligibilityBucket } from '$lib/opportunity-eligibility';
 
 const mocks = vi.hoisted(() => ({
   config: { type: 'sqlite' },
@@ -43,6 +44,10 @@ async function createTables(
     status TEXT NOT NULL,
     human_review_status TEXT,
     source_content_fingerprint TEXT,
+    source_content_version INTEGER,
+    eligibility_flags INTEGER,
+    eligibility_source_fingerprint TEXT,
+    eligibility_source_version INTEGER,
     scoring_material_fingerprint TEXT,
     updated_at TIMESTAMP,
     posted_at TIMESTAMP,
@@ -59,6 +64,7 @@ async function createTables(
     salary_min REAL,
     salary_max REAL,
     human_rating REAL
+    ,work_mode TEXT
   )`;
   const createScoreTable = `CREATE ${
     dialect === 'postgres' ? 'TEMP ' : ''
@@ -467,6 +473,76 @@ function runSuite(
           ['unscored', { recommendation: '', score: null }],
         ]),
       );
+    });
+
+    it('filters current eligibility buckets with OR semantics and pages unknown fallbacks', async () => {
+      const opportunityTable =
+        config.type === 'postgres' ? 'pg_temp.opportunities' : 'opportunities';
+      await database.query(`INSERT INTO ${opportunityTable}
+        (id, status, human_review_status, source_content_fingerprint, source_content_version,
+         eligibility_flags, eligibility_source_fingerprint, eligibility_source_version, updated_at)
+        VALUES
+          ('eligibility-canada-a', 'archived', '', 'canada-a', 1, 1, 'canada-a', 1, '2026-04-01T00:00:00Z'),
+          ('eligibility-canada-b', 'archived', '', 'canada-b', 1, 1, 'canada-b', 1, '2026-04-02T00:00:00Z'),
+          ('eligibility-sponsor-us', 'archived', '', 'sponsor-us', 1, 14, 'sponsor-us', 1, '2026-04-03T00:00:00Z'),
+          ('eligibility-unknown', 'archived', '', 'unknown', 1, 32, 'unknown', 1, '2026-04-04T00:00:00Z'),
+          ('eligibility-stale', 'archived', '', 'current', 1, 1, 'old', 1, '2026-04-05T00:00:00Z'),
+          ('eligibility-invalid', 'archived', '', 'invalid', 1, 128, 'invalid', 1, '2026-04-06T00:00:00Z'),
+          ('eligibility-incoherent', 'archived', '', 'incoherent', 1, 17, 'incoherent', 1, '2026-04-06T12:00:00Z'),
+          ('eligibility-conflict', 'archived', '', 'conflict', 1, 16, 'conflict', 1, '2026-04-07T00:00:00Z')`);
+      await database.query(`UPDATE ${opportunityTable}
+        SET work_mode = CASE WHEN id = 'eligibility-sponsor-us' THEN 'onsite' ELSE 'remote' END
+        WHERE id LIKE 'eligibility-%'`);
+      const { countOpportunityRecords, listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const base = {
+        candidateSkills: [],
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          eligibilityBuckets: ['canada_eligible', 'sponsorship_possible'] as EligibilityBucket[],
+          sort: 'eligibility' as const,
+          sortDirection: 'asc' as const,
+          status: 'archived',
+        },
+        reviewFilter: 'all',
+      };
+      await expect(countOpportunityRecords(base)).resolves.toBe(3);
+      await expect(
+        listOpportunityPageIds({ ...base, limit: 2, offset: 0 }),
+      ).resolves.toEqual(['eligibility-canada-b', 'eligibility-canada-a']);
+      await expect(
+        listOpportunityPageIds({ ...base, limit: 2, offset: 2 }),
+      ).resolves.toEqual(['eligibility-sponsor-us']);
+      await expect(
+        listOpportunityPageIds({
+          ...base,
+          filters: { ...base.filters, workModes: ['remote'] },
+          limit: 10,
+          offset: 0,
+        }),
+      ).resolves.toEqual(['eligibility-canada-b', 'eligibility-canada-a']);
+      await expect(
+        listOpportunityPageIds({
+          ...base,
+          filters: { ...base.filters, eligibilityBuckets: ['unknown'] },
+          limit: 10,
+          offset: 0,
+        }),
+      ).resolves.toEqual([
+        'eligibility-incoherent',
+        'eligibility-invalid',
+        'eligibility-stale',
+        'eligibility-unknown',
+      ]);
+      await expect(
+        listOpportunityPageIds({
+          ...base,
+          filters: { ...base.filters, eligibilityBuckets: ['conflicting'] },
+          limit: 10,
+          offset: 0,
+        }),
+      ).resolves.toEqual(['eligibility-conflict']);
     });
 
     it('selects only material-current auto scores while preserving current human scores', async () => {

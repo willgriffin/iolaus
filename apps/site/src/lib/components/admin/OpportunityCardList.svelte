@@ -45,6 +45,11 @@ import {
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
+import {
+  eligibilityBucketLabels,
+  getOpportunityEligibility,
+  type EligibilityBucket,
+} from '$lib/opportunity-eligibility';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
@@ -122,6 +127,7 @@ const REVIEW_STORAGE_KEY = 'iolaus.admin.opportunities.review';
 const SORT_STORAGE_KEY = 'iolaus.admin.opportunities.sort';
 const OPPORTUNITY_SORT_VALUES: readonly OpportunitySort[] = [
   'best',
+  'eligibility',
   'newest',
   'score',
   'salary',
@@ -556,7 +562,7 @@ function toggleSkill(skill: string): void {
   }
 }
 
-function toggleArrayValue(values: string[], value: string): string[] {
+function toggleArrayValue<T extends string>(values: T[], value: T): T[] {
   return values.includes(value)
     ? values.filter((entry) => entry !== value)
     : [...values, value];
@@ -573,6 +579,13 @@ function toggleWorkMode(value: string): void {
   setFilters({
     ...filters,
     workModes: toggleArrayValue(filters.workModes, value),
+  });
+}
+
+function toggleEligibilityBucket(bucket: EligibilityBucket): void {
+  setFilters({
+    ...filters,
+    eligibilityBuckets: toggleArrayValue(filters.eligibilityBuckets, bucket),
   });
 }
 
@@ -648,6 +661,12 @@ function salaryLabel(record: AdminRecord): string {
 function scoreLabel(record: AdminRecord): string {
   const score = num(record, 'latestScore');
   return score === null ? 'Unscored' : `${score}/100`;
+}
+
+function eligibilityLabel(record: AdminRecord): string {
+  const eligibility = getOpportunityEligibility(record);
+  const bucket = eligibility.buckets[0];
+  return bucket ? eligibilityBucketLabels[bucket] : 'Eligibility unknown';
 }
 
 function boolField(record: AdminRecord, key: string): boolean {
@@ -860,6 +879,7 @@ const resultCountLabel = $derived.by(() => {
         onchange={commitSort}
       >
         <option value="best">Best fit</option>
+        <option value="eligibility">Canada eligibility</option>
         <option value="newest">Newest</option>
         <option value="score">AI score</option>
         <option value="salary">Salary</option>
@@ -941,6 +961,9 @@ const resultCountLabel = $derived.by(() => {
         >
           {str(record, 'title') || 'Untitled opportunity'}
         </a>
+        <span class="eligibility-label" title="Posting eligibility from the current source">
+          {eligibilityLabel(record)}
+        </span>
         {#if posting}
           <a class="posting-icon" href={posting} target="_blank" rel="noreferrer" title="View posting" aria-label="View posting">
             <ExternalLink size={15} strokeWidth={2.2} />
@@ -966,6 +989,7 @@ const resultCountLabel = $derived.by(() => {
 
   {#snippet expandedOpportunity({ row: record }: { row: AdminRecord })}
     {@const oppId = str(record, 'id')}
+    {@const eligibility = getOpportunityEligibility(record)}
     {@const required = skillList(record, 'requiredSkills')}
     {@const preferred = skillList(record, 'preferredSkills')}
     {@const currentStatus = str(record, 'humanReviewStatus')}
@@ -1046,6 +1070,22 @@ const resultCountLabel = $derived.by(() => {
                 <p class="summary">{str(record, 'locationNotes')}</p>
               </section>
             {/if}
+
+            <section>
+              <h4>Canada eligibility</h4>
+              <p class="summary">{eligibility.reason}</p>
+              {#if eligibility.assertions.length}
+                <ul class="detail-list" aria-label="Eligibility evidence">
+                  {#each eligibility.assertions as assertion}
+                    <li>
+                      <strong>{humanize(assertion.kind)}</strong>: “{assertion.excerpt}”
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="muted">No current source excerpt supports an eligibility conclusion.</p>
+              {/if}
+            </section>
 
             <section>
               <h4>Details</h4>
@@ -1325,6 +1365,15 @@ const resultCountLabel = $derived.by(() => {
             >
               Visa / EOR
             </button>
+          </div>
+
+          <span class="field-label">Canada eligibility</span>
+          <div class="toggle-row" role="group" aria-label="Canada eligibility">
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('canada_eligible')} onclick={() => toggleEligibilityBucket('canada_eligible')}>Canada eligible</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('sponsorship_possible')} onclick={() => toggleEligibilityBucket('sponsorship_possible')}>Visa sponsorship possible</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('us_residence_required')} onclick={() => toggleEligibilityBucket('us_residence_required')}>US residence required</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('unknown')} onclick={() => toggleEligibilityBucket('unknown')}>Unknown</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('conflicting')} onclick={() => toggleEligibilityBucket('conflicting')}>Conflicting</button>
           </div>
 
           <span class="field-label">Fit</span>
@@ -1849,6 +1898,13 @@ const resultCountLabel = $derived.by(() => {
   .title-link:hover {
     color: var(--smrt-color-primary);
     text-decoration: underline;
+  }
+
+  .eligibility-label {
+    flex: 0 1 auto;
+    color: var(--smrt-color-on-surface-variant);
+    font-size: 12px;
+    overflow-wrap: anywhere;
   }
 
   /* Posting opens in a new tab right beside the title; the rating is pushed to

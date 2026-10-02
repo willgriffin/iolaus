@@ -306,6 +306,39 @@ test('opportunity filters scroll vertically and close', async ({ page }) => {
   await expect(dialog).toHaveCount(0);
 });
 
+test('eligibility bucket filters share the list query and survive a reload', async ({
+  page,
+}, testInfo) => {
+  const prefix = `Eligibility ${testInfo.project.name}`;
+  const params = new URLSearchParams({ q: prefix, review: 'unsorted' });
+  params.append('eligibilityBucket', 'canada_eligible');
+  params.append('eligibilityBucket', 'sponsorship_possible');
+  await page.goto(`/admin/opportunities?${params}`);
+
+  await expect(
+    page.getByText(`${prefix} Canada`, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(`${prefix} Conflict`, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(`${prefix} Unknown`, { exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByText(`${prefix} Canada`, { exact: true }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.getAll('eligibilityBucket').join(',') ===
+      'canada_eligible,sponsorship_possible',
+  );
+
+  params.delete('eligibilityBucket');
+  params.append('eligibilityBucket', 'unknown');
+  await page.goto(`/admin/opportunities?${params}`);
+  await expect(page.getByText(`${prefix} Unknown`, { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(`${prefix} Canada`, { exact: true }),
+  ).toHaveCount(0);
+});
+
 test('app settings use the full mobile width', async ({ page }) => {
   await openTasks(page);
   await page.getByRole('button', { name: 'Open app settings' }).tap();

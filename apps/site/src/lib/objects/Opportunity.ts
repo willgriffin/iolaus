@@ -43,6 +43,14 @@ export class Opportunity extends SmrtObject {
   relocationSupported = false;
   @field({ type: 'boolean' })
   visaOrEorPossible = false;
+  @field({ type: 'text' })
+  postingEligibilityJson = '{}';
+  @field({ type: 'integer' })
+  eligibilityFlags = 32;
+  @field({ type: 'text' })
+  eligibilitySourceFingerprint = '';
+  @field({ type: 'integer' })
+  eligibilitySourceVersion = 0;
   @field({ type: 'decimal', nullable: true })
   salaryMin: number | null = null;
   @field({ type: 'decimal', nullable: true })
@@ -146,6 +154,18 @@ export class Opportunity extends SmrtObject {
   async loadFromId(id?: string) {
     if (id) this.id = id;
     return await super.loadFromId();
+  }
+
+  /** Derived eligibility is rebuilt from independently verified source on every write. */
+  async save(options?: Parameters<SmrtObject['save']>[0]): Promise<this> {
+    const { verifiedOpportunityEligibilityProjection } = await import(
+      '../server/opportunity-eligibility-refresh.js'
+    );
+    Object.assign(
+      this,
+      verifiedOpportunityEligibilityProjection(this.toJSON()),
+    );
+    return super.save(options);
   }
 
   async processIntelligence(

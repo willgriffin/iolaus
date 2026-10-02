@@ -3610,6 +3610,10 @@ describe('opportunity source crawler discovery', () => {
         sourceContentVersion: 3,
         status: 'recommended',
         visaOrEorPossible: true,
+        postingEligibilityJson: '{"status":"canada_eligible"}',
+        eligibilityFlags: 3,
+        eligibilitySourceFingerprint: 'previous-eligibility-fingerprint',
+        eligibilitySourceVersion: 3,
       },
     ]);
     const sourceCrawls = recordCollection();
@@ -3670,6 +3674,10 @@ describe('opportunity source crawler discovery', () => {
       status: 'found',
       workMode: 'remote',
       visaOrEorPossible: false,
+      postingEligibilityJson: '',
+      eligibilityFlags: 0,
+      eligibilitySourceFingerprint: '',
+      eligibilitySourceVersion: 0,
     });
     expect(enqueueOpportunityIntelligence).toHaveBeenCalledWith(
       'existing-opportunity',

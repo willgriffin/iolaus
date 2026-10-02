@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { getCollection } from '../src/lib/server/smrt.js';
+import { fingerprintOpportunitySourceContent } from '../src/lib/server/opportunity-source-content.js';
 import {
   assertSyntheticDemoFixtureEnabled,
   seedSyntheticDemoFixture,
@@ -180,6 +181,43 @@ for (const [projectIndex, project] of [
     });
     await record.save();
   }
+}
+
+// Current-source eligibility fixture rows exercise the list's shared query
+// path. Their names and evidence are fictional and isolated by viewport.
+for (const project of [
+  'android-portrait',
+  'android-landscape',
+  'android-narrow',
+  'desktop-control',
+] as const) {
+  const eligibilityOpportunity = async (name: string, descriptionRaw: string) => {
+    const source = {
+      sourceContentFingerprint: fingerprintOpportunitySourceContent({ descriptionRaw }),
+      sourceContentVersion: 1,
+      sourceContentJson: JSON.stringify({ descriptionRaw }),
+      descriptionRaw,
+    };
+    const record = await opportunities.create({
+      ...source,
+      currency: 'CAD',
+      humanReviewStatus: 'needs_input',
+      status: 'found',
+      title: `Eligibility ${project} ${name}`,
+      workMode: 'remote',
+    });
+    await record.save();
+  };
+  await eligibilityOpportunity('Canada', 'Location: Canada.');
+  await eligibilityOpportunity(
+    'Sponsor and US',
+    'Candidates must reside in the United States. We offer visa sponsorship.',
+  );
+  await eligibilityOpportunity('Unknown', 'A general fictional role.');
+  await eligibilityOpportunity(
+    'Conflict',
+    'Location: Canada. Candidates must reside in the United States.',
+  );
 }
 const tasks = await getCollection('Task');
 for (let index = 0; index < 16; index += 1) {

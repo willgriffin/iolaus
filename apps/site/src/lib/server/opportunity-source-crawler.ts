@@ -6814,6 +6814,13 @@ const opportunityDerivedResetUpdateFields = [
   'roleTags',
   'seniority',
   'visaOrEorPossible',
+  // Eligibility is a source-bound interpretation of the posting.  It must
+  // never survive a source-content version change alongside the legacy
+  // derived fields above.
+  'postingEligibilityJson',
+  'eligibilityFlags',
+  'eligibilitySourceFingerprint',
+  'eligibilitySourceVersion',
 ] as const;
 
 function snakeCaseField(value: string): string {
@@ -6859,6 +6866,10 @@ function resetOpportunityDerivedContent(
   opportunity.roleTags = '';
   opportunity.seniority = 'unknown';
   opportunity.visaOrEorPossible = false;
+  opportunity.postingEligibilityJson = '';
+  opportunity.eligibilityFlags = 0;
+  opportunity.eligibilitySourceFingerprint = '';
+  opportunity.eligibilitySourceVersion = 0;
 }
 
 /**

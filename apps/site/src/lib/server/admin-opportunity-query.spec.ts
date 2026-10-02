@@ -84,6 +84,27 @@ describe('admin-opportunity-query', () => {
     expect(defaultSql).not.toContain("<> 'stale'");
   });
 
+  it('uses current source-bound eligibility flags with OR bucket matching', async () => {
+    const { createOpportunityWhereSql } = await import(
+      './admin-opportunity-query'
+    );
+    const query = createOpportunityWhereSql({
+      candidateSkills: [],
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        eligibilityBuckets: ['canada_eligible', 'sponsorship_possible'],
+      },
+      reviewFilter: 'all',
+    });
+
+    expect(query.whereSql).toContain('eligibility_source_fingerprint');
+    expect(query.whereSql).toContain('eligibility_source_version');
+    expect(query.whereSql).toContain("COALESCE(o.source_content_fingerprint, '') <> ''");
+    expect(query.whereSql).toContain('ELSE 32');
+    expect(query.whereSql).toContain(' OR ');
+    expect(query.values).toEqual(expect.arrayContaining([1, 2]));
+  });
+
   it('hides archived opportunities unless a status filter asks for them', async () => {
     const { countOpportunityRecords, listOpportunityPageIds } = await import(
       './admin-opportunity-query'
