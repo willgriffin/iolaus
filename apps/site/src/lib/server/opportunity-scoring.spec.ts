@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { opportunityEligibilityProjection } from '../opportunity-eligibility.js';
 import {
   borderlineScoringFixture,
   clearAcceptScoringFixture,
@@ -10,7 +11,6 @@ import {
   preferredOnlyEvidenceScoringFixture,
 } from './fixtures/opportunity-scoring.js';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
-import { opportunityEligibilityProjection } from '../opportunity-eligibility.js';
 import {
   buildBoundedOpportunityScoringRequest,
   deterministicOpportunityScore,
