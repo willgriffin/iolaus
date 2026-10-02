@@ -133,6 +133,7 @@ const PRIVATE_RESUME_COLLECTIONS = new Set([
   'ProjectAttachment',
   'ProjectTag',
   'ResumeAchievement',
+  'ResumeAsset',
   'ResumeEducation',
   'ResumeLink',
   'ResumeOtherRole',
@@ -1065,10 +1066,14 @@ export function parseTailoringConfigRecord(
   };
 }
 
-export async function listResumeTailoringConfigs(): Promise<
-  ResumeTailoringRecord[]
-> {
-  const records = await listRecords('ResumeTailoringConfig', 'name ASC');
+export async function listResumeTailoringConfigs(
+  subject?: WorkspaceSubject,
+): Promise<ResumeTailoringRecord[]> {
+  const records = await listRecords(
+    'ResumeTailoringConfig',
+    'name ASC',
+    subject,
+  );
   return records
     .filter((record) => booleanValue(record.active, true))
     .map(parseTailoringConfigRecord);
@@ -1090,13 +1095,25 @@ export async function getResumeTailoringConfig(
     : null;
 }
 
-export async function listResumeAssets(): Promise<ResumeRecord[]> {
-  const assets = await listRecords('ResumeAsset', 'updated_at DESC');
-  return assets.filter((asset) => !stringValue(asset.applicationId));
+export async function listResumeAssets(
+  subject?: WorkspaceSubject,
+): Promise<ResumeRecord[]> {
+  const assets = await listRecords('ResumeAsset', 'updated_at DESC', subject);
+  const ownership = subject ? privateRecordWhere(subject) : null;
+  return assets.filter(
+    (asset) =>
+      !stringValue(asset.applicationId) &&
+      (!ownership ||
+        Object.entries(ownership).every(
+          ([key, value]) => asset[key] === value,
+        )),
+  );
 }
 
-export async function getPublishedResumeAsset(): Promise<ResumeRecord | null> {
-  const assets = await listResumeAssets();
+export async function getPublishedResumeAsset(
+  subject?: WorkspaceSubject,
+): Promise<ResumeRecord | null> {
+  const assets = await listResumeAssets(subject);
   return assets.find((asset) => booleanValue(asset.isPublished)) ?? null;
 }
 

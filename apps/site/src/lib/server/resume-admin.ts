@@ -4,8 +4,11 @@ import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import type { TailoringConfig } from '@willgriffin/iolaus-resume';
+import { isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
+  getPrivateRecord,
+  recordOwnedBySubject,
   requireWorkspaceSubject,
   type WorkspaceSubject,
 } from './private-workspace.js';
@@ -13,6 +16,7 @@ import {
   getPublishedResumeAsset,
   getResumeTailoringConfig,
   listResumeAssets,
+  loadAdminResumeSource,
   loadPublishedResumeSource,
   type ResumeRecord,
 } from './resume-data.js';
@@ -328,13 +332,21 @@ export async function generateResumeAsset(
 ) {
   // An application packet can never create a tenant-only asset: the same
   // owner/profile key must be written atomically with its artifact metadata.
-  const subject = options.applicationId
-    ? requireWorkspaceSubject(options.subject as WorkspaceSubject)
-    : null;
-  const source = await loadPublishedResumeSource();
+  const subject =
+    options.subject || options.applicationId || isSharedHosted()
+      ? requireWorkspaceSubject(options.subject as WorkspaceSubject)
+      : undefined;
+  const source = subject
+    ? await loadAdminResumeSource(undefined, subject)
+    : await loadPublishedResumeSource();
+  if (!source)
+    error(400, 'No resume source is available for this candidate profile.');
   const tailoringRecord = options.tailoringId
-    ? await getResumeTailoringConfig(options.tailoringId)
-    : await ensureCanonicalResumeTailoringConfig();
+    ? await getResumeTailoringConfig(options.tailoringId, subject)
+    : await ensureCanonicalResumeTailoringConfig(subject);
+  if (options.tailoringId && !tailoringRecord) {
+    error(404, 'Resume tailoring config not found.');
+  }
   const tailoring = options.tailoring
     ? { ...(tailoringRecord?.config ?? {}), ...options.tailoring }
     : tailoringRecord?.config;
@@ -487,6 +499,7 @@ export async function generateResumeAsset(
 export async function regenerateResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
 ) {
   const id = assetId.trim();
   if (!id) {
@@ -494,14 +507,21 @@ export async function regenerateResumeAsset(
   }
 
   const collection = await getCollection('ResumeAsset');
-  const asset = await collection.get(id);
+  const scopedSubject = subject ? requireWorkspaceSubject(subject) : undefined;
+  if (isSharedHosted() && !scopedSubject)
+    requireWorkspaceSubject(subject as WorkspaceSubject);
+  const asset = scopedSubject
+    ? await getPrivateRecord('ResumeAsset', id, scopedSubject)
+    : await collection.get(id);
   if (!asset) {
     error(404, 'Resume asset not found.');
   }
 
   const record = asset as unknown as Record<string, unknown>;
   return await generateResumeAsset({
+    applicationId: stringValue(record.applicationId),
     filesystem,
+    subject: scopedSubject,
     tailoringId: stringValue(record.tailoringId),
     targetOpportunityId: stringValue(record.targetOpportunityId),
   });
@@ -666,29 +686,38 @@ async function markResumeAssetFailed(
 export async function publishResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
 ) {
   if (!assetId) {
     error(400, 'Missing resume asset ID.');
   }
 
   return await withCanonicalResumePublicationLock(
-    async () => await publishResumeAssetUnlocked(assetId, filesystem),
+    async () => await publishResumeAssetUnlocked(assetId, filesystem, subject),
   );
 }
 
 async function publishResumeAssetUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
 ): Promise<ResumeRecord> {
-  return (await publishResumeAssetWithPdfUnlocked(assetId, filesystem)).asset;
+  return (await publishResumeAssetWithPdfUnlocked(assetId, filesystem, subject))
+    .asset;
 }
 
 async function publishResumeAssetWithPdfUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
 ): Promise<PublishedResumeAsset> {
   const collection = await getCollection('ResumeAsset');
-  const asset = await collection.get(assetId);
+  const scopedSubject = subject ? requireWorkspaceSubject(subject) : undefined;
+  if (isSharedHosted() && !scopedSubject)
+    requireWorkspaceSubject(subject as WorkspaceSubject);
+  const asset = scopedSubject
+    ? await getPrivateRecord('ResumeAsset', assetId, scopedSubject)
+    : await collection.get(assetId);
   if (!asset) {
     error(404, 'Resume asset not found.');
   }
@@ -711,7 +740,7 @@ async function publishResumeAssetWithPdfUnlocked(
   const pdf = await fs.read(pdfPath, { raw: true });
 
   const now = new Date();
-  const assets = await listResumeAssets();
+  const assets = await listResumeAssets(scopedSubject);
   const nextStates = nextPublishedAssetStates(assets, assetId, now);
   await Promise.all(
     nextStates.map(async (state) => {
@@ -719,7 +748,15 @@ async function publishResumeAssetWithPdfUnlocked(
       const existing = assets.find((asset) => asset.id === state.id);
       if (!existing?.isPublished && existing?.status !== 'published') return;
       const record = await collection.get(state.id);
-      if (!record) return;
+      if (
+        !record ||
+        (scopedSubject &&
+          !recordOwnedBySubject(
+            record as unknown as Record<string, unknown>,
+            scopedSubject,
+          ))
+      )
+        return;
       const mutable = record as unknown as Record<string, unknown> & {
         save: () => Promise<void>;
       };
@@ -735,15 +772,16 @@ async function publishResumeAssetWithPdfUnlocked(
     publishedAt: now,
     status: 'published',
   });
-  await asset.save();
+  await assetRecord.save();
 
   // The asset PDF is immutable and is the source of truth for public reads.
   // Update this compatibility alias only after publication state is durable, so
   // a failed state transition cannot expose an uncommitted candidate.
   try {
-    await fs.write(PUBLISHED_RESUME_PDF_PATH, bufferValue(pdf), {
-      createParents: true,
-    });
+    if (!isSharedHosted())
+      await fs.write(PUBLISHED_RESUME_PDF_PATH, bufferValue(pdf), {
+        createParents: true,
+      });
   } catch {
     // Public delivery reads the immutable published asset first; an alias
     // refresh failure must not invalidate the durable publication state.

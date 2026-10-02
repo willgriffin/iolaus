@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
   getResumeFilesystem: vi.fn(async () => ({})),
   getResumeTailoringConfig: vi.fn(),
   loadPublishedResumeSource: vi.fn(),
+  loadAdminResumeSource: vi.fn(),
   requestScopedDatabase: vi.fn(),
   resolveDatabase: vi.fn(),
   publishedAsset: {
@@ -104,6 +105,7 @@ vi.mock('./resume-data.js', () => ({
   }),
   listResumeTailoringConfigs: vi.fn(),
   loadPublishedResumeSource: mocks.loadPublishedResumeSource,
+  loadAdminResumeSource: mocks.loadAdminResumeSource,
   parseTailoringConfigRecord: vi.fn((record: Record<string, unknown>) => ({
     ...record,
     config: JSON.parse(String(record.configJson ?? '{}')),
@@ -166,6 +168,7 @@ beforeEach(() => {
   mocks.getResumeFilesystem.mockResolvedValue({});
   mocks.getResumeTailoringConfig.mockClear();
   mocks.getResumeTailoringConfig.mockResolvedValue(null);
+  mocks.loadAdminResumeSource.mockReset();
   mocks.loadPublishedResumeSource.mockReset();
   mocks.loadPublishedResumeSource.mockResolvedValue({
     experience: { education: [], other: [], positions: [] },
@@ -556,7 +559,10 @@ describe('regenerateResumeAsset', () => {
       targetOpportunityId: 'opportunity-1',
       title: 'Resume - Backend',
     });
-    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith('tailoring-1');
+    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith(
+      'tailoring-1',
+      undefined,
+    );
     expect(resumeAssets.create).toHaveBeenCalledWith(
       expect.objectContaining({
         context: '',
@@ -1303,5 +1309,115 @@ describe('refreshPublishedCanonicalResumeAsset', () => {
       isPublished: true,
       status: 'published',
     });
+  });
+});
+
+const PRIVATE_SUBJECT = {
+  profileId: 'profile-owner',
+  tenantId: 'tenant-owner',
+  userId: 'user-owner',
+};
+const PRIVATE_OWNERSHIP = {
+  candidateProfileId: PRIVATE_SUBJECT.profileId,
+  tenantId: PRIVATE_SUBJECT.tenantId,
+  ownerUserId: PRIVATE_SUBJECT.userId,
+};
+
+describe('private resume generation', () => {
+  it('uses owned candidate source and seeds an owned canonical config and asset on first generation', async () => {
+    const source = {
+      experience: { education: [], other: [], positions: [] },
+      profile: {
+        email: 'owner@example.test',
+        links: [],
+        name: 'Private Candidate',
+        summary: 'Owner evidence.',
+        title: 'Engineer',
+      },
+      skills: { groups: [], skillGroups: [] },
+    };
+    mocks.loadAdminResumeSource.mockResolvedValueOnce(source);
+    const configs = collection([
+      record({
+        id: 'foreign-config',
+        configSlug: 'canonical',
+        configJson: '{}',
+        ...PRIVATE_OWNERSHIP,
+        ownerUserId: 'foreign-user',
+      }),
+    ]);
+    const assets = collection();
+    mocks.collections.set('ResumeTailoringConfig', configs);
+    mocks.collections.set('ResumeAsset', assets);
+
+    const asset = await generateResumeAsset({
+      applicationId: 'owner-application',
+      filesystem: {} as FilesystemInterface,
+      subject: PRIVATE_SUBJECT,
+    });
+
+    expect(mocks.loadAdminResumeSource).toHaveBeenCalledWith(
+      undefined,
+      PRIVATE_SUBJECT,
+    );
+    expect(mocks.loadPublishedResumeSource).not.toHaveBeenCalled();
+    expect(configs.create).toHaveBeenCalledWith(
+      expect.objectContaining(PRIVATE_OWNERSHIP),
+    );
+    expect(asset).toMatchObject({
+      ...PRIVATE_OWNERSHIP,
+      applicationId: 'owner-application',
+      tailoringId: 'created-2',
+    });
+    expect(mocks.generateResumeArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({ source }),
+    );
+  });
+
+  it('rejects an unavailable foreign tailoring selection before creating an asset', async () => {
+    mocks.loadAdminResumeSource.mockResolvedValueOnce({ profile: {} });
+    const assets = collection();
+    mocks.collections.set('ResumeAsset', assets);
+    await expect(
+      generateResumeAsset({
+        applicationId: 'owner-application',
+        subject: PRIVATE_SUBJECT,
+        tailoringId: 'foreign-config',
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith(
+      'foreign-config',
+      PRIVATE_SUBJECT,
+    );
+    expect(assets.create).not.toHaveBeenCalled();
+    expect(mocks.generateResumeArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('rejects another profile asset before regeneration or filesystem access', async () => {
+    const foreign = record({
+      id: 'foreign-asset',
+      ...PRIVATE_OWNERSHIP,
+      candidateProfileId: 'foreign-profile',
+    });
+    const assets = collection([foreign]);
+    mocks.collections.set('ResumeAsset', assets);
+    const filesystem = { read: vi.fn() };
+    await expect(
+      regenerateResumeAsset(
+        'foreign-asset',
+        filesystem as unknown as FilesystemInterface,
+        PRIVATE_SUBJECT,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      publishResumeAsset(
+        'foreign-asset',
+        filesystem as unknown as FilesystemInterface,
+        PRIVATE_SUBJECT,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(assets.create).not.toHaveBeenCalled();
+    expect(filesystem.read).not.toHaveBeenCalled();
+    expect(foreign.save).not.toHaveBeenCalled();
   });
 });

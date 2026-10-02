@@ -1,4 +1,16 @@
-import { fail, isHttpError } from '@sveltejs/kit';
+import { error, fail, isHttpError } from '@sveltejs/kit';
+import { isSharedHosted } from '$lib/server/app-config';
+import {
+  isOwnerAuthorityDenial,
+  runAsOwner,
+} from '$lib/server/owner-principal';
+import {
+  candidateProfileWhere,
+  getPrivateRecord,
+  listPrivateRecords,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from '$lib/server/private-workspace';
 import {
   generateResumeAsset,
   loadResumeAssetPreviews,
@@ -12,9 +24,16 @@ import {
   loadLegacyAdminResumeSource,
   loadLegacyResumeSource,
   loadNormalizedResumeSource,
+  loadPublishedResumeSource,
 } from '$lib/server/resume-data';
 import { withPublishedCanonicalRefresh } from '$lib/server/resume-source-refresh';
 import { getCollection } from '$lib/server/smrt';
+import {
+  requireCandidateWorkspaceSubject,
+  withVerifiedWorkspaceSubject,
+  workspaceSubjectFromLocals,
+} from '$lib/server/workspace-subject';
+import { workspaceWorkflowOperation } from '$lib/server/workspace-workflow-capabilities';
 import type { Actions, PageServerLoad } from './$types';
 
 type RecordLike = Record<string, unknown> & {
@@ -22,10 +41,64 @@ type RecordLike = Record<string, unknown> & {
   save?: () => Promise<void>;
 };
 
-async function listRecords(className: string, orderBy = 'updated_at ASC') {
-  const collection = await getCollection(className);
-  const records = await collection.list({ limit: 1000, orderBy });
-  return JSON.parse(JSON.stringify(records)) as RecordLike[];
+function subjectFromLocals(locals: App.Locals): WorkspaceSubject {
+  return requireWorkspaceSubject(
+    requireCandidateWorkspaceSubject(workspaceSubjectFromLocals(locals)),
+  );
+}
+
+async function runResumeMutation<T>(
+  locals: App.Locals,
+  fn: (subject: WorkspaceSubject) => Promise<T>,
+): Promise<T> {
+  const subject = subjectFromLocals(locals);
+  const operation = workspaceWorkflowOperation('profile.manage');
+  try {
+    return await runAsOwner(
+      locals,
+      async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+        return await withVerifiedWorkspaceSubject(
+          subject,
+          async (verified) => await fn(requireWorkspaceSubject(verified)),
+        );
+      },
+      { action: 'admin.resume.manage' },
+    );
+  } catch (cause) {
+    if (isOwnerAuthorityDenial(cause)) error(403, 'Forbidden');
+    throw cause;
+  }
+}
+
+async function listRecords(
+  className: string,
+  subject: WorkspaceSubject,
+  orderBy = 'updated_at ASC',
+) {
+  if (className === 'CandidateProfile') {
+    const profile = await getPrivateRecord(
+      className,
+      subject.profileId,
+      subject,
+    );
+    return profile
+      ? (JSON.parse(JSON.stringify([profile])) as RecordLike[])
+      : [];
+  }
+  return JSON.parse(
+    JSON.stringify(
+      await listPrivateRecords(className, subject, { limit: 1000, orderBy }),
+    ),
+  ) as RecordLike[];
+}
+
+async function savedResumeData() {
+  invalidatePublishedResumeCache();
+  // A shared candidate edit must never refresh a global public resume or other owners' applications.
+  return isSharedHosted()
+    ? { ok: true, message: 'Saved resume data.' }
+    : await withPublishedCanonicalRefresh({ ok: true });
 }
 
 function dateFormValue(value: FormDataEntryValue | null): Date | null {
@@ -33,11 +106,19 @@ function dateFormValue(value: FormDataEntryValue | null): Date | null {
   return new Date(`${value}T00:00:00.000Z`);
 }
 
-async function updateRecord(className: string, form: FormData, keys: string[]) {
+async function updateRecord(
+  className: string,
+  form: FormData,
+  keys: string[],
+  subject: WorkspaceSubject,
+) {
   const id = String(form.get('id') ?? '');
   if (!id) return { ok: false, error: 'Missing record id' };
-  const collection = await getCollection(className);
-  const record = (await collection.get(id)) as RecordLike | null;
+  const record = (await getPrivateRecord(
+    className,
+    id,
+    subject,
+  )) as RecordLike | null;
   if (!record) return { ok: false, error: 'Record not found' };
   for (const key of keys) {
     const value = form.get(key);
@@ -52,8 +133,7 @@ async function updateRecord(className: string, form: FormData, keys: string[]) {
   if (typeof record.save !== 'function')
     return { ok: false, error: 'Record cannot be saved' };
   await record.save();
-  invalidatePublishedResumeCache();
-  return await withPublishedCanonicalRefresh({ ok: true });
+  return await savedResumeData();
 }
 
 type ResumePageTab = 'data' | 'markdown' | 'pdf' | 'text';
@@ -63,12 +143,13 @@ function resumePageTab(value: string | null): ResumePageTab {
   return 'data';
 }
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
+  const subject = subjectFromLocals(locals);
   const [normalizedSourceResult, tailoringConfigsResult, assetsResult] =
     await Promise.allSettled([
-      loadNormalizedResumeSource(),
-      listResumeTailoringConfigs(),
-      listResumeAssets(),
+      loadNormalizedResumeSource(undefined, subject),
+      listResumeTailoringConfigs(subject),
+      listResumeAssets(subject),
     ]);
 
   const normalizedSource =
@@ -97,18 +178,23 @@ export const load: PageServerLoad = async ({ url }) => {
   let legacySource = null;
   if (!normalizedSource) {
     try {
-      legacySource = await loadLegacyAdminResumeSource();
+      legacySource = await loadLegacyAdminResumeSource(undefined, subject);
     } catch {
       // The static legacy source still makes the editor usable when the
       // normalized and legacy database reads are temporarily unavailable.
     }
   }
-  const source = normalizedSource ?? legacySource ?? loadLegacyResumeSource();
+  const source =
+    normalizedSource ??
+    legacySource ??
+    (isSharedHosted()
+      ? await loadPublishedResumeSource()
+      : loadLegacyResumeSource());
   const [profiles, experiences, educationRecords] = normalizedRecordsAvailable
     ? await Promise.all([
-        listRecords('CandidateProfile', 'profileKey ASC'),
-        listRecords('Experience', 'sortOrder ASC'),
-        listRecords('Education', 'sortOrder ASC'),
+        listRecords('CandidateProfile', subject, 'profileKey ASC'),
+        listRecords('Experience', subject, 'sortOrder ASC'),
+        listRecords('Education', subject, 'sortOrder ASC'),
       ])
     : [[], [], []];
 
@@ -124,16 +210,25 @@ export const load: PageServerLoad = async ({ url }) => {
 };
 
 export const actions: Actions = {
-  generate: async ({ request }) => {
+  generate: async ({ locals, request }) => {
     const form = await request.formData();
     const tailoringId = String(form.get('tailoringId') ?? '');
-    return await generateResumeAsset({ tailoringId });
+    return await runResumeMutation(
+      locals,
+      async (subject) => await generateResumeAsset({ tailoringId, subject }),
+    );
   },
-  regenerate: async ({ request }) => {
+  regenerate: async ({ locals, request }) => {
     const form = await request.formData();
     try {
-      const asset = await regenerateResumeAsset(
-        String(form.get('assetId') ?? ''),
+      const asset = await runResumeMutation(
+        locals,
+        async (subject) =>
+          await regenerateResumeAsset(
+            String(form.get('assetId') ?? ''),
+            undefined,
+            subject,
+          ),
       );
       return {
         assetId: asset.id,
@@ -155,69 +250,113 @@ export const actions: Actions = {
       });
     }
   },
-  publish: async ({ request }) => {
+  publish: async ({ locals, request }) => {
     const form = await request.formData();
-    return await publishResumeAsset(String(form.get('assetId') ?? ''));
+    return await runResumeMutation(
+      locals,
+      async (subject) =>
+        await publishResumeAsset(
+          String(form.get('assetId') ?? ''),
+          undefined,
+          subject,
+        ),
+    );
   },
-  updateProfile: async ({ request }) => {
+  updateProfile: async ({ locals, request }) => {
     const form = await request.formData();
-    return await updateRecord('CandidateProfile', form, [
-      'profileKey',
-      'name',
-      'firstName',
-      'lastName',
-      'title',
-      'email',
-      'phone',
-      'location',
-      'linkedinUrl',
-      'githubUrl',
-      'workAuthorization',
-      'summary',
-      'active',
-      'isDefault',
-    ]);
+    return await runResumeMutation(
+      locals,
+      async (subject) =>
+        await updateRecord(
+          'CandidateProfile',
+          form,
+          [
+            'profileKey',
+            'name',
+            'firstName',
+            'lastName',
+            'title',
+            'email',
+            'phone',
+            'location',
+            'linkedinUrl',
+            'githubUrl',
+            'workAuthorization',
+            'summary',
+            'active',
+            'isDefault',
+          ],
+          subject,
+        ),
+    );
   },
-  updateExperience: async ({ request }) => {
+  updateExperience: async ({ locals, request }) => {
     const form = await request.formData();
-    return await updateRecord('Experience', form, [
-      'experienceKey',
-      'url',
-      'summary',
-      'startDate',
-      'endDate',
-      'startPrecision',
-      'endPrecision',
-      'weight',
-      'sortOrder',
-    ]);
+    return await runResumeMutation(
+      locals,
+      async (subject) =>
+        await updateRecord(
+          'Experience',
+          form,
+          [
+            'experienceKey',
+            'url',
+            'summary',
+            'startDate',
+            'endDate',
+            'startPrecision',
+            'endPrecision',
+            'weight',
+            'sortOrder',
+          ],
+          subject,
+        ),
+    );
   },
-  updateEducation: async ({ request }) => {
+  updateEducation: async ({ locals, request }) => {
     const form = await request.formData();
-    return await updateRecord('Education', form, [
-      'profileKey',
-      'title',
-      'institution',
-      'detail',
-      'startDate',
-      'endDate',
-      'sortOrder',
-    ]);
+    return await runResumeMutation(
+      locals,
+      async (subject) =>
+        await updateRecord(
+          'Education',
+          form,
+          [
+            'profileKey',
+            'title',
+            'institution',
+            'detail',
+            'startDate',
+            'endDate',
+            'sortOrder',
+          ],
+          subject,
+        ),
+    );
   },
-  setDefaultProfile: async ({ request }) => {
+  setDefaultProfile: async ({ locals, request }) => {
     const form = await request.formData();
     const id = String(form.get('profileId') ?? '');
     if (!id) return { ok: false, error: 'Missing profile id' };
-    const collection = await getCollection('CandidateProfile');
-    const records = (await collection.list({
-      limit: 1000,
-    })) as unknown as RecordLike[];
-    for (const record of records) {
-      record.isDefault = record.id === id;
-      if (record.id === id) record.active = true;
-      if (typeof record.save === 'function') await record.save();
-    }
-    invalidatePublishedResumeCache();
-    return await withPublishedCanonicalRefresh({ ok: true });
+    return await runResumeMutation(locals, async (subject) => {
+      const profile = await getPrivateRecord('CandidateProfile', id, subject);
+      if (!profile) error(404, 'Profile not found.');
+      const collection = await getCollection('CandidateProfile');
+      const records = (await collection.list({
+        limit: 1000,
+        where: candidateProfileWhere(subject),
+      })) as unknown as RecordLike[];
+      for (const record of records) {
+        if (
+          record.tenantId !== subject.tenantId ||
+          record.ownerUserId !== subject.userId
+        )
+          continue;
+        record.isDefault = record.id === id;
+        if (record.id === id) record.active = true;
+        if (typeof record.save === 'function') await record.save();
+      }
+      return await savedResumeData();
+    });
   },
 };
