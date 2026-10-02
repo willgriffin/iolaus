@@ -177,7 +177,7 @@ export function assessmentCoverageMessages(
       ? ['Candidate evidence was truncated.']
       : []),
     ...(coverage.requirementsTruncated
-      ? ['Role requirements were truncated.']
+      ? ['Role requirements may be incomplete.']
       : []),
   ];
 }

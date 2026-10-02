@@ -19,7 +19,7 @@ unknown.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A posting claim has an exact source attribution | Typed result is resolved | High-confidence value and selected posting excerpt become a claim | Unknown source key, low confidence, missing provenance, or malformed answer is rejected | Posting assessment | Pure resolver; no write | Node | JEV predicate and choice result | Unit | `vitest ... opportunity-assessment.spec.ts` |
 | Missing or truncated evidence does not invent a gap | Assessment preparation and resolution | Complete candidate evidence can support a role/experience claim | Truncated or absent candidate evidence resolves to `unknown` / `uncertain`, never a confirmed gap | Candidate profile | Pure resolver; no write | Node | Bounded JEV state | Unit | same |
-| Each requirement keeps its own evidence pair | Typed requirement decisions | A required skill stores its posting clause and its supporting candidate passage | A gap is withheld if candidate evidence was trimmed, or if the model supplies a candidate source for a gap | Candidate profile | Pure resolver; no write | Node | Typed JEV per-requirement choices | Unit | same |
+| Each requirement keeps its own evidence pair | Typed requirement decisions | A required skill stores its posting clause and its supporting candidate passage | A gap is withheld if candidate evidence was trimmed or no explicit contradicting candidate source is attributed | Candidate profile | Pure resolver; no write | Node | Typed JEV per-citation predicates | Unit | same |
 | Location is assessed for the intended work country, not citizenship | Personal compatibility projection | An explicitly allowed target location plus verified country-wide authorization is eligible | Citizenship, residence, a missing posting authorization statement, or unknown sponsorship never establish authorization; an authorization requirement with no proof remains unknown | Candidate profile | Pure resolver; no write | Node | No immigration-pathway inference | Unit | same |
 | Sponsorship remains independent from location | Personal compatibility projection | Required authorization plus offered sponsorship is sponsorship-possible | Denied sponsorship only excludes a candidate who states sponsorship is required | Candidate profile | Pure resolver; no write | Node | Posting source assertions | Unit | same |
 | Conflicting posting claims fail closed | Assessment resolution | A consistent answer is usable | An attributed `conflicting` decision or a conflicting persisted projection becomes an explicit conflicting outcome | Posting assessment | Pure resolver; no write | Node | Typed JEV choice / current-source validator | Unit | same |
@@ -39,5 +39,58 @@ unknown.
 | Provider preflight is bounded | JEV assessment is prepared | Request fits 64 KiB and reservation derives from typed response criteria | Oversized request or response reservation fails before a billable provider call | Governed AgentRun | Existing reservation/control history | Native JEV | `decide()` has no max-output option | Unit + operator | provider spec/canary |
 | Current private projection parity | List API or triage action loads a bounded opportunity set | Both attach the same source-current private `assessmentProjection` for the session-hook-verified tenant/user/profile tuple | A supplied URL/form value never selects a profile; foreign, stale, malformed, or missing rows map to unknown and never leak raw assessment JSON | Verified workspace | Scoped batch projection lookup | SQLite + PostgreSQL | Admin + MCP view models | Route + integration | `admin-resource-route.spec.ts`, `opportunity-triage.spec.ts`, and admin route specs |
 | Readiness fails closed before fit display | Projection from a current private assessment | Structured requirements plus complete posting/candidate evidence yields `assessable` | Zero requirements yields `needs_extraction`; a clipped or omitted candidate source, posting source, or requirement yields `needs_evidence`; UI keeps eligibility but suppresses fit authority | Verified tenant/user/profile | Token-free scoped projection refresh | SQLite + PostgreSQL | Safe projection only: readiness plus four coverage scalars | Unit + route/UI | assessment store/input and admin projection specs |
-| Bounded candidate evidence retains matching facts | Candidate input preparation | Role, tenure, and skills matching extracted requirements precede projects/achievements; each source retains its original id | Any omitted or clipped candidate evidence records coverage loss; keyword overlap only prioritizes sources and never proves omitted material irrelevant | Verified tenant/user/profile | Pure bounded input preparation | Node | 30 excerpts × 360 chars under governed request ceiling | Unit | `opportunity-assessment-input.spec.ts` |
+| Complete candidate evidence retains matching facts | Candidate input preparation | All roles, tenure, skills and narratives retain original IDs and full content | Invalid or explicitly partial sources record coverage loss; scoped skill choices never erase facts or prove an absence-based gap | Verified tenant/user/profile | Pure complete input preparation | Node | Exact UTF-8 request and output reservation ceilings | Unit | `opportunity-assessment-input.spec.ts` |
 | Requirement-aware rank is local and cautious | Projection refresh after a stored decision | Supported required and preferred requirements contribute fixed normalized shares (30 and 10 points) regardless of list length | Gaps subtract only when candidate, posting, and requirements coverage are complete; uncertain requirements are neutral; final local preference-adjusted score stays within 0–100 and readiness keeps incomplete scores out of score filtering/sorting | Verified tenant/user/profile | Token-free preference/projection refresh | SQLite + PostgreSQL | No JEV call on rank or preference change | Unit + SQL | assessment and query specs |
+
+## Complete structured input pack (daily-use #137)
+
+| Behavior / invariant | Reachable trigger | Positive case | Negative / failure case | Actor / context | Data executor / transaction | Runtime / dialect | External contract edge | Test level | Validation |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Complete evidence survives preparation | Workspace assessment preparation | All atomic skills, role/tenure, duties and narratives retain source IDs and full text, including beyond 30 sources / 360 characters / eight requirements | Missing raw posting explicitly marks partial coverage; no hash substitutes for semantic content | Verified workspace | Pure preparation; existing scoped loader | Node | Typed JEV state | Unit | assessment/input specs via exclusive snapshot lane |
+| Requirement citation predicates remain attributable | Requirement decision | Attributed posting requirements and affirmative narrative / matching skill predicates resolve to original IDs | A source outside the offered predicate scope cannot emit support; absent evidence alone never proves a gap | Verified workspace | Pure resolver | Node | Typed binary citation predicates | Unit | assessment specs via exclusive snapshot lane |
+| Exact complete-request preflight precedes billing | Assessment provider | UTF-8 bytes and typed response reservation both fit | Either ceiling exceeded rejects before governance/provider; incomplete coverage remains nonauthoritative | Governed AgentRun | Existing governance unchanged; N/A new transaction | Node / native JEV | 64 KiB request, 20,000 reserved output tokens | Unit + native operator | provider specs + native owner pure preflight |
+
+Base regression evidence: old builders explicitly sliced 30 sources, 360-character text and eight requirements; new tests assert 201 complete sources, long narrative and more than eight requirements. Snapshot executor owns executable validation. No database schema, tenancy or persistence protocol changes are introduced.
+
+The complete pack also includes every stored qualification statement (tenure,
+scale, communication and other non-taxonomy requirements) and responsibility.
+Short wire citations map to the private durable `sourceCatalog`; record/section identity never needs
+to be billed as opaque prose. A `citationScopes` record preserves offered keys
+and whether the scope is exhaustive. Full candidate facts stay in state even
+when a question offers fewer citations; evidence outside that scope is uncertain
+and cannot become a gap or negative fit contribution. `requirements_complete`
+checks the full raw posting before a saved result can claim full role coverage.
+Its private audit retains the exact probability and whether input rows were
+complete; uncertain extraction is described as potentially incomplete rather
+than claiming that request text was truncated. Pack/contract v4 includes duties
+and independent binary citation support under a new identity and preserves previously accounted decisions.
+Zero extracted requirements stop before any governance reservation or provider.
+Education retains distinct native record IDs even for identical title/body rows,
+and the private loader reads an overflow row to reject silent collection loss.
+
+Focused regressions cover compact citation reconstruction/parent links, a real
+supporting narrative outside offered criteria (uncertain with no penalty), full
+qualification statements, thirty requirements with 150 retained sources,
+incomplete raw requirement extraction, duplicate education identities and the
+no-reservation extraction prerequisite. Native pure preflight uses the current
+rich candidate and complete role requirements; no paid request is allowed until
+its exact bytes and typed output reservation both fit existing ceilings.
+
+Binary support protocol: every offered citation gets an independent direct-support
+predicate. Only probabilities at least 0.85 yield that exact canonical source;
+there is no selected-citation multiclass confidence requirement. Mandatory and
+preferred classification also use independent predicates unless the extracted
+required/preferred source label fixes it deterministically. Explicit contradiction
+predicates are offered only for exhaustive scopes, and a support/contradiction
+conflict stays uncertain. Exact UTF-8 request bytes and the same typed output
+reservation determine the largest fitting citation scope; no semantic catalog
+content or role clause is removed.
+
+Native v4 pure preflight for the current imported role retained 24 requirements
+(including all seven duties), 150 candidate sources and 32 posting sources. It
+measured 65,529 UTF-8 bytes and 12,288 reserved output tokens: 120 support
+predicates, five per requirement, no contradiction predicates for partial scopes.
+All 19 matching atomic skill citations remained offered alongside 101 narrative
+citations; no matching skills were excluded. The private receipt preserves the
+per-requirement scope counters without exposing candidate text. Paid-result
+validation remains a separate checkpoint.

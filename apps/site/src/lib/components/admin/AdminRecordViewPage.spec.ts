@@ -134,7 +134,7 @@ describe('AdminRecordViewPage opportunity workflow panels', () => {
       candidateTruncated: false,
       postingTruncated: false,
       requirementsTruncated: true,
-      messages: ['Role requirements were truncated.'],
+      messages: ['Role requirements may be incomplete.'],
     },
   ])('keeps eligibility visible and withholds match scores for incomplete coverage ($matchReadiness)', ({
     matchReadiness,

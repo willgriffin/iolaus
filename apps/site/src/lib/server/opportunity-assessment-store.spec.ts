@@ -24,7 +24,7 @@ const assessment = {
       value: 'not_stated',
     },
   ],
-  contractVersion: 'opportunity-assessment/v1' as const,
+  contractVersion: 'opportunity-assessment/v4' as const,
   coverage: {
     candidateTruncated: false,
     postingTruncated: false,

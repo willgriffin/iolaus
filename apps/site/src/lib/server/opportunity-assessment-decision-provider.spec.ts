@@ -3,6 +3,8 @@ import { prepareOpportunityAssessment } from './opportunity-assessment.js';
 import {
   assessmentDecisionOutputTokenCeiling,
   evaluateOpportunityAssessment,
+  OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
+  preflightOpportunityAssessmentRequest,
 } from './opportunity-assessment-decision-provider.js';
 
 const mocks = vi.hoisted(() => ({
@@ -25,6 +27,7 @@ const prepared = prepareOpportunityAssessment({
     targetWorkCountry: { code: 'CA', label: 'Canada' },
   },
   candidateMaterialFingerprint: 'candidate-v1',
+  requirements: [{ id: 'requirement-1', text: 'Platform work' }],
   candidateSources: [
     {
       id: 'candidate-1',
@@ -56,7 +59,7 @@ const workspaceSubject = {
 function answers() {
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(prepared.request.questions)) {
-    if (key.endsWith('_explicit'))
+    if (prepared.request.questions[key].type === 'predicate')
       result[key] = { type: 'predicate', probability: 0.1 };
     else if (key.endsWith('_posting_source'))
       result[key] = {
@@ -187,5 +190,196 @@ describe('opportunity assessment decision provider', () => {
         workspaceSubject,
       }),
     ).rejects.toThrow('subject fingerprint');
+  });
+  it('preflights exact UTF-8 bytes and declines oversized complete content before reservation', async () => {
+    const oversized = prepareOpportunityAssessment({
+      candidate: prepared.candidate,
+      candidateMaterialFingerprint: 'full-candidate',
+      candidateSources: [
+        {
+          id: 'unicode',
+          kind: 'achievement',
+          title: 'Complete narrative',
+          text: 'é'.repeat(40_000),
+        },
+      ],
+      postingMaterial: prepared.postingMaterial,
+      postingSources: prepared.postingSources,
+      requirements: [{ id: 'r', text: 'Platform work' }],
+    });
+    const preflight = preflightOpportunityAssessmentRequest(oversized);
+    expect(preflight.requestBytes).toBe(
+      Buffer.byteLength(JSON.stringify(oversized.request), 'utf8'),
+    );
+    expect(preflight.requestBytes).toBeGreaterThan(
+      OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
+    );
+    expect(preflight).toMatchObject({ fits: false, reason: 'request_bytes' });
+    expect(oversized.coverage.candidateTruncated).toBe(false);
+    await expect(
+      evaluateOpportunityAssessment(oversized, {
+        agentRunId: 'run',
+        contentFingerprint: 'posting',
+        opportunityId: 'opportunity',
+        subjectFingerprint: 'subject',
+        workspaceSubject,
+      }),
+    ).rejects.toThrow('Complete opportunity assessment request');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
+  });
+
+  it('declines an excessive typed output reservation even when the request bytes fit', async () => {
+    const outputHeavy = {
+      ...prepared,
+      request: {
+        state: {},
+        questions: Object.fromEntries(
+          Array.from({ length: 70 }, (_, index) => [
+            `q${index}`,
+            {
+              type: 'choice' as const,
+              instructions: 'Select evidence',
+              criteria: Object.fromEntries(
+                Array.from({ length: 28 }, (_, criterion) => [
+                  `c${criterion}`,
+                  null,
+                ]),
+              ),
+            },
+          ]),
+        ),
+      },
+    };
+    expect(preflightOpportunityAssessmentRequest(outputHeavy)).toMatchObject({
+      fits: false,
+      reason: 'output_reservation',
+    });
+    await expect(
+      evaluateOpportunityAssessment(outputHeavy, {
+        agentRunId: 'run',
+        contentFingerprint: 'posting',
+        opportunityId: 'opportunity',
+        subjectFingerprint: 'subject',
+        workspaceSubject,
+      }),
+    ).rejects.toThrow('response reservation');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
+  });
+  it('requires extraction before any assessment reservation or provider call', async () => {
+    await expect(
+      evaluateOpportunityAssessment(
+        { ...prepared, requirements: [] },
+        {
+          agentRunId: 'run',
+          contentFingerprint: 'posting',
+          opportunityId: 'opportunity',
+          subjectFingerprint: 'subject',
+          workspaceSubject,
+        },
+      ),
+    ).rejects.toThrow('Extract structured role requirements');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
+  });
+  it('budgets a rich complete source catalog with thirty requirements without losing facts', () => {
+    const full = prepareOpportunityAssessment({
+      candidate: prepared.candidate,
+      candidateMaterialFingerprint: 'rich',
+      candidateSources: Array.from({ length: 150 }, (_, index) => ({
+        id: `private-original-identifier-${index}`,
+        kind:
+          index === 0
+            ? 'candidate_profile'
+            : index >= 148
+              ? 'skill'
+              : 'achievement',
+        title: 'Evidence',
+        text:
+          index === 148
+            ? 'Engineering'
+            : index === 149
+              ? 'Leadership'
+              : `Engineering leadership evidence ${index}. ${'Complete private narrative. '.repeat(4)}`,
+      })),
+      postingMaterial: prepared.postingMaterial,
+      postingSources: prepared.postingSources,
+      requirements: Array.from({ length: 30 }, (_, index) => ({
+        id: `requirement-${index}`,
+        text: 'Engineering leadership',
+      })),
+    });
+    expect(full.candidateSources).toHaveLength(150);
+    expect(full.requirements).toHaveLength(30);
+    expect(full.sourceCatalog).toHaveLength(151);
+    const preflight = preflightOpportunityAssessmentRequest(full);
+    expect(preflight.offeredSupportPredicates).toBeGreaterThan(0);
+    expect(preflight.offeredSupportPredicates).toBe(
+      full.citationScopes.reduce(
+        (total, scope) => total + scope.candidateKeys.length,
+        0,
+      ),
+    );
+    expect(full.citationScopes.every((scope) => !scope.complete)).toBe(true);
+    expect(preflight.offeredContradictionPredicates).toBe(0);
+    for (const scope of full.citationScopes) {
+      // A fitting request must retain useful evidence offers for every role
+      // requirement, rather than spending the budget on empty predicates.
+      expect(scope.candidateKeys.length).toBeGreaterThan(0);
+      const offered = scope.candidateKeys.map((key) =>
+        full.sourceCatalog.find((source) => source.key === key),
+      );
+      expect(offered.map((source) => source?.sourceId)).toEqual(
+        expect.arrayContaining([
+          'private-original-identifier-148',
+          'private-original-identifier-149',
+          'private-original-identifier-0',
+          'private-original-identifier-1',
+        ]),
+      );
+      const kinds = scope.candidateKeys.map(
+        (key) => full.sourceCatalog.find((source) => source.key === key)?.kind,
+      );
+      expect(kinds).toEqual(
+        expect.arrayContaining(['candidate_profile', 'achievement']),
+      );
+    }
+    expect(preflightOpportunityAssessmentRequest(full)).toMatchObject({
+      fits: true,
+    });
+    expect(full.coverage).toEqual({
+      candidateTruncated: false,
+      postingTruncated: false,
+      requirementsTruncated: false,
+    });
+  });
+  it('declines a fitting request with no offered support scope before billing', async () => {
+    const noScope = prepareOpportunityAssessment({
+      candidate: prepared.candidate,
+      candidateMaterialFingerprint: 'unrelated-skills',
+      candidateSources: [
+        { id: 'skill', kind: 'skill', title: 'Unrelated', text: 'Unrelated' },
+      ],
+      postingMaterial: prepared.postingMaterial,
+      postingSources: prepared.postingSources,
+      requirements: [{ id: 'r', text: 'Platform work' }],
+    });
+    expect(preflightOpportunityAssessmentRequest(noScope)).toMatchObject({
+      fits: false,
+      reason: 'citation_scope',
+      offeredSupportPredicates: 0,
+    });
+    await expect(
+      evaluateOpportunityAssessment(noScope, {
+        agentRunId: 'run',
+        contentFingerprint: 'posting',
+        opportunityId: 'opportunity',
+        subjectFingerprint: 'subject',
+        workspaceSubject,
+      }),
+    ).rejects.toThrow('No candidate citation scope');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.getAI).not.toHaveBeenCalled();
   });
 });

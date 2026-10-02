@@ -1,11 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assessmentCoverageMessages,
   compareAssessmentEligibility,
   getOpportunityAssessmentProjection,
   matchesAssessmentEligibility,
 } from './opportunity-assessment-projection';
 
 describe('opportunity assessment projection', () => {
+  it('describes uncertain requirement completeness without claiming wire truncation', () => {
+    const projection = getOpportunityAssessmentProjection({
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      ranking: { eligibilityPriority: 0, fitScore: 88 },
+      matchReadiness: 'needs_evidence',
+      coverage: {
+        candidateTruncated: false,
+        postingTruncated: false,
+        requirementsTruncated: true,
+        requirementCount: 17,
+      },
+    });
+    expect(projection.matchReadiness).toBe('needs_evidence');
+    expect(assessmentCoverageMessages(projection)).toEqual([
+      'Role requirements may be incomplete.',
+    ]);
+  });
   it('only accepts an explicit current safe projection', () => {
     const assessment = {
       eligibilityBucket: 'eligible',

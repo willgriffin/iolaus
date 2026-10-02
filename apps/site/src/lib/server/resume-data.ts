@@ -167,9 +167,14 @@ export interface CandidateEvidenceSource {
     | 'achievement'
     | 'candidate_profile'
     | 'education'
+    | 'duty'
     | 'employment'
     | 'project'
-    | 'skill';
+    | 'skill'
+    | 'skill_context';
+  /** Original record identifier; id identifies its attributable catalog occurrence. */
+  recordId?: string;
+  sectionId?: string;
   text: string;
   title: string;
 }
@@ -1130,6 +1135,22 @@ function evidenceText(...values: unknown[]): string {
  * engine receives a server-validated subject and cannot ask it to read a
  * different profile by swapping an opaque id in tool input.
  */
+function completeEvidenceReadPlan<K extends string>(
+  spec: Record<K, readonly [string, string, number?, string?]>,
+): Record<K, readonly [string, string, number, string?]> {
+  // Read one overflow row so a source collection limit cannot masquerade as
+  // complete candidate coverage. loadRecordSpec fails closed at 1001 rows.
+  const result = {} as Record<K, readonly [string, string, number, string?]>;
+  for (const key of Object.keys(spec) as K[]) {
+    const [className, orderBy, , inMemoryOrderBy] = spec[key];
+    result[key] =
+      inMemoryOrderBy === undefined
+        ? [className, orderBy, 1001]
+        : [className, orderBy, 1001, inMemoryOrderBy];
+  }
+  return result;
+}
+
 export async function loadWorkspaceCandidateEvidence(
   subject: WorkspaceSubject,
 ): Promise<WorkspaceCandidateEvidence> {
@@ -1143,26 +1164,37 @@ export async function loadWorkspaceCandidateEvidence(
     throw new Error('Candidate profile is outside this workspace.');
   }
 
-  const source =
-    (await loadNormalizedResumeSource(undefined, scopedSubject)) ??
-    (await loadLegacyAdminResumeSource(undefined, scopedSubject));
+  const normalizedRecords = await loadRecordSpec(
+    completeEvidenceReadPlan(NORMALIZED_RESUME_READ_PLAN),
+    scopedSubject,
+  );
+  let source = assembleResumeSourceFromRecords(normalizedRecords);
+  let educationRecords = normalizedRecords.education;
+  if (!source) {
+    const legacyRecords = (await loadRecordSpec(
+      completeEvidenceReadPlan(LEGACY_RESUME_READ_PLAN),
+      scopedSubject,
+    )) as unknown as LegacyResumeSourceRecords;
+    source = assembleResumeSourceFromLegacyRecords(legacyRecords);
+    educationRecords = legacyRecords.education;
+  }
   const evidence: CandidateEvidenceSource[] = [];
   const append = (next: CandidateEvidenceSource) => {
     if (next.id && next.text) evidence.push(next);
   };
 
   append({
-    id: scopedSubject.profileId,
+    id: `profile:${scopedSubject.profileId}`,
+    recordId: scopedSubject.profileId,
     kind: 'candidate_profile',
-    text: evidenceText(profile.title, profile.summary),
+    text: evidenceText(profile.title, profile.summary, profile.factsJson),
     title: stringValue(profile.name) || 'Candidate profile',
   });
-  // Primary matching facts always enter the bounded collection before rich
-  // narrative evidence. Otherwise a long project history could silently omit
-  // the candidate's actual roles and skill inventory.
+  // Preserve atomic role/tenure facts alongside every narrative source.
   for (const position of source?.experience.positions ?? []) {
     append({
       id: `position:${stringValue(position.id)}`,
+      recordId: stringValue(position.id),
       kind: 'employment',
       text: evidenceText(
         position.role,
@@ -1170,14 +1202,32 @@ export async function loadWorkspaceCandidateEvidence(
         [stringValue(position.start), stringValue(position.end)]
           .filter(Boolean)
           .join(' - '),
+        position.blurb,
       ),
       title: stringValue(position.role) || 'Employment',
+    });
+  }
+  for (const [index, role] of (source?.experience.other ?? []).entries()) {
+    append({
+      id: `other-role:${index}`,
+      kind: 'employment',
+      text: evidenceText(role.role, role.company, role.period, role.body),
+      title: role.role || 'Other employment',
+    });
+  }
+  for (const group of source?.skills.skillGroups ?? []) {
+    append({
+      id: `skill-group:${group.id}`,
+      kind: 'skill_context',
+      text: evidenceText(group.label, group.blurb, group.skills.join(', ')),
+      title: group.label || 'Skill context',
     });
   }
   for (const group of source?.skills.groups ?? []) {
     for (const skill of group.skills ?? []) {
       append({
-        id: stringValue(skill.id),
+        id: `skill:${group.id}:${stringValue(skill.id)}`,
+        recordId: stringValue(skill.id),
         kind: 'skill',
         text: stringValue(skill.label),
         title: stringValue(skill.label) || 'Skill',
@@ -1185,17 +1235,46 @@ export async function loadWorkspaceCandidateEvidence(
     }
   }
   for (const position of source?.experience.positions ?? []) {
+    for (const [index, duty] of (position.duties ?? []).entries()) {
+      append({
+        id: `position:${position.id}:duty:${duty.id || index}`,
+        kind: 'duty',
+        sectionId: `position:${position.id}`,
+        text: evidenceText(duty.title, duty.body),
+        title: duty.title || position.role,
+      });
+    }
     for (const project of position.projects ?? []) {
       append({
-        id: stringValue(project.id),
+        id: `project:${stringValue(project.id)}`,
+        recordId: stringValue(project.id),
         kind: 'project',
-        text: evidenceText(project.name, project.summary),
+        sectionId: `position:${position.id}`,
+        text: evidenceText(
+          project.name,
+          project.summary,
+          project.start,
+          project.end,
+        ),
         title: stringValue(project.name) || 'Project',
       });
-      for (const achievement of project.achievements ?? []) {
+      for (const [index, duty] of (project.duties ?? []).entries()) {
         append({
-          id: `${stringValue(project.id)}:${stringValue(achievement.title)}`,
+          id: `project:${project.id}:duty:${duty.id || index}`,
+          kind: 'duty',
+          sectionId: `project:${project.id}`,
+          text: evidenceText(duty.title, duty.body),
+          title: duty.title || project.name,
+        });
+      }
+      for (const [index, achievement] of (
+        project.achievements ?? []
+      ).entries()) {
+        append({
+          id: `achievement:project:${project.id}:${achievement.id || index}`,
+          ...(achievement.id ? { recordId: achievement.id } : {}),
           kind: 'achievement',
+          sectionId: `project:${project.id}`,
           text: evidenceText(
             achievement.title,
             achievement.body,
@@ -1205,10 +1284,14 @@ export async function loadWorkspaceCandidateEvidence(
         });
       }
     }
-    for (const achievement of position.achievements ?? []) {
+    for (const [index, achievement] of (
+      position.achievements ?? []
+    ).entries()) {
       append({
-        id: `${stringValue(position.id)}:${stringValue(achievement.title)}`,
+        id: `achievement:position:${position.id}:${achievement.id || index}`,
+        ...(achievement.id ? { recordId: achievement.id } : {}),
         kind: 'achievement',
+        sectionId: `position:${position.id}`,
         text: evidenceText(
           achievement.title,
           achievement.body,
@@ -1218,16 +1301,35 @@ export async function loadWorkspaceCandidateEvidence(
       });
     }
   }
-  for (const education of source?.experience.education ?? []) {
+  const educationIds = new Map<string, string[]>();
+  for (const [index, record] of [...educationRecords]
+    .sort(bySortOrder)
+    .entries()) {
+    const identity = evidenceText(
+      record.title,
+      record.institution,
+      record.detail,
+    );
+    const ids = educationIds.get(identity) ?? [];
+    ids.push(stringValue(record.id) || `occurrence:${index}`);
+    educationIds.set(identity, ids);
+  }
+  for (const [index, education] of (
+    source?.experience.education ?? []
+  ).entries()) {
+    const body = evidenceText(
+      education.title,
+      education.institution,
+      education.detail,
+    );
+    const recordId = educationIds.get(body)?.shift() || `occurrence:${index}`;
     append({
-      id: `${stringValue(education.title)}:${stringValue(education.institution)}`,
+      id: `education:${recordId}`,
       kind: 'education',
-      text: evidenceText(
-        education.title,
-        education.institution,
-        education.detail,
-      ),
-      title: stringValue(education.title) || 'Education',
+      recordId,
+      sectionId: `profile:${scopedSubject.profileId}`,
+      text: body,
+      title: education.title || 'Education',
     });
   }
 
@@ -1252,7 +1354,14 @@ export async function loadWorkspaceCandidateEvidence(
     workAuthorization: stringValue(profile.workAuthorization),
   };
   const fingerprint = createHash('sha256')
-    .update(JSON.stringify({ candidate, evidence, subject: scopedSubject }))
+    .update(
+      JSON.stringify({
+        // Preferences rerank saved facts locally and never invalidate JEV material.
+        candidate: { ...candidate, preferencesJson: undefined },
+        evidence,
+        subject: scopedSubject,
+      }),
+    )
     .digest('hex');
   return { candidate, evidence, fingerprint, subject: scopedSubject };
 }

@@ -1264,6 +1264,7 @@ async function runAssessment(
         sourceContentVersion: sourceVersion,
       },
       postingSources: posting.postingSources,
+      postingCoverageTruncated: posting.postingCoverageTruncated,
       requirements: posting.requirements,
     });
     const privateMaterialFingerprint =
@@ -1282,6 +1283,15 @@ async function runAssessment(
         message: 'Skipped stale private opportunity assessment material.',
         mode: 'assessment',
         skipReason: 'stale',
+        status: 'skipped',
+      };
+    }
+    if (prepared.requirements.length === 0) {
+      return {
+        message:
+          'Extract structured role requirements before private matching.',
+        mode: 'assessment',
+        skipReason: 'prerequisite',
         status: 'skipped',
       };
     }

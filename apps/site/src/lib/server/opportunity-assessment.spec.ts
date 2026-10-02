@@ -58,7 +58,52 @@ function prepared(
   });
 }
 
-function decision(answers: Record<string, unknown>): DecisionResult {
+function decision(
+  answers: Record<string, unknown>,
+  request?: ReturnType<typeof prepared>,
+): DecisionResult {
+  // Existing scenario fixtures describe the intended categorical outcome; turn
+  // those intents into complete binary wire answers. New protocol regressions
+  // below supply predicate probabilities directly, without choice confidence.
+  answers = { ...answers };
+  if (request) {
+    for (const [key, question] of Object.entries(request.request.questions)) {
+      const match =
+        /^r(\d+)_(required|preferred|c\d+_supports|c\d+_contradicts)$/u.exec(
+          key,
+        );
+      if (!match || question.type !== 'predicate' || answers[key]) continue;
+      const prefix = `r${match[1]}`;
+      const importance = answers[`${prefix}_importance`] as
+        | { choice?: string; confidence?: number }
+        | undefined;
+      const support = answers[`${prefix}_support`] as
+        | { choice?: string; confidence?: number }
+        | undefined;
+      const citation = answers[`${prefix}_candidate_source`] as
+        | { choice?: string; confidence?: number }
+        | undefined;
+      const outcome = match[2]!;
+      const affirmed =
+        outcome === 'required' || outcome === 'preferred'
+          ? importance?.choice === outcome
+          : outcome === `${citation?.choice}_supports`
+            ? support?.choice === 'supported'
+            : outcome === `${citation?.choice}_contradicts` &&
+              support?.choice === 'gap';
+      const probability =
+        outcome === 'required' || outcome === 'preferred'
+          ? (importance?.confidence ?? 0.04)
+          : Math.min(support?.confidence ?? 0.04, citation?.confidence ?? 0.04);
+      answers[key] = {
+        type: 'predicate',
+        probability: affirmed ? probability : 0.04,
+      };
+    }
+    for (const key of Object.keys(answers))
+      if (/^r\d+_(importance|support|candidate_source)$/u.test(key))
+        delete answers[key];
+  }
   return {
     answers: answers as DecisionResult['answers'],
     model: 'jev-1.13.0',
@@ -67,7 +112,9 @@ function decision(answers: Record<string, unknown>): DecisionResult {
 }
 
 function completeAnswers(values: Record<string, [string, string]>) {
-  const answers: Record<string, unknown> = {};
+  const answers: Record<string, unknown> = {
+    requirements_complete: { type: 'predicate', probability: 0.95 },
+  };
   for (const dimension of [
     'location_access',
     'sponsorship',
@@ -108,7 +155,7 @@ function completeAnswers(values: Record<string, [string, string]>) {
     if (candidateScoped) {
       answers[`${dimension}_posting_source`] = {
         type: 'choice',
-        choice: unresolved ? 'uncertain' : 'posting_2',
+        choice: unresolved ? 'uncertain' : 'p2',
         confidence: unresolved ? 0.9 : 0.96,
         probabilities: {},
       };
@@ -134,11 +181,11 @@ describe('opportunity assessment contract', () => {
       prepared(),
       decision(
         completeAnswers({
-          location_access: ['allowed', 'candidate_0'],
-          authorization: ['required', 'posting_1'],
-          sponsorship: ['offered', 'posting_1'],
-          role_domain: ['direct', 'candidate_0'],
-          experience_fit: ['supported', 'candidate_0'],
+          location_access: ['allowed', 'c0'],
+          authorization: ['required', 'p1'],
+          sponsorship: ['offered', 'p1'],
+          role_domain: ['direct', 'c0'],
+          experience_fit: ['supported', 'c0'],
         }),
       ),
     );
@@ -183,11 +230,11 @@ describe('opportunity assessment contract', () => {
 
   it('rejects unproven or malformed model claims instead of constructing a gap', () => {
     const request = prepared({ candidateSources: [] });
-    const answers = completeAnswers({ experience_fit: ['gap', 'candidate_0'] });
+    const answers = completeAnswers({ experience_fit: ['gap', 'c0'] });
     expect(() =>
       resolveOpportunityAssessment(request, decision(answers)),
     ).toThrow('Unknown experience_fit decision choice');
-    const low = completeAnswers({ experience_fit: ['gap', 'candidate_0'] });
+    const low = completeAnswers({ experience_fit: ['gap', 'c0'] });
     (low.experience_fit_explicit as { probability: number }).probability = 0.4;
     const resolved = resolveOpportunityAssessment(prepared(), decision(low));
     expect(
@@ -200,9 +247,9 @@ describe('opportunity assessment contract', () => {
       prepared(),
       decision(
         completeAnswers({
-          location_access: ['restricted', 'candidate_0'],
-          sponsorship: ['denied', 'posting_1'],
-          authorization: ['required', 'posting_1'],
+          location_access: ['restricted', 'c0'],
+          sponsorship: ['denied', 'p1'],
+          authorization: ['required', 'p1'],
         }),
       ),
     );
@@ -216,9 +263,9 @@ describe('opportunity assessment contract', () => {
       prepared(),
       decision(
         completeAnswers({
-          location_access: ['allowed', 'candidate_0'],
-          authorization: ['not_stated', 'posting_1'],
-          sponsorship: ['denied', 'posting_1'],
+          location_access: ['allowed', 'c0'],
+          authorization: ['not_stated', 'p1'],
+          sponsorship: ['denied', 'p1'],
         }),
       ),
     );
@@ -251,9 +298,9 @@ describe('opportunity assessment contract', () => {
       prepared(),
       decision(
         completeAnswers({
-          location_access: ['allowed', 'candidate_0'],
-          authorization: ['not_stated', 'posting_1'],
-          sponsorship: ['offered', 'posting_1'],
+          location_access: ['allowed', 'c0'],
+          authorization: ['not_stated', 'p1'],
+          sponsorship: ['offered', 'p1'],
         }),
       ),
     );
@@ -274,10 +321,10 @@ describe('opportunity assessment contract', () => {
       source,
       decision(
         completeAnswers({
-          location_access: ['allowed', 'candidate_0'],
-          authorization: ['not_stated', 'posting_1'],
-          role_domain: ['direct', 'candidate_0'],
-          experience_fit: ['supported', 'candidate_0'],
+          location_access: ['allowed', 'c0'],
+          authorization: ['not_stated', 'p1'],
+          role_domain: ['direct', 'c0'],
+          experience_fit: ['supported', 'c0'],
         }),
       ),
     );
@@ -321,34 +368,37 @@ describe('opportunity assessment contract', () => {
       requirements: [{ id: 'typescript', text: 'TypeScript' }],
     });
     const answers = completeAnswers({
-      location_access: ['allowed', 'candidate_0'],
-      authorization: ['not_stated', 'posting_1'],
+      location_access: ['allowed', 'c0'],
+      authorization: ['not_stated', 'p1'],
     });
-    answers.requirement_0_importance = {
+    answers.r0_importance = {
       type: 'choice',
       choice: 'required',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_support = {
+    answers.r0_support = {
       type: 'choice',
       choice: 'supported',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_posting_source = {
+    answers.r0_posting_source = {
       type: 'choice',
-      choice: 'posting_2',
+      choice: 'p2',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_candidate_source = {
+    answers.r0_candidate_source = {
       type: 'choice',
-      choice: 'candidate_0',
+      choice: 'c0',
       confidence: 0.96,
       probabilities: {},
     };
-    const supported = resolveOpportunityAssessment(source, decision(answers));
+    const supported = resolveOpportunityAssessment(
+      source,
+      decision(answers, source),
+    );
     const authorized = {
       ...candidate,
       authorizedWorkCountries: [
@@ -409,55 +459,58 @@ describe('opportunity assessment contract', () => {
       ],
     });
     const answers = completeAnswers({});
-    answers.requirement_0_importance = {
+    answers.r0_importance = {
       type: 'choice',
       choice: 'required',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_support = {
+    answers.r0_support = {
       type: 'choice',
       choice: 'supported',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_posting_source = {
+    answers.r0_posting_source = {
       type: 'choice',
-      choice: 'posting_2',
+      choice: 'p2',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_0_candidate_source = {
+    answers.r0_candidate_source = {
       type: 'choice',
-      choice: 'candidate_0',
+      choice: 'c0',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_1_importance = {
+    answers.r1_importance = {
       type: 'choice',
       choice: 'required',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_1_support = {
+    answers.r1_support = {
       type: 'choice',
       choice: 'gap',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_1_posting_source = {
+    answers.r1_posting_source = {
       type: 'choice',
-      choice: 'posting_2',
+      choice: 'p2',
       confidence: 0.96,
       probabilities: {},
     };
-    answers.requirement_1_candidate_source = {
+    answers.r1_candidate_source = {
       type: 'choice',
       choice: 'none',
       confidence: 0.96,
       probabilities: {},
     };
-    const resolved = resolveOpportunityAssessment(source, decision(answers));
+    const resolved = resolveOpportunityAssessment(
+      source,
+      decision(answers, source),
+    );
     expect(resolved.requirements).toEqual([
       {
         id: 'kubernetes',
@@ -469,7 +522,7 @@ describe('opportunity assessment contract', () => {
       {
         id: 'leadership',
         importance: 'required',
-        support: 'gap',
+        support: 'uncertain',
         postingSourceKeys: ['posting-3'],
         candidateSourceKeys: [],
       },
@@ -492,37 +545,39 @@ describe('opportunity assessment contract', () => {
       ],
     });
     const truncatedAnswers = completeAnswers({});
-    truncatedAnswers.requirement_0_importance = {
+    truncatedAnswers.r0_importance = {
       type: 'choice',
       choice: 'required',
       confidence: 0.96,
       probabilities: {},
     };
-    truncatedAnswers.requirement_0_support = {
+    truncatedAnswers.r0_support = {
       type: 'choice',
       choice: 'gap',
       confidence: 0.96,
       probabilities: {},
     };
-    truncatedAnswers.requirement_0_posting_source = {
+    truncatedAnswers.r0_posting_source = {
       type: 'choice',
-      choice: 'posting_2',
+      choice: 'p2',
       confidence: 0.96,
       probabilities: {},
     };
-    truncatedAnswers.requirement_0_candidate_source = {
+    truncatedAnswers.r0_candidate_source = {
       type: 'choice',
       choice: 'none',
       confidence: 0.96,
       probabilities: {},
     };
     expect(
-      resolveOpportunityAssessment(truncated, decision(truncatedAnswers))
-        .requirements[0]?.support,
+      resolveOpportunityAssessment(
+        truncated,
+        decision(truncatedAnswers, truncated),
+      ).requirements[0]?.support,
     ).toBe('uncertain');
   });
 
-  it('invalidates the request for candidate and source material changes, and records truncation', () => {
+  it('invalidates the request for changed material and preserves long source content', () => {
     const one = prepared();
     const two = prepared({ candidateMaterialFingerprint: 'candidate-v2' });
     const three = prepared({
@@ -543,6 +598,378 @@ describe('opportunity assessment contract', () => {
     });
     expect(two.fingerprint).not.toBe(one.fingerprint);
     expect(three.fingerprint).not.toBe(one.fingerprint);
-    expect(long.coverage.candidateTruncated).toBe(true);
+    expect(long.coverage.candidateTruncated).toBe(false);
+    expect(long.candidateSources[0]?.text).toBe('x'.repeat(601));
+  });
+  it('retains full catalogs and more than eight requirements while scoping only skill choices', () => {
+    const requirements = Array.from({ length: 12 }, (_, index) => ({
+      id: `r-${index}`,
+      text: `TypeScript ${index}`,
+      postingSourceIds: ['posting-3'],
+    }));
+    const source = prepared({
+      requirements,
+      candidateSources: Array.from({ length: 201 }, (_, index) => ({
+        id: `skill-${String(index).padStart(3, '0')}`,
+        kind: 'skill',
+        text:
+          index === 0 || index === 200
+            ? 'TypeScript'
+            : `Unrelated atomic skill ${index}`,
+        title: `Skill ${index}`,
+      })),
+    });
+    expect(source.candidateSources).toHaveLength(201);
+    expect(source.requirements).toHaveLength(12);
+    expect(source.coverage).toEqual({
+      candidateTruncated: false,
+      postingTruncated: false,
+      requirementsTruncated: false,
+    });
+    expect(
+      (source.request.state as Record<string, unknown>)
+        .candidateEvidence as unknown[],
+    ).toHaveLength(201);
+    expect(source.request.questions.r0_c0_supports?.type).toBe('predicate');
+    expect(source.request.questions.r0_c200_supports?.type).toBe('predicate');
+    expect(source.request.questions.r0_c199_supports).toBeUndefined();
+    expect(source.request.questions.r0_candidate_source).toBeUndefined();
+    const answers = completeAnswers({});
+    for (const index of requirements.keys()) {
+      answers[`r${index}_importance`] = {
+        type: 'choice',
+        choice: 'required',
+        confidence: 0.96,
+      };
+      answers[`r${index}_support`] = {
+        type: 'choice',
+        choice: index === 0 ? 'supported' : 'uncertain',
+        confidence: 0.96,
+      };
+      answers[`r${index}_posting_source`] = {
+        type: 'choice',
+        choice: 'p2',
+        confidence: 0.96,
+      };
+      answers[`r${index}_candidate_source`] = {
+        type: 'choice',
+        choice: index === 0 ? 'c200' : 'uncertain',
+        confidence: 0.96,
+      };
+    }
+    expect(
+      resolveOpportunityAssessment(source, decision(answers, source))
+        .requirements[0],
+    ).toMatchObject({
+      support: 'supported',
+      candidateSourceKeys: ['skill-200'],
+      postingSourceKeys: ['posting-3'],
+    });
+    expect(source.request.questions.r0_posting_source).toBeUndefined();
+    expect(
+      source.sourceCatalog.find((entry) => entry.key === 'p2')?.sourceId,
+    ).toBe('posting-3');
+  });
+
+  it('rejects a conflicting source identifier instead of silently losing attribution', () => {
+    expect(() =>
+      prepared({
+        candidateSources: [
+          { id: 'same', kind: 'skill', title: 'A', text: 'A' },
+          { id: 'same', kind: 'skill', title: 'B', text: 'B' },
+        ],
+      }),
+    ).toThrow('Conflicting assessment source id');
+  });
+  it('requires an attributed contradiction for a gap and suppresses it when coverage is partial', () => {
+    const source = prepared({
+      candidateSources: [
+        {
+          id: 'contradiction',
+          kind: 'candidate_profile',
+          title: 'Verified experience',
+          text: 'I have never managed employees.',
+        },
+      ],
+      requirements: [{ id: 'leadership', text: 'People management required' }],
+    });
+    const answers = completeAnswers({});
+    answers.r0_importance = {
+      type: 'choice',
+      choice: 'required',
+      confidence: 0.96,
+    };
+    answers.r0_support = {
+      type: 'choice',
+      choice: 'gap',
+      confidence: 0.96,
+    };
+    answers.r0_posting_source = {
+      type: 'choice',
+      choice: 'p2',
+      confidence: 0.96,
+    };
+    answers.r0_candidate_source = {
+      type: 'choice',
+      choice: 'c0',
+      confidence: 0.96,
+    };
+    expect(
+      resolveOpportunityAssessment(source, decision(answers, source))
+        .requirements[0],
+    ).toMatchObject({ support: 'gap', candidateSourceKeys: ['contradiction'] });
+    expect(
+      resolveOpportunityAssessment(
+        {
+          ...source,
+          coverage: { ...source.coverage, candidateTruncated: true },
+        },
+        decision(answers, source),
+      ).requirements[0]?.support,
+    ).toBe('uncertain');
+  });
+  it('keeps all semantic facts and durable provenance when wire citations are compact', () => {
+    const source = prepared({
+      candidateSources: [
+        {
+          id: 'source-with-long-private-identity',
+          recordId: 'original-record',
+          sectionId: 'parent-role',
+          kind: 'achievement',
+          title: 'Achievement',
+          text: 'Achievement\nComplete narrative evidence.',
+        },
+        {
+          id: 'parent-role',
+          recordId: 'original-role',
+          kind: 'employment',
+          title: 'Engineer',
+          text: 'Engineer at Example 2010–2026',
+        },
+      ],
+      requirements: [
+        { id: 'full-requirement-id', text: 'Engineering experience' },
+      ],
+    });
+    const wire = JSON.stringify(source.request);
+    expect(wire).not.toContain('source-with-long-private-identity');
+    expect(wire).not.toContain('original-record');
+    expect(source.sourceCatalog).toContainEqual({
+      key: 'c1',
+      sourceId: 'source-with-long-private-identity',
+      recordId: 'original-record',
+      sectionId: 'parent-role',
+      kind: 'achievement',
+    });
+    const evidence = (source.request.state as Record<string, unknown>)
+      .candidateEvidence as Array<Record<string, unknown>>;
+    expect(evidence[1]).toMatchObject({
+      k: 'c1',
+      p: 'c0',
+      t: 'Achievement\nComplete narrative evidence.',
+    });
+    expect(evidence[1]).not.toHaveProperty('u');
+    expect(
+      prepareOpportunityAssessment({
+        ...source,
+        candidateSources: [
+          { ...source.candidateSources[1]!, id: 'other-private-identity' },
+          source.candidateSources[0]!,
+        ],
+      }).fingerprint,
+    ).not.toBe(source.fingerprint);
+  });
+
+  it('retains supporting facts outside offered citations as uncertain with no gap penalty', () => {
+    const candidateSources = Array.from({ length: 150 }, (_, index) => ({
+      id: `a${String(index).padStart(3, '0')}`,
+      kind: 'achievement',
+      title: 'Evidence',
+      text: 'People management context',
+    }));
+    candidateSources.push({
+      id: 'zz-support',
+      kind: 'achievement',
+      title: 'Supporting narrative',
+      text: 'Mentored executives and coached direct reports.',
+    });
+    const source = prepared({
+      candidateSources,
+      requirements: Array.from({ length: 30 }, (_, index) => ({
+        id: `role-${index}`,
+        text: 'People management',
+        postingSourceIds: ['posting-3'],
+      })),
+    });
+    const outsideIndex = source.candidateSources.findIndex(
+      (entry) => entry.id === 'zz-support',
+    );
+    expect(source.citationScopes[0]?.complete).toBe(false);
+    expect(source.citationScopes[0]?.candidateKeys).not.toContain(
+      `c${outsideIndex}`,
+    );
+    expect(JSON.stringify(source.request.state)).toContain(
+      'Mentored executives and coached direct reports.',
+    );
+    const answers = completeAnswers({});
+    for (const index of source.requirements.keys()) {
+      answers[`r${index}_importance`] = {
+        type: 'choice',
+        choice: 'required',
+        confidence: 0.96,
+      };
+      answers[`r${index}_support`] = {
+        type: 'choice',
+        choice: index === 0 ? 'supported' : 'gap',
+        confidence: 0.96,
+      };
+      answers[`r${index}_posting_source`] = {
+        type: 'choice',
+        choice: 'p2',
+        confidence: 0.96,
+      };
+      answers[`r${index}_candidate_source`] = {
+        type: 'choice',
+        choice:
+          index === 0
+            ? 'uncertain'
+            : source.citationScopes[index]!.candidateKeys[0]!,
+        confidence: 0.96,
+      };
+    }
+    const assessment = resolveOpportunityAssessment(
+      source,
+      decision(answers, source),
+    );
+    expect(
+      assessment.requirements.every((entry) => entry.support === 'uncertain'),
+    ).toBe(true);
+    expect(assessment.citationScopes).toEqual(source.citationScopes);
+    expect(
+      rankOpportunityAssessment(assessment, candidate, []).reasons.some(
+        (reason) => reason.includes('gap'),
+      ),
+    ).toBe(false);
+  });
+
+  it('withholds authoritative readiness when any raw role requirement remains unextracted', () => {
+    const source = prepared({
+      requirements: [{ id: 'r', text: 'TypeScript' }],
+    });
+    const answers = completeAnswers({});
+    answers.requirements_complete = { type: 'predicate', probability: 0.4 };
+    answers.r0_importance = {
+      type: 'choice',
+      choice: 'required',
+      confidence: 0.96,
+    };
+    answers.r0_support = {
+      type: 'choice',
+      choice: 'uncertain',
+      confidence: 0.96,
+    };
+    answers.r0_posting_source = {
+      type: 'choice',
+      choice: 'p2',
+      confidence: 0.96,
+    };
+    answers.r0_candidate_source = {
+      type: 'choice',
+      choice: 'uncertain',
+      confidence: 0.96,
+    };
+    const resolved = resolveOpportunityAssessment(
+      source,
+      decision(answers, source),
+    );
+    expect(resolved.coverage.requirementsTruncated).toBe(true);
+    expect(resolved.requirementCompleteness).toEqual({
+      inputComplete: true,
+      probability: 0.4,
+      complete: false,
+    });
+  });
+  it('accepts independent binary support from several exact citations without multiclass confidence', () => {
+    const source = prepared({
+      candidateSources: [
+        {
+          id: 'achievement-a',
+          kind: 'achievement',
+          title: 'A',
+          text: 'Built reliable production platforms.',
+        },
+        {
+          id: 'achievement-b',
+          kind: 'achievement',
+          title: 'B',
+          text: 'Operated reliable production platforms.',
+        },
+      ],
+      postingSources: [
+        {
+          id: 'required-platform',
+          kind: 'posting_requirement',
+          title: 'Required',
+          text: 'required: Production platforms',
+        },
+      ],
+      requirements: [
+        {
+          id: 'platform',
+          text: 'Production platforms',
+          postingSourceIds: ['required-platform'],
+        },
+      ],
+    });
+    const answers = completeAnswers({});
+    for (const [key, question] of Object.entries(source.request.questions))
+      if (/^r0_/u.test(key) && question.type === 'predicate')
+        answers[key] = {
+          type: 'predicate',
+          probability: key.endsWith('_supports') ? 0.9 : 0.04,
+        };
+    expect(source.request.questions.r0_support).toBeUndefined();
+    expect(source.request.questions.r0_importance).toBeUndefined();
+    expect(source.request.questions.r0_candidate_source).toBeUndefined();
+    const resolved = resolveOpportunityAssessment(source, decision(answers));
+    expect(resolved.requirements[0]).toEqual({
+      id: 'platform',
+      importance: 'required',
+      support: 'supported',
+      candidateSourceKeys: ['achievement-a', 'achievement-b'],
+      postingSourceKeys: ['required-platform'],
+    });
+    answers.r0_c0_supports = { type: 'predicate', probability: 1.01 };
+    expect(() =>
+      resolveOpportunityAssessment(source, decision(answers)),
+    ).toThrow('Malformed r0_c0_supports');
+  });
+
+  it('keeps low support probabilities and contradictory binary evidence uncertain', () => {
+    const source = prepared({
+      requirements: [{ id: 'r', text: 'Platform leadership' }],
+    });
+    const answers = completeAnswers({});
+    answers.r0_required = { type: 'predicate', probability: 0.96 };
+    answers.r0_preferred = { type: 'predicate', probability: 0.04 };
+    answers.r0_posting_source = {
+      type: 'choice',
+      choice: 'p2',
+      confidence: 0.96,
+    };
+    answers.r0_c0_supports = { type: 'predicate', probability: 0.84 };
+    answers.r0_c0_contradicts = { type: 'predicate', probability: 0.04 };
+    expect(
+      resolveOpportunityAssessment(source, decision(answers)).requirements[0],
+    ).toMatchObject({ support: 'uncertain', candidateSourceKeys: [] });
+    answers.r0_c0_supports = { type: 'predicate', probability: 0.96 };
+    answers.r0_c0_contradicts = { type: 'predicate', probability: 0.96 };
+    expect(
+      resolveOpportunityAssessment(source, decision(answers)).requirements[0],
+    ).toMatchObject({ support: 'uncertain', candidateSourceKeys: [] });
+    delete answers.r0_c0_supports;
+    expect(() =>
+      resolveOpportunityAssessment(source, decision(answers)),
+    ).toThrow('Malformed r0_c0_supports');
   });
 });

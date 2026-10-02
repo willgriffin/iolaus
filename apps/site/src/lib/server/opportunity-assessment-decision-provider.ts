@@ -5,6 +5,9 @@ import {
   getAI,
 } from '@happyvertical/ai';
 import {
+  assessmentDecisionOutputTokenCeiling,
+  OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS,
+  OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
   OPPORTUNITY_ASSESSMENT_VERSION,
   type PreparedOpportunityAssessment,
   resolveOpportunityAssessment,
@@ -16,9 +19,11 @@ import {
 } from './opportunity-intelligence-governance.js';
 import type { WorkspaceSubject } from './private-workspace.js';
 
-/** TypeSafe's decision operation has no remote max-output control. */
-export const OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES = 64_000;
-export const OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS = 20_000;
+export {
+  assessmentDecisionOutputTokenCeiling,
+  OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS,
+  OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
+} from './opportunity-assessment.js';
 
 export class OpportunityAssessmentRequestTooLargeError extends Error {
   constructor(message: string) {
@@ -27,27 +32,47 @@ export class OpportunityAssessmentRequestTooLargeError extends Error {
   }
 }
 
-/**
- * A typed choice response carries a probability for every criterion. Reserve
- * from that wire shape rather than inheriting the old small skill batch's
- * 4,096-token estimate. This is a conservative accounting ceiling, not a
- * provider-side generation control (the TypeSafe decision API exposes none).
- */
-export function assessmentDecisionOutputTokenCeiling(
-  request: DecisionRequest,
-): number {
-  const responseBytes = Object.values(request.questions).reduce(
-    (total, question) =>
-      total +
-      (question.type === 'predicate'
-        ? 96
-        : 192 + Object.keys(question.criteria).length * 32),
-    256,
+/** Token-free exact wire preflight, shared by native operators and invocation. */
+export function preflightOpportunityAssessmentRequest(
+  prepared: PreparedOpportunityAssessment,
+): {
+  requestBytes: number;
+  maxOutputTokens: number;
+  offeredSupportPredicates: number;
+  offeredContradictionPredicates: number;
+  fits: boolean;
+  reason?: 'request_bytes' | 'output_reservation' | 'citation_scope';
+} {
+  const requestBytes = Buffer.byteLength(
+    JSON.stringify(prepared.request),
+    'utf8',
   );
-  // Three bytes/token is intentionally conservative for JSON keys and decimal
-  // probability values. The hard ceiling rejects an oversized batch before a
-  // billable provider call.
-  return Math.max(1_024, Math.ceil(responseBytes / 3));
+  const maxOutputTokens = assessmentDecisionOutputTokenCeiling(
+    prepared.request,
+  );
+  const reason =
+    requestBytes > OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES
+      ? 'request_bytes'
+      : maxOutputTokens > OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS
+        ? 'output_reservation'
+        : prepared.requirements.length > 0 &&
+            prepared.citationScopes.some(
+              (scope) => scope.candidateKeys.length === 0,
+            )
+          ? 'citation_scope'
+          : undefined;
+  return {
+    requestBytes,
+    maxOutputTokens,
+    offeredSupportPredicates: Object.keys(prepared.request.questions).filter(
+      (key) => /^r\d+_c\d+_supports$/u.test(key),
+    ).length,
+    offeredContradictionPredicates: Object.keys(
+      prepared.request.questions,
+    ).filter((key) => /^r\d+_c\d+_contradicts$/u.test(key)).length,
+    fits: !reason,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 function opaqueInputFingerprint(
@@ -81,6 +106,10 @@ export async function evaluateOpportunityAssessment(
 ) {
   if (process.env.OPPORTUNITY_ASSESSMENT_DECISIONS_ENABLED !== 'true')
     return undefined;
+  if (prepared.requirements.length === 0)
+    throw new Error(
+      'Extract structured role requirements before private matching.',
+    );
   const apiKey = process.env.TYPESAFE_API_KEY?.trim();
   if (!apiKey)
     throw new Error(
@@ -116,24 +145,19 @@ export async function evaluateOpportunityAssessment(
       'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
     ),
   };
-  // Byte bounds avoid pretending a chat tokenizer can exactly price Jev.
-  const estimatedInputTokens = Buffer.byteLength(
-    JSON.stringify(prepared.request),
-    'utf8',
-  );
-  if (estimatedInputTokens > OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES) {
+  // Never reserve or invoke a partial wire representation to make it fit.
+  const preflight = preflightOpportunityAssessmentRequest(prepared);
+  if (!preflight.fits) {
     throw new OpportunityAssessmentRequestTooLargeError(
-      `Opportunity assessment request is ${estimatedInputTokens} bytes, above the ${OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES}-byte limit.`,
+      preflight.reason === 'request_bytes'
+        ? `Complete opportunity assessment request is ${preflight.requestBytes} bytes, above the ${OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES}-byte limit.`
+        : preflight.reason === 'citation_scope'
+          ? 'No candidate citation scope is available for every role requirement within the assessment limits.'
+          : `Complete opportunity assessment response reservation is ${preflight.maxOutputTokens} tokens, above the ${OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS}-token limit.`,
     );
   }
-  const maxOutputTokens = assessmentDecisionOutputTokenCeiling(
-    prepared.request,
-  );
-  if (maxOutputTokens > OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS) {
-    throw new OpportunityAssessmentRequestTooLargeError(
-      `Opportunity assessment response reservation is ${maxOutputTokens} tokens, above the ${OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS}-token limit.`,
-    );
-  }
+  const estimatedInputTokens = preflight.requestBytes;
+  const maxOutputTokens = preflight.maxOutputTokens;
   const { output } =
     await executeGovernedOpportunityIntelligenceRequest<DecisionResult>({
       config,

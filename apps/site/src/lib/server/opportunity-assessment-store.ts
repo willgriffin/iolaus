@@ -129,6 +129,13 @@ export function projectOpportunityAssessment(
     (claim) => claim.value === 'conflicting',
   );
   const matchReadiness = assessmentMatchReadiness(assessment);
+  const scopedUncertain = assessment.requirements.filter(
+    (requirement) =>
+      requirement.support === 'uncertain' &&
+      assessment.citationScopes?.some(
+        (scope) => scope.requirementId === requirement.id && !scope.complete,
+      ),
+  ).length;
   return {
     coverage: {
       candidateTruncated: assessment.coverage.candidateTruncated,
@@ -150,7 +157,7 @@ export function projectOpportunityAssessment(
         ? 'Needs structured role requirements before matching.'
         : matchReadiness === 'needs_evidence'
           ? 'Needs fuller posting or candidate evidence before matching.'
-          : (ranking.reasons[0] ?? 'Assessment needs clarification'),
+          : `${ranking.reasons[0] ?? 'Assessment needs clarification'}${scopedUncertain ? `; ${scopedUncertain} role requirements need clarification.` : ''}`,
     sourceStatus: 'current',
   };
 }

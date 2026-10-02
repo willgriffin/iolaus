@@ -1,12 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
-  OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES,
-  OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
+  OPPORTUNITY_ASSESSMENT_INPUT_PACK_VERSION,
   type OpportunityAssessmentRequirement,
   type OpportunityAssessmentSource,
 } from './opportunity-assessment.js';
-
-const DESCRIPTION_SCAN_LIMIT = OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT * 58;
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -23,34 +20,17 @@ function textList(value: unknown): string[] {
       : [];
 }
 
-function scalarSource(
-  opportunityId: string,
-  field: string,
-  value: unknown,
-): OpportunityAssessmentSource | undefined {
-  const body = Array.isArray(value) ? textList(value).join(', ') : text(value);
-  if (!body) return undefined;
-  return {
-    id: `${opportunityId}:00-field:${field}`,
-    kind: 'posting_field',
-    text: `${field}: ${body}`,
-    title: field,
-  };
-}
-
-/**
- * Retains role-specific structured clauses first, then scans the full bounded
- * raw posting in exact chunks. The final coverage sentinel is never evidence:
- * it tells the assessment contract that source text was truncated.
- */
+/** Full raw posting plus atomic structured fields; no redundant signal excerpts. */
 export function buildOpportunityAssessmentPostingInput(
   opportunity: Record<string, unknown>,
 ): {
   postingSources: OpportunityAssessmentSource[];
+  postingCoverageTruncated: boolean;
   requirements: OpportunityAssessmentRequirement[];
 } {
   const opportunityId = text(opportunity.id) || 'opportunity';
-  const sources = [
+  const postingSources: OpportunityAssessmentSource[] = [];
+  for (const field of [
     'title',
     'workMode',
     'locations',
@@ -60,86 +40,83 @@ export function buildOpportunityAssessmentPostingInput(
     'visaOrEorPossible',
     'relocationSupported',
     'applyInstructions',
-  ]
-    .map((field) => scalarSource(opportunityId, field, opportunity[field]))
-    .filter((source): source is OpportunityAssessmentSource => Boolean(source));
-  const raw =
-    text(opportunity.descriptionRaw) || text(opportunity.descriptionSummary);
-  const scanned = raw.slice(0, DESCRIPTION_SCAN_LIMIT);
-  // Scan every byte of the bounded posting for country/authorization language
-  // before adding generic excerpts. This keeps contradictory role clauses in
-  // the request even when a long description would otherwise crowd them out.
-  const materialTerms =
-    /\b(?:canada|united states|u\.?s\.?|visa|sponsor(?:ship)?|work authorization|eligible to work|remote)\b/giu;
-  const usedPassages = new Set<number>();
-  for (const match of scanned.matchAll(materialTerms)) {
-    const index = match.index ?? 0;
-    const offset = Math.max(0, index - 120);
-    if (usedPassages.has(offset)) continue;
-    usedPassages.add(offset);
-    const passage = scanned.slice(
-      offset,
-      offset + OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
-    );
-    sources.push({
-      id: `${opportunityId}:01-signal:${offset}`,
-      kind: 'posting_material_clause',
-      sourceLineStart: offset,
-      sourceLineEnd: offset + passage.length,
-      text: passage,
-      title: 'Location or authorization clause',
-    });
+  ]) {
+    const value = opportunity[field];
+    const body = Array.isArray(value)
+      ? textList(value).join(', ')
+      : text(value);
+    if (body)
+      postingSources.push({
+        id: `${opportunityId}:field:${field}`,
+        kind: 'posting_field',
+        text: `${field}: ${body}`,
+        title: field,
+      });
   }
-  for (
-    let offset = 0;
-    offset < Math.min(raw.length, DESCRIPTION_SCAN_LIMIT);
-    offset += OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT
-  ) {
-    const passage = raw.slice(
-      offset,
-      offset + OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
-    );
-    if (!passage) continue;
-    sources.push({
-      id: `${opportunityId}:10-description:${offset}`,
+  const raw = text(opportunity.descriptionRaw);
+  const description = raw || text(opportunity.descriptionSummary);
+  if (description)
+    postingSources.push({
+      id: `${opportunityId}:description`,
       kind: 'posting_description',
-      sourceLineStart: offset,
-      sourceLineEnd: offset + passage.length,
-      text: passage,
-      title: 'Posting description',
+      text: description,
+      title: raw ? 'Full posting' : 'Posting summary (partial)',
     });
+  const requirements: OpportunityAssessmentRequirement[] = [];
+  for (const [field, importance] of [
+    ['requiredSkills', 'required'],
+    ['preferredSkills', 'preferred'],
+  ] as const) {
+    for (const [index, value] of textList(opportunity[field]).entries()) {
+      const id = `${opportunityId}:${importance}:${index}`;
+      postingSources.push({
+        id,
+        kind: 'posting_requirement',
+        text: `${importance}: ${value}`,
+        title: `${importance} requirement`,
+      });
+      requirements.push({ id, text: value, postingSourceIds: [id] });
+    }
   }
-  if (raw.length > DESCRIPTION_SCAN_LIMIT) {
-    sources.push({
-      // This intentionally exceeds the excerpt limit so `prepareSources()`
-      // records coverage loss without asking JEV to use the sentinel.
-      id: `${opportunityId}:99-coverage:description`,
-      kind: 'coverage',
-      text: raw,
-      title: 'Posting source coverage',
-    });
+  // Full-role coverage includes qualifications and duties, not only taxonomy
+  // skills. Preserve commas inside each clause and its extracted-field identity.
+  for (const [field, kind, title] of [
+    ['qualifications', 'qualification', 'Role qualification'],
+    ['responsibilities', 'responsibility', 'Role responsibility'],
+  ] as const) {
+    for (const [index, statement] of text(opportunity[field])
+      .split(/\r?\n|;\s+/u)
+      .map(text)
+      .filter(Boolean)
+      .entries()) {
+      const id = `${opportunityId}:${kind}:${index}`;
+      postingSources.push({
+        id,
+        kind: 'posting_requirement',
+        text: statement,
+        title,
+      });
+      requirements.push({ id, text: statement, postingSourceIds: [id] });
+    }
   }
-  const requirements = [
-    ...textList(opportunity.requiredSkills).map((value, index) => ({
-      id: `${opportunityId}:required:${index}`,
-      text: value,
-    })),
-    ...textList(opportunity.preferredSkills).map((value, index) => ({
-      id: `${opportunityId}:preferred:${index}`,
-      text: value,
-    })),
-  ];
-  return { postingSources: sources, requirements };
+  return { postingSources, requirements, postingCoverageTruncated: !raw };
 }
 
 export interface SelectedOpportunityAssessmentCandidateSources {
-  /** Any omitted or clipped private evidence prevents an absence-based gap. */
+  /** Only invalid/missing semantic source content marks the complete catalog partial. */
   truncated: boolean;
   sources: OpportunityAssessmentSource[];
 }
 
 export function normalizeOpportunityAssessmentCandidateSources(
-  sources: Array<{ id: unknown; kind: unknown; text: unknown; title: unknown }>,
+  sources: Array<{
+    id: unknown;
+    kind: unknown;
+    text: unknown;
+    title: unknown;
+    sectionId?: unknown;
+    recordId?: unknown;
+  }>,
 ): OpportunityAssessmentSource[] {
   return sources
     .map((source) => ({
@@ -147,54 +124,15 @@ export function normalizeOpportunityAssessmentCandidateSources(
       kind: text(source.kind) || 'candidate_evidence',
       text: text(source.text),
       title: text(source.title) || 'Candidate evidence',
+      ...(text(source.sectionId) ? { sectionId: text(source.sectionId) } : {}),
+      ...(text(source.recordId) ? { recordId: text(source.recordId) } : {}),
     }))
     .filter((source) => source.id && source.text);
 }
 
-function requirementTerms(
-  requirements: OpportunityAssessmentRequirement[],
-): Set<string> {
-  const terms = new Set<string>();
-  for (const requirement of requirements) {
-    for (const term of text(requirement.text)
-      .toLowerCase()
-      .match(/[a-z0-9+#.]{2,}/gu) ?? []) {
-      if (
-        ![
-          'and',
-          'for',
-          'the',
-          'with',
-          'using',
-          'years',
-          'year',
-          'experience',
-        ].includes(term)
-      ) {
-        terms.add(term);
-      }
-    }
-  }
-  return terms;
-}
-
-function sourceMatchesRequirement(
-  source: OpportunityAssessmentSource,
-  terms: Set<string>,
-): boolean {
-  if (terms.size === 0) return false;
-  const sourceTerms = new Set(
-    `${source.title} ${source.text}`.toLowerCase().match(/[a-z0-9+#.]{2,}/gu) ??
-      [],
-  );
-  return [...terms].some((term) => sourceTerms.has(term));
-}
-
 /**
- * Selects exact, attributable candidate material for the bounded decision request.
- * Roles and requirement-matching skills are retained before narrative evidence.
- * Requirement terms guide priority only; they never prove that omitted resume
- * material is irrelevant. Any omitted or clipped evidence remains explicit.
+ * The catalog is complete, independent of requirement keywords. Question choice
+ * scoping happens later; it must never erase semantic evidence from state.
  */
 export function selectOpportunityAssessmentCandidateSources(
   sources: Array<{
@@ -202,68 +140,15 @@ export function selectOpportunityAssessmentCandidateSources(
     kind: unknown;
     text: unknown;
     title: unknown;
+    sectionId?: unknown;
+    recordId?: unknown;
   }>,
-  requirements: OpportunityAssessmentRequirement[],
+  _requirements: OpportunityAssessmentRequirement[],
 ): SelectedOpportunityAssessmentCandidateSources {
   const normalized = normalizeOpportunityAssessmentCandidateSources(sources);
-  const terms = requirementTerms(requirements);
-  const matches = (source: OpportunityAssessmentSource) =>
-    sourceMatchesRequirement(source, terms);
-  const selected: OpportunityAssessmentSource[] = [];
-  const included = new Set<string>();
-  const add = (source: OpportunityAssessmentSource) => {
-    if (
-      selected.length >= OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES ||
-      included.has(source.id)
-    )
-      return;
-    included.add(source.id);
-    selected.push(source);
-  };
-  const isProfile = (source: OpportunityAssessmentSource) =>
-    source.kind === 'candidate_profile';
-  const isEmployment = (source: OpportunityAssessmentSource) =>
-    source.kind === 'employment';
-  const isRole = (source: OpportunityAssessmentSource) =>
-    isProfile(source) || isEmployment(source);
-  const isSkill = (source: OpportunityAssessmentSource) =>
-    source.kind === 'skill';
-  const addAtMost = (
-    candidates: OpportunityAssessmentSource[],
-    maximum: number,
-  ) => {
-    for (const source of candidates) {
-      if (selected.length >= maximum) break;
-      add(source);
-    }
-  };
-  // Reserve space for directly attributable skills. Long employment histories
-  // cannot crowd out the skills that a role actually asks us to assess.
-  normalized.filter(isProfile).forEach(add);
-  addAtMost(normalized.filter(isEmployment), 13);
-  // Then preserve every skill that can directly support an extracted requirement.
-  normalized
-    .filter((source) => isSkill(source) && matches(source))
-    .forEach(add);
-  // Relevant accomplishments before generic skills/narrative prevents a project flood.
-  normalized
-    .filter((source) => !isRole(source) && !isSkill(source) && matches(source))
-    .forEach(add);
-  normalized.filter(isSkill).forEach(add);
-  normalized
-    .filter((source) => !isRole(source) && !isSkill(source))
-    .forEach(add);
-
-  // Keyword matching prioritizes evidence; it cannot establish that a
-  // different accomplishment is irrelevant (for example leadership versus
-  // management). Retain the bounded selection but fail closed for coverage.
-  const omittedEvidence = normalized.some((source) => !included.has(source.id));
-  const clippedEvidence = selected.some(
-    (source) => source.text.length > OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
-  );
   return {
-    sources: selected,
-    truncated: omittedEvidence || clippedEvidence,
+    sources: normalized,
+    truncated: normalized.length !== sources.length,
   };
 }
 
@@ -281,6 +166,7 @@ export function opportunityAssessmentSubjectMaterialFingerprint(input: {
   return createHash('sha256')
     .update(
       JSON.stringify({
+        inputPackVersion: OPPORTUNITY_ASSESSMENT_INPUT_PACK_VERSION,
         candidateMaterialFingerprint: input.candidateMaterialFingerprint,
         sourceContentFingerprint: input.sourceContentFingerprint,
         sourceContentVersion: input.sourceContentVersion,
