@@ -208,3 +208,50 @@ provider does not establish a shared negative cache entry.
 
 Executable validation and native exact preflight remain external snapshot/operator
 checkpoints; this matrix does not claim an unexecuted paid canary succeeded.
+
+
+## Opt-in partial evidence contract
+
+The separate `requirement-evidence-audit/v1-decomposed` source path preserves the
+existing full v6 protocol. Its empty shared state and literal source/nearest
+literal headings bind independent row-support, mapped-list precision,
+mapped-list recall and positive context predicates. Every expected answer is
+retained, with exact key cardinality; one low result cannot overwrite another.
+A statement is an accepted excerpt only when its literal support and every
+linked clause precision are at least 0.85. Low recall or unresolved context
+retains the full native clause, UTF-16 span and hash and prevents full coverage.
+Context is certified only at raw probability at most 0.15; headings use native
+proof, never invented model probabilities. Importance remains unknown.
+
+`partialAssessmentEvidence` is an explicit server opt-in. The partial reader
+requires the new canonical feature/schema's completed GLOBAL request/result,
+actual positive accounted usage and current source identity; diagnostic TEMP
+responses cannot authorize it. A historical source context additionally needs
+joined completed native base/feedback/repair ancestry matching the ledger.
+Private matching sends accepted excerpts only and retains the complete candidate
+fact catalog. Each question includes the literal accepted criterion, exact candidate
+citation and only its linked parent. All exact named atomic skill matches and at
+least one attributed narrative remain offered for every criterion; generic skill
+proficiency wording cannot manufacture a named match. Unoffered facts remain in
+the catalog and cannot establish absence. Scoped citation answers yield supported or uncertain, never gaps,
+eligibility, stars, scores or a strong-fit conclusion. A missing accepted row or
+native receipt declines before a private reservation. Source, audit, candidate
+and freshly resolved principal changes prevent stale writes after accounting.
+
+Private results use `opportunity-assessment-partial/v1`, `status=partial` and
+`matchReadiness=needs_evidence`, with unknown eligibility and neutral priority.
+The full assessment parser and ranked SQL require their full contract and
+current status, so a partial record cannot enter score filtering or ordering.
+The native evaluator attaches its PRIVATE request ID and input fingerprint;
+rendering must verify the joined actual governed receipt for the current subject
+and material before re-resolving its answers. No EvaluationScore or application
+recommendation is written. This documents
+an implementation boundary; it does not claim an actual semantic canary passed.
+
+| Partial behavior | Required regression |
+| --- | --- |
+| Accepted excerpt boundary | High support with low precision excluded; low recall retains excerpt but denies complete coverage |
+| Independent probabilities | Missing, extra, malformed answers and changed binding fingerprint rejected |
+| Native authority | Orphan, foreign, conservative, zero-usage or diagnostic result refused; source changes invalidate |
+| Private evidence only | Full candidate catalog retained; supported/uncertain only; exact canonical citation provenance |
+| Safe persistence | Distinct partial contract/status, neutral unknown eligibility, no ranking projection or EvaluationScore |

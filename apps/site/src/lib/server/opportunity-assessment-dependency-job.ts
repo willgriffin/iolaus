@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
+import { resolveDatabase } from '@happyvertical/smrt-core';
 import {
   type JobExecutionContext,
   type SmrtJob,
@@ -10,7 +11,7 @@ import {
   runOpportunityLifecycleTransaction,
   withOpportunityLifecycleLock,
 } from './application-workflow.js';
-import { getSmrtOptions } from './db.js';
+import { getDbConfig, getSmrtOptions } from './db.js';
 import {
   type RuntimeWorkspaceSubject,
   requireActiveRunnerExecutionContext,
@@ -22,14 +23,26 @@ import {
   defaultFencedOpportunityUpdate,
   processOpportunityWithLlm,
 } from './opportunity-details.js';
+import { resolveOpportunityIntelligenceBudgetConfig } from './opportunity-intelligence-config.js';
 import {
   finishOpportunityIntelligenceAgentRun,
   startOpportunityIntelligenceAgentRun,
 } from './opportunity-intelligence-governance.js';
+import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
+import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
 import {
+  evaluateRequirementEvidenceAudit,
+  readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
+  requirementCoverageLedgerFingerprint,
   requirementCoverageSourceDependencyFingerprint,
 } from './opportunity-requirement-coverage-provider.js';
+import {
+  type AttestedCompletedSourceExtraction,
+  assertOpportunitySourceExtractionNotAttempted,
+  attestCompletedOpportunitySourceExtraction,
+} from './opportunity-requirement-coverage-source-stage-job.js';
+import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 
 /** A separate source-only prerequisite job on the existing intelligence queue. */
@@ -60,13 +73,22 @@ export interface OpportunityAssessmentDependencyEnqueueResult {
   job: SmrtJob;
   sourceDependency: OpportunityAssessmentSourceDependency;
   stage: 'source_preparation';
+  sourceStatus?: OpportunityAssessmentSourceStatus;
 }
+
+export type OpportunityAssessmentSourceStatus =
+  | 'extraction_pending'
+  | 'audit_pending'
+  | 'audit_blocked'
+  | 'operator_required'
+  | 'partial';
 
 export interface OpportunityAssessmentSourceDependency {
   dedupeKey: string;
   kind: 'requirement_coverage';
   sourceContentFingerprint: string;
   sourceContentVersion: number;
+  status?: OpportunityAssessmentSourceStatus;
 }
 
 export interface OpportunityAssessmentDependencyJobCollection {
@@ -81,9 +103,13 @@ export interface EnqueueOpportunityAssessmentDependencyOptions {
   collection?: OpportunityAssessmentDependencyJobCollection;
   now?: Date;
   opportunityCollection?: {
-    get: (id: string) => Promise<unknown | null | undefined>;
+    get: (
+      id: { id: string },
+      options: { cache: false },
+    ) => Promise<unknown | null | undefined>;
   };
   reason?: string;
+  readCompletedExtraction?: typeof readCompletedSourceExtraction;
   withLifecycleLock?: <T>(
     opportunityId: string,
     action: () => Promise<T>,
@@ -139,8 +165,18 @@ export interface RunOpportunityAssessmentDependencyJobDependencies {
       fencedOpportunityUpdate: FencedOpportunityUpdate;
       signal: AbortSignal;
       sourceContentVersion: number;
+      sourceExtractionStage: 'extract-only';
+      assertCurrentAuthority: () => Promise<void>;
     },
   ) => Promise<SourcePreparationResult>;
+  readCompletedExtraction?: typeof readCompletedSourceExtraction;
+  readPartialEvidence?: typeof readPartialOpportunityRequirementEvidence;
+  assertNotAttempted?: typeof assertOpportunitySourceExtractionNotAttempted;
+  auditEvidence?: typeof evaluateRequirementEvidenceAudit;
+  preflightEvidence?: (actual: AttestedCompletedSourceExtraction) => Promise<{
+    preparedAudit: Parameters<typeof evaluateRequirementEvidenceAudit>[0];
+    admitted: boolean;
+  }>;
   runAsRevalidated?: <T>(
     subject: RuntimeWorkspaceSubject,
     capability: 'assessment.execute',
@@ -423,7 +459,66 @@ async function defaultOpportunity(
   opportunityId: string,
 ): Promise<OpportunityRecord | null> {
   const collection = await getCollection('Opportunity');
-  return (await collection.get(opportunityId)) as OpportunityRecord | null;
+  const row = await collection.get({ id: opportunityId }, { cache: false });
+  return row ? (row.toJSON() as OpportunityRecord) : null;
+}
+
+/** Discover only the exact GLOBAL identity; a cache leaf never attests it. */
+async function readCompletedSourceExtraction(
+  opportunity: OpportunityRecord,
+): Promise<AttestedCompletedSourceExtraction | undefined> {
+  const posting = prepareOpportunityPosting(
+    opportunityWithSourceContent(opportunity),
+  );
+  const coverage = requirementCoverageContextForOpportunity({
+    ...opportunity,
+    preparedPostingFingerprint: posting.fingerprint,
+  });
+  const db = await resolveDatabase(getDbConfig());
+  const { rows } = await db.query(
+    `SELECT request_id FROM opportunity_intelligence_requests
+    WHERE opportunity_id = ? AND content_fingerprint = ? AND input_fingerprint = ?
+      AND feature = 'opportunity-extraction-chunk-1'
+      AND COALESCE(tenant_id, '') = '' AND COALESCE(owner_user_id, '') = ''
+      AND COALESCE(candidate_profile_id, '') = ''`,
+    [
+      opportunity.id,
+      coverage.sourceFingerprint,
+      coverage.extractionFingerprint,
+    ],
+  );
+  if (!rows.length) return undefined;
+  if (rows.length !== 1 || !text(rows[0]?.request_id))
+    throw new Error('The current source preparation requires operator review.');
+  return await attestCompletedOpportunitySourceExtraction(
+    opportunity,
+    text(rows[0].request_id),
+  );
+}
+
+async function preflightSourceEvidence(
+  actual: AttestedCompletedSourceExtraction,
+) {
+  const price = (name: string) => {
+    const value = process.env[name];
+    if (!value || !/^\d+$/u.test(value) || !Number.isSafeInteger(Number(value)))
+      throw new Error(`Configure ${name} before source evidence preparation.`);
+    return Number(value);
+  };
+  const { preflightCompletedOpportunityRequirementEvidenceAudit } =
+    await import('./opportunity-requirement-coverage-source-stage-job.js');
+  return preflightCompletedOpportunityRequirementEvidenceAudit(actual, {
+    limits: resolveOpportunityIntelligenceBudgetConfig().run,
+    auditPricing: {
+      configured: true,
+      inputMicrosPerMillion: price(
+        'OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION',
+      ),
+      outputMicrosPerMillion: price(
+        'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+      ),
+    },
+  });
 }
 
 function requiredSourceArgs(args: OpportunityAssessmentDependencyJobArgs): {
@@ -521,6 +616,8 @@ export async function enqueueOpportunityAssessmentCoverage(
   }
   const {
     sourcePreparationAgentRunId: _ignoredSourcePreparationAgentRunId,
+    partialAssessmentEvidence: _ignoredPartialEvidence,
+    sourceCoverageStage: _ignoredSourceStage,
     ...callerArgs
   } = args;
   const enveloped = withRuntimeWorkspaceSubject(callerArgs);
@@ -528,7 +625,8 @@ export async function enqueueOpportunityAssessmentCoverage(
   const getOpportunity = options.opportunityCollection
     ? async (id: string) =>
         (await options.opportunityCollection!.get(
-          id,
+          { id },
+          { cache: false },
         )) as OpportunityRecord | null
     : defaultOpportunity;
   const collection =
@@ -602,7 +700,33 @@ export async function enqueueOpportunityAssessmentCoverage(
       opportunity,
       terminalBridge,
     );
-    if (coverageOutcome.status === 'blocked') {
+    let completed: AttestedCompletedSourceExtraction | undefined;
+    let sourceStatus: OpportunityAssessmentSourceStatus = 'extraction_pending';
+    if (
+      coverageOutcome.status === 'missing' ||
+      (coverageOutcome.status === 'blocked' &&
+        coverageOutcome.reason === 'confidence')
+    ) {
+      try {
+        completed = await (
+          options.readCompletedExtraction ?? readCompletedSourceExtraction
+        )(opportunity);
+      } catch {
+        throw new OpportunityAssessmentDependencyEnqueueError(
+          'source_coverage_blocked',
+          'The current source lifecycle requires operator review before assessment can resume.',
+        );
+      }
+      if (completed) {
+        if (!sameSubject(completed.workspaceSubject, subject))
+          throw new OpportunityAssessmentDependencyEnqueueError(
+            'source_coverage_blocked',
+            'Source evidence preparation belongs to another workspace subject; its operator must complete it.',
+          );
+        sourceStatus = 'audit_pending';
+      }
+    }
+    if (coverageOutcome.status === 'blocked' && !completed) {
       throw new OpportunityAssessmentDependencyEnqueueError(
         'source_coverage_blocked',
         blockedCoverageMessage(coverageOutcome.reason),
@@ -654,6 +778,7 @@ export async function enqueueOpportunityAssessmentCoverage(
         job: active,
         sourceDependency,
         stage: 'source_preparation' as const,
+        sourceStatus,
       };
     }
     const job = await collection.enqueueJob({
@@ -686,6 +811,7 @@ export async function enqueueOpportunityAssessmentCoverage(
       job,
       sourceDependency,
       stage: 'source_preparation' as const,
+      sourceStatus,
     };
   });
 }
@@ -704,6 +830,7 @@ export async function runOpportunityAssessmentDependencyJob(
 ): Promise<{
   message: string;
   status: 'prepared' | 'skipped';
+  sourceStatus?: OpportunityAssessmentSourceStatus;
 }> {
   const opportunityId = text(opportunity.id);
   if (!opportunityId) throw new Error('Opportunity id is required.');
@@ -730,176 +857,401 @@ export async function runOpportunityAssessmentDependencyJob(
     dependencies.recordSourcePreparationRun ?? recordSourcePreparationRun;
   const runAsRevalidated =
     dependencies.runAsRevalidated ?? runAsRevalidatedJobWorkspaceSubject;
-  const prepareSource =
-    dependencies.prepareSource ??
-    (async (id, options) =>
-      await processOpportunityWithLlm(id, {
-        agentRunId: options.agentRunId,
-        expectedSourceContentFingerprint:
-          options.expectedSourceContentFingerprint,
-        fencedOpportunityUpdate: options.fencedOpportunityUpdate,
-        signal: options.signal,
-        sourceContentVersion: options.sourceContentVersion,
-      }));
-
-  const preparation = await withLock(
+  const prepareSource = dependencies.prepareSource ?? processOpportunityWithLlm;
+  const readPartialEvidence =
+    dependencies.readPartialEvidence ??
+    readPartialOpportunityRequirementEvidence;
+  const readCompleted =
+    dependencies.readCompletedExtraction ?? readCompletedSourceExtraction;
+  const assertNotAttempted =
+    dependencies.assertNotAttempted ??
+    assertOpportunitySourceExtractionNotAttempted;
+  const auditEvidence =
+    dependencies.auditEvidence ?? evaluateRequirementEvidenceAudit;
+  const preflightEvidence =
+    dependencies.preflightEvidence ?? preflightSourceEvidence;
+  const preparation: {
+    message: string;
+    ready: boolean;
+    sourceStatus?: OpportunityAssessmentSourceStatus;
+  } = await withLock(
     opportunityId,
     async () =>
       await runAsRevalidated(
         subject,
         'assessment.execute',
         async (_subject, run) => {
-          // Waiting for the advisory lock can outlive the method's initial native
-          // context. Re-enter before even loading source or starting provider work.
           await run.assertOperation('opportunities', 'read');
+          const isCurrent = (
+            current: OpportunityRecord | null,
+          ): current is OpportunityRecord =>
+            sourceIdentityMatches(current, expected) &&
+            requirementCoverageSourceDependencyFingerprint(current) ===
+              expected.sourceDependencyFingerprint;
           const current = await getOpportunity(opportunityId);
-          if (
-            !sourceIdentityMatches(current, expected) ||
-            requirementCoverageSourceDependencyFingerprint(current) !==
-              expected.sourceDependencyFingerprint
-          ) {
+          if (!isCurrent(current))
             return {
               message: 'Skipped stale opportunity source.',
               ready: false as const,
             };
-          }
+          const sourceBridge = await readPriorBridge(
+            context,
+            subject,
+            expected,
+            opportunityId,
+          );
           const initialCoverage = await readCoverageOutcome(
             opportunityId,
             current,
-            await readPriorBridge(context, subject, expected, opportunityId),
+            sourceBridge,
           );
-          if (initialCoverage.status === 'ready') {
+          if (initialCoverage.status === 'ready')
             return {
               message: 'Reused verified source coverage.',
               ready: true as const,
             };
-          }
-          if (initialCoverage.status === 'blocked') {
+          const initialPartial = await readPartialEvidence(current);
+          if (initialPartial)
+            return initialPartial.acceptedRequirements.length
+              ? {
+                  message: 'Reused recorded partial source evidence.',
+                  ready: true as const,
+                  sourceStatus: 'partial' as const,
+                }
+              : {
+                  message:
+                    'Current source evidence has no verified applicant excerpts; operator review is required.',
+                  ready: false as const,
+                  sourceStatus: 'audit_blocked' as const,
+                };
+          if (
+            initialCoverage.status === 'blocked' &&
+            initialCoverage.reason !== 'confidence'
+          )
             return {
               message: blockedCoverageMessage(initialCoverage.reason),
               ready: false as const,
+              sourceStatus: 'audit_blocked' as const,
+            };
+
+          const fresh = async <T>(work: () => Promise<T>) =>
+            await runAsRevalidated(
+              subject,
+              'assessment.execute',
+              async (_fresh, principal) => {
+                await principal.assertOperation('opportunities', 'read');
+                if (!isCurrent(await getOpportunity(opportunityId)))
+                  throw new Error('Source preparation is no longer current.');
+                return await work();
+              },
+            );
+          const assertCurrentAuthority = async () =>
+            await fresh(async () => undefined);
+          const persist: FencedOpportunityUpdate = async (
+            id,
+            fingerprint,
+            updates,
+          ) =>
+            await fresh(async () => {
+              if (id !== opportunityId || fingerprint !== expected.fingerprint)
+                throw new Error(
+                  'Source preparation publication identity is invalid.',
+                );
+              return await runOpportunityLifecycleTransaction(
+                async (database) =>
+                  await defaultFencedOpportunityUpdate(
+                    id,
+                    fingerprint,
+                    updates,
+                    expected.version,
+                    database,
+                  ),
+              );
+            });
+          let actual: AttestedCompletedSourceExtraction | undefined;
+          try {
+            actual = await readCompleted(current);
+          } catch {
+            return {
+              message:
+                'The current source lifecycle requires operator review before assessment can resume.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
             };
           }
-          const agentRunId = await startRun({
-            opportunityId,
-            sourceId: text(current.sourceId),
-            userId: subject.userId,
-            workspaceSubject: subject,
-          });
-          // `recordRun` only resolves after the authentic, currently claimed native
-          // job row has stored this server-created id. This bridge is then safe for
-          // the outcome reader to correlate a paid/semantic source attempt.
-          const sourceJob = {
-            sourceDependencyFingerprint: expected.sourceDependencyFingerprint,
-            sourcePreparationAgentRunId: agentRunId,
-          };
-          let result: SourcePreparationResult;
-          try {
-            await recordRun(
-              context,
-              subject,
-              expected,
+          if (actual && !sameSubject(actual.workspaceSubject, subject))
+            return {
+              message:
+                'Source evidence preparation belongs to another workspace subject; its operator must complete it.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
+          if (!actual && initialCoverage.status === 'blocked')
+            return {
+              message: blockedCoverageMessage(initialCoverage.reason),
+              ready: false as const,
+              sourceStatus: 'audit_blocked' as const,
+            };
+          let agentRunId = actual?.agentRunId ?? '';
+          if (!actual) {
+            try {
+              await assertNotAttempted(current);
+            } catch {
+              return {
+                message:
+                  'The exact source identity was already attempted; operator review is required.',
+                ready: false as const,
+                sourceStatus: 'operator_required' as const,
+              };
+            }
+            await assertCurrentAuthority();
+            agentRunId = await startRun({
               opportunityId,
-              agentRunId,
-            );
-            result = await prepareSource(opportunityId, {
-              agentRunId,
-              expectedSourceContentFingerprint: expected.fingerprint,
-              fencedOpportunityUpdate: async (
-                id,
-                expectedSourceContentFingerprint,
-                updates,
-              ) =>
-                await runAsRevalidated(
-                  subject,
-                  'assessment.execute',
-                  async (_currentSubject, updateRun) => {
-                    await updateRun.assertOperation('opportunities', 'read');
-                    return await runOpportunityLifecycleTransaction(
-                      async (database) =>
-                        await defaultFencedOpportunityUpdate(
-                          id,
-                          expectedSourceContentFingerprint,
-                          updates,
-                          expected.version,
-                          database,
-                        ),
-                    );
-                  },
-                ),
-              signal: AbortSignal.timeout(
-                OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
-              ),
-              sourceContentVersion: expected.version,
+              sourceId: text(current.sourceId),
+              userId: subject.userId,
+              workspaceSubject: subject,
             });
-            await finishRun(
-              agentRunId,
-              result.status === 'processed' ? 'succeeded' : 'failed',
-              result.status === 'processed' ? '' : result.message,
-              subject,
-            );
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            await finishRun(agentRunId, 'failed', message, subject);
-            const currentAfterFailure = await getOpportunity(opportunityId);
-            if (sourceIdentityMatches(currentAfterFailure, expected)) {
-              const failedOutcome = await readCoverageOutcome(
+            const sourceJob = {
+              sourceDependencyFingerprint: expected.sourceDependencyFingerprint,
+              sourcePreparationAgentRunId: agentRunId,
+            };
+            try {
+              await recordRun(
+                context,
+                subject,
+                expected,
                 opportunityId,
-                currentAfterFailure,
-                sourceJob,
+                agentRunId,
               );
-              if (failedOutcome.status === 'blocked') {
+              const extracted = await prepareSource(opportunityId, {
+                agentRunId,
+                sourceExtractionStage: 'extract-only',
+                assertCurrentAuthority,
+                expectedSourceContentFingerprint: expected.fingerprint,
+                fencedOpportunityUpdate: persist,
+                signal: AbortSignal.timeout(
+                  OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
+                ),
+                sourceContentVersion: expected.version,
+              });
+              await finishRun(
+                agentRunId,
+                extracted.status === 'processed' ? 'succeeded' : 'failed',
+                extracted.status === 'processed' ? '' : extracted.message,
+                subject,
+              );
+              if (extracted.status !== 'processed') {
+                if (extracted.status === 'error')
+                  throw new Error(extracted.message);
+                return { message: extracted.message, ready: false as const };
+              }
+              const refreshed = await getOpportunity(opportunityId);
+              if (!isCurrent(refreshed))
                 return {
-                  message: blockedCoverageMessage(failedOutcome.reason),
+                  message: 'Skipped stale opportunity source.',
                   ready: false as const,
                 };
+              // A concurrent existing verified receipt remains the full-path authority.
+              if (
+                (await readCoverageOutcome(opportunityId, refreshed, sourceJob))
+                  .status === 'ready'
+              )
+                return {
+                  message: 'Prepared verified source coverage.',
+                  ready: true as const,
+                };
+              actual = await readCompleted(refreshed);
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              await finishRun(agentRunId, 'failed', message, subject);
+              const failedCurrent = await getOpportunity(opportunityId);
+              if (isCurrent(failedCurrent)) {
+                const failed = await readCoverageOutcome(
+                  opportunityId,
+                  failedCurrent,
+                  sourceJob,
+                );
+                if (failed.status === 'blocked')
+                  return {
+                    message: blockedCoverageMessage(failed.reason),
+                    ready: false as const,
+                    sourceStatus: 'operator_required' as const,
+                  };
               }
+              throw error;
             }
-            throw error;
           }
-          if (result.status !== 'processed') {
-            if (result.status === 'error') throw new Error(result.message);
-            return { message: result.message, ready: false as const };
-          }
-          const refreshed = await getOpportunity(opportunityId);
           if (
-            !sourceIdentityMatches(refreshed, expected) ||
-            requirementCoverageSourceDependencyFingerprint(refreshed) !==
-              expected.sourceDependencyFingerprint
-          ) {
+            !actual ||
+            actual.agentRunId !== agentRunId ||
+            !sameSubject(actual.workspaceSubject, subject)
+          )
+            return {
+              message:
+                'The completed source checkpoint requires native receipt review.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
+          await recordRun(
+            context,
+            subject,
+            expected,
+            opportunityId,
+            agentRunId,
+          );
+          await assertCurrentAuthority();
+          let plan: Awaited<ReturnType<typeof preflightEvidence>>;
+          try {
+            plan = await preflightEvidence(actual);
+          } catch {
+            return {
+              message:
+                'Source checkpoint retained: configure approved evidence audit pricing and limits before resuming.',
+              ready: false as const,
+              sourceStatus: 'audit_blocked' as const,
+            };
+          }
+          if (!plan.admitted)
+            return {
+              message:
+                'Source checkpoint retained: exact evidence audit and historical reservations exceed the lifecycle ceiling.',
+              ready: false as const,
+              sourceStatus: 'audit_blocked' as const,
+            };
+          await assertCurrentAuthority();
+          const beforeAudit = await getOpportunity(opportunityId);
+          if (!isCurrent(beforeAudit))
             return {
               message: 'Skipped stale opportunity source.',
               ready: false as const,
             };
-          }
-          const refreshedCoverage = await readCoverageOutcome(
-            opportunityId,
-            refreshed,
-            sourceJob,
-          );
-          if (refreshedCoverage.status === 'blocked') {
+          let reattested: AttestedCompletedSourceExtraction | undefined;
+          try {
+            reattested = await readCompleted(beforeAudit);
+          } catch {
             return {
-              message: blockedCoverageMessage(refreshedCoverage.reason),
+              message:
+                'The source lifecycle requires operator review before evidence admission.',
               ready: false as const,
+              sourceStatus: 'operator_required' as const,
             };
           }
-          if (refreshedCoverage.status !== 'ready') {
-            throw new Error(
-              'Source preparation completed without a recorded requirement coverage outcome.',
+          if (
+            !reattested ||
+            reattested.requestId !== actual.requestId ||
+            reattested.agentRunId !== actual.agentRunId ||
+            !sameSubject(reattested.workspaceSubject, subject) ||
+            reattested.ledgerFingerprint !== actual.ledgerFingerprint ||
+            reattested.context.extractionFingerprint !==
+              actual.context.extractionFingerprint ||
+            JSON.stringify(reattested.reservation) !==
+              JSON.stringify(actual.reservation)
+          )
+            return {
+              message:
+                'The source lifecycle changed before evidence admission.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
+          let existing: Record<string, unknown>;
+          try {
+            existing = JSON.parse(
+              String(beforeAudit.preparedPostingJson || '{}'),
             );
+            if (
+              !existing ||
+              typeof existing !== 'object' ||
+              Array.isArray(existing)
+            )
+              throw new Error('Invalid source preparation cache.');
+          } catch {
+            return {
+              message: 'Source preparation history requires operator review.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
           }
-          return {
-            message: 'Prepared verified source coverage.',
-            ready: true as const,
-          };
+          if (
+            !existing.requirementCoverage ||
+            requirementCoverageLedgerFingerprint(
+              existing.requirementCoverage as typeof actual.ledger,
+            ) !== actual.ledgerFingerprint
+          ) {
+            if (
+              !(await persist(opportunityId, expected.fingerprint, {
+                preparedPostingJson: JSON.stringify({
+                  ...existing,
+                  requirementCoverage: actual.ledger,
+                }),
+                preparedPostingFingerprint: actual.posting.fingerprint,
+                preparedPostingVersion: actual.posting.version,
+                updated_at: new Date(),
+              }))
+            )
+              return {
+                message: 'Discarded stale source checkpoint.',
+                ready: false as const,
+              };
+          }
+          try {
+            await assertCurrentAuthority();
+            await auditEvidence(plan.preparedAudit, {
+              agentRunId,
+              opportunityId,
+              contentFingerprint: actual.context.sourceFingerprint,
+              historicalReservation: actual.reservation,
+              signal: AbortSignal.timeout(
+                OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
+              ),
+            });
+            await finishRun(agentRunId, 'succeeded', '', subject);
+          } catch (error) {
+            await finishRun(
+              agentRunId,
+              'failed',
+              error instanceof Error ? error.message : String(error),
+              subject,
+            );
+            return {
+              message:
+                'Source evidence auditing failed; the checkpoint is retained for operator review.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
+          }
+          await assertCurrentAuthority();
+          const refreshed = await getOpportunity(opportunityId);
+          if (!isCurrent(refreshed))
+            return {
+              message: 'Skipped stale opportunity source.',
+              ready: false as const,
+            };
+          const partial = await readPartialEvidence(refreshed);
+          return partial?.acceptedRequirements.length
+            ? {
+                message: 'Prepared recorded partial source evidence.',
+                ready: true as const,
+                sourceStatus: 'partial' as const,
+              }
+            : {
+                message:
+                  'Source audit recorded no verified applicant excerpts; overall match remains uncertain.',
+                ready: false as const,
+                sourceStatus: 'audit_blocked' as const,
+              };
         },
       ),
   );
 
-  if (!preparation.ready) {
-    return { message: preparation.message, status: 'skipped' };
-  }
+  if (!preparation.ready)
+    return {
+      message: preparation.message,
+      status: 'skipped',
+      ...(preparation.sourceStatus
+        ? { sourceStatus: preparation.sourceStatus }
+        : {}),
+    };
 
   const enqueueAssessment =
     dependencies.enqueueAssessment ??
@@ -922,13 +1274,14 @@ export async function runOpportunityAssessmentDependencyJob(
         !sourceIdentityMatches(current, expected) ||
         requirementCoverageSourceDependencyFingerprint(current) !==
           expected.sourceDependencyFingerprint ||
-        (
+        ((
           await readCoverageOutcome(
             opportunityId,
             current,
             await readPriorBridge(context, subject, expected, opportunityId),
           )
-        ).status !== 'ready'
+        ).status !== 'ready' &&
+          !(await readPartialEvidence(current))?.acceptedRequirements.length)
       ) {
         return {
           message: 'Skipped stale opportunity source.',
@@ -939,6 +1292,9 @@ export async function runOpportunityAssessmentDependencyJob(
       return {
         message: 'Queued private opportunity assessment.',
         status: 'prepared' as const,
+        ...(preparation.sourceStatus
+          ? { sourceStatus: preparation.sourceStatus }
+          : {}),
       };
     },
   );

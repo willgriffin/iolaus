@@ -255,6 +255,17 @@ export class Opportunity extends SmrtObject {
           subject,
         );
         await run.assertOperation('opportunities', 'read');
+        if (args.sourceCoverageStage !== undefined) {
+          const { runOpportunityRequirementCoverageSourceStageJob } =
+            await import(
+              '../server/opportunity-requirement-coverage-source-stage-job.js'
+            );
+          return await runOpportunityRequirementCoverageSourceStageJob(
+            this.id ?? '',
+            runnerContext,
+            subject,
+          );
+        }
         if (args.sourceCoverageRepair !== undefined) {
           const { runOpportunityRequirementCoverageRepairJob } = await import(
             '../server/opportunity-requirement-coverage-repair-job.js'

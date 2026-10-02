@@ -291,3 +291,42 @@ export function opportunityAssessmentSubjectMaterialFingerprint(input: {
     )
     .digest('hex');
 }
+
+/** Partial evidence never exposes unresolved clauses as candidate requirements. */
+export function buildPartialOpportunityAssessmentPostingInput(
+  opportunityId: string,
+  evidence: import('./opportunity-requirement-coverage-provider.js').PartialOpportunityRequirementEvidence,
+): {
+  postingSources: OpportunityAssessmentSource[];
+  requirements: OpportunityAssessmentRequirement[];
+} {
+  const postingSources: OpportunityAssessmentSource[] = [];
+  const requirements: OpportunityAssessmentRequirement[] = [];
+  for (const row of evidence.acceptedRequirements) {
+    const id = `${opportunityId}:partial:${row.id}`;
+    const clauses = row.clauseIds.map(
+      (clauseId) =>
+        evidence.ledger.clauses.find((clause) => clause.id === clauseId)!,
+    );
+    postingSources.push({
+      id,
+      kind: 'posting_requirement',
+      title: 'Verified partial applicant criterion',
+      text: row.text,
+      recordId: opportunityId,
+      sourceSpans: clauses.map((clause) => ({
+        clauseId: clause.id,
+        start: clause.spanStart,
+        end: clause.spanEnd,
+        hash: clause.hash,
+      })),
+    });
+    requirements.push({
+      id,
+      text: row.text,
+      postingSourceIds: [id],
+      auditedImportance: 'unknown',
+    });
+  }
+  return { postingSources, requirements };
+}

@@ -52,6 +52,7 @@ import {
   syncRecommendedOpportunityDecisionTasks,
 } from './application-workflow';
 import { acceptFactCandidate, createFactIntakeFromText } from './fact-workflow';
+import { loadCurrentPartialOpportunityAssessmentProjections } from './opportunity-assessment-partial-projection';
 import {
   loadCurrentOpportunityAssessmentProjections,
   loadOpportunityAssessmentQueryContext,
@@ -64,7 +65,9 @@ import {
   isOpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job';
 import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
+import { opportunityWithSourceContent } from './opportunity-source-content';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep';
+import { analyzeOpportunityVideoRequirements } from './opportunity-video-requirements';
 import {
   isOwnerAuthorityDenial,
   type OwnerPrincipalLocals,
@@ -353,6 +356,7 @@ export async function attachOpportunityContext(
     agentRuns,
     companies,
     assessmentProjections,
+    partialAssessmentProjections,
     reviewOverlays,
   ] = await Promise.all([
     subject
@@ -395,6 +399,12 @@ export async function attachOpportunityContext(
           subject,
         })
       : Promise.resolve(new Map<string, unknown>()),
+    subject
+      ? loadCurrentPartialOpportunityAssessmentProjections({
+          opportunities: records,
+          subject,
+        })
+      : Promise.resolve(new Map()),
     subject
       ? loadCurrentOpportunityReviewOverlays({
           opportunityIds,
@@ -471,6 +481,20 @@ export async function attachOpportunityContext(
       // state as "unknown" and never falls back to another user's assessment.
       assessmentProjection: record.id
         ? (assessmentProjections.get(record.id) ?? null)
+        : null,
+      videoRequirements: analyzeOpportunityVideoRequirements(
+        String(opportunityWithSourceContent(record).descriptionRaw ?? ''),
+        {
+          sourceContentFingerprint:
+            typeof record.sourceContentFingerprint === 'string'
+              ? record.sourceContentFingerprint
+              : undefined,
+          sourceContentVersion:
+            Number(record.sourceContentVersion) || undefined,
+        },
+      ),
+      partialAssessmentProjection: record.id
+        ? (partialAssessmentProjections.get(record.id) ?? null)
         : null,
       reviewOverlay: record.id ? (reviewOverlays.get(record.id) ?? null) : null,
       // Omitted rather than emptied when the activity trail was not read: an

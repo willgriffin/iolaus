@@ -24,7 +24,11 @@ import {
 import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
+import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
+import PartialOpportunityEvidence, {
+  getCurrentPartialOpportunityAssessmentProjection,
+} from './PartialOpportunityEvidence.svelte';
 import ResourceFormFields from './ResourceFormFields.svelte';
 
 type AdminRecord = Record<string, unknown> & { id?: string };
@@ -127,6 +131,14 @@ const assessmentProjection = $derived(
 );
 const hasCurrentAssessment = $derived(
   assessmentProjection.sourceStatus === 'current',
+);
+const hasCurrentPartialAssessment = $derived(
+  !hasCurrentAssessment &&
+    Boolean(
+      getCurrentPartialOpportunityAssessmentProjection(
+        data.record.partialAssessmentProjection,
+      ),
+    ),
 );
 const isCompanyRecord = $derived(data.resource.slug === 'companies');
 const isSourceRecord = $derived(data.resource.slug === 'sources');
@@ -980,7 +992,7 @@ $effect(() => {
     <section class="panel record-intelligence" aria-label="Your opportunity assessment">
       <div class="intel-head">
         <span class="field-kicker">Your opportunity assessment</span>
-        <strong>{hasCurrentAssessment ? 'Current' : 'Unknown'}</strong>
+        <strong>{hasCurrentAssessment ? 'Current' : hasCurrentPartialAssessment ? 'Partial assessment' : 'Unknown'}</strong>
       </div>
       <div class="intelligence-meta">
         <span>Eligibility: {assessmentEligibilityLabels[assessmentProjection.buckets[0]]}</span>
@@ -988,15 +1000,23 @@ $effect(() => {
           <span>Match score: {assessmentProjection.fitScore}/100</span>
         {/if}
       </div>
-      <p><strong>{assessmentMatchReadinessLabel(assessmentProjection)}</strong></p>
-      {#each assessmentCoverageMessages(assessmentProjection) as message}
-        <p>{message}</p>
-      {/each}
+      <p><strong>{hasCurrentPartialAssessment ? 'Overall fit not yet established' : assessmentMatchReadinessLabel(assessmentProjection)}</strong></p>
+      {#if !hasCurrentPartialAssessment}
+        {#each assessmentCoverageMessages(assessmentProjection) as message}
+          <p>{message}</p>
+        {/each}
+      {/if}
       {#if hasCurrentAssessment && assessmentProjection.matchReadiness !== 'assessable'}
         <p>A match score is not available until role requirements and evidence have sufficient coverage.</p>
       {/if}
-      <p>{assessmentProjection.reason || 'Assessment needs clarification.'}</p>
-      <p>{hasCurrentAssessment ? 'Current for this posting and your selected candidate profile.' : 'Run Assess to assess this posting against your selected candidate profile.'}</p>
+      {#if hasCurrentPartialAssessment}
+        <p>Current partial evidence is available for this posting and your selected candidate profile. Review the supported criteria and unresolved source clauses before deciding what evidence needs clarification.</p>
+      {:else}
+        <p>{assessmentProjection.reason || 'Assessment needs clarification.'}</p>
+        <p>{hasCurrentAssessment ? 'Current for this posting and your selected candidate profile.' : 'Run Assess to assess this posting against your selected candidate profile.'}</p>
+      {/if}
+      <PartialOpportunityEvidence projection={data.record.partialAssessmentProjection} />
+      <OpportunityVideoRequirements requirements={data.record.videoRequirements} />
     </section>
   {/if}
 

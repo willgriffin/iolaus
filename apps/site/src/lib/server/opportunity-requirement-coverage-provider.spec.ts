@@ -14,12 +14,18 @@ import {
   validateRequirementCoverageAuditAdmission,
 } from './opportunity-requirement-coverage.js';
 import {
+  evaluateRequirementEvidenceAudit,
   hasRecordedRequirementCoverageAudit,
   type PreparedRequirementCoverageAudit,
+  partialRequirementEvidenceFromAudit,
   preflightRequirementCoverageAudit,
   preflightRequirementCoverageLifecycle,
+  preflightRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
+  prepareRequirementEvidenceAudit,
   REQUIREMENT_COVERAGE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
   readVerifiedOpportunityRequirementCoverage,
   requirementCoverageAuditReservationCeiling,
@@ -28,6 +34,7 @@ import {
   requirementCoverageLedgerFingerprint,
   requirementCoverageSourceDependencyFingerprint,
   resolveRequirementCoverageAudit,
+  resolveRequirementEvidenceAudit,
   validateVerifiedRequirementCoverage,
 } from './opportunity-requirement-coverage-provider.js';
 
@@ -140,6 +147,7 @@ describe('source requirement coverage audit', () => {
   it('fits the actual 42-clause 46-row repaired ledger and preserves every independent answer', () => {
     const context: RequirementCoverageContext = {
       sourceText: publicPosting,
+      extractionContract: 'paid-v4-coverage-only4096',
       sourceFingerprint:
         'b6ac3f8a55585780e534f408fb7decf4a8b5d260bc5d921d7b4facd5d9b45a11',
       sourceVersion: 1,
@@ -665,6 +673,41 @@ describe('source requirement coverage audit', () => {
     const prepared = prepareRequirementCoverageAudit(context, ledger);
     expect(ledger.clauses).toHaveLength(42);
     expect(ledger.requirements).toHaveLength(46);
+    const decomposed = prepareRequirementEvidenceAudit(context, ledger);
+    expect(decomposed.request.state).toEqual({});
+    expect(Object.keys(decomposed.bindings)).toHaveLength(104);
+    expect(
+      Object.values(decomposed.bindings).filter(
+        (row) => row.mode === 'support',
+      ),
+    ).toHaveLength(46);
+    expect(
+      Object.values(decomposed.bindings).filter(
+        (row) => row.mode === 'precision',
+      ),
+    ).toHaveLength(20);
+    expect(
+      Object.values(decomposed.bindings).filter((row) => row.mode === 'recall'),
+    ).toHaveLength(20);
+    expect(
+      Object.values(decomposed.bindings).filter(
+        (row) => row.mode === 'context',
+      ),
+    ).toHaveLength(18);
+    expect(decomposed.request.questions.c21_precision!.instructions).toContain(
+      'in Source',
+    );
+    expect(decomposed.request.questions.c21_r0_support!.instructions).toContain(
+      'Heading: "Skills you bring"',
+    );
+    expect(
+      preflightRequirementEvidenceAudit(decomposed, {
+        calls: 2,
+        reservedTokens: 20192,
+      }).fits,
+    ).toBe(true);
+    expect(decomposed.inputFingerprint).not.toBe(prepared.ledgerFingerprint);
+
     expect(Object.keys(prepared.request.questions)).toHaveLength(84);
     expect(Object.keys(prepared.questionEntailmentIds)).toHaveLength(46);
     expect(prepared.contextQuestionKeys).toHaveLength(18);
@@ -1795,5 +1838,347 @@ describe('source requirement coverage audit', () => {
         limits,
       ),
     ).toEqual({ calls: 2, reservedTokens: 35_000, fits: true });
+  });
+});
+
+describe('opt-in decomposed source evidence', () => {
+  function evidenceFixture() {
+    const { context, ledger } = fixture();
+    const prepared = prepareRequirementEvidenceAudit(context, ledger);
+    const result: DecisionResult = {
+      model: 'jev-latest',
+      provenance: { model: 'jev-latest', provider: 'typesafe' },
+      answers: Object.fromEntries(
+        Object.entries(prepared.bindings).map(([key, row]) => [
+          key,
+          {
+            type: 'predicate',
+            probability: row.mode === 'context' ? 0.1 : 0.95,
+          },
+        ]),
+      ),
+    };
+    return { context, ledger, prepared, result };
+  }
+  it('admits supported precision-verified excerpts despite low recall without certifying whole coverage', () => {
+    const { prepared, result } = evidenceFixture();
+    result.answers.c1_recall = { type: 'predicate', probability: 0.84 };
+    const audit = resolveRequirementEvidenceAudit(
+      prepared,
+      result,
+      'actual-native',
+    );
+    expect(audit.rowSupport['duty-1']).toBe(0.95);
+    expect(audit.clauseRecall[prepared.ledger.clauses[1]!.id]).toBe(0.84);
+    expect(audit.acceptedRequirementIds).toEqual(['duty-1']);
+    expect(audit.fullCoverage).toBe(false);
+    const partial = partialRequirementEvidenceFromAudit(prepared, audit);
+    expect(partial.acceptedRequirements[0]!.importance).toBe('unknown');
+    expect(partial.unresolvedClauses).toEqual([
+      expect.objectContaining({
+        text: prepared.ledger.clauses[1]!.text,
+        reason: 'recall',
+      }),
+    ]);
+    result.answers.c1_precision = { type: 'predicate', probability: 0.84 };
+    const imprecise = resolveRequirementEvidenceAudit(
+      prepared,
+      result,
+      'actual-native',
+    );
+    expect(imprecise.acceptedRequirementIds).toEqual([]);
+    expect(imprecise.rowSupport['duty-1']).toBe(0.95);
+    result.answers.c1_precision = { type: 'predicate', probability: 0.95 };
+    result.answers.c1_r0_support = { type: 'predicate', probability: 0.84 };
+    expect(
+      resolveRequirementEvidenceAudit(prepared, result).acceptedRequirementIds,
+    ).toEqual([]);
+  });
+  it('keeps every independent answer and exact symmetric context threshold', () => {
+    const { prepared, result } = evidenceFixture();
+    result.answers.c2_criterion = { type: 'predicate', probability: 0.15 };
+    expect(resolveRequirementEvidenceAudit(prepared, result).fullCoverage).toBe(
+      true,
+    );
+    result.answers.c2_criterion = { type: 'predicate', probability: 0.151 };
+    expect(resolveRequirementEvidenceAudit(prepared, result).fullCoverage).toBe(
+      false,
+    );
+    for (const mode of ['missing', 'extra', 'malformed', 'nan']) {
+      const bad = structuredClone(result);
+      if (mode === 'missing') delete bad.answers.c1_precision;
+      else if (mode === 'extra')
+        bad.answers.unasked = { type: 'predicate', probability: 1 };
+      else
+        bad.answers.c1_precision = {
+          type: 'predicate',
+          probability: mode === 'nan' ? NaN : -1,
+        };
+      expect(() => resolveRequirementEvidenceAudit(prepared, bad)).toThrow();
+    }
+    const audit = resolveRequirementEvidenceAudit(prepared, result);
+    expect(Object.keys(audit.answerProbabilities)).toEqual(
+      Object.keys(prepared.request.questions),
+    );
+    expect(() =>
+      partialRequirementEvidenceFromAudit(prepared, {
+        ...audit,
+        acceptedRequirementIds: ['invented'],
+      }),
+    ).toThrow('identity');
+  });
+  it('requires exact joined GLOBAL actual receipts and invalidates changed native source', async () => {
+    const opportunity = {
+      id: 'partial-native',
+      descriptionRaw: 'Requirements\nFamiliarity with Kubernetes.',
+      sourceContentFingerprint: 'partial-source',
+      sourceContentVersion: 1,
+    };
+    const planned = prepareOpportunityPosting(opportunity);
+    const context = requirementCoverageContextForOpportunity({
+      ...opportunity,
+      preparedPostingFingerprint: planned.fingerprint,
+    });
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.requirements = [
+      {
+        id: 'k8',
+        text: 'Familiarity with Kubernetes.',
+        clauseIds: [ledger.clauses[1]!.id],
+        importance: 'required',
+      },
+    ];
+    ledger.dispositions = ledger.clauses.map((clause, index) =>
+      index === 0
+        ? {
+            clauseId: clause.id,
+            type: 'nonrequirement',
+            requirementIds: [],
+            exclusionRule: 'section_heading',
+          }
+        : {
+            clauseId: clause.id,
+            type: 'material_requirement',
+            requirementIds: ['k8'],
+          },
+    );
+    const prepared = prepareRequirementEvidenceAudit(context, ledger);
+    const result: DecisionResult = {
+      model: 'jev-latest',
+      provenance: { model: 'jev-latest', provider: 'typesafe' },
+      answers: Object.fromEntries(
+        Object.keys(prepared.request.questions).map((key) => [
+          key,
+          {
+            type: 'predicate',
+            probability: key.endsWith('recall') ? 0.5 : 0.95,
+          },
+        ]),
+      ),
+    };
+    const row = {
+      output_json: JSON.stringify(result),
+      owner_request_id: 'native-evidence',
+      request_id: 'native-evidence',
+      opportunity_id: opportunity.id,
+      content_fingerprint: context.sourceFingerprint,
+      input_fingerprint: prepared.inputFingerprint,
+      feature: 'opportunity-source-requirement-evidence',
+      output_schema_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      prompt_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      prepared_payload_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      model: 'jev-latest',
+      profile: 'typesafe-opportunity-source-evidence',
+      result_status: 'completed',
+      request_status: 'succeeded',
+      accounting_basis: 'actual',
+      actual_total_tokens: 200,
+      tenant_id: '',
+      owner_user_id: '',
+      candidate_profile_id: '',
+      request_tenant_id: '',
+      request_owner_user_id: '',
+      request_candidate_profile_id: '',
+    };
+    const cached = {
+      ...opportunity,
+      preparedPostingJson: JSON.stringify({ requirementCoverage: ledger }),
+    };
+    mocks.query.mockResolvedValue({ rows: [] });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.query.mockResolvedValue({ rows: [row] });
+    const partial = await readPartialOpportunityRequirementEvidence(cached);
+    expect(partial?.acceptedRequirements.map((item) => item.id)).toEqual([
+      'k8',
+    ]);
+    expect(partial?.audit.fullCoverage).toBe(false);
+    expect(mocks.query.mock.calls.at(-1)?.[0]).toContain(
+      'JOIN opportunity_intelligence_requests',
+    );
+    for (const patch of [
+      { request_tenant_id: 'foreign' },
+      { owner_user_id: 'foreign' },
+      { accounting_basis: 'conservative' },
+      { actual_total_tokens: 0 },
+      { request_status: 'failed' },
+      { request_id: 'orphan' },
+      { output_schema_version: 'diagnostic-only' },
+    ]) {
+      mocks.query.mockResolvedValue({ rows: [{ ...row, ...patch }] });
+      await expect(
+        readPartialOpportunityRequirementEvidence(cached),
+      ).resolves.toBeUndefined();
+    }
+    mocks.query.mockResolvedValue({ rows: [row] });
+    for (const patch of [
+      { descriptionRaw: 'Requirements\nPHP experience.' },
+      { sourceContentFingerprint: 'changed' },
+      { sourceContentVersion: 2 },
+    ])
+      await expect(
+        readPartialOpportunityRequirementEvidence({ ...cached, ...patch }),
+      ).resolves.toBeUndefined();
+  });
+  it('selects historical partial evidence only after recomputed native completed repair ancestry', async () => {
+    const opportunity = {
+      id: 'historical-partial',
+      descriptionRaw: 'Familiarity with Kubernetes.',
+      sourceContentFingerprint: 'source-history',
+      sourceContentVersion: 1,
+    };
+    const planned = prepareOpportunityPosting(opportunity);
+    const context = requirementCoverageContextForOpportunity(
+      { ...opportunity, preparedPostingFingerprint: planned.fingerprint },
+      'paid-v4-coverage-only4096',
+    );
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.requirements = [
+      {
+        id: 'k8',
+        text: ledger.clauses[0]!.text,
+        clauseIds: [ledger.clauses[0]!.id],
+        importance: 'required',
+      },
+    ];
+    ledger.dispositions = [
+      {
+        clauseId: ledger.clauses[0]!.id,
+        type: 'material_requirement',
+        requirementIds: ['k8'],
+      },
+    ];
+    ledger.repair = {
+      version: 'requirement-coverage-repair/v1-delta4096',
+      baseExtractionFingerprint: context.extractionFingerprint,
+      baseLedgerFingerprint: 'base-native',
+      baseRequestId: 'base-receipt',
+      feedbackAuditFingerprint: 'feedback-input',
+      feedbackRequestId: 'feedback-receipt',
+      targetClauseIds: [ledger.clauses[0]!.id],
+      inputFingerprint: 'repair-input',
+      inputTokenCeiling: 6000,
+      maxOutputTokens: 4096,
+      removedRequirementIds: [],
+    };
+    const prepared = prepareRequirementEvidenceAudit(context, ledger);
+    const output: DecisionResult = {
+      model: 'jev-latest',
+      provenance: { model: 'jev-latest', provider: 'typesafe' },
+      answers: Object.fromEntries(
+        Object.keys(prepared.request.questions).map((key) => [
+          key,
+          {
+            type: 'predicate',
+            probability: key.endsWith('recall') ? 0.6 : 0.95,
+          },
+        ]),
+      ),
+    };
+    const receipt = {
+      output_json: JSON.stringify(output),
+      owner_request_id: 'evidence-receipt',
+      request_id: 'evidence-receipt',
+      opportunity_id: opportunity.id,
+      content_fingerprint: context.sourceFingerprint,
+      input_fingerprint: prepared.inputFingerprint,
+      feature: 'opportunity-source-requirement-evidence',
+      output_schema_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      prompt_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      prepared_payload_version: REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+      model: 'jev-latest',
+      profile: 'typesafe-opportunity-source-evidence',
+      result_status: 'completed',
+      request_status: 'succeeded',
+      accounting_basis: 'actual',
+      actual_total_tokens: 100,
+      tenant_id: '',
+      owner_user_id: '',
+      candidate_profile_id: '',
+      request_tenant_id: '',
+      request_owner_user_id: '',
+      request_candidate_profile_id: '',
+    };
+    const cached = {
+      ...opportunity,
+      preparedPostingJson: JSON.stringify({ requirementCoverage: ledger }),
+    };
+    mocks.query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes('SELECT owner_request_id')
+        ? [{ owner_request_id: 'actual-repair' }]
+        : [receipt],
+    }));
+    mocks.attestCompleted.mockRejectedValue(
+      new Error('No actual native ancestry'),
+    );
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.attestCompleted.mockResolvedValue({
+      prepared: { context },
+      completedRepair: {
+        inputFingerprint: ledger.repair.inputFingerprint,
+        ledgerFingerprint: prepared.ledgerFingerprint,
+      },
+    });
+    const accepted = await readPartialOpportunityRequirementEvidence(cached);
+    expect(accepted?.context.extractionFingerprint).toBe(
+      context.extractionFingerprint,
+    );
+    expect(accepted?.acceptedRequirements.map((row) => row.id)).toEqual(['k8']);
+    mocks.attestCompleted.mockResolvedValue({
+      prepared: { context },
+      completedRepair: {
+        inputFingerprint: ledger.repair.inputFingerprint,
+        ledgerFingerprint: 'forged-merged-leaf',
+      },
+    });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+  });
+  it('rejects changed prepared bindings and deterministic heading maps before governance', async () => {
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT', '4');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT', '80000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS', '100000');
+    for (const mode of ['binding', 'heading']) {
+      const { prepared } = evidenceFixture();
+      if (mode === 'binding')
+        prepared.bindings.c1_r0_support!.requirementId = 'invented';
+      else
+        prepared.deterministicHeadingClauseIds.push(
+          prepared.ledger.clauses[1]!.id,
+        );
+      await expect(
+        evaluateRequirementEvidenceAudit(prepared, {
+          agentRunId: 'source-run',
+          opportunityId: 'source-role',
+          contentFingerprint: prepared.context.sourceFingerprint,
+          historicalReservation: { calls: 0, reservedTokens: 0 },
+        }),
+      ).rejects.toThrow('modified after preparation');
+    }
+    vi.unstubAllEnvs();
   });
 });

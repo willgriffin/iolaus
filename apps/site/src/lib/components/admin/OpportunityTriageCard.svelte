@@ -18,6 +18,10 @@ import {
 } from '$lib/opportunity-assessment-projection';
 import { getNumber, getString, parseSkillList } from '$lib/opportunity-filters';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
+import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
+import PartialOpportunityEvidence, {
+  getCurrentPartialOpportunityAssessmentProjection,
+} from './PartialOpportunityEvidence.svelte';
 
 /**
  * One triage card: the job description is the body, on the left; the right
@@ -79,6 +83,14 @@ const postingUrl = $derived(str('postingUrl') || str('applyUrl'));
 const assessment = $derived(
   getOpportunityAssessmentProjection(record.assessmentProjection),
 );
+const hasCurrentPartialAssessment = $derived(
+  assessment.sourceStatus !== 'current' &&
+    Boolean(
+      getCurrentPartialOpportunityAssessmentProjection(
+        record.partialAssessmentProjection,
+      ),
+    ),
+);
 const score = $derived(
   assessment.matchReadiness === 'assessable' ? assessment.fitScore : null,
 );
@@ -137,7 +149,7 @@ const facts = $derived(
         {#if score !== null}
           <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
-          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {assessmentMatchReadinessLabel(assessment)}</span>
+          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {hasCurrentPartialAssessment ? 'Partial assessment' : assessmentMatchReadinessLabel(assessment)}</span>
         {/if}
       </p>
       {#if postingUrl}
@@ -161,10 +173,17 @@ const facts = $derived(
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
       <p>Eligibility: {assessmentEligibilityLabels[assessment.buckets[0]]}</p>
-      <p>{assessment.reason}</p>
-      {#each assessmentCoverageMessages(assessment) as message}
-        <p class="muted">{message}</p>
-      {/each}
+      {#if hasCurrentPartialAssessment}
+        <p>Overall fit not yet established.</p>
+        <p class="muted">Current partial evidence is available for this posting and candidate profile. Review the supported criteria and unresolved source clauses before deciding what evidence needs clarification.</p>
+      {:else}
+        <p>{assessment.reason}</p>
+        {#each assessmentCoverageMessages(assessment) as message}
+          <p class="muted">{message}</p>
+        {/each}
+      {/if}
+      <PartialOpportunityEvidence projection={record.partialAssessmentProjection} />
+      <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
     <section class="panel" aria-label="Facts">
       <h3>Facts</h3>

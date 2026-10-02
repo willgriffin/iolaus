@@ -39,6 +39,12 @@ import {
   selectOpportunityAssessmentCandidateSources,
 } from './opportunity-assessment-input.js';
 import {
+  evaluatePartialOpportunityAssessment,
+  OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+  preparePartialOpportunityAssessment,
+  storePartialOpportunityAssessment,
+} from './opportunity-assessment-partial.js';
+import {
   hasOpportunityAssessment,
   loadOpportunityAssessmentPreferences,
   storeOpportunityAssessment,
@@ -56,6 +62,7 @@ import {
   countOpportunityInputTokens,
   inputTokenCeilingForModel,
 } from './opportunity-posting-preparation.js';
+import { readPartialOpportunityRequirementEvidence } from './opportunity-requirement-coverage-provider.js';
 import {
   attributableOpportunityScoringReasons,
   buildBoundedOpportunityScoringRequest,
@@ -94,7 +101,10 @@ type OpportunityIntelligenceDatabase = Awaited<
 >;
 type Collection = {
   create: (payload: Record<string, unknown>) => Promise<MutableRecord>;
-  get: (id: string) => Promise<MutableRecord | null>;
+  get: (
+    filter: string | { id: string },
+    options?: { cache?: false },
+  ) => Promise<MutableRecord | null>;
   list: (options?: Record<string, unknown>) => Promise<MutableRecord[]>;
 };
 
@@ -154,6 +164,8 @@ export interface NormalizedOpportunityScore {
 }
 
 export interface OpportunityIntelligenceOptions {
+  /** Explicit evidence-only path; never enables full score or eligibility projection. */
+  partialAssessmentEvidence?: boolean;
   agentRunId?: string;
   aiClient?: Pick<AIInterface, 'chat'>;
   apiKey?: string;
@@ -197,6 +209,18 @@ async function runLifecycleMutation<T>(
 }
 
 interface OpportunityIntelligenceStepResult {
+  partialEvidence?: {
+    contractVersion: string;
+    fingerprint: string;
+    matchReadiness: 'needs_evidence';
+    requirements: Array<{
+      id: string;
+      support: 'supported' | 'uncertain';
+      candidateSourceKeys: string[];
+      postingSourceKeys: string[];
+    }>;
+    unresolvedClauses: Array<{ clauseId: string; reason: string }>;
+  };
   agentRunId?: string;
   evaluationScoreId?: string;
   message: string;
@@ -1223,10 +1247,159 @@ async function runExtract(
   };
 }
 
+async function runPartialAssessment(
+  opportunity: MutableRecord,
+  options: OpportunityIntelligenceOptions,
+): Promise<OpportunityIntelligenceStepResult> {
+  const subject = options.workspaceSubject;
+  const opportunityId = stringValue(opportunity.id);
+  if (!subject || !opportunityId)
+    return {
+      mode: 'assessment',
+      status: 'skipped',
+      skipReason: 'prerequisite',
+      message:
+        'A verified candidate workspace and current opportunity are required for partial matching.',
+    };
+  try {
+    const source = await readPartialOpportunityRequirementEvidence(opportunity);
+    if (!source || !source.acceptedRequirements.length)
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'prerequisite',
+        message:
+          'No current recorded applicant excerpts are available for partial matching.',
+      };
+    if (
+      (options.expectedSourceContentFingerprint &&
+        options.expectedSourceContentFingerprint !==
+          source.context.sourceFingerprint) ||
+      (options.sourceContentVersion !== undefined &&
+        options.sourceContentVersion !== source.context.sourceVersion)
+    )
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'stale',
+        message: 'Skipped stale partial source evidence.',
+      };
+    const evidence = await loadWorkspaceCandidateEvidence(subject);
+    const selected = selectOpportunityAssessmentCandidateSources(
+      evidence.evidence,
+      [],
+    );
+    const prepared = preparePartialOpportunityAssessment({
+      opportunityId,
+      evidence: source,
+      candidateSources: selected.sources,
+      candidateCoverageTruncated: selected.truncated,
+      candidateMaterialFingerprint: evidence.fingerprint,
+    });
+    const subjectFingerprint = opportunityAssessmentSubjectMaterialFingerprint({
+      candidateMaterialFingerprint: evidence.fingerprint,
+      sourceContentFingerprint: source.context.sourceFingerprint,
+      sourceContentVersion: source.context.sourceVersion,
+      requirementCoverageFingerprint: source.fingerprint,
+      subject,
+    });
+    if (
+      options.expectedScoringMaterialFingerprint &&
+      options.expectedScoringMaterialFingerprint !== subjectFingerprint
+    )
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'stale',
+        message: 'Skipped stale private partial material.',
+      };
+    const prior = await listPrivateRecords('OpportunityAssessment', subject, {
+      limit: 1,
+      where: {
+        opportunityId,
+        assessmentFingerprint: prepared.fingerprint,
+        contractVersion: OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+      },
+    });
+    if (prior.length)
+      return {
+        mode: 'assessment',
+        status: 'processed',
+        message: 'Reused current private partial evidence.',
+      };
+    const result = await evaluatePartialOpportunityAssessment(prepared, {
+      agentRunId: stringValue(options.agentRunId),
+      opportunityId,
+      opportunity,
+      subject,
+      subjectFingerprint,
+      signal: options.signal,
+      store: options.governanceStore,
+    });
+    return await runAsRevalidatedJobWorkspaceSubject(
+      subject,
+      'assessment.execute',
+      async (currentSubject, run) => {
+        await run.assertOperation('opportunities', 'read');
+        const current = await getOpportunity(opportunityId);
+        const currentEvidence =
+          await loadWorkspaceCandidateEvidence(currentSubject);
+        if (
+          !current ||
+          currentEvidence.fingerprint !== evidence.fingerprint ||
+          (await readPartialOpportunityRequirementEvidence(current))
+            ?.fingerprint !== source.fingerprint
+        )
+          return {
+            mode: 'assessment' as const,
+            status: 'skipped' as const,
+            skipReason: 'stale' as const,
+            message: 'Discarded stale partial evidence after usage settlement.',
+          };
+        const created = await storePartialOpportunityAssessment({
+          result,
+          subject: currentSubject,
+          opportunityId,
+          agentRunId: stringValue(options.agentRunId),
+        });
+        return {
+          mode: 'assessment' as const,
+          status: 'processed' as const,
+          message: created
+            ? 'Saved private partial evidence; overall match remains uncertain.'
+            : 'Reused current private partial evidence.',
+          partialEvidence: {
+            contractVersion: result.contractVersion,
+            fingerprint: result.fingerprint,
+            matchReadiness: result.matchReadiness,
+            requirements: result.requirements,
+            unresolvedClauses: result.unresolvedClauses.map((clause) => ({
+              clauseId: clause.clauseId,
+              reason: clause.reason,
+            })),
+          },
+        };
+      },
+    );
+  } catch (cause) {
+    if (options.signal?.aborted) throw cause;
+    return {
+      mode: 'assessment',
+      status: 'error',
+      message:
+        cause instanceof Error
+          ? cause.message
+          : 'Private partial matching failed.',
+    };
+  }
+}
+
 async function runAssessment(
   opportunity: MutableRecord,
   options: OpportunityIntelligenceOptions,
 ): Promise<OpportunityIntelligenceStepResult> {
+  if (options.partialAssessmentEvidence)
+    return await runPartialAssessment(opportunity, options);
   const subject = options.workspaceSubject;
   const opportunityId = stringValue(opportunity.id);
   if (!subject) {
@@ -2796,7 +2969,10 @@ function expandModes(
 async function getOpportunity(
   opportunityId: string,
 ): Promise<MutableRecord | null> {
-  return await (await collection('Opportunity')).get(opportunityId);
+  return await (await collection('Opportunity')).get(
+    { id: opportunityId },
+    { cache: false },
+  );
 }
 
 async function processOpportunityIntelligenceInternal(

@@ -396,3 +396,56 @@ describe('AdminRecordViewPage recommendation decision', () => {
     expect(body).not.toContain('preflightOverrideReason');
   });
 });
+
+const partialEvidence = {
+  version: 'opportunity-assessment-partial-projection/v1',
+  mode: 'partial',
+  sourceStatus: 'current',
+  criterionCount: 1,
+  supportedCriterionCount: 1,
+  unresolvedSourceClauseCount: 2,
+  requirements: [
+    {
+      id: 'criterion',
+      text: 'Maintain tested API integrations.',
+      support: 'supported',
+      postingCitations: [
+        {
+          excerpt: 'You must maintain tested API integrations.',
+          clauseId: 'clause-1',
+          start: 10,
+          end: 51,
+        },
+      ],
+      candidateCitations: [
+        {
+          sourceId: 'employment:1',
+          title: 'Platform engineer',
+          excerpt: 'Maintained tested API integrations.',
+          recordId: 'job-1',
+        },
+      ],
+    },
+  ],
+};
+
+it('shows current partial evidence alongside an unavailable full match without promoting a legacy score', () => {
+  const { body } = renderOpportunity({
+    id: 'opp-1',
+    title: 'Engineer',
+    latestScore: 99,
+    partialAssessmentProjection: partialEvidence,
+  });
+  expect(body).toContain('1 supported criterion of 1 assessed');
+  expect(body).toContain('2 unresolved source clauses');
+  expect(body).toContain('No overall fit conclusion.');
+  expect(body).toContain('You must maintain tested API integrations.');
+  expect(body).toContain('Maintained tested API integrations.');
+  const currentAssessment = body.match(
+    /<section[^>]*aria-label="Your opportunity assessment"[\s\S]*?<\/section>/,
+  )?.[0];
+  expect(currentAssessment).toContain('No overall fit conclusion.');
+  expect(currentAssessment).not.toContain('99/100');
+  expect(currentAssessment).not.toContain('Strong match');
+  expect(body).toContain('Earlier intelligence recommendation');
+});

@@ -44,6 +44,9 @@ const mocks = vi.hoisted(() => {
     updateAdminRecord: vi.fn(),
     isOpportunityIntelligenceEnqueueError: vi.fn(),
     loadCurrentOpportunityAssessmentProjections: vi.fn(),
+    loadCurrentPartialOpportunityAssessmentProjections: vi.fn(
+      async () => new Map(),
+    ),
     loadOpportunityAssessmentQueryContext: vi.fn(async () => ({
       assessmentCandidateMaterialFingerprint: 'candidate-material-test',
       assessmentPreferencesFingerprint: 'preferences-test',
@@ -94,6 +97,11 @@ vi.mock('./opportunity-assessment-store', () => ({
     mocks.loadCurrentOpportunityAssessmentProjections,
   loadOpportunityAssessmentQueryContext:
     mocks.loadOpportunityAssessmentQueryContext,
+}));
+
+vi.mock('./opportunity-assessment-partial-projection', () => ({
+  loadCurrentPartialOpportunityAssessmentProjections:
+    mocks.loadCurrentPartialOpportunityAssessmentProjections,
 }));
 
 vi.mock('./opportunity-review-overlay', () => ({
@@ -299,6 +307,10 @@ describe('admin-resource-route', () => {
     mocks.getCollection.mockClear();
     mocks.getAdminRecord.mockReset();
     mocks.isOpportunityIntelligenceEnqueueError.mockReset();
+    mocks.loadCurrentPartialOpportunityAssessmentProjections.mockReset();
+    mocks.loadCurrentPartialOpportunityAssessmentProjections.mockResolvedValue(
+      new Map(),
+    );
     mocks.loadCurrentOpportunityAssessmentProjections.mockReset();
     mocks.loadCurrentOpportunityAssessmentProjections.mockResolvedValue(
       new Map(),
@@ -1147,6 +1159,44 @@ describe('admin-resource-route', () => {
       subject,
     });
     expect(record?.assessmentProjection).toEqual(projection);
+  });
+
+  it('attaches current private partial evidence separately and clears it on a stale reload', async () => {
+    const { attachOpportunityContext } = await import('./admin-resource-route');
+    const subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const opportunity = {
+      id: 'opp-1',
+      title: 'Engineer',
+      sourceContentFingerprint: 'source',
+      sourceContentVersion: 1,
+    };
+    const partial = {
+      version: 'opportunity-assessment-partial-projection/v1',
+      mode: 'partial',
+      sourceStatus: 'current',
+      criterionCount: 1,
+    };
+    mocks.loadCurrentPartialOpportunityAssessmentProjections
+      .mockResolvedValueOnce(new Map([['opp-1', partial]]))
+      .mockResolvedValueOnce(new Map());
+    const [first] = await attachOpportunityContext([opportunity], {
+      workspaceSubject: subject,
+      includeActivity: false,
+    });
+    expect(first?.partialAssessmentProjection).toEqual(partial);
+    expect(first?.assessmentProjection).toBeNull();
+    expect(
+      mocks.loadCurrentPartialOpportunityAssessmentProjections,
+    ).toHaveBeenCalledWith({ opportunities: [opportunity], subject });
+    const [reload] = await attachOpportunityContext([opportunity], {
+      workspaceSubject: subject,
+      includeActivity: false,
+    });
+    expect(reload?.partialAssessmentProjection).toBeNull();
   });
 
   it('serializes private agent run models before returning opportunity detail data', async () => {

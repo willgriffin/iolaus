@@ -19,6 +19,7 @@ import {
 
 const workspace = vi.hoisted(() => ({
   coverageReady: true,
+  partial: undefined as unknown,
   subject: null as {
     profileId: string;
     tenantId: string;
@@ -52,6 +53,9 @@ vi.mock('./opportunity-assessment-input.js', () => ({
   ),
 }));
 vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
+  readPartialOpportunityRequirementEvidence: vi.fn(
+    async () => workspace.partial,
+  ),
   hasRecordedRequirementCoverageAudit: vi.fn(async () => true),
   requirementCoverageSourceDependencyFingerprint: vi.fn(
     () => 'source-coverage-contract-seed',
@@ -79,6 +83,7 @@ describe('opportunity intelligence jobs', () => {
   beforeEach(() => {
     workspace.subject = null;
     workspace.coverageReady = true;
+    workspace.partial = undefined;
     vi.clearAllMocks();
   });
 
@@ -100,7 +105,7 @@ describe('opportunity intelligence jobs', () => {
     };
     const result = await enqueueOpportunityIntelligenceWithStatus(
       'opp-1',
-      {},
+      { partialAssessmentEvidence: true },
       {
         collection,
         opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
@@ -112,6 +117,132 @@ describe('opportunity intelligence jobs', () => {
     expect(loadWorkspaceCandidateEvidence).not.toHaveBeenCalled();
     expect(collection.create).not.toHaveBeenCalled();
     expect(collection.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('derives private partial mode only from current native GLOBAL evidence and binds its fingerprint', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-source-row' }],
+      fingerprint: 'native-partial-proof',
+      context: { sourceFingerprint: 'fp', sourceVersion: 1 },
+    };
+    const { enqueueOpportunityAssessmentCoverage } = await import(
+      './opportunity-assessment-dependency-job'
+    );
+    const { opportunityAssessmentSubjectMaterialFingerprint } = await import(
+      './opportunity-assessment-input'
+    );
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({
+            id: 'private-partial-job',
+            ...data,
+          }) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => []),
+    };
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      { partialAssessmentEvidence: false },
+      {
+        collection,
+        opportunityCollection: {
+          get: async () => ({
+            id: 'opp-1',
+            sourceContentFingerprint: 'fp',
+            sourceContentVersion: 1,
+          }),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      stage: 'private_assessment',
+      sourceStatus: 'partial',
+    });
+    expect(result.job.args.partialAssessmentEvidence).toBe(true);
+    expect(
+      opportunityAssessmentSubjectMaterialFingerprint,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requirementCoverageFingerprint: 'native-partial-proof',
+        subject: workspace.subject,
+      }),
+    );
+    expect(enqueueOpportunityAssessmentCoverage).not.toHaveBeenCalled();
+  });
+
+  it('rechecks native partial proof before creating a private run and rejects a bare persisted opt-in', async () => {
+    const subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const target = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'fp',
+      sourceContentVersion: 1,
+    };
+    const processor = vi.fn(async () => ({
+      status: 'processed',
+      message: 'partial',
+    }));
+    const startRun = vi.fn(async () => 'private-run');
+    const finishRun = vi.fn(async () => {});
+    const args = {
+      modes: 'assessment' as const,
+      partialAssessmentEvidence: true,
+      contentFingerprint: 'fp',
+      contentVersion: 1,
+    };
+    const deps = {
+      workspaceSubject: subject,
+      processor,
+      startRun,
+      finishRun,
+      readCurrentOpportunity: vi.fn(async () => target),
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'skipped' });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(processor).not.toHaveBeenCalled();
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-row' }],
+      context: { sourceFingerprint: 'fp', sourceVersion: 1 },
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'processed' });
+    expect(startRun).toHaveBeenCalledOnce();
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        partialAssessmentEvidence: true,
+        workspaceSubject: subject,
+      }),
+    );
+    expect(deps.readCurrentOpportunity).toHaveBeenCalledWith('opp-1');
+    processor.mockClear();
+    startRun.mockClear();
+    deps.readCurrentOpportunity.mockResolvedValueOnce({
+      ...target,
+      sourceContentVersion: 2,
+    });
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-row' }],
+      context: { sourceFingerprint: 'fp', sourceVersion: 2 },
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'skipped' });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(processor).not.toHaveBeenCalled();
   });
 
   it('keeps explicit source-only extraction separate from the private continuation', async () => {

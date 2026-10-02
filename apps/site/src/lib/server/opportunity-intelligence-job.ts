@@ -18,6 +18,7 @@ import {
   enqueueOpportunityAssessmentCoverage,
   OpportunityAssessmentDependencyEnqueueError,
   type OpportunityAssessmentSourceDependency,
+  type OpportunityAssessmentSourceStatus,
 } from './opportunity-assessment-dependency-job.js';
 import {
   opportunityAssessmentSubjectMaterialFingerprint,
@@ -43,6 +44,7 @@ import {
 import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
 import {
   hasRecordedRequirementCoverageAudit,
+  readPartialOpportunityRequirementEvidence,
   requirementCoverageSourceDependencyFingerprint,
 } from './opportunity-requirement-coverage-provider.js';
 import { OPPORTUNITY_SOURCE_CONTENT_FINGERPRINT_VERSION } from './opportunity-source-content.js';
@@ -70,6 +72,8 @@ export interface OpportunityIntelligenceJobArgs
   sourceCrawlId?: string;
   sourceCrawlItemId?: string;
   sourceId?: string;
+  /** Server-derived from a current actual GLOBAL evidence receipt. */
+  partialAssessmentEvidence?: boolean;
 }
 
 export interface OpportunityIntelligenceEnqueueResult {
@@ -77,6 +81,7 @@ export interface OpportunityIntelligenceEnqueueResult {
   job: SmrtJob;
   sourceDependency?: OpportunityAssessmentSourceDependency;
   stage?: 'source_preparation' | 'private_assessment';
+  sourceStatus?: OpportunityAssessmentSourceStatus;
 }
 
 interface OpportunityIntelligenceJobCollection {
@@ -93,12 +98,16 @@ export interface EnqueueOpportunityIntelligenceOptions {
   collection?: OpportunityIntelligenceJobCollection;
   now?: Date;
   opportunityCollection?: {
-    get: (id: string) => Promise<unknown | null | undefined>;
+    get: (
+      id: { id: string },
+      options: { cache: false },
+    ) => Promise<unknown | null | undefined>;
   };
   reason?: string;
 }
 
 export interface RunOpportunityIntelligenceJobDependencies {
+  readCurrentOpportunity?: (id: string) => Promise<OpportunityJobTarget>;
   /** Freshly verified by the runtime job wrapper; never read from payload. */
   workspaceSubject?: RuntimeWorkspaceSubject;
   finishRun?: typeof finishOpportunityIntelligenceAgentRun;
@@ -208,7 +217,10 @@ async function requireOpportunity(
 ): Promise<OpportunityJobTarget> {
   const opportunityCollection =
     options.opportunityCollection ?? (await getCollection('Opportunity'));
-  const opportunity = await opportunityCollection.get(opportunityId);
+  const opportunity = await opportunityCollection.get(
+    { id: opportunityId },
+    { cache: false },
+  );
   if (!opportunity) {
     throw new OpportunityIntelligenceEnqueueError(
       'opportunity_not_found',
@@ -310,7 +322,8 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
   args: OpportunityIntelligenceJobArgs = {},
   options: EnqueueOpportunityIntelligenceOptions = {},
 ): Promise<OpportunityIntelligenceEnqueueResult> {
-  const envelopedArgs = withRuntimeWorkspaceSubject(args);
+  const { partialAssessmentEvidence: _ignoredPartial, ...candidateArgs } = args;
+  const envelopedArgs = withRuntimeWorkspaceSubject(candidateArgs);
   const subject = runtimeWorkspaceSubjectFromJobArgs(envelopedArgs);
   const requestedModes = Array.isArray(args.modes) ? args.modes : [args.modes];
   if (requestedModes.length === 1 && requestedModes[0] === 'extract') {
@@ -326,14 +339,18 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
   const opportunity = await requireOpportunity(opportunityId.trim(), options);
   const sourceRecord = opportunitySourceRecord(opportunity);
   const coverage = verifiedOpportunityRequirementCoverage(sourceRecord);
-  if (
-    !coverage ||
-    !(await hasRecordedRequirementCoverageAudit(
-      opportunityId.trim(),
-      requirementCoverageContextForOpportunity(sourceRecord),
-      coverage.ledger,
-    ))
-  ) {
+  const fullReady = Boolean(
+    coverage &&
+      (await hasRecordedRequirementCoverageAudit(
+        opportunityId.trim(),
+        requirementCoverageContextForOpportunity(sourceRecord),
+        coverage.ledger,
+      )),
+  );
+  const partial = fullReady
+    ? undefined
+    : await readPartialOpportunityRequirementEvidence(sourceRecord);
+  if (!fullReady && !partial?.acceptedRequirements.length) {
     const enqueueJob = options.collection?.enqueueJob;
     if (options.collection && !enqueueJob) {
       throw new Error(
@@ -355,7 +372,9 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
   // Candidate evidence is loaded only after the recorded global prerequisite
   // is current; source preparation jobs never capture this material.
   const evidence = await loadWorkspaceCandidateEvidence(subject);
-  const requirementCoverageFingerprint = coverage.fingerprint;
+  const requirementCoverageFingerprint = fullReady
+    ? coverage!.fingerprint
+    : partial!.fingerprint;
   const subjectMaterialFingerprint =
     opportunityAssessmentSubjectMaterialFingerprint({
       candidateMaterialFingerprint: evidence.fingerprint,
@@ -375,11 +394,16 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
       modes:
         envelopedArgs.modes ?? ('assessment' as OpportunityIntelligenceMode),
       scoringMaterialFingerprint: subjectMaterialFingerprint,
+      partialAssessmentEvidence: !fullReady,
     },
     options,
     subject,
   );
-  return { ...result, stage: 'private_assessment' };
+  return {
+    ...result,
+    stage: 'private_assessment',
+    ...(!fullReady ? { sourceStatus: 'partial' as const } : {}),
+  };
 }
 
 async function enqueueOpportunityIntelligenceInternal(
@@ -562,6 +586,38 @@ export async function runOpportunityIntelligenceJob(
   }
 
   const processor = dependencies.processor ?? processOpportunityIntelligence;
+  let partialAssessmentEvidence = false;
+  if (args.partialAssessmentEvidence) {
+    const current = dependencies.workspaceSubject
+      ? await (
+          dependencies.readCurrentOpportunity ??
+          (async (id: string) => await requireOpportunity(id, {}))
+        )(opportunityId)
+      : undefined;
+    const partial = dependencies.workspaceSubject
+      ? await readPartialOpportunityRequirementEvidence(
+          opportunitySourceRecord(current!),
+        )
+      : undefined;
+    if (
+      !partial?.acceptedRequirements.length ||
+      partial.context.sourceFingerprint !==
+        stringValue(current?.sourceContentFingerprint) ||
+      (expectedFingerprint &&
+        partial.context.sourceFingerprint !== expectedFingerprint) ||
+      partial.context.sourceVersion !==
+        positiveInteger(current?.sourceContentVersion) ||
+      (args.contentVersion !== undefined &&
+        partial.context.sourceVersion !== args.contentVersion)
+    )
+      return {
+        failed: 0,
+        message:
+          'Current recorded source evidence is required for private partial matching.',
+        status: 'skipped',
+      };
+    partialAssessmentEvidence = true;
+  }
   const signal = AbortSignal.timeout(OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS);
   const shouldCreateRun =
     !dependencies.processor || Boolean(dependencies.startRun);
@@ -611,6 +667,7 @@ export async function runOpportunityIntelligenceJob(
       ),
       governanceStore: dependencies.governanceStore,
       modes: args.modes ?? 'all',
+      partialAssessmentEvidence,
       opportunityId,
       signal,
       sourceContentVersion: args.contentVersion,

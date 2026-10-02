@@ -49,6 +49,10 @@ import {
 } from '$lib/opportunity-table-sorting';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
+import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
+import PartialOpportunityEvidence, {
+  getCurrentPartialOpportunityAssessmentProjection,
+} from './PartialOpportunityEvidence.svelte';
 
 type WorkflowOption = { label: string; value: string };
 type SignalFilterKey =
@@ -652,7 +656,12 @@ function scoreLabel(record: AdminRecord): string {
   );
   return assessment.matchReadiness === 'assessable'
     ? `${assessment.fitScore}/100`
-    : assessmentMatchReadinessLabel(assessment);
+    : assessment.sourceStatus !== 'current' &&
+        getCurrentPartialOpportunityAssessmentProjection(
+          record.partialAssessmentProjection,
+        )
+      ? 'Partial assessment'
+      : assessmentMatchReadinessLabel(assessment);
 }
 
 function eligibilityLabel(record: AdminRecord): string {
@@ -908,9 +917,11 @@ const resultCountLabel = $derived.by(() => {
     {:else if column.id === 'location'}
       <span class="table-meta"><MapPin size={13} strokeWidth={2.2} /> {locationLabel(record)}</span>
     {:else if column.id === 'score'}
-      <span class="badge neutral" title={assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
+      <span class="badge neutral" title={getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
         <Sparkles size={12} strokeWidth={2.4} /> {scoreLabel(record)}
       </span>
+      <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
+      <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
     {:else if column.id === 'status'}
       <span class={`badge ${toneFor(str(record, 'status'))}`}>
         {humanize(str(record, 'status'), 'unknown')}
