@@ -79,8 +79,9 @@ its exact bytes and typed output reservation both fit existing ceilings.
 Binary support protocol: every offered citation gets an independent direct-support
 predicate. Only probabilities at least 0.85 yield that exact canonical source;
 there is no selected-citation multiclass confidence requirement. Mandatory and
-preferred classification also use independent predicates unless the extracted
-required/preferred source label fixes it deterministically. Explicit contradiction
+preferred classification require independently verified explicit source labels;
+an extraction proposal alone cannot fix their classification. Audited rows never
+fall back to a private inferred importance label. Explicit contradiction
 predicates are offered only for exhaustive scopes, and a support/contradiction
 conflict stays uncertain. Exact UTF-8 request bytes and the same typed output
 reservation determine the largest fitting citation scope; no semantic catalog
@@ -117,9 +118,10 @@ exhaustive manifest of exact native raw posting spans, including About-role/team
 context. Spans use JavaScript UTF-16 offsets; IDs, hashes and reciprocal mappings
 are checked against the unchanged native source. Required/preferred importance
 must be independently verified as explicit; otherwise it remains unknown. The
-v5 audit reserves a bounded optional classification question scope while keeping
-every semantic clause coverage question. Under-threshold, conflicting or
-unoffered importance stays unknown, and private classification cannot promote it.
+current direct audit offers no importance classification questions: every proposed
+required/preferred label therefore remains unknown, and private classification
+cannot promote it. The earlier v5 audit used a bounded optional scope; its
+accounted results remain historical evidence rather than current authority.
 Unknown or malformed coverage
 stops before an audit or private matching call.
 
@@ -131,25 +133,55 @@ benefit program terms, with their scope and exceptions, remain exact source
 context. A current, separately recorded repair may explicitly retire a context
 row while preserving its original paid proposal receipt.
 
-Every body clause receives a keyed independent literal predicate at the existing
-0.85 threshold. A context label alone proves nothing. Exact canonical headings
-with native span/hash/grammar and unmapped heading dispositions use deterministic
-proof; no synthetic confidence value is recorded. Clause literals and order stay
-in the request. Redundant raw source is omitted only when native spans exhaust
-all non-whitespace source content; any non-whitespace gap retains full raw text.
-Private matching uses only verified candidate rows and preserves context clause
-attribution on its full posting source without duplicating their text.
+The current `requirement-coverage-audit/v6-direct-literal` request asks a
+self-contained entailment predicate for every mapped row and a separate
+complete-list predicate for every mapped body clause. Both must reach 0.85;
+entailing one row does not establish complete coverage. Source/context bodies
+instead receive the positive applicant-criterion classifier: only a raw result
+at or below 0.15 certifies context, with `1 - p` recorded as its coverage
+confidence. The raw answer remains recorded. A context label alone proves
+nothing.
+
+Every exact question key and raw probability is retained in `answerProbabilities`.
+Per-clause coverage is the conservative minimum of all row entailments and its
+complete-list result, so a high recall result cannot overwrite low entailment,
+or vice versa. Missing, extra, malformed or nonfinite answers reject the result;
+request and canonical binding fingerprints cover the entire layout. Exact
+canonical headings with native span/hash/grammar and unmapped heading
+dispositions use deterministic proof, with no synthetic confidence value.
+
+Every body literal and mapped row text occurs directly in its question; heading
+literals, ordered clause metadata and row-to-clause references stay in state.
+Redundant raw source is omitted only when native spans exhaust all non-whitespace
+source content; any non-whitespace gap retains full raw text. Private matching
+uses only verified candidate rows and preserves context clause attribution on
+its full posting source without duplicating their text.
 
 The cache lives in existing prepared posting JSON, contains no candidate
 material, and binds source, preparation, extraction, repair, ledger and actual
 governed request identities. Private readiness requires the completed global
 provider output matching that exact audit; injected JSON cannot unlock it.
+Fresh extraction uses the current V5 source semantics. The explicit paid V4
+context is recomputed from current captured raw source, version and canonical
+preparation; it is never selected merely because a JSON leaf names its
+fingerprint. The async effective-cache reader additionally reconstructs the
+completed GLOBAL base, feedback and repair ancestry and compares the merged
+ledger before authorizing that historical context. Private preparation and its
+final source/profile fence consume this same verified context. Changed raw
+source, version, receipt ancestry or merged material invalidates it.
 
-The pre-repair audit reservation serializes the actual native clause structure
-and shared policy, then reserves the validator's maximum legal row, mapping-key
-and escaped-text counts plus the bounded optional importance scope. The actual
-post-repair request must fit that prior reservation and all unchanged byte,
-output, call and aggregate token limits before the audit can bill.
+The pre-extraction reservation serializes conservative direct-question
+skeletons, including the maximum legal reciprocal references to the longest
+literal source and both escaped-text occurrences. This can honestly reject an
+unknown future layout even when a particular completed ledger would fit. An
+audit-only replay of an already recorded completed repair instead preflights its
+exact reconstructed request and retains both historical stage reservations;
+it cannot regenerate extraction or repair. The real 42-clause, 46-row direct
+preflight contains 84 predicates (46 entailments, 20 complete-list checks and
+18 context classifiers), measures 55,413 request bytes and reserves 2,774 output
+tokens. Including the two recorded 10,096-token stages gives 78,379 of the
+unchanged 80,000-token lifecycle ceiling. A fitting request is not proof that
+its semantic audit passed.
 
 The existing source extraction/audit lifecycle admits its aggregate request,
 token and spend reservations before its first provider call. Each Luna stage
@@ -169,7 +201,7 @@ provider does not establish a shared negative cache entry.
 | Behavior | Positive evidence | Failure evidence | Validation |
 | --- | --- | --- | --- |
 | Exact source coverage | Full literal clause and qualifiers, reciprocal native spans/IDs | Missing/duplicate/changed clause or summary-only source | coverage module/provider specs |
-| Independent semantic audit | Every body verdict at least 0.85; exact native heading proof | Partial 0.84, missing/malformed answer, unsupported exclusion | coverage provider specs |
+| Independent semantic audit | Every mapped-row entailment and whole-clause coverage at least 0.85; context raw positive classifier at most 0.15; exact native heading proof | High recall with low entailment or inverse, context 0.151, omitted/extra/malformed answer, unsupported exclusion | coverage provider specs |
 | Audit authority | Current completed global provider output matches the cache | Forged JSON, foreign/private receipt, stale extraction/source | provider receipt and input specs |
 | Prebilling private prerequisite | Verified cache fingerprint enters private request/job identity | Missing receipt rejects before governance/provider | assessment provider and dependency specs |
 | Aggregate source admission | Every extraction chunk and audit reserve counted within limits | Over-budget tokens/calls/spend reject before first provider | source extraction/provider lifecycle specs |

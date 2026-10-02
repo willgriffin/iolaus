@@ -25,14 +25,19 @@ import {
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import {
   buildRequirementCoverage,
+  mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
   type PreparedRequirementCoverageRepair,
   prepareRequirementCoverageRepair,
-  REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-  REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_REPAIR_VERSION,
   requirementCoverageContextForOpportunity,
 } from './opportunity-requirement-coverage.js';
-import { requirementCoverageSourceDependencyFingerprint } from './opportunity-requirement-coverage-provider.js';
+import {
+  requirementCoverageLedgerFingerprint,
+  requirementCoverageSourceDependencyFingerprint,
+} from './opportunity-requirement-coverage-provider.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 import { requireSourceCrawlOperator } from './source-crawl-operator.js';
@@ -48,6 +53,8 @@ export interface SourceCoverageRepairReceiptSelection {
   feedbackRequestId: string;
   feedbackInputFingerprint: string;
   targetClauseIds: string[];
+  /** A completed native receipt selects audit-only replay, never a new repair. */
+  repairRequestId?: string;
 }
 
 /** Native operator-only submission; receipt/source fields are server-derived. */
@@ -81,10 +88,22 @@ export async function enqueueOpportunityRequirementCoverageRepair(
               if (!opportunity)
                 throw new Error('Source repair opportunity is missing.');
               const native = opportunity.toJSON();
-              const attested = await attestOpportunityRequirementCoverageRepair(
-                native,
-                selection,
-              );
+              const completed =
+                selection.repairRequestId === undefined
+                  ? undefined
+                  : await attestCompletedOpportunityRequirementCoverageRepair(
+                      native,
+                      {
+                        ...selection,
+                        repairRequestId: identifier(selection.repairRequestId),
+                      },
+                    );
+              const attested =
+                completed ??
+                (await attestOpportunityRequirementCoverageRepair(
+                  native,
+                  selection,
+                ));
               const jobs = await SmrtJobCollection.create(getSmrtOptions());
               return await jobs.enqueueJob({
                 objectId: opportunityId,
@@ -105,6 +124,14 @@ export async function enqueueOpportunityRequirementCoverageRepair(
                     attested.prepared.provenance.inputFingerprint,
                   sourceCoverageRepair: {
                     contract: SOURCE_COVERAGE_REPAIR_JOB_CONTRACT,
+                    stage: completed ? 'audit_completed_repair' : 'repair',
+                    ...(completed
+                      ? {
+                          repairRequestId: completed.completedRepair.requestId,
+                          completedRepairLedgerFingerprint:
+                            completed.completedRepair.ledgerFingerprint,
+                        }
+                      : {}),
                     baseRequestId: attested.prepared.provenance.baseRequestId,
                     feedbackRequestId:
                       attested.prepared.provenance.feedbackRequestId,
@@ -123,6 +150,16 @@ export async function enqueueOpportunityRequirementCoverageRepair(
   );
 }
 
+export async function enqueueOpportunityRequirementCoverageAuditReplay(
+  opportunityId: string,
+  selection: SourceCoverageRepairReceiptSelection & { repairRequestId: string },
+): Promise<SmrtJob> {
+  return await enqueueOpportunityRequirementCoverageRepair(
+    opportunityId,
+    selection,
+  );
+}
+
 export interface SourceCoverageHistoricalReservation {
   calls: number;
   reservedTokens: number;
@@ -137,10 +174,54 @@ export interface AttestedSourceCoverageRepair {
   feedbackAuthority: 'native-persisted-historical-request-identity';
 }
 
+export interface CompletedSourceCoverageRepairReceipt {
+  requestId: string;
+  opportunityId: string;
+  inputFingerprint: string;
+  contentFingerprint: string;
+  contentVersion: number;
+  output: unknown;
+  ledgerFingerprint: string;
+  reservation: SourceCoverageHistoricalReservation;
+}
+
+export interface AttestedCompletedSourceCoverageRepair
+  extends AttestedSourceCoverageRepair {
+  completedRepair: CompletedSourceCoverageRepairReceipt;
+}
+
 type NativeReceipt = Record<string, unknown>;
 type ReceiptDatabase = {
   query: (sql: string, params: unknown[]) => Promise<{ rows: NativeReceipt[] }>;
 };
+
+async function globalNativeReceipts(
+  opportunityId: string,
+  requestIds: string[],
+  database?: ReceiptDatabase,
+) {
+  const db = database ?? (await resolveDatabase(getDbConfig()));
+  return await db.query(
+    `SELECT r.owner_request_id, r.opportunity_id, r.content_fingerprint,
+      r.input_fingerprint, r.feature, r.prompt_version, r.output_schema_version,
+      r.status, r.output_json, r.model, r.tenant_id, r.owner_user_id, r.candidate_profile_id,
+      q.request_id, q.opportunity_id AS request_opportunity_id,
+      q.content_fingerprint AS request_content_fingerprint,
+      q.input_fingerprint AS request_input_fingerprint, q.feature AS request_feature,
+      q.model AS request_model, q.status AS request_status, q.accounting_basis, q.actual_total_tokens,
+      q.reserved_input_tokens, q.requested_max_output_tokens, q.reserved_spend_micros,
+      q.tenant_id AS request_tenant_id, q.owner_user_id AS request_owner_user_id,
+      q.candidate_profile_id AS request_candidate_profile_id
+    FROM opportunity_intelligence_results r
+    JOIN opportunity_intelligence_requests q ON q.request_id = r.owner_request_id
+    WHERE r.owner_request_id IN (${requestIds.map(() => '?').join(', ')}) AND r.opportunity_id = ?
+      AND COALESCE(r.tenant_id, '') = '' AND COALESCE(r.owner_user_id, '') = ''
+      AND COALESCE(r.candidate_profile_id, '') = ''
+      AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = ''
+      AND COALESCE(q.candidate_profile_id, '') = ''`,
+    [...requestIds, opportunityId],
+  );
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -251,32 +332,18 @@ export async function attestOpportunityRequirementCoverageRepair(
     throw new Error(
       'Source repair requires the current canonical prepared source.',
     );
-  const context = requirementCoverageContextForOpportunity({
-    ...opportunity,
-    preparedPostingFingerprint: planned.fingerprint,
-  });
+  // Historical replay is allowlisted here, not selected by a posting payload.
+  // The independently derived context must still match the actual GLOBAL base.
+  const context = requirementCoverageContextForOpportunity(
+    { ...opportunity, preparedPostingFingerprint: planned.fingerprint },
+    'paid-v4-coverage-only4096',
+  );
   identifier(context.sourceFingerprint);
   positiveInteger(context.sourceVersion);
-  const db = database ?? (await resolveDatabase(getDbConfig()));
-  const result = await db.query(
-    `SELECT r.owner_request_id, r.opportunity_id, r.content_fingerprint,
-      r.input_fingerprint, r.feature, r.prompt_version, r.output_schema_version,
-      r.status, r.output_json, r.tenant_id, r.owner_user_id, r.candidate_profile_id,
-      q.request_id, q.opportunity_id AS request_opportunity_id,
-      q.content_fingerprint AS request_content_fingerprint,
-      q.input_fingerprint AS request_input_fingerprint, q.feature AS request_feature,
-      q.status AS request_status, q.accounting_basis, q.actual_total_tokens,
-      q.reserved_input_tokens, q.requested_max_output_tokens, q.reserved_spend_micros,
-      q.tenant_id AS request_tenant_id, q.owner_user_id AS request_owner_user_id,
-      q.candidate_profile_id AS request_candidate_profile_id
-    FROM opportunity_intelligence_results r
-    JOIN opportunity_intelligence_requests q ON q.request_id = r.owner_request_id
-    WHERE r.owner_request_id IN (?, ?) AND r.opportunity_id = ?
-      AND COALESCE(r.tenant_id, '') = '' AND COALESCE(r.owner_user_id, '') = ''
-      AND COALESCE(r.candidate_profile_id, '') = ''
-      AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = ''
-      AND COALESCE(q.candidate_profile_id, '') = ''`,
-    [baseRequestId, feedbackRequestId, opportunityId],
+  const result = await globalNativeReceipts(
+    opportunityId,
+    [baseRequestId, feedbackRequestId],
+    database,
   );
   const bases = result.rows.filter(
     (row) => row.owner_request_id === baseRequestId,
@@ -294,8 +361,8 @@ export async function attestOpportunityRequirementCoverageRepair(
     sourceFingerprint: context.sourceFingerprint,
     inputFingerprint: context.extractionFingerprint,
     feature: 'opportunity-extraction-chunk-1',
-    promptVersion: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-    schemaVersion: REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+    promptVersion: REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+    schemaVersion: REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
   });
   requireNativeReceipt(feedbackReceipt, {
     requestId: feedbackRequestId,
@@ -364,6 +431,67 @@ export async function attestOpportunityRequirementCoverageRepair(
   };
 }
 
+/** Reconstruct only from the actual completed GLOBAL repair delta and ancestry. */
+export async function attestCompletedOpportunityRequirementCoverageRepair(
+  opportunity: Record<string, unknown>,
+  selection: SourceCoverageRepairReceiptSelection & { repairRequestId: string },
+  database?: ReceiptDatabase,
+): Promise<AttestedCompletedSourceCoverageRepair> {
+  const attested = await attestOpportunityRequirementCoverageRepair(
+    opportunity,
+    selection,
+    database,
+  );
+  const requestId = identifier(selection.repairRequestId);
+  if (
+    requestId === selection.baseRequestId ||
+    requestId === selection.feedbackRequestId
+  )
+    throw new Error(
+      'Audit replay requires a distinct completed native repair receipt.',
+    );
+  const opportunityId = identifier(opportunity.id);
+  const result = await globalNativeReceipts(
+    opportunityId,
+    [requestId],
+    database,
+  );
+  if (result.rows.length !== 1)
+    throw new Error('Completed native repair receipt is missing or ambiguous.');
+  const receipt = result.rows[0];
+  requireNativeReceipt(receipt, {
+    requestId,
+    opportunityId,
+    sourceFingerprint: attested.prepared.context.sourceFingerprint,
+    inputFingerprint: attested.prepared.provenance.inputFingerprint,
+    feature: 'opportunity-source-requirement-repair',
+    promptVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+    schemaVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+  });
+  if (
+    receipt.model !== 'openai/gpt-6-luna' ||
+    receipt.request_model !== receipt.model
+  )
+    throw new Error(
+      'Audit replay requires the recorded native source repair model.',
+    );
+  const output: unknown = JSON.parse(String(receipt.output_json));
+  const merged = mergeRequirementCoverageRepair(attested.prepared, output);
+  return {
+    ...attested,
+    completedRepair: {
+      requestId,
+      opportunityId,
+      inputFingerprint: attested.prepared.provenance.inputFingerprint,
+      contentFingerprint: attested.prepared.context.sourceFingerprint,
+      contentVersion: attested.prepared.context.sourceVersion,
+      output,
+      ledgerFingerprint: requirementCoverageLedgerFingerprint(merged),
+      reservation: reservation(receipt),
+    },
+  };
+}
+
 interface RepairProcessorOptions {
   agentRunId: string;
   expectedSourceContentFingerprint: string;
@@ -377,11 +505,19 @@ interface RepairJobDependencies {
   getOpportunity?: (id: string) => Promise<Record<string, unknown> | null>;
   getJob?: (id: string) => Promise<SmrtJob | null>;
   attest?: typeof attestOpportunityRequirementCoverageRepair;
+  attestCompleted?: typeof attestCompletedOpportunityRequirementCoverageRepair;
   /** Supplied by the frozen source runtime; never an AI/provider test adapter. */
   processRepair: (
     id: string,
     prepared: PreparedRequirementCoverageRepair,
     options: RepairProcessorOptions,
+  ) => Promise<{ status: string; message: string }>;
+  processAuditReplay?: (
+    id: string,
+    attestation: AttestedCompletedSourceCoverageRepair,
+    options: RepairProcessorOptions & {
+      resolveCompletedRepair: () => Promise<CompletedSourceCoverageRepairReceipt>;
+    },
   ) => Promise<{ status: string; message: string }>;
   runFresh?: typeof runAsRevalidatedJobWorkspaceSubject;
   requireOperator?: typeof requireSourceCrawlOperator;
@@ -422,6 +558,9 @@ export async function runOpportunityRequirementCoverageRepairJob(
       await (await SmrtJobCollection.create(getSmrtOptions())).get(id));
   const attest =
     dependencies.attest ?? attestOpportunityRequirementCoverageRepair;
+  const attestCompleted =
+    dependencies.attestCompleted ??
+    attestCompletedOpportunityRequirementCoverageRepair;
   const withLock = dependencies.withLock ?? withOpportunityLifecycleLock;
   const transaction =
     dependencies.transaction ?? runOpportunityLifecycleTransaction;
@@ -487,7 +626,34 @@ export async function runOpportunityRequirementCoverageRepairJob(
           feedbackInputFingerprint: identifier(intent.feedbackInputFingerprint),
           targetClauseIds: intent.targetClauseIds,
         };
-        const attested = await attest(current, selection);
+        if (
+          intent.stage !== undefined &&
+          intent.stage !== 'repair' &&
+          intent.stage !== 'audit_completed_repair'
+        )
+          throw new Error('Source repair stage is invalid.');
+        const replaySelection =
+          intent.stage === 'audit_completed_repair'
+            ? {
+                ...selection,
+                repairRequestId: identifier(intent.repairRequestId),
+              }
+            : undefined;
+        const completed = replaySelection
+          ? await attestCompleted(current, replaySelection)
+          : undefined;
+        const attested = completed ?? (await attest(current, selection));
+        const processAuditReplay = dependencies.processAuditReplay;
+        if (
+          replaySelection &&
+          (!processAuditReplay ||
+            !completed ||
+            intent.completedRepairLedgerFingerprint !==
+              completed.completedRepair.ledgerFingerprint)
+        )
+          throw new Error(
+            'Audit replay requires its exact attested completed repair and audit-only processor.',
+          );
         const prepared = attested.prepared;
         if (
           job.args.repairInputFingerprint !==
@@ -527,39 +693,84 @@ export async function runOpportunityRequirementCoverageRepairJob(
           };
           const assertCurrentAuthority = async () =>
             await fresh(async () => await requireCurrentSource());
-          const result = await dependencies.processRepair(
-            opportunityId,
-            prepared,
-            {
-              agentRunId,
-              expectedSourceContentFingerprint:
-                prepared.context.sourceFingerprint,
-              sourceContentVersion: prepared.context.sourceVersion,
-              baseReservation: attested.baseReservation,
-              assertCurrentAuthority,
-              fencedOpportunityUpdate: async (id, fingerprint, updates) =>
+          const processorOptions: RepairProcessorOptions = {
+            agentRunId,
+            expectedSourceContentFingerprint:
+              prepared.context.sourceFingerprint,
+            sourceContentVersion: prepared.context.sourceVersion,
+            baseReservation: completed
+              ? {
+                  calls:
+                    attested.baseReservation.calls +
+                    completed.completedRepair.reservation.calls,
+                  reservedTokens:
+                    attested.baseReservation.reservedTokens +
+                    completed.completedRepair.reservation.reservedTokens,
+                  spendMicros:
+                    attested.baseReservation.spendMicros +
+                    completed.completedRepair.reservation.spendMicros,
+                }
+              : attested.baseReservation,
+            assertCurrentAuthority,
+            fencedOpportunityUpdate: async (id, fingerprint, updates) =>
+              await fresh(async () => {
+                if (
+                  id !== opportunityId ||
+                  fingerprint !== prepared.context.sourceFingerprint
+                )
+                  throw new Error(
+                    'Source repair publication identity is invalid.',
+                  );
+                await requireCurrentSource();
+                return await transaction(
+                  async (database) =>
+                    await update(
+                      id,
+                      fingerprint,
+                      updates,
+                      prepared.context.sourceVersion,
+                      database,
+                    ),
+                );
+              }),
+          };
+          const replay = async () => {
+            if (!replaySelection || !completed || !processAuditReplay)
+              throw new Error(
+                'Audit replay cannot fall back to source repair.',
+              );
+            return await processAuditReplay(opportunityId, completed, {
+              ...processorOptions,
+              resolveCompletedRepair: async () =>
                 await fresh(async () => {
+                  await requireCurrentSource();
+                  const latest = await getOpportunity(opportunityId);
+                  if (!latest)
+                    throw new Error('Audit replay source is missing.');
+                  const refreshed = await attestCompleted(
+                    latest,
+                    replaySelection,
+                  );
                   if (
-                    id !== opportunityId ||
-                    fingerprint !== prepared.context.sourceFingerprint
+                    refreshed.completedRepair.inputFingerprint !==
+                      prepared.provenance.inputFingerprint ||
+                    refreshed.completedRepair.ledgerFingerprint !==
+                      intent.completedRepairLedgerFingerprint
                   )
                     throw new Error(
-                      'Source repair publication identity is invalid.',
+                      'Audit replay completed repair provenance changed.',
                     );
-                  await requireCurrentSource();
-                  return await transaction(
-                    async (database) =>
-                      await update(
-                        id,
-                        fingerprint,
-                        updates,
-                        prepared.context.sourceVersion,
-                        database,
-                      ),
-                  );
+                  return refreshed.completedRepair;
                 }),
-            },
-          );
+            });
+          };
+          const result = replaySelection
+            ? await replay()
+            : await dependencies.processRepair(
+                opportunityId,
+                prepared,
+                processorOptions,
+              );
           await finishRun(
             agentRunId,
             result.status === 'processed' ? 'succeeded' : 'failed',

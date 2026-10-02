@@ -6,9 +6,12 @@ import {
 } from './opportunity-assessment.js';
 import {
   type CoverageLedger,
+  type RequirementCoverageContext,
   requirementCoverageContextForOpportunity,
 } from './opportunity-requirement-coverage.js';
 import { validateVerifiedRequirementCoverage } from './opportunity-requirement-coverage-provider.js';
+
+export { readVerifiedOpportunityRequirementCoverage } from './opportunity-requirement-coverage-provider.js';
 
 /** Only the current native source cache can satisfy the private prerequisite. */
 export function verifiedOpportunityRequirementCoverage(
@@ -53,7 +56,11 @@ function textList(value: unknown): string[] {
 /** Full raw posting plus atomic structured fields; no redundant signal excerpts. */
 export function buildOpportunityAssessmentPostingInput(
   opportunity: Record<string, unknown>,
-  verified?: { ledger: CoverageLedger; fingerprint: string },
+  verified?: {
+    ledger: CoverageLedger;
+    fingerprint: string;
+    context?: RequirementCoverageContext;
+  },
 ): {
   postingSources: OpportunityAssessmentSource[];
   postingCoverageTruncated: boolean;
@@ -85,7 +92,10 @@ export function buildOpportunityAssessmentPostingInput(
       });
   }
   const raw = verified
-    ? requirementCoverageContextForOpportunity(opportunity).sourceText
+    ? (
+        verified.context ??
+        requirementCoverageContextForOpportunity(opportunity)
+      ).sourceText
     : text(opportunity.descriptionRaw);
   const description = raw || text(opportunity.descriptionSummary);
   if (description)

@@ -14,6 +14,7 @@ import { getDbConfig, getSmrtOptions } from '../src/lib/server/db.js';
 import {
   buildOpportunityLlmExtractionMessages,
   defaultFencedOpportunityUpdate,
+  preflightOpportunityRequirementCoverageRepair,
 } from '../src/lib/server/opportunity-details.js';
 import {
   executeGovernedOpportunityIntelligenceRequest,
@@ -25,15 +26,22 @@ import {
   buildRequirementCoverage,
   buildRequirementCoverageSource,
   normalizeRequirementCoverageForAudit,
-  REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-  REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_REPAIR_VERSION,
   requirementCoverageContextForOpportunity,
 } from '../src/lib/server/opportunity-requirement-coverage.js';
 import {
+  prepareRequirementCoverageAudit,
   readRecordedRequirementCoverageOutcome,
+  resolveRequirementCoverageAudit,
   validateVerifiedRequirementCoverage,
 } from '../src/lib/server/opportunity-requirement-coverage-provider.js';
-import { enqueueOpportunityRequirementCoverageRepair } from '../src/lib/server/opportunity-requirement-coverage-repair-job.js';
+import {
+  attestOpportunityRequirementCoverageRepair,
+  enqueueOpportunityRequirementCoverageAuditReplay,
+  enqueueOpportunityRequirementCoverageRepair,
+} from '../src/lib/server/opportunity-requirement-coverage-repair-job.js';
 import { fingerprintOpportunitySourceContent } from '../src/lib/server/opportunity-source-content.js';
 import { getCollection } from '../src/lib/server/smrt.js';
 import { withSyntheticDemoOwnerContext } from '../src/lib/server/synthetic-demo-fixture.js';
@@ -77,21 +85,39 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
   tenantId: string;
 };
 const scenario = process.argv[2];
-if (!['positive', 'stale', 'forged', 'revoked'].includes(scenario))
+if (
+  ![
+    'positive',
+    'stale',
+    'forged',
+    'revoked',
+    'audit-positive',
+    'audit-stale',
+    'audit-forged',
+  ].includes(scenario)
+)
   throw new Error('Unknown fictional repair case');
+const auditOnly = scenario.startsWith('audit-');
 const db = await resolveDatabase(getDbConfig());
 let repairJobId = '';
-const provider = await startRepairProvider(async () => {
-  if (!repairJobId) return undefined;
-  const rows =
-    (
-      await db.query(
-        'SELECT id, status, args, tenant_id, attempts FROM _smrt_jobs WHERE id = ?',
-        [repairJobId],
-      )
-    ).rows ?? [];
-  return rows[0] as Json | undefined;
-});
+let replayJobId = '';
+let replayEventStart = 0;
+let beforeReplay: Json | undefined;
+let exactReplay: Json | undefined;
+const provider = await startRepairProvider(
+  async () => {
+    if (!repairJobId && !replayJobId) return undefined;
+    const rows =
+      (
+        await db.query(
+          'SELECT id, status, args, tenant_id, attempts FROM _smrt_jobs WHERE id = ?',
+          [replayJobId || repairJobId],
+        )
+      ).rows ?? [];
+    return rows[0] as Json | undefined;
+  },
+  { auditReplayOnly: auditOnly },
+);
 process.env.HAVE_AI_BASE_URL = provider.url;
 process.env.HAVE_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_BASE_URL = provider.url;
 const opportunities = await getCollection('Opportunity');
@@ -138,6 +164,32 @@ const asOwner = async <T>(work: () => Promise<T>) =>
     const subject = await resolveWorkspaceSubjectForProfile(fixture.profileId);
     return await withVerifiedWorkspaceSubject(subject, work);
   });
+async function serviceNativeJobs() {
+  const runner = new TaskRunner({
+    concurrency: 1,
+    queues: ['opportunity-intelligence'],
+    pollInterval: 100,
+    idlePollInterval: 100,
+    retention: false,
+    shutdownTimeout: 10_000,
+  });
+  await runner.initialize(db);
+  await runner.start();
+  try {
+    const deadline = Date.now() + 90_000;
+    while (
+      (await jobs()).some((row) =>
+        ['pending', 'running'].includes(String(row.status)),
+      )
+    ) {
+      if (Date.now() > deadline)
+        throw new Error('Native repair job did not settle');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  } finally {
+    await runner.stop();
+  }
+}
 let refusal = '';
 let baseRequestId = '';
 let feedbackRequestId = '';
@@ -146,10 +198,13 @@ let beforePreparedJson = '';
 try {
   const native = opportunity.toJSON();
   const posting = prepareOpportunityPosting(native);
-  const context = requirementCoverageContextForOpportunity({
-    ...native,
-    preparedPostingFingerprint: posting.fingerprint,
-  });
+  const context = requirementCoverageContextForOpportunity(
+    {
+      ...native,
+      preparedPostingFingerprint: posting.fingerprint,
+    },
+    'paid-v4-coverage-only4096',
+  );
   const settings =
     await resolveOpportunityIntelligenceExtractionAiProfileClient();
   if (!settings) throw new Error('Native fictional extraction profile missing');
@@ -172,8 +227,8 @@ try {
       feature: 'opportunity-extraction-chunk-1',
       profile: settings.profile,
       model: settings.model,
-      promptVersion: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-      outputSchemaVersion: REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+      promptVersion: REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+      outputSchemaVersion: REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
       preparedPayloadVersion: posting.version,
     },
     invoke: async () => {
@@ -317,63 +372,225 @@ try {
   };
   if (scenario === 'forged')
     selection.feedbackInputFingerprint = 'forged-native-feedback-fingerprint';
-  try {
-    const job = await asOwner(
+  if (auditOnly) {
+    // Historical protocol bootstrap records actual SDK/governance ancestry;
+    // only the later audit replay executes as an authentic native TaskRunner job.
+    const captured = (
+      await opportunities.get({ id }, { cache: false })
+    )?.toJSON();
+    if (!captured) throw new Error('Captured native repair ancestry missing');
+    const attested = await asOwner(
       async () =>
-        await enqueueOpportunityRequirementCoverageRepair(id, selection),
+        await attestOpportunityRequirementCoverageRepair(captured, selection),
     );
-    repairJobId = String(job.id);
-  } catch (error) {
-    refusal = error instanceof Error ? error.message : String(error);
-  }
-  if (repairJobId) {
-    if (scenario === 'stale') {
-      const changed = {
-        ...source,
-        descriptionRaw:
-          source.descriptionRaw +
-          '\nA newly captured source version is required.',
-      };
-      const latest = await opportunities.get({ id }, { cache: false });
-      if (!latest) throw new Error('Fictional stale fixture vanished');
-      Object.assign(latest, {
-        descriptionRaw: changed.descriptionRaw,
-        sourceContentJson: JSON.stringify(changed),
-        sourceContentFingerprint: fingerprintOpportunitySourceContent(changed),
-        sourceContentVersion: 2,
-      });
-      await latest.save();
-    }
-    if (scenario === 'revoked') {
-      const users = await UserCollection.create(getSmrtOptions());
-      const user = await users.get(fixture.userId);
-      if (!user) throw new Error('Fictional operator unavailable');
-      user.status = UserStatus.SUSPENDED;
-      await user.save();
-    }
-    const runner = new TaskRunner({
-      concurrency: 1,
-      queues: ['opportunity-intelligence'],
-      pollInterval: 100,
-      idlePollInterval: 100,
-      retention: false,
-      shutdownTimeout: 10_000,
+    const plan = await preflightOpportunityRequirementCoverageRepair(
+      attested.prepared,
+      {
+        model: settings.model,
+        counter: settings.aiClient.countTokens?.bind(settings.aiClient),
+        baseReservation: attested.baseReservation,
+        auditPricing: {
+          configured: true,
+          inputMicrosPerMillion: Number(
+            process.env
+              .OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION,
+          ),
+          outputMicrosPerMillion: Number(
+            process.env
+              .OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION,
+          ),
+        },
+      },
+    );
+    if (!plan.admitted)
+      throw new Error(
+        'Fictional historical repair exceeds native whole-plan admission',
+      );
+    const historicalRunId = await asOwner(
+      async () =>
+        await startOpportunityIntelligenceAgentRun({
+          opportunityId: id,
+          workspaceSubject: requireCurrentCandidateWorkspaceSubject(),
+        }),
+    );
+    await executeGovernedOpportunityIntelligenceRequest({
+      estimatedInputTokens: plan.inputTokenCount,
+      inputTokenCeiling: plan.inputTokenCeiling,
+      maxOutputTokens: plan.maxOutputTokens,
+      identity: {
+        agentRunId: historicalRunId,
+        opportunityId: id,
+        contentFingerprint: context.sourceFingerprint,
+        inputFingerprint: attested.prepared.provenance.inputFingerprint,
+        feature: 'opportunity-source-requirement-repair',
+        profile: settings.profile,
+        model: settings.model,
+        promptVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+        outputSchemaVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+        preparedPayloadVersion: posting.version,
+      },
+      invoke: async () => {
+        const response = await settings.aiClient.chat(plan.messages, {
+          model: settings.model,
+          maxTokens: plan.maxOutputTokens,
+          responseFormat: { type: 'json_object' },
+        });
+        return {
+          output: JSON.parse(String(response.content)) as Json,
+          usage: response.usage,
+        };
+      },
     });
-    await runner.initialize(db);
-    await runner.start();
+    await asOwner(
+      async () =>
+        await finishOpportunityIntelligenceAgentRun(
+          historicalRunId,
+          'succeeded',
+          '',
+          requireCurrentCandidateWorkspaceSubject(),
+        ),
+    );
+  } else {
     try {
-      const deadline = Date.now() + 90_000;
-      while (
-        (await jobs()).some((row) =>
-          ['pending', 'running'].includes(String(row.status)),
-        )
-      ) {
-        if (Date.now() > deadline)
-          throw new Error('Native repair job did not settle');
-        await new Promise((resolve) => setTimeout(resolve, 200));
+      const job = await asOwner(
+        async () =>
+          await enqueueOpportunityRequirementCoverageRepair(id, selection),
+      );
+      repairJobId = String(job.id);
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    if (repairJobId) {
+      if (scenario === 'stale') {
+        const changed = {
+          ...source,
+          descriptionRaw:
+            source.descriptionRaw +
+            '\nA newly captured source version is required.',
+        };
+        const latest = await opportunities.get({ id }, { cache: false });
+        if (!latest) throw new Error('Fictional stale fixture vanished');
+        Object.assign(latest, {
+          descriptionRaw: changed.descriptionRaw,
+          sourceContentJson: JSON.stringify(changed),
+          sourceContentFingerprint:
+            fingerprintOpportunitySourceContent(changed),
+          sourceContentVersion: 2,
+        });
+        await latest.save();
       }
-    } finally {
-      await runner.stop();
+      if (scenario === 'revoked') {
+        const users = await UserCollection.create(getSmrtOptions());
+        const user = await users.get(fixture.userId);
+        if (!user) throw new Error('Fictional operator unavailable');
+        user.status = UserStatus.SUSPENDED;
+        await user.save();
+      }
+      await serviceNativeJobs();
+    }
+  }
+  if (auditOnly) {
+    const completed = (
+      await opportunities.get({ id }, { cache: false })
+    )?.toJSON();
+    const initialJobs = await jobs();
+    if (!completed || initialJobs.length !== 0)
+      throw new Error(
+        'Audit fixture historical bootstrap must not fabricate native jobs: ' +
+          JSON.stringify(initialJobs),
+      );
+    const repairReceipts = await rows(
+      'opportunity_intelligence_results',
+      'owner_request_id, feature, status, output_json',
+    );
+    const repairReceipt = repairReceipts.find(
+      (row) =>
+        row.feature === 'opportunity-source-requirement-repair' &&
+        row.status === 'completed',
+    );
+    if (!repairReceipt)
+      throw new Error('Audit fixture completed native repair receipt missing');
+    const before = JSON.parse(String(completed.preparedPostingJson)) as Json;
+    beforeReplay = {
+      preparedPostingJson: before,
+      jobs: initialJobs,
+      receipts: repairReceipts,
+    };
+    replayEventStart = provider.events.length;
+    const replaySelection = {
+      ...selection,
+      repairRequestId:
+        scenario === 'audit-forged'
+          ? baseRequestId
+          : String(repairReceipt.owner_request_id),
+    };
+    try {
+      const job = await asOwner(
+        async () =>
+          await enqueueOpportunityRequirementCoverageAuditReplay(
+            id,
+            replaySelection,
+          ),
+      );
+      replayJobId = String(job.id);
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    if (replayJobId) {
+      if (scenario === 'audit-stale') {
+        const changed = {
+          ...source,
+          descriptionRaw:
+            source.descriptionRaw +
+            '\nA newly captured source version is required.',
+        };
+        const latest = await opportunities.get({ id }, { cache: false });
+        if (!latest) throw new Error('Fictional replay stale fixture vanished');
+        Object.assign(latest, {
+          descriptionRaw: changed.descriptionRaw,
+          sourceContentJson: JSON.stringify(changed),
+          sourceContentFingerprint:
+            fingerprintOpportunitySourceContent(changed),
+          sourceContentVersion: 2,
+        });
+        await latest.save();
+      }
+      await serviceNativeJobs();
+    }
+    if (scenario === 'audit-positive') {
+      const latest = (
+        await opportunities.get({ id }, { cache: false })
+      )?.toJSON();
+      if (!latest) throw new Error('Replayed source vanished');
+      const saved = JSON.parse(String(latest.preparedPostingJson));
+      const auditContext = requirementCoverageContextForOpportunity(
+        latest,
+        'paid-v4-coverage-only4096',
+      );
+      const preparedAudit = prepareRequirementCoverageAudit(
+        auditContext,
+        saved.requirementCoverage,
+      );
+      const auditId = String(saved.requirementCoverage.audit?.requestId ?? '');
+      const auditReceipts = await rows(
+        'opportunity_intelligence_results',
+        'owner_request_id, feature, status, output_json',
+      );
+      const receipt = auditReceipts.find(
+        (row) => row.owner_request_id === auditId,
+      );
+      if (!receipt)
+        throw new Error('Replayed audit actual GLOBAL receipt missing');
+      exactReplay = {
+        request: preparedAudit.request,
+        expectedAudit: resolveRequirementCoverageAudit(
+          preparedAudit,
+          JSON.parse(String(receipt.output_json)),
+          auditId,
+        ),
+        repairRequestId: repairReceipt.owner_request_id,
+        auditRequestId: auditId,
+      };
     }
   }
   const current = (await opportunities.get({ id }, { cache: false }))?.toJSON();
@@ -381,9 +598,16 @@ try {
   const prepared = JSON.parse(
     String(current.preparedPostingJson ?? '{}'),
   ) as Json;
-  const currentContext = requirementCoverageContextForOpportunity(current);
+  const currentContext = requirementCoverageContextForOpportunity(
+    current,
+    'paid-v4-coverage-only4096',
+  );
   const output = {
     scenario,
+    replayJobId,
+    replayEventStart,
+    beforeReplay,
+    exactReplay,
     id,
     repairJobId,
     baseRequestId,
@@ -395,11 +619,11 @@ try {
     providerEvents: provider.events,
     receipts: await rows(
       'opportunity_intelligence_results',
-      'owner_request_id, agent_run_id, feature, status, input_fingerprint, output_json, tenant_id, owner_user_id, candidate_profile_id',
+      'owner_request_id, agent_run_id, feature, status, input_fingerprint, output_json, output_schema_version, model, tenant_id, owner_user_id, candidate_profile_id',
     ),
     requests: await rows(
       'opportunity_intelligence_requests',
-      'request_id, feature, status, accounting_basis, actual_total_tokens, requested_max_output_tokens, input_token_ceiling',
+      'request_id, feature, status, model, accounting_basis, actual_total_tokens, requested_max_output_tokens, input_token_ceiling',
     ),
     assessments: await rows(
       'opportunity_assessments',

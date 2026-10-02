@@ -1,0 +1,2261 @@
+{
+  "checkedAt": "2026-10-02T14:34:44.764Z",
+  "actualCompletedRepairOutput": true,
+  "providerAuthority": false,
+  "testFixtureOnly": true,
+  "candidateContent": false,
+  "identitiesOmitted": true,
+  "repairOutput": {
+    "requirementCoverage": {
+      "requirements": [
+        {
+          "id": "repair_r1",
+          "text": "Be curious about better ways to work, including new tools, AI, or rethinking how to approach a problem.",
+          "clauseIds": [
+            "c38"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "repair_r2",
+          "text": "Be willing to evolve alongside the products Wealthsimple is building.",
+          "clauseIds": [
+            "c38"
+          ],
+          "importance": "unknown"
+        }
+      ],
+      "dispositions": [
+        {
+          "clauseId": "c4",
+          "type": "source_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c5",
+          "type": "source_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c33",
+          "type": "source_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c35",
+          "type": "source_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c36",
+          "type": "source_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c38",
+          "type": "material_requirement",
+          "requirementIds": [
+            "repair_r1",
+            "repair_r2"
+          ]
+        }
+      ],
+      "removedRequirementIds": [
+        "r1",
+        "r2",
+        "r3",
+        "r4",
+        "r49",
+        "r50"
+      ]
+    }
+  },
+  "sourceContext": {
+    "sourceText": "Build something people love\nWealthsimple is Canada’s leading financial innovator. The company offers a full suite of simple, sophisticated financial products across managed investing, do-it-yourself trading, cryptocurrency, tax filing, spending and saving. Wealthsimple currently serves more than 4 million Canadians and holds over $155 billion in assets under administration. The company was founded in 2014 by a team of financial experts and technology entrepreneurs, and is headquartered in Toronto, Canada.\n\nWe're proud of what we've built — and we're just getting started. Read our Culture Manual and learn more about how we work .\n\nAbout the team\nWe build the products and infrastructure that millions of Canadians trust with their financial lives. Data & Engineering at Wealthsimple spans everything from the client-facing apps to the systems running underneath them — and we hold ourselves to a high bar on both. We move fast, but we build thoughtfully: quality, security, and scalability aren’t trade-offs here, they’re the standard.\nThe Production Engineering team sits within Platform Experience, on the boundary between Platform and Product. Our mandate is to raise reliability across Wealthsimple’s most critical flows — reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements. We measure ourselves against two targets: 99.9% uptime on critical flows, and fewer than 1% of weekly active users experiencing errors in the app. If you want to work on hard problems with people who care deeply about craft, you’ll fit right in.\n \nAbout the role\nThis is a new role — one that doesn’t yet exist at Wealthsimple — and it’s a meaningful one. As a Staff Software Developer on Production Engineering, you’ll bring senior technical leadership to the work of making Wealthsimple more reliable at scale. You’ll work across platform and product teams, identify the highest-leverage reliability problems, and build solutions that don’t just fix the immediate issue but raise the floor for everyone. This isn’t a role where you sit in one corner of the codebase. It’s a role where you shape how engineering gets done across the company.\n \nWhat you’ll do\n\n- Improve the platform to prevent incidents — designing and driving adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services\n\n- Build tooling that reduces time to mitigation when incidents occur, including contributing to our in-house product on AI-assisted incident response\n\n- Own the investigation and follow-through on load test findings — translating results into concrete reliability improvements across critical flows\n\n- Work across platform and product engineering teams as a technical influencer — participating in architecture and readiness reviews, coaching service owners, and driving adoption of scalable reliability practices\n\n- Identify recurring failure patterns and design platform-level fixes that prevent them from showing up again in a different service\n\n- Contribute to the team’s reliability syncs with product engineering, helping align on incident themes, critical-flow risks, and the next highest-leverage initiatives\n\n \nSkills you bring\n\n- 8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work\n\n- Demonstrated track record of improving reliability at scale — reducing incidents, building guardrails, or driving operational standards across multiple teams\n\n- Strong proficiency in backend systems and distributed architecture; you can diagnose complex failure modes across a service mesh\n\n- Experience with load testing and capacity planning, and the ability to translate findings into concrete engineering improvements\n\n- Proven ability to work across engineering teams as a technical influencer — driving adoption of standards and practices without direct authority\n\n- Familiarity with Kubernetes, Helm, Argo and modern deployment tooling\n\n- Strong written and verbal communication — comfortable presenting findings and recommendations to both engineering teams and senior leadership\n\n \nWho you are\n\n- You think in systems — you’re not looking for the fix, you’re looking for what caused the problem and how to make sure it doesn’t happen elsewhere\n\n- You’re comfortable working without direct authority; you build credibility through the quality of your thinking and the clarity of your recommendations\n\n- You hold a high bar for operational excellence without making it someone else’s problem to catch up to — you bring people along\n\n- You’re energised by ambiguity, not slowed down by it; you know how to prioritise when everything feels urgent\n\n- You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance\n\nWhy Wealthsimple?\n🌸 Top-tier health benefits and life insurance\n📈 Long-term group savings with employer match, through Wealthsimple for Business\n🌴 20 vacation days, 4 wellness days, and unlimited sick and mental health days per year*\n✈️ 90 days away: work outside Canada for up to 90 days per year*\n👥 Employee resource groups, including Rainbow (2SLGBTQ), Women of WS, and Black at WS\n🌎 We are a hybrid team with over 1,500 employees across North America. The people are one of the best parts of working here: you'll collaborate with incredibly talented, curious, and driven teammates who are deeply committed to doing great work.\n\n*Unlimited paid sick days, Wellness Days and the 90 day away program do not apply to certain roles.\n\nICYMI\nTechnology & Innovation at Wealthsimple: We move quickly and build thoughtfully. That means we're always looking for better ways to work — whether that's new tools, AI, or rethinking how we approach a problem. We don't expect you to have all the answers, but we do expect curiosity and a willingness to evolve alongside the products we're building.\n\nInclusion Statement: We're building products for a diverse world, and we need a diverse team to do it well. We strongly encourage applications from everyone, regardless of race, religion, colour, national origin, gender, sexual orientation, age, marital status, or disability status.\n\nAccessibility Statement: We're committed to an accessible hiring experience. If you need any accommodations throughout the interview process, please let us know — we'll work with you to make sure you have what you need. We also welcome any feedback on how we can better accommodate candidates with accessibility needs.\n\nAI in Hiring: We may use artificial intelligence (AI) tools to support parts of our hiring process, such as reviewing applications, analyzing resumes, or assessing responses. These tools assist our team but don't replace human judgment – all final hiring decisions are made by people. If you have questions about how your data is used, reach out to us.",
+    "sourceFingerprint": "b6ac3f8a55585780e534f408fb7decf4a8b5d260bc5d921d7b4facd5d9b45a11",
+    "sourceVersion": 1,
+    "extractionFingerprint": "0174f4239927cc275aca4076a5119828aa882f9a4fe29376eeda5d10cba4183f",
+    "preparedFingerprint": "f90219409bf4073de7e090279c7d6ab281dfbe2c00b44f0a4d03957310248c50"
+  },
+  "baseLedger": {
+    "version": "requirement-coverage/v1",
+    "sourceFingerprint": "b6ac3f8a55585780e534f408fb7decf4a8b5d260bc5d921d7b4facd5d9b45a11",
+    "sourceVersion": 1,
+    "extractionFingerprint": "0174f4239927cc275aca4076a5119828aa882f9a4fe29376eeda5d10cba4183f",
+    "preparedFingerprint": "f90219409bf4073de7e090279c7d6ab281dfbe2c00b44f0a4d03957310248c50",
+    "clauses": [
+      {
+        "id": "clause:711e6a637ddaaaf2d37dcc25",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 0,
+        "spanEnd": 27,
+        "text": "Build something people love",
+        "hash": "1a51a329db3cedd339d2af305ef9aa2ff9af0ea2050f7ace2aaeb7efacf96738"
+      },
+      {
+        "id": "clause:2e745252ccde07b2a9761db7",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 28,
+        "spanEnd": 510,
+        "text": "Wealthsimple is Canada’s leading financial innovator. The company offers a full suite of simple, sophisticated financial products across managed investing, do-it-yourself trading, cryptocurrency, tax filing, spending and saving. Wealthsimple currently serves more than 4 million Canadians and holds over $155 billion in assets under administration. The company was founded in 2014 by a team of financial experts and technology entrepreneurs, and is headquartered in Toronto, Canada.",
+        "hash": "48e680c3d90ab8149b10665dbdfd12f51903677009cc18191716f073fb5ca033"
+      },
+      {
+        "id": "clause:577d2c76eda37e6470a7ddf6",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 512,
+        "spanEnd": 636,
+        "text": "We're proud of what we've built — and we're just getting started. Read our Culture Manual and learn more about how we work .",
+        "hash": "ffcc970262c48cd031dc69cda4ac5945193a1c9467dd35312d81e763ec92b8fa"
+      },
+      {
+        "id": "clause:901544d8e9eca92625812418",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "heading",
+        "spanStart": 638,
+        "spanEnd": 652,
+        "text": "About the team",
+        "hash": "0507be222c723805324d536a1d6aebd6f7a4cb6c171a445c2d0939b7e96a78a4"
+      },
+      {
+        "id": "clause:f8a13f672a2ff97edf065765",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "body",
+        "spanStart": 653,
+        "spanEnd": 1042,
+        "text": "We build the products and infrastructure that millions of Canadians trust with their financial lives. Data & Engineering at Wealthsimple spans everything from the client-facing apps to the systems running underneath them — and we hold ourselves to a high bar on both. We move fast, but we build thoughtfully: quality, security, and scalability aren’t trade-offs here, they’re the standard.",
+        "hash": "981e7456f8ad40ee424f42f39656da64e43b4c638a240a91be034ef38761f1df"
+      },
+      {
+        "id": "clause:988e296f3ffceaa11df17e9a",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "body",
+        "spanStart": 1043,
+        "spanEnd": 1596,
+        "text": "The Production Engineering team sits within Platform Experience, on the boundary between Platform and Product. Our mandate is to raise reliability across Wealthsimple’s most critical flows — reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements. We measure ourselves against two targets: 99.9% uptime on critical flows, and fewer than 1% of weekly active users experiencing errors in the app. If you want to work on hard problems with people who care deeply about craft, you’ll fit right in.",
+        "hash": "7c4e4ee339a6c1da89de36fe0e4626959f934c270bd5de2696b97283e8211d65"
+      },
+      {
+        "id": "clause:7dc43cbc9b9e6755c50dfa68",
+        "section": "section:7dc43cbc9b9e6755c50dfa68",
+        "kind": "heading",
+        "spanStart": 1599,
+        "spanEnd": 1613,
+        "text": "About the role",
+        "hash": "6d87d6249548dd53001744a2c253143889b6928a7cfc9640044bee478c056e71"
+      },
+      {
+        "id": "clause:5bb66be711ba984a066cb9df",
+        "section": "section:7dc43cbc9b9e6755c50dfa68",
+        "kind": "body",
+        "spanStart": 1614,
+        "spanEnd": 2193,
+        "text": "This is a new role — one that doesn’t yet exist at Wealthsimple — and it’s a meaningful one. As a Staff Software Developer on Production Engineering, you’ll bring senior technical leadership to the work of making Wealthsimple more reliable at scale. You’ll work across platform and product teams, identify the highest-leverage reliability problems, and build solutions that don’t just fix the immediate issue but raise the floor for everyone. This isn’t a role where you sit in one corner of the codebase. It’s a role where you shape how engineering gets done across the company.",
+        "hash": "14f49ebb0323a2da4b13a4a896211d4d8d36c5a1583ced3935e50f188754aff1"
+      },
+      {
+        "id": "clause:161d34e927e8e3d49b1af4ea",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "heading",
+        "spanStart": 2196,
+        "spanEnd": 2210,
+        "text": "What you’ll do",
+        "hash": "2d2e835244cc678728af2b93e01fc3f605a7f64bbb234b234ac1edaadb4e88f1"
+      },
+      {
+        "id": "clause:99adec899b9cca9a96a5db07",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2212,
+        "spanEnd": 2403,
+        "text": "- Improve the platform to prevent incidents — designing and driving adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services",
+        "hash": "2055fd958ee00c4da106e9caedf4ea881ae152799d679ceb9c8bcae3220acdb2"
+      },
+      {
+        "id": "clause:ab75ddd15e9153deca2d1c74",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2405,
+        "spanEnd": 2554,
+        "text": "- Build tooling that reduces time to mitigation when incidents occur, including contributing to our in-house product on AI-assisted incident response",
+        "hash": "984dc8a6da448f3dace936aea2140fa1b6f3abb304cc88a6be37f530182df99a"
+      },
+      {
+        "id": "clause:682797740997fc2f0380b9e6",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2556,
+        "spanEnd": 2703,
+        "text": "- Own the investigation and follow-through on load test findings — translating results into concrete reliability improvements across critical flows",
+        "hash": "3d929b52e49c2c4a364804db43bdcaacaa28085d1b2244bc2a05ae5e13b75fb4"
+      },
+      {
+        "id": "clause:4bc6e8cf8ae4474c102b33d8",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2705,
+        "spanEnd": 2918,
+        "text": "- Work across platform and product engineering teams as a technical influencer — participating in architecture and readiness reviews, coaching service owners, and driving adoption of scalable reliability practices",
+        "hash": "e289381fe4ca67fe58ede4dac5120c2842e399d4f50a220eec3b6836a61c2f98"
+      },
+      {
+        "id": "clause:912fcb0fa2fec8a108376512",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2920,
+        "spanEnd": 3052,
+        "text": "- Identify recurring failure patterns and design platform-level fixes that prevent them from showing up again in a different service",
+        "hash": "a76b59851d98add9631d000f9ca8c44bc8fb7fcb29624f320e4f08187be42e8e"
+      },
+      {
+        "id": "clause:08ea52bc4fc05123007f0fb2",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3054,
+        "spanEnd": 3221,
+        "text": "- Contribute to the team’s reliability syncs with product engineering, helping align on incident themes, critical-flow risks, and the next highest-leverage initiatives",
+        "hash": "a7b414adfd1f3c9d4124bde117ec475e57114258f00951e010bbf0f6ae8c5a32"
+      },
+      {
+        "id": "clause:d56e9a720e7417337062952e",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3225,
+        "spanEnd": 3241,
+        "text": "Skills you bring",
+        "hash": "5f6418e48062c1b07242e060beb0e52a603379760faa418a3f5bdb395fe8fc48"
+      },
+      {
+        "id": "clause:a30b9d1d9f8eac3a8f581dce",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3243,
+        "spanEnd": 3352,
+        "text": "- 8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work",
+        "hash": "d1a696387d6fde9453e7784026f56744fb69851c70e30d4e16f9c5c5c09bf22f"
+      },
+      {
+        "id": "clause:0a154200359c45b02a0ffa4d",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3354,
+        "spanEnd": 3513,
+        "text": "- Demonstrated track record of improving reliability at scale — reducing incidents, building guardrails, or driving operational standards across multiple teams",
+        "hash": "33a378544580abeaf57501960cd59ca0c80cd6575411a2fba24df86dd8408e84"
+      },
+      {
+        "id": "clause:0152c8bf71033ef54ff88529",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3515,
+        "spanEnd": 3645,
+        "text": "- Strong proficiency in backend systems and distributed architecture; you can diagnose complex failure modes across a service mesh",
+        "hash": "d241fbac7cc8da4709ebfe2ec7152c3c170a997fe335bac0474231611a57bda9"
+      },
+      {
+        "id": "clause:983f42723b4b563b7191c8a1",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3647,
+        "spanEnd": 3777,
+        "text": "- Experience with load testing and capacity planning, and the ability to translate findings into concrete engineering improvements",
+        "hash": "4405a219b32c6f650c52d02d0a65beade8c62a672b95295873288d0989384447"
+      },
+      {
+        "id": "clause:39e77d46c7f6138e1e773642",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3779,
+        "spanEnd": 3925,
+        "text": "- Proven ability to work across engineering teams as a technical influencer — driving adoption of standards and practices without direct authority",
+        "hash": "b5bb2088dff6a3966096c0990b84b098714ad12f90ff429c033d35b0d9b62606"
+      },
+      {
+        "id": "clause:944b081adab613a2c5cf45b4",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3927,
+        "spanEnd": 3998,
+        "text": "- Familiarity with Kubernetes, Helm, Argo and modern deployment tooling",
+        "hash": "4262688b5daa9c1f8b79e2bad315cebe3ad4558a5573c18b7e48cdba49d18d9c"
+      },
+      {
+        "id": "clause:bd618864a1b28ca723696e85",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 4000,
+        "spanEnd": 4143,
+        "text": "- Strong written and verbal communication — comfortable presenting findings and recommendations to both engineering teams and senior leadership",
+        "hash": "3eb441166631e322f2066bec2adb036b320abbdc429398716757ccf48af6076c"
+      },
+      {
+        "id": "clause:059c95bb008a4e9e3d43562e",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "heading",
+        "spanStart": 4147,
+        "spanEnd": 4158,
+        "text": "Who you are",
+        "hash": "4d579636f5b12881f76f9f7f1770fab2745486faefb3d2fd5e59d2a8fe52b1ae"
+      },
+      {
+        "id": "clause:0f4a8f3b136fde69ddff6af1",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4160,
+        "spanEnd": 4308,
+        "text": "- You think in systems — you’re not looking for the fix, you’re looking for what caused the problem and how to make sure it doesn’t happen elsewhere",
+        "hash": "663ad6903b2eb6eb3ad676fe864ac64ce3f1f6a81a0d5368e84b2c247609ddc6"
+      },
+      {
+        "id": "clause:8204d1637f7bfe6b2326f012",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4310,
+        "spanEnd": 4463,
+        "text": "- You’re comfortable working without direct authority; you build credibility through the quality of your thinking and the clarity of your recommendations",
+        "hash": "ad17c129fb7b1d9acb63032852da4a1ac4ee793b921b1f4bb627335d7e48ba25"
+      },
+      {
+        "id": "clause:7f46b835eb5993e19f31f955",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4465,
+        "spanEnd": 4594,
+        "text": "- You hold a high bar for operational excellence without making it someone else’s problem to catch up to — you bring people along",
+        "hash": "92d132954599ab18f62c8a39e8fe369c4c791d70a140a9644dcb3700ab90e6d8"
+      },
+      {
+        "id": "clause:0b517d07f65788d46a30efef",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4596,
+        "spanEnd": 4707,
+        "text": "- You’re energised by ambiguity, not slowed down by it; you know how to prioritise when everything feels urgent",
+        "hash": "1c2cffef015fcc85b2835ea889ec4f50eabfdb2707a30310fde0f9cdfba74fd6"
+      },
+      {
+        "id": "clause:cd3cbbdf00be859aa4448900",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4709,
+        "spanEnd": 4874,
+        "text": "- You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance",
+        "hash": "f8e3da5de3a5e988b965d1235b31f78fbcf2b6530702beb1b1daa25aa7b65b63"
+      },
+      {
+        "id": "clause:bc1c395190adc33c463c7014",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4876,
+        "spanEnd": 4893,
+        "text": "Why Wealthsimple?",
+        "hash": "59e68301c3d5169cc349b7ab7aeadf2cea0023087cefea0f1ce26777095c0b6e"
+      },
+      {
+        "id": "clause:0b0c3b93aec978cf28190b36",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4894,
+        "spanEnd": 4940,
+        "text": "🌸 Top-tier health benefits and life insurance",
+        "hash": "3b68030960f21f14164e77cad2a592fbbb33581533ae15794de9bc8972c4e4cf"
+      },
+      {
+        "id": "clause:7247c020e4f78d1b4f6b9119",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4941,
+        "spanEnd": 5022,
+        "text": "📈 Long-term group savings with employer match, through Wealthsimple for Business",
+        "hash": "7e4824a16511d6fcbb0bd0403952d5bd0c9c89b2f36ba33ee4d700d5d9f95205"
+      },
+      {
+        "id": "clause:43bd255de96590cc8efdb651",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5023,
+        "spanEnd": 5112,
+        "text": "🌴 20 vacation days, 4 wellness days, and unlimited sick and mental health days per year*",
+        "hash": "d33e815a31be0d627aef4176f0afd1d0cc70a3bf8d19b3ef33940d64a57979a1"
+      },
+      {
+        "id": "clause:a8b870bd266516bac5200dad",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5113,
+        "spanEnd": 5177,
+        "text": "✈️ 90 days away: work outside Canada for up to 90 days per year*",
+        "hash": "cfed8621328aa52c27095d19fa38c41239d075d724ddd6feff6a2ab8ab2fdc79"
+      },
+      {
+        "id": "clause:40c20554b5af2f2934b76bd8",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5178,
+        "spanEnd": 5264,
+        "text": "👥 Employee resource groups, including Rainbow (2SLGBTQ), Women of WS, and Black at WS",
+        "hash": "a4ea6ba1a5cc4092b9074e9abde746a617fe275eb66b53779b8f0d43a1ccb0b7"
+      },
+      {
+        "id": "clause:43718a8cbedb50e33e4cc8ad",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5265,
+        "spanEnd": 5511,
+        "text": "🌎 We are a hybrid team with over 1,500 employees across North America. The people are one of the best parts of working here: you'll collaborate with incredibly talented, curious, and driven teammates who are deeply committed to doing great work.",
+        "hash": "700f3793fac65c5d8814d95fc9b66ca6184ca9976bf8943f0cffaaf463a0c794"
+      },
+      {
+        "id": "clause:9ecf22ac7b288b9a2dd23538",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5513,
+        "spanEnd": 5612,
+        "text": "*Unlimited paid sick days, Wellness Days and the 90 day away program do not apply to certain roles.",
+        "hash": "c0e614f2ba10a7abc7a3eaf5ff6e409e234ec06e2f607eb6db0f03d98b1a21e8"
+      },
+      {
+        "id": "clause:58a006bc9c4b3a07f46e24a8",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5614,
+        "spanEnd": 5619,
+        "text": "ICYMI",
+        "hash": "7f699abeeb35ea740295092229cd732663eabdf49b0d86a9455d86d511494e51"
+      },
+      {
+        "id": "clause:9af48b8468b6c89a022e31d4",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5620,
+        "spanEnd": 5968,
+        "text": "Technology & Innovation at Wealthsimple: We move quickly and build thoughtfully. That means we're always looking for better ways to work — whether that's new tools, AI, or rethinking how we approach a problem. We don't expect you to have all the answers, but we do expect curiosity and a willingness to evolve alongside the products we're building.",
+        "hash": "f953d5f2c0708798ddeb767eefef442ec9dd3ba1b754a5ea696a1f969ba4ca61"
+      },
+      {
+        "id": "clause:9ec1e0fbc4df7feca1a069ce",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5970,
+        "spanEnd": 6253,
+        "text": "Inclusion Statement: We're building products for a diverse world, and we need a diverse team to do it well. We strongly encourage applications from everyone, regardless of race, religion, colour, national origin, gender, sexual orientation, age, marital status, or disability status.",
+        "hash": "62ceda8d25c5cbced4d5e34d85804fa415dc2039e23bb54f6daa5abf61b111c6"
+      },
+      {
+        "id": "clause:1ed16f6271b199c995c195a0",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 6255,
+        "spanEnd": 6573,
+        "text": "Accessibility Statement: We're committed to an accessible hiring experience. If you need any accommodations throughout the interview process, please let us know — we'll work with you to make sure you have what you need. We also welcome any feedback on how we can better accommodate candidates with accessibility needs.",
+        "hash": "851551dc82551377526934022703b450a704f7640abbd22d044cddc2abcb960b"
+      },
+      {
+        "id": "clause:4ae56f27a5fadee6f664d799",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 6575,
+        "spanEnd": 6927,
+        "text": "AI in Hiring: We may use artificial intelligence (AI) tools to support parts of our hiring process, such as reviewing applications, analyzing resumes, or assessing responses. These tools assist our team but don't replace human judgment – all final hiring decisions are made by people. If you have questions about how your data is used, reach out to us.",
+        "hash": "1b051126d00abbb1074ebbc312ab6851b689452e4243819e3065ae467c8b98a8"
+      }
+    ],
+    "requirements": [
+      {
+        "id": "r1",
+        "text": "The Production Engineering team sits within Platform Experience, on the boundary between Platform and Product.",
+        "clauseIds": [
+          "clause:988e296f3ffceaa11df17e9a"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "r2",
+        "text": "Raise reliability across Wealthsimple’s most critical flows by reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements.",
+        "clauseIds": [
+          "clause:988e296f3ffceaa11df17e9a"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "r3",
+        "text": "Target 99.9% uptime on critical flows.",
+        "clauseIds": [
+          "clause:988e296f3ffceaa11df17e9a"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "r4",
+        "text": "Target fewer than 1% of weekly active users experiencing errors in the app.",
+        "clauseIds": [
+          "clause:988e296f3ffceaa11df17e9a"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "r5",
+        "text": "Bring senior technical leadership to the work of making Wealthsimple more reliable at scale.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r6",
+        "text": "Work across platform and product teams.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r7",
+        "text": "Identify the highest-leverage reliability problems.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r8",
+        "text": "Build solutions that fix the immediate issue and raise the floor for everyone.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r9",
+        "text": "Shape how engineering gets done across the company.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r10",
+        "text": "Improve the platform to prevent incidents by designing guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+        "clauseIds": [
+          "clause:99adec899b9cca9a96a5db07"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r11",
+        "text": "Drive adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+        "clauseIds": [
+          "clause:99adec899b9cca9a96a5db07"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r12",
+        "text": "Build tooling that reduces time to mitigation when incidents occur.",
+        "clauseIds": [
+          "clause:ab75ddd15e9153deca2d1c74"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r13",
+        "text": "Contribute to the in-house product on AI-assisted incident response.",
+        "clauseIds": [
+          "clause:ab75ddd15e9153deca2d1c74"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r14",
+        "text": "Own the investigation and follow-through on load test findings.",
+        "clauseIds": [
+          "clause:682797740997fc2f0380b9e6"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r15",
+        "text": "Translate load test results into concrete reliability improvements across critical flows.",
+        "clauseIds": [
+          "clause:682797740997fc2f0380b9e6"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r16",
+        "text": "Work across platform and product engineering teams as a technical influencer.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r17",
+        "text": "Participate in architecture and readiness reviews.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r18",
+        "text": "Coach service owners.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r19",
+        "text": "Drive adoption of scalable reliability practices.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r20",
+        "text": "Identify recurring failure patterns.",
+        "clauseIds": [
+          "clause:912fcb0fa2fec8a108376512"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r21",
+        "text": "Design platform-level fixes that prevent recurring failure patterns from showing up again in a different service.",
+        "clauseIds": [
+          "clause:912fcb0fa2fec8a108376512"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r22",
+        "text": "Contribute to the team’s reliability syncs with product engineering.",
+        "clauseIds": [
+          "clause:08ea52bc4fc05123007f0fb2"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r23",
+        "text": "Help align on incident themes, critical-flow risks, and the next highest-leverage initiatives.",
+        "clauseIds": [
+          "clause:08ea52bc4fc05123007f0fb2"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r24",
+        "text": "Have 8+ years of software engineering experience.",
+        "clauseIds": [
+          "clause:a30b9d1d9f8eac3a8f581dce"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r25",
+        "text": "Have significant time in platform, infrastructure, or SRE work.",
+        "clauseIds": [
+          "clause:a30b9d1d9f8eac3a8f581dce"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r26",
+        "text": "Have a demonstrated track record of improving reliability at scale through reducing incidents, building guardrails, or driving operational standards across multiple teams.",
+        "clauseIds": [
+          "clause:0a154200359c45b02a0ffa4d"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r27",
+        "text": "Have strong proficiency in backend systems.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r28",
+        "text": "Have strong proficiency in distributed architecture.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r29",
+        "text": "Be able to diagnose complex failure modes across a service mesh.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r30",
+        "text": "Have experience with load testing and capacity planning.",
+        "clauseIds": [
+          "clause:983f42723b4b563b7191c8a1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r31",
+        "text": "Be able to translate load testing and capacity planning findings into concrete engineering improvements.",
+        "clauseIds": [
+          "clause:983f42723b4b563b7191c8a1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r32",
+        "text": "Have a proven ability to work across engineering teams as a technical influencer, driving adoption of standards and practices without direct authority.",
+        "clauseIds": [
+          "clause:39e77d46c7f6138e1e773642"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r33",
+        "text": "Have familiarity with Kubernetes.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r34",
+        "text": "Have familiarity with Helm.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r35",
+        "text": "Have familiarity with Argo.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r36",
+        "text": "Have familiarity with modern deployment tooling.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r37",
+        "text": "Have strong written communication skills.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r38",
+        "text": "Have strong verbal communication skills.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r39",
+        "text": "Be comfortable presenting findings and recommendations to both engineering teams and senior leadership.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r40",
+        "text": "Think in systems: look for what caused a problem and how to make sure it does not happen elsewhere, rather than looking only for the fix.",
+        "clauseIds": [
+          "clause:0f4a8f3b136fde69ddff6af1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r41",
+        "text": "Be comfortable working without direct authority.",
+        "clauseIds": [
+          "clause:8204d1637f7bfe6b2326f012"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r42",
+        "text": "Build credibility through the quality of your thinking and the clarity of your recommendations.",
+        "clauseIds": [
+          "clause:8204d1637f7bfe6b2326f012"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r43",
+        "text": "Hold a high bar for operational excellence without making it someone else’s problem to catch up to.",
+        "clauseIds": [
+          "clause:7f46b835eb5993e19f31f955"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r44",
+        "text": "Bring people along.",
+        "clauseIds": [
+          "clause:7f46b835eb5993e19f31f955"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r45",
+        "text": "Be energised by ambiguity, not slowed down by it.",
+        "clauseIds": [
+          "clause:0b517d07f65788d46a30efef"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r46",
+        "text": "Know how to prioritise when everything feels urgent.",
+        "clauseIds": [
+          "clause:0b517d07f65788d46a30efef"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r47",
+        "text": "Be curious about where AI-assisted tooling is headed in reliability engineering.",
+        "clauseIds": [
+          "clause:cd3cbbdf00be859aa4448900"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r48",
+        "text": "Want to help shape how AI-assisted tooling is used in reliability engineering, not just observe it from a distance.",
+        "clauseIds": [
+          "clause:cd3cbbdf00be859aa4448900"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r49",
+        "text": "We are a hybrid team with over 1,500 employees across North America.",
+        "clauseIds": [
+          "clause:43718a8cbedb50e33e4cc8ad"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "r50",
+        "text": "Collaborate with talented, curious, and driven teammates who are deeply committed to doing great work.",
+        "clauseIds": [
+          "clause:43718a8cbedb50e33e4cc8ad"
+        ],
+        "importance": "unknown"
+      }
+    ],
+    "dispositions": [
+      {
+        "clauseId": "clause:711e6a637ddaaaf2d37dcc25",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:2e745252ccde07b2a9761db7",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:577d2c76eda37e6470a7ddf6",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:901544d8e9eca92625812418",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:f8a13f672a2ff97edf065765",
+        "type": "role_context",
+        "requirementIds": [],
+        "auditPending": "nonmaterial"
+      },
+      {
+        "clauseId": "clause:988e296f3ffceaa11df17e9a",
+        "type": "role_context",
+        "requirementIds": [
+          "r1",
+          "r2",
+          "r3",
+          "r4"
+        ]
+      },
+      {
+        "clauseId": "clause:7dc43cbc9b9e6755c50dfa68",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:5bb66be711ba984a066cb9df",
+        "type": "role_context",
+        "requirementIds": [
+          "r5",
+          "r6",
+          "r7",
+          "r8",
+          "r9"
+        ]
+      },
+      {
+        "clauseId": "clause:161d34e927e8e3d49b1af4ea",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:99adec899b9cca9a96a5db07",
+        "type": "role_duty",
+        "requirementIds": [
+          "r10",
+          "r11"
+        ]
+      },
+      {
+        "clauseId": "clause:ab75ddd15e9153deca2d1c74",
+        "type": "role_duty",
+        "requirementIds": [
+          "r12",
+          "r13"
+        ]
+      },
+      {
+        "clauseId": "clause:682797740997fc2f0380b9e6",
+        "type": "role_duty",
+        "requirementIds": [
+          "r14",
+          "r15"
+        ]
+      },
+      {
+        "clauseId": "clause:4bc6e8cf8ae4474c102b33d8",
+        "type": "role_duty",
+        "requirementIds": [
+          "r16",
+          "r17",
+          "r18",
+          "r19"
+        ]
+      },
+      {
+        "clauseId": "clause:912fcb0fa2fec8a108376512",
+        "type": "role_duty",
+        "requirementIds": [
+          "r20",
+          "r21"
+        ]
+      },
+      {
+        "clauseId": "clause:08ea52bc4fc05123007f0fb2",
+        "type": "role_duty",
+        "requirementIds": [
+          "r22",
+          "r23"
+        ]
+      },
+      {
+        "clauseId": "clause:d56e9a720e7417337062952e",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:a30b9d1d9f8eac3a8f581dce",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r24",
+          "r25"
+        ]
+      },
+      {
+        "clauseId": "clause:0a154200359c45b02a0ffa4d",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r26"
+        ]
+      },
+      {
+        "clauseId": "clause:0152c8bf71033ef54ff88529",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r27",
+          "r28",
+          "r29"
+        ]
+      },
+      {
+        "clauseId": "clause:983f42723b4b563b7191c8a1",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r30",
+          "r31"
+        ]
+      },
+      {
+        "clauseId": "clause:39e77d46c7f6138e1e773642",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r32"
+        ]
+      },
+      {
+        "clauseId": "clause:944b081adab613a2c5cf45b4",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r33",
+          "r34",
+          "r35",
+          "r36"
+        ]
+      },
+      {
+        "clauseId": "clause:bd618864a1b28ca723696e85",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r37",
+          "r38",
+          "r39"
+        ]
+      },
+      {
+        "clauseId": "clause:059c95bb008a4e9e3d43562e",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:0f4a8f3b136fde69ddff6af1",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r40"
+        ]
+      },
+      {
+        "clauseId": "clause:8204d1637f7bfe6b2326f012",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r41",
+          "r42"
+        ]
+      },
+      {
+        "clauseId": "clause:7f46b835eb5993e19f31f955",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r43",
+          "r44"
+        ]
+      },
+      {
+        "clauseId": "clause:0b517d07f65788d46a30efef",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r45",
+          "r46"
+        ]
+      },
+      {
+        "clauseId": "clause:cd3cbbdf00be859aa4448900",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r47",
+          "r48"
+        ]
+      },
+      {
+        "clauseId": "clause:bc1c395190adc33c463c7014",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:0b0c3b93aec978cf28190b36",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:7247c020e4f78d1b4f6b9119",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:43bd255de96590cc8efdb651",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:a8b870bd266516bac5200dad",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:40c20554b5af2f2934b76bd8",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:43718a8cbedb50e33e4cc8ad",
+        "type": "role_context",
+        "requirementIds": [
+          "r49",
+          "r50"
+        ]
+      },
+      {
+        "clauseId": "clause:9ecf22ac7b288b9a2dd23538",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:58a006bc9c4b3a07f46e24a8",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:9af48b8468b6c89a022e31d4",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:9ec1e0fbc4df7feca1a069ce",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:1ed16f6271b199c995c195a0",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:4ae56f27a5fadee6f664d799",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      }
+    ]
+  },
+  "mergedLedger": {
+    "version": "requirement-coverage/v1",
+    "sourceFingerprint": "b6ac3f8a55585780e534f408fb7decf4a8b5d260bc5d921d7b4facd5d9b45a11",
+    "sourceVersion": 1,
+    "extractionFingerprint": "0174f4239927cc275aca4076a5119828aa882f9a4fe29376eeda5d10cba4183f",
+    "preparedFingerprint": "f90219409bf4073de7e090279c7d6ab281dfbe2c00b44f0a4d03957310248c50",
+    "clauses": [
+      {
+        "id": "clause:711e6a637ddaaaf2d37dcc25",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 0,
+        "spanEnd": 27,
+        "text": "Build something people love",
+        "hash": "1a51a329db3cedd339d2af305ef9aa2ff9af0ea2050f7ace2aaeb7efacf96738"
+      },
+      {
+        "id": "clause:2e745252ccde07b2a9761db7",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 28,
+        "spanEnd": 510,
+        "text": "Wealthsimple is Canada’s leading financial innovator. The company offers a full suite of simple, sophisticated financial products across managed investing, do-it-yourself trading, cryptocurrency, tax filing, spending and saving. Wealthsimple currently serves more than 4 million Canadians and holds over $155 billion in assets under administration. The company was founded in 2014 by a team of financial experts and technology entrepreneurs, and is headquartered in Toronto, Canada.",
+        "hash": "48e680c3d90ab8149b10665dbdfd12f51903677009cc18191716f073fb5ca033"
+      },
+      {
+        "id": "clause:577d2c76eda37e6470a7ddf6",
+        "section": "section:opening",
+        "kind": "body",
+        "spanStart": 512,
+        "spanEnd": 636,
+        "text": "We're proud of what we've built — and we're just getting started. Read our Culture Manual and learn more about how we work .",
+        "hash": "ffcc970262c48cd031dc69cda4ac5945193a1c9467dd35312d81e763ec92b8fa"
+      },
+      {
+        "id": "clause:901544d8e9eca92625812418",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "heading",
+        "spanStart": 638,
+        "spanEnd": 652,
+        "text": "About the team",
+        "hash": "0507be222c723805324d536a1d6aebd6f7a4cb6c171a445c2d0939b7e96a78a4"
+      },
+      {
+        "id": "clause:f8a13f672a2ff97edf065765",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "body",
+        "spanStart": 653,
+        "spanEnd": 1042,
+        "text": "We build the products and infrastructure that millions of Canadians trust with their financial lives. Data & Engineering at Wealthsimple spans everything from the client-facing apps to the systems running underneath them — and we hold ourselves to a high bar on both. We move fast, but we build thoughtfully: quality, security, and scalability aren’t trade-offs here, they’re the standard.",
+        "hash": "981e7456f8ad40ee424f42f39656da64e43b4c638a240a91be034ef38761f1df"
+      },
+      {
+        "id": "clause:988e296f3ffceaa11df17e9a",
+        "section": "section:901544d8e9eca92625812418",
+        "kind": "body",
+        "spanStart": 1043,
+        "spanEnd": 1596,
+        "text": "The Production Engineering team sits within Platform Experience, on the boundary between Platform and Product. Our mandate is to raise reliability across Wealthsimple’s most critical flows — reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements. We measure ourselves against two targets: 99.9% uptime on critical flows, and fewer than 1% of weekly active users experiencing errors in the app. If you want to work on hard problems with people who care deeply about craft, you’ll fit right in.",
+        "hash": "7c4e4ee339a6c1da89de36fe0e4626959f934c270bd5de2696b97283e8211d65"
+      },
+      {
+        "id": "clause:7dc43cbc9b9e6755c50dfa68",
+        "section": "section:7dc43cbc9b9e6755c50dfa68",
+        "kind": "heading",
+        "spanStart": 1599,
+        "spanEnd": 1613,
+        "text": "About the role",
+        "hash": "6d87d6249548dd53001744a2c253143889b6928a7cfc9640044bee478c056e71"
+      },
+      {
+        "id": "clause:5bb66be711ba984a066cb9df",
+        "section": "section:7dc43cbc9b9e6755c50dfa68",
+        "kind": "body",
+        "spanStart": 1614,
+        "spanEnd": 2193,
+        "text": "This is a new role — one that doesn’t yet exist at Wealthsimple — and it’s a meaningful one. As a Staff Software Developer on Production Engineering, you’ll bring senior technical leadership to the work of making Wealthsimple more reliable at scale. You’ll work across platform and product teams, identify the highest-leverage reliability problems, and build solutions that don’t just fix the immediate issue but raise the floor for everyone. This isn’t a role where you sit in one corner of the codebase. It’s a role where you shape how engineering gets done across the company.",
+        "hash": "14f49ebb0323a2da4b13a4a896211d4d8d36c5a1583ced3935e50f188754aff1"
+      },
+      {
+        "id": "clause:161d34e927e8e3d49b1af4ea",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "heading",
+        "spanStart": 2196,
+        "spanEnd": 2210,
+        "text": "What you’ll do",
+        "hash": "2d2e835244cc678728af2b93e01fc3f605a7f64bbb234b234ac1edaadb4e88f1"
+      },
+      {
+        "id": "clause:99adec899b9cca9a96a5db07",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2212,
+        "spanEnd": 2403,
+        "text": "- Improve the platform to prevent incidents — designing and driving adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services",
+        "hash": "2055fd958ee00c4da106e9caedf4ea881ae152799d679ceb9c8bcae3220acdb2"
+      },
+      {
+        "id": "clause:ab75ddd15e9153deca2d1c74",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2405,
+        "spanEnd": 2554,
+        "text": "- Build tooling that reduces time to mitigation when incidents occur, including contributing to our in-house product on AI-assisted incident response",
+        "hash": "984dc8a6da448f3dace936aea2140fa1b6f3abb304cc88a6be37f530182df99a"
+      },
+      {
+        "id": "clause:682797740997fc2f0380b9e6",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2556,
+        "spanEnd": 2703,
+        "text": "- Own the investigation and follow-through on load test findings — translating results into concrete reliability improvements across critical flows",
+        "hash": "3d929b52e49c2c4a364804db43bdcaacaa28085d1b2244bc2a05ae5e13b75fb4"
+      },
+      {
+        "id": "clause:4bc6e8cf8ae4474c102b33d8",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2705,
+        "spanEnd": 2918,
+        "text": "- Work across platform and product engineering teams as a technical influencer — participating in architecture and readiness reviews, coaching service owners, and driving adoption of scalable reliability practices",
+        "hash": "e289381fe4ca67fe58ede4dac5120c2842e399d4f50a220eec3b6836a61c2f98"
+      },
+      {
+        "id": "clause:912fcb0fa2fec8a108376512",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 2920,
+        "spanEnd": 3052,
+        "text": "- Identify recurring failure patterns and design platform-level fixes that prevent them from showing up again in a different service",
+        "hash": "a76b59851d98add9631d000f9ca8c44bc8fb7fcb29624f320e4f08187be42e8e"
+      },
+      {
+        "id": "clause:08ea52bc4fc05123007f0fb2",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3054,
+        "spanEnd": 3221,
+        "text": "- Contribute to the team’s reliability syncs with product engineering, helping align on incident themes, critical-flow risks, and the next highest-leverage initiatives",
+        "hash": "a7b414adfd1f3c9d4124bde117ec475e57114258f00951e010bbf0f6ae8c5a32"
+      },
+      {
+        "id": "clause:d56e9a720e7417337062952e",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3225,
+        "spanEnd": 3241,
+        "text": "Skills you bring",
+        "hash": "5f6418e48062c1b07242e060beb0e52a603379760faa418a3f5bdb395fe8fc48"
+      },
+      {
+        "id": "clause:a30b9d1d9f8eac3a8f581dce",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3243,
+        "spanEnd": 3352,
+        "text": "- 8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work",
+        "hash": "d1a696387d6fde9453e7784026f56744fb69851c70e30d4e16f9c5c5c09bf22f"
+      },
+      {
+        "id": "clause:0a154200359c45b02a0ffa4d",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3354,
+        "spanEnd": 3513,
+        "text": "- Demonstrated track record of improving reliability at scale — reducing incidents, building guardrails, or driving operational standards across multiple teams",
+        "hash": "33a378544580abeaf57501960cd59ca0c80cd6575411a2fba24df86dd8408e84"
+      },
+      {
+        "id": "clause:0152c8bf71033ef54ff88529",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3515,
+        "spanEnd": 3645,
+        "text": "- Strong proficiency in backend systems and distributed architecture; you can diagnose complex failure modes across a service mesh",
+        "hash": "d241fbac7cc8da4709ebfe2ec7152c3c170a997fe335bac0474231611a57bda9"
+      },
+      {
+        "id": "clause:983f42723b4b563b7191c8a1",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3647,
+        "spanEnd": 3777,
+        "text": "- Experience with load testing and capacity planning, and the ability to translate findings into concrete engineering improvements",
+        "hash": "4405a219b32c6f650c52d02d0a65beade8c62a672b95295873288d0989384447"
+      },
+      {
+        "id": "clause:39e77d46c7f6138e1e773642",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3779,
+        "spanEnd": 3925,
+        "text": "- Proven ability to work across engineering teams as a technical influencer — driving adoption of standards and practices without direct authority",
+        "hash": "b5bb2088dff6a3966096c0990b84b098714ad12f90ff429c033d35b0d9b62606"
+      },
+      {
+        "id": "clause:944b081adab613a2c5cf45b4",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 3927,
+        "spanEnd": 3998,
+        "text": "- Familiarity with Kubernetes, Helm, Argo and modern deployment tooling",
+        "hash": "4262688b5daa9c1f8b79e2bad315cebe3ad4558a5573c18b7e48cdba49d18d9c"
+      },
+      {
+        "id": "clause:bd618864a1b28ca723696e85",
+        "section": "section:161d34e927e8e3d49b1af4ea",
+        "kind": "body",
+        "spanStart": 4000,
+        "spanEnd": 4143,
+        "text": "- Strong written and verbal communication — comfortable presenting findings and recommendations to both engineering teams and senior leadership",
+        "hash": "3eb441166631e322f2066bec2adb036b320abbdc429398716757ccf48af6076c"
+      },
+      {
+        "id": "clause:059c95bb008a4e9e3d43562e",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "heading",
+        "spanStart": 4147,
+        "spanEnd": 4158,
+        "text": "Who you are",
+        "hash": "4d579636f5b12881f76f9f7f1770fab2745486faefb3d2fd5e59d2a8fe52b1ae"
+      },
+      {
+        "id": "clause:0f4a8f3b136fde69ddff6af1",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4160,
+        "spanEnd": 4308,
+        "text": "- You think in systems — you’re not looking for the fix, you’re looking for what caused the problem and how to make sure it doesn’t happen elsewhere",
+        "hash": "663ad6903b2eb6eb3ad676fe864ac64ce3f1f6a81a0d5368e84b2c247609ddc6"
+      },
+      {
+        "id": "clause:8204d1637f7bfe6b2326f012",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4310,
+        "spanEnd": 4463,
+        "text": "- You’re comfortable working without direct authority; you build credibility through the quality of your thinking and the clarity of your recommendations",
+        "hash": "ad17c129fb7b1d9acb63032852da4a1ac4ee793b921b1f4bb627335d7e48ba25"
+      },
+      {
+        "id": "clause:7f46b835eb5993e19f31f955",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4465,
+        "spanEnd": 4594,
+        "text": "- You hold a high bar for operational excellence without making it someone else’s problem to catch up to — you bring people along",
+        "hash": "92d132954599ab18f62c8a39e8fe369c4c791d70a140a9644dcb3700ab90e6d8"
+      },
+      {
+        "id": "clause:0b517d07f65788d46a30efef",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4596,
+        "spanEnd": 4707,
+        "text": "- You’re energised by ambiguity, not slowed down by it; you know how to prioritise when everything feels urgent",
+        "hash": "1c2cffef015fcc85b2835ea889ec4f50eabfdb2707a30310fde0f9cdfba74fd6"
+      },
+      {
+        "id": "clause:cd3cbbdf00be859aa4448900",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4709,
+        "spanEnd": 4874,
+        "text": "- You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance",
+        "hash": "f8e3da5de3a5e988b965d1235b31f78fbcf2b6530702beb1b1daa25aa7b65b63"
+      },
+      {
+        "id": "clause:bc1c395190adc33c463c7014",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4876,
+        "spanEnd": 4893,
+        "text": "Why Wealthsimple?",
+        "hash": "59e68301c3d5169cc349b7ab7aeadf2cea0023087cefea0f1ce26777095c0b6e"
+      },
+      {
+        "id": "clause:0b0c3b93aec978cf28190b36",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4894,
+        "spanEnd": 4940,
+        "text": "🌸 Top-tier health benefits and life insurance",
+        "hash": "3b68030960f21f14164e77cad2a592fbbb33581533ae15794de9bc8972c4e4cf"
+      },
+      {
+        "id": "clause:7247c020e4f78d1b4f6b9119",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 4941,
+        "spanEnd": 5022,
+        "text": "📈 Long-term group savings with employer match, through Wealthsimple for Business",
+        "hash": "7e4824a16511d6fcbb0bd0403952d5bd0c9c89b2f36ba33ee4d700d5d9f95205"
+      },
+      {
+        "id": "clause:43bd255de96590cc8efdb651",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5023,
+        "spanEnd": 5112,
+        "text": "🌴 20 vacation days, 4 wellness days, and unlimited sick and mental health days per year*",
+        "hash": "d33e815a31be0d627aef4176f0afd1d0cc70a3bf8d19b3ef33940d64a57979a1"
+      },
+      {
+        "id": "clause:a8b870bd266516bac5200dad",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5113,
+        "spanEnd": 5177,
+        "text": "✈️ 90 days away: work outside Canada for up to 90 days per year*",
+        "hash": "cfed8621328aa52c27095d19fa38c41239d075d724ddd6feff6a2ab8ab2fdc79"
+      },
+      {
+        "id": "clause:40c20554b5af2f2934b76bd8",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5178,
+        "spanEnd": 5264,
+        "text": "👥 Employee resource groups, including Rainbow (2SLGBTQ), Women of WS, and Black at WS",
+        "hash": "a4ea6ba1a5cc4092b9074e9abde746a617fe275eb66b53779b8f0d43a1ccb0b7"
+      },
+      {
+        "id": "clause:43718a8cbedb50e33e4cc8ad",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5265,
+        "spanEnd": 5511,
+        "text": "🌎 We are a hybrid team with over 1,500 employees across North America. The people are one of the best parts of working here: you'll collaborate with incredibly talented, curious, and driven teammates who are deeply committed to doing great work.",
+        "hash": "700f3793fac65c5d8814d95fc9b66ca6184ca9976bf8943f0cffaaf463a0c794"
+      },
+      {
+        "id": "clause:9ecf22ac7b288b9a2dd23538",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5513,
+        "spanEnd": 5612,
+        "text": "*Unlimited paid sick days, Wellness Days and the 90 day away program do not apply to certain roles.",
+        "hash": "c0e614f2ba10a7abc7a3eaf5ff6e409e234ec06e2f607eb6db0f03d98b1a21e8"
+      },
+      {
+        "id": "clause:58a006bc9c4b3a07f46e24a8",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5614,
+        "spanEnd": 5619,
+        "text": "ICYMI",
+        "hash": "7f699abeeb35ea740295092229cd732663eabdf49b0d86a9455d86d511494e51"
+      },
+      {
+        "id": "clause:9af48b8468b6c89a022e31d4",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5620,
+        "spanEnd": 5968,
+        "text": "Technology & Innovation at Wealthsimple: We move quickly and build thoughtfully. That means we're always looking for better ways to work — whether that's new tools, AI, or rethinking how we approach a problem. We don't expect you to have all the answers, but we do expect curiosity and a willingness to evolve alongside the products we're building.",
+        "hash": "f953d5f2c0708798ddeb767eefef442ec9dd3ba1b754a5ea696a1f969ba4ca61"
+      },
+      {
+        "id": "clause:9ec1e0fbc4df7feca1a069ce",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 5970,
+        "spanEnd": 6253,
+        "text": "Inclusion Statement: We're building products for a diverse world, and we need a diverse team to do it well. We strongly encourage applications from everyone, regardless of race, religion, colour, national origin, gender, sexual orientation, age, marital status, or disability status.",
+        "hash": "62ceda8d25c5cbced4d5e34d85804fa415dc2039e23bb54f6daa5abf61b111c6"
+      },
+      {
+        "id": "clause:1ed16f6271b199c995c195a0",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 6255,
+        "spanEnd": 6573,
+        "text": "Accessibility Statement: We're committed to an accessible hiring experience. If you need any accommodations throughout the interview process, please let us know — we'll work with you to make sure you have what you need. We also welcome any feedback on how we can better accommodate candidates with accessibility needs.",
+        "hash": "851551dc82551377526934022703b450a704f7640abbd22d044cddc2abcb960b"
+      },
+      {
+        "id": "clause:4ae56f27a5fadee6f664d799",
+        "section": "section:059c95bb008a4e9e3d43562e",
+        "kind": "body",
+        "spanStart": 6575,
+        "spanEnd": 6927,
+        "text": "AI in Hiring: We may use artificial intelligence (AI) tools to support parts of our hiring process, such as reviewing applications, analyzing resumes, or assessing responses. These tools assist our team but don't replace human judgment – all final hiring decisions are made by people. If you have questions about how your data is used, reach out to us.",
+        "hash": "1b051126d00abbb1074ebbc312ab6851b689452e4243819e3065ae467c8b98a8"
+      }
+    ],
+    "requirements": [
+      {
+        "id": "r5",
+        "text": "Bring senior technical leadership to the work of making Wealthsimple more reliable at scale.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r6",
+        "text": "Work across platform and product teams.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r7",
+        "text": "Identify the highest-leverage reliability problems.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r8",
+        "text": "Build solutions that fix the immediate issue and raise the floor for everyone.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r9",
+        "text": "Shape how engineering gets done across the company.",
+        "clauseIds": [
+          "clause:5bb66be711ba984a066cb9df"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r10",
+        "text": "Improve the platform to prevent incidents by designing guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+        "clauseIds": [
+          "clause:99adec899b9cca9a96a5db07"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r11",
+        "text": "Drive adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+        "clauseIds": [
+          "clause:99adec899b9cca9a96a5db07"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r12",
+        "text": "Build tooling that reduces time to mitigation when incidents occur.",
+        "clauseIds": [
+          "clause:ab75ddd15e9153deca2d1c74"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r13",
+        "text": "Contribute to the in-house product on AI-assisted incident response.",
+        "clauseIds": [
+          "clause:ab75ddd15e9153deca2d1c74"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r14",
+        "text": "Own the investigation and follow-through on load test findings.",
+        "clauseIds": [
+          "clause:682797740997fc2f0380b9e6"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r15",
+        "text": "Translate load test results into concrete reliability improvements across critical flows.",
+        "clauseIds": [
+          "clause:682797740997fc2f0380b9e6"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r16",
+        "text": "Work across platform and product engineering teams as a technical influencer.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r17",
+        "text": "Participate in architecture and readiness reviews.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r18",
+        "text": "Coach service owners.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r19",
+        "text": "Drive adoption of scalable reliability practices.",
+        "clauseIds": [
+          "clause:4bc6e8cf8ae4474c102b33d8"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r20",
+        "text": "Identify recurring failure patterns.",
+        "clauseIds": [
+          "clause:912fcb0fa2fec8a108376512"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r21",
+        "text": "Design platform-level fixes that prevent recurring failure patterns from showing up again in a different service.",
+        "clauseIds": [
+          "clause:912fcb0fa2fec8a108376512"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r22",
+        "text": "Contribute to the team’s reliability syncs with product engineering.",
+        "clauseIds": [
+          "clause:08ea52bc4fc05123007f0fb2"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r23",
+        "text": "Help align on incident themes, critical-flow risks, and the next highest-leverage initiatives.",
+        "clauseIds": [
+          "clause:08ea52bc4fc05123007f0fb2"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r24",
+        "text": "Have 8+ years of software engineering experience.",
+        "clauseIds": [
+          "clause:a30b9d1d9f8eac3a8f581dce"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r25",
+        "text": "Have significant time in platform, infrastructure, or SRE work.",
+        "clauseIds": [
+          "clause:a30b9d1d9f8eac3a8f581dce"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r26",
+        "text": "Have a demonstrated track record of improving reliability at scale through reducing incidents, building guardrails, or driving operational standards across multiple teams.",
+        "clauseIds": [
+          "clause:0a154200359c45b02a0ffa4d"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r27",
+        "text": "Have strong proficiency in backend systems.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r28",
+        "text": "Have strong proficiency in distributed architecture.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r29",
+        "text": "Be able to diagnose complex failure modes across a service mesh.",
+        "clauseIds": [
+          "clause:0152c8bf71033ef54ff88529"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r30",
+        "text": "Have experience with load testing and capacity planning.",
+        "clauseIds": [
+          "clause:983f42723b4b563b7191c8a1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r31",
+        "text": "Be able to translate load testing and capacity planning findings into concrete engineering improvements.",
+        "clauseIds": [
+          "clause:983f42723b4b563b7191c8a1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r32",
+        "text": "Have a proven ability to work across engineering teams as a technical influencer, driving adoption of standards and practices without direct authority.",
+        "clauseIds": [
+          "clause:39e77d46c7f6138e1e773642"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r33",
+        "text": "Have familiarity with Kubernetes.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r34",
+        "text": "Have familiarity with Helm.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r35",
+        "text": "Have familiarity with Argo.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r36",
+        "text": "Have familiarity with modern deployment tooling.",
+        "clauseIds": [
+          "clause:944b081adab613a2c5cf45b4"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r37",
+        "text": "Have strong written communication skills.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r38",
+        "text": "Have strong verbal communication skills.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r39",
+        "text": "Be comfortable presenting findings and recommendations to both engineering teams and senior leadership.",
+        "clauseIds": [
+          "clause:bd618864a1b28ca723696e85"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r40",
+        "text": "Think in systems: look for what caused a problem and how to make sure it does not happen elsewhere, rather than looking only for the fix.",
+        "clauseIds": [
+          "clause:0f4a8f3b136fde69ddff6af1"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r41",
+        "text": "Be comfortable working without direct authority.",
+        "clauseIds": [
+          "clause:8204d1637f7bfe6b2326f012"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r42",
+        "text": "Build credibility through the quality of your thinking and the clarity of your recommendations.",
+        "clauseIds": [
+          "clause:8204d1637f7bfe6b2326f012"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r43",
+        "text": "Hold a high bar for operational excellence without making it someone else’s problem to catch up to.",
+        "clauseIds": [
+          "clause:7f46b835eb5993e19f31f955"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r44",
+        "text": "Bring people along.",
+        "clauseIds": [
+          "clause:7f46b835eb5993e19f31f955"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r45",
+        "text": "Be energised by ambiguity, not slowed down by it.",
+        "clauseIds": [
+          "clause:0b517d07f65788d46a30efef"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r46",
+        "text": "Know how to prioritise when everything feels urgent.",
+        "clauseIds": [
+          "clause:0b517d07f65788d46a30efef"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r47",
+        "text": "Be curious about where AI-assisted tooling is headed in reliability engineering.",
+        "clauseIds": [
+          "clause:cd3cbbdf00be859aa4448900"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "r48",
+        "text": "Want to help shape how AI-assisted tooling is used in reliability engineering, not just observe it from a distance.",
+        "clauseIds": [
+          "clause:cd3cbbdf00be859aa4448900"
+        ],
+        "importance": "required"
+      },
+      {
+        "id": "repair_r1",
+        "text": "Be curious about better ways to work, including new tools, AI, or rethinking how to approach a problem.",
+        "clauseIds": [
+          "clause:9af48b8468b6c89a022e31d4"
+        ],
+        "importance": "unknown"
+      },
+      {
+        "id": "repair_r2",
+        "text": "Be willing to evolve alongside the products Wealthsimple is building.",
+        "clauseIds": [
+          "clause:9af48b8468b6c89a022e31d4"
+        ],
+        "importance": "unknown"
+      }
+    ],
+    "dispositions": [
+      {
+        "clauseId": "clause:711e6a637ddaaaf2d37dcc25",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:2e745252ccde07b2a9761db7",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:577d2c76eda37e6470a7ddf6",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:901544d8e9eca92625812418",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:f8a13f672a2ff97edf065765",
+        "type": "source_context",
+        "requirementIds": []
+      },
+      {
+        "clauseId": "clause:988e296f3ffceaa11df17e9a",
+        "type": "source_context",
+        "requirementIds": []
+      },
+      {
+        "clauseId": "clause:7dc43cbc9b9e6755c50dfa68",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:5bb66be711ba984a066cb9df",
+        "type": "role_context",
+        "requirementIds": [
+          "r5",
+          "r6",
+          "r7",
+          "r8",
+          "r9"
+        ]
+      },
+      {
+        "clauseId": "clause:161d34e927e8e3d49b1af4ea",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:99adec899b9cca9a96a5db07",
+        "type": "role_duty",
+        "requirementIds": [
+          "r10",
+          "r11"
+        ]
+      },
+      {
+        "clauseId": "clause:ab75ddd15e9153deca2d1c74",
+        "type": "role_duty",
+        "requirementIds": [
+          "r12",
+          "r13"
+        ]
+      },
+      {
+        "clauseId": "clause:682797740997fc2f0380b9e6",
+        "type": "role_duty",
+        "requirementIds": [
+          "r14",
+          "r15"
+        ]
+      },
+      {
+        "clauseId": "clause:4bc6e8cf8ae4474c102b33d8",
+        "type": "role_duty",
+        "requirementIds": [
+          "r16",
+          "r17",
+          "r18",
+          "r19"
+        ]
+      },
+      {
+        "clauseId": "clause:912fcb0fa2fec8a108376512",
+        "type": "role_duty",
+        "requirementIds": [
+          "r20",
+          "r21"
+        ]
+      },
+      {
+        "clauseId": "clause:08ea52bc4fc05123007f0fb2",
+        "type": "role_duty",
+        "requirementIds": [
+          "r22",
+          "r23"
+        ]
+      },
+      {
+        "clauseId": "clause:d56e9a720e7417337062952e",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:a30b9d1d9f8eac3a8f581dce",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r24",
+          "r25"
+        ]
+      },
+      {
+        "clauseId": "clause:0a154200359c45b02a0ffa4d",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r26"
+        ]
+      },
+      {
+        "clauseId": "clause:0152c8bf71033ef54ff88529",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r27",
+          "r28",
+          "r29"
+        ]
+      },
+      {
+        "clauseId": "clause:983f42723b4b563b7191c8a1",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r30",
+          "r31"
+        ]
+      },
+      {
+        "clauseId": "clause:39e77d46c7f6138e1e773642",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r32"
+        ]
+      },
+      {
+        "clauseId": "clause:944b081adab613a2c5cf45b4",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r33",
+          "r34",
+          "r35",
+          "r36"
+        ]
+      },
+      {
+        "clauseId": "clause:bd618864a1b28ca723696e85",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r37",
+          "r38",
+          "r39"
+        ]
+      },
+      {
+        "clauseId": "clause:059c95bb008a4e9e3d43562e",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "section_heading"
+      },
+      {
+        "clauseId": "clause:0f4a8f3b136fde69ddff6af1",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r40"
+        ]
+      },
+      {
+        "clauseId": "clause:8204d1637f7bfe6b2326f012",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r41",
+          "r42"
+        ]
+      },
+      {
+        "clauseId": "clause:7f46b835eb5993e19f31f955",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r43",
+          "r44"
+        ]
+      },
+      {
+        "clauseId": "clause:0b517d07f65788d46a30efef",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r45",
+          "r46"
+        ]
+      },
+      {
+        "clauseId": "clause:cd3cbbdf00be859aa4448900",
+        "type": "material_requirement",
+        "requirementIds": [
+          "r47",
+          "r48"
+        ]
+      },
+      {
+        "clauseId": "clause:bc1c395190adc33c463c7014",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:0b0c3b93aec978cf28190b36",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:7247c020e4f78d1b4f6b9119",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:43bd255de96590cc8efdb651",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:a8b870bd266516bac5200dad",
+        "type": "source_context",
+        "requirementIds": []
+      },
+      {
+        "clauseId": "clause:40c20554b5af2f2934b76bd8",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:43718a8cbedb50e33e4cc8ad",
+        "type": "source_context",
+        "requirementIds": []
+      },
+      {
+        "clauseId": "clause:9ecf22ac7b288b9a2dd23538",
+        "type": "source_context",
+        "requirementIds": []
+      },
+      {
+        "clauseId": "clause:58a006bc9c4b3a07f46e24a8",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:9af48b8468b6c89a022e31d4",
+        "type": "material_requirement",
+        "requirementIds": [
+          "repair_r1",
+          "repair_r2"
+        ]
+      },
+      {
+        "clauseId": "clause:9ec1e0fbc4df7feca1a069ce",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:1ed16f6271b199c995c195a0",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      },
+      {
+        "clauseId": "clause:4ae56f27a5fadee6f664d799",
+        "type": "nonrequirement",
+        "requirementIds": [],
+        "exclusionRule": "literal_nonmaterial_audit"
+      }
+    ],
+    "repair": {
+      "version": "requirement-coverage-repair/v1-delta4096",
+      "sourceFingerprint": "b6ac3f8a55585780e534f408fb7decf4a8b5d260bc5d921d7b4facd5d9b45a11",
+      "sourceVersion": 1,
+      "preparedFingerprint": "f90219409bf4073de7e090279c7d6ab281dfbe2c00b44f0a4d03957310248c50",
+      "baseExtractionFingerprint": "0174f4239927cc275aca4076a5119828aa882f9a4fe29376eeda5d10cba4183f",
+      "baseLedgerFingerprint": "5bb6e3f97b43782cd9c21f1e47e59cd0fa9821f1d8d09a6dd997b1f5a2192b79",
+      "feedbackAuditFingerprint": "f0cc35c75de375d07dc3c964bb9700a5387699196ba11aa5d0319b1b17890a99",
+      "targetClauseIds": [
+        "clause:f8a13f672a2ff97edf065765",
+        "clause:988e296f3ffceaa11df17e9a",
+        "clause:a8b870bd266516bac5200dad",
+        "clause:43718a8cbedb50e33e4cc8ad",
+        "clause:9ecf22ac7b288b9a2dd23538",
+        "clause:9af48b8468b6c89a022e31d4"
+      ],
+      "inputTokenCeiling": 6000,
+      "maxOutputTokens": 4096,
+      "inputFingerprint": "2aa36101c8417a507ac77911c2ff5dbc930ed183ff3ca748d0f11fbba59810f2",
+      "removedRequirementIds": [
+        "r1",
+        "r2",
+        "r3",
+        "r4",
+        "r49",
+        "r50"
+      ]
+    }
+  },
+  "targetClauseIds": [
+    "clause:f8a13f672a2ff97edf065765",
+    "clause:988e296f3ffceaa11df17e9a",
+    "clause:a8b870bd266516bac5200dad",
+    "clause:43718a8cbedb50e33e4cc8ad",
+    "clause:9ecf22ac7b288b9a2dd23538",
+    "clause:9af48b8468b6c89a022e31d4"
+  ]
+}

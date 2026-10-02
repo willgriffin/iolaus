@@ -2,7 +2,12 @@ import { createServer, type IncomingMessage } from 'node:http';
 
 type Json = Record<string, unknown>;
 export interface RepairProviderEvent {
-  kind: 'base' | 'historical_feedback' | 'repair' | 'current_audit';
+  kind:
+    | 'base'
+    | 'historical_feedback'
+    | 'repair'
+    | 'current_audit'
+    | 'audit_replay';
   request: Json;
   nativeRepairIntent?: Json;
 }
@@ -26,6 +31,7 @@ async function payload(request: IncomingMessage): Promise<Json> {
 /** Only transport is fictional; native SDK parsing/governance stays real. */
 export async function startRepairProvider(
   readNativeRepairIntent: () => Promise<Json | undefined>,
+  options: { auditReplayOnly?: boolean } = {},
 ) {
   const events: RepairProviderEvent[] = [];
   const server = createServer(async (request, response) => {
@@ -156,7 +162,13 @@ export async function startRepairProvider(
           ]),
         );
         events.push({
-          kind: historical ? 'historical_feedback' : 'current_audit',
+          kind: historical
+            ? 'historical_feedback'
+            : options.auditReplayOnly ||
+                events.some((row) => row.kind === 'current_audit')
+              ? 'audit_replay'
+              : 'current_audit',
+          nativeRepairIntent: await readNativeRepairIntent(),
           request: body,
         });
         response.end(

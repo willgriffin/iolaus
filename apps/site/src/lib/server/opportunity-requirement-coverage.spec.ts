@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import paid from './fixtures/ats/wealthsimple-paid-v4-source-context.json';
 import capturedIncomplete from './fixtures/ats/wealthsimple-source-coverage-incomplete.json';
 import capturedPending from './fixtures/ats/wealthsimple-source-coverage-pending.json';
 import {
@@ -11,7 +12,12 @@ import {
   mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
   prepareRequirementCoverageRepair,
+  REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION,
+  REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION,
   type RequirementCoverageContext,
+  type RequirementCoverageExtractionContract,
   requirementCoverageContextForOpportunity,
   requirementCoverageExtractionClauses,
   validatePreparedRequirementCoverageRepair,
@@ -729,5 +735,138 @@ describe('exact source requirement coverage', () => {
         preparedPostingFingerprint: 'changed',
       }).extractionFingerprint,
     ).not.toBe(first.extractionFingerprint);
+  });
+});
+
+const historical = () =>
+  requirementCoverageContextForOpportunity(paid, 'paid-v4-coverage-only4096');
+describe('fresh source contract and paid V4 native identity', () => {
+  it('recomputes the actual paid 0174 identity using immutable full historical literals', () => {
+    expect(REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION).toBe(
+      'requirement-coverage-source/v4-coverage-only4096',
+    );
+    expect(REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION).toBe(
+      'opportunity-extraction/v2/requirement-coverage-v3-only4096',
+    );
+    expect(REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION).toBe(
+      'opportunity-extraction-output/v1/requirement-coverage-v3-only4096',
+    );
+    expect(historical().extractionFingerprint).toBe(
+      paid.expectedHistoricalExtractionFingerprint,
+    );
+    expect(Buffer.byteLength(historical().sourceText)).toBe(7021);
+  });
+  it('uses a genuinely distinct V5 default without reinterpreting the paid ancestry', () => {
+    expect(REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION).toBe(
+      'requirement-coverage-source/v5-candidate-context4096',
+    );
+    expect(
+      requirementCoverageContextForOpportunity(paid).extractionFingerprint,
+    ).not.toBe(historical().extractionFingerprint);
+    expect(historical().extractionFingerprint).toBe(
+      paid.expectedHistoricalExtractionFingerprint,
+    );
+  });
+  it('invalidates historical identity on changed native raw, version or preparation', () => {
+    for (const delta of [
+      { descriptionRaw: `${paid.descriptionRaw}\nChanged criterion.` },
+      { sourceContentVersion: 2 },
+      { preparedPostingFingerprint: 'changed-preparation' },
+    ]) {
+      expect(
+        requirementCoverageContextForOpportunity(
+          { ...paid, ...delta },
+          'paid-v4-coverage-only4096',
+        ).extractionFingerprint,
+      ).not.toBe(paid.expectedHistoricalExtractionFingerprint);
+    }
+  });
+  it('never derives either identity from an injected ledger or accepts unknown contract selection', () => {
+    const injected = {
+      ...paid,
+      preparedPostingJson: JSON.stringify({
+        requirementCoverage: {
+          extractionFingerprint: 'forged',
+          audit: { fingerprint: 'forged' },
+        },
+      }),
+    };
+    expect(requirementCoverageContextForOpportunity(injected)).toEqual(
+      requirementCoverageContextForOpportunity(paid),
+    );
+    expect(
+      requirementCoverageContextForOpportunity(
+        injected,
+        'paid-v4-coverage-only4096',
+      ),
+    ).toEqual(historical());
+    expect(() =>
+      requirementCoverageContextForOpportunity(
+        paid,
+        'forged' as RequirementCoverageExtractionContract,
+      ),
+    ).toThrow('Unknown source extraction contract');
+  });
+  it('uses captured canonical raw instead of a mutable rendered description or summary', () => {
+    const canonical = {
+      ...paid,
+      descriptionRaw: 'rendered summary',
+      sourceContentJson: JSON.stringify({
+        descriptionRaw: paid.descriptionRaw,
+      }),
+    };
+    expect(
+      requirementCoverageContextForOpportunity(
+        canonical,
+        'paid-v4-coverage-only4096',
+      ),
+    ).toEqual(historical());
+    expect(
+      requirementCoverageContextForOpportunity({
+        descriptionSummary: paid.descriptionRaw,
+      }).sourceText,
+    ).toBe('');
+  });
+  it('retains exact context without candidate rows and retains actual criteria as reciprocal atomic rows', () => {
+    const raw =
+      'About the team\nOur team builds financial products.\nRequirements\nYou must diagnose incidents.\nBenefits\nWork outside Canada up to 90 days; this program excludes certain roles.';
+    const context = requirementCoverageContextForOpportunity({
+      descriptionRaw: raw,
+      sourceContentFingerprint: 'native-source',
+      sourceContentVersion: 1,
+    });
+    const ledger = buildRequirementCoverageSource(context);
+    for (const clause of ledger.clauses.filter(
+      (item) => item.kind === 'body',
+    )) {
+      const criterion = clause.text === 'You must diagnose incidents.';
+      if (criterion)
+        ledger.requirements.push({
+          id: 'r1',
+          text: clause.text,
+          clauseIds: [clause.id],
+          importance: 'required',
+        });
+      ledger.dispositions = ledger.dispositions.map((row) =>
+        row.clauseId === clause.id
+          ? {
+              clauseId: clause.id,
+              type: criterion ? 'material_requirement' : 'source_context',
+              requirementIds: criterion ? ['r1'] : [],
+            }
+          : row,
+      );
+    }
+    expect(
+      validateRequirementCoverage(context, ledger).structuralComplete,
+    ).toBe(true);
+    expect(ledger.requirements).toHaveLength(1);
+    expect(
+      ledger.dispositions.filter((row) => row.type === 'source_context'),
+    ).toHaveLength(2);
+    expect(
+      ledger.clauses.map((row) => raw.slice(row.spanStart, row.spanEnd)),
+    ).toEqual(ledger.clauses.map((row) => row.text));
+    expect(ledger.audit).toBeUndefined(); // Structural validity is not an independent semantic verdict.
   });
 });

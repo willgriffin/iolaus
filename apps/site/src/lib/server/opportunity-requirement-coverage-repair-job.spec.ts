@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import {
   buildRequirementCoverageSource,
-  REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-  REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+  REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
+  REQUIREMENT_COVERAGE_REPAIR_VERSION,
   requirementCoverageContextForOpportunity,
 } from './opportunity-requirement-coverage.js';
 import {
+  attestCompletedOpportunityRequirementCoverageRepair,
   attestOpportunityRequirementCoverageRepair,
   runOpportunityRequirementCoverageRepairJob,
   SOURCE_COVERAGE_REPAIR_JOB_CONTRACT,
@@ -35,10 +37,16 @@ vi.mock('./smrt.js', () => ({ getCollection: vi.fn() }));
 vi.mock('./source-crawl-operator.js', () => ({
   requireSourceCrawlOperator: vi.fn(),
 }));
-vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
-  requirementCoverageSourceDependencyFingerprint: () =>
-    'source-dependency-seed',
-}));
+vi.mock(
+  './opportunity-requirement-coverage-provider.js',
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('./opportunity-requirement-coverage-provider.js')
+    >()),
+    requirementCoverageSourceDependencyFingerprint: () =>
+      'source-dependency-seed',
+  }),
+);
 // Runner branding itself belongs to native TaskRunner integration. This unit
 // adapter only admits the separately established active test context.
 vi.mock('./job-workspace-subject.js', () => ({
@@ -70,7 +78,10 @@ function fixture() {
   opportunity.preparedPostingFingerprint = prepareOpportunityPosting(
     opportunityWithSourceContent(opportunity),
   ).fingerprint;
-  const context = requirementCoverageContextForOpportunity(opportunity);
+  const context = requirementCoverageContextForOpportunity(
+    opportunity,
+    'paid-v4-coverage-only4096',
+  );
   const base = buildRequirementCoverageSource(context);
   const answers: Record<string, unknown> = {};
   for (const [index, clause] of base.clauses.entries()) {
@@ -127,8 +138,8 @@ function fixture() {
     request_input_fingerprint: context.extractionFingerprint,
     feature: 'opportunity-extraction-chunk-1',
     request_feature: 'opportunity-extraction-chunk-1',
-    prompt_version: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-    output_schema_version: REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+    prompt_version: REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
+    output_schema_version: REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
     output_json: JSON.stringify({ requirementCoverage: base }),
   };
   const feedbackReceipt: Record<string, unknown> = {
@@ -150,7 +161,9 @@ function fixture() {
     targetClauseIds: [base.clauses[3].id],
   };
   const db = {
-    query: vi.fn(async () => ({ rows: [baseReceipt, feedbackReceipt] })),
+    query: vi.fn(async (_sql: string, _params: unknown[]) => ({
+      rows: [baseReceipt, feedbackReceipt],
+    })),
   };
   return {
     opportunity,
@@ -163,6 +176,139 @@ function fixture() {
     db,
   };
 }
+
+async function completedFixture() {
+  const f = fixture();
+  const base = await attestOpportunityRequirementCoverageRepair(
+    f.opportunity,
+    f.selection,
+    f.db,
+  );
+  const target = base.prepared.base.clauses.find(
+    (row) => row.id === f.selection.targetClauseIds[0],
+  );
+  if (!target) throw new Error('Fixture target missing.');
+  const output = {
+    requirementCoverage: {
+      requirements: [
+        {
+          id: 'repair_r0',
+          text: target.text,
+          clauseIds: [target.id],
+          importance: 'unknown',
+        },
+      ],
+      dispositions: [
+        {
+          clauseId: target.id,
+          type: 'material_requirement',
+          requirementIds: ['repair_r0'],
+        },
+      ],
+      removedRequirementIds: [],
+    },
+  };
+  const repairReceipt: Record<string, unknown> = {
+    ...f.baseReceipt,
+    owner_request_id: 'completed-repair-request',
+    request_id: 'completed-repair-request',
+    input_fingerprint: base.prepared.provenance.inputFingerprint,
+    request_input_fingerprint: base.prepared.provenance.inputFingerprint,
+    feature: 'opportunity-source-requirement-repair',
+    request_feature: 'opportunity-source-requirement-repair',
+    prompt_version: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+    output_schema_version: REQUIREMENT_COVERAGE_REPAIR_VERSION,
+    model: 'openai/gpt-6-luna',
+    request_model: 'openai/gpt-6-luna',
+    output_json: JSON.stringify(output),
+  };
+  f.db.query.mockImplementation(async (_sql, params) => ({
+    rows: params.includes('completed-repair-request')
+      ? [repairReceipt]
+      : [f.baseReceipt, f.feedbackReceipt],
+  }));
+  return {
+    ...f,
+    selection: { ...f.selection, repairRequestId: 'completed-repair-request' },
+    repairReceipt,
+    output,
+  };
+}
+
+describe('completed-only native source repair audit replay', () => {
+  it('attests actual completed repair output and reconstructs the merged material instead of the posting payload', async () => {
+    const f = await completedFixture();
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: { requirements: [{ id: 'forged' }] },
+    });
+    const result = await attestCompletedOpportunityRequirementCoverageRepair(
+      f.opportunity,
+      f.selection,
+      f.db,
+    );
+    expect(result.completedRepair).toMatchObject({
+      requestId: 'completed-repair-request',
+      output: f.output,
+      inputFingerprint: result.prepared.provenance.inputFingerprint,
+      contentFingerprint: f.context.sourceFingerprint,
+      contentVersion: 1,
+      reservation: { calls: 1, reservedTokens: 10096, spendMicros: 1000 },
+    });
+    expect(result.completedRepair.ledgerFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([
+    ['status', 'failed'],
+    ['request_status', 'failed'],
+    ['tenant_id', 'other'],
+    ['request_candidate_profile_id', 'private-profile'],
+    ['input_fingerprint', 'wrong-ancestry'],
+    ['content_fingerprint', 'old-source'],
+    ['output_schema_version', 'unknown'],
+    ['accounting_basis', 'conservative'],
+    ['actual_total_tokens', 0],
+    ['model', 'other-model'],
+  ] satisfies Array<
+    [string, unknown]
+  >)('rejects unauthoritative completed repair %s', async (key, value) => {
+    const f = await completedFixture();
+    f.repairReceipt[key] = value;
+    await expect(
+      attestCompletedOpportunityRequirementCoverageRepair(
+        f.opportunity,
+        f.selection,
+        f.db,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('rejects an incomplete actual repair output without regenerating a replacement', async () => {
+    const f = await completedFixture();
+    f.repairReceipt.output_json = '{}';
+    await expect(
+      attestCompletedOpportunityRequirementCoverageRepair(
+        f.opportunity,
+        f.selection,
+        f.db,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('rejects changed source despite a provided old completed ledger', async () => {
+    const f = await completedFixture();
+    f.opportunity.sourceContentVersion = 2;
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: f.base,
+    });
+    await expect(
+      attestCompletedOpportunityRequirementCoverageRepair(
+        f.opportunity,
+        f.selection,
+        f.db,
+      ),
+    ).rejects.toThrow();
+  });
+});
 
 describe('native source coverage repair attestation', () => {
   it('replays only actual GLOBAL receipts and decodes all 42 historical body questions', async () => {
@@ -199,6 +345,32 @@ describe('native source coverage repair attestation', () => {
     expect(f.db.query).toHaveBeenCalledWith(
       expect.stringContaining('JOIN opportunity_intelligence_requests'),
       ['base-native-request', 'audit-native-request', 'opportunity-1'],
+    );
+  });
+
+  it('uses explicit paid V4 native ancestry while fresh extraction remains distinct and posting payload cannot select the contract', async () => {
+    const f = fixture();
+    const fresh = requirementCoverageContextForOpportunity(f.opportunity);
+    expect(fresh.extractionFingerprint).not.toBe(
+      f.context.extractionFingerprint,
+    );
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      requirementCoverage: {
+        ...f.base,
+        extractionFingerprint: fresh.extractionFingerprint,
+      },
+      extractionContract: 'current',
+    });
+    const result = await attestOpportunityRequirementCoverageRepair(
+      f.opportunity,
+      f.selection,
+      f.db,
+    );
+    expect(result.prepared.context.extractionFingerprint).toBe(
+      f.context.extractionFingerprint,
+    );
+    expect(result.prepared.provenance.baseRequestId).toBe(
+      'base-native-request',
     );
   });
 
@@ -557,5 +729,111 @@ describe('fresh native source repair adapter fences', () => {
       'Operator role revoked.',
       f.subject,
     );
+  });
+
+  it('dispatches completed-repair audit-only with exact native re-attestation and zero repair calls', async () => {
+    const f = await adapterFixture();
+    const cached = await completedFixture();
+    const completed = await attestCompletedOpportunityRequirementCoverageRepair(
+      cached.opportunity,
+      cached.selection,
+      cached.db,
+    );
+    f.job.args.sourceCoverageRepair = {
+      contract: SOURCE_COVERAGE_REPAIR_JOB_CONTRACT,
+      ...cached.selection,
+      stage: 'audit_completed_repair',
+      completedRepairLedgerFingerprint:
+        completed.completedRepair.ledgerFingerprint,
+    };
+    f.dependencies.attestCompleted = vi.fn(async () => completed);
+    f.dependencies.processAuditReplay = vi.fn(
+      async (_id, attestation, options) => {
+        expect(attestation.completedRepair.output).toEqual(cached.output);
+        expect(options.baseReservation).toEqual({
+          calls: 2,
+          reservedTokens: 20192,
+          spendMicros: 2000,
+        });
+        const freshReceipt = await options.resolveCompletedRepair();
+        expect(freshReceipt.requestId).toBe('completed-repair-request');
+        await options.assertCurrentAuthority();
+        await options.fencedOpportunityUpdate(
+          'opportunity-1',
+          f.sourceContext.sourceFingerprint,
+          {},
+        );
+        return {
+          status: 'processed',
+          message: 'Re-audited completed source repair.',
+        };
+      },
+    );
+    await expect(
+      runOpportunityRequirementCoverageRepairJob(
+        'opportunity-1',
+        f.context,
+        f.subject,
+        f.dependencies,
+      ),
+    ).resolves.toMatchObject({ status: 'processed' });
+    expect(f.dependencies.processAuditReplay).toHaveBeenCalledOnce();
+    expect(f.dependencies.processRepair).not.toHaveBeenCalled();
+    expect(f.dependencies.attestCompleted).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a missing completed repair before any processor and never falls back to Luna', async () => {
+    const f = await adapterFixture();
+    const intent = f.job.args.sourceCoverageRepair as Record<string, unknown>;
+    f.job.args.sourceCoverageRepair = {
+      ...intent,
+      stage: 'audit_completed_repair',
+      repairRequestId: 'missing-repair',
+    };
+    f.dependencies.attestCompleted = vi.fn(async () => {
+      throw new Error('Completed native repair receipt is missing.');
+    });
+    f.dependencies.processAuditReplay = vi.fn(async () => ({
+      status: 'processed',
+      message: '',
+    }));
+    await expect(
+      runOpportunityRequirementCoverageRepairJob(
+        'opportunity-1',
+        f.context,
+        f.subject,
+        f.dependencies,
+      ),
+    ).rejects.toThrow('receipt is missing');
+    expect(f.dependencies.processAuditReplay).not.toHaveBeenCalled();
+    expect(f.dependencies.processRepair).not.toHaveBeenCalled();
+    expect(f.dependencies.startRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects an absent audit-only processor rather than using the repair processor', async () => {
+    const f = await adapterFixture();
+    const cached = await completedFixture();
+    const completed = await attestCompletedOpportunityRequirementCoverageRepair(
+      cached.opportunity,
+      cached.selection,
+      cached.db,
+    );
+    f.job.args.sourceCoverageRepair = {
+      contract: SOURCE_COVERAGE_REPAIR_JOB_CONTRACT,
+      ...cached.selection,
+      stage: 'audit_completed_repair',
+      completedRepairLedgerFingerprint:
+        completed.completedRepair.ledgerFingerprint,
+    };
+    f.dependencies.attestCompleted = vi.fn(async () => completed);
+    await expect(
+      runOpportunityRequirementCoverageRepairJob(
+        'opportunity-1',
+        f.context,
+        f.subject,
+        f.dependencies,
+      ),
+    ).rejects.toThrow('audit-only processor');
+    expect(f.dependencies.processRepair).not.toHaveBeenCalled();
   });
 });

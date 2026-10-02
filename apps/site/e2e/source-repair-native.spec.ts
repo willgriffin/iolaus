@@ -8,6 +8,20 @@ type Json = Record<string, unknown>;
 interface RepairResult {
   scenario: string;
   repairJobId: string;
+  replayJobId: string;
+  replayEventStart: number;
+  beforeReplay: {
+    preparedPostingJson: {
+      requirementCoverage: { audit: Json; requirements: Json[] };
+    };
+    receipts: Json[];
+  };
+  exactReplay: {
+    request: { state: Json; questions: Json };
+    expectedAudit: Json;
+    repairRequestId: string;
+    auditRequestId: string;
+  };
   refusal: string;
   bootstrapEventCount: number;
   owner: { tenantId: string; userId: string; profileId: string };
@@ -196,4 +210,134 @@ for (const scenario of ['stale', 'forged', 'revoked']) {
       }
     },
   );
+}
+
+for (const scenario of ['positive', 'stale', 'forged']) {
+  test(`native TaskRunner audit-only replay ${scenario} uses actual completed repair receipt`, async ({
+    baseURL: _baseURL,
+  }, info) => {
+    test.skip(
+      process.env.IOLAUS_E2E_SOURCE_COVERAGE !== '1',
+      'Explicit fictional loopback provider required',
+    );
+    test.setTimeout(180_000);
+    const result = await nativeRepair(`audit-${scenario}`, info);
+    expect(result.replayEventStart).toBe(3);
+    expect(
+      result.providerEvents
+        .slice(0, result.replayEventStart)
+        .map((row) => row.kind),
+    ).toEqual(['base', 'historical_feedback', 'repair']);
+    expect(result.assessments).toHaveLength(0);
+    for (const receipt of result.receipts) {
+      expect(receipt.tenant_id ?? '').toBe('');
+      expect(receipt.owner_user_id ?? '').toBe('');
+      expect(receipt.candidate_profile_id ?? '').toBe('');
+    }
+    const replayEvents = result.providerEvents.slice(result.replayEventStart);
+    if (scenario === 'positive') {
+      expect(result.refusal).toBe('');
+      expect(replayEvents.map((row) => row.kind)).toEqual(['audit_replay']);
+      expect(replayEvents[0].request.model).toBe('jev-latest');
+      expect(result.jobs).toHaveLength(1);
+      expect(result.jobs[0]).toMatchObject({
+        id: result.replayJobId,
+        method: 'prepareAssessmentCoverage',
+        status: 'completed',
+        tenant_id: result.owner.tenantId,
+      });
+      const intent = parsed(result.jobs[0].args);
+      expect(intent.sourceCoverageRepair).toMatchObject({
+        stage: 'audit_completed_repair',
+        repairRequestId: result.exactReplay.repairRequestId,
+      });
+      expect(replayEvents[0].nativeRepairIntent).toMatchObject({
+        id: result.replayJobId,
+        status: 'running',
+      });
+      expect(replayEvents[0].request.state).toEqual(
+        result.exactReplay.request.state,
+      );
+      // The actual TypeSafe SDK converts its public predicate primitive to
+      // the vendor noul wire type; keys and literal instructions stay exact.
+      const wireQuestions = Object.fromEntries(
+        Object.entries(result.exactReplay.request.questions).map(
+          ([key, value]) => {
+            const question = value as Json;
+            expect(question.type).toBe('predicate');
+            return [key, { ...question, type: 'noul' }];
+          },
+        ),
+      );
+      expect(replayEvents[0].request.questions).toEqual(wireQuestions);
+      // Five dynamic direct-literal questions over the fictional three-clause
+      // ledger; this is protocol proof, not the real daily 84-question dataset.
+      expect(Object.keys(result.exactReplay.request.questions)).toHaveLength(5);
+      expect(
+        result.current.preparedPostingJson.requirementCoverage.audit,
+      ).toEqual(result.exactReplay.expectedAudit);
+      expect(result.exactReplay.auditRequestId).not.toBe(
+        result.beforeReplay.preparedPostingJson.requirementCoverage.audit
+          ?.requestId,
+      );
+      expect(result.verified.complete).toBe(true);
+      for (const row of result.beforeReplay.preparedPostingJson
+        .requirementCoverage.requirements)
+        expect(
+          result.current.preparedPostingJson.requirementCoverage.requirements,
+        ).toContainEqual(row);
+      expect(
+        result.current.preparedPostingJson.requirementCoverage.requirements,
+      ).toHaveLength(3);
+      const newReceipts = result.receipts.filter(
+        (row) =>
+          !result.beforeReplay.receipts.some(
+            (before) => before.owner_request_id === row.owner_request_id,
+          ),
+      );
+      expect(newReceipts).toHaveLength(1);
+      expect(newReceipts[0]).toMatchObject({
+        owner_request_id: result.exactReplay.auditRequestId,
+        feature: 'opportunity-source-requirement-coverage',
+        status: 'completed',
+        model: 'jev-latest',
+        output_schema_version: 'requirement-coverage-audit/v6-direct-literal',
+      });
+      expect(
+        result.requests.filter(
+          (row) => row.feature === 'opportunity-source-requirement-repair',
+        ),
+      ).toHaveLength(1);
+      const sourceOnly = JSON.stringify({
+        request: replayEvents[0].request,
+        cache: result.current.preparedPostingJson,
+      });
+      for (const identity of [
+        result.owner.tenantId,
+        result.owner.userId,
+        result.owner.profileId,
+      ])
+        expect(sourceOnly).not.toContain(identity);
+    } else {
+      expect(replayEvents).toHaveLength(0);
+      expect(result.receipts).toHaveLength(result.beforeReplay.receipts.length);
+      expect(result.current.preparedPostingJson).toEqual(
+        result.beforeReplay.preparedPostingJson,
+      );
+      if (scenario === 'forged') {
+        expect(result.refusal).toMatch(
+          /distinct completed native repair receipt/,
+        );
+        expect(result.replayJobId).toBe('');
+        expect(result.jobs).toHaveLength(0);
+      } else {
+        expect(result.jobs).toHaveLength(1);
+        expect(result.jobs[0]).toMatchObject({
+          id: result.replayJobId,
+          status: 'failed',
+        });
+        expect(result.jobs[0].last_error).toMatch(/source is not current/);
+      }
+    }
+  });
 }

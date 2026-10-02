@@ -9,9 +9,18 @@ export const REQUIREMENT_COVERAGE_VERSION = 'requirement-coverage/v1';
 export const REQUIREMENT_COVERAGE_REPAIR_VERSION =
   'requirement-coverage-repair/v1-delta4096';
 export const REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION =
+  'requirement-coverage-source/v5-candidate-context4096';
+export const REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION = `${OPPORTUNITY_EXTRACTION_PROMPT_VERSION}/requirement-coverage-v4-candidate-context4096`;
+export const REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION = `${OPPORTUNITY_EXTRACTION_SCHEMA_VERSION}/requirement-coverage-v4-candidate-context4096`;
+export const REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION =
   'requirement-coverage-source/v4-coverage-only4096';
-export const REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION = `${OPPORTUNITY_EXTRACTION_PROMPT_VERSION}/requirement-coverage-v3-only4096`;
-export const REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION = `${OPPORTUNITY_EXTRACTION_SCHEMA_VERSION}/requirement-coverage-v3-only4096`;
+export const REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION =
+  'opportunity-extraction/v2/requirement-coverage-v3-only4096';
+export const REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION =
+  'opportunity-extraction-output/v1/requirement-coverage-v3-only4096';
+export type RequirementCoverageExtractionContract =
+  | 'current'
+  | 'paid-v4-coverage-only4096';
 export interface RequirementCoverageContext {
   sourceText: string;
   sourceFingerprint: string;
@@ -60,7 +69,9 @@ export interface CoverageLedger {
   dispositions: CoverageDisposition[];
   repair?: CoverageRepairProvenance;
   audit?: {
-    version: 'requirement-coverage-audit/v5-candidate-criteria';
+    version: 'requirement-coverage-audit/v6-direct-literal';
+    answerProbabilities: Record<string, number>;
+    requestFingerprint: string;
     ledgerFingerprint: string;
     sourceFingerprint: string;
     extractionFingerprint: string;
@@ -330,7 +341,11 @@ export function mergeRequirementCoverageRepair(
 /** Derive identity from captured/native source fields, never from a ledger. */
 export function requirementCoverageContextForOpportunity(
   opportunity: Record<string, unknown>,
+  contract: RequirementCoverageExtractionContract = 'current',
 ): RequirementCoverageContext {
+  if (contract !== 'current' && contract !== 'paid-v4-coverage-only4096')
+    throw new Error('Unknown source extraction contract.');
+  const historical = contract === 'paid-v4-coverage-only4096';
   const source = opportunityWithSourceContent(opportunity);
   const sourceText =
     typeof source.descriptionRaw === 'string' && source.descriptionRaw.trim()
@@ -352,13 +367,19 @@ export function requirementCoverageContextForOpportunity(
     extractionFingerprint: hash(
       JSON.stringify({
         version: REQUIREMENT_COVERAGE_VERSION,
-        sourceContractVersion: REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION,
+        sourceContractVersion: historical
+          ? REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION
+          : REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION,
         sourceFingerprint,
         sourceVersion,
         preparedFingerprint,
         sourceTextHash: hash(sourceText),
-        promptVersion: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-        schemaVersion: REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+        promptVersion: historical
+          ? REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION
+          : REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
+        schemaVersion: historical
+          ? REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION
+          : REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
       }),
     ),
     ...(preparedFingerprint ? { preparedFingerprint } : {}),

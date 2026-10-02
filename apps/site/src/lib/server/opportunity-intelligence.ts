@@ -35,8 +35,8 @@ import { evaluateOpportunityAssessment } from './opportunity-assessment-decision
 import {
   buildOpportunityAssessmentPostingInput,
   opportunityAssessmentSubjectMaterialFingerprint,
+  readVerifiedOpportunityRequirementCoverage,
   selectOpportunityAssessmentCandidateSources,
-  verifiedOpportunityRequirementCoverage,
 } from './opportunity-assessment-input.js';
 import {
   hasOpportunityAssessment,
@@ -56,8 +56,6 @@ import {
   countOpportunityInputTokens,
   inputTokenCeilingForModel,
 } from './opportunity-posting-preparation.js';
-import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
-import { hasRecordedRequirementCoverageAudit } from './opportunity-requirement-coverage-provider.js';
 import {
   attributableOpportunityScoringReasons,
   buildBoundedOpportunityScoringRequest,
@@ -1256,15 +1254,8 @@ async function runAssessment(
   }
   try {
     const verifiedCoverage =
-      verifiedOpportunityRequirementCoverage(opportunity);
-    if (
-      !verifiedCoverage ||
-      !(await hasRecordedRequirementCoverageAudit(
-        opportunityId,
-        requirementCoverageContextForOpportunity(opportunity),
-        verifiedCoverage.ledger,
-      ))
-    ) {
+      await readVerifiedOpportunityRequirementCoverage(opportunity);
+    if (!verifiedCoverage) {
       return {
         message:
           'The current posting needs a separately recorded source extraction and clause coverage audit before private matching.',
@@ -1355,7 +1346,7 @@ async function runAssessment(
       subjectFingerprint: privateMaterialFingerprint,
       workspaceSubject: subject,
       requirementCoverage: {
-        context: requirementCoverageContextForOpportunity(opportunity),
+        context: verifiedCoverage.context,
         ledger: verifiedCoverage.ledger,
       },
     });
@@ -1388,8 +1379,8 @@ async function runAssessment(
             Math.trunc(numberValue(current.sourceContentVersion) ?? 0),
           ) !== sourceVersion ||
           currentEvidence.fingerprint !== evidence.fingerprint ||
-          verifiedOpportunityRequirementCoverage(current)?.fingerprint !==
-            verifiedCoverage.fingerprint
+          (await readVerifiedOpportunityRequirementCoverage(current))
+            ?.fingerprint !== verifiedCoverage.fingerprint
         ) {
           return {
             message: 'Discarded stale private opportunity assessment material.',

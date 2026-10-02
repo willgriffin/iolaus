@@ -9,7 +9,6 @@ import {
 import { buildRequirementCoverageSource } from './opportunity-requirement-coverage.js';
 import {
   prepareRequirementCoverageAudit,
-  requirementCoverageClauseQuestionKey,
   resolveRequirementCoverageAudit,
 } from './opportunity-requirement-coverage-provider.js';
 
@@ -57,17 +56,26 @@ coverageLedger.dispositions = [
     requirementIds: ['r1'],
   },
 ];
+const coverageAuditRequest = prepareRequirementCoverageAudit(
+  coverageContext,
+  coverageLedger,
+);
 coverageLedger.audit = resolveRequirementCoverageAudit(
-  prepareRequirementCoverageAudit(coverageContext, coverageLedger),
+  coverageAuditRequest,
   {
     model: 'jev-test',
     provenance: { model: 'jev-test', provider: 'typesafe' },
-    answers: {
-      [requirementCoverageClauseQuestionKey(0, 'mapped')]: {
-        type: 'predicate',
-        probability: 0.9,
-      },
-    },
+    answers: Object.fromEntries(
+      Object.keys(coverageAuditRequest.request.questions).map((key) => [
+        key,
+        {
+          type: 'predicate' as const,
+          probability: coverageAuditRequest.contextQuestionKeys.includes(key)
+            ? 0.1
+            : 0.9,
+        },
+      ]),
+    ),
   } satisfies import('@happyvertical/ai').DecisionResult,
   'source-receipt-1',
 );

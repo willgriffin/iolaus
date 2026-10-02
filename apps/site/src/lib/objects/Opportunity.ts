@@ -259,14 +259,19 @@ export class Opportunity extends SmrtObject {
           const { runOpportunityRequirementCoverageRepairJob } = await import(
             '../server/opportunity-requirement-coverage-repair-job.js'
           );
-          const { processOpportunityRequirementCoverageRepair } = await import(
-            '../server/opportunity-details.js'
-          );
+          const {
+            processOpportunityRequirementCoverageRepair,
+            processOpportunityRequirementCoverageAuditReplay,
+          } = await import('../server/opportunity-details.js');
           return await runOpportunityRequirementCoverageRepairJob(
             this.id ?? '',
             runnerContext,
             subject,
-            { processRepair: processOpportunityRequirementCoverageRepair },
+            {
+              processRepair: processOpportunityRequirementCoverageRepair,
+              processAuditReplay:
+                processOpportunityRequirementCoverageAuditReplay,
+            },
           );
         }
         const { workspaceWorkflowOperation } = await import(

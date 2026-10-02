@@ -141,7 +141,12 @@ describe('opportunity assessment input', () => {
         answers: Object.fromEntries(
           Object.keys(prepared.request.questions).map((key) => [
             key,
-            { type: 'predicate', probability: 0.95 },
+            {
+              type: 'predicate',
+              probability: prepared.contextQuestionKeys.includes(key)
+                ? 0.05
+                : 0.95,
+            },
           ]),
         ),
       } satisfies import('@happyvertical/ai').DecisionResult,
@@ -217,6 +222,7 @@ describe('opportunity assessment input', () => {
         model: 'jev-test',
         provenance: { model: 'jev-test', provider: 'typesafe' },
         answers: {
+          c0_row0_entailed: { type: 'predicate', probability: 0.9 },
           [requirementCoverageClauseQuestionKey(0, 'mapped')]: {
             type: 'predicate',
             probability: 0.9,
