@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { projectOpportunityAssessment } from './opportunity-assessment-store.js';
+import {
+  isCurrentOpportunityAssessmentRecord,
+  projectOpportunityAssessment,
+} from './opportunity-assessment-store.js';
 
 const assessment = {
   candidateMaterialFingerprint: 'candidate-v1',
@@ -49,6 +52,7 @@ describe('opportunity assessment projection', () => {
     );
     expect(projection).toEqual({
       conflicting: false,
+      eligibilityBucket: 'eligible',
       personalEligibility: 'eligible_without_sponsorship',
       ranking: { eligibilityPriority: 0, excluded: false, fitScore: 60 },
       reason: 'Eligible without sponsorship',
@@ -56,5 +60,62 @@ describe('opportunity assessment projection', () => {
     });
     expect(JSON.stringify(projection)).not.toContain('posting-1');
     expect(JSON.stringify(projection)).not.toContain('resume-1');
+  });
+
+  it('hides a projection after profile country, authorization, or evidence material changes', () => {
+    const row = {
+      candidateMaterialFingerprint: 'profile-ca-authorization-none-evidence-a',
+      sourceContentFingerprint: 'posting-v1',
+      sourceContentVersion: 1,
+    };
+    const current = {
+      candidateMaterialFingerprint: row.candidateMaterialFingerprint,
+      sourceContentFingerprint: 'posting-v1',
+      sourceContentVersion: 1,
+    };
+    expect(isCurrentOpportunityAssessmentRecord(row, current)).toBe(true);
+
+    // All three inputs are folded into the verified evidence fingerprint by
+    // loadWorkspaceCandidateEvidence; a changed fingerprint excludes the old
+    // result until a bounded assessment refresh stores a replacement.
+    for (const changedCandidateMaterial of [
+      'profile-us-authorization-none-evidence-a',
+      'profile-ca-authorization-ca-evidence-a',
+      'profile-ca-authorization-none-evidence-b',
+    ]) {
+      expect(
+        isCurrentOpportunityAssessmentRecord(row, {
+          ...current,
+          candidateMaterialFingerprint: changedCandidateMaterial,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it('reranks the same stored assessment when a local preference changes', () => {
+    const candidate = {
+      authorizedWorkCountries: [],
+      citizenships: [{ code: 'CA', label: 'Canada' }],
+      sponsorshipRequired: 'unknown' as const,
+      targetWorkCountry: { code: 'CA', label: 'Canada' },
+    };
+    const baseline = projectOpportunityAssessment(assessment, candidate, []);
+    const reranked = projectOpportunityAssessment(assessment, candidate, [
+      {
+        category: 'scoring',
+        isHardFilter: false,
+        name: 'Avoid uncertain remote arrangements',
+        ruleJson: JSON.stringify({
+          dimension: 'location_access',
+          values: ['allowed'],
+        }),
+        weight: -25,
+      },
+    ]);
+
+    expect(reranked.ranking.fitScore).toBe(baseline.ranking.fitScore - 25);
+    expect(reranked.ranking.eligibilityPriority).toBe(
+      baseline.ranking.eligibilityPriority,
+    );
   });
 });

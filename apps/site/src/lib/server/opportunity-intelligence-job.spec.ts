@@ -1,5 +1,5 @@
 import type { SmrtJob, SmrtJobData } from '@happyvertical/smrt-jobs';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   enqueueOpportunityIntelligence,
   enqueueOpportunityIntelligenceWithStatus,
@@ -17,6 +17,35 @@ import {
   isOpportunityIntelligenceActiveJobConflict,
 } from './opportunity-intelligence-job-schema';
 
+const workspace = vi.hoisted(() => ({
+  subject: null as {
+    profileId: string;
+    tenantId: string;
+    userId: string;
+  } | null,
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  getCurrentWorkspaceSubject: () => workspace.subject,
+  requireCurrentWorkspaceSubject: () => workspace.subject,
+}));
+vi.mock('./resume-data.js', () => ({
+  loadWorkspaceCandidateEvidence: vi.fn(async () => ({
+    fingerprint: 'candidate-fingerprint',
+  })),
+}));
+vi.mock('./opportunity-assessment-input.js', () => ({
+  opportunityAssessmentSubjectMaterialFingerprint: vi.fn(
+    ({
+      subject,
+      candidateMaterialFingerprint,
+      sourceContentFingerprint,
+      sourceContentVersion,
+    }) =>
+      `${subject.tenantId}:${subject.userId}:${subject.profileId}:${candidateMaterialFingerprint}:${sourceContentFingerprint}:${sourceContentVersion}`,
+  ),
+}));
+
 function jobRecord(data: Record<string, unknown>) {
   return {
     id: String(data.id ?? ''),
@@ -26,6 +55,10 @@ function jobRecord(data: Record<string, unknown>) {
 }
 
 describe('opportunity intelligence jobs', () => {
+  beforeEach(() => {
+    workspace.subject = null;
+  });
+
   it('rejects missing opportunity ids with a stable enqueue error code', async () => {
     await expect(enqueueOpportunityIntelligence('   ')).rejects.toMatchObject({
       code: 'opportunity_id_required',
@@ -63,7 +96,6 @@ describe('opportunity intelligence jobs', () => {
         collection,
         now: runAt,
         opportunityCollection,
-        user: { id: 'user-1' },
       },
     );
 
@@ -78,7 +110,6 @@ describe('opportunity intelligence jobs', () => {
           modes: ['extract', 'score'],
           reason: 'manual',
           sourceId: 'source-1',
-          userId: 'user-1',
         }),
         maxAttempts: 1,
         method: OPPORTUNITY_INTELLIGENCE_METHOD,
@@ -89,6 +120,146 @@ describe('opportunity intelligence jobs', () => {
         timeout: OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
       }),
     );
+  });
+
+  it('captures a verified workspace subject and creates only the assessment mode', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const created = jobRecord({ id: 'job-workspace-1' });
+    const collection = {
+      create: vi.fn(
+        async (payload: SmrtJobData) =>
+          Object.assign(created, payload) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => [] as SmrtJob[]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+        sourceId: 'source-1',
+      })),
+    };
+
+    await enqueueOpportunityIntelligence(
+      'opp-1',
+      {},
+      {
+        collection,
+        opportunityCollection,
+      },
+    );
+
+    expect(collection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          contentFingerprint: 'source-fingerprint',
+          contentVersion: 7,
+          modes: 'assessment',
+          runtimeWorkspaceSubject: workspace.subject,
+          scoringMaterialFingerprint:
+            'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+        }),
+      }),
+    );
+  });
+
+  it('rejects a same-fingerprint active job whose durable workspace tuple is foreign', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const collection = {
+      create: vi.fn(),
+      list: vi.fn(async () => [
+        jobRecord({
+          args: {
+            contentFingerprint: 'source-fingerprint',
+            runtimeWorkspaceSubject: {
+              profileId: 'profile-2',
+              tenantId: 'tenant-2',
+              userId: 'user-2',
+            },
+            scoringMaterialFingerprint:
+              'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+          },
+          id: 'foreign-job',
+          tenantId: 'tenant-2',
+        }) as unknown as SmrtJob,
+      ]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+      })),
+    };
+
+    await expect(
+      enqueueOpportunityIntelligence(
+        'opp-1',
+        {},
+        { collection, opportunityCollection },
+      ),
+    ).rejects.toMatchObject({ code: 'opportunity_not_found' });
+    expect(collection.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a foreign active job recovered after a concurrent save conflict', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const foreign = jobRecord({
+      args: {
+        contentFingerprint: 'source-fingerprint',
+        runtimeWorkspaceSubject: {
+          profileId: 'profile-2',
+          tenantId: 'tenant-2',
+          userId: 'user-2',
+        },
+        scoringMaterialFingerprint:
+          'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+      },
+      id: 'foreign-race-job',
+      tenantId: 'tenant-2',
+    });
+    const collection = {
+      create: vi.fn(async () => {
+        throw Object.assign(
+          new Error(
+            'duplicate key value violates unique constraint "idx_smrt_jobs_opportunity_intelligence_active_fingerprint"',
+          ),
+          { code: '23505' },
+        );
+      }),
+      list: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([foreign as unknown as SmrtJob]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+      })),
+    };
+
+    await expect(
+      enqueueOpportunityIntelligence(
+        'opp-1',
+        {},
+        { collection, opportunityCollection },
+      ),
+    ).rejects.toMatchObject({ code: 'opportunity_not_found' });
   });
 
   it('reuses an active opportunity intelligence job for the same opportunity', async () => {
@@ -338,7 +509,7 @@ describe('opportunity intelligence jobs', () => {
     await expect(
       runOpportunityIntelligenceJob(
         { id: 'opp-1' },
-        { modes: 'all', userId: 'user-1' },
+        { modes: 'all' },
         undefined,
         { processor, updateStatus },
       ),
@@ -348,7 +519,7 @@ describe('opportunity intelligence jobs', () => {
         modes: 'all',
         opportunityId: 'opp-1',
         signal: expect.any(AbortSignal),
-        user: { id: 'user-1' },
+        user: null,
       }),
     );
     expect(updateStatus).toHaveBeenCalledWith('opp-1', '', 'failed');
@@ -389,16 +560,31 @@ describe('opportunity intelligence jobs', () => {
     const updateStatus = vi.fn(async () => {
       throw new Error('database temporarily unavailable');
     });
+    const workspaceSubject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
 
     await expect(
       runOpportunityIntelligenceJob(
         { id: 'opp-1', sourceContentFingerprint: 'fingerprint-v1' },
         { contentFingerprint: 'fingerprint-v1', contentVersion: 1 },
         { logger } as never,
-        { finishRun, processor, startRun, updateStatus },
+        { finishRun, processor, startRun, updateStatus, workspaceSubject },
       ),
     ).resolves.toMatchObject({ status: 'processed' });
-    expect(finishRun).toHaveBeenCalledWith('run-1', 'succeeded');
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceSubject,
+      }),
+    );
+    expect(finishRun).toHaveBeenCalledWith(
+      'run-1',
+      'succeeded',
+      '',
+      workspaceSubject,
+    );
     expect(updateStatus).toHaveBeenCalledWith(
       'opp-1',
       'fingerprint-v1',

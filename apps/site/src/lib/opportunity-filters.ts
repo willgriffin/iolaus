@@ -1,10 +1,10 @@
 import type { AdminRecord } from '$lib/admin/dock';
 import {
-  ELIGIBILITY_BUCKETS,
-  eligibilityRank,
-  getOpportunityEligibility,
-  type EligibilityBucket,
-} from '$lib/opportunity-eligibility';
+  ASSESSMENT_ELIGIBILITY_BUCKETS,
+  type AssessmentEligibilityBucket,
+  compareAssessmentEligibility,
+  matchesAssessmentEligibility,
+} from '$lib/opportunity-assessment-projection';
 
 // Status ordering for the default "best fit" sort — active/early stages first,
 // terminal last. Shared with the list component so sort and grouping agree.
@@ -57,8 +57,8 @@ export interface OpportunityFilterState {
   freshness: string;
   employmentTypes: string[];
   workModes: string[];
-  /** Current posting eligibility buckets. Multiple selected buckets match OR. */
-  eligibilityBuckets: EligibilityBucket[];
+  /** Active-profile eligibility buckets. Multiple selections match OR. */
+  eligibilityBuckets: AssessmentEligibilityBucket[];
   seniority: string;
   relocationOnly: boolean;
   visaOnly: boolean;
@@ -355,8 +355,12 @@ export function matchesOpportunity(
     return false;
 
   if (filters.eligibilityBuckets.length > 0) {
-    const buckets = getOpportunityEligibility(record).buckets;
-    if (!filters.eligibilityBuckets.some((bucket) => buckets.includes(bucket)))
+    if (
+      !matchesAssessmentEligibility(
+        record.assessmentProjection,
+        filters.eligibilityBuckets,
+      )
+    )
       return false;
   }
 
@@ -440,7 +444,10 @@ export function sortOpportunities(
         primary = compare(postedRank(left), postedRank(right));
         break;
       case 'eligibility':
-        primary = compare(eligibilityRank(left), eligibilityRank(right), 'asc');
+        primary = compareAssessmentEligibility(
+          left.assessmentProjection,
+          right.assessmentProjection,
+        );
         break;
       case 'score':
         primary = compare(score(left), score(right));
@@ -457,7 +464,10 @@ export function sortOpportunities(
       default:
         primary =
           statusRank(left) - statusRank(right) ||
-          compare(eligibilityRank(left), eligibilityRank(right), 'asc') ||
+          compareAssessmentEligibility(
+            left.assessmentProjection,
+            right.assessmentProjection,
+          ) ||
           compare(score(left), score(right), 'desc');
     }
     if (primary) return primary;
@@ -508,6 +518,26 @@ export function countActiveFilters(filters: OpportunityFilterState): number {
   return count;
 }
 
+/**
+ * Preserve saved Canada-era links while translating them to generic
+ * active-profile eligibility. Newly written URLs use only these generic keys.
+ */
+function normalizeEligibilityBucket(
+  bucket: string,
+): AssessmentEligibilityBucket | null {
+  const aliases: Record<string, AssessmentEligibilityBucket> = {
+    canada_eligible: 'eligible',
+    us_residence_required: 'location_restriction',
+    incompatible: 'location_restriction',
+  };
+  const normalized = aliases[bucket] ?? bucket;
+  return ASSESSMENT_ELIGIBILITY_BUCKETS.includes(
+    normalized as AssessmentEligibilityBucket,
+  )
+    ? (normalized as AssessmentEligibilityBucket)
+    : null;
+}
+
 // Merge a possibly-partial / stale persisted blob onto defaults, keeping only
 // known keys so a schema change can't poison the in-memory state.
 export function normalizeFilterState(raw: unknown): OpportunityFilterState {
@@ -555,10 +585,9 @@ export function normalizeFilterState(raw: unknown): OpportunityFilterState {
     input.employmentType,
   );
   base.workModes = stringArrayOr(input.workModes, input.workMode);
-  base.eligibilityBuckets = stringArrayOr(input.eligibilityBuckets).filter(
-    (bucket): bucket is EligibilityBucket =>
-      ELIGIBILITY_BUCKETS.includes(bucket as EligibilityBucket),
-  );
+  base.eligibilityBuckets = stringArrayOr(input.eligibilityBuckets)
+    .map(normalizeEligibilityBucket)
+    .filter((bucket): bucket is AssessmentEligibilityBucket => bucket !== null);
   base.seniority = stringOr(input.seniority, 'all');
   base.relocationOnly = boolOr(input.relocationOnly, false);
   base.visaOnly = boolOr(input.visaOnly, false);

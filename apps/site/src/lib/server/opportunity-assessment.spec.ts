@@ -211,6 +211,63 @@ describe('opportunity assessment contract', () => {
     );
   });
 
+  it('requires verified target-country authorization before an allowed location is eligible', () => {
+    const assessment = resolveOpportunityAssessment(
+      prepared(),
+      decision(
+        completeAnswers({
+          location_access: ['allowed', 'candidate_0'],
+          authorization: ['not_stated', 'posting_1'],
+          sponsorship: ['denied', 'posting_1'],
+        }),
+      ),
+    );
+    const authorizedCandidate = {
+      ...candidate,
+      authorizedWorkCountries: [
+        {
+          country: { code: 'CA', label: 'Canada' },
+          scope: 'country' as const,
+        },
+      ],
+    };
+
+    // The same Canadian work location is only eligible for the profile with
+    // explicit country-wide authorization. A sponsorship denial cannot undo
+    // an authorization the candidate already has.
+    expect(projectPersonalEligibility(assessment, authorizedCandidate)).toBe(
+      'eligible_without_sponsorship',
+    );
+    expect(
+      projectPersonalEligibility(assessment, {
+        ...candidate,
+        sponsorshipRequired: 'unknown',
+      }),
+    ).toBe('unknown');
+  });
+
+  it('keeps sponsorship possible only for a candidate who confirms the need', () => {
+    const assessment = resolveOpportunityAssessment(
+      prepared(),
+      decision(
+        completeAnswers({
+          location_access: ['allowed', 'candidate_0'],
+          authorization: ['not_stated', 'posting_1'],
+          sponsorship: ['offered', 'posting_1'],
+        }),
+      ),
+    );
+    expect(projectPersonalEligibility(assessment, candidate)).toBe(
+      'sponsorship_possible',
+    );
+    expect(
+      projectPersonalEligibility(assessment, {
+        ...candidate,
+        sponsorshipRequired: 'unknown',
+      }),
+    ).toBe('unknown');
+  });
+
   it('uses preferences only for local, explainable ranking', () => {
     const source = prepared();
     const assessment = resolveOpportunityAssessment(
@@ -224,8 +281,17 @@ describe('opportunity assessment contract', () => {
         }),
       ),
     );
+    const authorizedCandidate = {
+      ...candidate,
+      authorizedWorkCountries: [
+        {
+          country: { code: 'CA', label: 'Canada' },
+          scope: 'country' as const,
+        },
+      ],
+    };
     const before = opportunityAssessmentCacheKey(source, 'jev-1.13.0');
-    const ranking = rankOpportunityAssessment(assessment, candidate, [
+    const ranking = rankOpportunityAssessment(assessment, authorizedCandidate, [
       {
         category: 'scoring',
         name: 'Direct domain',

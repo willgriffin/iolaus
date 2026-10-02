@@ -10,8 +10,8 @@ import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
 export const OPPORTUNITY_ASSESSMENT_VERSION = 'opportunity-assessment/v1';
 export const OPPORTUNITY_ASSESSMENT_CONFIDENCE = 0.85;
 /** Keeps one typed JEV request below the existing governed 64k input ceiling. */
-export const OPPORTUNITY_ASSESSMENT_MAX_POSTING_SOURCES = 60;
-export const OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES = 60;
+export const OPPORTUNITY_ASSESSMENT_MAX_POSTING_SOURCES = 30;
+export const OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES = 30;
 export const OPPORTUNITY_ASSESSMENT_MAX_REQUIREMENTS = 8;
 export const OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT = 360;
 
@@ -808,27 +808,19 @@ export function projectPersonalEligibility(
           !authorization.condition,
       ),
   );
-  if (authorization === 'required') {
-    if (authorized)
-      return location === 'allowed'
-        ? 'eligible_without_sponsorship'
-        : 'unknown';
-    if (profile.sponsorshipRequired === true) {
-      if (sponsorship === 'offered' || sponsorship === 'conditional')
-        return 'sponsorship_possible';
-      if (sponsorship === 'denied') return 'incompatible';
-    }
-    return 'unknown';
-  }
-  if (location === 'allowed' && authorization === 'not_stated') {
-    if (profile.sponsorshipRequired === true && sponsorship === 'denied')
-      return 'incompatible';
-    if (
-      profile.sponsorshipRequired === true &&
-      (sponsorship === 'offered' || sponsorship === 'conditional')
-    )
+  if (location !== 'allowed') return 'unknown';
+
+  // A role's location allowance only establishes where it may be performed.
+  // It says nothing about this person's right to work there. Country-wide
+  // verified authorization is the sole affirmative no-sponsorship proof in
+  // this contract; citizenship, residence, and a missing posting requirement
+  // cannot fill that gap.
+  if (authorized) return 'eligible_without_sponsorship';
+
+  if (profile.sponsorshipRequired === true) {
+    if (sponsorship === 'offered' || sponsorship === 'conditional')
       return 'sponsorship_possible';
-    return 'eligible_without_sponsorship';
+    if (sponsorship === 'denied') return 'incompatible';
   }
   return 'unknown';
 }

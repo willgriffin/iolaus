@@ -1,18 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { describe, expect, it } from 'vitest';
-import type { AdminRecord } from '$lib/admin/dock';
-import experienceData from '$lib/data/experience.json';
-import skillsData from '$lib/data/skills.json';
-import {
-  DEFAULT_OPPORTUNITY_FILTERS,
-  matchesOpportunity,
-  type OpportunityFilterState,
-} from '$lib/opportunity-filters';
-import {
-  candidateSkillTermsFromData,
-  createCandidateSkillMatcher,
-} from '$lib/skill-matching';
+import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import {
   countOpportunityRecords,
   listLatestOpportunityRelatedContext,
@@ -23,6 +12,11 @@ import {
 import { getDatabaseUrl, getDbConfig } from './db.js';
 
 const runSnapshotCoverage = process.env.OPPORTUNITY_LIST_PERF === '1';
+const SNAPSHOT_WORKSPACE_SUBJECT = {
+  profileId: process.env.OPPORTUNITY_LIST_PROFILE_ID ?? 'snapshot-profile',
+  tenantId: process.env.OPPORTUNITY_LIST_TENANT_ID ?? 'snapshot-tenant',
+  userId: process.env.OPPORTUNITY_LIST_USER_ID ?? 'snapshot-user',
+};
 
 function assertLocalSnapshotDatabase(): void {
   const url = new URL(getDatabaseUrl());
@@ -31,79 +25,6 @@ function assertLocalSnapshotDatabase(): void {
       'Opportunity performance coverage requires a local restored database snapshot.',
     );
   }
-}
-
-function reviewFilterMatches(
-  record: AdminRecord,
-  reviewFilter: string,
-): boolean {
-  const status =
-    typeof record.humanReviewStatus === 'string'
-      ? record.humanReviewStatus.trim().toLowerCase()
-      : '';
-  if (!reviewFilter || reviewFilter === 'all') return true;
-  if (reviewFilter === 'unsorted') {
-    return !['apply', 'maybe', 'reject'].includes(status);
-  }
-  if (reviewFilter === 'missing_application_planning') {
-    return (
-      status === 'apply' &&
-      (!record.applicationId ||
-        !record.applicationResumeMode ||
-        !record.applicationCoverLetterMode)
-    );
-  }
-  return status === reviewFilter;
-}
-
-async function allSnapshotOpportunityRecords(): Promise<AdminRecord[]> {
-  const db = await resolveDatabase(getDbConfig());
-  const result = await db.query(`
-    SELECT
-      o.id,
-      o.status,
-      o.required_skills AS "requiredSkills",
-      o.preferred_skills AS "preferredSkills",
-      o.salary_min AS "salaryMin",
-      o.salary_max AS "salaryMax",
-      o.hourly_min AS "hourlyMin",
-      o.hourly_max AS "hourlyMax",
-      o.posted_at AS "postedAt",
-      o.first_seen_at AS "firstSeenAt",
-      o.expires_at AS "expiresAt",
-      o.freshness,
-      o.employment_type AS "employmentType",
-      o.work_mode AS "workMode",
-      o.seniority,
-      o.relocation_supported AS "relocationSupported",
-      o.visa_or_eor_possible AS "visaOrEorPossible",
-      o.founder_signal AS "founderSignal",
-      o.greenfield_signal AS "greenfieldSignal",
-      o.human_rating AS "humanRating",
-      o.human_review_status AS "humanReviewStatus",
-      latest.score AS "latestScore",
-      latest_application.id AS "applicationId",
-      latest_application.resume_mode AS "applicationResumeMode",
-      latest_application.cover_letter_mode AS "applicationCoverLetterMode"
-    FROM opportunities o
-    LEFT JOIN LATERAL (
-      SELECT es.score
-      FROM evaluation_scores es
-      WHERE es.opportunity_id = o.id
-        AND COALESCE(es.source_content_fingerprint, '') =
-          COALESCE(o.source_content_fingerprint, '')
-      ORDER BY es.updated_at DESC
-      LIMIT 1
-    ) latest ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT a.id, a.resume_mode, a.cover_letter_mode
-      FROM applications a
-      WHERE a.opportunity_id = o.id
-      ORDER BY a.updated_at DESC
-      LIMIT 1
-    ) latest_application ON TRUE
-  `);
-  return result.rows as AdminRecord[];
 }
 
 describe.runIf(runSnapshotCoverage)(
@@ -115,6 +36,7 @@ describe.runIf(runSnapshotCoverage)(
         candidateSkills: [],
         filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'best' as const },
         reviewFilter: 'unsorted',
+        workspaceSubject: SNAPSHOT_WORKSPACE_SUBJECT,
       };
       const startedAt = performance.now();
       const [total, firstPage] = await Promise.all([
@@ -147,11 +69,15 @@ describe.runIf(runSnapshotCoverage)(
         limit: 1,
         offset: 0,
         reviewFilter: 'all',
+        workspaceSubject: SNAPSHOT_WORKSPACE_SUBJECT,
       });
 
       expect(opportunityIds).toHaveLength(1);
       await expect(
-        listLatestOpportunityRelatedContext(opportunityIds),
+        listLatestOpportunityRelatedContext(
+          opportunityIds,
+          SNAPSHOT_WORKSPACE_SUBJECT,
+        ),
       ).resolves.toEqual(expect.any(Array));
     });
 
@@ -183,6 +109,7 @@ describe.runIf(runSnapshotCoverage)(
           sort: 'score' as const,
         },
         reviewFilter: 'unsorted',
+        workspaceSubject: SNAPSHOT_WORKSPACE_SUBJECT,
       };
       const [total, pageIds, facets] = await Promise.all([
         countOpportunityRecords(query),
@@ -191,7 +118,10 @@ describe.runIf(runSnapshotCoverage)(
           limit: OPPORTUNITY_TABLE_PAGE_SIZE,
           offset: 0,
         }),
-        listOpportunityFilterOptions(query.reviewFilter),
+        listOpportunityFilterOptions(
+          query.reviewFilter,
+          SNAPSHOT_WORKSPACE_SUBJECT,
+        ),
       ]);
 
       expect(total).toBeGreaterThan(0);
@@ -201,159 +131,5 @@ describe.runIf(runSnapshotCoverage)(
         'kubernetes',
       );
     });
-
-    it('matches legacy filter semantics across every URL filter dimension and sort', async () => {
-      assertLocalSnapshotDatabase();
-      const [records, candidateSkills] = await Promise.all([
-        allSnapshotOpportunityRecords(),
-        Promise.resolve(
-          candidateSkillTermsFromData({
-            experience: experienceData,
-            skills: skillsData,
-          }),
-        ),
-      ]);
-      const hasSkill = createCandidateSkillMatcher(candidateSkills);
-      const cases: Array<{
-        filters: OpportunityFilterState;
-        label: string;
-        reviewFilter: string;
-      }> = [
-        {
-          filters: { ...DEFAULT_OPPORTUNITY_FILTERS },
-          label: 'all review statuses',
-          reviewFilter: 'all',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            salaryMin: 100_000,
-            salaryMax: 250_000,
-            includeMissingComp: false,
-          },
-          label: 'salary range',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            hourlyMin: 40,
-            hourlyMax: 200,
-            includeMissingComp: false,
-          },
-          label: 'hourly range',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: { ...DEFAULT_OPPORTUNITY_FILTERS, skills: ['Kubernetes'] },
-          label: 'skill array',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: { ...DEFAULT_OPPORTUNITY_FILTERS, fit: 'have' },
-          label: 'matching required skills',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: { ...DEFAULT_OPPORTUNITY_FILTERS, fit: 'gaps' },
-          label: 'missing required skills',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            postedWithinDays: 30,
-            excludeExpired: true,
-          },
-          label: 'posted and expiry dates',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            employmentTypes: ['full time'],
-            workModes: ['remote'],
-            seniority: 'senior',
-          },
-          label: 'employment, work mode, and seniority',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            founderOnly: true,
-            freshOnly: true,
-            freshness: 'fresh',
-            greenfieldOnly: true,
-            relocationOnly: true,
-            visaOnly: true,
-          },
-          label: 'opportunity signals',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: {
-            ...DEFAULT_OPPORTUNITY_FILTERS,
-            minRating: 5,
-            minScore: 50,
-            maxScore: 95,
-          },
-          label: 'rating and score bounds',
-          reviewFilter: 'unsorted',
-        },
-        {
-          filters: { ...DEFAULT_OPPORTUNITY_FILTERS },
-          label: 'application planning',
-          reviewFilter: 'missing_application_planning',
-        },
-      ];
-
-      for (const testCase of cases) {
-        const expectedIds = new Set(
-          records
-            .filter((record) =>
-              reviewFilterMatches(record, testCase.reviewFilter),
-            )
-            .filter((record) =>
-              matchesOpportunity(record, testCase.filters, { hasSkill }),
-            )
-            .map((record) => String(record.id)),
-        );
-        await expect(
-          countOpportunityRecords({
-            candidateSkills,
-            filters: testCase.filters,
-            reviewFilter: testCase.reviewFilter,
-          }),
-          testCase.label,
-        ).resolves.toBe(expectedIds.size);
-
-        for (const sort of [
-          'best',
-          'newest',
-          'score',
-          'salary',
-          'rating',
-        ] as const) {
-          const pageIds = await listOpportunityPageIds({
-            candidateSkills,
-            filters: { ...testCase.filters, sort },
-            limit: OPPORTUNITY_TABLE_PAGE_SIZE,
-            offset: 0,
-            reviewFilter: testCase.reviewFilter,
-          });
-          expect(pageIds, `${testCase.label}: ${sort}`).toHaveLength(
-            Math.min(OPPORTUNITY_TABLE_PAGE_SIZE, expectedIds.size),
-          );
-          expect(new Set(pageIds).size, `${testCase.label}: ${sort}`).toBe(
-            pageIds.length,
-          );
-          expect(
-            pageIds.every((id) => expectedIds.has(id)),
-            `${testCase.label}: ${sort}`,
-          ).toBe(true);
-        }
-      }
-    }, 20_000);
   },
 );

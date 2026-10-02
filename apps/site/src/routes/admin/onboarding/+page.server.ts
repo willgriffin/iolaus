@@ -1,8 +1,8 @@
 import { type Actions, fail } from '@sveltejs/kit';
-import { revokeReusableAnswerByLabelKey } from '$lib/server/application-workflow.js';
 import {
   type CandidateOnboardingInput,
   isCandidateResumeAssetSelectable,
+  revokeCandidateOnboardingReusableAnswer,
   saveCandidateOnboarding,
 } from '$lib/server/candidate-onboarding.js';
 import {
@@ -11,6 +11,7 @@ import {
   projectCandidateOnboardingProfile,
 } from '$lib/server/candidate-onboarding-profile.js';
 import { getCollection } from '$lib/server/smrt.js';
+import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject.js';
 import type { PageServerLoad } from './$types';
 
 function stringValue(value: FormDataEntryValue | null): string {
@@ -34,6 +35,8 @@ function onboardingInput(form: FormData): CandidateOnboardingInput {
     veteranStatus: stringValue(form.get('demographicVeteranStatus')),
   };
   return {
+    authorizedWorkCountries: listValue(form.get('authorizedWorkCountries')),
+    citizenshipCountries: listValue(form.get('citizenshipCountries')),
     email: stringValue(form.get('email')),
     firstName: stringValue(form.get('firstName')),
     githubUrl: stringValue(form.get('githubUrl')),
@@ -55,13 +58,21 @@ function onboardingInput(form: FormData): CandidateOnboardingInput {
         value: stringValue(form.get('reusableAnswerValue')),
       },
     ],
+    residenceCountry: stringValue(form.get('residenceCountry')),
     resumeAssetId: stringValue(form.get('resumeAssetId')),
     resumeSource:
       form.get('resumeSource') === 'upload_later'
         ? 'upload_later'
         : 'not_selected',
     saveVoluntaryDemographics,
+    sponsorshipRequired:
+      form.get('sponsorshipRequired') === 'yes'
+        ? 'yes'
+        : form.get('sponsorshipRequired') === 'no'
+          ? 'no'
+          : 'unknown',
     summary: stringValue(form.get('summary')),
+    targetWorkCountry: stringValue(form.get('targetWorkCountry')),
     title: stringValue(form.get('title')),
     workAuthorization: stringValue(form.get('workAuthorization')),
     ...(saveVoluntaryDemographics ? { demographics } : {}),
@@ -72,7 +83,8 @@ function recordValue(row: unknown): Record<string, unknown> {
   return row as Record<string, unknown>;
 }
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+  const subject = workspaceSubjectFromLocals(locals);
   const [profiles, answers, assets] = await Promise.all([
     getCollection('CandidateProfile'),
     getCollection('CandidateAnswer'),
@@ -82,17 +94,38 @@ export const load: PageServerLoad = async () => {
     profiles.list({
       limit: 1,
       orderBy: 'updated_at DESC',
-      where: { profileKey: 'default' },
+      where: subject.profileId
+        ? {
+            id: subject.profileId,
+            ownerUserId: subject.userId,
+            tenantId: subject.tenantId,
+          }
+        : {
+            ownerUserId: subject.userId,
+            profileKey: 'default',
+            tenantId: subject.tenantId,
+          },
     }),
-    answers.list({
-      limit: 100,
-      orderBy: 'updated_at DESC',
-      where: { active: true, profileKey: 'default' },
-    }),
+    subject.profileId
+      ? answers.list({
+          limit: 100,
+          orderBy: 'updated_at DESC',
+          where: {
+            active: true,
+            candidateProfileId: subject.profileId,
+            ownerUserId: subject.userId,
+            tenantId: subject.tenantId,
+          },
+        })
+      : Promise.resolve([]),
     assets.list({
       limit: 100,
       orderBy: 'updated_at DESC',
-      where: { assetType: 'resume' },
+      where: {
+        assetType: 'resume',
+        ownerUserId: subject.userId,
+        tenantId: subject.tenantId,
+      },
     }),
   ]);
   const activeProfile = profileRows[0] ? recordValue(profileRows[0]) : null;
@@ -104,14 +137,28 @@ export const load: PageServerLoad = async () => {
           String(recordValue(asset).id ?? '') === selectedResumeAssetId,
       ) ?? (await assets.get(selectedResumeAssetId)))
     : null;
+  const ownedSelectedResumeAsset =
+    selectedResumeAsset &&
+    String(recordValue(selectedResumeAsset).tenantId ?? '') ===
+      subject.tenantId &&
+    String(recordValue(selectedResumeAsset).ownerUserId ?? '') ===
+      subject.userId
+      ? recordValue(selectedResumeAsset)
+      : null;
   return {
     profile: projectCandidateOnboardingProfile(activeProfile),
     reusableAnswers: answerRows.map((item) =>
       projectCandidateOnboardingAnswer(recordValue(item)),
     ),
     resumeAssets: mergeCandidateOnboardingResumeAssets(
-      assetRows.map(recordValue),
-      selectedResumeAsset ? recordValue(selectedResumeAsset) : null,
+      assetRows
+        .map(recordValue)
+        .filter(
+          (asset) =>
+            String(asset.tenantId ?? '') === subject.tenantId &&
+            String(asset.ownerUserId ?? '') === subject.userId,
+        ),
+      ownedSelectedResumeAsset,
       activeProfileId,
       isCandidateResumeAssetSelectable,
     ).map((row) => ({
@@ -124,11 +171,12 @@ export const load: PageServerLoad = async () => {
 };
 
 export const actions: Actions = {
-  revokeReusableAnswer: async ({ request }) => {
+  revokeReusableAnswer: async ({ locals, request }) => {
     const form = await request.formData();
     try {
-      const revoked = await revokeReusableAnswerByLabelKey(
+      const revoked = await revokeCandidateOnboardingReusableAnswer(
         stringValue(form.get('labelKey')),
+        workspaceSubjectFromLocals(locals),
       );
       return { revoked };
     } catch (cause) {
@@ -138,10 +186,13 @@ export const actions: Actions = {
       });
     }
   },
-  save: async ({ request }) => {
+  save: async ({ locals, request }) => {
     const form = await request.formData();
     try {
-      const result = await saveCandidateOnboarding(onboardingInput(form));
+      const result = await saveCandidateOnboarding(
+        onboardingInput(form),
+        workspaceSubjectFromLocals(locals),
+      );
       return {
         saved: true,
         savedForReuse: result.savedForReuse,

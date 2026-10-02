@@ -15,6 +15,37 @@ function preferences(): Record<string, string | string[]> {
 const savedPreferences = preferences();
 const stringList = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value.join(', ') : value || '';
+
+function countryCode(value: string | undefined): string {
+  try {
+    const parsed = JSON.parse(value || '{}') as { code?: unknown };
+    return typeof parsed.code === 'string' ? parsed.code : '';
+  } catch {
+    return '';
+  }
+}
+
+function countryCodes(
+  value: string | undefined,
+  authorization = false,
+): string {
+  try {
+    const parsed = JSON.parse(value || '[]') as unknown[];
+    return parsed
+      .map((entry) => {
+        const record = entry as {
+          code?: unknown;
+          country?: { code?: unknown };
+        };
+        const code = authorization ? record.country?.code : record.code;
+        return typeof code === 'string' ? code : '';
+      })
+      .filter(Boolean)
+      .join(', ');
+  } catch {
+    return '';
+  }
+}
 </script>
 
 <svelte:head>
@@ -53,6 +84,18 @@ const stringList = (value: string | string[] | undefined) =>
         <label>Phone <input name="phone" type="tel" value={data.profile?.phone ?? ''} autocomplete="tel" /></label>
         <label>Current location <input name="location" value={data.profile?.location ?? ''} autocomplete="address-level2" /></label>
         <label>Work authorization <input name="workAuthorization" value={data.profile?.workAuthorization ?? ''} placeholder="For example, eligible to work in Canada" /></label>
+        <label>Citizenship countries <input name="citizenshipCountries" value={countryCodes(data.profile?.citizenshipsJson)} placeholder="CA, US" autocapitalize="characters" /></label>
+        <label>Residence country <input name="residenceCountry" value={countryCode(data.profile?.residenceCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
+        <label>Target work country <input name="targetWorkCountry" value={countryCode(data.profile?.targetWorkCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
+        <label>Verified work authorization countries <input name="authorizedWorkCountries" value={countryCodes(data.profile?.authorizedWorkCountriesJson, true)} placeholder="CA" autocapitalize="characters" /></label>
+        <p class="field-note">Enter only countries where you have unrestricted, verified authorization. Employer-limited or conditional authorization stays unknown until it has its own evidence.</p>
+        <label>Need employer sponsorship?
+          <select name="sponsorshipRequired" value={data.profile?.sponsorshipRequired === true ? 'yes' : data.profile?.sponsorshipRequired === false ? 'no' : 'unknown'}>
+            <option value="unknown">I’m not sure</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </label>
       </div>
       <div class="grid two">
         <label>LinkedIn URL <input name="linkedinUrl" type="url" value={data.profile?.linkedinUrl ?? ''} /></label>
@@ -137,6 +180,7 @@ const stringList = (value: string | string[] | undefined) =>
   .onboarding-form { display: grid; gap: 18px; }
   section { border: 1px solid #ded8ca; border-radius: 8px; padding: 20px; background: #fffdf9; }
   .grid { display: grid; gap: 14px; margin-top: 14px; }
+  .field-note { grid-column: 1 / -1; margin: -4px 0 0; font-size: 13px; }
   .two { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   label { display: grid; gap: 6px; font-size: 14px; font-weight: 650; }
   input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid #bcb4a7; border-radius: 5px; background: #fff; color: inherit; font: inherit; padding: 9px 10px; }

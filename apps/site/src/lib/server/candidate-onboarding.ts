@@ -33,6 +33,8 @@ export interface CandidateFactState {
 }
 
 export interface CandidateOnboardingInput {
+  authorizedWorkCountries?: string[];
+  citizenshipCountries?: string[];
   demographics?: Record<string, string>;
   email?: string;
   firstName?: string;
@@ -49,10 +51,13 @@ export interface CandidateOnboardingInput {
     saveForReuse: boolean;
     value: string;
   }>;
+  residenceCountry?: string;
   resumeAssetId?: string;
   resumeSource?: 'existing_asset' | 'not_selected' | 'upload_later';
   saveVoluntaryDemographics?: boolean;
+  sponsorshipRequired?: 'yes' | 'no' | 'unknown';
   summary?: string;
+  targetWorkCountry?: string;
   title?: string;
   workAuthorization?: string;
 }
@@ -188,6 +193,42 @@ export interface CandidateOnboardingResult {
   selectedResumeAssetId: string;
 }
 
+/** Withdraw reuse consent only inside the verified profile that created it. */
+export async function revokeCandidateOnboardingReusableAnswer(
+  labelKey: string,
+  subject: CandidateOnboardingSubject,
+  suppliedCollection?: Collection,
+): Promise<number> {
+  const scope = requireCandidateProfileSubject(subject);
+  const normalized = stringValue(labelKey, 500);
+  if (!normalized) throw new Error('A reusable answer label key is required.');
+  const collection =
+    suppliedCollection ??
+    ((await getCollection('CandidateAnswer')) as unknown as Collection);
+  const rows = await collection.list({
+    limit: 500,
+    orderBy: 'updated_at DESC',
+    where: subjectWhere(scope),
+  });
+  let revoked = 0;
+  for (const row of rows) {
+    if (
+      reusableAnswerLabelKey(row) !== normalized ||
+      row.active === false ||
+      String(row.tenantId ?? '') !== scope.tenantId ||
+      String(row.ownerUserId ?? '') !== scope.userId ||
+      String(row.candidateProfileId ?? '') !== scope.profileId
+    ) {
+      continue;
+    }
+    row.active = false;
+    row.revokedForReuseAt = new Date();
+    await row.save();
+    revoked += 1;
+  }
+  return revoked;
+}
+
 /**
  * Limit onboarding resume choices to unclaimed assets and assets already
  * owned by the active candidate profile. Foreign profile metadata must not be
@@ -224,6 +265,34 @@ function stringValue(value: unknown, maximum = MAX_FACT_LENGTH): string {
     );
   }
   return text;
+}
+
+function countryReference(
+  value: unknown,
+): { code: string; label: string } | undefined {
+  const code = stringValue(value, 8).toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return undefined;
+  const label = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+  return label ? { code, label } : undefined;
+}
+
+function countryReferences(
+  values: string[] | undefined,
+): Array<{ code: string; label: string }> {
+  const unique = new Map<string, { code: string; label: string }>();
+  for (const value of values ?? []) {
+    const next = countryReference(value);
+    if (next && !unique.has(next.code)) unique.set(next.code, next);
+  }
+  return [...unique.values()].sort((left, right) =>
+    left.code.localeCompare(right.code),
+  );
+}
+
+function sponsorshipRequirement(
+  value: CandidateOnboardingInput['sponsorshipRequired'],
+): boolean | 'unknown' {
+  return value === 'yes' ? true : value === 'no' ? false : 'unknown';
 }
 
 function profileKey(value: unknown): string {
@@ -285,7 +354,16 @@ export function candidateFactState(
     location: stringValue(input.location),
     name: stringValue(input.name),
     phone: stringValue(input.phone),
+    sponsorshipRequired:
+      input.sponsorshipRequired === 'yes'
+        ? 'yes'
+        : input.sponsorshipRequired === 'no'
+          ? 'no'
+          : '',
     summary: stringValue(input.summary),
+    targetWorkCountryJson: JSON.stringify(
+      countryReference(input.targetWorkCountry) ?? {},
+    ),
     title: stringValue(input.title),
     workAuthorization: stringValue(input.workAuthorization),
   };
@@ -451,7 +529,7 @@ async function selectResumeAsset(options: {
 async function validateResumeAssetSelection(options: {
   assetId: string;
   collection: Collection;
-  subject: Required<CandidateOnboardingSubject>;
+  subject: CandidateOnboardingSubject;
 }): Promise<void> {
   const id = stringValue(options.assetId, 160);
   if (!id) return;
@@ -495,6 +573,15 @@ export async function persistCandidateOnboarding(
       ? 'upload_later'
       : 'not_selected';
   const profileValues = {
+    authorizedWorkCountriesJson: JSON.stringify(
+      countryReferences(input.authorizedWorkCountries).map((country) => ({
+        country,
+        scope: 'country',
+      })),
+    ),
+    citizenshipsJson: JSON.stringify(
+      countryReferences(input.citizenshipCountries),
+    ),
     demographicsConsentAt: input.saveVoluntaryDemographics ? now : null,
     demographicsJson: JSON.stringify(
       input.saveVoluntaryDemographics
@@ -514,9 +601,16 @@ export async function persistCandidateOnboarding(
     phone: stringValue(input.phone),
     preferencesJson: JSON.stringify(compactPreferences(input.preferences)),
     profileKey: key,
+    residenceCountryJson: JSON.stringify(
+      countryReference(input.residenceCountry) ?? {},
+    ),
     resumeAssetId: selectedResumeAssetId,
     resumeSource,
+    sponsorshipRequired: sponsorshipRequirement(input.sponsorshipRequired),
     summary: stringValue(input.summary),
+    targetWorkCountryJson: JSON.stringify(
+      countryReference(input.targetWorkCountry) ?? {},
+    ),
     title: stringValue(input.title),
     workAuthorization: stringValue(input.workAuthorization),
   };

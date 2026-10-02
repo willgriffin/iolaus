@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareOpportunityAssessment } from './opportunity-assessment.js';
-import { evaluateOpportunityAssessment } from './opportunity-assessment-decision-provider.js';
+import {
+  assessmentDecisionOutputTokenCeiling,
+  evaluateOpportunityAssessment,
+} from './opportunity-assessment-decision-provider.js';
 
 const mocks = vi.hoisted(() => ({
   capabilities: vi.fn(),
@@ -43,6 +46,12 @@ const prepared = prepareOpportunityAssessment({
     },
   ],
 });
+
+const workspaceSubject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
 
 function answers() {
   const result: Record<string, unknown> = {};
@@ -123,6 +132,7 @@ describe('opportunity assessment decision provider', () => {
       contentFingerprint: 'posting-v1',
       opportunityId: 'opportunity-1',
       subjectFingerprint: 'opaque-subject-v1',
+      workspaceSubject,
     });
     expect(mocks.execute).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -130,12 +140,19 @@ describe('opportunity assessment decision provider', () => {
           feature: 'opportunity-assessment',
           inputFingerprint: expect.not.stringContaining('opaque-subject-v1'),
         }),
+        workspaceSubject,
       }),
     );
     expect(mocks.decide).toHaveBeenCalledWith(
       prepared.request,
       expect.objectContaining({ timeout: 30000 }),
     );
+  });
+
+  it('reserves from the typed decision response shape, not the legacy skill cap', () => {
+    expect(
+      assessmentDecisionOutputTokenCeiling(prepared.request),
+    ).toBeGreaterThan(1_024);
   });
 
   it('does not invoke a provider while disabled', async () => {
@@ -146,6 +163,7 @@ describe('opportunity assessment decision provider', () => {
         contentFingerprint: 'posting-v1',
         opportunityId: 'opportunity-1',
         subjectFingerprint: 'opaque-subject-v1',
+        workspaceSubject,
       }),
     ).resolves.toBeUndefined();
     expect(mocks.getAI).not.toHaveBeenCalled();
@@ -157,6 +175,7 @@ describe('opportunity assessment decision provider', () => {
         contentFingerprint: 'posting-v1',
         opportunityId: 'opportunity-1',
         subjectFingerprint: 'opaque-subject-v1',
+        workspaceSubject,
       }),
     ).rejects.toThrow('AgentRun');
     await expect(
@@ -165,6 +184,7 @@ describe('opportunity assessment decision provider', () => {
         contentFingerprint: 'posting-v1',
         opportunityId: 'opportunity-1',
         subjectFingerprint: '',
+        workspaceSubject,
       }),
     ).rejects.toThrow('subject fingerprint');
   });

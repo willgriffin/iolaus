@@ -311,15 +311,19 @@ test('eligibility bucket filters share the list query and survive a reload', asy
 }, testInfo) => {
   const prefix = `Eligibility ${testInfo.project.name}`;
   const params = new URLSearchParams({ q: prefix, review: 'unsorted' });
-  params.append('eligibilityBucket', 'canada_eligible');
+  params.append('eligibilityBucket', 'eligible');
   params.append('eligibilityBucket', 'sponsorship_possible');
   await page.goto(`/admin/opportunities?${params}`);
 
   await expect(
     page.getByText(`${prefix} Canada`, { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(`${prefix} Conflict`, { exact: true })).toHaveCount(0);
-  await expect(page.getByText(`${prefix} Unknown`, { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText(`${prefix} Conflict`, { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(`${prefix} Unknown`, { exact: true }),
+  ).toHaveCount(0);
   await page.reload();
   await expect(
     page.getByText(`${prefix} Canada`, { exact: true }),
@@ -327,16 +331,18 @@ test('eligibility bucket filters share the list query and survive a reload', asy
   await expect(page).toHaveURL(
     (url) =>
       url.searchParams.getAll('eligibilityBucket').join(',') ===
-      'canada_eligible,sponsorship_possible',
+      'eligible,sponsorship_possible',
   );
 
   params.delete('eligibilityBucket');
   params.append('eligibilityBucket', 'unknown');
   await page.goto(`/admin/opportunities?${params}`);
-  await expect(page.getByText(`${prefix} Unknown`, { exact: true })).toBeVisible();
   await expect(
-    page.getByText(`${prefix} Canada`, { exact: true }),
-  ).toHaveCount(0);
+    page.getByText(`${prefix} Unknown`, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(`${prefix} Canada`, { exact: true })).toHaveCount(
+    0,
+  );
 });
 
 test('app settings use the full mobile width', async ({ page }) => {

@@ -9,6 +9,10 @@ import {
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
 } from './opportunity-intelligence-config.js';
+import {
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getCollection } from './smrt.js';
 
 export const OPPORTUNITY_INTELLIGENCE_CONTROL_KEY = 'opportunity-intelligence';
@@ -63,6 +67,8 @@ export interface OpportunityIntelligenceReservation
   requestId: string;
   reservedInputTokens: number;
   reservedSpendMicros: number;
+  /** Present only for a verified candidate-owned assessment reservation. */
+  workspaceSubject?: WorkspaceSubject;
 }
 
 export type OpportunityIntelligenceReserveResult<T> =
@@ -241,6 +247,29 @@ export function opportunityIntelligenceIdempotencyKey(
   return createHash('sha256').update(JSON.stringify(values)).digest('hex');
 }
 
+function scopedOpportunityIntelligenceIdempotencyKey(
+  identity: OpportunityIntelligenceRequestIdentity,
+  workspaceSubject?: WorkspaceSubject,
+): string {
+  const base = opportunityIntelligenceIdempotencyKey(identity);
+  if (!workspaceSubject) return base;
+  const subject = requireWorkspaceSubject(workspaceSubject);
+  // Candidate assessment results must not suppress or reuse another
+  // workspace's result even if an upstream caller accidentally reuses an
+  // otherwise complete request identity. Operator ledger identities remain
+  // byte-for-byte unchanged.
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        base,
+        profileId: subject.profileId,
+        tenantId: subject.tenantId,
+        userId: subject.userId,
+      }),
+    )
+    .digest('hex');
+}
+
 function requestCostMicros(
   usage: TokenUsage,
   pricing: OpportunityIntelligenceBudgetConfig['pricing'],
@@ -254,6 +283,34 @@ function requestCostMicros(
 
 function queryRow(result: { rows?: DatabaseRow[] }): DatabaseRow | null {
   return result.rows?.[0] ?? null;
+}
+
+function reservationOwnership(reservation: OpportunityIntelligenceReservation) {
+  return {
+    candidateProfileId: reservation.workspaceSubject?.profileId ?? '',
+    ownerUserId: reservation.workspaceSubject?.userId ?? '',
+    tenantId: reservation.workspaceSubject?.tenantId ?? '',
+  };
+}
+
+function ownershipPredicate(prefix = ''): string {
+  const column = (name: string) => `${prefix}${name}`;
+  return [
+    `COALESCE(${column('tenant_id')}, '') = ?`,
+    `COALESCE(${column('owner_user_id')}, '') = ?`,
+    `COALESCE(${column('candidate_profile_id')}, '') = ?`,
+  ].join(' AND ');
+}
+
+function ownershipValues(
+  reservation: OpportunityIntelligenceReservation,
+): string[] {
+  const ownership = reservationOwnership(reservation);
+  return [
+    ownership.tenantId,
+    ownership.ownerUserId,
+    ownership.candidateProfileId,
+  ];
 }
 
 function budgetBlock(reason: string): OpportunityIntelligenceBlockedResult {
@@ -277,9 +334,13 @@ async function reserveBudgetRow(
   id: string,
   reservation: OpportunityIntelligenceReservation,
 ): Promise<'ok' | 'missing' | 'calls' | 'input_tokens' | 'spend'> {
+  const ownerScoped =
+    table === 'agent_runs' && Boolean(reservation.workspaceSubject);
+  const predicate = ownerScoped ? ` AND ${ownershipPredicate()}` : '';
+  const ownership = ownerScoped ? ownershipValues(reservation) : [];
   const result = await db.query(
-    `SELECT * FROM ${table} WHERE id = ? FOR UPDATE`,
-    [id],
+    `SELECT * FROM ${table} WHERE id = ?${predicate} FOR UPDATE`,
+    [id, ...ownership],
   );
   const row = queryRow(result);
   if (!row) return 'missing';
@@ -318,9 +379,14 @@ async function reserveBudgetRow(
           intelligence_reserved_input_tokens = intelligence_reserved_input_tokens + ?,
           intelligence_reserved_spend_micros = intelligence_reserved_spend_micros + ?,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      WHERE id = ?${predicate}
     `,
-    [reservation.reservedInputTokens, reservation.reservedSpendMicros, id],
+    [
+      reservation.reservedInputTokens,
+      reservation.reservedSpendMicros,
+      id,
+      ...ownership,
+    ],
   );
   return 'ok';
 }
@@ -334,6 +400,10 @@ async function settleBudgetRow(
   actualSpendMicros: number,
 ): Promise<void> {
   if (!id) return;
+  const ownerScoped =
+    table === 'agent_runs' && Boolean(reservation.workspaceSubject);
+  const predicate = ownerScoped ? ` AND ${ownershipPredicate()}` : '';
+  const ownership = ownerScoped ? ownershipValues(reservation) : [];
   await db.query(
     `
       UPDATE ${table}
@@ -345,7 +415,7 @@ async function settleBudgetRow(
           intelligence_actual_output_tokens = intelligence_actual_output_tokens + ?,
           intelligence_actual_spend_micros = intelligence_actual_spend_micros + ?,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      WHERE id = ?${predicate}
     `,
     [
       reservation.reservedInputTokens,
@@ -354,6 +424,7 @@ async function settleBudgetRow(
       numberValue(usage.completionTokens),
       actualSpendMicros,
       id,
+      ...ownership,
     ],
   );
 }
@@ -396,13 +467,14 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
           `
           INSERT INTO opportunity_intelligence_results (
             id, slug, context, idempotency_key, opportunity_id,
+            tenant_id, owner_user_id, candidate_profile_id,
             source_crawl_id, source_crawl_item_id, agent_run_id,
             content_fingerprint, input_fingerprint, prepared_payload_version, prompt_version,
             output_schema_version, feature, profile, model, status,
             owner_request_id, request_id, output_json, error_code,
             started_at, created_at, updated_at
           ) VALUES (
-            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             'started', ?, ?, '{}', '', CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
@@ -414,6 +486,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
             reservation.idempotencyKey,
             reservation.idempotencyKey,
             reservation.opportunityId,
+            ...ownershipValues(reservation),
             reservation.sourceCrawlId ?? '',
             reservation.sourceCrawlItemId ?? '',
             reservation.agentRunId,
@@ -433,8 +506,10 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
         if (!ownsResult) {
           const existing = queryRow(
             await transaction.query(
-              `SELECT * FROM opportunity_intelligence_results WHERE idempotency_key = ? FOR UPDATE`,
-              [reservation.idempotencyKey],
+              `SELECT * FROM opportunity_intelligence_results
+               WHERE idempotency_key = ? AND ${ownershipPredicate()}
+               FOR UPDATE`,
+              [reservation.idempotencyKey, ...ownershipValues(reservation)],
             ),
           );
           if (stringValue(existing?.status) === 'completed') {
@@ -570,13 +645,14 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
           INSERT INTO opportunity_intelligence_requests (
             id, slug, context, request_id, provider_request_id,
             idempotency_key, feature, source_crawl_id, source_crawl_item_id,
-            opportunity_id, agent_run_id, content_fingerprint, input_fingerprint, profile, model,
+            opportunity_id, tenant_id, owner_user_id, candidate_profile_id,
+            agent_run_id, content_fingerprint, input_fingerprint, profile, model,
             provider, status, attempts, estimated_input_tokens,
             input_token_ceiling, requested_max_output_tokens,
             reserved_input_tokens, reserved_spend_micros,
             started_at, created_at, updated_at
           ) VALUES (
-            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bifrost',
+            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bifrost',
             'started', 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
@@ -591,6 +667,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
             reservation.sourceCrawlId ?? '',
             reservation.sourceCrawlItemId ?? '',
             reservation.opportunityId,
+            ...ownershipValues(reservation),
             reservation.agentRunId,
             reservation.contentFingerprint,
             reservation.inputFingerprint ?? '',
@@ -650,7 +727,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               actual_output_tokens = ?, actual_total_tokens = ?,
               actual_spend_micros = ?, accounting_basis = ?, duration_ms = ?, error_code = ?,
               finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-          WHERE request_id = ?
+          WHERE request_id = ? AND ${ownershipPredicate()}
         `,
         [
           terminal.providerRequestId ?? reservation.requestId,
@@ -665,6 +742,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
             ? ''
             : terminal.errorCode || terminal.status,
           reservation.requestId,
+          ...ownershipValues(reservation),
         ],
       );
       await transaction.query(
@@ -673,6 +751,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
           SET status = ?, output_json = ?, error_code = ?,
               finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
           WHERE idempotency_key = ? AND owner_request_id = ?
+            AND ${ownershipPredicate()}
         `,
         [
           terminal.status === 'succeeded' ? 'completed' : 'failed',
@@ -680,6 +759,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
           terminal.status === 'succeeded' ? '' : terminal.status,
           reservation.idempotencyKey,
           reservation.requestId,
+          ...ownershipValues(reservation),
         ],
       );
       await settleBudgetRow(
@@ -782,6 +862,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
   maxOutputTokens: number;
   signal?: AbortSignal;
   store?: OpportunityIntelligenceGovernanceStore;
+  /** Server-verified owner tuple for a candidate-private provider result. */
+  workspaceSubject?: WorkspaceSubject;
 }): Promise<{ output: T; requestId: string; reused: boolean }> {
   const store =
     options.store ?? new DatabaseOpportunityIntelligenceGovernanceStore();
@@ -825,10 +907,16 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     );
   }
   const requestId = randomUUID();
+  const workspaceSubject = options.workspaceSubject
+    ? requireWorkspaceSubject(options.workspaceSubject)
+    : undefined;
   const reservation: OpportunityIntelligenceReservation = {
     ...options.identity,
     estimatedInputTokens: options.estimatedInputTokens,
-    idempotencyKey: opportunityIntelligenceIdempotencyKey(options.identity),
+    idempotencyKey: scopedOpportunityIntelligenceIdempotencyKey(
+      options.identity,
+      workspaceSubject,
+    ),
     inputTokenCeiling: options.inputTokenCeiling,
     maxOutputTokens: options.maxOutputTokens,
     requestId,
@@ -838,6 +926,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
       maxOutputTokens: options.maxOutputTokens,
       pricing,
     }),
+    workspaceSubject,
   };
   if (reservation.reservedSpendMicros <= 0) {
     await safelyOpenCircuit(store, 'pricing_missing');
@@ -1230,11 +1319,14 @@ export async function startOpportunityIntelligenceAgentRun(options: {
   sourceCrawlId?: string;
   sourceId?: string;
   userId?: string;
+  /** Present only for a verified candidate-owned assessment. */
+  workspaceSubject?: WorkspaceSubject;
 }): Promise<string> {
   const config = resolveOpportunityIntelligenceBudgetConfig();
   const collection = await getCollection('AgentRun');
   const run = await collection.create({
-    initiatedByUserId: options.userId ?? '',
+    candidateProfileId: options.workspaceSubject?.profileId ?? '',
+    initiatedByUserId: options.workspaceSubject?.userId ?? options.userId ?? '',
     inputJson: JSON.stringify({
       sourceCrawlId: options.sourceCrawlId ?? '',
     }),
@@ -1242,10 +1334,12 @@ export async function startOpportunityIntelligenceAgentRun(options: {
     intelligenceInputTokenLimit: config.run.inputTokens,
     intelligenceSpendLimitMicros: config.run.spendMicros,
     opportunityId: options.opportunityId,
+    ownerUserId: options.workspaceSubject?.userId ?? '',
     runType: 'opportunity_intelligence',
     sourceId: options.sourceId ?? '',
     startedAt: new Date(),
     status: 'running',
+    tenantId: options.workspaceSubject?.tenantId ?? '',
   });
   await run.save();
   return stringValue(run.id);
@@ -1255,6 +1349,7 @@ export async function finishOpportunityIntelligenceAgentRun(
   agentRunId: string,
   status: 'failed' | 'succeeded',
   error = '',
+  workspaceSubject?: WorkspaceSubject,
 ): Promise<void> {
   if (!agentRunId) return;
   const collection = await getCollection('AgentRun');
@@ -1262,6 +1357,14 @@ export async function finishOpportunityIntelligenceAgentRun(
     | (Record<string, unknown> & { save: () => Promise<void> })
     | null;
   if (!run) return;
+  if (
+    workspaceSubject &&
+    (run.tenantId !== workspaceSubject.tenantId ||
+      run.ownerUserId !== workspaceSubject.userId ||
+      run.candidateProfileId !== workspaceSubject.profileId)
+  ) {
+    throw new Error('Agent run is outside the verified workspace subject.');
+  }
   run.error = error;
   run.finishedAt = new Date();
   run.status = status;

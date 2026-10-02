@@ -10,6 +10,10 @@ import {
   statusForOpportunityRecommendation,
 } from './opportunity-intelligence';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
+import {
+  OPPORTUNITY_SCORING_INPUT_VERSION,
+  OPPORTUNITY_SCORING_PROMPT_VERSION,
+} from './opportunity-scoring.js';
 import { resolveSkillMatching } from './skill-matching.js';
 
 type MockRecord = Record<string, unknown> & {
@@ -611,7 +615,7 @@ describe('processOpportunityIntelligence', () => {
     expect(reason.missingInfo.join(' ')).toContain('PostgreSQL');
   });
 
-  it('scores, stores reasonJson evidence, and syncs recommendation tasks', async () => {
+  it('scores and stores reasonJson evidence without creating an ownerless recommendation task', async () => {
     const opportunities = collection([
       record({
         descriptionRaw: 'Build agent workflow products. Requires TypeScript.',
@@ -667,12 +671,12 @@ describe('processOpportunityIntelligence', () => {
       scoring: {
         input: {
           evidenceCount: expect.any(Number),
-          version: 'opportunity-scoring-input/v4',
+          version: OPPORTUNITY_SCORING_INPUT_VERSION,
         },
         model: 'openai/gpt-6.1-sol',
         modelInvoked: true,
         outputSchemaVersion: 'opportunity-score-output/v2',
-        promptVersion: 'opportunity-score/v6',
+        promptVersion: OPPORTUNITY_SCORING_PROMPT_VERSION,
       },
     });
     expect(storedReason.scoring?.inputTokenCount).toBeLessThanOrEqual(
@@ -687,7 +691,9 @@ describe('processOpportunityIntelligence', () => {
       timeout: 105_000,
     });
     expect(opportunities.records[0].status).toBe('recommended');
-    expect(mocks.syncRecommendedOpportunityDecisionTasks).toHaveBeenCalled();
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
   });
 
   it('stores score provenance for the exact queued source version', async () => {

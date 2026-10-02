@@ -8,13 +8,13 @@ import {
 describe('opportunity assessment projection', () => {
   it('only accepts an explicit current safe projection', () => {
     const assessment = {
-      personalEligibility: 'eligible_without_sponsorship',
+      eligibilityBucket: 'eligible',
       sourceStatus: 'current',
       ranking: { eligibilityPriority: 0, fitScore: 84 },
       reason: 'Safe summary',
     };
     expect(getOpportunityAssessmentProjection(assessment)).toMatchObject({
-      buckets: ['eligible_without_sponsorship'],
+      buckets: ['eligible'],
       fitScore: 84,
     });
     expect(
@@ -25,25 +25,25 @@ describe('opportunity assessment projection', () => {
     ).toEqual(['unknown']);
     expect(
       getOpportunityAssessmentProjection({
-        personalEligibility: 'bad',
+        eligibilityBucket: 'bad',
         sourceStatus: 'current',
       }).buckets,
     ).toEqual(['unknown']);
   });
   it('filters OR buckets and ranks priority then fit score', () => {
     const sponsor = {
-      personalEligibility: 'sponsorship_possible',
+      eligibilityBucket: 'sponsorship_possible',
       sourceStatus: 'current',
       ranking: { eligibilityPriority: 1, fitScore: 99 },
     };
     const eligible = {
-      personalEligibility: 'eligible_without_sponsorship',
+      eligibilityBucket: 'eligible',
       sourceStatus: 'current',
       ranking: { eligibilityPriority: 0, fitScore: 1 },
     };
     expect(
       matchesAssessmentEligibility(sponsor, [
-        'incompatible',
+        'location_restriction',
         'sponsorship_possible',
       ]),
     ).toBe(true);

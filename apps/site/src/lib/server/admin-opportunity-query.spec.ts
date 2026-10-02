@@ -8,6 +8,12 @@ const mocks = vi.hoisted(() => ({
   scopedQuery: vi.fn(),
 }));
 
+const WORKSPACE_SUBJECT = {
+  profileId: 'profile-a',
+  tenantId: 'tenant-a',
+  userId: 'user-a',
+} as const;
+
 vi.mock('@happyvertical/smrt-core', () => ({
   resolveDatabase: vi.fn(async () => ({ query: mocks.query })),
 }));
@@ -41,9 +47,12 @@ describe('admin-opportunity-query', () => {
     } = await import('./admin-opportunity-query');
 
     await countOpportunityRecords({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     await listOpportunityPageIds({
       candidateSkills: [],
@@ -51,10 +60,12 @@ describe('admin-opportunity-query', () => {
       limit: 10,
       offset: 0,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
-    await listLatestOpportunityRelatedContext([
-      '11111111-1111-4111-8111-111111111111',
-    ]);
+    await listLatestOpportunityRelatedContext(
+      ['11111111-1111-4111-8111-111111111111'],
+      WORKSPACE_SUBJECT,
+    );
 
     expect(mocks.scopedQuery).toHaveBeenCalledTimes(3);
     expect(mocks.query).not.toHaveBeenCalled();
@@ -69,6 +80,7 @@ describe('admin-opportunity-query', () => {
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, excludeStale: true },
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [staleSql] = mocks.query.mock.calls[0] ?? [];
@@ -79,30 +91,35 @@ describe('admin-opportunity-query', () => {
       candidateSkills: [],
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     const [defaultSql] = mocks.query.mock.calls[0] ?? [];
     expect(defaultSql).not.toContain("<> 'stale'");
   });
 
-  it('uses current source-bound eligibility flags with OR bucket matching', async () => {
+  it('uses current private eligibility projections with legacy bucket aliases', async () => {
     const { createOpportunityWhereSql } = await import(
       './admin-opportunity-query'
     );
     const query = createOpportunityWhereSql({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
-        eligibilityBuckets: ['canada_eligible', 'sponsorship_possible'],
+        eligibilityBuckets: ['eligible', 'sponsorship_possible'],
       },
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
-    expect(query.whereSql).toContain('eligibility_source_fingerprint');
-    expect(query.whereSql).toContain('eligibility_source_version');
-    expect(query.whereSql).toContain("COALESCE(o.source_content_fingerprint, '') <> ''");
-    expect(query.whereSql).toContain('ELSE 32');
-    expect(query.whereSql).toContain(' OR ');
-    expect(query.values).toEqual(expect.arrayContaining([1, 2]));
+    expect(query.whereSql).toContain('latest_assessment.eligibility_bucket');
+    expect(query.joins.join('\n')).toContain('opportunity_assessments');
+    expect(query.values).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(['eligible', 'sponsorship_possible']),
+      ]),
+    );
   });
 
   it('hides archived opportunities unless a status filter asks for them', async () => {
@@ -116,6 +133,7 @@ describe('admin-opportunity-query', () => {
       limit: 10,
       offset: 0,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     const [defaultSql, ...defaultValues] = mocks.query.mock.calls[0] ?? [];
     expect(defaultSql).toMatch(/o\.status <> \$\d+/);
@@ -126,6 +144,7 @@ describe('admin-opportunity-query', () => {
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, status: 'archived' },
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     const [archivedSql, ...archivedValues] = mocks.query.mock.calls[0] ?? [];
     expect(archivedSql).toMatch(/o\.status = \$\d+/);
@@ -133,12 +152,14 @@ describe('admin-opportunity-query', () => {
     expect(archivedValues).toContain('archived');
   });
 
-  it('only sorts with scores matching the opportunity content fingerprint', async () => {
+  it('only sorts with an exact current assessment projection', async () => {
     const { listOpportunityPageIds } = await import(
       './admin-opportunity-query'
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
@@ -147,15 +168,20 @@ describe('admin-opportunity-query', () => {
       limit: 25,
       offset: 0,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
-    expect(sql).toMatch(
-      /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
+    expect(sql).toContain('FROM opportunity_assessments oa');
+    expect(sql).toContain(
+      'oa.source_content_fingerprint = COALESCE(o.source_content_fingerprint',
     );
-    expect(sql).not.toContain(
-      "COALESCE(es.source_content_fingerprint, '') = ''\n          OR",
+    expect(sql).toContain(
+      'oa.source_content_version = COALESCE(o.source_content_version',
     );
+    expect(sql).toContain('oa.candidate_material_fingerprint');
+    expect(sql).toContain('oa.preferences_fingerprint');
+    expect(sql).not.toContain('FROM evaluation_scores es');
   });
 
   it('uses the requested direction for a supported server sort', async () => {
@@ -164,6 +190,8 @@ describe('admin-opportunity-query', () => {
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
@@ -173,46 +201,52 @@ describe('admin-opportunity-query', () => {
       limit: 25,
       offset: 0,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
-    expect(sql).toContain('ORDER BY latest.score ASC NULLS LAST');
+    expect(sql).toContain(
+      'ORDER BY latest_assessment.fit_score ASC NULLS LAST',
+    );
   });
 
-  it('deprioritizes only explicit current rejects for score-sorted triage', async () => {
+  it('deprioritizes current excluded assessments for score-sorted triage', async () => {
     const { listOpportunityPageIds } = await import(
       './admin-opportunity-query'
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
       limit: 25,
       offset: 0,
       reviewFilter: 'unsorted',
       triageRejectDepriority: true,
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     const [triageSql] = mocks.query.mock.calls[0] ?? [];
     expect(triageSql).toContain(
-      "CASE WHEN lower(btrim(COALESCE(latest.recommendation, ''), '",
+      'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
-    expect(triageSql).toContain('\ufeff');
-    expect(triageSql).toContain('latest.score DESC NULLS LAST');
-    expect(triageSql).toContain('SELECT es.score, es.recommendation');
-    expect(triageSql).toMatch(
-      /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
-    );
+    expect(triageSql).toContain('latest_assessment.fit_score DESC NULLS LAST');
+    expect(triageSql).toContain('FROM opportunity_assessments oa');
+    expect(triageSql).not.toContain('FROM evaluation_scores es');
 
     mocks.query.mockClear();
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
       limit: 25,
       offset: 0,
       reviewFilter: 'unsorted',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     const [browseSql] = mocks.query.mock.calls[0] ?? [];
-    expect(browseSql).not.toContain('CASE WHEN lower(btrim(');
+    expect(browseSql).not.toContain('CASE WHEN latest_assessment.excluded');
   });
 
   it('uses SQLite-compatible review normalization and score join locally', async () => {
@@ -222,6 +256,8 @@ describe('admin-opportunity-query', () => {
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
@@ -230,37 +266,45 @@ describe('admin-opportunity-query', () => {
       limit: 25,
       offset: 0,
       reviewFilter: 'maybe',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql, ...values] = mocks.query.mock.calls[0] ?? [];
-    expect(sql).toContain('lower(trim(o.human_review_status)) = $1');
-    expect(sql).toContain('LEFT JOIN evaluation_scores latest');
-    expect(sql).toContain('latest.id = (');
+    expect(sql).toContain('LEFT JOIN decisions latest_review');
+    expect(sql).toContain("latest_review.decision = 'defer'");
+    expect(sql).toContain('d.tenant_id = $3');
+    expect(sql).not.toContain('o.human_review_status');
+    expect(sql).toContain(
+      'LEFT JOIN opportunity_assessments latest_assessment',
+    );
+    expect(sql).toContain('latest_assessment.id = (');
     expect(sql).not.toContain('LEFT JOIN LATERAL');
     expect(values).toContain('maybe');
   });
 
-  it('uses SQLite recommendation normalization for triage ranking', async () => {
+  it('uses SQLite assessment projection ranking for triage', async () => {
     mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
     const { listOpportunityPageIds } = await import(
       './admin-opportunity-query'
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
       limit: 25,
       offset: 0,
       reviewFilter: 'unsorted',
       triageRejectDepriority: true,
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain(
-      "CASE WHEN lower(trim(COALESCE(latest.recommendation, ''), '",
+      'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
-    expect(sql).toContain('\ufeff');
-    expect(sql).toContain('latest.score DESC NULLS LAST');
+    expect(sql).toContain('latest_assessment.fit_score DESC NULLS LAST');
   });
 
   it('loads only fingerprint-current score context for bounded SQLite triage ids', async () => {
@@ -279,10 +323,10 @@ describe('admin-opportunity-query', () => {
       './admin-opportunity-query'
     );
 
-    const scores = await listCurrentOpportunityScores([
-      'recommend-96',
-      'outdated-reject',
-    ]);
+    const scores = await listCurrentOpportunityScores(
+      ['recommend-96', 'outdated-reject'],
+      WORKSPACE_SUBJECT,
+    );
 
     expect(scores).toEqual(
       new Map([['recommend-96', { recommendation: 'recommend', score: 96 }]]),
@@ -291,6 +335,9 @@ describe('admin-opportunity-query', () => {
     expect(sql).toContain('LEFT JOIN evaluation_scores latest');
     expect(sql).toContain('latest.id = (');
     expect(sql).toContain('WHERE CAST(o.id AS TEXT) IN ($1, $2)');
+    expect(sql).toContain('es.tenant_id = $3');
+    expect(sql).toContain('es.owner_user_id = $4');
+    expect(sql).toContain('es.candidate_profile_id = $5');
     expect(sql).toMatch(
       /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
     );
@@ -328,21 +375,16 @@ describe('admin-opportunity-query', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('covers the score lateral the triage preset sorts by', async () => {
-    // Issue #452 asked whether the deck's `latest.score DESC` ordering has an
-    // index behind it. It does: the lateral matches on `(opportunity_id,
-    // COALESCE(source_content_fingerprint, ''))` and takes the newest row, and
-    // this index is exactly that key plus `updated_at DESC`, with `score`
-    // included so the lookup never visits the heap. No further index is
-    // needed, and this asserts the definition cannot drift away from the join.
+  it('keeps the historical score index only for bounded post-page context', async () => {
     const release = vi.fn(async () => {});
     const sessionQuery = vi.fn(async () => ({ rows: [] }));
     const acquireSession = vi.fn(async () => ({
       query: sessionQuery,
       release,
     }));
-    const { createOpportunityWhereSql, ensureOpportunityListQueryIndexes } =
-      await import('./admin-opportunity-query');
+    const { ensureOpportunityListQueryIndexes } = await import(
+      './admin-opportunity-query'
+    );
 
     await ensureOpportunityListQueryIndexes({ acquireSession } as never);
 
@@ -359,19 +401,44 @@ describe('admin-opportunity-query', () => {
     expect(scoreIndex).toContain("(COALESCE(source_content_fingerprint, ''))");
     expect(scoreIndex).toContain('updated_at DESC');
     expect(scoreIndex).toContain('INCLUDE (score)');
+  });
 
-    // And the join it has to serve is still shaped that way.
-    const { joins } = createOpportunityWhereSql({
+  it('uses only an exact current assessment materialization before paging', async () => {
+    const { createOpportunityWhereSql } = await import(
+      './admin-opportunity-query'
+    );
+
+    const { joins, values } = createOpportunityWhereSql({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: [],
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, minScore: 1 },
-      reviewFilter: 'unsorted',
+      reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
-    const scoreJoin = joins.find((join) => join.includes('evaluation_scores'));
-    expect(scoreJoin).toContain('es.opportunity_id = CAST(o.id AS TEXT)');
-    expect(scoreJoin).toContain(
-      "COALESCE(es.source_content_fingerprint, '') =",
+    const assessmentJoin = joins.find((join) =>
+      join.includes('opportunity_assessments'),
     );
-    expect(scoreJoin).toContain('CASE WHEN COALESCE(es.created_by_profile_id');
+
+    expect(assessmentJoin).toContain('oa.tenant_id');
+    expect(assessmentJoin).toContain('oa.owner_user_id');
+    expect(assessmentJoin).toContain('oa.candidate_profile_id');
+    expect(assessmentJoin).toContain("oa.status = 'current'");
+    expect(assessmentJoin).toContain('oa.contract_version');
+    expect(assessmentJoin).toContain('oa.source_content_fingerprint');
+    expect(assessmentJoin).toContain('oa.source_content_version');
+    expect(assessmentJoin).toContain('oa.candidate_material_fingerprint');
+    expect(assessmentJoin).toContain('oa.preferences_fingerprint');
+    expect(assessmentJoin).not.toContain('evaluation_scores');
+    expect(values).toEqual(
+      expect.arrayContaining([
+        'tenant-a',
+        'user-a',
+        'profile-a',
+        'candidate-material-a',
+        'preferences-a',
+      ]),
+    );
   });
 
   it('repairs an invalid concurrent index before retrying it', async () => {
@@ -398,7 +465,7 @@ describe('admin-opportunity-query', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('normalizes stored review decisions before filtering', async () => {
+  it('filters with the latest subject-owned decision overlay, never global opportunity review fields', async () => {
     const { countOpportunityRecords } = await import(
       './admin-opportunity-query'
     );
@@ -407,22 +474,136 @@ describe('admin-opportunity-query', () => {
       candidateSkills: [],
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       reviewFilter: 'apply',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
     await countOpportunityRecords({
       candidateSkills: [],
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       reviewFilter: 'unsorted',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [applySql, ...applyParams] = mocks.query.mock.calls[0] ?? [];
     const [unsortedSql, ...unsortedParams] = mocks.query.mock.calls[1] ?? [];
-    expect(applySql).toContain('lower(btrim(o.human_review_status)) = $1');
-    // The trailing 'archived' is the default archived-status exclusion.
-    expect(applyParams).toEqual(['apply', 'archived']);
-    expect(unsortedSql).toContain(
-      "COALESCE(lower(btrim(o.human_review_status)), '') NOT IN ($1, $2, $3)",
+    expect(applySql).toContain('FROM decisions d');
+    expect(applySql).toContain('latest_review.decision IS NULL');
+    expect(applySql).toContain("latest_review.decision = 'accept_to_apply'");
+    expect(applySql).toContain(
+      'ORDER BY d.created_at DESC NULLS LAST, d.id DESC',
     );
-    expect(unsortedParams).toEqual(['apply', 'maybe', 'reject', 'archived']);
+    expect(applySql).toContain('d.tenant_id = $3');
+    expect(applySql).toContain('d.owner_user_id = $4');
+    expect(applySql).toContain('d.candidate_profile_id = $5');
+    expect(applySql).not.toContain('o.human_review_status');
+    expect(applySql).not.toContain('o.human_rating');
+    expect(applyParams).toEqual([
+      'apply',
+      'archived',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+    ]);
+    expect(unsortedSql).toContain('NOT IN ($1, $2, $3)');
+    expect(unsortedSql).toContain('FROM decisions d');
+    expect(unsortedParams).toEqual([
+      'apply',
+      'maybe',
+      'reject',
+      'archived',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+    ]);
+  });
+
+  it('binds score, application, review, and related-context joins to the complete workspace subject', async () => {
+    const {
+      countOpportunityRecords,
+      listCurrentOpportunityScores,
+      listLatestOpportunityRelatedContext,
+      listOpportunityFilterOptions,
+      listOpportunityPageIds,
+    } = await import('./admin-opportunity-query');
+
+    await countOpportunityRecords({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, minScore: 60 },
+      reviewFilter: 'apply',
+      workspaceSubject: WORKSPACE_SUBJECT,
+    });
+    await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'rating' },
+      limit: 10,
+      offset: 0,
+      reviewFilter: 'missing_application_planning',
+      workspaceSubject: WORKSPACE_SUBJECT,
+    });
+    await listOpportunityFilterOptions('apply', WORKSPACE_SUBJECT);
+    await listCurrentOpportunityScores(['opportunity-a'], WORKSPACE_SUBJECT);
+    await listLatestOpportunityRelatedContext(
+      ['opportunity-a'],
+      WORKSPACE_SUBJECT,
+    );
+
+    for (const [sql, ...values] of mocks.query.mock.calls) {
+      expect(sql).toContain('tenant_id');
+      expect(sql).toContain('owner_user_id');
+      expect(sql).toContain('candidate_profile_id');
+      expect(values).toContain('tenant-a');
+      expect(values).toContain('user-a');
+      expect(values).toContain('profile-a');
+    }
+  });
+
+  it('returns no related context when a forged subject has no selected profile', async () => {
+    const { listLatestOpportunityRelatedContext } = await import(
+      './admin-opportunity-query'
+    );
+
+    await expect(
+      listLatestOpportunityRelatedContext(['opportunity-a'], {
+        tenantId: 'tenant-a',
+        userId: 'user-a',
+      } as never),
+    ).resolves.toEqual([]);
+    expect(mocks.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects every exported listing boundary without a selected workspace profile', async () => {
+    const {
+      countOpportunityRecords,
+      listOpportunityMatchingIds,
+      listOpportunityPageIds,
+      listOpportunityRevisionsByIds,
+    } = await import('./admin-opportunity-query');
+    const forgedSubject = { tenantId: 'tenant-a', userId: 'user-a' } as never;
+    const query = {
+      candidateSkills: [],
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      reviewFilter: 'all',
+      workspaceSubject: forgedSubject,
+    } as never as Record<string, unknown>;
+
+    await expect(countOpportunityRecords(query as never)).resolves.toBe(0);
+    await expect(
+      listOpportunityMatchingIds(query as never, { limit: 10 }),
+    ).resolves.toEqual([]);
+    await expect(
+      listOpportunityPageIds({
+        ...(query as object),
+        limit: 10,
+        offset: 0,
+      } as never),
+    ).resolves.toEqual([]);
+    await expect(
+      listOpportunityRevisionsByIds(['opportunity-a'], forgedSubject),
+    ).resolves.toEqual([]);
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 
   it('keeps compensation, skill, fit, and score filters in the database query', async () => {
@@ -431,6 +612,8 @@ describe('admin-opportunity-query', () => {
     );
 
     await listOpportunityPageIds({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
       candidateSkills: ['kubernetes'],
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
@@ -445,14 +628,15 @@ describe('admin-opportunity-query', () => {
       limit: 100,
       offset: 0,
       reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain('regexp_split_to_array');
     expect(sql).toContain('NOT (EXISTS');
     expect(sql).toContain('o.salary_min IS NULL AND o.salary_max IS NULL');
-    expect(sql).toContain('latest.score >=');
-    expect(sql).toContain('latest.score <=');
+    expect(sql).toContain('latest_assessment.fit_score >=');
+    expect(sql).toContain('latest_assessment.fit_score <=');
     expect(params).toContainEqual(['kubernetes']);
     expect(params).toContainEqual(['kubernetes']);
     expect(params).toContain(120_000);
@@ -475,6 +659,7 @@ describe('admin-opportunity-query', () => {
       offset: 0,
       reviewFilter: 'all',
       search: 'platform engineer',
+      workspaceSubject: WORKSPACE_SUBJECT,
     });
 
     const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
@@ -493,22 +678,67 @@ describe('admin-opportunity-query', () => {
       '22222222-2222-4222-8222-222222222222',
     ];
 
-    await listLatestOpportunityRelatedContext(ids);
+    await listLatestOpportunityRelatedContext(ids, WORKSPACE_SUBJECT);
 
-    const [sql, idParam, limitParam] = mocks.query.mock.calls[0] ?? [];
+    const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain('LEFT JOIN LATERAL');
     expect(sql).toContain('FROM applications a');
     expect(sql).toContain('FROM evaluation_scores es');
     expect(sql).toMatch(
       /COALESCE\(es\.source_content_fingerprint, ''\) =\s+COALESCE\(o\.source_content_fingerprint, ''\)/,
     );
-    expect(sql.match(/LIMIT 1/g)).toHaveLength(2);
+    expect(sql).toContain('FROM decisions d');
+    expect(sql.match(/LIMIT 1/g)).toHaveLength(3);
     expect(sql).toContain('WHERE o.id = ANY($1)');
     expect(sql).not.toContain('o.id::text');
     expect(sql).not.toContain('$1::text[]');
-    expect(sql).toContain('LIMIT $2');
-    expect(idParam).toEqual(ids);
-    expect(limitParam).toBe(2);
+    expect(sql).toContain('LIMIT $11');
+    expect(params).toEqual([
+      ids,
+      'tenant-a',
+      'user-a',
+      'profile-a',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+      2,
+    ]);
+  });
+
+  it('returns only the review-overlay-safe related decision fields', async () => {
+    mocks.query.mockResolvedValue({
+      rows: [
+        {
+          humanRating: 11,
+          humanReviewNotes: 42,
+          humanReviewStatus: 'not-a-status',
+          opportunityId: 'opportunity-a',
+          reviewedAt: 42,
+          reviewedByProfileId: 12,
+          reviewedByUserId: null,
+        },
+      ],
+    });
+    const { listLatestOpportunityRelatedContext } = await import(
+      './admin-opportunity-query'
+    );
+
+    await expect(
+      listLatestOpportunityRelatedContext(['opportunity-a'], WORKSPACE_SUBJECT),
+    ).resolves.toEqual([
+      {
+        humanRating: null,
+        humanReviewNotes: '',
+        humanReviewStatus: undefined,
+        opportunityId: 'opportunity-a',
+        reviewedAt: null,
+        reviewedByProfileId: '',
+        reviewedByUserId: '',
+      },
+    ]);
   });
 
   describe('createOpportunityQueryFingerprint', () => {
@@ -677,6 +907,7 @@ describe('admin-opportunity-query', () => {
           candidateSkills: [],
           filters: DEFAULT_OPPORTUNITY_FILTERS,
           reviewFilter: 'all',
+          workspaceSubject: WORKSPACE_SUBJECT,
         },
         { limit: 501 },
       );

@@ -1,13 +1,24 @@
 /** A presentation-safe assessment summary; never reads candidate or provider data. */
 export const ASSESSMENT_ELIGIBILITY_BUCKETS = [
-  'eligible_without_sponsorship',
+  'eligible',
   'sponsorship_possible',
-  'incompatible',
+  'location_restriction',
   'unknown',
   'conflicting',
 ] as const;
 export type AssessmentEligibilityBucket =
   (typeof ASSESSMENT_ELIGIBILITY_BUCKETS)[number];
+
+export const assessmentEligibilityLabels: Record<
+  AssessmentEligibilityBucket,
+  string
+> = {
+  eligible: 'Eligible for your work location',
+  sponsorship_possible: 'Sponsorship possible',
+  location_restriction: 'Location or authorization restriction',
+  unknown: 'Unknown',
+  conflicting: 'Conflicting',
+};
 
 export type OpportunityAssessmentProjection = {
   buckets: AssessmentEligibilityBucket[];
@@ -17,11 +28,11 @@ export type OpportunityAssessmentProjection = {
 };
 
 const priority: Record<AssessmentEligibilityBucket, number> = {
-  eligible_without_sponsorship: 0,
+  eligible: 0,
   sponsorship_possible: 1,
   unknown: 2,
   conflicting: 3,
-  incompatible: 4,
+  location_restriction: 4,
 };
 
 export function getOpportunityAssessmentProjection(
@@ -41,38 +52,30 @@ export function getOpportunityAssessmentProjection(
     return unknown;
   const value = assessment as Record<string, unknown>;
   if (value.sourceStatus !== 'current') return unknown;
-  const personal = value.personalEligibility;
+  const rawBucket = value.eligibilityBucket;
   if (
-    ![
-      'eligible_without_sponsorship',
-      'sponsorship_possible',
-      'incompatible',
-      'unknown',
-    ].includes(String(personal))
+    !ASSESSMENT_ELIGIBILITY_BUCKETS.includes(
+      rawBucket as AssessmentEligibilityBucket,
+    )
   )
     return unknown;
-  const bucket = personal as Exclude<
-    AssessmentEligibilityBucket,
-    'conflicting'
-  >;
-  const conflicting = value.conflicting === true;
+  const bucket = rawBucket as AssessmentEligibilityBucket;
   const ranking = value.ranking;
   const rank =
     ranking && typeof ranking === 'object' && !Array.isArray(ranking)
       ? (ranking as Record<string, unknown>)
       : {};
-  const fitScore =
-    typeof rank.fitScore === 'number' && Number.isFinite(rank.fitScore)
-      ? rank.fitScore
-      : 0;
+  if (
+    typeof rank.fitScore !== 'number' ||
+    !Number.isFinite(rank.fitScore) ||
+    typeof rank.eligibilityPriority !== 'number' ||
+    !Number.isFinite(rank.eligibilityPriority)
+  )
+    return unknown;
   return {
-    buckets: conflicting ? ['conflicting'] : [bucket],
-    eligibilityPriority:
-      typeof rank.eligibilityPriority === 'number' &&
-      Number.isFinite(rank.eligibilityPriority)
-        ? rank.eligibilityPriority
-        : priority[conflicting ? 'conflicting' : bucket],
-    fitScore,
+    buckets: [bucket],
+    eligibilityPriority: rank.eligibilityPriority,
+    fitScore: rank.fitScore,
     reason: typeof value.reason === 'string' ? value.reason : '',
   };
 }

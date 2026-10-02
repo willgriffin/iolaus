@@ -6,8 +6,15 @@ import {
   SmrtJobCollection,
   type SmrtJobData,
 } from '@happyvertical/smrt-jobs';
+import { getAppConfig } from './app-config.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
+import {
+  type RuntimeWorkspaceSubject,
+  runtimeWorkspaceSubjectFromJobArgs,
+  withRuntimeWorkspaceSubject,
+} from './job-workspace-subject.js';
+import { opportunityAssessmentSubjectMaterialFingerprint } from './opportunity-assessment-input.js';
 import {
   type OpportunityIntelligenceMode,
   type OpportunityIntelligenceOptions,
@@ -26,7 +33,9 @@ import {
   OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
 } from './opportunity-intelligence-job-schema.js';
 import { OPPORTUNITY_SOURCE_CONTENT_FINGERPRINT_VERSION } from './opportunity-source-content.js';
+import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 import { getCollection } from './smrt.js';
+import { getCurrentWorkspaceSubject } from './workspace-subject.js';
 
 export {
   ensureOpportunityIntelligenceJobDedupe,
@@ -36,7 +45,8 @@ export {
   OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
 } from './opportunity-intelligence-job-schema.js';
 
-export interface OpportunityIntelligenceJobArgs {
+export interface OpportunityIntelligenceJobArgs
+  extends Record<string, unknown> {
   applicationId?: string;
   contentFingerprint?: string;
   contentFingerprintVersion?: string;
@@ -47,7 +57,6 @@ export interface OpportunityIntelligenceJobArgs {
   sourceCrawlId?: string;
   sourceCrawlItemId?: string;
   sourceId?: string;
-  userId?: string;
 }
 
 export interface OpportunityIntelligenceEnqueueResult {
@@ -71,15 +80,12 @@ export interface EnqueueOpportunityIntelligenceOptions {
     get: (id: string) => Promise<unknown | null | undefined>;
   };
   reason?: string;
-  user?: { id?: unknown } | null;
 }
 
 export interface RunOpportunityIntelligenceJobDependencies {
-  finishRun?: (
-    agentRunId: string,
-    status: 'failed' | 'succeeded',
-    error?: string,
-  ) => Promise<void>;
+  /** Freshly verified by the runtime job wrapper; never read from payload. */
+  workspaceSubject?: RuntimeWorkspaceSubject;
+  finishRun?: typeof finishOpportunityIntelligenceAgentRun;
   governanceStore?: OpportunityIntelligenceGovernanceStore;
   processor?: (options: OpportunityIntelligenceOptions) => Promise<{
     failed?: number;
@@ -123,6 +129,29 @@ function stringValue(value: unknown): string {
 function positiveInteger(value: unknown): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.trunc(number) : 0;
+}
+
+function requireMatchingActiveWorkspaceJob(
+  job: SmrtJob,
+  subject: RuntimeWorkspaceSubject,
+): void {
+  try {
+    const stored = runtimeWorkspaceSubjectFromJobArgs(job.args);
+    if (
+      job.tenantId !== subject.tenantId ||
+      stored.tenantId !== subject.tenantId ||
+      stored.userId !== subject.userId ||
+      stored.profileId !== subject.profileId
+    ) {
+      throw new Error('mismatch');
+    }
+  } catch {
+    // Do not disclose an active job belonging to a different workspace.
+    throw new OpportunityIntelligenceEnqueueError(
+      'opportunity_not_found',
+      'Opportunity not found.',
+    );
+  }
 }
 
 export async function updateOpportunityIntelligenceTerminalStatus(
@@ -221,6 +250,69 @@ export async function enqueueOpportunityIntelligenceWithStatus(
   args: OpportunityIntelligenceJobArgs = {},
   options: EnqueueOpportunityIntelligenceOptions = {},
 ): Promise<OpportunityIntelligenceEnqueueResult> {
+  // Existing source/reconciliation workers have no workspace subject and keep
+  // their explicit global/operator path. A request-bound caller is always
+  // captured as its current verified subject, never from `args` or options.
+  if (getCurrentWorkspaceSubject()) {
+    return await enqueueWorkspaceOpportunityIntelligenceWithStatus(
+      opportunityId,
+      args,
+      options,
+    );
+  }
+  if (getAppConfig().workspaceMode === 'shared') {
+    throw new OpportunityIntelligenceEnqueueError(
+      'opportunity_not_found',
+      'Shared workspace intelligence jobs require a bound workspace subject.',
+    );
+  }
+  return await enqueueOpportunityIntelligenceInternal(
+    opportunityId,
+    args,
+    options,
+  );
+}
+
+/** Queue a candidate-owned intelligence run from the current verified subject. */
+export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
+  opportunityId: string,
+  args: OpportunityIntelligenceJobArgs = {},
+  options: EnqueueOpportunityIntelligenceOptions = {},
+): Promise<OpportunityIntelligenceEnqueueResult> {
+  const envelopedArgs = withRuntimeWorkspaceSubject(args);
+  const subject = runtimeWorkspaceSubjectFromJobArgs(envelopedArgs);
+  const [evidence, opportunity] = await Promise.all([
+    loadWorkspaceCandidateEvidence(subject),
+    requireOpportunity(opportunityId.trim(), options),
+  ]);
+  const subjectMaterialFingerprint =
+    opportunityAssessmentSubjectMaterialFingerprint({
+      candidateMaterialFingerprint: evidence.fingerprint,
+      sourceContentFingerprint: stringValue(
+        opportunity.sourceContentFingerprint,
+      ),
+      sourceContentVersion: positiveInteger(opportunity.sourceContentVersion),
+      subject,
+    });
+  return await enqueueOpportunityIntelligenceInternal(
+    opportunityId,
+    {
+      ...envelopedArgs,
+      modes:
+        envelopedArgs.modes ?? ('assessment' as OpportunityIntelligenceMode),
+      scoringMaterialFingerprint: subjectMaterialFingerprint,
+    },
+    options,
+    subject,
+  );
+}
+
+async function enqueueOpportunityIntelligenceInternal(
+  opportunityId: string,
+  args: OpportunityIntelligenceJobArgs,
+  options: EnqueueOpportunityIntelligenceOptions,
+  runtimeWorkspaceSubject?: RuntimeWorkspaceSubject,
+): Promise<OpportunityIntelligenceEnqueueResult> {
   const normalizedOpportunityId = opportunityId.trim();
   if (!normalizedOpportunityId) {
     throw new OpportunityIntelligenceEnqueueError(
@@ -238,21 +330,20 @@ export async function enqueueOpportunityIntelligenceWithStatus(
   const requestedVersion = positiveInteger(args.contentVersion);
   const resolvedArgs: OpportunityIntelligenceJobArgs = {
     ...args,
-    ...(requestedFingerprint || currentFingerprint
+    ...(currentFingerprint || requestedFingerprint
       ? {
-          contentFingerprint: requestedFingerprint || currentFingerprint,
+          contentFingerprint: currentFingerprint || requestedFingerprint,
           contentFingerprintVersion:
-            stringValue(args.contentFingerprintVersion) ||
             OPPORTUNITY_SOURCE_CONTENT_FINGERPRINT_VERSION,
         }
       : {}),
-    ...(requestedVersion || currentVersion
-      ? { contentVersion: requestedVersion || currentVersion }
+    ...(currentVersion || requestedVersion
+      ? { contentVersion: currentVersion || requestedVersion }
       : {}),
-    ...(stringValue(args.sourceId) || stringValue(opportunity.sourceId)
+    ...(stringValue(opportunity.sourceId) || stringValue(args.sourceId)
       ? {
           sourceId:
-            stringValue(args.sourceId) || stringValue(opportunity.sourceId),
+            stringValue(opportunity.sourceId) || stringValue(args.sourceId),
         }
       : {}),
   };
@@ -269,7 +360,12 @@ export async function enqueueOpportunityIntelligenceWithStatus(
     stringValue(resolvedArgs.contentFingerprint),
     stringValue(resolvedArgs.scoringMaterialFingerprint),
   );
-  if (existingJob) return { enqueued: false, job: existingJob };
+  if (existingJob) {
+    if (runtimeWorkspaceSubject) {
+      requireMatchingActiveWorkspaceJob(existingJob, runtimeWorkspaceSubject);
+    }
+    return { enqueued: false, job: existingJob };
+  }
 
   try {
     const job = await collection.create({
@@ -277,8 +373,7 @@ export async function enqueueOpportunityIntelligenceWithStatus(
         ...resolvedArgs,
         modes: resolvedArgs.modes ?? 'all',
         reason: options.reason ?? resolvedArgs.reason ?? 'manual',
-        userId:
-          stringValue(options.user?.id) || stringValue(resolvedArgs.userId),
+        ...(runtimeWorkspaceSubject ? { runtimeWorkspaceSubject } : {}),
       },
       // One-shot avoids duplicate LLM spend/audit writes; admins can requeue
       // after inspecting the failed AgentRun diagnostics.
@@ -308,7 +403,12 @@ export async function enqueueOpportunityIntelligenceWithStatus(
       stringValue(resolvedArgs.contentFingerprint),
       stringValue(resolvedArgs.scoringMaterialFingerprint),
     );
-    if (activeJob) return { enqueued: false, job: activeJob };
+    if (activeJob) {
+      if (runtimeWorkspaceSubject) {
+        requireMatchingActiveWorkspaceJob(activeJob, runtimeWorkspaceSubject);
+      }
+      return { enqueued: false, job: activeJob };
+    }
     throw error;
   }
 }
@@ -372,7 +472,7 @@ export async function runOpportunityIntelligenceJob(
     dependencies.finishRun ?? finishOpportunityIntelligenceAgentRun;
   const updateStatus =
     dependencies.updateStatus ??
-    (dependencies.processor
+    (dependencies.processor || dependencies.workspaceSubject
       ? undefined
       : updateOpportunityIntelligenceTerminalStatus);
   const updateStatusBestEffort = async (
@@ -397,7 +497,8 @@ export async function runOpportunityIntelligenceJob(
         opportunityId,
         sourceCrawlId: stringValue(args.sourceCrawlId),
         sourceId: stringValue(args.sourceId),
-        userId: stringValue(args.userId),
+        userId: dependencies.workspaceSubject?.userId ?? '',
+        workspaceSubject: dependencies.workspaceSubject,
       })
     : '';
   let result: Awaited<ReturnType<typeof processor>>;
@@ -417,7 +518,10 @@ export async function runOpportunityIntelligenceJob(
       sourceCrawlId: stringValue(args.sourceCrawlId),
       sourceCrawlItemId: stringValue(args.sourceCrawlItemId),
       sourceId: stringValue(args.sourceId),
-      user: stringValue(args.userId) ? { id: stringValue(args.userId) } : null,
+      user: dependencies.workspaceSubject
+        ? { id: dependencies.workspaceSubject.userId }
+        : null,
+      workspaceSubject: dependencies.workspaceSubject,
     });
   } catch (error) {
     if (agentRunId) {
@@ -425,6 +529,7 @@ export async function runOpportunityIntelligenceJob(
         agentRunId,
         'failed',
         error instanceof Error ? error.message : String(error),
+        dependencies.workspaceSubject,
       );
     }
     await updateStatusBestEffort('failed');
@@ -432,7 +537,13 @@ export async function runOpportunityIntelligenceJob(
   }
 
   if (result.status === 'skipped') {
-    if (agentRunId) await finishRun(agentRunId, 'succeeded');
+    if (agentRunId)
+      await finishRun(
+        agentRunId,
+        'succeeded',
+        '',
+        dependencies.workspaceSubject,
+      );
     if (!result.stale) await updateStatusBestEffort('skipped');
     context?.logger?.info?.(
       result.stale
@@ -453,7 +564,13 @@ export async function runOpportunityIntelligenceJob(
       message: result.message,
       opportunityId,
     });
-    if (agentRunId) await finishRun(agentRunId, 'failed', result.message);
+    if (agentRunId)
+      await finishRun(
+        agentRunId,
+        'failed',
+        result.message,
+        dependencies.workspaceSubject,
+      );
     await updateStatusBestEffort('failed');
     throw new Error(result.message);
   }
@@ -462,7 +579,8 @@ export async function runOpportunityIntelligenceJob(
     message: result.message,
     opportunityId,
   });
-  if (agentRunId) await finishRun(agentRunId, 'succeeded');
+  if (agentRunId)
+    await finishRun(agentRunId, 'succeeded', '', dependencies.workspaceSubject);
   await updateStatusBestEffort('completed');
 
   return result;

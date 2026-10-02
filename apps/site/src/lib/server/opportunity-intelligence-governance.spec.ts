@@ -370,6 +370,9 @@ describe('opportunity intelligence governance', () => {
       25,
       'PROVIDER_UNAVAILABLE',
       'request-1',
+      '',
+      '',
+      '',
     ]);
     expect(runSettlement).toEqual([1_000, 2_000, 1_000, 2_048, 2_000, 'run-1']);
     expect(controlSettlement).toEqual([0, 1, '', '', '', '', 'control-1']);
@@ -802,5 +805,141 @@ describe('opportunity intelligence governance', () => {
       code: 'budget_missing',
       kind: 'blocked',
     });
+  });
+
+  it('keeps candidate assessment idempotency and reservations separate by verified subject', async () => {
+    const store = new MemoryStore();
+    const invoke = vi.fn(async () => ({
+      output: { assessment: 'private' },
+      usage: { completionTokens: 10, promptTokens: 900, totalTokens: 910 },
+    }));
+    const request = (workspaceSubject: {
+      profileId: string;
+      tenantId: string;
+      userId: string;
+    }) =>
+      executeGovernedOpportunityIntelligenceRequest({
+        config,
+        estimatedInputTokens: 900,
+        identity: {
+          ...identity,
+          feature: 'opportunity-assessment',
+          inputFingerprint: 'opaque-assessment-input',
+        },
+        inputTokenCeiling: 1_000,
+        invoke,
+        maxOutputTokens: 2_048,
+        store,
+        workspaceSubject,
+      });
+
+    await request({
+      profileId: 'profile-a',
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+    });
+    await request({
+      profileId: 'profile-b',
+      tenantId: 'tenant-a',
+      userId: 'user-b',
+    });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(store.results.size).toBe(2);
+  });
+
+  it('physically stamps private request and result rows while retaining operator blanks', async () => {
+    const statements: Array<{ parameters: unknown[]; sql: string }> = [];
+    const transaction = {
+      query: vi.fn(async (sql: string, parameters: unknown[] = []) => {
+        statements.push({ parameters, sql });
+        if (sql.includes('INSERT INTO opportunity_intelligence_results')) {
+          return { rowCount: 1, rows: [{ id: 'result-1' }] };
+        }
+        if (sql.includes('FROM opportunity_intelligence_controls')) {
+          return {
+            rowCount: 1,
+            rows: [
+              {
+                circuit_state: 'closed',
+                enabled: true,
+                id: 'control-1',
+                input_token_threshold: 100_000,
+                request_threshold: 20,
+                window_input_tokens: 0,
+                window_request_count: 0,
+              },
+            ],
+          };
+        }
+        if (sql.includes('FROM agent_runs')) {
+          return {
+            rowCount: 1,
+            rows: [
+              {
+                intelligence_actual_calls: 0,
+                intelligence_actual_input_tokens: 0,
+                intelligence_actual_spend_micros: 0,
+                intelligence_call_limit: 4,
+                intelligence_input_token_limit: 20_000,
+                intelligence_reserved_calls: 0,
+                intelligence_reserved_input_tokens: 0,
+                intelligence_reserved_spend_micros: 0,
+                intelligence_spend_limit_micros: 100_000,
+              },
+            ],
+          };
+        }
+        if (
+          sql.includes('UPDATE agent_runs') ||
+          sql.includes('INSERT INTO opportunity_intelligence_requests') ||
+          sql.includes('UPDATE opportunity_intelligence_controls')
+        ) {
+          return { rowCount: 1, rows: [] };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }),
+    };
+    const database = {
+      transaction: vi.fn(
+        async (callback: (db: typeof transaction) => Promise<unknown>) =>
+          await callback(transaction),
+      ),
+    };
+    const store = new DatabaseOpportunityIntelligenceGovernanceStore(
+      database as never,
+    );
+    const reservation: OpportunityIntelligenceReservation = {
+      ...identity,
+      estimatedInputTokens: 900,
+      idempotencyKey: 'candidate-private-key',
+      inputTokenCeiling: 1_000,
+      maxOutputTokens: 2_048,
+      requestId: 'request-private',
+      reservedInputTokens: 1_000,
+      reservedSpendMicros: 2_000,
+      sourceCrawlId: '',
+      sourceCrawlItemId: '',
+      workspaceSubject: {
+        profileId: 'profile-a',
+        tenantId: 'tenant-a',
+        userId: 'user-a',
+      },
+    };
+
+    await expect(store.reserve(reservation)).resolves.toMatchObject({
+      kind: 'owner',
+    });
+
+    for (const statement of statements.filter(({ sql }) =>
+      /INSERT INTO opportunity_intelligence_(requests|results)/.test(sql),
+    )) {
+      expect(statement.sql).toContain(
+        'tenant_id, owner_user_id, candidate_profile_id',
+      );
+      expect(statement.parameters).toEqual(
+        expect.arrayContaining(['tenant-a', 'user-a', 'profile-a']),
+      );
+    }
   });
 });

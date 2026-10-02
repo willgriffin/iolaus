@@ -28,6 +28,11 @@ import {
   triageCloseHref,
 } from '$lib/admin/triage-session';
 import {
+  type AssessmentEligibilityBucket,
+  assessmentEligibilityLabels,
+  getOpportunityAssessmentProjection,
+} from '$lib/opportunity-assessment-projection';
+import {
   countActiveFilters,
   DEFAULT_OPPORTUNITY_FILTERS,
   filterStateFromSearchParams,
@@ -45,11 +50,6 @@ import {
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
-import {
-  eligibilityBucketLabels,
-  getOpportunityEligibility,
-  type EligibilityBucket,
-} from '$lib/opportunity-eligibility';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
@@ -582,7 +582,7 @@ function toggleWorkMode(value: string): void {
   });
 }
 
-function toggleEligibilityBucket(bucket: EligibilityBucket): void {
+function toggleEligibilityBucket(bucket: AssessmentEligibilityBucket): void {
   setFilters({
     ...filters,
     eligibilityBuckets: toggleArrayValue(filters.eligibilityBuckets, bucket),
@@ -664,14 +664,21 @@ function scoreLabel(record: AdminRecord): string {
 }
 
 function eligibilityLabel(record: AdminRecord): string {
-  const eligibility = getOpportunityEligibility(record);
-  const bucket = eligibility.buckets[0];
-  return bucket ? eligibilityBucketLabels[bucket] : 'Eligibility unknown';
+  const bucket = getOpportunityAssessmentProjection(record.assessmentProjection)
+    .buckets[0];
+  return bucket ? assessmentEligibilityLabels[bucket] : 'Unknown';
 }
 
 function boolField(record: AdminRecord, key: string): boolean {
   const value = record[key];
   return value === true || value === 'true';
+}
+
+function optionalBooleanLabel(record: AdminRecord, key: string): string {
+  const value = record[key];
+  if (value === true || value === 'true') return 'Yes';
+  if (value === false || value === 'false') return 'No';
+  return 'Unknown';
 }
 
 function dateField(record: AdminRecord, key: string): string {
@@ -879,7 +886,7 @@ const resultCountLabel = $derived.by(() => {
         onchange={commitSort}
       >
         <option value="best">Best fit</option>
-        <option value="eligibility">Canada eligibility</option>
+        <option value="eligibility">Eligibility for your work location</option>
         <option value="newest">Newest</option>
         <option value="score">AI score</option>
         <option value="salary">Salary</option>
@@ -961,7 +968,7 @@ const resultCountLabel = $derived.by(() => {
         >
           {str(record, 'title') || 'Untitled opportunity'}
         </a>
-        <span class="eligibility-label" title="Posting eligibility from the current source">
+        <span class="eligibility-label" title="Eligibility for your active work-location profile">
           {eligibilityLabel(record)}
         </span>
         {#if posting}
@@ -989,7 +996,7 @@ const resultCountLabel = $derived.by(() => {
 
   {#snippet expandedOpportunity({ row: record }: { row: AdminRecord })}
     {@const oppId = str(record, 'id')}
-    {@const eligibility = getOpportunityEligibility(record)}
+    {@const eligibility = getOpportunityAssessmentProjection(record.assessmentProjection)}
     {@const required = skillList(record, 'requiredSkills')}
     {@const preferred = skillList(record, 'preferredSkills')}
     {@const currentStatus = str(record, 'humanReviewStatus')}
@@ -1072,21 +1079,10 @@ const resultCountLabel = $derived.by(() => {
             {/if}
 
             <section>
-              <h4>Canada eligibility</h4>
-              <p class="summary">{eligibility.reason}</p>
-              {#if eligibility.assertions.length}
-                <ul class="detail-list" aria-label="Eligibility evidence">
-                  {#each eligibility.assertions as assertion}
-                    <li>
-                      <strong>{humanize(assertion.kind)}</strong>: “{assertion.excerpt}”
-                      {#if assertion.sourceField}
-                        <span class="muted"> — Captured posting field: {assertion.sourceField}</span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              {:else}
-                <p class="muted">No current source excerpt supports an eligibility conclusion.</p>
+              <h4>Eligibility for your work location</h4>
+              <p class="summary">{eligibility.reason || eligibilityLabel(record)}</p>
+              {#if eligibility.buckets.includes('unknown')}
+                <p class="muted">No current profile assessment is available for this posting.</p>
               {/if}
             </section>
 
@@ -1109,7 +1105,7 @@ const resultCountLabel = $derived.by(() => {
                   <div class="fact"><dt>Freshness</dt><dd>{humanize(str(record, 'freshness'))}</dd></div>
                 {/if}
                 <div class="fact"><dt>Relocation supported</dt><dd>{boolField(record, 'relocationSupported') ? 'Yes' : 'No'}</dd></div>
-                <div class="fact"><dt>Visa or EOR possible</dt><dd>{boolField(record, 'visaOrEorPossible') ? 'Yes' : 'No'}</dd></div>
+                <div class="fact"><dt>Visa or EOR posting signal</dt><dd>{optionalBooleanLabel(record, 'visaOrEorPossible')}</dd></div>
                 <div class="fact"><dt>Greenfield signal</dt><dd>{boolField(record, 'greenfieldSignal') ? 'Yes' : 'No'}</dd></div>
                 <div class="fact"><dt>Founder signal</dt><dd>{boolField(record, 'founderSignal') ? 'Yes' : 'No'}</dd></div>
                 {#if dateField(record, 'reviewedAt')}
@@ -1370,11 +1366,11 @@ const resultCountLabel = $derived.by(() => {
             </button>
           </div>
 
-          <span class="field-label">Canada eligibility</span>
-          <div class="toggle-row" role="group" aria-label="Canada eligibility">
-            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('canada_eligible')} onclick={() => toggleEligibilityBucket('canada_eligible')}>Canada eligible</button>
-            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('sponsorship_possible')} onclick={() => toggleEligibilityBucket('sponsorship_possible')}>Visa sponsorship possible</button>
-            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('us_residence_required')} onclick={() => toggleEligibilityBucket('us_residence_required')}>US residence required</button>
+          <span class="field-label">Eligibility for your work location</span>
+          <div class="toggle-row" role="group" aria-label="Eligibility for your work location">
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('eligible')} onclick={() => toggleEligibilityBucket('eligible')}>Eligible for your work location</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('sponsorship_possible')} onclick={() => toggleEligibilityBucket('sponsorship_possible')}>Sponsorship possible</button>
+            <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('location_restriction')} onclick={() => toggleEligibilityBucket('location_restriction')}>Location or authorization restriction</button>
             <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('unknown')} onclick={() => toggleEligibilityBucket('unknown')}>Unknown</button>
             <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('conflicting')} onclick={() => toggleEligibilityBucket('conflicting')}>Conflicting</button>
           </div>
