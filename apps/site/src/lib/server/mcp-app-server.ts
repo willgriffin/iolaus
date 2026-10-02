@@ -21,7 +21,10 @@ import {
 } from './job-search-webmcp.js';
 import { runAsOwner } from './owner-principal.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
-import { workspaceSubjectFromLocals } from './workspace-subject.js';
+import {
+  withVerifiedWorkspaceSubject,
+  workspaceSubjectFromLocals,
+} from './workspace-subject.js';
 import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
 /** Static resource only: data is returned by authorized tool calls. */
@@ -128,11 +131,18 @@ async function runOwnerWorkflow<T>(options: {
       for (const operation of options.operations) {
         await run.assertOperation(operation.collection, operation.action);
       }
-      return await options.execute({
-        id: owner.id,
-        profileId: owner.profileId,
-        tenantId: owner.tenantId,
-      });
+      // The native principal establishes a fresh tenant context. Revalidate
+      // the request-minted profile and bind its subject inside that context
+      // before private services read it; tool arguments never supply scope.
+      return await withVerifiedWorkspaceSubject(
+        workspaceSubjectForOwner(owner),
+        async () =>
+          await options.execute({
+            id: owner.id,
+            profileId: owner.profileId,
+            tenantId: owner.tenantId,
+          }),
+      );
     },
     {
       action: `mcp-apps.${options.tool}`,

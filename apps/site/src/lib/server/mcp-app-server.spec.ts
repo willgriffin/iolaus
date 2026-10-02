@@ -1,10 +1,27 @@
 import { mountMcpRoute } from '@happyvertical/smrt-app-mcp/sveltekit';
-import { describe, expect, it } from 'vitest';
+import { getCurrentTenant, withTenant } from '@happyvertical/smrt-tenancy';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
 import {
   IOLAUS_MCP_APP_RESOURCE,
   mcpAppServer,
   resolveMcpAppPrincipal,
 } from './mcp-app-server.js';
+
+const workflows = vi.hoisted(() => ({
+  getProfile: vi.fn(),
+  inspectApplication: vi.fn(),
+}));
+
+// Keep executeAsPrincipal and the workspace verifier real; only storage and
+// the workflow body are bounded fixtures for native-context regression.
+vi.mock('./smrt.js', () => ({
+  getCollection: vi.fn(async () => ({ get: workflows.getProfile })),
+  getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
+}));
+vi.mock('./application-inspect-webmcp.js', () => ({
+  inspectJobApplication: workflows.inspectApplication,
+}));
 
 const owner = {
   id: 'owner-1',
@@ -56,6 +73,110 @@ function toolsListRequest() {
 }
 
 describe('Iolaus MCP Apps server', () => {
+  beforeEach(() => {
+    workflows.getProfile.mockReset();
+    workflows.inspectApplication.mockReset();
+  });
+
+  it('rebinds the verified selected profile inside the fresh native principal context', async () => {
+    const subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    };
+    const locals = {
+      ...subjectLocals(subject),
+      permissions: ['workflow.application.inspect'],
+    };
+    workflows.getProfile.mockResolvedValue({
+      active: true,
+      id: subject.profileId,
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    });
+    workflows.inspectApplication.mockImplementation(async () => {
+      expect(requireCurrentPrivateWorkspaceSubject()).toEqual(subject);
+      expect(getCurrentTenant()?.metadata?.workspaceSubject).toEqual(subject);
+      return { application: { id: '11111111-1111-4111-8111-111111111111' } };
+    });
+    const principal = resolveMcpAppPrincipal(locals);
+    const result = await withTenant(
+      {
+        tenantId: subject.tenantId,
+        userId: subject.userId,
+        metadata: {
+          workspaceSubject: {
+            ...subject,
+            profileId: 'untrusted-prior-profile',
+          },
+        },
+      },
+      async () =>
+        await mcpAppServer.callTool({
+          name: 'job_search_inspect_application',
+          arguments: { applicationId: '11111111-1111-4111-8111-111111111111' },
+          principal,
+        }),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(workflows.getProfile).toHaveBeenCalledWith(subject.profileId);
+    expect(workflows.inspectApplication).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { ownerUserId: 'foreign-user', tenantId: 'tenant-1', active: true },
+    { ownerUserId: 'owner-1', tenantId: 'foreign-tenant', active: true },
+    { ownerUserId: 'owner-1', tenantId: 'tenant-1', active: false },
+  ])('rejects a selected profile that no longer belongs to the active principal (%j)', async (profile) => {
+    const locals = {
+      ...subjectLocals({
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'owner-1',
+      }),
+      permissions: ['workflow.application.inspect'],
+    };
+    workflows.getProfile.mockResolvedValue({ id: 'profile-1', ...profile });
+    const result = await mcpAppServer.callTool({
+      name: 'job_search_inspect_application',
+      arguments: { applicationId: '11111111-1111-4111-8111-111111111111' },
+      principal: resolveMcpAppPrincipal(locals),
+    });
+    expect(result.isError).toBe(true);
+    expect(workflows.inspectApplication).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    {
+      roleId: 'member',
+      status: 'suspended',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    },
+  ])('does not mint workflow authority without active membership (%j)', async (membership) => {
+    const locals = {
+      ...subjectLocals({
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'owner-1',
+      }),
+      membership,
+      permissions: ['workflow.application.inspect'],
+    } as App.Locals;
+    const principal = resolveMcpAppPrincipal(locals);
+    expect(principal).toBeNull();
+    await expect(
+      mcpAppServer.callTool({
+        name: 'job_search_inspect_application',
+        arguments: { applicationId: '11111111-1111-4111-8111-111111111111' },
+        principal,
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(workflows.getProfile).not.toHaveBeenCalled();
+    expect(workflows.inspectApplication).not.toHaveBeenCalled();
+  });
+
   it('mints a principal only from the hook-verified workspace subject', () => {
     const locals = {
       membership: {
