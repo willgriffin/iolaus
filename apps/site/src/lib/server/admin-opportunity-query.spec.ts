@@ -1,3 +1,4 @@
+import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 
@@ -37,6 +38,307 @@ describe('admin-opportunity-query', () => {
     mocks.scopedQuery.mockReset();
     mocks.scopedQuery.mockResolvedValue({ rows: [] });
   });
+
+  for (const dialect of ['sqlite', 'postgres'] as const) {
+    it.runIf(
+      dialect === 'sqlite' ||
+        Boolean(process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL),
+    )(
+      `runs search, Overview dates and skill/fit filters with native ${dialect} count/page and private review before pagination`,
+      async () => {
+        const postgresUrl =
+          process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL ?? '';
+        if (
+          dialect === 'postgres' &&
+          !['localhost', '127.0.0.1', '[::1]'].includes(
+            new URL(postgresUrl).hostname,
+          )
+        )
+          throw new Error(
+            'Query regression requires a local PostgreSQL test database.',
+          );
+        const db = await getDatabase(
+          dialect === 'sqlite'
+            ? { type: 'sqlite', url: ':memory:', cache: false }
+            : { type: 'postgres', url: postgresUrl, cache: false },
+        );
+        const session =
+          dialect === 'postgres' ? await db.acquireSession?.() : null;
+        if (dialect === 'postgres' && !session) {
+          await db.close?.();
+          throw new Error('PostgreSQL regression requires a pinned session.');
+        }
+        const executor = session ?? db;
+        mocks.requestDatabase.mockReturnValue(executor);
+        mocks.dbConfig.mockReturnValue({ type: dialect });
+        const { countOpportunityRecords, listOpportunityPageIds } =
+          await import('./admin-opportunity-query');
+        try {
+          // Connection-local fixtures never mutate the migrated or canonical tables.
+          await executor.query(
+            `CREATE TEMP TABLE opportunities (id TEXT PRIMARY KEY, company_id TEXT, title TEXT, description_summary TEXT, required_skills TEXT, preferred_skills TEXT, locations TEXT, posting_url TEXT, status TEXT, posted_at TIMESTAMPTZ, first_seen_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, freshness TEXT)`,
+          );
+          await executor.query(
+            `CREATE TEMP TABLE companies (id TEXT PRIMARY KEY, name TEXT)`,
+          );
+          await executor.query(
+            `CREATE TEMP TABLE decisions (id TEXT PRIMARY KEY, opportunity_id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, decision TEXT, created_at TEXT, human_rating INTEGER, reason TEXT, decider_profile_id TEXT, decider_user_id TEXT)`,
+          );
+          await executor.query(
+            'INSERT INTO companies VALUES (?, ?)',
+            'company-1',
+            'VANTA Security',
+          );
+          for (const [id, title, companyId] of [
+            ['role-a', 'Platform 100%_! Engineer', 'company-1'],
+            ['role-b', 'Platform 1000X Engineer', 'other-company'],
+            ['role-foreign', 'Platform 100%_! Engineer', 'company-1'],
+          ] as const) {
+            await executor.query(
+              "INSERT INTO opportunities VALUES (?, ?, ?, '', '', '', '', '', 'found', '2026-10-01', '2026-10-01', '2026-10-01', NULL, 'unknown')",
+              id,
+              companyId,
+              title,
+            );
+            await executor.query(
+              "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, 'defer', '2026-10-01', NULL, '', '', '')",
+              `decision-${id}`,
+              id,
+              WORKSPACE_SUBJECT.tenantId,
+              id === 'role-foreign' ? 'foreign-user' : WORKSPACE_SUBJECT.userId,
+              WORKSPACE_SUBJECT.profileId,
+            );
+          }
+          const query = {
+            candidateSkills: [],
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'newest' as const,
+            },
+            reviewFilter: 'maybe',
+            workspaceSubject: WORKSPACE_SUBJECT,
+          };
+          expect(
+            await countOpportunityRecords({ ...query, search: 'pLaTfOrM' }),
+          ).toBe(2);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              search: 'pLaTfOrM',
+              limit: 1,
+              offset: 0,
+            }),
+          ).toEqual(['role-a']);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              search: 'pLaTfOrM',
+              limit: 1,
+              offset: 1,
+            }),
+          ).toEqual(['role-b']);
+          expect(
+            await countOpportunityRecords({ ...query, search: '100%_!' }),
+          ).toBe(1);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              search: '100%_!',
+              limit: 10,
+              offset: 0,
+            }),
+          ).toEqual(['role-a']);
+          expect(
+            await countOpportunityRecords({ ...query, search: 'vanta' }),
+          ).toBe(1);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              search: 'vanta',
+              limit: 10,
+              offset: 0,
+            }),
+          ).toEqual(['role-a']);
+          expect(
+            await countOpportunityRecords({ ...query, search: "%' OR 1=1 --" }),
+          ).toBe(0);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              search: "%' OR 1=1 --",
+              limit: 10,
+              offset: 0,
+            }),
+          ).toEqual([]);
+          const clock = vi
+            .spyOn(Date, 'now')
+            .mockReturnValue(Date.parse('2026-10-02T00:00:00Z'));
+          try {
+            await executor.query(
+              "UPDATE opportunities SET expires_at = '2026-10-01T20:00:00-05:00', freshness = ' Fresh ' WHERE id = 'role-a'",
+            );
+            await executor.query(
+              "UPDATE opportunities SET posted_at = NULL WHERE id = 'role-b'",
+            );
+            for (const [id, postedAt, expiresAt, freshness] of [
+              [
+                'role-expired',
+                '2026-10-01T00:00:00Z',
+                '2026-10-01T23:59:59Z',
+                'fresh',
+              ],
+              [
+                'role-stale',
+                '2026-10-01T00:00:00Z',
+                '2026-10-03T00:00:00Z',
+                ' StAlE ',
+              ],
+              ['role-old', null, null, 'unknown'],
+            ] as const) {
+              await executor.query(
+                "INSERT INTO opportunities VALUES (?, '', 'Filter fixture', '', '', '', '', '', 'found', ?, '2026-09-01', '2026-10-01', ?, ?)",
+                id,
+                postedAt,
+                expiresAt,
+                freshness,
+              );
+              await executor.query(
+                "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, 'defer', '2026-10-01', NULL, '', '', '')",
+                `decision-${id}`,
+                id,
+                WORKSPACE_SUBJECT.tenantId,
+                WORKSPACE_SUBJECT.userId,
+                WORKSPACE_SUBJECT.profileId,
+              );
+            }
+            const overview = {
+              ...query,
+              filters: {
+                ...query.filters,
+                excludeExpired: true,
+                excludeStale: true,
+                postedWithinDays: 2,
+              },
+            };
+            expect(await countOpportunityRecords(query)).toBe(5);
+            expect(await countOpportunityRecords(overview)).toBe(2);
+            expect(
+              await listOpportunityPageIds({
+                ...overview,
+                limit: 1,
+                offset: 0,
+              }),
+            ).toEqual(['role-a']);
+            expect(
+              await listOpportunityPageIds({
+                ...overview,
+                limit: 1,
+                offset: 1,
+              }),
+            ).toEqual(['role-b']);
+            expect(
+              await listOpportunityPageIds({
+                ...overview,
+                filters: { ...overview.filters, freshOnly: true },
+                limit: 10,
+                offset: 0,
+              }),
+            ).toEqual(['role-a']);
+          } finally {
+            clock.mockRestore();
+          }
+          await executor.query(
+            'UPDATE opportunities SET required_skills = ?, preferred_skills = ? WHERE id IN (?, ?)',
+            ' TypeScript,\nCloud--native,, ',
+            'Kubernetes\r Docker',
+            'role-a',
+            'role-foreign',
+          );
+          await executor.query(
+            'UPDATE opportunities SET required_skills = ? WHERE id = ?',
+            'Rust\rSecurity',
+            'role-b',
+          );
+          const skillsQuery = { ...query, search: 'platform' };
+          const matchingIds = async (
+            filters: Partial<typeof query.filters>,
+            candidateSkills: string[] = [],
+          ) => {
+            const skillQuery = {
+              ...skillsQuery,
+              candidateSkills,
+              filters: { ...query.filters, ...filters },
+            };
+            const ids = await listOpportunityPageIds({
+              ...skillQuery,
+              limit: 10,
+              offset: 0,
+            });
+            expect(await countOpportunityRecords(skillQuery)).toBe(ids.length);
+            return ids;
+          };
+          expect(await matchingIds({ skills: [' docker '] })).toEqual([
+            'role-a',
+          ]);
+          expect(await matchingIds({ skills: ['security'] })).toEqual([
+            'role-b',
+          ]);
+          expect(await matchingIds({ skills: ['cloud native'] })).toEqual([]);
+          expect(await matchingIds({ skills: ["docker') OR 1=1 --"] })).toEqual(
+            [],
+          );
+          expect(
+            await matchingIds({ fit: 'have' }, ['typescript', 'cloud native']),
+          ).toEqual(['role-a']);
+          expect(
+            await matchingIds({ fit: 'have' }, ['typescript', 'cloud']),
+          ).toEqual(['role-a']);
+          expect(
+            await matchingIds({ fit: 'gaps' }, ['typescript', 'cloud native']),
+          ).toEqual(['role-b']);
+          expect(
+            await matchingIds({ fit: 'have' }, ['typescript', 'cloudnative']),
+          ).toEqual([]);
+          expect(await matchingIds({ fit: 'have' })).toEqual([]);
+          expect(await matchingIds({ fit: 'gaps' })).toEqual([
+            'role-a',
+            'role-b',
+          ]);
+          expect(
+            await countOpportunityRecords({
+              ...query,
+              search: 'Filter fixture',
+              filters: { ...query.filters, fit: 'have' },
+            }),
+          ).toBe(3);
+          expect(
+            await countOpportunityRecords({
+              ...query,
+              search: 'Filter fixture',
+              filters: { ...query.filters, fit: 'gaps' },
+            }),
+          ).toBe(0);
+          expect(
+            await listOpportunityPageIds({
+              ...skillsQuery,
+              candidateSkills: ['typescript', 'cloud native'],
+              filters: { ...query.filters, fit: 'gaps' },
+              limit: 1,
+              offset: 0,
+            }),
+          ).toEqual(['role-b']);
+        } finally {
+          if (session) {
+            await executor.query('DROP TABLE IF EXISTS pg_temp.decisions');
+            await executor.query('DROP TABLE IF EXISTS pg_temp.companies');
+            await executor.query('DROP TABLE IF EXISTS pg_temp.opportunities');
+            await session.release();
+          }
+          await db.close?.();
+        }
+      },
+    );
+  }
 
   it('keeps browser-facing raw queries on the request-scoped database', async () => {
     mocks.requestDatabase.mockReturnValue({ query: mocks.scopedQuery });
@@ -667,8 +969,10 @@ describe('admin-opportunity-query', () => {
     });
 
     const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
-    expect(sql).toContain('o.title ILIKE $1');
-    expect(sql).toContain('search_company.name ILIKE $1');
+    expect(sql).toContain("lower(o.title) LIKE lower($1) ESCAPE '!'");
+    expect(sql).toContain(
+      "lower(search_company.name) LIKE lower($1) ESCAPE '!'",
+    );
     expect(sql).not.toContain('platform engineer');
     expect(params).toEqual(['%platform engineer%', 'archived', 10, 0]);
   });
@@ -871,6 +1175,10 @@ describe('admin-opportunity-query', () => {
         {
           ...baseQuery,
           filters: { ...DEFAULT_OPPORTUNITY_FILTERS, minScore: 5 },
+        },
+        {
+          ...baseQuery,
+          filters: { ...DEFAULT_OPPORTUNITY_FILTERS, excludeStale: true },
         },
         {
           ...baseQuery,

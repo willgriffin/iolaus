@@ -430,17 +430,51 @@ function rangeOverlapSql({
   )`;
 }
 
-function normalizedPhraseSql(value: string): string {
+function normalizedPhraseSql(
+  value: string,
+  dialect: OpportunityQueryDialect,
+): string {
+  if (dialect === 'sqlite') {
+    // Match PostgreSQL's [^a-z0-9]+ replacement exactly: each separator run
+    // becomes one space, including punctuation at either end of a phrase.
+    return `(WITH RECURSIVE phrase_chars(rest, phrase, separator) AS (
+      SELECT lower(trim(${value})), '', 0
+      UNION ALL
+      SELECT substr(rest, 2), phrase || CASE
+          WHEN substr(rest, 1, 1) GLOB '[a-z0-9]' THEN substr(rest, 1, 1)
+          WHEN separator = 0 THEN ' '
+          ELSE ''
+        END,
+        CASE WHEN substr(rest, 1, 1) GLOB '[a-z0-9]' THEN 0 ELSE 1 END
+      FROM phrase_chars WHERE rest <> ''
+    ) SELECT phrase FROM phrase_chars WHERE rest = '')`;
+  }
   return `regexp_replace(lower(btrim(${value})), '[^a-z0-9]+', ' ', 'g')`;
 }
 
-function requiredSkillValuesSql(): string {
+function sqliteSkillValuesSql(value: string, alias: string): string {
+  return `(WITH RECURSIVE skill_parts(value, rest) AS (
+    SELECT '', replace(replace(COALESCE(${value}, ''), char(10), ','), char(13), ',') || ','
+    UNION ALL
+    SELECT substr(rest, 1, instr(rest, ',') - 1), substr(rest, instr(rest, ',') + 1)
+    FROM skill_parts WHERE rest <> ''
+  ) SELECT value FROM skill_parts WHERE value <> '') AS ${alias}`;
+}
+
+function requiredSkillValuesSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite')
+    return sqliteSkillValuesSql('o.required_skills', 'required_skill');
   return `unnest(
     regexp_split_to_array(COALESCE(o.required_skills, ''), E'[,\\n\\r]+')
   ) AS required_skill(value)`;
 }
 
-function allSkillValuesSql(): string {
+function allSkillValuesSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite')
+    return sqliteSkillValuesSql(
+      "COALESCE(o.required_skills, '') || ',' || COALESCE(o.preferred_skills, '')",
+      'opportunity_skill',
+    );
   return `unnest(
     regexp_split_to_array(
       concat_ws(',', COALESCE(o.required_skills, ''), COALESCE(o.preferred_skills, '')),
@@ -464,11 +498,14 @@ export function normalizeQueryTerms(values: readonly string[]): string[] {
   ].sort();
 }
 
-function candidateSkillMatchSql(candidatePlaceholder: string): string {
-  const requiredPhrase = normalizedPhraseSql('required_skill.value');
+function candidateSkillMatchSql(
+  candidateTermsSql: string,
+  dialect: OpportunityQueryDialect,
+): string {
+  const requiredPhrase = normalizedPhraseSql('required_skill.value', dialect);
   return `EXISTS (
     SELECT 1
-    FROM unnest(${candidatePlaceholder}::text[]) AS candidate_term(value)
+    FROM ${candidateTermsSql}
     WHERE ${requiredPhrase} <> ''
       AND (
         (' ' || ${requiredPhrase} || ' ') LIKE ('% ' || candidate_term.value || ' %')
@@ -493,19 +530,24 @@ function filterWhereSql({
 
   const searchTerm = search?.trim().slice(0, 200);
   if (searchTerm) {
-    const pattern = pushParam(values, `%${searchTerm}%`);
+    // Treat browser search as literal text on both engines. An explicit
+    // escape character avoids PostgreSQL/SQLite backslash differences.
+    const pattern = pushParam(
+      values,
+      `%${searchTerm.replace(/[!%_]/g, '!$&')}%`,
+    );
     where.push(`(
-      o.title ILIKE ${pattern}
-      OR o.description_summary ILIKE ${pattern}
-      OR o.required_skills ILIKE ${pattern}
-      OR o.preferred_skills ILIKE ${pattern}
-      OR o.locations ILIKE ${pattern}
-      OR o.posting_url ILIKE ${pattern}
+      lower(o.title) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.description_summary) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.required_skills) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.preferred_skills) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.locations) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.posting_url) LIKE lower(${pattern}) ESCAPE '!'
       OR EXISTS (
         SELECT 1
         FROM companies search_company
         WHERE CAST(search_company.id AS TEXT) = o.company_id
-          AND search_company.name ILIKE ${pattern}
+          AND lower(search_company.name) LIKE lower(${pattern}) ESCAPE '!'
       )
     )`);
   }
@@ -526,23 +568,28 @@ function filterWhereSql({
   // empty list it fingerprints as, rather than adding an unsatisfiable
   // predicate the fingerprint cannot distinguish.
   if (skills.length > 0) {
+    const skillPredicate =
+      dialect === 'sqlite'
+        ? `lower(trim(opportunity_skill.value)) IN (${skills.map((skill) => pushParam(values, skill)).join(', ')})`
+        : `lower(btrim(opportunity_skill.value)) = ANY(${pushParam(values, skills)}::text[])`;
     where.push(`EXISTS (
       SELECT 1
-      FROM ${allSkillValuesSql()}
-      WHERE lower(btrim(opportunity_skill.value)) = ANY(${pushParam(values, skills)}::text[])
+      FROM ${allSkillValuesSql(dialect)}
+      WHERE ${skillPredicate}
     )`);
   }
 
   if (filters.fit !== 'all') {
-    const candidatePlaceholder = pushParam(
-      values,
-      normalizeQueryTerms(candidateSkills),
-    );
-    const candidateMatch = candidateSkillMatchSql(candidatePlaceholder);
+    const candidates = normalizeQueryTerms(candidateSkills);
+    const candidateTermsSql =
+      dialect === 'sqlite'
+        ? `(${candidates.length ? candidates.map((candidate) => `SELECT ${pushParam(values, candidate)} AS value`).join(' UNION ALL ') : 'SELECT NULL AS value WHERE 0'}) AS candidate_term`
+        : `unnest(${pushParam(values, candidates)}::text[]) AS candidate_term(value)`;
+    const candidateMatch = candidateSkillMatchSql(candidateTermsSql, dialect);
     const unmatchedRequiredSkill = `EXISTS (
       SELECT 1
-      FROM ${requiredSkillValuesSql()}
-      WHERE btrim(required_skill.value) <> ''
+      FROM ${requiredSkillValuesSql(dialect)}
+      WHERE ${dialect === 'sqlite' ? 'trim' : 'btrim'}(required_skill.value) <> ''
         AND NOT (${candidateMatch})
     )`;
     where.push(
@@ -572,21 +619,31 @@ function filterWhereSql({
   });
   if (hourlyRange) where.push(hourlyRange);
 
+  // Bind one UTC clock reading for this query. SQLite normalizes stored ISO
+  // timestamps (including offsets) through julianday; PostgreSQL keeps its
+  // native timestamp comparison and parameter typing.
+  const now = Date.now();
+  const timestampSql = (expression: string) =>
+    dialect === 'sqlite' ? `julianday(${expression})` : expression;
   if (filters.postedWithinDays !== null) {
+    const cutoff = pushParam(
+      values,
+      new Date(now - filters.postedWithinDays * 86_400_000).toISOString(),
+    );
     where.push(
-      `COALESCE(o.posted_at, o.first_seen_at) >= NOW() - (${pushParam(
-        values,
-        filters.postedWithinDays,
-      )} * INTERVAL '1 day')`,
+      `${timestampSql('COALESCE(o.posted_at, o.first_seen_at)')} >= ${timestampSql(cutoff)}`,
     );
   }
   if (filters.excludeExpired) {
-    where.push(`(o.expires_at IS NULL OR o.expires_at >= NOW())`);
+    const currentTime = pushParam(values, new Date(now).toISOString());
+    where.push(
+      `(o.expires_at IS NULL OR ${timestampSql('o.expires_at')} >= ${timestampSql(currentTime)})`,
+    );
   }
   if (filters.excludeStale) {
     // A posting the board reconciliation stopped seeing is not worth a
     // decision; it stays out of any listing that opts into this filter.
-    where.push(`COALESCE(lower(btrim(o.freshness)), '') <> 'stale'`);
+    where.push(`COALESCE(lower(trim(o.freshness)), '') <> 'stale'`);
   }
   if (filters.freshness !== 'all') {
     where.push(`o.freshness = ${pushParam(values, filters.freshness)}`);
@@ -645,7 +702,7 @@ function filterWhereSql({
   if (filters.visaOnly) where.push(`o.visa_or_eor_possible IS TRUE`);
   if (filters.founderOnly) where.push(`o.founder_signal IS TRUE`);
   if (filters.greenfieldOnly) where.push(`o.greenfield_signal IS TRUE`);
-  if (filters.freshOnly) where.push(`lower(btrim(o.freshness)) = 'fresh'`);
+  if (filters.freshOnly) where.push(`lower(trim(o.freshness)) = 'fresh'`);
   if (filters.minRating !== null) {
     // Ratings live on the private review overlay, never on the global posting.
     needsReview = true;
@@ -840,7 +897,7 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
       query.assessmentPreferencesFingerprint ?? '',
     ],
     ['reviewFilter', query.reviewFilter.trim()],
-    ['search', (query.search ?? '').trim().toLowerCase()],
+    ['search', (query.search ?? '').trim().slice(0, 200).toLowerCase()],
     ['status', filters.status],
     ['fit', filters.fit],
     ['skills', list(filters.skills)],
@@ -851,6 +908,7 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
     ['includeMissingComp', filters.includeMissingComp],
     ['postedWithinDays', filters.postedWithinDays],
     ['excludeExpired', filters.excludeExpired],
+    ['excludeStale', filters.excludeStale],
     ['freshness', filters.freshness],
     ['employmentTypes', list(filters.employmentTypes)],
     ['workModes', list(filters.workModes)],
@@ -1248,7 +1306,7 @@ export async function listOpportunityFilterOptions(
         ${joins.join('\n')}
         ${whereSql}
       ), skill_values(skill, rest) AS (
-        SELECT '', COALESCE(required_skills, '') || ',' || COALESCE(preferred_skills, '') || ','
+        SELECT '', replace(replace(COALESCE(required_skills, '') || ',' || COALESCE(preferred_skills, ''), char(10), ','), char(13), ',') || ','
         FROM scoped
         UNION ALL
         SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
