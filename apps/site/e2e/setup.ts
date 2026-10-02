@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
-import { request } from '@playwright/test';
+import { chromium, request } from '@playwright/test';
 import { resolveApplicationStateRoot } from '../../../scripts/smrt-runtime-identity.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -59,6 +59,8 @@ export default async function setup() {
     TURBO_FORCE: 'true',
     CI: 'true',
     pnpm_config_verify_deps_before_run: 'false',
+    // Exercise the upstream PDF renderer with the existing test browser.
+    PUPPETEER_EXECUTABLE_PATH: chromium.executablePath(),
   });
   const stateRoot = resolveApplicationStateRoot({
     appId: 'iolaus-e2e',
@@ -188,7 +190,17 @@ export default async function setup() {
       });
       if (response.status() !== 303)
         throw new Error(`Owner setup failed (${response.status()})`);
-      await api.storageState({ path: join(root, 'auth.json') });
+      const ownerStorage = await api.storageState({
+        path: join(root, 'auth.json'),
+      });
+      const sessionCookies = ownerStorage.cookies.filter(
+        (cookie) => cookie.httpOnly && cookie.path === '/',
+      );
+      if (sessionCookies.length !== 1)
+        throw new Error('Expected exactly one native owner session cookie');
+      // Use the runtime fingerprint minted by the running server, whose
+      // database environment can differ from the seed CLI process.
+      environment.IOLAUS_E2E_SESSION_COOKIE_NAME = sessionCookies[0].name;
       chmodSync(join(root, 'auth.json'), 0o600);
     } finally {
       await api.dispose();
@@ -212,6 +224,7 @@ export default async function setup() {
     console.log(
       'E2E runtime ready: build, db:migrate, db:status, synthetic seed and authenticated task data passed.',
     );
+    process.env.IOLAUS_E2E_LOG = logPath;
     process.env.IOLAUS_E2E_ORIGIN = origin;
     process.env.IOLAUS_E2E_FOREIGN_AUTH = environment.IOLAUS_E2E_FOREIGN_AUTH;
     process.env.IOLAUS_E2E_AUTH = join(root, 'auth.json');

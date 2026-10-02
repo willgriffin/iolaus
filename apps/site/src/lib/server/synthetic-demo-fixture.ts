@@ -84,6 +84,7 @@ export interface SyntheticDemoFixtureCollections {
 
 export interface SyntheticDemoFixtureResult {
   applicationId: string;
+  resumeAssetId: string;
   profileId: string;
   tenantId: string;
   userId: string;
@@ -735,6 +736,7 @@ export async function seedSyntheticDemoFixture(
 
   return {
     profileId,
+    resumeAssetId: stringValue(resume.record.id),
     tenantId: subject.tenantId,
     userId: subject.userId,
     applicationId: stringValue(application.record.id),

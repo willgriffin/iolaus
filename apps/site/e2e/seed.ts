@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import { renderHtmlToPdf } from '@happyvertical/pdf';
 import { executeAsPrincipal } from '@happyvertical/smrt-agents';
 import { withSystemContext } from '@happyvertical/smrt-tenancy';
 import {
@@ -12,10 +13,10 @@ import {
   UserCollection,
   UserStatus,
 } from '@happyvertical/smrt-users';
-import { sessionCookieName } from '../src/lib/server/auth.js';
 import { saveCandidateOnboarding } from '../src/lib/server/candidate-onboarding.js';
 import { getSmrtOptions } from '../src/lib/server/db.js';
 import { fingerprintOpportunitySourceContent } from '../src/lib/server/opportunity-source-content.js';
+import { getResumeFilesystem } from '../src/lib/server/resume-files.js';
 import { getCollection } from '../src/lib/server/smrt.js';
 import {
   assertSyntheticDemoFixtureEnabled,
@@ -25,6 +26,9 @@ import {
 import { resolveWorkspaceSubjectForProfile } from '../src/lib/server/workspace-subject.js';
 
 assertSyntheticDemoFixtureEnabled();
+const sessionCookieName = process.env.IOLAUS_E2E_SESSION_COOKIE_NAME;
+if (!sessionCookieName)
+  throw new Error('E2E native server session cookie name missing.');
 await withSyntheticDemoOwnerContext(async (identity) => {
   // This is the ordinary verified onboarding workflow in the isolated runtime.
   // Refuse to alter an existing personal profile if setup isolation ever regresses.
@@ -44,6 +48,64 @@ await withSyntheticDemoOwnerContext(async (identity) => {
   const fixture = await seedSyntheticDemoFixture(undefined, process.env, {
     subject,
   });
+  const resumeAssets = await getCollection('ResumeAsset');
+  const publishedFixture = await resumeAssets.get(fixture.resumeAssetId);
+  if (!publishedFixture)
+    throw new Error('Fictional default resume fixture missing.');
+  const filesystem = await getResumeFilesystem();
+  const fictionalResume = publishedFixture as unknown as Record<
+    string,
+    unknown
+  >;
+  const html = String(await filesystem.read(String(fictionalResume.htmlPath)));
+  const pdfPath = `${String(fictionalResume.generatedPath)}.pdf`;
+  await filesystem.write(pdfPath, Buffer.from(await renderHtmlToPdf(html)), {
+    createParents: true,
+  });
+  Object.assign(publishedFixture, {
+    pdfPath,
+    pdfBasename: 'fictional-qa-resume.pdf',
+    isPublished: true,
+    publishedAt: new Date(),
+    status: 'published',
+  });
+  await publishedFixture.save();
+  const applyingOpportunities: Record<string, string> = {};
+  const publicOpportunities = await getCollection('Opportunity');
+  for (const project of [
+    'android-portrait',
+    'android-landscape',
+    'android-narrow',
+    'desktop-control',
+  ]) {
+    const descriptionRaw =
+      'Fictional local QA role in Canada. Build accessible TypeScript interfaces and reliable integrations. No employer, live posting, or outreach exists.';
+    const opportunity = await publicOpportunities.create({
+      applyInstructions:
+        'Fictional local browser QA only. Never submit externally.',
+      applyMethod: 'other',
+      companyId: '',
+      currency: 'CAD',
+      descriptionRaw,
+      descriptionSummary:
+        'Fictional application preparation for accessible TypeScript software.',
+      requiredSkills: 'TypeScript\nAccessible interfaces',
+      salaryMin: 155000,
+      salaryMax: 175000,
+      sourceContentJson: JSON.stringify({ descriptionRaw }),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent({
+        descriptionRaw,
+      }),
+      sourceContentVersion: 1,
+      status: 'found',
+      title: `Applying readiness ${project} fictional engineer`,
+      workMode: 'remote',
+    });
+    await opportunity.save();
+    if (!opportunity.id)
+      throw new Error('Applying readiness opportunity missing id.');
+    applyingOpportunities[project] = opportunity.id;
+  }
   const ownership = {
     tenantId: subject.tenantId,
     ownerUserId: subject.userId,
@@ -248,6 +310,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         currency: 'CAD',
         requiredSkills: 'TypeScript',
         postedAt: new Date('2026-01-01'),
+        postingUrl: 'https://example.invalid/iolaus-fictional-qa',
       });
       await record.save();
       if (humanReviewStatus) await recordReview(record.id, humanReviewStatus);
@@ -295,6 +358,27 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     );
   }
   const tasks = await privateCollection('Task');
+  for (const values of [
+    {
+      title: 'Fictional overdue priority task',
+      dueAt: new Date('2020-01-01'),
+      kanbanColumn: 'inbox',
+    },
+    {
+      title: 'Fictional owner decision priority task',
+      dueAt: new Date('2100-01-01'),
+      kanbanColumn: 'needs_user_decision',
+    },
+  ]) {
+    const task = await tasks.create({
+      ...values,
+      assigneeRole: 'owner',
+      description: 'Fictional priority ordering QA. No external action.',
+      status: 'open',
+      taskType: 'review_application',
+    });
+    await task.save();
+  }
   for (let index = 0; index < 16; index += 1) {
     const task = await tasks.create({
       externalTaskId: `mobile-e2e-fictional-${index}`,
@@ -355,6 +439,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     process.env.IOLAUS_E2E_FIXTURE as string,
     JSON.stringify({
       ...fixture,
+      applyingOpportunities,
       approvedApplicationId: approvedApplication.id,
       draftingApplicationId: draftingApplication.id,
       orphanApplicationId: orphanApplication.id,
@@ -395,7 +480,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     await membership.save();
     return { userId: user.id, tenantId: tenant.id };
   });
-  await executeAsPrincipal(
+  const session = await executeAsPrincipal(
     {
       ...options,
       action: 'e2e.foreign.onboarding',
@@ -412,12 +497,19 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         { name: 'Fictional Foreign QA Candidate' },
         foreign,
       );
+      const sessions = await SessionService.create(options);
+      const sessionId = await sessions.createSession(
+        foreign.userId,
+        foreign.tenantId,
+      );
+      const context = await sessions.loadSessionContext(sessionId);
+      if (
+        context?.user.id !== foreign.userId ||
+        context.tenantId !== foreign.tenantId
+      )
+        throw new Error('Foreign native session verification failed.');
+      return sessionId;
     },
-  );
-  const sessions = await SessionService.create(options);
-  const session = await sessions.createSession(
-    foreign.userId,
-    foreign.tenantId,
   );
   writeFileSync(
     process.env.IOLAUS_E2E_FOREIGN_AUTH as string,

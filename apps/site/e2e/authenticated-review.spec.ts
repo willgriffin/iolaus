@@ -5,6 +5,7 @@ import {
   test as base,
   expect,
 } from '@playwright/test';
+import { attachRuntimeFailure } from './evidence.js';
 
 // This exercises a real browser, native cookie sessions and the MCP HTTP route.
 // The controlled link renderer models host navigation only; external ChatGPT /
@@ -22,6 +23,9 @@ const test = base.extend({
     await use(process.env.IOLAUS_E2E_AUTH);
   },
 });
+
+// biome-ignore lint/correctness/noEmptyPattern: Playwright fixture dependencies are destructured.
+test.afterEach(async ({}, testInfo) => await attachRuntimeFailure(testInfo));
 
 async function callTool(
   request: APIRequestContext,
@@ -103,14 +107,22 @@ test('dedicated MCP review link authenticates the browser without approving or s
   await page.goto('/__e2e-review-link');
   const requestedHeaders: Record<string, string>[] = [];
   context.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/admin/applications/')) {
+    if (
+      request.isNavigationRequest() &&
+      new URL(request.url()).pathname.startsWith('/admin/applications/')
+    ) {
       requestedHeaders.push(request.headers());
     }
   });
   const popupPromise = context.waitForEvent('page');
   await page.getByRole('link', { name: 'Open dedicated review' }).click();
   const review = await popupPromise;
-  await review.waitForURL(`${baseURL}/admin/applications/${applicationId}`);
+  await review.waitForURL(
+    (url) =>
+      url.origin === baseURL &&
+      url.pathname.replace(/\/$/, '') ===
+        `/admin/applications/${applicationId}`,
+  );
   await expect(
     review
       .getByText('Fictional Principal Engineer — Iolaus Demo', { exact: false })
@@ -136,11 +148,41 @@ test('dedicated MCP review link authenticates the browser without approving or s
   for (const [actor, storageState] of deniedActors) {
     const deniedContext = await browser.newContext({ baseURL, storageState });
     try {
-      const denied = await deniedContext.request.get(destination, {
-        maxRedirects: 0,
-        headers: { referer: `${baseURL}/admin/applications/${applicationId}` },
-      });
-      expect([303, 401, 403, 404], actor).toContain(denied.status());
+      // The legacy review loader redirects to the canonical application.
+      // Check ownership at that actual private read boundary, then exercise
+      // the dedicated link in the real browser below.
+      const denied = await deniedContext.request.get(
+        `/admin/applications/${applicationId}/`,
+        {
+          maxRedirects: 0,
+          headers: {
+            referer: `${baseURL}/admin/applications/${applicationId}`,
+          },
+        },
+      );
+      if (actor === 'anonymous') {
+        expect([303, 401, 403], actor).toContain(denied.status());
+      } else {
+        // This page disables SSR: HTTP 200 serves an empty app shell. The
+        // SvelteKit data endpoint carries the native private-record denial.
+        expect(denied.status()).toBe(200);
+        const data = await deniedContext.request.get(
+          `/admin/applications/${applicationId}/__data.json?x-sveltekit-invalidated=011`,
+        );
+        const payload = (await data.json()) as {
+          nodes?: Array<{ type?: string; status?: number }>;
+        };
+        expect(
+          payload.nodes?.some(
+            (node) =>
+              node.type === 'error' && [403, 404].includes(node.status ?? 0),
+          ),
+          'Foreign canonical private load denies the record',
+        ).toBe(true);
+        expect(JSON.stringify(payload)).not.toContain(
+          'Fictional Principal Engineer',
+        );
+      }
       expect(await denied.text(), actor).not.toContain(
         'Fictional Principal Engineer',
       );
@@ -155,9 +197,18 @@ test('dedicated MCP review link authenticates the browser without approving or s
       const response = await deniedPage.goto(destination);
       expect(response).not.toBeNull();
       if (actor === 'anonymous') {
-        expect(new URL(deniedPage.url()).pathname).toBe('/login');
+        expect(new URL(deniedPage.url()).pathname.replace(/\/$/, '')).toBe(
+          '/login',
+        );
       } else {
-        expect([401, 403, 404]).toContain(response?.status());
+        await expect(
+          deniedPage.getByRole('heading', { name: /^(?:403|404)$/ }),
+        ).toBeVisible();
+        await expect(
+          deniedPage.getByText('Fictional Principal Engineer', {
+            exact: false,
+          }),
+        ).toHaveCount(0);
       }
       await deniedPage.screenshot({
         path: testInfo.outputPath(`${actor}-review-denied.png`),
