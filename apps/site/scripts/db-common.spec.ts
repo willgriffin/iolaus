@@ -20,6 +20,26 @@ const coreMocks = vi.hoisted(() => ({
   resolveDatabase: vi.fn(),
 }));
 
+const migrationMocks = vi.hoisted(() => ({
+  applyAll: vi.fn(async () => [{ success: true }]),
+  options: vi.fn(),
+}));
+
+vi.mock('@happyvertical/smrt-core/migrations', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('@happyvertical/smrt-core/migrations')
+  >();
+  return {
+    ...actual,
+    MigrationTracker: class {
+      constructor(options: unknown) {
+        migrationMocks.options(options);
+      }
+      applyAll = migrationMocks.applyAll;
+    },
+  };
+});
+
 vi.mock('@happyvertical/smrt-core', async (importOriginal) => {
   const actual = await importOriginal<typeof SmrtCore>();
   return {
@@ -103,6 +123,27 @@ beforeEach(() => {
 });
 
 describe('SMRT database timestamp compatibility', () => {
+  it.each([false, true])(
+    'uses native atomic DDL only for an explicit maintenance window (%s)',
+    async (maintenanceWindow) => {
+      coreMocks.hasActionableChanges.mockReturnValueOnce(true);
+      coreMocks.getSQLFromDiff.mockReturnValueOnce([
+        'ALTER TABLE candidate_profiles ADD COLUMN ownership_fixture TEXT',
+      ]);
+
+      await migrateSmrtDatabase(database, { maintenanceWindow });
+
+      expect(migrationMocks.options).toHaveBeenCalledWith({
+        db: database,
+        useConcurrentIndexes: !maintenanceWindow,
+      });
+      expect(migrationMocks.applyAll).toHaveBeenCalledWith(
+        expect.any(Array),
+        { postgresSafe: !maintenanceWindow, reconcile: true },
+      );
+    },
+  );
+
   it('orders new PostgreSQL tables before foreign-key dependents', async () => {
     coreMocks.generateSchemaDiff.mockResolvedValueOnce({
       added_tables: [

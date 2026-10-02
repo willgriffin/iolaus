@@ -9,6 +9,7 @@ import {
   PUBLISHED_RESUME_PDF_PATH,
   getResumeFilesystem,
 } from '../src/lib/server/resume-files.js';
+import { assertLegacyPersonalResumeBackfillsEnabled } from './legacy-personal-resume-backfill.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
@@ -359,6 +360,7 @@ async function backfillCurrentResumeAsset(): Promise<number> {
 }
 
 export async function ensurePublishedCurrentResumeAssetFiles(): Promise<number> {
+  assertLegacyPersonalResumeBackfillsEnabled();
   const collection = await getCollection('ResumeAsset');
   const records = (await collection.list({ limit: 1000 })) as RecordLike[];
   const current = records.find(
@@ -404,6 +406,7 @@ export async function ensurePublishedCurrentResumeAssetFiles(): Promise<number> 
 }
 
 export async function backfillResumeAdmin(): Promise<ResumeAdminBackfillSummary> {
+  assertLegacyPersonalResumeBackfillsEnabled();
   const [profile, experience, skills] = await Promise.all([
     readJson<Profile>(resolve(DATA_DIR, 'profile.json')),
     readJson<Experience>(resolve(DATA_DIR, 'experience.json')),

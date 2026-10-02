@@ -20,6 +20,10 @@ First take the normal verified backup and work on a restored isolated copy.
 This upgrade has four ordered phases. Do not use this procedure for a fresh
 installation: a fresh private or shared install runs the ordinary native
 database migration, then creates records through the subject-bound workflows.
+That migration deliberately skips the legacy bundled personal-resume imports
+in every mode because they have no verified candidate workspace subject. An
+existing private database retains its already-owned history; a new personal
+resume must be created through onboarding or a subject-bound import workflow.
 
 First add the ownership columns on the isolated legacy copy. This command adds
 only nullable columns with the model's native scalar type and never creates unique keys, changes defaults, or
@@ -90,10 +94,16 @@ schemas and CandidateProfile conflict key can now add their non-null and unique
 requirements without encountering an unowned legacy row.
 
 ```sh
-pnpm --filter @willgriffin/iolaus-site db:migrate
+pnpm --filter @willgriffin/iolaus-site db:migrate -- --maintenance-window
 pnpm --filter @willgriffin/iolaus-site exec tsx scripts/check-workspace-ownership-enforcement.ts
 pnpm --filter @willgriffin/iolaus-site db:status
 ```
+
+`--maintenance-window` is required when the native plan creates a new table
+with its NULL-equal conflict index. Use it only while the application is
+stopped and the migration lock is exclusively held. It selects an atomic
+migration mode for that native create path; it does not authorize replacement
+of an existing index or constraint.
 
 The final check is read-only and reports every missing or nullable ownership
 column, a partial mixed-ledger tuple, and a missing CandidateProfile or

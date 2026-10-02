@@ -3,6 +3,7 @@ import { TagCollection } from '@happyvertical/smrt-tags';
 import { getSmrtOptions } from '../src/lib/server/db.js';
 import { getCollection } from '../src/lib/server/smrt.js';
 import { loadLegacyAdminResumeSource, loadLegacyResumeSource } from '../src/lib/server/resume-data.js';
+import { assertLegacyPersonalResumeBackfillsEnabled } from './legacy-personal-resume-backfill.js';
 
 type RecordLike = Record<string, unknown> & {
   id?: string;
@@ -488,6 +489,7 @@ async function upsertCanonicalCompactConfig(compactExperienceIds: string[]): Pro
 }
 
 export async function backfillResumeSource(): Promise<ResumeSourceBackfillSummary> {
+  assertLegacyPersonalResumeBackfillsEnabled();
   const source = (await loadLegacyAdminResumeSource()) ?? loadLegacyResumeSource();
   const profileSummary = await backfillProfile(source.profile as Profile);
   const skillSummary = await backfillSkills(source.skills as Skills);

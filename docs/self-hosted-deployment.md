@@ -90,6 +90,11 @@ hosted workloads retain their PostgreSQL profile. Use the supported
 `pnpm --filter @willgriffin/iolaus-site db:migrate` command; no deployment
 specific migration wrapper is required.
 
+For a stopped, operator-controlled upgrade that introduces a new native table
+with a NULL-equal conflict index, run `db:migrate -- --maintenance-window`
+instead. The explicit flag selects atomic DDL under the migration lock; never
+use it for a rolling deployment or as permission to replace an existing index.
+
 The generic topology does not enable SMRT's restricted PostgreSQL deployment
 permission contract. A private overlay that enables it must use the offline
 qualification sequence in [PostgreSQL deployment permissions](postgres-permissions.md),
