@@ -14,11 +14,13 @@ import type { AdminResource } from '$lib/admin/resources';
 import experienceData from '$lib/data/experience.json';
 import skillsData from '$lib/data/skills.json';
 import { applicationStatuses } from '$lib/objects/lifecycle';
+import { getOpportunityEligibility } from '$lib/opportunity-eligibility';
 import {
   EMPTY_OPPORTUNITY_FILTER_OPTIONS,
   filterStateFromSearchParams,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
+import { opportunityPostingSupport } from '$lib/opportunity-posting-support';
 import { candidateSkillTermsFromData } from '$lib/skill-matching';
 import type { AdminRecord } from './admin-data';
 import {
@@ -55,6 +57,7 @@ import {
   loadOpportunityAssessmentQueryContext,
 } from './opportunity-assessment-store';
 import { loadOpportunityDetails } from './opportunity-details';
+import { verifiedOpportunityEligibilityProjection } from './opportunity-eligibility-refresh';
 import { parseOpportunityReasonJson } from './opportunity-intelligence';
 import {
   enqueueOpportunityIntelligence,
@@ -1197,6 +1200,15 @@ export async function loadAdminRecordPageData(
     company,
     comboOptions,
     opportunityRelations,
+    postingSupport:
+      resource.slug === 'opportunities'
+        ? opportunityPostingSupport(
+            getOpportunityEligibility({
+              ...record,
+              ...verifiedOpportunityEligibilityProjection(record),
+            }),
+          )
+        : undefined,
     referenceOptions,
     record: records[0],
     relatedProjectBulletEditor,

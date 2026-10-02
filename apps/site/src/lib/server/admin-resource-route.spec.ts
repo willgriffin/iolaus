@@ -1171,6 +1171,50 @@ describe('admin-resource-route', () => {
       subject: workspaceSubject,
     });
     expect(data.record.assessmentProjection).toEqual(projection);
+    expect(data.postingSupport).toEqual({
+      relocationSupported: 'Unknown',
+      visaOrEorPossible: 'Unknown',
+    });
+  });
+
+  it('derives posting support from independently fingerprint-verified source while retaining raw model booleans', async () => {
+    const { loadAdminRecordPageData } = await import('./admin-resource-route');
+    const { getAdminResource } = await import('$lib/admin/resources');
+    const { fingerprintOpportunitySourceContent } = await import(
+      './opportunity-source-content'
+    );
+    const source = { descriptionRaw: 'We offer visa sponsorship.' };
+    const record = {
+      id: 'opp-1',
+      relocationSupported: false,
+      visaOrEorPossible: false,
+      sourceContentJson: JSON.stringify(source),
+      sourceContentVersion: 1,
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+    };
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.getAdminRecord.mockResolvedValue(record);
+    mocks.listComboOptions.mockResolvedValue({});
+    mocks.listReferenceOptions.mockResolvedValue({});
+    const valid = await loadAdminRecordPageData('opportunities', 'opp-1', {
+      workspaceSubject,
+    });
+    expect(valid.postingSupport).toEqual({
+      relocationSupported: 'Unknown',
+      visaOrEorPossible:
+        'Visa sponsorship: yes (explicit posting evidence); EOR: Unknown',
+    });
+    expect(valid.record.visaOrEorPossible).toBe(false);
+    record.sourceContentFingerprint = 'tampered';
+    const tampered = await loadAdminRecordPageData('opportunities', 'opp-1', {
+      workspaceSubject,
+    });
+    expect(tampered.postingSupport).toEqual({
+      relocationSupported: 'Unknown',
+      visaOrEorPossible: 'Unknown',
+    });
   });
 
   it('does not read a private assessment from a detail loader without a selected subject', async () => {

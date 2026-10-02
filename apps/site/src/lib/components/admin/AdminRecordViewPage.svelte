@@ -21,6 +21,7 @@ import {
   assessmentMatchReadinessLabel,
   getOpportunityAssessmentProjection,
 } from '$lib/opportunity-assessment-projection';
+import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
@@ -72,6 +73,7 @@ let { data, form } = $props<{
   data: {
     company?: AdminRecord | null;
     opportunityRelations?: OpportunityRelationEditorData[];
+    postingSupport?: OpportunityPostingSupport;
     referenceOptions: import('$lib/admin/resources').ReferenceOptionsByField;
     record: AdminRecord;
     resource: import('$lib/admin/resources').AdminResource;
@@ -506,7 +508,15 @@ function shouldShowDetailField(field: ResourceField): boolean {
   if (isHiddenViewField(field)) return false;
   if (isOverviewOnlyField(field)) return false;
   if (isDescriptionField(field)) return false;
+  if (postingSupportValue(field) !== null) return true;
   return hasDisplayValue(field);
+}
+
+function postingSupportValue(field: ResourceField): string | null {
+  if (!isOpportunityRecord) return null;
+  if (field.key === 'relocationSupported' || field.key === 'visaOrEorPossible')
+    return data.postingSupport?.[field.key] ?? 'Unknown';
+  return null;
 }
 
 function fieldPriority(field: ResourceField): number {
@@ -1126,11 +1136,15 @@ $effect(() => {
         <div class:wide={field.kind === 'textarea'}>
           <dt>{displayFieldLabel(field)}</dt>
           <dd>
-            <AdminRecordValue
-              {field}
-              record={data.record}
-              referenceOptions={data.referenceOptions}
-            />
+            {#if postingSupportValue(field) !== null}
+              <span>{postingSupportValue(field)}</span>
+            {:else}
+              <AdminRecordValue
+                {field}
+                record={data.record}
+                referenceOptions={data.referenceOptions}
+              />
+            {/if}
           </dd>
         </div>
       {/each}

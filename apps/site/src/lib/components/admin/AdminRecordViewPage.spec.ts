@@ -2,6 +2,7 @@ import { APP_STATE_KEY, createInitialState } from '@happyvertical/smrt-svelte';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import { getAdminResource } from '$lib/admin/resources';
+import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
 import AdminRecordViewPage from './AdminRecordViewPage.svelte';
 
 // smrt-svelte form primitives read the app state from context; SSR specs only
@@ -23,7 +24,10 @@ function formMarkup(body: string, action: string): string {
   return body.slice(open, body.indexOf('</form>', formAt));
 }
 
-function renderOpportunity(record: Record<string, unknown>) {
+function renderOpportunity(
+  record: Record<string, unknown>,
+  postingSupport?: OpportunityPostingSupport,
+) {
   const tags = requireResource('opportunity-tags');
   const roles = requireResource('opportunity-roles');
   const places = requireResource('opportunity-places');
@@ -66,6 +70,7 @@ function renderOpportunity(record: Record<string, unknown>) {
         ],
         referenceOptions: {},
         record,
+        postingSupport,
         resource: requireResource('opportunities'),
       },
     },
@@ -74,6 +79,48 @@ function renderOpportunity(record: Record<string, unknown>) {
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it.each([
+    false,
+    true,
+    undefined,
+  ])('shows Unknown instead of unproven default support booleans (%s)', (defaultValue) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      relocationSupported: defaultValue,
+      visaOrEorPossible: defaultValue,
+    });
+    const markup = body.replace(/<!--[\s\S]*?-->/g, '');
+    for (const label of ['Relocation supported', 'Visa or EOR possible']) {
+      const value = new RegExp(
+        `<dt\\b[^>]*>\\s*${label}\\s*</dt>\\s*<dd\\b[^>]*>([\\s\\S]*?)</dd>`,
+      ).exec(markup)?.[1];
+      expect(value).toBeDefined();
+      expect(value).toContain('Unknown');
+      expect(value).not.toMatch(/>\s*(?:true|false)\s*<\/span>/);
+    }
+  });
+
+  it('renders the server-verified affirmative and negative support labels without changing stored booleans', () => {
+    const record = {
+      id: 'opp-1',
+      relocationSupported: false,
+      visaOrEorPossible: false,
+    };
+    const { body } = renderOpportunity(record, {
+      relocationSupported: 'Unknown',
+      visaOrEorPossible:
+        'Visa sponsorship: yes (explicit posting evidence); EOR: no (explicit posting evidence)',
+    });
+    expect(body).toContain(
+      'Visa sponsorship: yes (explicit posting evidence); EOR: no (explicit posting evidence)',
+    );
+    expect(record).toEqual({
+      id: 'opp-1',
+      relocationSupported: false,
+      visaOrEorPossible: false,
+    });
+  });
+
   it('shows the current safe candidate assessment separately from earlier intelligence', () => {
     const { body } = renderOpportunity({
       id: 'opp-1',
