@@ -49,6 +49,7 @@ const actualRoleClauses = [
   'You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance',
 ];
 const context: RequirementCoverageContext = {
+  extractionContract: 'paid-v4-coverage-only4096',
   sourceText: publicPosting,
   sourceFingerprint: 'source-current',
   sourceVersion: 1,
@@ -75,6 +76,57 @@ function completeLedger(ctx = context): CoverageLedger {
   return ledger;
 }
 describe('exact source requirement coverage', () => {
+  it('recognizes the exact fresh Skills you bring heading without changing raw spans or paid clauses', () => {
+    const fresh = { ...context, extractionContract: 'current' as const };
+    const clauses = buildPostingClauses(fresh);
+    const heading = clauses[15];
+    expect(heading).toMatchObject({
+      text: 'Skills you bring',
+      kind: 'heading',
+      spanStart: 3225,
+      spanEnd: 3241,
+    });
+    expect(publicPosting.slice(heading.spanStart, heading.spanEnd)).toBe(
+      heading.text,
+    );
+    expect(clauses[16].section).toBe(heading.section);
+    const subsequent = clauses.find((clause) => clause.text === 'Who you are')!;
+    expect(subsequent.kind).toBe('heading');
+    expect(subsequent.section).not.toBe(heading.section);
+    expect(clauses[33].kind).toBe('body');
+    expect(clauses[36].kind).toBe('body');
+    expect(buildPostingClauses(context)[15]).toMatchObject({ kind: 'body' });
+    for (const text of [
+      'Skills you bring: must know Kubernetes',
+      'We value the skills you bring',
+    ])
+      expect(buildPostingClauses({ ...fresh, sourceText: text })[0].kind).toBe(
+        'body',
+      );
+    for (const text of ['What will you do?', 'About you:', 'Nice to Have:']) {
+      const raw = `${text}\nMust know Kubernetes.\nBenefits\nPaid vacation.`;
+      const parsed = buildPostingClauses({ ...fresh, sourceText: raw });
+      expect(parsed[0]).toMatchObject({
+        text,
+        kind: 'heading',
+        spanStart: 0,
+        spanEnd: text.length,
+      });
+      expect(parsed[1].kind).toBe('body');
+      expect(parsed[1].section).toBe(parsed[0].section);
+      expect(parsed[3].section).toBe(parsed[2].section);
+      expect(parsed[3].section).not.toBe(parsed[0].section);
+      expect(buildPostingClauses({ ...context, sourceText: raw })[0].kind).toBe(
+        'body',
+      );
+      expect(
+        buildPostingClauses({
+          ...fresh,
+          sourceText: `${text} Must know Kubernetes.`,
+        })[0].kind,
+      ).toBe('body');
+    }
+  });
   it('repairs exact source context and omitted criteria while preserving the paid base and scoped retirement provenance', () => {
     const base = normalizeRequirementCoverageForAudit(
       context,
@@ -756,9 +808,9 @@ describe('fresh source contract and paid V4 native identity', () => {
     );
     expect(Buffer.byteLength(historical().sourceText)).toBe(7021);
   });
-  it('uses a genuinely distinct V5 default without reinterpreting the paid ancestry', () => {
+  it('uses a distinct fresh heading contract without reinterpreting the paid ancestry', () => {
     expect(REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION).toBe(
-      'requirement-coverage-source/v5-candidate-context4096',
+      'requirement-coverage-source/v6-candidate-context4096-exact-headings',
     );
     expect(
       requirementCoverageContextForOpportunity(paid).extractionFingerprint,

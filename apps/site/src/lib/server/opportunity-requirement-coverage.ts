@@ -9,9 +9,9 @@ export const REQUIREMENT_COVERAGE_VERSION = 'requirement-coverage/v1';
 export const REQUIREMENT_COVERAGE_REPAIR_VERSION =
   'requirement-coverage-repair/v1-delta4096';
 export const REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION =
-  'requirement-coverage-source/v5-candidate-context4096';
-export const REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION = `${OPPORTUNITY_EXTRACTION_PROMPT_VERSION}/requirement-coverage-v4-candidate-context4096`;
-export const REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION = `${OPPORTUNITY_EXTRACTION_SCHEMA_VERSION}/requirement-coverage-v4-candidate-context4096`;
+  'requirement-coverage-source/v6-candidate-context4096-exact-headings';
+export const REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION = `${OPPORTUNITY_EXTRACTION_PROMPT_VERSION}/requirement-coverage-v5-candidate-context4096-exact-headings`;
+export const REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION = `${OPPORTUNITY_EXTRACTION_SCHEMA_VERSION}/requirement-coverage-v5-candidate-context4096-exact-headings`;
 export const REQUIREMENT_COVERAGE_PAID_V4_SOURCE_CONTRACT_VERSION =
   'requirement-coverage-source/v4-coverage-only4096';
 export const REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION =
@@ -22,6 +22,8 @@ export type RequirementCoverageExtractionContract =
   | 'current'
   | 'paid-v4-coverage-only4096';
 export interface RequirementCoverageContext {
+  /** Historical paid receipts retain the parser used for their extraction. */
+  extractionContract?: RequirementCoverageExtractionContract;
   sourceText: string;
   sourceFingerprint: string;
   sourceVersion: number;
@@ -361,6 +363,7 @@ export function requirementCoverageContextForOpportunity(
       ? opportunity.preparedPostingFingerprint
       : '';
   return {
+    extractionContract: contract,
     sourceText,
     sourceFingerprint,
     sourceVersion,
@@ -433,7 +436,7 @@ export function canonicalHeadingClauseIds(
     .filter(
       (clause) =>
         clause.kind === 'heading' &&
-        HEADING.test(literalTextForPostingClause(clause)) &&
+        isPostingHeading(literalTextForPostingClause(clause), context) &&
         Array.isArray(dispositions) &&
         dispositions.filter((row) => record(row)?.clauseId === clause.id)
           .length === 1 &&
@@ -501,8 +504,24 @@ export function literalTextForPostingClause(
     .replace(/\s+/g, ' ')
     .trim();
 }
-const HEADING =
+const LEGACY_HEADING =
   /^(?:about(?: the)? (?:role|team|company)|about us|who (?:you are|we are)|what you(?:'|’)ll (?:do|bring)|what we(?:'|’)re looking for|what we offer|(?:key )?responsibilities|(?:minimum |preferred |required )?(?:qualifications|requirements)|benefits|perks|compensation|salary|location|how to apply|equal opportunity)\s*:?[\s]*$/i;
+const HEADING =
+  /^(?:skills you bring|what will you do\?|about you|nice to have)\s*:?[\s]*$/i;
+/** Current exact standalone heading grammar, without certifying a ledger. */
+export function isCurrentPostingHeading(literal: string): boolean {
+  return LEGACY_HEADING.test(literal) || HEADING.test(literal);
+}
+function isPostingHeading(
+  literal: string,
+  context?: RequirementCoverageContext,
+) {
+  return (
+    LEGACY_HEADING.test(literal) ||
+    (context?.extractionContract !== 'paid-v4-coverage-only4096' &&
+      HEADING.test(literal))
+  );
+}
 const NAVIGATION =
   /^(?:apply now|back to (?:jobs|openings)|privacy policy|cookie (?:policy|settings)|sign in|skip to (?:content|main))\s*[→›»]*$/i;
 const EQUAL_OPPORTUNITY =
@@ -528,7 +547,7 @@ export function buildPostingClauses(
     const text = raw.slice(spanStart, spanEnd);
     const literal = literalTextForPostingClause({ text });
     if (!literal) return;
-    const kind = HEADING.test(literal) ? 'heading' : 'body';
+    const kind = isPostingHeading(literal, context) ? 'heading' : 'body';
     const id = `clause:${hash(`${context.sourceFingerprint}:${spanStart}:${spanEnd}:${text}`).slice(0, 24)}`;
     if (kind === 'heading') section = `section:${id.slice(7)}`;
     clauses.push({
@@ -655,7 +674,7 @@ function validExclusion(clause: PostingClause, rule: unknown): boolean {
     rule === 'literal_nonmaterial_audit' ||
     (rule === 'section_heading' &&
       clause.kind === 'heading' &&
-      HEADING.test(text)) ||
+      isPostingHeading(text)) ||
     (rule === 'navigation_label' && NAVIGATION.test(text)) ||
     (rule === 'equal_opportunity_statement' && EQUAL_OPPORTUNITY.test(text))
   );
@@ -695,7 +714,7 @@ export function normalizeRequirementCoverageForAudit(
         String(disposition.type) === 'section_heading' &&
         !disposition.requirementIds.length &&
         clause.kind === 'heading' &&
-        HEADING.test(literalTextForPostingClause(clause))
+        isPostingHeading(literalTextForPostingClause(clause), context)
       ) {
         return {
           ...disposition,

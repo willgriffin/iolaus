@@ -330,6 +330,9 @@ interface GoogleCareersPosting {
 }
 
 export interface OpportunityLlmExtractionOptions {
+  /** Native source checkpoint only; audit is admitted from the actual receipt. */
+  sourceExtractionStage?: 'extract-only';
+  assertCurrentAuthority?: () => Promise<void>;
   aiClient?: Pick<AIInterface, 'chat'>;
   apiKey?: string;
   baseUrl?: string;
@@ -357,12 +360,23 @@ type OpportunityLlmSettings = AiProfileClient;
 
 type OpportunityLlmProcessStatus = 'error' | 'processed' | 'skipped';
 type OpportunityLlmResult = {
+  coverageComplete?: boolean;
+  sourceExtraction?: OpportunityRequirementCoverageSourceCheckpoint;
   message: string;
   opportunityId?: string;
   stale?: boolean;
   status: OpportunityLlmProcessStatus;
   updatedFields?: string[];
 };
+
+/** A receipt locator, never proof of paid completion or semantic coverage. */
+export interface OpportunityRequirementCoverageSourceCheckpoint {
+  version: 'opportunity-source-extraction-checkpoint/v1';
+  requestIds: string[];
+  inputFingerprint: string;
+  ledgerFingerprint: string;
+  reservation: { calls: number; reservedTokens: number; spendMicros: number };
+}
 
 const llmStringFields = [
   'title',
@@ -3318,6 +3332,7 @@ export async function preflightOpportunityRequirementCoverageExtraction(
     counter?: (text: string) => Promise<number>;
     limits?: OpportunityIntelligenceBudgetConfig['run'];
     auditPricing?: OpportunityIntelligenceBudgetConfig['pricing'];
+    sourceExtractionStage?: 'extract-only';
   },
 ) {
   const coverageContext = requirementCoverageContextForOpportunity({
@@ -3352,7 +3367,9 @@ export async function preflightOpportunityRequirementCoverageExtraction(
         calls: 1,
         reservedTokens: chunk.inputTokenCeiling + maxOutputTokens,
       })),
-      auditReservation,
+      ...(options.sourceExtractionStage === 'extract-only'
+        ? []
+        : [auditReservation]),
     ],
     {
       calls: Math.min(4, limits.calls),
@@ -3363,7 +3380,9 @@ export async function preflightOpportunityRequirementCoverageExtraction(
     options.model,
   );
   const reservedSpendMicros =
-    extractionPricing.configured && options.auditPricing?.configured
+    extractionPricing.configured &&
+    (options.sourceExtractionStage === 'extract-only' ||
+      options.auditPricing?.configured)
       ? chunks.reduce(
           (sum, chunk) =>
             sum +
@@ -3374,11 +3393,13 @@ export async function preflightOpportunityRequirementCoverageExtraction(
             }),
           0,
         ) +
-        reservedRequestSpendMicros({
-          inputTokens: auditReservation.requestBytes,
-          maxOutputTokens: auditReservation.maxOutputTokens,
-          pricing: options.auditPricing,
-        })
+        (options.sourceExtractionStage === 'extract-only'
+          ? 0
+          : reservedRequestSpendMicros({
+              inputTokens: auditReservation.requestBytes,
+              maxOutputTokens: auditReservation.maxOutputTokens,
+              pricing: options.auditPricing!,
+            }))
       : null;
   const spendFits =
     reservedSpendMicros !== null &&
@@ -3420,9 +3441,10 @@ async function requestOpportunityLlmExtraction(
   inputTokenCounts: number[];
   output: Record<string, unknown>;
   requirementCoverage: CoverageLedger;
+  sourceExtraction?: OpportunityRequirementCoverageSourceCheckpoint;
 }> {
   let auditPricing: OpportunityIntelligenceBudgetConfig['pricing'] | undefined;
-  if (!options.aiClient) {
+  if (!options.aiClient && options.sourceExtractionStage !== 'extract-only') {
     if (!process.env.TYPESAFE_API_KEY?.trim())
       throw new Error(
         'Configure the source coverage audit provider before source extraction.',
@@ -3457,6 +3479,7 @@ async function requestOpportunityLlmExtraction(
       counter: settings.aiClient.countTokens?.bind(settings.aiClient),
       auditPricing,
       limits: resolveOpportunityIntelligenceBudgetConfig().run,
+      sourceExtractionStage: options.sourceExtractionStage,
     },
   );
   if (!plan.preflight.fits)
@@ -3485,6 +3508,7 @@ async function requestOpportunityLlmExtraction(
     output: Record<string, unknown>;
     sectionIds: string[];
   }> = [];
+  const requestIds: string[] = [];
 
   for (const chunk of chunks) {
     options.signal?.throwIfAborted();
@@ -3533,40 +3557,41 @@ async function requestOpportunityLlmExtraction(
       };
     };
 
-    const output =
+    if (options.sourceExtractionStage === 'extract-only')
+      await options.assertCurrentAuthority!();
+    const governed =
       options.agentRunId && !options.aiClient
-        ? (
-            await executeGovernedOpportunityIntelligenceRequest({
-              estimatedInputTokens: chunk.inputTokenCount,
-              identity: {
-                agentRunId: options.agentRunId,
-                contentFingerprint:
-                  stringValue(options.expectedSourceContentFingerprint) ||
-                  stringValue(opportunity.sourceContentFingerprint) ||
-                  prepared.fingerprint,
-                feature: `opportunity-extraction-chunk-${chunk.chunkIndex + 1}`,
-                inputFingerprint: coverageContext.extractionFingerprint,
-                model: settings.model,
-                opportunityId: stringValue(opportunity.id),
-                outputSchemaVersion:
-                  REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
-                preparedPayloadVersion: prepared.version,
-                profile: settings.profile,
-                promptVersion: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
-                sourceCrawlId: options.sourceCrawlId,
-                sourceCrawlItemId: options.sourceCrawlItemId,
-              },
-              inputTokenCeiling: chunk.inputTokenCeiling,
-              invoke,
-              maxOutputTokens,
-              signal: options.signal,
-              store: options.governanceStore,
-            })
-          ).output
-        : (await invoke()).output;
+        ? await executeGovernedOpportunityIntelligenceRequest({
+            estimatedInputTokens: chunk.inputTokenCount,
+            identity: {
+              agentRunId: options.agentRunId,
+              contentFingerprint:
+                stringValue(options.expectedSourceContentFingerprint) ||
+                stringValue(opportunity.sourceContentFingerprint) ||
+                prepared.fingerprint,
+              feature: `opportunity-extraction-chunk-${chunk.chunkIndex + 1}`,
+              inputFingerprint: coverageContext.extractionFingerprint,
+              model: settings.model,
+              opportunityId: stringValue(opportunity.id),
+              outputSchemaVersion:
+                REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,
+              preparedPayloadVersion: prepared.version,
+              profile: settings.profile,
+              promptVersion: REQUIREMENT_COVERAGE_EXTRACTION_PROMPT_VERSION,
+              sourceCrawlId: options.sourceCrawlId,
+              sourceCrawlItemId: options.sourceCrawlItemId,
+            },
+            inputTokenCeiling: chunk.inputTokenCeiling,
+            invoke,
+            maxOutputTokens,
+            signal: options.signal,
+            store: options.governanceStore,
+          })
+        : { output: (await invoke()).output, requestId: '' };
+    if (governed.requestId) requestIds.push(governed.requestId);
     results.push({
       chunkIndex: chunk.chunkIndex,
-      output,
+      output: governed.output,
       sectionIds: chunk.sections.map((section) => section.id),
     });
   }
@@ -3584,7 +3609,8 @@ async function requestOpportunityLlmExtraction(
       requirementCoverage,
     ).structuralComplete &&
     options.agentRunId &&
-    !options.aiClient
+    !options.aiClient &&
+    options.sourceExtractionStage !== 'extract-only'
   ) {
     const audit = prepareRequirementCoverageAudit(
       coverageContext,
@@ -3614,6 +3640,22 @@ async function requestOpportunityLlmExtraction(
     ...mergeOpportunityExtractionChunks(results, prepared.facts),
     inputTokenCounts: chunks.map((chunk) => chunk.inputTokenCount),
     requirementCoverage,
+    ...(options.sourceExtractionStage === 'extract-only'
+      ? {
+          sourceExtraction: {
+            version: 'opportunity-source-extraction-checkpoint/v1' as const,
+            requestIds,
+            inputFingerprint: coverageContext.extractionFingerprint,
+            ledgerFingerprint:
+              requirementCoverageLedgerFingerprint(requirementCoverage),
+            reservation: {
+              calls: plan.preflight.calls,
+              reservedTokens: plan.preflight.reservedTokens,
+              spendMicros: plan.reservedSpendMicros!,
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -3852,11 +3894,26 @@ export async function processOpportunityWithLlm(
   opportunityId: string,
   options: OpportunityLlmExtractionOptions = {},
 ): Promise<OpportunityLlmResult> {
+  if (
+    options.sourceExtractionStage === 'extract-only' &&
+    (options.aiClient ||
+      !options.agentRunId?.trim() ||
+      !options.expectedSourceContentFingerprint?.trim() ||
+      !Number.isSafeInteger(options.sourceContentVersion) ||
+      Number(options.sourceContentVersion) < 1 ||
+      !options.fencedOpportunityUpdate ||
+      !options.assertCurrentAuthority)
+  )
+    throw new Error(
+      'Source extraction checkpoint requires a native source run, fresh authority and source/version write fence.',
+    );
   options.signal?.throwIfAborted();
+  if (options.sourceExtractionStage === 'extract-only')
+    await options.assertCurrentAuthority!();
   const collection = await getCollection('Opportunity');
-  let opportunity = (await collection.get(
-    opportunityId,
-  )) as unknown as MutableRecord | null;
+  let opportunity = (await (options.sourceExtractionStage === 'extract-only'
+    ? collection.get({ id: opportunityId }, { cache: false })
+    : collection.get(opportunityId))) as unknown as MutableRecord | null;
   if (!opportunity) {
     const message = 'Opportunity not found.';
     await recordOpportunityLlmAudit({
@@ -3887,7 +3944,8 @@ export async function processOpportunityWithLlm(
 
   if (
     !sourceTextForOpportunity(opportunity) &&
-    stringValue(opportunity.postingUrl)
+    stringValue(opportunity.postingUrl) &&
+    options.sourceExtractionStage !== 'extract-only'
   ) {
     await loadOpportunityDetails(opportunityId);
     opportunity = (await collection.get(
@@ -3936,6 +3994,7 @@ export async function processOpportunityWithLlm(
   );
   const preparedWithCoverage: PreparedPosting & {
     requirementCoverage: CoverageLedger;
+    requirementCoverageSourceExtraction?: OpportunityRequirementCoverageSourceCheckpoint;
   } = {
     ...prepared,
     requirementCoverage: buildRequirementCoverageSource(
@@ -3945,10 +4004,15 @@ export async function processOpportunityWithLlm(
       }),
     ),
   };
-  const deterministicFields = applyOpportunityLlmUpdates(
-    opportunity,
-    normalizeOpportunityLlmExtraction(preparedPostingFactsAsOutput(prepared)),
-  );
+  const deterministicFields =
+    options.sourceExtractionStage === 'extract-only'
+      ? []
+      : applyOpportunityLlmUpdates(
+          opportunity,
+          normalizeOpportunityLlmExtraction(
+            preparedPostingFactsAsOutput(prepared),
+          ),
+        );
   const preparationUpdates = {
     ...Object.fromEntries(
       deterministicFields.map((field) => [field, opportunity?.[field]]),
@@ -3959,7 +4023,7 @@ export async function processOpportunityWithLlm(
     updated_at: new Date(),
   };
   const expected = expectedFingerprint(options);
-  if (expected) {
+  if (expected && options.sourceExtractionStage !== 'extract-only') {
     const update =
       options.fencedOpportunityUpdate ?? defaultFencedOpportunityUpdate;
     const persisted = await update(
@@ -3978,7 +4042,7 @@ export async function processOpportunityWithLlm(
       };
     }
     Object.assign(opportunity, preparationUpdates);
-  } else {
+  } else if (options.sourceExtractionStage !== 'extract-only') {
     Object.assign(opportunity, preparationUpdates);
     await opportunity.save();
   }
@@ -4033,13 +4097,27 @@ export async function processOpportunityWithLlm(
       settings,
       requestOptions,
     );
+    if (
+      options.sourceExtractionStage === 'extract-only' &&
+      extraction.sourceExtraction?.requestIds.length !== 1
+    )
+      throw new Error(
+        'Source checkpoint requires one completed native receipt.',
+      );
     preparedWithCoverage.requirementCoverage = extraction.requirementCoverage;
+    if (extraction.sourceExtraction)
+      preparedWithCoverage.requirementCoverageSourceExtraction =
+        extraction.sourceExtraction;
     const updates = normalizeOpportunityLlmExtraction(extraction.output);
     const updatedFields = [
       ...deterministicFields,
       'preparedPostingJson',
-      ...applyOpportunityLlmUpdates(opportunity, updates),
-      ...seedApplyFromHost(opportunity),
+      ...(options.sourceExtractionStage === 'extract-only'
+        ? []
+        : [
+            ...applyOpportunityLlmUpdates(opportunity, updates),
+            ...seedApplyFromHost(opportunity),
+          ]),
     ].filter((field, index, fields) => fields.indexOf(field) === index);
     if (updatedFields.length === 0) {
       const current = (await collection.get(
@@ -4103,14 +4181,17 @@ export async function processOpportunityWithLlm(
       updatedFields.map((field) => [field, opportunity?.[field]]),
     );
     Object.assign(persistedUpdates, {
-      freshness: 'fresh',
-      lastSeenAt: new Date(),
+      ...(options.sourceExtractionStage === 'extract-only'
+        ? {}
+        : { freshness: 'fresh', lastSeenAt: new Date() }),
       preparedPostingFingerprint: prepared.fingerprint,
       preparedPostingJson: JSON.stringify(preparedWithCoverage),
       preparedPostingVersion: prepared.version,
       updated_at: new Date(),
     });
     if (expected) {
+      if (options.sourceExtractionStage === 'extract-only')
+        await options.assertCurrentAuthority!();
       const update =
         options.fencedOpportunityUpdate ?? defaultFencedOpportunityUpdate;
       const persisted = await update(
@@ -4174,6 +4255,12 @@ export async function processOpportunityWithLlm(
       opportunityId,
       status: 'processed',
       updatedFields,
+      ...(extraction.sourceExtraction
+        ? {
+            sourceExtraction: extraction.sourceExtraction,
+            coverageComplete: false,
+          }
+        : {}),
     };
   } catch (cause) {
     const message =

@@ -15,6 +15,7 @@ import {
   preflightOpportunityRequirementCoverageRepair,
   processOpportunityRequirementCoverageAuditReplay,
   processOpportunityRequirementCoverageRepair,
+  processOpportunityWithLlm,
   resolveOpportunityDetails,
 } from './opportunity-details';
 import {
@@ -34,6 +35,171 @@ import { requirementCoverageLedgerFingerprint } from './opportunity-requirement-
 import * as sourceSmrt from './smrt.js';
 
 describe('source extraction reservation admission', () => {
+  it('admits only the native extraction stage when a prospective full audit cannot fit', async () => {
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MAX_INPUT_TOKENS', '6000');
+    try {
+      const opportunity = {
+        descriptionRaw: Array.from(
+          { length: 41 },
+          (_, i) => `Public role clause ${i} ${'literal source '.repeat(8)}`,
+        ).join('\n'),
+        sourceContentFingerprint: 'current-source',
+        sourceContentVersion: 1,
+      };
+      const posting = prepareOpportunityPosting(opportunity);
+      const options = {
+        model: 'openai/gpt-6-luna',
+        counter: async () => 3150,
+        auditPricing:
+          pricingForOpportunityIntelligenceModel('openai/gpt-6-luna'),
+      };
+      const full = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        posting,
+        options,
+      );
+      expect(full.admitted).toBe(false);
+      const staged = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        posting,
+        { ...options, sourceExtractionStage: 'extract-only' },
+      );
+      expect(staged.admitted).toBe(true);
+      expect(staged.preflight).toMatchObject({
+        calls: 1,
+        reservedTokens: 10096,
+      });
+      expect(staged.maxOutputTokens).toBe(4096);
+      expect(staged.chunks[0].inputTokenCeiling).toBe(6000);
+      expect(staged.reservedSpendMicros).toBe(
+        reservedRequestSpendMicros({
+          inputTokens: 6000,
+          maxOutputTokens: 4096,
+          pricing: options.auditPricing,
+        }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it('persists a native extraction receipt locator and unverified ledger without any audit or new run', async () => {
+    const opportunity = {
+      id: 'staged-source',
+      title: 'Original public role',
+      workMode: '',
+      salaryMin: 0,
+      descriptionRaw: 'Remote in Canada\nRequirements\nCuriosity.',
+      sourceContentFingerprint: 'current-source',
+      sourceContentVersion: 1,
+      preparedPostingJson: '{}',
+      save: vi.fn(),
+    };
+    const originalFingerprint =
+      prepareOpportunityPosting(opportunity).fingerprint;
+    const persisted: Record<string, unknown>[] = [];
+    const persist = vi.fn(
+      async (_id: string, _fp: string, updates: Record<string, unknown>) => {
+        persisted.push(updates);
+        Object.assign(opportunity, updates);
+        return true;
+      },
+    );
+    const get = vi.fn(async () => opportunity);
+    vi.spyOn(sourceSmrt, 'getCollection').mockResolvedValue({ get } as never);
+    vi.spyOn(
+      sourceAiConfig,
+      'resolveOpportunityIntelligenceExtractionAiProfileClient',
+    ).mockResolvedValue({
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-extraction',
+      aiClient: { chat: vi.fn(), countTokens: vi.fn(async () => 2000) },
+    } as never);
+    const governed = vi
+      .spyOn(sourceGovernance, 'executeGovernedOpportunityIntelligenceRequest')
+      .mockResolvedValue({
+        requestId: 'actual-global-receipt',
+        reused: false,
+        output: {
+          title: 'Model replacement title',
+          workMode: 'onsite',
+          salaryMin: 123456,
+          requirementCoverage: { requirements: [], dispositions: [] },
+        },
+      } as never);
+    const start = vi.spyOn(
+      sourceGovernance,
+      'startOpportunityIntelligenceAgentRun',
+    );
+    const audit = vi.spyOn(
+      sourceCoverageProvider,
+      'evaluateRequirementCoverageAudit',
+    );
+    const options = {
+      sourceExtractionStage: 'extract-only' as const,
+      agentRunId: 'existing-source-run',
+      expectedSourceContentFingerprint: 'current-source',
+      sourceContentVersion: 1,
+      fencedOpportunityUpdate: persist,
+      assertCurrentAuthority: vi.fn(async () => {}),
+    };
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MAX_INPUT_TOKENS', '6000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT', '4');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT', '80000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS', '100000');
+    try {
+      await expect(
+        processOpportunityWithLlm(opportunity.id, {
+          ...options,
+          agentRunId: undefined,
+        }),
+      ).rejects.toThrow('native source run');
+      const result = await processOpportunityWithLlm(opportunity.id, options);
+      expect(result).toMatchObject({
+        status: 'processed',
+        coverageComplete: false,
+        sourceExtraction: {
+          requestIds: ['actual-global-receipt'],
+          reservation: { calls: 1, reservedTokens: 10096 },
+        },
+      });
+      expect(get).toHaveBeenCalledWith(
+        { id: opportunity.id },
+        { cache: false },
+      );
+      expect(governed).toHaveBeenCalledOnce();
+      expect(start).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+      expect(persist).toHaveBeenCalledOnce();
+      expect(opportunity).toMatchObject({
+        title: 'Original public role',
+        workMode: '',
+        salaryMin: 0,
+      });
+      expect(persisted[0]).not.toHaveProperty('title');
+      expect(persisted[0]).not.toHaveProperty('workMode');
+      expect(persisted[0]).not.toHaveProperty('salaryMin');
+      expect(prepareOpportunityPosting(opportunity).fingerprint).toBe(
+        originalFingerprint,
+      );
+      expect(persisted[0].preparedPostingFingerprint).toBe(originalFingerprint);
+      const checkpoint = JSON.parse(String(persisted[0].preparedPostingJson));
+      expect(checkpoint.requirementCoverage.audit).toBeUndefined();
+      expect(checkpoint.requirementCoverageSourceExtraction).toEqual(
+        result.sourceExtraction,
+      );
+      expect(options.assertCurrentAuthority).toHaveBeenCalledTimes(3);
+      persist.mockResolvedValueOnce(false);
+      await expect(
+        processOpportunityWithLlm(opportunity.id, options),
+      ).resolves.toMatchObject({
+        status: 'skipped',
+        stale: true,
+      });
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
   it('refuses injected clients and stops a revoked post-repair principal before cache persistence or audit', async () => {
     const opportunity = {
       id: 'source-opportunity',
@@ -271,7 +437,8 @@ describe('source extraction reservation admission', () => {
     expect(
       payload.sourceClauses.map((row: { text: string }) => row.text),
     ).toEqual(coverage.clauses.map((row) => row.text));
-    expect(payload.headingClauseIds).toEqual(['c0']);
+    expect(payload.headingClauseIds).toEqual(['c0', 'c2']);
+    expect(coverage.clauses[2].kind).toBe('heading');
     expect(payload.sourceClauses[2]).toMatchObject({
       id: 'c2',
       text: 'Skills you bring',
@@ -1619,7 +1786,10 @@ function completedReplayFixture() {
 }
 describe('completed native source repair audit replay', () => {
   it('reconstructs the exact actual completed repair delta, preserving the old 50 rows and active 46 without a new Luna reservation', () => {
-    const context = completedFixture.sourceContext;
+    const context = {
+      ...completedFixture.sourceContext,
+      extractionContract: 'paid-v4-coverage-only4096' as const,
+    };
     const prepared = prepareRequirementCoverageRepair(
       context,
       completedFixture.baseLedger as never,
