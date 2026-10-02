@@ -105,7 +105,13 @@ function harness(overrides: Record<string, unknown> = {}) {
     },
   );
   const list = vi.fn(async () => [structuredClone(current)]);
-  const get = vi.fn(async () => structuredClone(current));
+  // Mirror native collection.get: a non-UUID string is a slug, not a text PK.
+  const get = vi.fn(
+    async (filter: string | { id: string }, _options?: { cache: false }) =>
+      typeof filter === 'object' && filter.id === current.id
+        ? structuredClone(current)
+        : null,
+  );
   const source = {
     id: SOURCE,
     sourceRole: 'root',
@@ -163,6 +169,38 @@ beforeEach(() => {
   auth.active = true;
 });
 describe('bounded native source schedule dispatcher', () => {
+  it('selects a legacy textual primary key exactly: before due zero, at due once, repeated tick zero', async () => {
+    const id = `source-crawl:${SOURCE}`;
+    const h = harness({ id });
+    h.list.mockImplementation(async (...args: unknown[]) => {
+      const where = (args[0] as { where: Record<string, unknown> }).where;
+      const current = await h.get({ id }, { cache: false });
+      return current &&
+        new Date(current.nextRun) <= new Date(where['nextRun <='] as Date)
+        ? [current]
+        : [];
+    });
+    const early = await dispatchDueSourceCrawls(
+      { ...h.options, now: new Date('2026-10-01T23:59:00Z') },
+      h.dependencies,
+    );
+    expect(early).toEqual({ scanned: 0, outcomes: [] });
+    expect(h.enqueue).not.toHaveBeenCalled();
+    const due = await dispatchDueSourceCrawls(h.options, h.dependencies);
+    expect(due.outcomes[0]).toMatchObject({
+      scheduleId: id,
+      status: 'dispatched',
+    });
+    expect(h.get).toHaveBeenCalledWith({ id }, { cache: false });
+    expect(h.update).toHaveBeenCalledWith(
+      '_smrt_agent_schedules',
+      expect.objectContaining({ id }),
+      expect.any(Object),
+    );
+    const repeated = await dispatchDueSourceCrawls(h.options, h.dependencies);
+    expect(repeated).toEqual({ scanned: 0, outcomes: [] });
+    expect(h.enqueue).toHaveBeenCalledTimes(1);
+  });
   it('admits only due source schedules, uses audited native enqueue, then advances by revision', async () => {
     const h = harness();
     const result = await dispatchDueSourceCrawls(h.options, h.dependencies);

@@ -37,11 +37,17 @@ type Schedule = {
   updated_at?: Date | string | null;
 };
 type Schedules = {
-  get: (id: string) => Promise<Schedule | null>;
+  get: (
+    filter: { id: string },
+    options: { cache: false },
+  ) => Promise<Schedule | null>;
   list: (options: Record<string, unknown>) => Promise<Schedule[]>;
 };
 type Sources = {
-  get: (id: string) => Promise<Record<string, unknown> | null>;
+  get: (
+    id: string,
+    options: { cache: false },
+  ) => Promise<Record<string, unknown> | null>;
 };
 
 export interface SourceCrawlDispatchOptions {
@@ -245,7 +251,12 @@ export async function dispatchDueSourceCrawls(
     try {
       const initial = assertSchedule(candidate, operator, admitted, now);
       const accepted = await fence(async () => {
-        const current = await schedules.get(outcome.scheduleId);
+        // Native get(string) treats non-UUID identifiers as slugs. Legacy
+        // schedules retain text primary keys, so always select their exact ID.
+        const current = await schedules.get(
+          { id: outcome.scheduleId },
+          { cache: false },
+        );
         if (!current) throw new Error('Source schedule no longer exists.');
         if (
           instant(current.nextRun)?.getTime() !== initial.due.getTime() ||
@@ -259,7 +270,7 @@ export async function dispatchDueSourceCrawls(
           state.revision.getTime() !== initial.revision.getTime()
         )
           return null;
-        const source = await sources.get(outcome.sourceId);
+        const source = await sources.get(outcome.sourceId, { cache: false });
         if (!source) throw new Error('Admitted source not found.');
         assertActiveOperableRootSource(source);
         // Source is an installation-wide catalog; reject an explicit foreign
@@ -301,7 +312,10 @@ export async function dispatchDueSourceCrawls(
       }
       outcome.receipt = accepted;
       const advanced = await fence(async () => {
-        const current = await schedules.get(outcome.scheduleId);
+        const current = await schedules.get(
+          { id: outcome.scheduleId },
+          { cache: false },
+        );
         if (!current) return false;
         if (
           instant(current.nextRun)?.getTime() !== initial.due.getTime() ||
