@@ -94,3 +94,17 @@ All 19 matching atomic skill citations remained offered alongside 101 narrative
 citations; no matching skills were excluded. The private receipt preserves the
 per-requirement scope counters without exposing candidate text. Paid-result
 validation remains a separate checkpoint.
+
+The accounted v4 canary returned every expected answer but remained
+`needs_evidence`: no support predicate reached 0.85, and the completeness audit
+was uncertain. A separately governed, self-contained positive/negative literal
+calibration crossed the existing threshold only for the supported pair. The v5
+follow-up changes the shared support rule to explicitly bind each rN requirement
+and cN citation to its full state text and parent context. Confidence thresholds,
+semantic catalogs, offered-scope policy and decoder safeguards remain unchanged;
+v5 uses a new material identity and preserves the accounted v4 result.
+
+A fitting byte count alone is insufficient: a zero-offer requirement scope
+now rejects before governance/provider invocation. Useful-scope regressions
+assert explicit matching skill IDs and relevant profile/narrative source IDs for
+every requirement rather than imposing an arbitrary universal citation count.

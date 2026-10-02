@@ -634,6 +634,15 @@ describe('opportunity assessment contract', () => {
     expect(source.request.questions.r0_c200_supports?.type).toBe('predicate');
     expect(source.request.questions.r0_c199_supports).toBeUndefined();
     expect(source.request.questions.r0_candidate_source).toBeUndefined();
+    const state = source.request.state as {
+      requirementPolicy: { support: string };
+    };
+    expect(state.requirementPolicy.support).toContain(
+      'rN=requirements[key=rN]; cN=candidateEvidence[k=cN]',
+    );
+    expect(state.requirementPolicy.support).toContain(
+      'rN.text or postingEvidence[k=rN.postingKey].t',
+    );
     const answers = completeAnswers({});
     for (const index of requirements.keys()) {
       answers[`r${index}_importance`] = {

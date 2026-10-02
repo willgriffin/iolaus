@@ -24,7 +24,7 @@ const fixtures = vi.hoisted(() => {
           value: 'not_stated',
         },
       ],
-      contractVersion: 'opportunity-assessment/v4',
+      contractVersion: 'opportunity-assessment/v5',
       coverage: {},
       fingerprint: 'assessment-v1',
       postingMaterial: {
