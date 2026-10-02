@@ -228,6 +228,15 @@ describe('admin-resource-route', () => {
     mocks.createDraftApplicationForOpportunity.mockReset();
     mocks.createFactIntakeFromText.mockReset();
     mocks.collections.clear();
+    mocks.collections.set('CandidateProfile', {
+      get: vi.fn(async () => ({
+        active: true,
+        id: workspaceSubject.profileId,
+        ownerUserId: workspaceSubject.userId,
+        tenantId: workspaceSubject.tenantId,
+      })),
+      list: vi.fn(async () => []),
+    });
     mocks.deleteAdminRecord.mockReset();
     mocks.enqueueOpportunityIntelligence.mockReset();
     mocks.enqueueSourceCrawl.mockReset();
@@ -483,8 +492,14 @@ describe('admin-resource-route', () => {
   });
 
   it('runs draft application creation as the owner principal and audits it', async () => {
-    mocks.createDraftApplicationForOpportunity.mockResolvedValue({
-      id: 'app-1',
+    const { getCurrentWorkspaceSubject } = await import('./workspace-subject');
+    const { getCurrentTenant } = await import('@happyvertical/smrt-tenancy');
+    mocks.createDraftApplicationForOpportunity.mockImplementation(async () => {
+      expect(getCurrentWorkspaceSubject()).toEqual(workspaceSubject);
+      expect(getCurrentTenant()?.metadata?.workspaceSubject).toEqual(
+        workspaceSubject,
+      );
+      return { id: 'app-1' };
     });
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const { createDraftApplicationAction } = await import(
@@ -520,6 +535,46 @@ describe('admin-resource-route', () => {
     info.mockRestore();
   });
 
+  it.each([
+    { active: true, ownerUserId: 'foreign-owner', tenantId: 'tenant-1' },
+    { active: true, ownerUserId: 'user-1', tenantId: 'foreign-tenant' },
+    { active: false, ownerUserId: 'user-1', tenantId: 'tenant-1' },
+  ])('denies native draft after the selected profile changes ownership or active state: %j', async (profile) => {
+    mocks.collections.set('CandidateProfile', {
+      get: vi.fn(async () => ({ id: workspaceSubject.profileId, ...profile })),
+      list: vi.fn(async () => []),
+    });
+    const { createDraftApplicationAction } = await import(
+      './admin-resource-route'
+    );
+    await expect(
+      createDraftApplicationAction(
+        postForm('/admin/opportunities/opp-1', {
+          opportunityId: 'opp-1',
+          profileId: 'forged-profile',
+        }),
+        ownerLocals(),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.createDraftApplicationForOpportunity).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-active hook membership before entering the native draft workflow', async () => {
+    const { createDraftApplicationAction } = await import(
+      './admin-resource-route'
+    );
+    const locals = ownerLocals();
+    await expect(
+      createDraftApplicationAction(
+        postForm('/admin/opportunities/opp-1', { opportunityId: 'opp-1' }),
+        {
+          ...locals,
+          membership: { ...locals.membership, status: 'suspended' },
+        },
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.createDraftApplicationForOpportunity).not.toHaveBeenCalled();
+  });
   it('refuses draft application creation the owner principal lacks permission for', async () => {
     const { createDraftApplicationAction } = await import(
       './admin-resource-route'
@@ -898,6 +953,61 @@ describe('admin-resource-route', () => {
     expect(mocks.listOpportunityFilterOptions).not.toHaveBeenCalled();
     expect(mocks.listComboOptions).not.toHaveBeenCalled();
     expect(mocks.listReferenceOptions).not.toHaveBeenCalled();
+  });
+
+  it('retains normalized q in the same count, page and fingerprint query, and narrows rows', async () => {
+    const { getAdminResource } = await import('$lib/admin/resources');
+    const { loadAdminResourcePageData } = await import(
+      './admin-resource-route'
+    );
+    const records = [
+      { id: 'platform-role', title: 'Platform Engineer' },
+      { id: 'design-role', title: 'Product Designer' },
+    ];
+    const matching = (query: { search?: string }) =>
+      records.filter((record) =>
+        record.title.toLowerCase().includes((query.search ?? '').toLowerCase()),
+      );
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.countOpportunityRecords.mockImplementation(
+      async (query) => matching(query).length,
+    );
+    mocks.listOpportunityPageIds.mockImplementation(async (query) =>
+      matching(query).map(({ id }) => id),
+    );
+    mocks.listAdminRecords.mockImplementation(async (_resource, options) =>
+      records.filter(({ id }) => options.where['id in'].includes(id)),
+    );
+    const filtered = await loadAdminResourcePageData(
+      'opportunities',
+      new URL(
+        'http://localhost/admin/opportunities?review=all&q=%20Platform%20',
+      ),
+      workspaceSubject,
+    );
+    expect(filtered.records.map(({ id }) => id)).toEqual(['platform-role']);
+    expect(filtered.pagination.totalRecords).toBe(1);
+    const query = mocks.countOpportunityRecords.mock.calls[0]?.[0];
+    expect(query).toMatchObject({
+      search: 'Platform',
+      reviewFilter: 'all',
+      workspaceSubject,
+    });
+    expect(mocks.createOpportunityQueryFingerprint).toHaveBeenCalledWith(query);
+    expect(mocks.listOpportunityPageIds).toHaveBeenCalledWith({
+      ...query,
+      limit: 100,
+      offset: 0,
+    });
+    const unfiltered = await loadAdminResourcePageData(
+      'opportunities',
+      new URL('http://localhost/admin/opportunities?review=all'),
+      workspaceSubject,
+    );
+    expect(unfiltered.records).toHaveLength(2);
+    expect(unfiltered.pagination.totalRecords).toBe(2);
   });
 
   it('attaches only the verified workspace assessment projection', async () => {

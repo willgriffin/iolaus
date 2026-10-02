@@ -110,6 +110,7 @@ async function runOwnerMutation<T>(
   operations: AdminOperation | readonly AdminOperation[],
   fn: (user: AdminActor) => Promise<T>,
 ): Promise<T> {
+  const subject = workspaceSubjectFromLocals(locals);
   const required = Array.isArray(operations)
     ? (operations as readonly AdminOperation[])
     : [operations as AdminOperation];
@@ -120,7 +121,13 @@ async function runOwnerMutation<T>(
         for (const operation of required) {
           await run.assertOperation(operation.collection, operation.action);
         }
-        return await fn(locals.user);
+        // Native principal entry creates a fresh tenant context. Revalidate
+        // the hook-minted subject only after permission checks, then retain
+        // that exact profile scope through private service and audit writes.
+        return await withVerifiedWorkspaceSubject(
+          subject,
+          async () => await fn(locals.user),
+        );
       },
       {
         action: `admin.${action}`,
@@ -931,6 +938,7 @@ export async function loadAdminResourcePageData(
       candidateSkills,
       filters: opportunityFilters,
       reviewFilter,
+      search: (url.searchParams.get('q') ?? '').trim().slice(0, 200),
       ...(subject ? { workspaceSubject: subject } : {}),
     };
     const opportunityQueryFingerprint =
