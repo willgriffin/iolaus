@@ -43,6 +43,10 @@ IOLAUS_OIDC_SERVER_URL=https://identity.example.com
 IOLAUS_OIDC_ISSUER_MODE=realm
 IOLAUS_OIDC_REALM=career
 IOLAUS_OIDC_CLIENT_ID=career-hub
+# `private` is the backwards-compatible default. Set `shared` only when this
+# is a public multi-user installation: each verified account receives a
+# separate tenant and private workspace.
+IOLAUS_WORKSPACE_MODE=private
 IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
 DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
@@ -111,10 +115,12 @@ path. Record only its aggregate success in the cutover evidence; do not copy
 identity rows or sensitive values into a ticket, log, or repository.
 
 Every private administrative request requires an active user, tenant,
-membership, role, and resolved permissions. In a hosted profile the user's
-email must also still match `IOLAUS_OIDC_ADMIN_EMAILS`, so removing an address
-from that allowlist revokes existing browser and CLI sessions at their next
-protected request.
+membership, role, and resolved permissions. `IOLAUS_WORKSPACE_MODE=private`
+also requires the user's email to still match `IOLAUS_OIDC_ADMIN_EMAILS`, so
+removing an address from that allowlist revokes existing browser and CLI
+sessions at their next protected request. `shared` accepts verified OIDC
+identities and creates a separate tenant per user; it must not be enabled for
+an operator's existing single-workspace installation.
 
 Before a production cutover, the identity-provider operator must complete one
 synthetic-account authorization-code login against the isolated rehearsal

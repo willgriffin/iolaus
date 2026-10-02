@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   contextActive: false,
   ensureApplicationRuntimeReady: vi.fn(),
+  verifyWorkspaceSubject: vi.fn(),
   withBearerSessionContext: vi.fn(),
 }));
 
@@ -60,6 +61,10 @@ vi.mock('$lib/server/terminal-auth', () => ({
   withBearerSessionContext: mocks.withBearerSessionContext,
 }));
 
+vi.mock('$lib/server/workspace-subject', () => ({
+  verifyWorkspaceSubject: mocks.verifyWorkspaceSubject,
+}));
+
 function event(
   token: string | null = 'terminal-token',
   pathname = '/api/job-search/browse',
@@ -102,6 +107,7 @@ describe('server bearer-session handling', () => {
     vi.clearAllMocks();
     mocks.contextActive = false;
     mocks.ensureApplicationRuntimeReady.mockResolvedValue(undefined);
+    mocks.verifyWorkspaceSubject.mockResolvedValue(null);
   });
 
   it('does not block process startup on a pending provider readiness check', async () => {
@@ -175,6 +181,9 @@ describe('server bearer-session handling', () => {
       tenantId: 'tenant-1',
       user,
     });
+    expect(mocks.verifyWorkspaceSubject).toHaveBeenCalledWith(
+      requestEvent.locals,
+    );
     expect(resolve).toHaveBeenCalledOnce();
   });
 

@@ -8,6 +8,8 @@ import {
   canUseLocalDevLogin,
   getOidcAuth,
   getRuntimeCookieName,
+  hostedWorkspaceTenantSlug,
+  isAuthorizedHostedOidcUser,
   isAuthorizedOidcAdmin,
   shouldUseSecureCookies,
   tenantSlugsFor,
@@ -30,6 +32,7 @@ const authEnvNames = [
   'IOLAUS_OIDC_REALM',
   'IOLAUS_OIDC_SERVER_URL',
   'IOLAUS_PUBLIC_URL',
+  'IOLAUS_WORKSPACE_MODE',
   'SMRT_APP_ID',
   'SMRT_RUNTIME_PROFILE',
 ] as const;
@@ -158,6 +161,45 @@ describe('isAuthorizedOidcAdmin', () => {
         undefined,
       ),
     ).toBe(false);
+  });
+});
+
+describe('isAuthorizedHostedOidcUser', () => {
+  it('keeps the private hosted allowlist while shared hosted mode admits verified identities', () => {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://jobs.example.invalid';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.invalid';
+    process.env.IOLAUS_OIDC_REALM = 'career';
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'career-hub';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'owner@example.invalid';
+    delete process.env.IOLAUS_WORKSPACE_MODE;
+
+    expect(
+      isAuthorizedHostedOidcUser({
+        email: 'member@example.invalid',
+        email_verified: true,
+      }),
+    ).toBe(false);
+    process.env.IOLAUS_WORKSPACE_MODE = 'shared';
+    expect(
+      isAuthorizedHostedOidcUser({
+        email: 'member@example.invalid',
+        email_verified: true,
+      }),
+    ).toBe(true);
+    expect(
+      isAuthorizedHostedOidcUser({
+        email: 'member@example.invalid',
+        email_verified: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('derives a bounded non-PII tenant slug from the verified user id', () => {
+    expect(
+      hostedWorkspaceTenantSlug('11111111-1111-4111-8111-111111111111'),
+    ).toMatch(/^iolaus-user-[a-f0-9]{24}$/u);
   });
 });
 

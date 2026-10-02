@@ -9,6 +9,7 @@ import { getSmrtOptions } from '$lib/server/db';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
 import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
 import { withBearerSessionContext } from '$lib/server/terminal-auth';
+import { verifyWorkspaceSubject } from '$lib/server/workspace-subject';
 
 // Warm the published resume before the readiness probe passes, so a fresh
 // replica never serves a public request from a cold cache. Skipped during the
@@ -92,8 +93,15 @@ const bearerSessionHandler: Handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 
+/** Refresh tenant membership and permissions after either session mechanism. */
+const workspaceSubjectHandler: Handle = async ({ event, resolve }) => {
+  await verifyWorkspaceSubject(event.locals);
+  return resolve(event);
+};
+
 export const handle = sequence(
   sessionHandler as unknown as Handle,
   bearerSessionHandler,
+  workspaceSubjectHandler,
   authGuard,
 );

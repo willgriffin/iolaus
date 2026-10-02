@@ -1,9 +1,13 @@
 import type { SessionLocals } from '@happyvertical/smrt-users/sveltekit';
+import type { WorkspaceSubject } from '$lib/server/workspace-subject';
 
 declare global {
   namespace App {
     // interface Error {}
-    interface Locals extends SessionLocals {}
+    interface Locals extends SessionLocals {
+      /** Set only by the server hook after live membership verification. */
+      workspaceSubject?: WorkspaceSubject;
+    }
     // interface PageData {}
     // interface PageState {}
     // interface Platform {}

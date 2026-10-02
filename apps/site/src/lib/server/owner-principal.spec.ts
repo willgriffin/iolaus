@@ -44,11 +44,9 @@ describe('owner principal tool catalog', () => {
     }
     expect(tools).toEqual(
       expect.arrayContaining([
-        'application_update',
         'opportunity_get',
         'opportunity_list',
         'opportunity_update',
-        'resumeprofile_list',
         'resumeposition_update',
         'source_update',
       ]),

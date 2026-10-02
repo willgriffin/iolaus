@@ -10,6 +10,10 @@ import { OperationPermissionError, type User } from '@happyvertical/smrt-users';
 import { getAppConfig } from './app-config.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import { listOwnerToolNames } from './tool-catalog.js';
+import {
+  type WorkspaceSubject,
+  workspaceSubjectFromLocals,
+} from './workspace-subject.js';
 
 /**
  * Stable agent-class identifier recorded on every owner-principal audit entry.
@@ -24,6 +28,7 @@ export interface OwnerPrincipalLocals {
   permissions?: readonly string[] | null;
   tenantId?: string | null;
   user?: Pick<User, 'id'> | null;
+  workspaceSubject?: WorkspaceSubject;
 }
 
 export interface RunAsOwnerOptions {
@@ -65,10 +70,16 @@ export function ownerPrincipalBinding(
   locals: OwnerPrincipalLocals,
   allowedTools: string[],
 ): PrincipalBinding {
+  // When the hook supplied a workspace subject, bind the principal from that
+  // verified object rather than from any route/tool input. Lower-level unit
+  // callers without request locals retain the minimal explicit test contract.
+  const subject = locals.workspaceSubject
+    ? workspaceSubjectFromLocals(locals)
+    : null;
   return {
     allowedTools,
-    runAsUserId: requireOwnerUserId(locals),
-    tenantId: locals.tenantId ?? null,
+    runAsUserId: subject?.userId ?? requireOwnerUserId(locals),
+    tenantId: subject?.tenantId ?? locals.tenantId ?? null,
   };
 }
 
