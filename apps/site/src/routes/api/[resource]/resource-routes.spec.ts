@@ -291,16 +291,16 @@ describe('generic resource API routes', () => {
     }> = [
       {
         name: 'an anonymous private task list',
-        invoke: () =>
-          collectionGet({
+        invoke: async () =>
+          await collectionGet({
             params: { resource: 'tasks' },
             url: new URL('https://iolaus.localhost/api/tasks'),
           } as never),
       },
       {
         name: 'an authenticated application creation',
-        invoke: () =>
-          collectionPost({
+        invoke: async () =>
+          await collectionPost({
             locals: { user: { id: 'user-1' } },
             params: { resource: 'applications' },
             request: jsonRequest({ status: 'draft' }),
@@ -308,8 +308,8 @@ describe('generic resource API routes', () => {
       },
       {
         name: 'a forged profile ownership update',
-        invoke: () =>
-          itemPut({
+        invoke: async () =>
+          await itemPut({
             locals: { user: { id: 'user-1' } },
             params: { id: 'profile-2', resource: 'candidateprofiles' },
             request: jsonRequest({
@@ -321,8 +321,8 @@ describe('generic resource API routes', () => {
       },
       {
         name: 'a foreign score deletion',
-        invoke: () =>
-          itemDelete({
+        invoke: async () =>
+          await itemDelete({
             locals: { user: { id: 'user-1' } },
             params: { id: 'score-2', resource: 'evaluationscores' },
           } as never),
