@@ -1967,6 +1967,10 @@ async function generateApplicationPackageAfterPreflight(options: {
         tailoringName: tailoringOptions.tailoringName,
         tailoringSlug: tailoringOptions.tailoringSlug,
         targetOpportunityId: opportunityId,
+        targetSkillTerms: [
+          ...textList(opportunity.requiredSkills),
+          ...textList(opportunity.preferredSkills),
+        ].flatMap((term) => term.split(/[,\r\n]+/)),
         subject,
       });
       trackGeneratedMaterialAsset(

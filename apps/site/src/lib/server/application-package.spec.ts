@@ -1189,6 +1189,8 @@ describe('generateApplicationPackage', () => {
           companyId: 'company-1',
           id: 'opp-1',
           title: 'AI Engineer',
+          requiredSkills: 'TypeScript, Node.js\nCloud infrastructure',
+          preferredSkills: 'PostgreSQL',
         }),
       ]),
     );
@@ -1226,6 +1228,12 @@ describe('generateApplicationPackage', () => {
     expect(mocks.generateResumeAsset).toHaveBeenCalledWith(
       expect.objectContaining({
         targetOpportunityId: 'opp-1',
+        targetSkillTerms: [
+          'TypeScript',
+          ' Node.js',
+          'Cloud infrastructure',
+          'PostgreSQL',
+        ],
         tailoringName: 'AI Engineer resume variant',
       }),
     );

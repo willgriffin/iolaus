@@ -1,4 +1,10 @@
 import type { FilesystemInterface } from '@happyvertical/files';
+import {
+  applyTailoring,
+  type GenerateResumeArtifactsOptions,
+  type ResumeSource,
+  type TailoringConfig,
+} from '@willgriffin/iolaus-resume';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ensurePublishedResumePdf,
@@ -59,16 +65,18 @@ function collection(records: MockRecord[] = []) {
 
 const mocks = vi.hoisted(() => ({
   collections: new Map<string, ReturnType<typeof collection>>(),
-  generateResumeArtifacts: vi.fn(async () => ({
-    htmlPath: 'generated-resumes/created-2/resume.html',
-    markdownPath: 'generated-resumes/created-2/resume.md',
-    outputPrefix: 'resume.canonical',
-    pdfBasename: 'resume.pdf',
-    pdfPath: 'generated-resumes/created-2/resume.pdf',
-    slug: 'canonical',
-    source: {},
-    textPath: 'generated-resumes/created-2/resume.txt',
-  })),
+  generateResumeArtifacts: vi.fn(
+    async (_options?: GenerateResumeArtifactsOptions) => ({
+      htmlPath: 'generated-resumes/created-2/resume.html',
+      markdownPath: 'generated-resumes/created-2/resume.md',
+      outputPrefix: 'resume.canonical',
+      pdfBasename: 'resume.pdf',
+      pdfPath: 'generated-resumes/created-2/resume.pdf',
+      slug: 'canonical',
+      source: {},
+      textPath: 'generated-resumes/created-2/resume.txt',
+    }),
+  ),
   getDefaultPuppeteerExecutablePath: vi.fn(async () => undefined),
   getResumeFilesystem: vi.fn(async () => ({})),
   getResumeTailoringConfig: vi.fn(),
@@ -544,6 +552,171 @@ describe('generateResumeAsset canonical tailoring', () => {
         }),
       }),
     );
+  });
+});
+
+describe('target-aware truthful resume selection', () => {
+  const cases: Array<{
+    name: string;
+    terms: string[];
+    config: TailoringConfig;
+    expected: string;
+  }> = [
+    {
+      name: 'matching catalog label wins the cap',
+      terms: ['Node.js'],
+      config: {},
+      expected: 'Target evidence',
+    },
+    {
+      name: 'whole-word no-match keeps canonical order',
+      terms: ['RAG'],
+      config: {},
+      expected: 'General evidence',
+    },
+    {
+      name: 'explicit emphasis wins over posting',
+      terms: ['Node.js'],
+      config: { emphasizeTags: ['storage'] },
+      expected: 'Storage evidence',
+    },
+    {
+      name: 'explicit empty emphasis disables automatic order',
+      terms: ['Node.js'],
+      config: { emphasizeTags: [] },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored pinned evidence stays first',
+      terms: ['Node.js'],
+      config: {
+        pinnedAchievementTitles: {
+          role: ['General evidence'],
+          project: ['General evidence'],
+        },
+      },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored dropped target cannot return',
+      terms: ['Node.js'],
+      config: {
+        droppedAchievementTitles: {
+          role: ['Target evidence'],
+          project: ['Target evidence'],
+        },
+      },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored excluded target cannot return',
+      terms: ['Node.js'],
+      config: { excludeTags: ['backend-runtime'] },
+      expected: 'General evidence',
+    },
+  ];
+  it.each(cases)('$name', async ({ terms, config, expected }) => {
+    const achievements = [
+      {
+        title: 'General evidence',
+        body: 'Reviewed general outcome.',
+        tags: [],
+      },
+      {
+        title: 'Storage evidence',
+        body: 'Reviewed storage outcome.',
+        tags: ['storage'],
+      },
+      {
+        title: 'Target evidence',
+        body: 'Reviewed runtime outcome.',
+        tags: ['backend-runtime'],
+      },
+    ];
+    const source: ResumeSource = {
+      profile: {
+        name: 'Candidate',
+        email: '',
+        links: [],
+        title: 'Engineer',
+        summary: 'Reviewed profile.',
+      },
+      experience: {
+        education: [],
+        other: [],
+        positions: [
+          {
+            id: 'role',
+            role: 'Engineer',
+            company: 'Example',
+            start: '2020',
+            end: '2026',
+            achievements,
+            projects: [{ id: 'project', name: 'Project', achievements }],
+          },
+        ],
+      },
+      skills: {
+        skillGroups: [],
+        groups: [
+          {
+            id: 'software',
+            label: 'Software',
+            skills: [
+              { id: 'backend-runtime', label: 'Node.js' },
+              { id: 'storage', label: 'Storage' },
+            ],
+          },
+        ],
+      },
+    };
+    const originalSource = JSON.parse(JSON.stringify(source));
+    const baseConfig: TailoringConfig = {
+      maxAchievementsPerPosition: 1,
+      maxAchievementsPerProject: 1,
+      ...config,
+    };
+    const canonical = record({
+      id: 'owned-canonical',
+      configSlug: 'canonical',
+      configJson: JSON.stringify(baseConfig),
+      ...PRIVATE_OWNERSHIP,
+    });
+    mocks.collections.set('ResumeTailoringConfig', collection([canonical]));
+    mocks.collections.set('ResumeAsset', collection());
+    mocks.loadAdminResumeSource.mockResolvedValueOnce(source);
+    await generateResumeAsset({
+      applicationId: 'application',
+      subject: PRIVATE_SUBJECT,
+      targetOpportunityId: 'posting',
+      targetSkillTerms: terms,
+      filesystem: {} as FilesystemInterface,
+    });
+    const options = mocks.generateResumeArtifacts.mock.calls.at(-1)?.[0];
+    if (!options) throw new Error('Resume renderer was not reached.');
+    const tailored = applyTailoring(
+      options.source.profile,
+      options.source.experience,
+      options.source.skills,
+      options.tailoring,
+    );
+    expect(
+      tailored.experience.positions[0]?.achievements.map((item) => item.title),
+    ).toEqual([expected]);
+    expect(
+      tailored.experience.positions[0]?.projects?.[0]?.achievements.map(
+        (item) => item.title,
+      ),
+    ).toEqual([expected]);
+    expect(tailored.profile).toEqual(source.profile);
+    expect(source).toEqual(originalSource);
+    expect(canonical.configJson).toBe(JSON.stringify(baseConfig));
+    expect(canonical.save).not.toHaveBeenCalled();
+    if (Object.hasOwn(config, 'emphasizeTags'))
+      expect(options.tailoring?.emphasizeTags).toEqual(config.emphasizeTags);
+    else if (terms.includes('RAG'))
+      expect(options.tailoring).toEqual(baseConfig);
+    else expect(options.tailoring?.emphasizeTags).toEqual(['backend-runtime']);
   });
 });
 

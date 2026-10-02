@@ -3,7 +3,8 @@ import type { FilesystemInterface } from '@happyvertical/files';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
-import type { TailoringConfig } from '@willgriffin/iolaus-resume';
+import type { ResumeSource, TailoringConfig } from '@willgriffin/iolaus-resume';
+import { createCandidateSkillMatcher } from '$lib/skill-matching';
 import { isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
@@ -43,6 +44,8 @@ interface GenerateResumeAssetOptions {
   /** Required when this creates an application-owned private artifact. */
   subject?: WorkspaceSubject;
   targetOpportunityId?: string;
+  /** Extracted posting terms used only to prioritize existing candidate tags. */
+  targetSkillTerms?: readonly string[];
   tailoring?: TailoringConfig;
   tailoringId?: string;
   tailoringName?: string;
@@ -327,6 +330,33 @@ export function nextPublishedAssetStates(
     });
 }
 
+function withTargetSkillEmphasis(
+  source: ResumeSource,
+  config: TailoringConfig | undefined,
+  targetTerms: readonly string[] | undefined,
+): TailoringConfig | undefined {
+  // An explicit empty emphasis list is also an owner choice. Never replace
+  // authored overrides, exclusions, pins or content with inferred values.
+  if (!targetTerms?.length || Object.hasOwn(config ?? {}, 'emphasizeTags'))
+    return config;
+  const matchesTarget = createCandidateSkillMatcher(targetTerms);
+  const skills = source.skills.groups.flatMap((group) => group.skills);
+  const labelsById = new Map(skills.map((skill) => [skill.id, skill.label]));
+  const existingTags = new Set([
+    ...skills.map((skill) => skill.id),
+    ...source.experience.positions.flatMap((position) => [
+      ...position.achievements.flatMap((achievement) => achievement.tags),
+      ...(position.projects ?? []).flatMap((project) =>
+        project.achievements.flatMap((achievement) => achievement.tags),
+      ),
+    ]),
+  ]);
+  const emphasizeTags = [...existingTags].filter(
+    (tag) => matchesTarget(tag) || matchesTarget(labelsById.get(tag) ?? ''),
+  );
+  return emphasizeTags.length ? { ...config, emphasizeTags } : config;
+}
+
 export async function generateResumeAsset(
   options: GenerateResumeAssetOptions = {},
 ) {
@@ -348,9 +378,13 @@ export async function generateResumeAsset(
   if (options.tailoringId && !tailoringRecord) {
     error(404, 'Resume tailoring config not found.');
   }
-  const tailoring = options.tailoring
-    ? { ...(tailoringRecord?.config ?? {}), ...options.tailoring }
-    : tailoringRecord?.config;
+  const tailoring = withTargetSkillEmphasis(
+    source,
+    options.tailoring
+      ? { ...(tailoringRecord?.config ?? {}), ...options.tailoring }
+      : tailoringRecord?.config,
+    options.targetSkillTerms,
+  );
   const collection = await getCollection('ResumeAsset');
   const now = new Date();
   const title = titleForAsset(
