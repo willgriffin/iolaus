@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       "apps/*/src/**/*.{js,ts,tsx,jsx,svelte}",
+      "!apps/site/src/lib/components/mcp-apps/generated",
       "apps/site/scripts/db-doctor.ts",
       "apps/site/scripts/skill-matching-live.ts",
       "apps/site/scripts/db-export.ts",

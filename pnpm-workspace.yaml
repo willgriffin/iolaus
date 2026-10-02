@@ -6,6 +6,7 @@ packages:
 # Remove only after all dependents require a protected release directly.
 overrides:
   '@happyvertical/ai': 0.96.1
+  '@happyvertical/smrt-dev-mcp': file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz
 
 # pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
 # package.json (overrides, onlyBuiltDependencies) are no longer honored.
@@ -73,10 +74,13 @@ minimumReleaseAgeExclude:
   - '@happyvertical/sql'
   - '@happyvertical/spider'
   - '@happyvertical/utils'
-  - '@happyvertical/smrt-reports@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31'
-  - '@happyvertical/smrt-playbooks@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31'
-  - '@happyvertical/smrt-app-runtime@0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31'
-  - '@happyvertical/smrt-ledgers@0.51.31'
+  - '@happyvertical/smrt-reports@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0'
+  - '@happyvertical/smrt-playbooks@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0'
+  - '@happyvertical/smrt-app-runtime@0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0'
+  - '@happyvertical/smrt-ledgers@0.51.31 || 0.52.0'
+  - '@happyvertical/smrt-app-mcp@0.52.0'
+  - '@happyvertical/smrt-mcp-apps@0.52.0'
+  - '@happyvertical/smrt-mcp-openai@0.52.0'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4

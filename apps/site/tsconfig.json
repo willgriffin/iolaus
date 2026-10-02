@@ -12,5 +12,6 @@
     "strict": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
-  }
+  },
+  "exclude": ["src/lib/components/mcp-apps/generated/**"]
 }

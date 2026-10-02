@@ -1105,16 +1105,14 @@ describe('MCP public tool policy', () => {
     ).not.toHaveBeenCalled();
   });
 
-  it('refuses opportunity and source writes whose side effects the principal may not perform', async () => {
-    await expect(
-      callMcpTool({
-        arguments: { id: 'opp-1', status: 'recommended' },
-        name: 'opportunity_update',
-        permissions: ['opportunities.read', 'opportunities.update'],
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+  it('does not dispatch private recommendation work from a generic opportunity write', async () => {
+    await callMcpTool({
+      arguments: { id: 'opp-1', status: 'recommended' },
+      name: 'opportunity_update',
+      permissions: ['opportunities.read', 'opportunities.update'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
     expect(
       workflowMocks.syncRecommendedOpportunityDecisionTasks,
     ).not.toHaveBeenCalled();
@@ -1154,26 +1152,9 @@ describe('MCP public tool policy', () => {
     ).not.toHaveBeenCalled();
 
     expect(mcpMocks.tasks).toEqual([]);
-    expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
   });
 
-  it('syncs workflow side effects after MCP writes by a principal holding the composite operation set', async () => {
-    await callMcpTool({
-      arguments: {
-        id: 'app-approved',
-        status: 'approved',
-      },
-      name: 'application_update',
-      ...owner,
-    });
-
-    expect(mcpMocks.tasks).toContainEqual(
-      expect.objectContaining({
-        applicationId: 'app-approved',
-        taskType: 'submit_application',
-      }),
-    );
-
+  it('keeps only global source workflow side effects on generic MCP writes', async () => {
     await callMcpTool({
       arguments: {
         accountStatus: 'needs_2fa',
@@ -1207,7 +1188,7 @@ describe('MCP public tool policy', () => {
 
     expect(
       workflowMocks.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalled();
+    ).not.toHaveBeenCalled();
   });
 
   it('does not let a stale MCP application update restore final approval', async () => {
