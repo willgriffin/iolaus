@@ -1,6 +1,5 @@
 <script lang="ts">
 import { liveCollection } from '@happyvertical/smrt-svelte/web';
-import { getCollectionDefinition } from '@happyvertical/smrt-virt-web';
 import { createSmrtCollection } from '@happyvertical/smrt-web';
 import { onDestroy, onMount, untrack } from 'svelte';
 import { browser } from '$app/environment';
@@ -13,6 +12,7 @@ import type {
 } from '$lib/admin/resources';
 import type { OpportunityFilterOptions } from '$lib/opportunity-filters';
 import AdminResourcePage from './AdminResourcePage.svelte';
+import { getAdminResourceCollectionDefinition } from './admin-resource-definitions';
 import {
   ADMIN_RESOURCE_REFRESH_EVENT,
   type AdminResourceListPayload,
@@ -59,7 +59,7 @@ if (!isHydratedAdminResourceSlug(resourceSlug)) {
   throw new Error(`Unsupported hydrated admin resource: ${resourceSlug}`);
 }
 
-const resourceDefinition = getCollectionDefinition(resourceSlug);
+const resourceDefinition = getAdminResourceCollectionDefinition(resourceSlug);
 const initialSearch = untrack(() => page.url.search);
 const queryScope = adminResourceQueryScope(
   resourceSlug,
