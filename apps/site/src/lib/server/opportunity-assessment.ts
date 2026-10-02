@@ -149,7 +149,7 @@ const definitions: Record<AssessmentDimension, DimensionDefinition> = {
     scope: 'candidate',
     values: ['allowed', 'restricted', 'conditional', 'conflicting', 'unknown'],
     instructions: (candidate) =>
-      `Assess whether this posting explicitly permits work from the candidate's intended work country ${JSON.stringify(candidate.targetWorkCountry ?? null)}. Use allowed only for an explicit role-specific allowance, restricted only for an explicit role-specific restriction, and conditional only when the stated condition applies. Do not infer eligibility from citizenship, general company presence, or a mixed remote-country list.`,
+      `Assess whether this posting explicitly permits work from the candidate's intended work country ${JSON.stringify(candidate.targetWorkCountry ?? null)}. Use allowed for an explicit role-specific target-country listing, including a multi-country remote listing that includes the target. Use restricted only for an explicit role-specific restriction, and conditional only when the stated condition applies. A multi-country listing without the target does not make another country mandatory; it is unknown unless the posting says that country is required. Do not infer eligibility from citizenship or general company presence.`,
   },
   sponsorship: {
     scope: 'posting',

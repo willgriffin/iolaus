@@ -31,6 +31,7 @@ export { ExperienceTag } from './ExperienceTag.js';
 export { FactCandidate } from './FactCandidate.js';
 export { FactIntake } from './FactIntake.js';
 export { Opportunity } from './Opportunity.js';
+export { OpportunityAssessment } from './OpportunityAssessment.js';
 export { OpportunityCompany } from './OpportunityCompany.js';
 export { OpportunityIntelligenceControl } from './OpportunityIntelligenceControl.js';
 export { OpportunityIntelligenceRequest } from './OpportunityIntelligenceRequest.js';

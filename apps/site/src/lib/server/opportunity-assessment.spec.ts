@@ -118,6 +118,17 @@ function completeAnswers(values: Record<string, [string, string]>) {
 }
 
 describe('opportunity assessment contract', () => {
+  it('instructs JEV to treat an explicit target-country alternative as allowed', () => {
+    const question = prepared().request.questions.location_access_value;
+    expect(question?.type).toBe('choice');
+    expect(String(question?.instructions)).toContain(
+      'multi-country remote listing that includes the target',
+    );
+    expect(String(question?.instructions)).toContain(
+      'listing without the target does not make another country mandatory',
+    );
+  });
+
   it('keeps source-attributed posting facts separate from private compatibility', () => {
     const assessment = resolveOpportunityAssessment(
       prepared(),
