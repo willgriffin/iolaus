@@ -48,7 +48,11 @@ for (const key of required) {
 if (env.SMRT_RUNTIME_PROFILE !== 'self-hosted') {
   throw new Error('Daily-use runtime must use SMRT_RUNTIME_PROFILE=self-hosted.');
 }
-const databaseName = decodeURIComponent(new URL(env.DATABASE_URL).pathname.replace(/^\/+|\/+$/gu, ''));
+const databaseUrl = new URL(env.DATABASE_URL);
+for (const key of ['host', 'port', 'user', 'password']) {
+  if (databaseUrl.searchParams.has(key)) throw new Error(`DATABASE_URL must not override PostgreSQL ${key} through query parameters.`);
+}
+const databaseName = decodeURIComponent(databaseUrl.pathname.replace(/^\/+|\/+$/gu, ''));
 const databaseNamespace = env.SMRT_APP_ID.replaceAll('-', '_');
 if (databaseName !== databaseNamespace && !databaseName.startsWith(`${databaseNamespace}_`)) {
   throw new Error(`Daily-use PostgreSQL database must be named ${databaseNamespace} or begin with ${databaseNamespace}_.`);
@@ -61,12 +65,15 @@ env.PORT ||= '47292';
 env.SMRT_BACKGROUND_JOBS ||= 'false';
 env.TSX_TSCONFIG_PATH ||= join(root, 'apps', 'site', 'tsconfig.runtime.json');
 env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS = new URL(env.IOLAUS_PUBLIC_URL).hostname;
-const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseName, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
+const databaseTarget = `${databaseUrl.protocol}//${databaseUrl.username}@${databaseUrl.host}/${databaseName}`;
+const configuration = createHash('sha256').update(JSON.stringify({ appId: env.SMRT_APP_ID, profile: env.SMRT_RUNTIME_PROFILE, publicUrl: env.IOLAUS_PUBLIC_URL, database: databaseTarget, listener: `127.0.0.1:${env.PORT}`, assets: env.RESUME_FILES_CONFIG_JSON })).digest('hex');
 
 function record() {
   if (!existsSync(recordPath)) return null;
   const value = JSON.parse(readFileSync(recordPath, 'utf8'));
-  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string') return null;
+  if (!Number.isSafeInteger(value.pid) || typeof value.start !== 'string' || !value.start.trim()) {
+    throw new Error('Daily-use process record has no verifiable start time; retain it and inspect private state.');
+  }
   const check = spawnSync('ps', ['-p', String(value.pid), '-o', 'lstart=,command='], { encoding: 'utf8' });
   if (check.status !== 0) return null;
   if (!check.stdout.includes(value.start) || !check.stdout.includes('vite')) throw new Error('Daily-use process record does not identify the live process; retain it and inspect private state.');
@@ -76,10 +83,12 @@ function record() {
 
 async function ready(pid) {
   const url = `http://127.0.0.1:${env.PORT}/api/_runtime/health`;
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    try { const response = await fetch(url); if (response.status === 200) return; } catch {}
+  const deadline = performance.now() + 60_000;
+  while (performance.now() < deadline) {
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    try { const response = await fetch(url, { signal: AbortSignal.timeout(Math.min(1000, remaining)) }); if (response.status === 200) return; } catch {}
     try { process.kill(pid, 0); } catch { throw new Error('Daily-use Vite process exited before health became ready.'); }
-    await new Promise((done) => setTimeout(done, 250));
+    await new Promise((done) => setTimeout(done, Math.max(1, Math.min(250, deadline - performance.now()))));
   }
   throw new Error(`Daily-use Vite process did not become ready at ${url}.`);
 }
@@ -121,6 +130,7 @@ else if (command === 'status') {
   console.log(JSON.stringify({ status: current ? 'running' : 'stopped', pid: current?.pid ?? null, configuration: current ? configuration : null, secretValuesIncluded: false }));
 }
 else if (command === 'backup') {
+  if (databaseName !== env.IOLAUS_POSTGRES_DATABASE || databaseUrl.hostname !== '127.0.0.1' || databaseUrl.port !== (env.IOLAUS_POSTGRES_PORT || '54330')) throw new Error('Daily backup DATABASE_URL must identify the configured local Compose PostgreSQL database.');
   const stamp = new Date().toISOString().replaceAll(':', '-');
   const directory = resolve(env.IOLAUS_DAILY_BACKUP_DIR || '/Users/will/Work/willgriffin/local-ops/iolaus/backups', stamp);
   const partial = `${directory}.partial`;
