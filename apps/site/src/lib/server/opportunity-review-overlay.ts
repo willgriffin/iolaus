@@ -181,8 +181,9 @@ export async function loadCurrentOpportunityReviewOverlays({
 
   const records = await listPrivateRecords('Decision', verifiedSubject, {
     // SQL projections must use the same current-row definition:
-    // ORDER BY created_at DESC NULLS LAST, id DESC.
-    orderBy: 'created_at DESC, id DESC',
+    // ORDER BY created_at DESC NULLS LAST, id DESC. SMRT expects one native
+    // ordering clause per array entry, rather than a comma-delimited string.
+    orderBy: ['created_at DESC', 'id DESC'],
     where: { opportunityId: ids },
   });
   const byOpportunity = new Map<string, Record<string, unknown>>();
@@ -291,7 +292,7 @@ export async function listPrivateDecisionTags(input: {
     );
   }
   return await listPrivateRecords('DecisionTag', verifiedSubject, {
-    orderBy: 'created_at DESC, id DESC',
+    orderBy: ['created_at DESC', 'id DESC'],
     where: { decisionId },
   });
 }
