@@ -1,5 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const operatorMock = vi.hoisted(() => ({
+  subject: { tenantId: 'tenant-1', userId: 'user-1', profileId: 'profile-1' },
+  capture: vi.fn(() => ({
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+    profileId: 'profile-1',
+  })),
+}));
+vi.mock('./source-crawl-operator.js', () => ({
+  captureSourceCrawlOperator: () => operatorMock.capture(),
+}));
+vi.mock('./job-workspace-subject.js', () => ({
+  withRuntimeWorkspaceSubject: (args: Record<string, unknown>) => ({
+    ...args,
+    runtimeWorkspaceSubject: { ...operatorMock.subject },
+  }),
+  runtimeWorkspaceSubjectFromJobArgs: (args: Record<string, unknown>) => {
+    if (!args?.runtimeWorkspaceSubject) throw new Error('missing subject');
+    return args.runtimeWorkspaceSubject;
+  },
+}));
+
 const dbConfig = vi.hoisted(() => ({
   type: 'postgres' as 'postgres' | 'sqlite',
 }));
@@ -27,6 +49,20 @@ const SOURCE_ID = '11111111-1111-4111-8111-111111111111';
 const CHILD_ID = '22222222-2222-4222-8222-222222222222';
 
 function record(values: Record<string, unknown>) {
+  if (
+    values.objectType === '@willgriffin/iolaus-site:Source' &&
+    values.args &&
+    typeof values.args === 'object'
+  ) {
+    values = {
+      tenantId: 'tenant-1',
+      ...values,
+      args: {
+        runtimeWorkspaceSubject: { ...operatorMock.subject },
+        ...(values.args as Record<string, unknown>),
+      },
+    };
+  }
   return Object.assign(values, { save: vi.fn(async () => values) });
 }
 
@@ -91,6 +127,24 @@ function serializedSourceLock() {
 }
 
 describe('source WebMCP service', () => {
+  it('refuses an unverified operator or a caller user mismatch before touching persistence', async () => {
+    const db = database();
+    operatorMock.capture.mockImplementationOnce(() => {
+      throw new Error('verified operator required');
+    });
+    await expect(
+      enqueueRootSourceCrawl({}, { id: 'user-1' }, { database: db as never }),
+    ).rejects.toThrow('verified operator required');
+    await expect(
+      enqueueRootSourceCrawl(
+        {},
+        { id: 'foreign-user' },
+        { database: db as never },
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
   const root = record({
     id: SOURCE_ID,
     sourceRole: 'root',
@@ -107,6 +161,9 @@ describe('source WebMCP service', () => {
   beforeEach(() => {
     dbConfig.type = 'postgres';
     vi.clearAllMocks();
+    operatorMock.capture.mockImplementation(() => ({
+      ...operatorMock.subject,
+    }));
   });
   afterEach(() => vi.unstubAllEnvs());
 
@@ -461,6 +518,10 @@ describe('source WebMCP service', () => {
       reused: true,
     });
     expect(jobs.create).toHaveBeenCalledOnce();
+    expect(jobs.records[0]).toMatchObject({
+      tenantId: operatorMock.subject.tenantId,
+      args: { runtimeWorkspaceSubject: operatorMock.subject },
+    });
     expect(crawls.create).toHaveBeenCalledOnce();
     expect(crawls.records[0]).toMatchObject({
       intelligenceCallLimit: expect.any(Number),
@@ -470,6 +531,42 @@ describe('source WebMCP service', () => {
     expect(Number(crawls.records[0].intelligenceCallLimit)).toBeGreaterThan(0);
     expect(first.crawlId).toMatch(/^[0-9a-f-]{36}$/);
     expect(first.jobId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it.each([
+    'missing',
+    'tenant',
+    'user',
+    'profile',
+  ])('refuses reuse of a %s operator binding', async (mismatch) => {
+    const jobs = collection();
+    const dependencies = {
+      audit: vi.fn(),
+      crawlCollection: collection() as never,
+      database: database() as never,
+      jobCollection: jobs as never,
+      sourceCollection: collection([root]) as never,
+      sourceLock: serializedSourceLock(),
+    };
+    const input = {
+      sourceId: SOURCE_ID,
+      idempotencyKey: 'bound-operation-test',
+      reason: 'Bounded owner crawl',
+    };
+    await enqueueRootSourceCrawl(input, { id: 'user-1' }, dependencies);
+    const job = jobs.records[0];
+    const args = job.args as Record<string, unknown>;
+    if (mismatch === 'missing') delete args.runtimeWorkspaceSubject;
+    else if (mismatch === 'tenant') job.tenantId = 'foreign-tenant';
+    else
+      args.runtimeWorkspaceSubject = {
+        ...operatorMock.subject,
+        [mismatch === 'user' ? 'userId' : 'profileId']: 'foreign',
+      };
+    await expect(
+      enqueueRootSourceCrawl(input, { id: 'user-1' }, dependencies),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(jobs.create).toHaveBeenCalledOnce();
   });
 
   it('refuses another crawl while an ownerless nonterminal crawl needs reconciliation', async () => {

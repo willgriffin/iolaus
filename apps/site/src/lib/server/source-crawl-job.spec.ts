@@ -36,6 +36,65 @@ const summary = {
 };
 
 describe('runSourceCrawlJob', () => {
+  it('passes the native write fence through the crawler and caps bound intelligence at zero', async () => {
+    const source = {
+      id: 'source-1',
+      isActive: true,
+      sourceRole: 'root',
+      parentSourceId: null,
+      save: vi.fn(),
+    };
+    const writeFence = vi.fn(
+      async (work: () => Promise<unknown>) => await work(),
+    );
+    const crawlSource = vi.fn(async () => summary);
+    const syncSchedule = vi.fn();
+    const subject = {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    };
+    await runSourceCrawlJob(
+      source,
+      { runtimeWorkspaceSubject: subject },
+      undefined,
+      { crawlSource, syncSchedule, writeFence: writeFence as never },
+    );
+    expect(crawlSource).toHaveBeenCalledWith(
+      source,
+      expect.objectContaining({ intelligenceEnqueueCap: 0, writeFence }),
+    );
+    expect(writeFence).toHaveBeenCalledOnce();
+    expect(syncSchedule).toHaveBeenCalledWith(source, {
+      saveSource: false,
+      runtimeWorkspaceSubject: subject,
+    });
+    expect(source.save).toHaveBeenCalledOnce();
+  });
+
+  it('refuses source/schedule persistence when authority expires after provider work', async () => {
+    const source = {
+      id: 'source-1',
+      isActive: true,
+      sourceRole: 'root',
+      parentSourceId: null,
+      save: vi.fn(),
+    };
+    const syncSchedule = vi.fn();
+    const writeFence = vi.fn(async () => {
+      throw new Error('membership revoked');
+    });
+    await expect(
+      runSourceCrawlJob(source, {}, undefined, {
+        crawlSource: vi.fn(async () => summary),
+        syncSchedule,
+        writeFence: writeFence as never,
+      }),
+    ).rejects.toThrow('membership revoked');
+    expect(syncSchedule).not.toHaveBeenCalled();
+    expect(source.save).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     mocks.query.mockReset();
   });

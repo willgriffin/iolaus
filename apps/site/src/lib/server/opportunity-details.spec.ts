@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import vanta from './fixtures/ats/vanta-developer-experience.json';
 import {
   extractSkillListingsFromDescription,
   normalizeOpportunityLlmExtraction,
@@ -20,6 +21,69 @@ function htmlResponse(body: string): Response {
 }
 
 describe('resolveOpportunityDetails', () => {
+  it('loads the branded Dropbox posting from its primary Greenhouse board', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) =>
+      String(input).endsWith('/boards/dropbox')
+        ? jsonResponse({ name: 'Dropbox' })
+        : jsonResponse({
+            id: 8036650,
+            absolute_url:
+              'https://jobs.dropbox.com/listing/8036650?gh_jid=8036650',
+            title: 'Enterprise Context Architect',
+            location: { name: 'Remote - Canada: Select locations' },
+            content: '<p>Design enterprise context architecture.</p>',
+          }),
+    );
+    const result = await resolveOpportunityDetails(
+      { postingUrl: 'https://jobs.dropbox.com/listing/8036650?gh_jid=8036650' },
+      fetchMock,
+    );
+    expect(result).toMatchObject({
+      provider: 'greenhouse',
+      status: 'resolved',
+      companyName: 'Dropbox',
+      locations: ['Remote - Canada: Select locations'],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://boards-api.greenhouse.io/v1/boards/dropbox/jobs/8036650?content=true',
+    );
+  });
+
+  it('preserves explicit Vanta employer, all Canada eligibility locations, and structured annual pay', async () => {
+    const result = await resolveOpportunityDetails(
+      { postingUrl: vanta.sourceUrl },
+      async () =>
+        htmlResponse(
+          `<script>window.__appData = ${JSON.stringify({ organization: vanta.organization, posting: vanta.posting })}</script><script type="application/ld+json">${JSON.stringify(vanta.jobPosting)}</script>`,
+        ),
+    );
+    expect(result).toMatchObject({
+      companyName: 'Vanta',
+      companyWebsiteUrl: 'https://vanta.com',
+      locations: ['Remote U.S.', 'Remote - Canada', 'Canada', 'USA'],
+      salaryMin: 224000,
+      salaryMax: 263000,
+      currency: 'USD',
+      provider: 'ashby',
+      status: 'resolved',
+    });
+  });
+
+  it('does not invent an employer from posting prose or a board slug', async () => {
+    const result = await resolveOpportunityDetails(
+      { postingUrl: 'https://jobs.ashbyhq.com/ambiguous/id' },
+      async () =>
+        htmlResponse(
+          `<script>{"posting":{"id":"id","title":"Engineer","descriptionPlainText":"At Vanta, GitLab and Wealthsimple we work together.","locationName":"Remote","compensationTierSummary":"401(k) and 4 weeks vacation"}}</script>`,
+        ),
+    );
+    expect(result).toMatchObject({
+      companyName: '',
+      locations: ['Remote'],
+      salaryMin: null,
+      salaryMax: null,
+    });
+  });
   it('normalizes supported LLM extraction fields into opportunity updates', () => {
     expect(
       normalizeOpportunityLlmExtraction({

@@ -10,10 +10,12 @@ import {
   crawlOpportunitySource,
   SourceCrawlOwnershipError,
 } from './opportunity-source-crawler.js';
+import type { SourceCrawlWriteFence } from './source-crawl-operator.js';
 import { assertOperableRootSource } from './source-provenance.js';
 import {
   SOURCE_CRAWL_TIMEOUT_MS,
   type SourceCrawlJobArgs,
+  type SyncSourceScheduleOptions,
   syncSourceSchedule,
 } from './source-schedules.js';
 
@@ -25,13 +27,14 @@ interface CrawlableSourceRecord extends SourceLike {
 }
 
 export interface RunSourceCrawlJobDependencies {
+  writeFence?: SourceCrawlWriteFence;
   crawlSource?: (
     source: SourceLike,
     options?: CrawlOpportunitySourcesOptions,
   ) => Promise<CrawlOpportunitySourceSummary>;
   syncSchedule?: (
     source: CrawlableSourceRecord,
-    options?: { saveSource?: boolean },
+    options?: SyncSourceScheduleOptions,
   ) => Promise<unknown>;
   failRequestedCrawl?: (input: {
     error: Error;
@@ -85,6 +88,8 @@ export async function runSourceCrawlJob(
   const crawlSource = dependencies.crawlSource ?? crawlOpportunitySource;
   const syncSchedule = dependencies.syncSchedule ?? syncSourceSchedule;
   const limit = Number(args.limit);
+  const writeFence: SourceCrawlWriteFence =
+    dependencies.writeFence ?? (async (work) => await work());
 
   assertOperableRootSource(source);
 
@@ -111,14 +116,17 @@ export async function runSourceCrawlJob(
           'Source crawl refused without an exact worker job binding.',
         );
       }
-      const terminalized = await (
-        dependencies.failRequestedCrawl ?? failQueuedRequestedSourceCrawl
-      )({
-        error: refusal,
-        jobId,
-        sourceCrawlId,
-        sourceId: String(source.id ?? ''),
-      });
+      const terminalized = await writeFence(
+        async () =>
+          await (
+            dependencies.failRequestedCrawl ?? failQueuedRequestedSourceCrawl
+          )({
+            error: refusal,
+            jobId,
+            sourceCrawlId,
+            sourceId: String(source.id ?? ''),
+          }),
+      );
       if (!terminalized) {
         throw new Error(
           'Source crawl refusal could not terminalize the exact queued crawl.',
@@ -136,6 +144,8 @@ export async function runSourceCrawlJob(
   try {
     const summary = await crawlSource(source, {
       includeGeneric: args.includeGeneric !== false,
+      writeFence: dependencies.writeFence,
+      ...(args.runtimeWorkspaceSubject ? { intelligenceEnqueueCap: 0 } : {}),
       ...(jobId ? { jobId } : {}),
       ...(context?.job.attempt ? { jobAttempt: context.job.attempt } : {}),
       limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
@@ -143,8 +153,15 @@ export async function runSourceCrawlJob(
       signal: AbortSignal.timeout(SOURCE_CRAWL_TIMEOUT_MS),
     });
     source.lastCheckedAt = new Date();
-    await syncSchedule(source, { saveSource: false });
-    await source.save?.();
+    await writeFence(async () => {
+      await syncSchedule(source, {
+        saveSource: false,
+        ...(args.runtimeWorkspaceSubject
+          ? { runtimeWorkspaceSubject: args.runtimeWorkspaceSubject }
+          : {}),
+      });
+      await source.save?.();
+    });
 
     context?.logger?.info?.('Source crawl completed.', {
       candidates: summary.candidates,
@@ -170,8 +187,15 @@ export async function runSourceCrawlJob(
       throw error;
     }
     source.lastCheckedAt = new Date();
-    await syncSchedule(source, { saveSource: false });
-    await source.save?.();
+    await writeFence(async () => {
+      await syncSchedule(source, {
+        saveSource: false,
+        ...(args.runtimeWorkspaceSubject
+          ? { runtimeWorkspaceSubject: args.runtimeWorkspaceSubject }
+          : {}),
+      });
+      await source.save?.();
+    });
 
     context?.logger?.error?.('Source crawl failed.', {
       error: error instanceof Error ? error.message : String(error),

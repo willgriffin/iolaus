@@ -6,6 +6,12 @@ import {
   resolveOpportunityIntelligenceExtractionAiProfileClient,
 } from './ai-config.js';
 import { recordAgentAudit } from './application-workflow.js';
+import {
+  atsPostingLocations,
+  atsStructuredCompensation,
+  atsTextCompensation,
+  uniqueAtsLocations,
+} from './ats-posting-metadata.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
@@ -29,7 +35,11 @@ import {
   preparedPostingFactsAsOutput,
   prepareOpportunityPosting,
 } from './opportunity-posting-preparation.js';
-import { opportunityWithSourceContent } from './opportunity-source-content.js';
+import {
+  fingerprintOpportunitySourceContent,
+  opportunityWithSourceContent,
+  parseOpportunitySourceContent,
+} from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 
 type MutableRecord = Record<string, unknown> & {
@@ -93,6 +103,8 @@ interface UnresolvedOpportunityDetail extends BaseOpportunityDetailResult {
 
 interface ResolvedOpportunityDetail extends BaseOpportunityDetailResult {
   canonicalUrl: string;
+  companyName?: string;
+  companyWebsiteUrl?: string;
   compNotes?: string;
   descriptionRaw: string;
   employmentType?: string;
@@ -102,6 +114,7 @@ interface ResolvedOpportunityDetail extends BaseOpportunityDetailResult {
   hourlyMax?: number | null;
   hourlyMin?: number | null;
   locationNotes?: string;
+  locations?: string[];
   preferredSkills?: string;
   postedAt?: Date | null;
   qualifications?: string;
@@ -125,11 +138,13 @@ export interface LoadOpportunityDetailsOptions {
 }
 
 interface GreenhouseJob {
+  company_name?: string;
   absolute_url?: string;
   content?: string;
   first_published?: string;
   id?: number | string;
   location?: { name?: string };
+  offices?: Array<{ name?: string; location?: unknown }>;
   title?: string;
   updated_at?: string;
 }
@@ -138,6 +153,8 @@ interface AshbyBoardJob {
   employmentType?: string;
   id?: string;
   locationName?: string;
+  secondaryLocationNames?: string[];
+  locationAddress?: unknown;
   publishedDate?: string;
   title?: string;
   workplaceType?: string;
@@ -158,6 +175,7 @@ interface LeverPosting {
   categories?: {
     commitment?: string;
     location?: string;
+    allLocations?: string[];
   };
   createdAt?: number;
   description?: string;
@@ -167,6 +185,12 @@ interface LeverPosting {
   lists?: Array<{ content?: string; text?: string }>;
   text?: string;
   workplaceType?: string;
+  salaryRange?: {
+    currency?: string;
+    interval?: string;
+    min?: number;
+    max?: number;
+  };
 }
 
 interface FreelancerProjectSeoDocument {
@@ -186,7 +210,7 @@ interface FreelancerProjectSeoDocument {
 
 interface YcJobPostingSchema {
   '@type'?: string;
-  applicantLocationRequirements?: { name?: string };
+  applicantLocationRequirements?: { name?: string } | Array<{ name?: string }>;
   baseSalary?: {
     currency?: string;
     Value?: {
@@ -938,37 +962,6 @@ function compensationTextFromAshbyPosting(posting: AshbyPosting): string {
     .join('\n');
 }
 
-function currencyFromCompensationText(text: string): string {
-  if (/\bCAD\b|CA\$/i.test(text)) return 'CAD';
-  if (/\bUSD\b|US\$|\$/i.test(text)) return 'USD';
-  if (/\bGBP\b|£/i.test(text)) return 'GBP';
-  if (/\bEUR\b|€/i.test(text)) return 'EUR';
-  return '';
-}
-
-function parseCompensationNumber(value: string): number | null {
-  const cleaned = value.replace(/[$,£€]/g, '').trim();
-  if (!cleaned) return null;
-  const multiplier = /k$/i.test(cleaned) ? 1_000 : 1;
-  const numeric = Number(cleaned.replace(/k$/i, ''));
-  return Number.isFinite(numeric) ? numeric * multiplier : null;
-}
-
-function compensationRangeFromText(text: string): {
-  max: number | null;
-  min: number | null;
-} {
-  const matches = Array.from(text.matchAll(/[$£€]?\s*(\d[\d,]*(?:\.\d+)?k?)/gi))
-    .map((match) => parseCompensationNumber(match[1] ?? ''))
-    .filter((value): value is number => value !== null);
-  const realistic = matches.filter((value) => value >= 1);
-  if (realistic.length === 0) return { max: null, min: null };
-  return {
-    max: realistic.length > 1 ? Math.max(...realistic) : null,
-    min: Math.min(...realistic),
-  };
-}
-
 function percentRangeFromText(text: string): {
   max: number | null;
   min: number | null;
@@ -984,9 +977,12 @@ function percentRangeFromText(text: string): {
 }
 
 function ycNumberValue(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const parsed = Number(stringValue(value).replace(/[$,£€]/g, ''));
-  return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0)
+    return value;
+  const cleaned = stringValue(value).replace(/[$,£€]/g, '');
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function extractAshbyCompensation(
@@ -1002,16 +998,16 @@ function extractAshbyCompensation(
 > {
   const text = compensationTextFromAshbyPosting(posting);
   if (!text) return {};
-
-  const range = compensationRangeFromText(text);
-  const isHourly = /\b(hour|hourly|\/hr|\/hour)\b/i.test(text);
   return {
+    salaryMin: null,
+    salaryMax: null,
+    hourlyMin: null,
+    hourlyMax: null,
+    ...atsTextCompensation(
+      posting.scrapeableCompensationSalarySummary ||
+        posting.compensationTierSummary,
+    ),
     compNotes: text,
-    currency: currencyFromCompensationText(text),
-    hourlyMax: isHourly ? range.max : null,
-    hourlyMin: isHourly ? range.min : null,
-    salaryMax: isHourly ? null : range.max,
-    salaryMin: isHourly ? null : range.min,
   };
 }
 
@@ -1040,13 +1036,15 @@ function leverJobDetail(
   const canonicalUrl =
     stringValue(posting.hostedUrl) || canonicalLeverUrl(boardSlug, jobId);
   const descriptionRaw = leverDescriptionRaw(posting);
-  const locationNotes = stringValue(posting.categories?.location);
+  const locations = atsPostingLocations(posting);
+  const locationNotes = locations.join('; ');
   return {
     canonicalUrl,
     descriptionRaw,
     employmentType: employmentTypeFromValue(posting.categories?.commitment),
     externalId: stringValue(posting.id) || jobId,
     locationNotes,
+    locations,
     message: 'Loaded Lever posting details.',
     postedAt:
       typeof posting.createdAt === 'number'
@@ -1059,6 +1057,9 @@ function leverJobDetail(
     workMode: workModeFromValue(
       [posting.workplaceType, locationNotes, descriptionRaw].join(' '),
     ),
+    ...(posting.salaryRange
+      ? atsStructuredCompensation(posting.salaryRange)
+      : {}),
   };
 }
 
@@ -1138,6 +1139,7 @@ function knownGreenhouseBoardToken(url: URL): string {
   const brandedGreenhouseBoards: Record<string, string> = {
     'databricks.com': 'databricks',
     'www.databricks.com': 'databricks',
+    'jobs.dropbox.com': 'dropbox',
     'fivetran.com': 'fivetran',
     'www.fivetran.com': 'fivetran',
     'navan.com': 'tripactions',
@@ -1174,17 +1176,23 @@ function knownGreenhouseBoardToken(url: URL): string {
   return '';
 }
 
-function greenhouseJobDetail(job: GreenhouseJob): ResolvedOpportunityDetail {
+function greenhouseJobDetail(
+  job: GreenhouseJob,
+  companyName = '',
+): ResolvedOpportunityDetail {
   const descriptionRaw = htmlToPlainText(job.content);
-  const location = stringValue(job.location?.name);
+  const locations = atsPostingLocations(job);
+  const location = locations.join('; ');
   // Raw requirement bullets become qualifications; the LLM extract step turns
   // the posting into atomic skills + responsibilities + qualifications.
   const qualifications = qualificationsFromDescription(descriptionRaw);
   return {
     canonicalUrl: stringValue(job.absolute_url),
+    companyName: stringValue(job.company_name) || companyName,
     descriptionRaw,
     externalId: stringValue(job.id),
     locationNotes: location,
+    locations,
     message: 'Loaded Greenhouse posting details.',
     postedAt: parseDate(job.first_published),
     provider: 'greenhouse',
@@ -1193,6 +1201,21 @@ function greenhouseJobDetail(job: GreenhouseJob): ResolvedOpportunityDetail {
     title: displayTitle(job.title),
     workMode: workModeFromValue(location),
   };
+}
+
+async function greenhouseEmployer(
+  boardToken: string,
+  fetchImpl: FetchLike,
+): Promise<string> {
+  try {
+    const board = await fetchJson<{ name?: string }>(
+      fetchImpl,
+      `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}`,
+    );
+    return stringValue(board?.name);
+  } catch {
+    return '';
+  }
 }
 
 async function resolveGreenhouseBoard(
@@ -1222,7 +1245,11 @@ async function resolveGreenhouseBoard(
     (job) => normalizeTitle(job.title) === targetTitle,
   );
 
-  if (exactMatches.length === 1) return greenhouseJobDetail(exactMatches[0]);
+  if (exactMatches.length === 1)
+    return greenhouseJobDetail(
+      exactMatches[0],
+      await greenhouseEmployer(boardToken, fetchImpl),
+    );
 
   if (exactMatches.length > 1) {
     return {
@@ -1260,7 +1287,10 @@ async function resolveGreenhouseJob(
     `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}/jobs/${encodeURIComponent(jobToken)}?content=true`,
   );
   if (directJob?.id || directJob?.absolute_url) {
-    return greenhouseJobDetail(directJob);
+    return greenhouseJobDetail(
+      directJob,
+      await greenhouseEmployer(boardToken, fetchImpl),
+    );
   }
 
   const data = await fetchJson<{ jobs?: GreenhouseJob[] }>(
@@ -1274,7 +1304,11 @@ async function resolveGreenhouseJob(
     jobs.find((job) => stringValue(job.absolute_url).includes(jobToken)) ??
     jobs.find((job) => normalizeTitle(job.title) === targetTitle);
 
-  if (matched) return greenhouseJobDetail(matched);
+  if (matched)
+    return greenhouseJobDetail(
+      matched,
+      await greenhouseEmployer(boardToken, fetchImpl),
+    );
 
   return {
     candidates: candidatesFromGreenhouse(jobs),
@@ -1312,13 +1346,32 @@ async function resolveAshbyJob(
     stringValue(posting.descriptionPlainText) ||
     htmlToPlainText(posting.descriptionHtml);
   const qualifications = qualificationsFromDescription(descriptionRaw);
-  const compensation = extractAshbyCompensation(posting);
+  const structured = extractJsonLdJobPosting(html);
+  const organization = extractJsonValue<{
+    name?: string;
+    publicWebsite?: string;
+  }>(html, '"organization":', '{');
+  const compensation = {
+    ...extractAshbyCompensation(posting),
+    ...(structured?.baseSalary
+      ? atsStructuredCompensation(structured.baseSalary)
+      : {}),
+  };
+  const locations = uniqueAtsLocations([
+    ...atsPostingLocations(posting),
+    ...jsonLdApplicantLocations(structured),
+  ]);
   return {
     canonicalUrl,
+    companyName:
+      stringValue(structured?.hiringOrganization?.name) ||
+      stringValue(organization?.name),
+    companyWebsiteUrl: stringValue(organization?.publicWebsite),
     descriptionRaw,
     employmentType: employmentTypeFromValue(posting.employmentType),
     externalId: stringValue(posting.id),
-    locationNotes: stringValue(posting.locationName),
+    locationNotes: locations.join('; '),
+    locations,
     message: 'Loaded Ashby posting details.',
     postedAt: posting.publishedDate
       ? parseDate(`${posting.publishedDate}T00:00:00.000Z`)
@@ -1357,7 +1410,28 @@ async function resolveLeverJob(
       status: 'unsupported',
     };
   }
+  try {
+    const html = await fetchText(fetchImpl, detail.canonicalUrl);
+    const structured = html ? extractJsonLdJobPosting(html) : null;
+    detail.companyName = stringValue(structured?.hiringOrganization?.name);
+  } catch {
+    // Optional primary employer metadata must not discard usable posting content.
+  }
   return detail;
+}
+
+function jsonLdApplicantLocations(
+  posting: YcJobPostingSchema | null,
+): string[] {
+  const requirements = posting?.applicantLocationRequirements;
+  return uniqueAtsLocations(
+    (Array.isArray(requirements)
+      ? requirements
+      : requirements
+        ? [requirements]
+        : []
+    ).map((entry) => entry.name),
+  );
 }
 
 function canonicalYcUrl(companySlug: string, jobSlug: string): string {
@@ -1439,10 +1513,7 @@ function locationFromYcPosting(
         .join(', ');
     })
     .filter(Boolean);
-  const applicantCountry = stringValue(
-    posting.applicantLocationRequirements?.name,
-  );
-  if (applicantCountry && parts.length === 0) parts.push(applicantCountry);
+  if (parts.length === 0) parts.push(...jsonLdApplicantLocations(posting));
   return parts.join(' / ');
 }
 
@@ -2710,6 +2781,7 @@ export function applyResolvedOpportunityDetails(
 
   assignKnownText(opportunity, 'externalId', result.externalId);
   assignKnownText(opportunity, 'locationNotes', result.locationNotes);
+  if (result.locations) opportunity.locations = result.locations.join('\n');
   assignKnownText(opportunity, 'preferredSkills', result.preferredSkills);
   assignKnownText(opportunity, 'requiredSkills', result.requiredSkills);
   assignKnownText(opportunity, 'qualifications', result.qualifications);
@@ -3170,7 +3242,7 @@ export async function loadOpportunityDetails(
     'Opportunity',
     options.db ? { db: options.db } : undefined,
   );
-  const opportunity = (await collection.get(
+  let opportunity = (await collection.get(
     opportunityId,
   )) as unknown as MutableRecord | null;
   if (!opportunity) {
@@ -3181,25 +3253,143 @@ export async function loadOpportunityDetails(
     } satisfies OpportunityDetailResult;
   }
 
-  const result = await resolveOpportunityDetails(opportunity, fetchImpl);
-  if (result.status === 'resolved') {
-    const resolved = options.normalizeCanonicalUrl
-      ? {
-          ...result,
-          canonicalUrl: await options.normalizeCanonicalUrl(
-            result.canonicalUrl,
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await resolveOpportunityDetails(opportunity, fetchImpl);
+    if (result.status === 'resolved') {
+      const resolved = options.normalizeCanonicalUrl
+        ? {
+            ...result,
+            canonicalUrl: await options.normalizeCanonicalUrl(
+              result.canonicalUrl,
+            ),
+          }
+        : result;
+      // Defer the shared crawler helpers: details are also imported by that module.
+      const {
+        applyOpportunitySourceContent,
+        opportunitySourceFenceCriteria,
+        opportunitySourceUpdates,
+        resetOpportunityDerivedContent,
+        sourceContentForCandidate,
+        sourceContentForOpportunity,
+      } = await import('./opportunity-source-crawler.js');
+      const expectedFingerprint = stringValue(
+        opportunity.sourceContentFingerprint,
+      );
+      const expectedVersion = Math.max(
+        0,
+        Math.trunc(Number(opportunity.sourceContentVersion) || 0),
+      );
+      const content = sourceContentForCandidate(
+        {
+          postingUrl: resolved.canonicalUrl,
+          title: resolved.title ?? stringValue(opportunity.title),
+        },
+        resolved,
+        parseOpportunitySourceContent(opportunity.sourceContentJson) ??
+          sourceContentForOpportunity(opportunity),
+      );
+      const fingerprint = fingerprintOpportunitySourceContent(content);
+      const materiallyChanged =
+        (expectedFingerprint ||
+          fingerprintOpportunitySourceContent(
+            sourceContentForOpportunity(opportunity),
+          )) !== fingerprint;
+      const next = { ...opportunity };
+      applyResolvedOpportunityDetails(next, resolved);
+      if (materiallyChanged) resetOpportunityDerivedContent(next);
+      applyOpportunitySourceContent(next, content);
+      if (resolved.locations) next.locations = resolved.locations.join('\n');
+      next.sourceContentFingerprint = fingerprint;
+      next.sourceContentVersion =
+        expectedFingerprint && materiallyChanged
+          ? Math.max(1, expectedVersion) + 1
+          : Math.max(1, expectedVersion);
+      if (materiallyChanged) {
+        next.sourceIntelligenceJobId = '';
+        next.sourceIntelligenceStatus = 'pending';
+      }
+      if (!stringValue(next.companyId) && stringValue(resolved.companyName)) {
+        next.companyId = await ensureDetailCompany(resolved, options.db);
+      }
+      if (options.db) {
+        const updates = {
+          ...opportunitySourceUpdates(next, { materiallyChanged }),
+          locations: next.locations,
+          companyId: next.companyId,
+          descriptionSummary: next.descriptionSummary,
+        };
+        const { verifiedOpportunityEligibilityProjection } = await import(
+          './opportunity-eligibility-refresh.js'
+        );
+        Object.assign(updates, verifiedOpportunityEligibilityProjection(next));
+        const write = await options.db.update(
+          'opportunities',
+          opportunitySourceFenceCriteria(
+            opportunityId,
+            expectedFingerprint,
+            expectedVersion,
           ),
+          {
+            ...Object.fromEntries(
+              Object.entries(updates)
+                .filter(([, value]) => value !== undefined)
+                .map(([field, value]) => [snakeCaseField(field), value]),
+            ),
+            updated_at: new Date(),
+          },
+        );
+        if (write.affected === 0) {
+          opportunity = (await collection.get(
+            opportunityId,
+          )) as unknown as MutableRecord | null;
+          if (!opportunity)
+            throw new Error('Opportunity disappeared during detail refresh.');
+          continue;
         }
-      : result;
-    applyResolvedOpportunityDetails(opportunity, resolved);
-    await opportunity.save();
-    return resolved;
-  }
+        await bumpOpportunityChangeFeed(options.db, [opportunityId]);
+      } else {
+        Object.assign(opportunity, next);
+        await opportunity.save();
+      }
+      return resolved;
+    }
 
-  if (result.status === 'not_found') {
-    opportunity.freshness = 'stale';
-    await opportunity.save();
-  }
+    if (result.status === 'not_found') {
+      opportunity.freshness = 'stale';
+      await opportunity.save();
+    }
 
-  return result;
+    return result;
+  }
+  throw new Error(
+    'Opportunity source changed concurrently during detail refresh; retry the import.',
+  );
+}
+
+async function ensureDetailCompany(
+  detail: Extract<OpportunityDetailResult, { status: 'resolved' }>,
+  db: LoadOpportunityDetailsOptions['db'],
+): Promise<string> {
+  const name = stringValue(detail.companyName);
+  if (!name) return '';
+  const { companyKeyFromName } = await import(
+    './opportunity-source-crawler.js'
+  );
+  const companyKey = companyKeyFromName(name);
+  if (!companyKey) return '';
+  const companies = await getCollection('Company', db ? { db } : undefined);
+  const [existing] = await companies.list({ limit: 1, where: { companyKey } });
+  if (existing) return stringValue(existing.id);
+  const [named] = await companies.list({ limit: 1, where: { name } });
+  if (named) return stringValue(named.id);
+  const company = await companies.create({
+    name,
+    companyKey,
+    careersUrl: detail.canonicalUrl,
+    websiteUrl: detail.companyWebsiteUrl ?? '',
+    researchStatus: 'partial',
+  });
+  await company.save();
+  return stringValue(company.id);
 }

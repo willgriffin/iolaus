@@ -7,10 +7,17 @@ import {
   SmrtJobCollection,
   type SmrtJobData,
 } from '@happyvertical/smrt-jobs';
+import { getAppConfig } from './app-config.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
+import {
+  type RuntimeWorkspaceSubject,
+  withRuntimeWorkspaceSubject,
+} from './job-workspace-subject.js';
 import type { SourceLike } from './opportunity-source-crawler.js';
 import { getCollection } from './smrt.js';
+import { captureSourceCrawlOperator } from './source-crawl-operator.js';
 import { assertActiveOperableRootSource } from './source-provenance.js';
+import { getCurrentWorkspaceSubject } from './workspace-subject.js';
 
 export const SOURCE_JOB_OBJECT_TYPE = '@willgriffin/iolaus-site:Source';
 export const SOURCE_CRAWL_QUEUE = 'source-crawls';
@@ -44,6 +51,8 @@ export interface SyncSourceScheduleOptions {
   db?: SmrtDatabase;
   now?: Date;
   saveSource?: boolean;
+  /** Server-captured operator authority; never accepted from client input. */
+  runtimeWorkspaceSubject?: RuntimeWorkspaceSubject;
 }
 
 export interface SyncAllSourceSchedulesSummary {
@@ -63,7 +72,8 @@ export interface EnqueueSourceCrawlOptions {
   };
 }
 
-export interface SourceCrawlJobArgs {
+export interface SourceCrawlJobArgs extends Record<string, unknown> {
+  runtimeWorkspaceSubject?: RuntimeWorkspaceSubject;
   includeGeneric?: boolean;
   limit?: number;
   reason?: string;
@@ -167,6 +177,7 @@ export function nextRunForCron(cron: string, now = new Date()): Date {
 export function buildSourceSchedule(
   source: ScheduleSource,
   now = new Date(),
+  operator?: RuntimeWorkspaceSubject,
 ): SourceScheduleRecord | null {
   const sourceId = stringValue(source.id);
   if (!sourceId) return null;
@@ -178,7 +189,9 @@ export function buildSourceSchedule(
     ('parentSourceId' in source && Boolean(stringValue(source.parentSourceId)))
       ? null
       : cronForSourceCadence(source.refreshCadence, source);
-  const enabled = Boolean(cron);
+  const enabled =
+    Boolean(cron) &&
+    (getAppConfig().workspaceMode !== 'shared' || Boolean(operator));
 
   return {
     id: sourceScheduleId(sourceId),
@@ -187,8 +200,12 @@ export function buildSourceSchedule(
     cron,
     enabled,
     method: SOURCE_CRAWL_METHOD,
-    methodArgs: { includeGeneric: true, reason: 'scheduled' },
-    nextRun: cron ? nextRunForCron(cron, now) : null,
+    methodArgs: {
+      includeGeneric: true,
+      reason: 'scheduled',
+      ...(operator ? { runtimeWorkspaceSubject: operator } : {}),
+    },
+    nextRun: enabled && cron ? nextRunForCron(cron, now) : null,
     status: enabled ? 'active' : 'inactive',
   };
 }
@@ -235,7 +252,11 @@ export async function syncSourceSchedule(
   options: SyncSourceScheduleOptions = {},
 ): Promise<SourceScheduleRecord | null> {
   const db = options.db ?? (await resolveDatabase(getDbConfig()));
-  const schedule = buildSourceSchedule(source, options.now);
+  const schedule = buildSourceSchedule(
+    source,
+    options.now,
+    options.runtimeWorkspaceSubject,
+  );
   if (!schedule) return null;
 
   const schedules = await sourceSchedules(db);
@@ -254,6 +275,9 @@ export async function syncSourceSchedule(
     status: schedule.enabled ? 'active' : 'disabled',
     timeout: SOURCE_CRAWL_TIMEOUT_MS,
     timezone: 'UTC',
+    ...(options.runtimeWorkspaceSubject
+      ? { tenantId: options.runtimeWorkspaceSubject.tenantId }
+      : {}),
   });
 
   source.nextCheckAt = schedule.nextRun;
@@ -377,17 +401,31 @@ export async function enqueueSourceCrawl(
   if (!normalizedSourceId) throw new Error('Source id is required.');
   await assertSourceExists(normalizedSourceId, options);
 
+  const requestSubject = getCurrentWorkspaceSubject();
+  let jobArgs: SourceCrawlJobArgs = {
+    includeGeneric: true,
+    ...args,
+    reason: options.reason ?? args.reason ?? 'manual',
+  };
+  if (getAppConfig().workspaceMode === 'shared' || requestSubject) {
+    captureSourceCrawlOperator();
+    jobArgs = withRuntimeWorkspaceSubject(jobArgs);
+  } else if ('runtimeWorkspaceSubject' in args) {
+    throw new Error(
+      'Source crawl ownership must be captured from a verified operator.',
+    );
+  }
+
   const collection =
     options.collection ??
     (await SmrtJobCollection.create({
       ...getSmrtOptions(),
     }));
   const job = await collection.create({
-    args: {
-      includeGeneric: true,
-      ...args,
-      reason: options.reason ?? args.reason ?? 'manual',
-    },
+    args: jobArgs,
+    ...(jobArgs.runtimeWorkspaceSubject
+      ? { tenantId: jobArgs.runtimeWorkspaceSubject.tenantId }
+      : {}),
     // LLM-backed crawls are intentionally one-shot. Operators must inspect the
     // failed run and explicitly requeue it to incur another provider attempt.
     maxAttempts: 1,

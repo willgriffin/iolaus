@@ -1,6 +1,7 @@
 import type { Link, SpiderAdapter } from '@happyvertical/spider';
 import type { AdapterContext } from '@happyvertical/spider/platform';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import vanta from './fixtures/ats/vanta-developer-experience.json';
 import { fingerprintOpportunitySourceContent } from './opportunity-source-content';
 import {
   candidateMatchesSource,
@@ -41,6 +42,115 @@ import {
   resolveRootPosting,
   sourceIsCrawlable,
 } from './opportunity-source-crawler';
+
+describe('primary ATS source candidate metadata', () => {
+  it('preserves explicit Greenhouse board identity and all source locations', async () => {
+    const job = {
+      id: 8698314002,
+      title: 'Duo Chat Engineer',
+      absolute_url: 'https://job-boards.greenhouse.io/gitlab/jobs/8698314002',
+      content: '<p>Build developer tools.</p>',
+      location: { name: 'Remote, Canada' },
+      offices: [{ name: 'Remote, United States' }],
+    };
+    const candidates = await discoverGreenhouseCandidates(
+      { url: 'https://job-boards.greenhouse.io/gitlab' },
+      async (url) =>
+        new Response(
+          JSON.stringify(
+            String(url).endsWith('/boards/gitlab')
+              ? { name: 'GitLab' }
+              : { jobs: [job] },
+          ),
+        ),
+    );
+    expect(candidates[0]).toMatchObject({
+      companyName: 'GitLab',
+      locationNotes: 'Remote, Canada; Remote, United States',
+      rawJson: job,
+      resolvedDetail: {
+        companyName: 'GitLab',
+        locations: ['Remote, Canada', 'Remote, United States'],
+      },
+    });
+  });
+
+  it('retains public Ashby API secondary addresses, company and structured compensation', async () => {
+    const job = {
+      id: vanta.posting.id,
+      title: vanta.posting.title,
+      descriptionHtml: '<p>Build developer tools.</p>',
+      location: 'Remote U.S.',
+      secondaryLocations: [
+        {
+          location: 'Remote - Canada',
+          address: { postalAddress: { addressCountry: 'Canada' } },
+        },
+      ],
+      compensation: {
+        compensationTierSummary: vanta.posting.compensationTierSummary,
+        summaryComponents: [
+          {
+            compensationType: 'Salary',
+            interval: '1 YEAR',
+            currencyCode: 'USD',
+            minValue: 224000,
+            maxValue: 263000,
+          },
+        ],
+      },
+    };
+    const fetch = vi.fn(async (url: string | URL) =>
+      String(url).includes('api.ashbyhq.com')
+        ? new Response(JSON.stringify({ jobs: [job] }))
+        : new Response(`<script>{"organization":{"name":"Vanta"}}</script>`),
+    );
+    const candidates = await discoverAshbyCandidates(
+      { url: 'https://api.ashbyhq.com/posting-api/job-board/vanta' },
+      undefined,
+      fetch,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.ashbyhq.com/posting-api/job-board/vanta?includeCompensation=true',
+    );
+    expect(candidates[0]).toMatchObject({
+      companyName: 'Vanta',
+      locationNotes: 'Remote U.S.; Remote - Canada; Canada',
+      rawJson: job,
+      resolvedDetail: {
+        locations: ['Remote U.S.', 'Remote - Canada', 'Canada'],
+        salaryMin: 224000,
+        salaryMax: 263000,
+        currency: 'USD',
+      },
+    });
+  });
+
+  it('retains Lever allLocations and explicit primary board employer title', async () => {
+    const candidates = await discoverLeverCandidates(
+      { url: 'https://jobs.lever.co/example' },
+      async (url) =>
+        String(url).includes('api.lever.co')
+          ? new Response(
+              JSON.stringify([
+                {
+                  id: 'job',
+                  text: 'Engineer',
+                  categories: {
+                    location: 'New York',
+                    allLocations: ['New York', 'Toronto'],
+                  },
+                },
+              ]),
+            )
+          : new Response('<title>Example Corporation</title>'),
+    );
+    expect(candidates[0]).toMatchObject({
+      companyName: 'Example Corporation',
+      locationNotes: 'New York; Toronto',
+    });
+  });
+});
 
 function crawlOpportunitySource(
   source: Parameters<typeof crawlOpportunitySourceWithGuard>[0],
@@ -1268,7 +1378,7 @@ describe('opportunity source crawler discovery', () => {
 
     expect(spider.fetch).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.ashbyhq.com/posting-api/job-board/zapier',
+      'https://api.ashbyhq.com/posting-api/job-board/zapier?includeCompensation=true',
     );
     expect(candidates).toEqual([
       expect.objectContaining({
@@ -1317,7 +1427,7 @@ describe('opportunity source crawler discovery', () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.ashbyhq.com/posting-api/job-board/zapier',
+      'https://api.ashbyhq.com/posting-api/job-board/zapier?includeCompensation=true',
     );
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
@@ -3663,7 +3773,7 @@ describe('opportunity source crawler discovery', () => {
       domainTags: '',
       founderSignal: false,
       greenfieldSignal: false,
-      locations: '',
+      locations: 'Remote',
       qualifications: '',
       relocationSupported: false,
       roleTags: '',
@@ -4766,7 +4876,7 @@ describe('opportunity source crawler discovery', () => {
     } as unknown as SpiderAdapter;
     const fetchMock = vi.fn(async (input: string | URL) => {
       expect(String(input)).toBe(
-        'https://api.ashbyhq.com/posting-api/job-board/zapier',
+        'https://api.ashbyhq.com/posting-api/job-board/zapier?includeCompensation=true',
       );
       return jsonResponse({
         jobs: [
@@ -5816,7 +5926,7 @@ describe('job-board adapter engine', () => {
       { fetchImpl },
     );
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(candidates).toEqual([
       expect.objectContaining({
         postingUrl: 'https://boards.greenhouse.io/example/jobs/1',
