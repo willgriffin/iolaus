@@ -914,7 +914,7 @@ $effect(() => {
           to generate the packet or record a submission.
         </p>
       {/if}
-      <OpportunityWorkflowForms record={data.record} />
+      <OpportunityWorkflowForms record={data.record} flat />
       {#if opportunityFactIntakes.length > 0}
         <ul class="related-list">
           {#each opportunityFactIntakes as intake, index (intake.id ?? index)}
@@ -1509,11 +1509,12 @@ $effect(() => {
     top: 16px;
     display: grid;
     gap: 14px;
-    padding: 14px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 10px;
-    background: var(--smrt-color-surface-container-low);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.06);
+    padding: 0 0 0 20px;
+    border: 0;
+    border-left: 1px solid var(--smrt-color-outline-variant);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .opportunity-summary .summary-head {
@@ -1789,6 +1790,8 @@ $effect(() => {
       position: static;
       grid-column: 1;
       grid-row: auto;
+      padding: 0;
+      border-left: 0;
     }
   }
 
@@ -1962,7 +1965,40 @@ $effect(() => {
     color: var(--smrt-color-on-error-container);
   }
 
+  /* Opportunity detail uses an open reading column and section dividers. */
+  .record-view-page.is-opportunity > .panel {
+    max-width: none;
+  }
+
+  .record-view-page.is-opportunity > .workflow-panel {
+    padding: 20px 0 0;
+    border: 0;
+    border-top: 1px solid var(--smrt-color-outline-variant);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .record-view-page.is-opportunity .related-list {
+    gap: 0;
+  }
+
+  .record-view-page.is-opportunity .related-item {
+    padding: 12px 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .record-view-page.is-opportunity .related-item + .related-item {
+    border-top: 1px solid var(--smrt-color-outline-variant);
+  }
+
   @media (max-width: 720px) {
+    .record-view-page.is-opportunity .field-list > div {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+    }
+
     .grid-form {
       grid-template-columns: minmax(0, 1fr);
     }
