@@ -4,6 +4,7 @@ import {
   decideOpportunityEligibility,
   getOpportunityEligibility,
   opportunityEligibilityProjection,
+  POSTING_ELIGIBILITY_VERSION,
 } from './opportunity-eligibility.js';
 import { verifiedOpportunityEligibilityProjection } from './server/opportunity-eligibility-refresh.js';
 import { fingerprintOpportunitySourceContent } from './server/opportunity-source-content.js';
@@ -19,6 +20,82 @@ function record(descriptionRaw: string) {
   return { ...value, ...opportunityEligibilityProjection(value) };
 }
 describe('source-grounded posting eligibility', () => {
+  it.each([
+    'Partnering with your Executive Sponsor, you will provide transformation support.',
+    'Ensure the roadmap is aligned with your Executive Sponsor and business priorities.',
+    'We offer project sponsorship and provide executive support.',
+    'Event sponsorship is available for the annual technology conference.',
+    'Conference sponsors provide support for speakers and exhibitors.',
+    'Candidates with a work visa collaborate with an Executive Sponsor who provides guidance.',
+    'Candidates with a work permit can access event sponsorship opportunities.',
+  ])('does not treat business sponsorship as immigration evidence: %s', (description) => {
+    const result = getOpportunityEligibility(record(description));
+    expect(result.flags).toBe(32);
+    expect(
+      result.assertions.filter((assertion) =>
+        [
+          'sponsorship_offered',
+          'conditional_sponsorship',
+          'sponsorship_denied',
+        ].includes(assertion.kind),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    'We offer visa sponsorship.',
+    'Immigration sponsorship is available for this role.',
+    'We sponsor work visas for qualified candidates.',
+    'We provide work permit sponsorship.',
+    'Work visa sponsorship is supported.',
+  ])('preserves explicit immigration sponsorship: %s', (description) => {
+    const result = getOpportunityEligibility(record(description));
+    expect(result.flags).toBe(2);
+    expect(result.assertions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'sponsorship_offered',
+          excerpt: description,
+        }),
+      ]),
+    );
+  });
+
+  it('rejects an older parser payload and token-free refresh replaces its false sponsorship', () => {
+    const value = record('Your Executive Sponsor provides strategic support.');
+    const previous = {
+      version: 'posting-eligibility/v1',
+      sourceContentFingerprint: value.sourceContentFingerprint,
+      sourceContentVersion: value.sourceContentVersion,
+      assertions: [
+        { kind: 'sponsorship_offered', excerpt: value.descriptionRaw },
+      ],
+    };
+    const old = {
+      ...value,
+      postingEligibilityJson: JSON.stringify(previous),
+      eligibilityFlags: 2,
+    };
+    expect(getOpportunityEligibility(old)).toMatchObject({
+      status: 'invalid',
+      flags: 32,
+      assertions: [],
+    });
+    const refreshed = verifiedOpportunityEligibilityProjection(old);
+    expect(JSON.parse(refreshed.postingEligibilityJson)).toMatchObject({
+      version: POSTING_ELIGIBILITY_VERSION,
+      assertions: [],
+    });
+    expect(refreshed.eligibilitySourceFingerprint).toBe(
+      value.sourceContentFingerprint,
+    );
+    expect(refreshed.eligibilitySourceVersion).toBe(value.sourceContentVersion);
+    expect(getOpportunityEligibility({ ...old, ...refreshed })).toMatchObject({
+      status: 'current',
+      flags: 32,
+    });
+  });
+
   it.each([
     ['Remote, Canada; Remote, United States', 1],
     ['Remote, Canada; Remote, United Kingdom; Remote, United States', 1],

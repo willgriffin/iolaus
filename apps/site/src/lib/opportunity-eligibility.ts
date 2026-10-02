@@ -24,7 +24,7 @@ export const eligibilityBucketLabels: Record<EligibilityBucket, string> = {
   conflicting: 'Conflicting evidence',
   incompatible: 'Canada work location excluded',
 };
-export const POSTING_ELIGIBILITY_VERSION = 'posting-eligibility/v1';
+export const POSTING_ELIGIBILITY_VERSION = 'posting-eligibility/v2';
 export type EligibilityAssertionKind =
   | 'canada_supported'
   | 'worldwide_supported'
@@ -263,17 +263,30 @@ export function buildOpportunityEligibility(
         )
       )
         add('us_residence_required');
+      // A business, project, or event sponsor is not immigration evidence.
+      // Require sponsorship to be explicitly tied to a visa/work permit or
+      // immigration within this clause rather than inferring its meaning.
+      const sponsorshipClause = clause.replace(
+        /\b(?:executive|project|event|conference|business|customer|client)\s+sponsor(?:ship|s)?\b/gi,
+        'business_backer',
+      );
+      const immigrationTopic =
+        /\b(?:visas?|immigration|work permits?|work authori[sz]ation)\b/i.test(
+          sponsorshipClause,
+        );
       const visa =
-        /\b(?:visa|immigration|work permit|sponsor(?:ship)?)\b/i.test(clause);
+        /\b(?:visas?|immigration|work permits?|work authori[sz]ation)\b(?:[\s-]+[\w-]+){0,4}[\s-]+sponsor(?:ship|s)?\b|\bsponsor(?:ship|s)?\b(?:[\s-]+[\w-]+){0,4}[\s-]+(?:visas?|immigration|work permits?|work authori[sz]ation)\b/i.test(
+          sponsorshipClause,
+        );
       const denial =
         /\b(?:no|not|cannot|can't|unable|do not|don't|without|never)\b.{0,55}\b(?:sponsor|visa|work permit)|\b(?:sponsorship|visa)\b.{0,35}\b(?:not available|not provided|unavailable|not offered|denied|not supported)\b/i.test(
-          clause,
+          sponsorshipClause,
         );
       const offered =
-        /\b(?:offers?|offered|provides?|provided|available|supports?|sponsors?|consider(?:s|ed)?)\b/i.test(
+        /\b(?:offers?|offered|provides?|provided|available|support(?:s|ed)?|sponsors?|consider(?:s|ed)?)\b/i.test(
           clause,
         );
-      if (visa && denial) add('sponsorship_denied');
+      if (immigrationTopic && denial) add('sponsorship_denied');
       else if (visa && offered)
         add(
           sponsorCondition ? 'conditional_sponsorship' : 'sponsorship_offered',
