@@ -20,6 +20,75 @@ function record(descriptionRaw: string) {
 }
 describe('source-grounded posting eligibility', () => {
   it.each([
+    ['Remote, Canada; Remote, United States', 1],
+    ['Remote, Canada; Remote, United Kingdom; Remote, United States', 1],
+    ['Remote, United States', 12],
+    ['Remote, United States; Remote, United Kingdom', 32],
+    ['Remote, Ontario, Canada', 32],
+    ['Toronto, Canada', 32],
+    ['Canada', 32],
+    ['Our corporate office is in Canada', 32],
+    ['Remote, Canada; except Canada', 32],
+  ])('captured ATS role location %s yields %i', (locationNotes, flags) => {
+    const source = {
+      descriptionRaw: 'A fictional engineering role.',
+      locationNotes,
+    };
+    const value = {
+      sourceContentJson: JSON.stringify(source),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+      sourceContentVersion: 1,
+    };
+    const projection = verifiedOpportunityEligibilityProjection(value);
+    expect(getOpportunityEligibility({ ...value, ...projection }).flags).toBe(
+      flags,
+    );
+  });
+  it('retains structured source-field provenance and body contradictions dominate', () => {
+    const source = {
+      descriptionRaw:
+        'Applicants must already be authorized to work in the US.',
+      locationNotes: 'Remote, Canada; Remote, United States',
+    };
+    const value = {
+      sourceContentJson: JSON.stringify(source),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+      sourceContentVersion: 1,
+    };
+    const result = getOpportunityEligibility({
+      ...value,
+      ...verifiedOpportunityEligibilityProjection(value),
+    });
+    expect(result.flags).toBe(16);
+    expect(result.assertions[0]).toMatchObject({
+      sourceField: 'locationNotes',
+      excerpt: source.locationNotes,
+      method: 'explicit-source-location',
+    });
+    source.descriptionRaw = 'Remote worldwide, except Canada.';
+    const excluded = {
+      ...value,
+      sourceContentJson: JSON.stringify(source),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+    };
+    expect(
+      getOpportunityEligibility({
+        ...excluded,
+        ...verifiedOpportunityEligibilityProjection(excluded),
+      }).flags,
+    ).toBe(16);
+  });
+  it('never derives ATS location assertions from editable row location fields', () => {
+    const value = record('A fictional role.');
+    expect(
+      getOpportunityEligibility({
+        ...value,
+        locationNotes: 'Remote, Canada',
+        locations: 'Remote, Canada',
+      }).flags,
+    ).toBe(32);
+  });
+  it.each([
     ['This role is remote in Canada. We do not offer visa sponsorship.', 1],
     ['Candidates must be based in the US. Visa sponsorship is available.', 14],
     [
@@ -113,10 +182,43 @@ describe('source-grounded posting eligibility', () => {
       verifiedOpportunityEligibilityProjection(value).eligibilityFlags,
     ).toBe(32);
   });
-  it('does not publish a partial positive classification for overlong clauses', () => {
+  it('does not publish a partial positive classification for an oversized source', () => {
     const payload = buildOpportunityEligibility(
-      record(`This role is remote in Canada.\n${'x'.repeat(601)}`),
+      record(`This role is remote in Canada.\n${'x'.repeat(200_001)}`),
     );
     expect(decideOpportunityEligibility(payload).flags).toBe(32);
+  });
+  it.each([
+    ['A lengthy duties paragraph with no geography restrictions.', 1],
+    ['Applicants must reside in the United States.', 16],
+    ['Remote worldwide, except Canada.', 16],
+  ])('fully scans ordinary long posting paragraphs and late clause %s', (tail, flags) => {
+    const descriptionRaw =
+      Array.from(
+        { length: 106 },
+        () => 'General engineering duties, testing and collaboration.',
+      ).join('\n') +
+      '\n' +
+      'Additional engineering responsibilities and collaboration. '.repeat(
+        100,
+      ) +
+      tail;
+    const source = {
+      descriptionRaw,
+      locationNotes: 'Remote, Canada; Remote, United States',
+    };
+    const value = {
+      sourceContentJson: JSON.stringify(source),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+      sourceContentVersion: 1,
+    };
+    expect(descriptionRaw.length).toBeGreaterThan(11_000);
+    expect(descriptionRaw.split('\n')).toHaveLength(107);
+    expect(
+      getOpportunityEligibility({
+        ...value,
+        ...verifiedOpportunityEligibilityProjection(value),
+      }).flags,
+    ).toBe(flags);
   });
 });

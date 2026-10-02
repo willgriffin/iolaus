@@ -46,7 +46,8 @@ export interface EligibilityAssertion {
   sectionKind: string;
   sourceLineStart: number;
   sourceLineEnd: number;
-  method: 'explicit-posting-clause';
+  method: 'explicit-posting-clause' | 'explicit-source-location';
+  sourceField?: 'locationNotes';
   condition?: string;
 }
 export interface OpportunityEligibilityPayload {
@@ -137,6 +138,46 @@ export function buildOpportunityEligibility(
     return payload;
   const lines = sourceLines(record);
   if (lines.length > 2_000) return payload; // Never ignore a possible later contradiction.
+  const location = text(object(record.sourceContentJson)?.locationNotes);
+  // ATS role-location alternatives are geographic availability, not simultaneous requirements.
+  // A bare country/city or a derived Opportunity.locations value supplies no assertion.
+  const alternatives = location
+    .split(';')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const remoteCountries = alternatives.map((value) =>
+    /^remote\s*,\s*(Canada|United States|United Kingdom)\s*$/i
+      .exec(value)?.[1]
+      ?.toLowerCase(),
+  );
+  const addLocation = (kind: EligibilityAssertionKind) =>
+    payload.assertions.push({
+      kind,
+      excerpt: location,
+      sectionId: 'source-field:locationNotes',
+      sectionKind: 'location',
+      sourceField: 'locationNotes',
+      sourceLineStart: 0,
+      sourceLineEnd: 0,
+      method: 'explicit-source-location',
+    });
+  if (location.length <= 1_000 && alternatives.length <= 20) {
+    if (
+      /^remote\b/i.test(location) &&
+      CANADA.test(location) &&
+      PROVINCE.test(location)
+    )
+      addLocation('region_restricted');
+    else if (remoteCountries.includes('canada') && !QUALIFIER.test(location))
+      addLocation('canada_supported');
+    else if (remoteCountries.includes('canada'))
+      addLocation('conditional_geography');
+    else if (
+      remoteCountries.length > 0 &&
+      remoteCountries.every((country) => country === 'united states')
+    )
+      addLocation('us_residence_required');
+  }
   let sectionKind = 'summary';
   let sectionStart = 1;
   const seen = new Set<string>();
@@ -170,7 +211,7 @@ export function buildOpportunityEligibility(
     }
     if (sectionKind === 'boilerplate') continue;
     for (const clause of line.split(/(?<=[.!?;])\s+(?=[A-Z])/)) {
-      if (clause.length > 600) return { ...payload, assertions: [] }; // No partial positive scan.
+      // Scan every clause in full; the complete source is already bounded above.
       const add = (kind: EligibilityAssertionKind, condition?: string) => {
         const key = `${kind}:${index}:${clause}`;
         if (seen.has(key)) return;

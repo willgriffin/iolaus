@@ -8,10 +8,15 @@ while offering sponsorship. Canada eligibility describes the posting's stated
 work geography, not a candidate's legal authorization. EOR is retained as a
 separate fact and does not establish visa sponsorship.
 
-The initial classifier is deterministic and token-free. It scans complete
+The initial classifier is deterministic and token-free. It recognizes captured
+ATS role-location fields such as `Remote, Canada` and scans complete
 bounded captured source text for explicit posting clauses, stores exact excerpts
 and source lines, and withholds positives when geography or sponsorship facts
-conflict. Conditions and Canadian province restrictions remain uncertain when
+conflict. Semicolon-separated ATS locations are alternatives: Canada plus US
+supports Canada geography, while US plus UK does not require US residence.
+Bare country/city names and editable derived locations do not establish facts.
+Captured field assertions retain `sourceField: locationNotes` provenance.
+Conditions and Canadian province restrictions remain uncertain when
 candidate region is unknown. Benefits/company boilerplate does not establish
 role requirements. Historical scores and `visaOrEorPossible` do not establish
 eligibility; candidate `workAuthorization` is never a posting classification gate.

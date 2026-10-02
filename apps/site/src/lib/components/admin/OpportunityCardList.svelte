@@ -1079,6 +1079,9 @@ const resultCountLabel = $derived.by(() => {
                   {#each eligibility.assertions as assertion}
                     <li>
                       <strong>{humanize(assertion.kind)}</strong>: “{assertion.excerpt}”
+                      {#if assertion.sourceField}
+                        <span class="muted"> — Captured posting field: {assertion.sourceField}</span>
+                      {/if}
                     </li>
                   {/each}
                 </ul>
