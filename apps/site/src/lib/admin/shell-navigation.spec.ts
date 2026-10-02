@@ -9,12 +9,12 @@ describe('admin navigation responsive defaults', () => {
     expect(navigationStateForViewport(false)).toBe('collapsed');
   });
 
-  it('starts expanded at xl', () => {
-    expect(navigationStateForViewport(true)).toBe('expanded');
+  it('starts collapsed at xl', () => {
+    expect(navigationStateForViewport(true)).toBe('collapsed');
   });
 
-  it('starts expanded above xl', () => {
-    expect(navigationStateForViewport(true)).toBe('expanded');
+  it('starts collapsed above xl', () => {
+    expect(navigationStateForViewport(true)).toBe('collapsed');
   });
 
   it('recognizes a persisted explicit panel choice', () => {

@@ -7,7 +7,6 @@ import {
   AppScopePanel,
   createShellState,
   type ShellFocusTool,
-  type ShellNavItem,
   type ShellPanelDefaults,
   type ShellStatusChip,
   type ShellSystemPanel,
@@ -26,6 +25,7 @@ import Sun from '@lucide/svelte/icons/sun';
 import UserRound from '@lucide/svelte/icons/user-round';
 import { onMount, setContext, untrack } from 'svelte';
 import { page } from '$app/state';
+import { buildAdminNavigation } from '$lib/admin/category-navigation';
 import {
   ADMIN_DOCK_CONTEXT,
   type AdminDockApi,
@@ -53,17 +53,17 @@ const ADMIN_SHELL_STORAGE_KEY = 'iolaus.admin.shell';
 const ADMIN_SHELL_CONFIG = {
   top: {
     collapsedSize: '3.5rem',
-    expandedSize: '18rem',
+    expandedSize: 'min(18rem, calc(100vw - 1rem))',
     initial: 'collapsed',
     label: 'App',
     presentation: 'overlay',
   },
   left: {
     collapsedSize: '4.25rem',
-    expandedSize: '18rem',
+    expandedSize: 'min(18rem, calc(100vw - 1rem))',
     initial: 'collapsed',
     label: 'Navigation',
-    presentation: 'push',
+    presentation: 'overlay',
   },
   // Keep the demo focused on the primary workflow until the tool dock has
   // completed its QA pass. The shell treats `false` as a fully hidden edge.
@@ -185,47 +185,9 @@ const systemPanels = $derived<ShellSystemPanel[]>([
     ],
   },
 ]);
-const navItems = $derived<ShellNavItem[]>(
-  [
-    resourceItem('tasks'),
-    resourceItem('opportunities'),
-    resourceItem('applications'),
-    navGroup('Career', '/admin/resume', [
-      {
-        href: '/admin/resume',
-        icon: 'file-text',
-        label: 'Resume',
-      },
-      resourceItem('candidate-profiles', { label: 'Profiles' }),
-      resourceItem('candidate-profile-links'),
-      resourceItem('experience'),
-      resourceItem('education'),
-      resourceItem('companies'),
-      resourceItem('roles'),
-      resourceItem('skills'),
-      resourceItem('resume-assets'),
-      resourceItem('resume-tailoring-configs', { label: 'Tailoring configs' }),
-      resourceItem('fact-intakes', { label: 'Notes' }),
-    ]),
-    navGroup('Research', '/admin/sources', [
-      resourceItem('sources'),
-      resourceItem('company-research', { label: 'Companies' }),
-    ]),
-    navGroup('Memory', '/admin/facts', [
-      resourceItem('facts'),
-      resourceItem('fact-candidates', { label: 'Review queue' }),
-      resourceItem('decisions'),
-    ]),
-    navGroup('System', '/admin/preferences', [
-      resourceItem('preferences'),
-      resourceItem('agent-runs'),
-      resourceItem('evaluation-scores'),
-    ]),
-  ].filter((item): item is ShellNavItem => Boolean(item)),
-);
+const navItems = $derived(buildAdminNavigation(data.resources));
 
 const activeRouteAliases: Record<string, string[]> = {
-  '/admin/tasks': ['/admin'],
   '/admin/decisions': ['/admin/decision-tags'],
   '/admin/experience': [
     '/admin/experience-companies',
@@ -248,35 +210,6 @@ const activeRouteAliases: Record<string, string[]> = {
     '/admin/skill-group-members',
   ],
   '/admin/sources': ['/admin/source-tags'],
-};
-
-const resourceNavIcons: Record<string, string> = {
-  'agent-runs': 'bot',
-  applications: 'send',
-  companies: 'building',
-  'company-research': 'building',
-  decisions: 'gavel',
-  education: 'file-text',
-  'evaluation-scores': 'bar-chart',
-  experience: 'briefcase',
-  'fact-candidates': 'bot',
-  'fact-intakes': 'file-text',
-  facts: 'database',
-  opportunities: 'briefcase',
-  preferences: 'sliders',
-  roles: 'briefcase',
-  'resume-assets': 'file-text',
-  'resume-tailoring-configs': 'sliders',
-  skills: 'tag',
-  sources: 'rss',
-  tasks: 'check-square',
-};
-
-const navGroupIcons: Record<string, string> = {
-  Career: 'file-text',
-  Memory: 'database',
-  Research: 'rss',
-  System: 'sliders',
 };
 
 function setResourceContext(context: AdminResourceDockData | null): void {
@@ -379,14 +312,9 @@ function toggleTheme(): void {
 }
 
 function handleTenantNavigate(): void {
-  if (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(max-width: 48rem)').matches
-  ) {
-    // Closing after mobile navigation is automatic; do not turn it into a
-    // persisted preference that overrides the responsive default later.
-    adminShell.panels.left = 'collapsed';
-  }
+  // Navigation is an overlay at every width. Use the shell's native close
+  // action so its active overlay and focus state settle along with the panel.
+  adminShell.collapsePanel('left');
 }
 
 onMount(() => {
@@ -445,37 +373,6 @@ onMount(() => {
   };
 });
 
-function resourceItem(
-  slug: string,
-  overrides: Partial<ShellNavItem> = {},
-): ShellNavItem | null {
-  const resource = data.resources.find((item) => item.slug === slug);
-  if (!resource) return null;
-  return {
-    href: `/admin/${resource.slug}`,
-    icon: resourceNavIcons[resource.slug] ?? 'database',
-    label: resource.label,
-    ...overrides,
-  };
-}
-
-function navGroup(
-  label: string,
-  fallbackHref: string,
-  children: Array<ShellNavItem | null>,
-): ShellNavItem | null {
-  const visibleChildren = children.filter((item): item is ShellNavItem =>
-    Boolean(item),
-  );
-  if (visibleChildren.length === 0) return null;
-  return {
-    href: fallbackHref,
-    icon: navGroupIcons[label] ?? 'folder-tree',
-    label,
-    children: visibleChildren,
-  };
-}
-
 function resolveAdminBreadcrumbs(
   pathname: string,
   resources: Array<{ label: string; singularLabel: string; slug: string }>,
@@ -484,7 +381,7 @@ function resolveAdminBreadcrumbs(
   const parts = pathname.split('/').filter(Boolean);
   if (parts[0] !== 'admin') return [];
 
-  const crumbs: BreadcrumbItem[] = [{ href: '/admin/tasks', label: 'Admin' }];
+  const crumbs: BreadcrumbItem[] = [{ href: '/admin', label: 'Overview' }];
   const resourceSlug = parts[1];
   if (!resourceSlug) return crumbs;
 
@@ -558,7 +455,6 @@ function routeMatches(href: string, currentPath: string): boolean {
 
 function currentTenantHref(pathname: string): string {
   const path = normalizeRoutePath(pathname);
-  if (path === '/admin') return '/admin/tasks';
 
   for (const [canonical, aliases] of Object.entries(activeRouteAliases)) {
     if (aliases.some((alias) => routeMatches(alias, path))) return canonical;
@@ -578,7 +474,7 @@ function currentTenantHref(pathname: string): string {
       <button
         class="admin-icon-button"
         type="button"
-        aria-label={adminShell.panels.left === 'expanded' ? 'Collapse navigation' : 'Expand navigation'}
+        aria-label={adminShell.panels.left === 'expanded' ? 'Close navigation menu' : 'Open navigation menu'}
         aria-expanded={adminShell.panels.left === 'expanded'}
         aria-controls="admin-navigation"
         onclick={() => adminShell.togglePanel('left')}
@@ -825,7 +721,7 @@ function currentTenantHref(pathname: string): string {
   }
 
   :global(.smrt-admin-shell) {
-    --smrt-admin-shell-left-expanded: 18rem;
+    --smrt-admin-shell-left-expanded: min(18rem, calc(100vw - 1rem));
     --smrt-admin-shell-right-expanded: min(420px, 32vw);
   }
 
@@ -922,8 +818,8 @@ function currentTenantHref(pathname: string): string {
     flex: 0 0 auto;
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     padding: 0;
   }
 
@@ -1056,6 +952,7 @@ function currentTenantHref(pathname: string): string {
     align-content: start;
     gap: 14px;
     min-height: 100%;
+    min-width: 0;
     padding: 22px;
   }
 
