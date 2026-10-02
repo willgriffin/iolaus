@@ -5,8 +5,8 @@ import {
   getOpportunityEligibility,
   opportunityEligibilityProjection,
 } from './opportunity-eligibility.js';
-import { fingerprintOpportunitySourceContent } from './server/opportunity-source-content.js';
 import { verifiedOpportunityEligibilityProjection } from './server/opportunity-eligibility-refresh.js';
+import { fingerprintOpportunitySourceContent } from './server/opportunity-source-content.js';
 
 function record(descriptionRaw: string) {
   const source = { descriptionRaw };
