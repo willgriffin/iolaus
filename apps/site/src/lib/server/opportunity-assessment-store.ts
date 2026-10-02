@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import { candidateWorkEligibilityFromProfile } from './candidate-work-eligibility.js';
 import {
   type CandidateWorkEligibility,
+  OPPORTUNITY_ASSESSMENT_RANKING_VERSION,
   OPPORTUNITY_ASSESSMENT_VERSION,
   type OpportunityAssessmentPreference,
   type OpportunityAssessmentResult,
+  opportunityAssessmentMatchReadiness,
   rankOpportunityAssessment,
 } from './opportunity-assessment.js';
 import {
@@ -15,6 +17,12 @@ import {
 import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 
 export interface OpportunityAssessmentProjection {
+  coverage: {
+    candidateTruncated: boolean;
+    postingTruncated: boolean;
+    requirementCount: number;
+    requirementsTruncated: boolean;
+  };
   conflicting: boolean;
   eligibilityBucket:
     | 'eligible'
@@ -27,6 +35,7 @@ export interface OpportunityAssessmentProjection {
     | 'sponsorship_possible'
     | 'incompatible'
     | 'unknown';
+  matchReadiness: 'assessable' | 'needs_evidence' | 'needs_extraction';
   ranking: {
     eligibilityPriority: number;
     excluded: boolean;
@@ -56,6 +65,15 @@ function assessmentEligibilityBucket(
     default:
       return 'unknown';
   }
+}
+
+function assessmentMatchReadiness(
+  assessment: OpportunityAssessmentResult,
+): OpportunityAssessmentProjection['matchReadiness'] {
+  return opportunityAssessmentMatchReadiness({
+    coverage: assessment.coverage,
+    requirementCount: assessment.requirements.length,
+  });
 }
 
 /**
@@ -110,16 +128,29 @@ export function projectOpportunityAssessment(
   const conflicting = assessment.claims.some(
     (claim) => claim.value === 'conflicting',
   );
+  const matchReadiness = assessmentMatchReadiness(assessment);
   return {
+    coverage: {
+      candidateTruncated: assessment.coverage.candidateTruncated,
+      postingTruncated: assessment.coverage.postingTruncated,
+      requirementCount: assessment.requirements.length,
+      requirementsTruncated: assessment.coverage.requirementsTruncated,
+    },
     conflicting,
     eligibilityBucket: assessmentEligibilityBucket(assessment, candidate),
     personalEligibility: ranking.eligibility,
+    matchReadiness,
     ranking: {
       eligibilityPriority: ranking.eligibilityPriority,
       excluded: ranking.excluded,
       fitScore: ranking.fitScore,
     },
-    reason: ranking.reasons[0] ?? 'Assessment needs clarification',
+    reason:
+      matchReadiness === 'needs_extraction'
+        ? 'Needs structured role requirements before matching.'
+        : matchReadiness === 'needs_evidence'
+          ? 'Needs fuller posting or candidate evidence before matching.'
+          : (ranking.reasons[0] ?? 'Assessment needs clarification'),
     sourceStatus: 'current',
   };
 }
@@ -130,8 +161,9 @@ export function opportunityAssessmentPreferencesFingerprint(
 ): string {
   return createHash('sha256')
     .update(
-      JSON.stringify(
-        preferences
+      JSON.stringify({
+        rankingVersion: OPPORTUNITY_ASSESSMENT_RANKING_VERSION,
+        preferences: preferences
           .map((preference) => ({
             active: preference.active !== false,
             category: preference.category,
@@ -143,7 +175,7 @@ export function opportunityAssessmentPreferencesFingerprint(
           .sort((left, right) =>
             JSON.stringify(left).localeCompare(JSON.stringify(right)),
           ),
-      ),
+      }),
     )
     .digest('hex');
 }
@@ -210,6 +242,7 @@ export async function storeOpportunityAssessment(input: {
     eligibilityPriority: projection.ranking.eligibilityPriority,
     excluded: projection.ranking.excluded,
     fitScore: projection.ranking.fitScore,
+    matchReadiness: projection.matchReadiness,
     model: input.assessment.provenance?.model ?? '',
     opportunityId: input.opportunityId,
     projectionJson: JSON.stringify(projection),
@@ -298,6 +331,7 @@ export async function refreshOpportunityAssessmentProjections(input: {
       Number(row.eligibilityPriority) ===
         projection.ranking.eligibilityPriority &&
       Number(row.fitScore) === projection.ranking.fitScore &&
+      row.matchReadiness === projection.matchReadiness &&
       row.excluded === projection.ranking.excluded
     ) {
       continue;
@@ -313,6 +347,7 @@ export async function refreshOpportunityAssessmentProjections(input: {
     mutable.eligibilityPriority = projection.ranking.eligibilityPriority;
     mutable.excluded = projection.ranking.excluded;
     mutable.fitScore = projection.ranking.fitScore;
+    mutable.matchReadiness = projection.matchReadiness;
     mutable.preferencesFingerprint = preferencesFingerprint;
     mutable.projectionJson = nextJson;
     await mutable.save();

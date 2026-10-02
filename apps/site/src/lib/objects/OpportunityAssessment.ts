@@ -39,6 +39,9 @@ export class OpportunityAssessment extends SmrtObject {
   eligibilityPriority = 2;
   @field({ type: 'integer' })
   fitScore = 0;
+  /** Whether the stored evidence can support a meaningful match ranking. */
+  @field({ type: 'text' })
+  matchReadiness = 'needs_extraction';
   @field({ type: 'boolean' })
   excluded = false;
   @field({ type: 'text' })

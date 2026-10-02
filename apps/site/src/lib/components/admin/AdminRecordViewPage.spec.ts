@@ -74,6 +74,119 @@ function renderOpportunity(record: Record<string, unknown>) {
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('shows the current safe candidate assessment separately from earlier intelligence', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection: {
+        eligibilityBucket: 'sponsorship_possible',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 1, fitScore: 72 },
+        reason: 'Sponsorship possible; relevant technical experience.',
+        sourceStatus: 'current',
+      },
+      assessmentJson: 'RAW_ASSESSMENT_SECRET',
+      candidatePassages: 'PRIVATE_CANDIDATE_SECRET',
+    });
+
+    expect(body).toContain('aria-label="Your opportunity assessment"');
+    expect(body).toContain('>Current</strong>');
+    expect(body).toContain('Eligibility: Sponsorship possible');
+    expect(body).toContain('Match score: 72/100');
+    expect(body).toContain(
+      'Sponsorship possible; relevant technical experience.',
+    );
+    expect(body).toContain(
+      'Current for this posting and your selected candidate profile.',
+    );
+    expect(body).toContain('Earlier intelligence recommendation');
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).not.toContain('RAW_ASSESSMENT_SECRET');
+    expect(body).not.toContain('PRIVATE_CANDIDATE_SECRET');
+    const form = formMarkup(body, 'processOpportunity');
+    expect(form).toContain('name="opportunityId"');
+    expect(form).toContain('value="opp-1"');
+    expect(form).not.toContain('name="profileId"');
+  });
+
+  it.each([
+    {
+      matchReadiness: 'needs_extraction',
+      requirementCount: 0,
+      candidateTruncated: true,
+      postingTruncated: true,
+      requirementsTruncated: false,
+      messages: [
+        'No structured role requirements were extracted.',
+        'Candidate evidence was truncated.',
+        'Posting material was truncated.',
+      ],
+    },
+    {
+      matchReadiness: 'needs_evidence',
+      requirementCount: 4,
+      candidateTruncated: false,
+      postingTruncated: false,
+      requirementsTruncated: true,
+      messages: ['Role requirements were truncated.'],
+    },
+  ])('keeps eligibility visible and withholds match scores for incomplete coverage ($matchReadiness)', ({
+    matchReadiness,
+    messages,
+    ...coverage
+  }) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection: {
+        eligibilityBucket: 'unknown',
+        matchReadiness,
+        coverage,
+        ranking: { eligibilityPriority: 2, fitScore: 15 },
+        reason: 'Eligibility needs clarification',
+        sourceStatus: 'current',
+      },
+    });
+    expect(body).toContain('>Current</strong>');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).toContain('Eligibility needs clarification');
+    expect(body).toContain(
+      matchReadiness === 'needs_extraction'
+        ? 'Needs extraction'
+        : 'Needs evidence',
+    );
+    for (const message of messages) expect(body).toContain(message);
+    expect(body).not.toContain('Match score:');
+    expect(body).not.toContain('99/100');
+  });
+
+  it.each([
+    undefined,
+    { sourceStatus: 'stale', eligibilityBucket: 'eligible' },
+    { sourceStatus: 'current', eligibilityBucket: 'provider_new_value' },
+    {
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      ranking: { fitScore: '72' },
+    },
+  ])('shows unknown rather than a legacy score without a valid current assessment (%j)', (assessmentProjection) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection,
+    });
+    expect(body).toContain('>Unknown</strong>');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).toContain('No current assessment is available.');
+    expect(body).not.toContain('Match score:');
+  });
+
   it('renders uncertain evidence separately from confirmed gaps', () => {
     const { body } = renderOpportunity({
       id: 'opp-1',

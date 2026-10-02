@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES,
   OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
   type OpportunityAssessmentRequirement,
   type OpportunityAssessmentSource,
@@ -131,6 +132,12 @@ export function buildOpportunityAssessmentPostingInput(
   return { postingSources: sources, requirements };
 }
 
+export interface SelectedOpportunityAssessmentCandidateSources {
+  /** Any omitted or clipped private evidence prevents an absence-based gap. */
+  truncated: boolean;
+  sources: OpportunityAssessmentSource[];
+}
+
 export function normalizeOpportunityAssessmentCandidateSources(
   sources: Array<{ id: unknown; kind: unknown; text: unknown; title: unknown }>,
 ): OpportunityAssessmentSource[] {
@@ -142,6 +149,122 @@ export function normalizeOpportunityAssessmentCandidateSources(
       title: text(source.title) || 'Candidate evidence',
     }))
     .filter((source) => source.id && source.text);
+}
+
+function requirementTerms(
+  requirements: OpportunityAssessmentRequirement[],
+): Set<string> {
+  const terms = new Set<string>();
+  for (const requirement of requirements) {
+    for (const term of text(requirement.text)
+      .toLowerCase()
+      .match(/[a-z0-9+#.]{2,}/gu) ?? []) {
+      if (
+        ![
+          'and',
+          'for',
+          'the',
+          'with',
+          'using',
+          'years',
+          'year',
+          'experience',
+        ].includes(term)
+      ) {
+        terms.add(term);
+      }
+    }
+  }
+  return terms;
+}
+
+function sourceMatchesRequirement(
+  source: OpportunityAssessmentSource,
+  terms: Set<string>,
+): boolean {
+  if (terms.size === 0) return false;
+  const sourceTerms = new Set(
+    `${source.title} ${source.text}`.toLowerCase().match(/[a-z0-9+#.]{2,}/gu) ??
+      [],
+  );
+  return [...terms].some((term) => sourceTerms.has(term));
+}
+
+/**
+ * Selects exact, attributable candidate material for the bounded decision request.
+ * Roles and requirement-matching skills are retained before narrative evidence.
+ * Requirement terms guide priority only; they never prove that omitted resume
+ * material is irrelevant. Any omitted or clipped evidence remains explicit.
+ */
+export function selectOpportunityAssessmentCandidateSources(
+  sources: Array<{
+    id: unknown;
+    kind: unknown;
+    text: unknown;
+    title: unknown;
+  }>,
+  requirements: OpportunityAssessmentRequirement[],
+): SelectedOpportunityAssessmentCandidateSources {
+  const normalized = normalizeOpportunityAssessmentCandidateSources(sources);
+  const terms = requirementTerms(requirements);
+  const matches = (source: OpportunityAssessmentSource) =>
+    sourceMatchesRequirement(source, terms);
+  const selected: OpportunityAssessmentSource[] = [];
+  const included = new Set<string>();
+  const add = (source: OpportunityAssessmentSource) => {
+    if (
+      selected.length >= OPPORTUNITY_ASSESSMENT_MAX_CANDIDATE_SOURCES ||
+      included.has(source.id)
+    )
+      return;
+    included.add(source.id);
+    selected.push(source);
+  };
+  const isProfile = (source: OpportunityAssessmentSource) =>
+    source.kind === 'candidate_profile';
+  const isEmployment = (source: OpportunityAssessmentSource) =>
+    source.kind === 'employment';
+  const isRole = (source: OpportunityAssessmentSource) =>
+    isProfile(source) || isEmployment(source);
+  const isSkill = (source: OpportunityAssessmentSource) =>
+    source.kind === 'skill';
+  const addAtMost = (
+    candidates: OpportunityAssessmentSource[],
+    maximum: number,
+  ) => {
+    for (const source of candidates) {
+      if (selected.length >= maximum) break;
+      add(source);
+    }
+  };
+  // Reserve space for directly attributable skills. Long employment histories
+  // cannot crowd out the skills that a role actually asks us to assess.
+  normalized.filter(isProfile).forEach(add);
+  addAtMost(normalized.filter(isEmployment), 13);
+  // Then preserve every skill that can directly support an extracted requirement.
+  normalized
+    .filter((source) => isSkill(source) && matches(source))
+    .forEach(add);
+  // Relevant accomplishments before generic skills/narrative prevents a project flood.
+  normalized
+    .filter((source) => !isRole(source) && !isSkill(source) && matches(source))
+    .forEach(add);
+  normalized.filter(isSkill).forEach(add);
+  normalized
+    .filter((source) => !isRole(source) && !isSkill(source))
+    .forEach(add);
+
+  // Keyword matching prioritizes evidence; it cannot establish that a
+  // different accomplishment is irrelevant (for example leadership versus
+  // management). Retain the bounded selection but fail closed for coverage.
+  const omittedEvidence = normalized.some((source) => !included.has(source.id));
+  const clippedEvidence = selected.some(
+    (source) => source.text.length > OPPORTUNITY_ASSESSMENT_MAX_SOURCE_TEXT,
+  );
+  return {
+    sources: selected,
+    truncated: omittedEvidence || clippedEvidence,
+  };
 }
 
 /**

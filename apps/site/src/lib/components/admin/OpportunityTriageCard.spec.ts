@@ -21,6 +21,19 @@ describe('OpportunityTriageCard', () => {
       humanRating: 6,
       id: 'opp-1',
       latestScore: 87,
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 87 },
+        reason: 'Eligibility needs clarification',
+      },
       locations: 'Remote (US)',
       postingUrl: 'https://example.test/jobs/1',
       requiredSkills: 'Rust, Postgres',
@@ -45,6 +58,56 @@ describe('OpportunityTriageCard', () => {
     expect(body).not.toContain('>Apply</button>');
     expect(body).not.toContain('acceptOpportunity');
     expect(body).not.toContain('preflightOverrideReason');
+  });
+
+  it.each([
+    {
+      matchReadiness: 'needs_extraction',
+      requirementCount: 0,
+      postingTruncated: false,
+      label: 'Needs extraction',
+      message: 'No structured role requirements were extracted.',
+    },
+    {
+      matchReadiness: 'needs_evidence',
+      requirementCount: 4,
+      postingTruncated: true,
+      label: 'Needs evidence',
+      message: 'Posting material was truncated.',
+    },
+  ])('withholds sparse match scores in triage and keeps eligibility ($label)', ({
+    matchReadiness,
+    requirementCount,
+    postingTruncated,
+    label,
+    message,
+  }) => {
+    const { body } = renderCard({
+      id: 'opp-1',
+      title: 'Staff engineer',
+      latestScore: 99,
+      latestScoreSummary: 'Legacy poor fit assessment',
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness,
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated,
+          requirementsTruncated: false,
+          requirementCount,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 15 },
+        reason: 'Eligibility needs clarification',
+      },
+    });
+    expect(body).toContain(label);
+    expect(body).toContain(message);
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).toContain('Eligibility needs clarification');
+    expect(body).not.toContain('15/100');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('Legacy poor fit assessment');
   });
 
   it('hides the posting check and the rating: the verdict buttons carry both', () => {
@@ -85,7 +148,7 @@ describe('OpportunityTriageCard', () => {
     expect(body).toContain('Backend engineer');
     expect(body).toContain('Unknown company');
     expect(body).toContain('Location not stated');
-    expect(body).toContain('Not scored');
+    expect(body).toContain('Match assessment unavailable');
     expect(body).toContain('No summary captured yet.');
     // No posting URL means no dangling posting link.
     expect(body).not.toContain('View the posting');

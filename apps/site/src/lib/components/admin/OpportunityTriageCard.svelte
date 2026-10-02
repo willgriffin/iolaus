@@ -10,6 +10,12 @@ import {
   TRIAGE_SHORTCUTS,
   type TriageShortcutAction,
 } from '$lib/admin/triage-shortcuts';
+import {
+  assessmentCoverageMessages,
+  assessmentEligibilityLabels,
+  assessmentMatchReadinessLabel,
+  getOpportunityAssessmentProjection,
+} from '$lib/opportunity-assessment-projection';
 import { getNumber, getString, parseSkillList } from '$lib/opportunity-filters';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
 
@@ -70,10 +76,13 @@ const title = $derived(str('title') || 'Untitled opportunity');
 const company = $derived(str('companyName') || str('company'));
 const locations = $derived(str('locations') || str('locationNotes'));
 const postingUrl = $derived(str('postingUrl') || str('applyUrl'));
-const score = $derived(getNumber(record, 'latestScore'));
-const summary = $derived(
-  str('latestScoreSummary') || str('descriptionSummary'),
+const assessment = $derived(
+  getOpportunityAssessmentProjection(record.assessmentProjection),
 );
+const score = $derived(
+  assessment.matchReadiness === 'assessable' ? assessment.fitScore : null,
+);
+const summary = $derived(str('descriptionSummary'));
 const requiredSkills = $derived(parseSkillList(str('requiredSkills')));
 const preferredSkills = $derived(parseSkillList(str('preferredSkills')));
 const responsibilities = $derived(lineItems('responsibilities'));
@@ -126,9 +135,9 @@ const facts = $derived(
         <span><Building2 size={14} strokeWidth={2.2} /> {company || 'Unknown company'}</span>
         <span><MapPin size={14} strokeWidth={2.2} /> {locations || 'Location not stated'}</span>
         {#if score !== null}
-          <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}</span>
+          <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
-          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> Not scored</span>
+          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {assessmentMatchReadinessLabel(assessment)}</span>
         {/if}
       </p>
       {#if postingUrl}
@@ -149,6 +158,14 @@ const facts = $derived(
   </div>
 
   <aside class="card-aside" aria-label="Decision">
+    <section class="panel" aria-label="Your opportunity assessment">
+      <h3>Your opportunity assessment</h3>
+      <p>Eligibility: {assessmentEligibilityLabels[assessment.buckets[0]]}</p>
+      <p>{assessment.reason}</p>
+      {#each assessmentCoverageMessages(assessment) as message}
+        <p class="muted">{message}</p>
+      {/each}
+    </section>
     <section class="panel" aria-label="Facts">
       <h3>Facts</h3>
       {#if facts.length}

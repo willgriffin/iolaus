@@ -40,6 +40,66 @@ function renderList(
   });
 }
 
+describe('OpportunityCardList assessment readiness', () => {
+  it.each([
+    {
+      matchReadiness: 'assessable',
+      requirementCount: 4,
+      candidateTruncated: false,
+      label: '72/100',
+      message: '',
+    },
+    {
+      matchReadiness: 'needs_extraction',
+      requirementCount: 0,
+      candidateTruncated: false,
+      label: 'Needs extraction',
+      message: 'No structured role requirements were extracted.',
+    },
+    {
+      matchReadiness: 'needs_evidence',
+      requirementCount: 4,
+      candidateTruncated: true,
+      label: 'Needs evidence',
+      message: 'Candidate evidence was truncated.',
+    },
+  ])('shows $label from the safe assessment without using a legacy score', ({
+    matchReadiness,
+    requirementCount,
+    candidateTruncated,
+    label,
+    message,
+  }) => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'opp-1',
+          title: 'Staff engineer',
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness,
+            coverage: {
+              requirementCount,
+              candidateTruncated,
+              postingTruncated: false,
+              requirementsTruncated: false,
+            },
+            ranking: { eligibilityPriority: 2, fitScore: 72 },
+            reason: 'Eligibility needs clarification',
+          },
+        },
+      ],
+    });
+    expect(body).toContain(label);
+    if (message) expect(body).toContain(message);
+    expect(body).toContain('Unknown');
+    expect(body).not.toContain('99/100');
+    if (matchReadiness !== 'assessable') expect(body).not.toContain('72/100');
+  });
+});
+
 describe('OpportunityCardList triage', () => {
   it('opens the deck as a modal over the list rather than navigating away', () => {
     const { body } = renderList();

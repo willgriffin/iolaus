@@ -22,6 +22,18 @@ export const assessmentEligibilityLabels: Record<
 
 export type OpportunityAssessmentProjection = {
   buckets: AssessmentEligibilityBucket[];
+  sourceStatus: 'current' | 'unknown';
+  matchReadiness:
+    | 'assessable'
+    | 'needs_extraction'
+    | 'needs_evidence'
+    | 'unknown';
+  coverage: {
+    candidateTruncated: boolean;
+    postingTruncated: boolean;
+    requirementsTruncated: boolean;
+    requirementCount: number;
+  } | null;
   fitScore: number;
   eligibilityPriority: number;
   reason: string;
@@ -40,6 +52,9 @@ export function getOpportunityAssessmentProjection(
 ): OpportunityAssessmentProjection {
   const unknown: OpportunityAssessmentProjection = {
     buckets: ['unknown'],
+    sourceStatus: 'unknown',
+    matchReadiness: 'unknown',
+    coverage: null,
     eligibilityPriority: priority.unknown,
     fitScore: 0,
     reason: 'No current assessment is available.',
@@ -72,12 +87,99 @@ export function getOpportunityAssessmentProjection(
     !Number.isFinite(rank.eligibilityPriority)
   )
     return unknown;
+  const coverage = safeAssessmentCoverage(value.coverage);
+  const verifiedMatchReadiness = consistentAssessmentReadiness(
+    value.matchReadiness,
+    coverage,
+  );
   return {
     buckets: [bucket],
+    sourceStatus: 'current',
+    matchReadiness:
+      coverage &&
+      (value.matchReadiness === 'assessable' ||
+        value.matchReadiness === 'needs_extraction' ||
+        value.matchReadiness === 'needs_evidence')
+        ? verifiedMatchReadiness
+        : 'unknown',
+    coverage,
     eligibilityPriority: rank.eligibilityPriority,
     fitScore: rank.fitScore,
     reason: typeof value.reason === 'string' ? value.reason : '',
   };
+}
+
+function consistentAssessmentReadiness(
+  value: unknown,
+  coverage: OpportunityAssessmentProjection['coverage'],
+): OpportunityAssessmentProjection['matchReadiness'] {
+  if (!coverage) return 'unknown';
+  if (value === 'needs_extraction' || value === 'needs_evidence') return value;
+  if (
+    coverage.requirementCount === 0 ||
+    coverage.candidateTruncated ||
+    coverage.postingTruncated ||
+    coverage.requirementsTruncated
+  ) {
+    return 'unknown';
+  }
+  return value === 'assessable' ? value : 'unknown';
+}
+
+function safeAssessmentCoverage(
+  value: unknown,
+): OpportunityAssessmentProjection['coverage'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const coverage = value as Record<string, unknown>;
+  if (
+    typeof coverage.candidateTruncated !== 'boolean' ||
+    typeof coverage.postingTruncated !== 'boolean' ||
+    typeof coverage.requirementsTruncated !== 'boolean' ||
+    typeof coverage.requirementCount !== 'number' ||
+    !Number.isInteger(coverage.requirementCount) ||
+    coverage.requirementCount < 0
+  )
+    return null;
+  return {
+    candidateTruncated: coverage.candidateTruncated,
+    postingTruncated: coverage.postingTruncated,
+    requirementsTruncated: coverage.requirementsTruncated,
+    requirementCount: coverage.requirementCount,
+  };
+}
+
+export function assessmentMatchReadinessLabel(
+  projection: OpportunityAssessmentProjection,
+): string {
+  switch (projection.matchReadiness) {
+    case 'assessable':
+      return 'Match assessment ready';
+    case 'needs_extraction':
+      return 'Needs extraction';
+    case 'needs_evidence':
+      return 'Needs evidence';
+    default:
+      return 'Match assessment unavailable';
+  }
+}
+
+export function assessmentCoverageMessages(
+  projection: OpportunityAssessmentProjection,
+): string[] {
+  const coverage = projection.coverage;
+  if (!coverage) return [];
+  return [
+    ...(coverage.requirementCount === 0
+      ? ['No structured role requirements were extracted.']
+      : []),
+    ...(coverage.postingTruncated ? ['Posting material was truncated.'] : []),
+    ...(coverage.candidateTruncated
+      ? ['Candidate evidence was truncated.']
+      : []),
+    ...(coverage.requirementsTruncated
+      ? ['Role requirements were truncated.']
+      : []),
+  ];
 }
 
 export function matchesAssessmentEligibility(
@@ -99,6 +201,9 @@ export function compareAssessmentEligibility(
   const a = getOpportunityAssessmentProjection(left);
   const b = getOpportunityAssessmentProjection(right);
   return (
-    a.eligibilityPriority - b.eligibilityPriority || b.fitScore - a.fitScore
+    a.eligibilityPriority - b.eligibilityPriority ||
+    (a.matchReadiness === 'assessable' && b.matchReadiness === 'assessable'
+      ? b.fitScore - a.fitScore
+      : 0)
   );
 }

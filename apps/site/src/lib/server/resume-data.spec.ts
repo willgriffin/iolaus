@@ -1317,6 +1317,9 @@ describe('workspace candidate evidence', () => {
       true,
     );
     expect(first.evidence.some((item) => item.kind === 'skill')).toBe(true);
+    expect(first.evidence.some((item) => item.kind === 'employment')).toBe(
+      true,
+    );
     expect(second.fingerprint).toBe(first.fingerprint);
     expect(mocks.getPrivateRecord).toHaveBeenCalledWith(
       'CandidateProfile',

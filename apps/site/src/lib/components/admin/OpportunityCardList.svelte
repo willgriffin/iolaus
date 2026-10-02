@@ -29,7 +29,9 @@ import {
 } from '$lib/admin/triage-session';
 import {
   type AssessmentEligibilityBucket,
+  assessmentCoverageMessages,
   assessmentEligibilityLabels,
+  assessmentMatchReadinessLabel,
   getOpportunityAssessmentProjection,
 } from '$lib/opportunity-assessment-projection';
 import {
@@ -156,7 +158,7 @@ const tableColumns: DataTableColumn<AdminRecord>[] = [
   },
   {
     id: 'score',
-    label: 'AI score',
+    label: 'Match assessment',
     align: 'right',
     minWidth: '6rem',
     sortable: true,
@@ -659,8 +661,12 @@ function salaryLabel(record: AdminRecord): string {
 // Score only — the recommendation is still conveyed by the badge's tone color
 // (toneFor(latestRecommendation) on the badge) and by the status badge.
 function scoreLabel(record: AdminRecord): string {
-  const score = num(record, 'latestScore');
-  return score === null ? 'Unscored' : `${score}/100`;
+  const assessment = getOpportunityAssessmentProjection(
+    record.assessmentProjection,
+  );
+  return assessment.matchReadiness === 'assessable'
+    ? `${assessment.fitScore}/100`
+    : assessmentMatchReadinessLabel(assessment);
 }
 
 function eligibilityLabel(record: AdminRecord): string {
@@ -711,8 +717,12 @@ type HalfFill = 'empty' | 'mine' | 'yours' | 'both';
 
 // AI score (0–100) mapped onto the 0–10 star scale, rounded to half-star steps.
 function aiRatingTen(record: AdminRecord): number | null {
-  const score = num(record, 'latestScore');
-  return score === null ? null : Math.round(score / 10);
+  const assessment = getOpportunityAssessmentProjection(
+    record.assessmentProjection,
+  );
+  return assessment.matchReadiness === 'assessable'
+    ? Math.round(assessment.fitScore / 10)
+    : null;
 }
 
 // Who fills a given half-star point (1–10): the human rating (mine, blue), the
@@ -982,7 +992,7 @@ const resultCountLabel = $derived.by(() => {
     {:else if column.id === 'location'}
       <span class="table-meta"><MapPin size={13} strokeWidth={2.2} /> {locationLabel(record)}</span>
     {:else if column.id === 'score'}
-      <span class={`badge ${toneFor(str(record, 'latestRecommendation'))}`}>
+      <span class="badge neutral" title={assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
         <Sparkles size={12} strokeWidth={2.4} /> {scoreLabel(record)}
       </span>
     {:else if column.id === 'status'}
@@ -1026,23 +1036,23 @@ const resultCountLabel = $derived.by(() => {
 
             <section>
               <div class="section-head">
-                <h4><Sparkles size={13} strokeWidth={2.2} /> Intelligence summary</h4>
+                <h4><Sparkles size={13} strokeWidth={2.2} /> Assessment summary</h4>
                 <form use:enhance method="POST" action="?/processOpportunity" class="inline-form">
                   <input type="hidden" name="opportunityId" value={oppId} />
                   <button
                     type="submit"
                     class="refresh-btn"
-                    aria-label="Re-run intelligence"
-                    title="Re-run the AI intelligence pipeline (re-scores and re-summarizes this opportunity)"
+                    aria-label="Refresh assessment"
+                    title="Assess this posting for your selected candidate profile"
                   >
                     <RefreshCw size={14} strokeWidth={2.2} />
                   </button>
                 </form>
               </div>
-              {#if str(record, 'latestScoreSummary')}
-                <p class="summary">{str(record, 'latestScoreSummary')}</p>
+              {#if eligibility.sourceStatus === 'current'}
+                <p class="summary">{eligibility.reason}</p>
               {:else}
-                <p class="muted">Not yet scored — refresh to run the intelligence pipeline.</p>
+                <p class="muted">No current profile assessment is available — refresh to assess this posting.</p>
               {/if}
             </section>
 
@@ -1081,7 +1091,11 @@ const resultCountLabel = $derived.by(() => {
             <section>
               <h4>Eligibility for your work location</h4>
               <p class="summary">{eligibility.reason || eligibilityLabel(record)}</p>
-              {#if eligibility.buckets.includes('unknown')}
+              <p class="summary">{assessmentMatchReadinessLabel(eligibility)}</p>
+              {#each assessmentCoverageMessages(eligibility) as message}
+                <p class="muted">{message}</p>
+              {/each}
+              {#if eligibility.sourceStatus !== 'current'}
                 <p class="muted">No current profile assessment is available for this posting.</p>
               {/if}
             </section>

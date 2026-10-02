@@ -34,8 +34,8 @@ import { prepareOpportunityAssessment } from './opportunity-assessment.js';
 import { evaluateOpportunityAssessment } from './opportunity-assessment-decision-provider.js';
 import {
   buildOpportunityAssessmentPostingInput,
-  normalizeOpportunityAssessmentCandidateSources,
   opportunityAssessmentSubjectMaterialFingerprint,
+  selectOpportunityAssessmentCandidateSources,
 } from './opportunity-assessment-input.js';
 import {
   hasOpportunityAssessment,
@@ -1249,12 +1249,16 @@ async function runAssessment(
     const evidence = await loadWorkspaceCandidateEvidence(subject);
     const candidate = candidateWorkEligibilityFromProfile(evidence.candidate);
     const posting = buildOpportunityAssessmentPostingInput(opportunity);
+    const selectedCandidateSources =
+      selectOpportunityAssessmentCandidateSources(
+        evidence.evidence,
+        posting.requirements,
+      );
     const prepared = prepareOpportunityAssessment({
       candidate,
+      candidateCoverageTruncated: selectedCandidateSources.truncated,
       candidateMaterialFingerprint: evidence.fingerprint,
-      candidateSources: normalizeOpportunityAssessmentCandidateSources(
-        evidence.evidence,
-      ),
+      candidateSources: selectedCandidateSources.sources,
       postingMaterial: {
         sourceContentFingerprint: sourceFingerprint,
         sourceContentVersion: sourceVersion,

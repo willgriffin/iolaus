@@ -8,6 +8,9 @@ import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
  * employment-authorisation evidence.
  */
 export const OPPORTUNITY_ASSESSMENT_VERSION = 'opportunity-assessment/v1';
+/** Bump when deterministic local ranking semantics change. */
+export const OPPORTUNITY_ASSESSMENT_RANKING_VERSION =
+  'opportunity-assessment-ranking/v2';
 export const OPPORTUNITY_ASSESSMENT_CONFIDENCE = 0.85;
 /** Keeps one typed JEV request below the existing governed 64k input ceiling. */
 export const OPPORTUNITY_ASSESSMENT_MAX_POSTING_SOURCES = 30;
@@ -108,6 +111,26 @@ export interface OpportunityAssessmentResult {
   };
   provenance?: DecisionResult['provenance'];
   requirements: OpportunityAssessmentRequirementResult[];
+}
+
+export type OpportunityAssessmentMatchReadiness =
+  | 'assessable'
+  | 'needs_evidence'
+  | 'needs_extraction';
+
+/** Token-free readiness gate for a bounded prepared request or saved result. */
+export function opportunityAssessmentMatchReadiness(input: {
+  coverage: OpportunityAssessmentResult['coverage'];
+  requirementCount: number;
+}): OpportunityAssessmentMatchReadiness {
+  if (input.requirementCount === 0) return 'needs_extraction';
+  if (
+    input.coverage.candidateTruncated ||
+    input.coverage.postingTruncated ||
+    input.coverage.requirementsTruncated
+  )
+    return 'needs_evidence';
+  return 'assessable';
 }
 
 export interface PreparedOpportunityAssessment {
@@ -438,6 +461,7 @@ function requirementQuestions(
 /** Builds one bounded typed-decision call. Preference rules are intentionally absent. */
 export function prepareOpportunityAssessment(input: {
   candidate: CandidateWorkEligibility;
+  candidateCoverageTruncated?: boolean;
   candidateMaterialFingerprint: string;
   candidateSources: OpportunityAssessmentSource[];
   postingMaterial: OpportunityAssessmentResult['postingMaterial'];
@@ -507,7 +531,8 @@ export function prepareOpportunityAssessment(input: {
     },
   };
   const coverage = {
-    candidateTruncated: preparedCandidate.truncated,
+    candidateTruncated:
+      preparedCandidate.truncated || input.candidateCoverageTruncated === true,
     postingTruncated: preparedPosting.truncated,
     requirementsTruncated:
       requirements.length < validRequirements.length ||
@@ -871,11 +896,64 @@ export function rankOpportunityAssessment(
     eligible_without_sponsorship: [0, 60, 'Eligible without sponsorship'],
     sponsorship_possible: [1, 40, 'Sponsorship may be possible'],
     unknown: [2, 15, 'Eligibility needs clarification'],
-    incompatible: [3, -100, 'Posting and profile are incompatible'],
+    incompatible: [3, 0, 'Posting and profile are incompatible'],
   };
   let [eligibilityPriority, fitScore, firstReason] = base[eligibility];
   const reasons = [firstReason];
   let excluded = eligibility === 'incompatible';
+  const completeEvidence =
+    !assessment.coverage.candidateTruncated &&
+    !assessment.coverage.postingTruncated &&
+    !assessment.coverage.requirementsTruncated;
+  let required = 0;
+  let preferred = 0;
+  let supportedRequired = 0;
+  let supportedPreferred = 0;
+  let gapRequired = 0;
+  let gapPreferred = 0;
+  for (const requirement of assessment.requirements) {
+    if (requirement.importance === 'required') {
+      required += 1;
+      if (requirement.support === 'supported') supportedRequired += 1;
+      else if (completeEvidence && requirement.support === 'gap')
+        gapRequired += 1;
+    } else if (requirement.importance === 'preferred') {
+      preferred += 1;
+      if (requirement.support === 'supported') supportedPreferred += 1;
+      else if (completeEvidence && requirement.support === 'gap')
+        gapPreferred += 1;
+    }
+  }
+  const contribution = (count: number, total: number, maximum: number) =>
+    total === 0 ? 0 : Math.round((count / total) * maximum);
+  // Requirement count must not inflate fit: required evidence owns a fixed 30
+  // point share and preferred evidence a fixed 10 point share.
+  const requiredSupport = contribution(supportedRequired, required, 30);
+  const preferredSupport = contribution(supportedPreferred, preferred, 10);
+  const requiredGap = contribution(gapRequired, required, 30);
+  const preferredGap = contribution(gapPreferred, preferred, 10);
+  if (requiredSupport) {
+    fitScore += requiredSupport;
+    reasons.push(
+      `${supportedRequired}/${required} required matches: +${requiredSupport}`,
+    );
+  }
+  if (preferredSupport) {
+    fitScore += preferredSupport;
+    reasons.push(
+      `${supportedPreferred}/${preferred} preferred matches: +${preferredSupport}`,
+    );
+  }
+  if (requiredGap) {
+    fitScore -= requiredGap;
+    reasons.push(`${gapRequired}/${required} required gaps: -${requiredGap}`);
+  }
+  if (preferredGap) {
+    fitScore -= preferredGap;
+    reasons.push(
+      `${gapPreferred}/${preferred} preferred gaps: -${preferredGap}`,
+    );
+  }
   for (const rule of preferences.filter((rule) => rule.active !== false)) {
     const target = ruleTarget(rule);
     if (!target) continue;
@@ -898,7 +976,17 @@ export function rankOpportunityAssessment(
       );
     }
   }
-  return { excluded, fitScore, eligibility, eligibilityPriority, reasons };
+  const boundedFitScore = Math.max(0, Math.min(100, fitScore));
+  if (boundedFitScore !== fitScore) {
+    reasons.push(`Fit bounded to ${boundedFitScore}`);
+  }
+  return {
+    excluded,
+    fitScore: boundedFitScore,
+    eligibility,
+    eligibilityPriority,
+    reasons,
+  };
 }
 
 /** Model changes invalidate a cached decision; preference changes intentionally do not. */

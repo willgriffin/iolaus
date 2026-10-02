@@ -15,6 +15,12 @@ import { notifyOpportunityListChanged } from '$lib/admin/opportunity-list-refres
 import { displayFieldLabel, type ResourceField } from '$lib/admin/resources';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
 import { recommendationDecisionDefinitions } from '$lib/objects/workflow';
+import {
+  assessmentCoverageMessages,
+  assessmentEligibilityLabels,
+  assessmentMatchReadinessLabel,
+  getOpportunityAssessmentProjection,
+} from '$lib/opportunity-assessment-projection';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
@@ -114,6 +120,12 @@ const reviewHref = $derived(
     : '',
 );
 const isOpportunityRecord = $derived(data.resource.slug === 'opportunities');
+const assessmentProjection = $derived(
+  getOpportunityAssessmentProjection(data.record.assessmentProjection),
+);
+const hasCurrentAssessment = $derived(
+  assessmentProjection.sourceStatus === 'current',
+);
 const isCompanyRecord = $derived(data.resource.slug === 'companies');
 const isSourceRecord = $derived(data.resource.slug === 'sources');
 const isTaskRecord = $derived(data.resource.slug === 'tasks');
@@ -650,7 +662,7 @@ $effect(() => {
           use:enhance={enhanceOpportunityExtraction}
           onsubmit={() => {
             opportunityExtractionState = 'processing';
-            opportunityExtractionMessage = 'Queueing opportunity...';
+            opportunityExtractionMessage = 'Queueing assessment...';
           }}
         >
           <input type="hidden" name="opportunityId" value={data.record.id ?? ''} />
@@ -660,7 +672,7 @@ $effect(() => {
             disabled={opportunityExtractionState === 'processing'}
           >
             <Sparkles size={16} strokeWidth={2.2} />
-            <span>{opportunityExtractionState === 'processing' ? 'Processing' : 'Process'}</span>
+            <span>{opportunityExtractionState === 'processing' ? 'Queueing assessment' : 'Assess'}</span>
           </button>
         </form>
       {/if}
@@ -954,6 +966,30 @@ $effect(() => {
     {/if}
   {/if}
 
+  {#if isOpportunityRecord}
+    <section class="panel record-intelligence" aria-label="Your opportunity assessment">
+      <div class="intel-head">
+        <span class="field-kicker">Your opportunity assessment</span>
+        <strong>{hasCurrentAssessment ? 'Current' : 'Unknown'}</strong>
+      </div>
+      <div class="intelligence-meta">
+        <span>Eligibility: {assessmentEligibilityLabels[assessmentProjection.buckets[0]]}</span>
+        {#if assessmentProjection.matchReadiness === 'assessable'}
+          <span>Match score: {assessmentProjection.fitScore}/100</span>
+        {/if}
+      </div>
+      <p><strong>{assessmentMatchReadinessLabel(assessmentProjection)}</strong></p>
+      {#each assessmentCoverageMessages(assessmentProjection) as message}
+        <p>{message}</p>
+      {/each}
+      {#if hasCurrentAssessment && assessmentProjection.matchReadiness !== 'assessable'}
+        <p>A match score is not available until role requirements and evidence have sufficient coverage.</p>
+      {/if}
+      <p>{assessmentProjection.reason || 'Assessment needs clarification.'}</p>
+      <p>{hasCurrentAssessment ? 'Current for this posting and your selected candidate profile.' : 'Run Assess to assess this posting against your selected candidate profile.'}</p>
+    </section>
+  {/if}
+
   {#if descriptionFields.length > 0}
     <section class="panel description-section" aria-label="Description">
       {#each descriptionFields as field}
@@ -978,10 +1014,12 @@ $effect(() => {
     {@const runs = agentRunEntries()}
     <section class="panel record-intelligence" aria-label="Opportunity intelligence">
       <div class="intel-head">
-        <span class="field-kicker">Recommendation</span>
-        <strong>{latestScoreLabel()}</strong>
+        <span class="field-kicker">Earlier intelligence recommendation</span>
+        {#if !hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable'}
+          <strong>{latestScoreLabel()}</strong>
+        {/if}
       </div>
-      {#if stringValue('latestScoreSummary')}
+      {#if stringValue('latestScoreSummary') && (!hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable')}
         <p>{stringValue('latestScoreSummary')}</p>
       {/if}
       <div class="intelligence-meta">

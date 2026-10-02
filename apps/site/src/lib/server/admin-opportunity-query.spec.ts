@@ -206,7 +206,7 @@ describe('admin-opportunity-query', () => {
 
     const [sql] = mocks.query.mock.calls[0] ?? [];
     expect(sql).toContain(
-      'ORDER BY latest_assessment.fit_score ASC NULLS LAST',
+      "ORDER BY CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END ASC NULLS LAST",
     );
   });
 
@@ -230,7 +230,9 @@ describe('admin-opportunity-query', () => {
     expect(triageSql).toContain(
       'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
-    expect(triageSql).toContain('latest_assessment.fit_score DESC NULLS LAST');
+    expect(triageSql).toContain(
+      "CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END DESC NULLS LAST",
+    );
     expect(triageSql).toContain('FROM opportunity_assessments oa');
     expect(triageSql).not.toContain('FROM evaluation_scores es');
 
@@ -304,7 +306,9 @@ describe('admin-opportunity-query', () => {
     expect(sql).toContain(
       'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
-    expect(sql).toContain('latest_assessment.fit_score DESC NULLS LAST');
+    expect(sql).toContain(
+      "CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END DESC NULLS LAST",
+    );
   });
 
   it('loads only fingerprint-current score context for bounded SQLite triage ids', async () => {

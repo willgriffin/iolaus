@@ -162,7 +162,13 @@ function privateResumeReadWhere(
 
 export interface CandidateEvidenceSource {
   id: string;
-  kind: 'achievement' | 'candidate_profile' | 'education' | 'project' | 'skill';
+  kind:
+    | 'achievement'
+    | 'candidate_profile'
+    | 'education'
+    | 'employment'
+    | 'project'
+    | 'skill';
   text: string;
   title: string;
 }
@@ -1095,11 +1101,13 @@ export async function getPublishedResumeAsset(): Promise<ResumeRecord | null> {
 }
 
 function evidenceText(...values: unknown[]): string {
-  return values.map(stringValue).filter(Boolean).join('\n').slice(0, 4_000);
+  // Do not silently crop private material here. The assessment input layer owns
+  // the request ceiling and records any omitted/clipped source as coverage loss.
+  return values.map(stringValue).filter(Boolean).join('\n');
 }
 
 /**
- * Load bounded candidate evidence for an authenticated selected profile.
+ * Load complete candidate evidence for an authenticated selected profile.
  *
  * This is deliberately separate from public resume loading: the assessment
  * engine receives a server-validated subject and cannot ask it to read a
@@ -1123,7 +1131,7 @@ export async function loadWorkspaceCandidateEvidence(
     (await loadLegacyAdminResumeSource(undefined, scopedSubject));
   const evidence: CandidateEvidenceSource[] = [];
   const append = (next: CandidateEvidenceSource) => {
-    if (evidence.length < 200 && next.id && next.text) evidence.push(next);
+    if (next.id && next.text) evidence.push(next);
   };
 
   append({
@@ -1132,6 +1140,33 @@ export async function loadWorkspaceCandidateEvidence(
     text: evidenceText(profile.title, profile.summary),
     title: stringValue(profile.name) || 'Candidate profile',
   });
+  // Primary matching facts always enter the bounded collection before rich
+  // narrative evidence. Otherwise a long project history could silently omit
+  // the candidate's actual roles and skill inventory.
+  for (const position of source?.experience.positions ?? []) {
+    append({
+      id: `position:${stringValue(position.id)}`,
+      kind: 'employment',
+      text: evidenceText(
+        position.role,
+        position.company,
+        [stringValue(position.start), stringValue(position.end)]
+          .filter(Boolean)
+          .join(' - '),
+      ),
+      title: stringValue(position.role) || 'Employment',
+    });
+  }
+  for (const group of source?.skills.groups ?? []) {
+    for (const skill of group.skills ?? []) {
+      append({
+        id: stringValue(skill.id),
+        kind: 'skill',
+        text: stringValue(skill.label),
+        title: stringValue(skill.label) || 'Skill',
+      });
+    }
+  }
   for (const position of source?.experience.positions ?? []) {
     for (const project of position.projects ?? []) {
       append({
@@ -1163,16 +1198,6 @@ export async function loadWorkspaceCandidateEvidence(
           achievement.metric,
         ),
         title: stringValue(achievement.title) || 'Achievement',
-      });
-    }
-  }
-  for (const group of source?.skills.groups ?? []) {
-    for (const skill of group.skills ?? []) {
-      append({
-        id: stringValue(skill.id),
-        kind: 'skill',
-        text: stringValue(skill.label),
-        title: stringValue(skill.label) || 'Skill',
       });
     }
   }

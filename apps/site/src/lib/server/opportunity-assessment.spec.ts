@@ -316,6 +316,91 @@ describe('opportunity assessment contract', () => {
     expect(opportunityAssessmentCacheKey(source, 'jev-next')).not.toBe(before);
   });
 
+  it('ranks supported requirements locally and never penalizes a gap from incomplete coverage', () => {
+    const source = prepared({
+      requirements: [{ id: 'typescript', text: 'TypeScript' }],
+    });
+    const answers = completeAnswers({
+      location_access: ['allowed', 'candidate_0'],
+      authorization: ['not_stated', 'posting_1'],
+    });
+    answers.requirement_0_importance = {
+      type: 'choice',
+      choice: 'required',
+      confidence: 0.96,
+      probabilities: {},
+    };
+    answers.requirement_0_support = {
+      type: 'choice',
+      choice: 'supported',
+      confidence: 0.96,
+      probabilities: {},
+    };
+    answers.requirement_0_posting_source = {
+      type: 'choice',
+      choice: 'posting_2',
+      confidence: 0.96,
+      probabilities: {},
+    };
+    answers.requirement_0_candidate_source = {
+      type: 'choice',
+      choice: 'candidate_0',
+      confidence: 0.96,
+      probabilities: {},
+    };
+    const supported = resolveOpportunityAssessment(source, decision(answers));
+    const authorized = {
+      ...candidate,
+      authorizedWorkCountries: [
+        {
+          country: { code: 'CA', label: 'Canada' },
+          scope: 'country' as const,
+        },
+      ],
+    };
+    expect(rankOpportunityAssessment(supported, authorized, []).fitScore).toBe(
+      90,
+    );
+    const fourSupported = {
+      ...supported,
+      requirements: [
+        ...Array.from({ length: 4 }, (_, index) => ({
+          ...supported.requirements[0]!,
+          id: `required-${index}`,
+        })),
+        {
+          ...supported.requirements[0]!,
+          id: 'uncertain',
+          importance: 'uncertain' as const,
+        },
+      ],
+    };
+    expect(
+      rankOpportunityAssessment(fourSupported, authorized, []).fitScore,
+    ).toBe(90);
+    expect(
+      rankOpportunityAssessment(fourSupported, authorized, [
+        {
+          category: 'scoring',
+          name: 'Location preference',
+          ruleJson: '{"dimension":"location_access","values":["allowed"]}',
+          weight: 100,
+        },
+      ]).fitScore,
+    ).toBe(100);
+
+    const incomplete = {
+      ...supported,
+      coverage: { ...supported.coverage, candidateTruncated: true },
+      requirements: [
+        { ...supported.requirements[0]!, support: 'gap' as const },
+      ],
+    };
+    expect(rankOpportunityAssessment(incomplete, authorized, []).fitScore).toBe(
+      60,
+    );
+  });
+
   it('keeps requirement importance and support attributable per requirement', () => {
     const source = prepared({
       requirements: [

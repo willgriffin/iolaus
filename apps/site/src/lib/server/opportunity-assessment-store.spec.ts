@@ -57,10 +57,17 @@ describe('opportunity assessment projection', () => {
     );
     expect(projection).toEqual({
       conflicting: false,
+      coverage: {
+        candidateTruncated: false,
+        postingTruncated: false,
+        requirementCount: 0,
+        requirementsTruncated: false,
+      },
       eligibilityBucket: 'eligible',
+      matchReadiness: 'needs_extraction',
       personalEligibility: 'eligible_without_sponsorship',
       ranking: { eligibilityPriority: 0, excluded: false, fitScore: 60 },
-      reason: 'Eligible without sponsorship',
+      reason: 'Needs structured role requirements before matching.',
       sourceStatus: 'current',
     });
     expect(JSON.stringify(projection)).not.toContain('posting-1');

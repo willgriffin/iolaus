@@ -333,7 +333,8 @@ function latestAssessmentJoinSql(
       oa.eligibility_bucket,
       oa.eligibility_priority,
       oa.excluded,
-      oa.fit_score
+      oa.fit_score,
+      oa.match_readiness
     FROM opportunity_assessments oa
     WHERE ${currentAssessment}
     ORDER BY oa.updated_at DESC NULLS LAST, oa.id DESC
@@ -655,13 +656,13 @@ function filterWhereSql({
   if (filters.minScore !== null) {
     needsAssessment = true;
     where.push(
-      `latest_assessment.fit_score >= ${pushParam(values, filters.minScore)}`,
+      `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score >= ${pushParam(values, filters.minScore)}`,
     );
   }
   if (filters.maxScore !== null) {
     needsAssessment = true;
     where.push(
-      `latest_assessment.fit_score <= ${pushParam(values, filters.maxScore)}`,
+      `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score <= ${pushParam(values, filters.maxScore)}`,
     );
   }
 
@@ -695,6 +696,7 @@ function orderBySql(
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
+  const assessableFit = `CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END`;
   switch (sort) {
     case 'eligibility':
       return `latest_assessment.eligibility_priority ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
@@ -705,13 +707,13 @@ function orderBySql(
         options.triageRejectDepriority
           ? 'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END ASC, '
           : ''
-      }latest_assessment.fit_score ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      }${assessableFit} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'salary':
       return `COALESCE(o.salary_max, o.salary_min) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'rating':
       return `latest_review.human_rating ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     default:
-      return `${opportunityStatusRankSql()} ASC, latest_assessment.eligibility_priority ASC NULLS LAST, latest_assessment.fit_score DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${opportunityStatusRankSql()} ASC, latest_assessment.eligibility_priority ASC NULLS LAST, ${assessableFit} DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   }
 }
 
