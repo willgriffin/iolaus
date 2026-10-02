@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { AIMessage } from '@happyvertical/ai';
 import {
-  getOpportunityEligibility,
   type EligibilityAssertion,
   type EligibilityBucket,
+  getOpportunityEligibility,
 } from '../opportunity-eligibility.js';
 import {
   OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
