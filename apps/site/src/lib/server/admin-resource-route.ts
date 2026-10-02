@@ -432,7 +432,7 @@ export async function attachOpportunityContext(
       typeof agentRun.opportunityId === 'string' ? agentRun.opportunityId : '';
     if (!opportunityId) continue;
     const items = agentRunsByOpportunity.get(opportunityId) ?? [];
-    if (items.length < 8) items.push(agentRun);
+    if (items.length < 8) items.push(serializeRecord(agentRun));
     agentRunsByOpportunity.set(opportunityId, items);
   }
 
@@ -1092,6 +1092,7 @@ export async function loadAdminRecordPageData(
     includeOpportunityRelations?: boolean;
     includeRelatedProjects?: boolean;
     returnTo?: string;
+    workspaceSubject?: WorkspaceSubject;
   } = {},
 ) {
   const resource = requireAdminResource(resourceSlug);
@@ -1111,7 +1112,9 @@ export async function loadAdminRecordPageData(
 
   const records =
     resource.slug === 'opportunities'
-      ? await attachOpportunityContext([record])
+      ? await attachOpportunityContext([record], {
+          workspaceSubject: options.workspaceSubject,
+        })
       : [record];
 
   let company: AdminRecord | null = null;

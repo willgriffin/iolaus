@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const collections = new Map<string, { list: ReturnType<typeof vi.fn> }>();
+  const collections = new Map<
+    string,
+    { get?: ReturnType<typeof vi.fn>; list: ReturnType<typeof vi.fn> }
+  >();
 
   return {
     collections,
@@ -172,6 +175,7 @@ const ownerPermissions = [
   ),
   'workflow.application.prepare',
   'workflow.application.review',
+  'workflow.assessment.execute',
   'workflow.profile.manage',
   'workflow.task.sync',
 ];
@@ -267,6 +271,81 @@ describe('admin-resource-route', () => {
     mocks.serializeRecord.mockClear();
     mocks.syncRecommendedOpportunityDecisionTasks.mockReset();
     mocks.updateAdminRecord.mockReset();
+  });
+
+  it('queues only native assessment for the verified selected subject from the detail action', async () => {
+    const { processOpportunityAction } = await import('./admin-resource-route');
+    const { getCurrentWorkspaceSubject } = await import('./workspace-subject');
+    mocks.collections.set('CandidateProfile', {
+      get: vi.fn(async () => ({
+        active: true,
+        id: workspaceSubject.profileId,
+        ownerUserId: workspaceSubject.userId,
+        tenantId: workspaceSubject.tenantId,
+      })),
+      list: vi.fn(async () => []),
+    });
+    mocks.enqueueOpportunityIntelligence.mockImplementation(async () => {
+      expect(getCurrentWorkspaceSubject()).toEqual(workspaceSubject);
+      return { id: 'assessment-job-1' };
+    });
+    const result = await processOpportunityAction(
+      postForm('/admin/opportunities/opp-1', {
+        opportunityId: 'opp-1',
+        profileId: 'foreign-profile',
+        modes: 'all',
+      }),
+      ownerLocals(),
+    );
+    expect(mocks.enqueueOpportunityIntelligence).toHaveBeenCalledWith('opp-1', {
+      modes: 'assessment',
+    });
+    expect(result).toMatchObject({
+      jobId: 'assessment-job-1',
+      status: 'queued',
+    });
+  });
+
+  it('denies detail assessment without its native workflow permission', async () => {
+    const { processOpportunityAction } = await import('./admin-resource-route');
+    await expect(
+      processOpportunityAction(
+        formRequest(['opp-1']),
+        ownerLocals(without('workflow.assessment.execute')),
+      ),
+    ).rejects.toMatchObject({ body: { message: 'Forbidden' }, status: 403 });
+    expect(mocks.enqueueOpportunityIntelligence).not.toHaveBeenCalled();
+  });
+
+  it('denies detail assessment with no verified selected candidate profile', async () => {
+    const { processOpportunityAction } = await import('./admin-resource-route');
+    await expect(
+      processOpportunityAction(formRequest(['opp-1']), {
+        ...ownerLocals(),
+        workspaceSubject: {
+          tenantId: workspaceSubject.tenantId,
+          userId: workspaceSubject.userId,
+        },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.enqueueOpportunityIntelligence).not.toHaveBeenCalled();
+  });
+
+  it('revalidates selected candidate ownership before queueing detail assessment', async () => {
+    const { processOpportunityAction } = await import('./admin-resource-route');
+    mocks.collections.set('CandidateProfile', {
+      get: vi.fn(async () => ({
+        active: true,
+        id: workspaceSubject.profileId,
+        ownerUserId: 'foreign-user',
+        tenantId: workspaceSubject.tenantId,
+      })),
+      list: vi.fn(async () => []),
+    });
+    await expect(
+      processOpportunityAction(formRequest(['opp-1']), ownerLocals()),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.enqueueOpportunityIntelligence).not.toHaveBeenCalled();
   });
 
   it("forwards the owner's explicit inconclusive-posting override to a recommendation decision", async () => {
@@ -860,6 +939,92 @@ describe('admin-resource-route', () => {
       subject,
     });
     expect(record?.assessmentProjection).toEqual(projection);
+  });
+
+  it('serializes private agent run models before returning opportunity detail data', async () => {
+    const { attachOpportunityContext } = await import('./admin-resource-route');
+    const { serializeRecord } = await import('./admin-data');
+    class AgentRunModel {
+      id = 'run-1';
+      opportunityId = 'opp-1';
+      runType = 'opportunity_intelligence';
+      status = 'completed';
+    }
+    const run = new AgentRunModel();
+    mocks.listPrivateRecords.mockImplementation(async (className: string) =>
+      className === 'AgentRun' ? [run] : [],
+    );
+    const plainRun = JSON.parse(JSON.stringify(run));
+    mocks.serializeRecord.mockImplementationOnce(() => plainRun);
+    const [record] = await attachOpportunityContext([{ id: 'opp-1' }], {
+      workspaceSubject,
+    });
+    expect(serializeRecord).toHaveBeenCalledWith(run);
+    expect(record?.agentRuns).toEqual([plainRun]);
+    expect(
+      (record?.agentRuns as unknown[] | undefined)?.[0],
+    ).not.toBeInstanceOf(AgentRunModel);
+  });
+
+  it('passes the verified selected subject through the opportunity detail loader', async () => {
+    const { loadAdminRecordPageData } = await import('./admin-resource-route');
+    const { getAdminResource } = await import('$lib/admin/resources');
+    const opportunity = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'posting-fingerprint',
+      sourceContentVersion: 1,
+      title: 'Staff engineer',
+    };
+    const projection = {
+      eligibilityBucket: 'unknown',
+      ranking: { eligibilityPriority: 2, fitScore: 15 },
+      reason: 'Eligibility needs clarification',
+      sourceStatus: 'current',
+    };
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.getAdminRecord.mockResolvedValue(opportunity);
+    mocks.listComboOptions.mockResolvedValue({});
+    mocks.listReferenceOptions.mockResolvedValue({});
+    mocks.loadCurrentOpportunityAssessmentProjections.mockResolvedValue(
+      new Map([['opp-1', projection]]),
+    );
+    const data = await loadAdminRecordPageData('opportunities', 'opp-1', {
+      workspaceSubject,
+    });
+    expect(
+      mocks.loadCurrentOpportunityAssessmentProjections,
+    ).toHaveBeenCalledWith({
+      opportunities: [
+        {
+          id: 'opp-1',
+          sourceContentFingerprint: 'posting-fingerprint',
+          sourceContentVersion: 1,
+        },
+      ],
+      subject: workspaceSubject,
+    });
+    expect(data.record.assessmentProjection).toEqual(projection);
+  });
+
+  it('does not read a private assessment from a detail loader without a selected subject', async () => {
+    const { loadAdminRecordPageData } = await import('./admin-resource-route');
+    const { getAdminResource } = await import('$lib/admin/resources');
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.getAdminRecord.mockResolvedValue({
+      id: 'opp-1',
+      title: 'Staff engineer',
+    });
+    mocks.listComboOptions.mockResolvedValue({});
+    mocks.listReferenceOptions.mockResolvedValue({});
+    const data = await loadAdminRecordPageData('opportunities', 'opp-1');
+    expect(
+      mocks.loadCurrentOpportunityAssessmentProjections,
+    ).not.toHaveBeenCalled();
+    expect(data.record.assessmentProjection).toBeNull();
   });
 
   it('loads compact opportunity facets only when the filter drawer requests them', async () => {
