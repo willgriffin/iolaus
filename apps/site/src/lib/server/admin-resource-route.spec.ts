@@ -328,7 +328,13 @@ describe('admin-resource-route', () => {
       expect.objectContaining({
         action: 'admin.processRecommendationTask',
         actorUserId: 'user-1',
-        agentClass: 'iolaus-willgriffin/owner',
+        agentClass: 'iolaus/owner',
+        metadata: {
+          operations: [
+            { action: 'application.review', collection: 'workflow' },
+            { action: 'task.sync', collection: 'workflow' },
+          ],
+        },
         onBehalfOfUserId: 'user-1',
         tenantId: 'tenant-1',
       }),

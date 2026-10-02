@@ -3,16 +3,15 @@ import { listApiExposedResources } from './api-exposure';
 import { apiResourceClasses, getApiResourceClass } from './api-resources';
 
 /**
- * Every slug the former hand-maintained REST map accepted. Each must still
- * resolve to the same class now that exposure derives from the decorators.
+ * Public catalog slugs the former hand-maintained REST map accepted. Each
+ * must still resolve to the same class now that exposure derives from the
+ * decorators. Candidate-owned records intentionally leave this map.
  */
-const legacySlugs: Record<string, string> = {
+const publicLegacySlugs: Record<string, string> = {
   companies: 'Company',
   companyattachments: 'CompanyAttachment',
   companyresearches: 'CompanyResearch',
   companytags: 'CompanyTag',
-  decisions: 'Decision',
-  decisiontags: 'DecisionTag',
   factcontents: 'FactContent',
   factevidences: 'FactEvidence',
   facts: 'Fact',
@@ -31,8 +30,8 @@ const legacySlugs: Record<string, string> = {
 };
 
 describe('apiResourceClasses', () => {
-  it('keeps every legacy REST slug resolving to the same class', () => {
-    for (const [slug, className] of Object.entries(legacySlugs)) {
+  it('keeps public legacy REST slugs resolving to the same class', () => {
+    for (const [slug, className] of Object.entries(publicLegacySlugs)) {
       expect(getApiResourceClass(slug), slug).toBe(className);
       expect(apiResourceClasses[slug], slug).toBe(className);
     }
@@ -55,6 +54,8 @@ describe('apiResourceClasses', () => {
   });
 
   it('keeps decorator-hidden and foreign classes off REST', () => {
+    expect(getApiResourceClass('decisions')).toBeUndefined();
+    expect(getApiResourceClass('decisiontags')).toBeUndefined();
     expect(getApiResourceClass('candidateanswers')).toBeUndefined();
     expect(getApiResourceClass('candidate_answers')).toBeUndefined();
     expect(getApiResourceClass('candidateprofiles')).toBeUndefined();

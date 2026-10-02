@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
   withSessionPermissionContext: vi.fn(),
 }));
 
-vi.mock('@happyvertical/smrt-users', () => ({
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-users')>()),
   SessionService: { create: mocks.sessionServiceCreate },
   withSessionPermissionContext: mocks.withSessionPermissionContext,
 }));

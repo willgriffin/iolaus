@@ -970,7 +970,7 @@ describe('createAdminRecord combo fields', () => {
     });
   });
 
-  it('syncs recommendation review tasks after creating and updating opportunities', async () => {
+  it('does not sync private recommendation tasks from unbound generic opportunity writes', async () => {
     const resource: AdminResource = {
       className: 'Opportunity',
       description: '',
@@ -1008,7 +1008,7 @@ describe('createAdminRecord combo fields', () => {
 
     expect(
       workflowMock.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalledTimes(2);
+    ).not.toHaveBeenCalled();
   });
 
   it('syncs selected application approvals after creating and updating resume variants', async () => {

@@ -6,6 +6,7 @@ import {
   type SmrtObject,
 } from '@happyvertical/smrt-core';
 import { getTestDatabase } from '@happyvertical/smrt-core/testing';
+import { withTenant } from '@happyvertical/smrt-tenancy';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   assembleResumeSourceFromRecords,
@@ -16,6 +17,8 @@ import {
   NORMALIZED_RESUME_READ_PLAN,
 } from './resume-read-plans.js';
 import './smrt.js';
+
+const subject = { tenantId: 'tenant-fixture', userId: 'user-fixture' };
 
 const postgresUrl = process.env.RESUME_READ_PLAN_TEST_DATABASE_URL?.trim();
 
@@ -94,7 +97,9 @@ async function assertProfileLinkProjection(
     db,
   });
 
-  await profiles.create({
+  const primaryProfile = await profiles.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     active: true,
     isDefault: true,
     name: 'Published Default',
@@ -102,7 +107,9 @@ async function assertProfileLinkProjection(
     summary: 'Default summary',
     title: 'Default title',
   });
-  await profiles.create({
+  const alternateProfile = await profiles.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     active: true,
     isDefault: false,
     name: 'Published Alternate',
@@ -111,29 +118,41 @@ async function assertProfileLinkProjection(
     title: 'Alternate title',
   });
   await links.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     id: '00000000-0000-4000-8000-000000000003',
     href: 'https://example.invalid/default-second',
     label: 'Default second',
+    candidateProfileId: primaryProfile.id,
     profileKey: 'default',
     sortOrder: 2,
   });
   await links.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     id: '00000000-0000-4000-8000-000000000002',
     href: 'https://example.invalid/default-first-b',
     label: 'Default first B',
+    candidateProfileId: primaryProfile.id,
     profileKey: 'default',
     sortOrder: 1,
   });
   await links.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     id: '00000000-0000-4000-8000-000000000001',
     href: 'https://example.invalid/default-first-a',
     label: 'Default first A',
+    candidateProfileId: primaryProfile.id,
     profileKey: 'default',
     sortOrder: 1,
   });
   await links.create({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     href: 'https://example.invalid/alternate',
     label: 'Alternate only',
+    candidateProfileId: alternateProfile.id,
     profileKey: 'alternate',
     sortOrder: 0,
   });
@@ -203,8 +222,10 @@ describe('published resume SMRT read plans (SQLite)', () => {
   it('executes every normalized and legacy ordering term through the real collection executor', async () => {
     const db = await createFixtureDatabase({ type: 'sqlite' });
     try {
-      await assertReadPlansExecute(db);
-      await assertProfileLinkProjection(db);
+      await withTenant(subject, async () => {
+        await assertReadPlansExecute(db);
+        await assertProfileLinkProjection(db);
+      });
     } finally {
       await db.close?.();
     }
@@ -241,8 +262,10 @@ describe.runIf(Boolean(postgresUrl))(
     });
 
     it('preserves the same guarded read-plan and published-link semantics', async () => {
-      await assertReadPlansExecute(db);
-      await assertProfileLinkProjection(db);
+      await withTenant(subject, async () => {
+        await assertReadPlansExecute(db);
+        await assertProfileLinkProjection(db);
+      });
     });
   },
 );

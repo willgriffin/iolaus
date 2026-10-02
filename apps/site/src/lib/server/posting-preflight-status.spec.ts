@@ -119,7 +119,7 @@ describe('posting preflight status', () => {
     );
 
     await expect(latestPostingPreflightStatus('opp-1')).rejects.toThrow(
-      'candidate profile ID',
+      'A candidate profile is required.',
     );
     expect(mocks.list).not.toHaveBeenCalled();
   });

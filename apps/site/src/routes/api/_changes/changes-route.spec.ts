@@ -1,3 +1,4 @@
+import { getCurrentTenant, withTenant } from '@happyvertical/smrt-tenancy';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET } from './+server';
 
@@ -8,13 +9,22 @@ const mocks = vi.hoisted(() => ({
   getDatabaseUrl: vi.fn(),
   getTenantScopedChangesSince: vi.fn(),
   resolveDatabase: vi.fn(),
+  shared: false,
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   ensureChangeFeedTable: mocks.ensureChangeFeedTable,
   getTenantScopedChangesSince: mocks.getTenantScopedChangesSince,
   resolveDatabase: mocks.resolveDatabase,
 }));
+
+vi.mock('$lib/server/app-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/app-config')>()),
+  isSharedHosted: () => mocks.shared,
+}));
+
+vi.mock('$lib/server/smrt', () => ({ getCollection: vi.fn() }));
 
 vi.mock('$lib/server/db', () => ({
   getDbConfig: mocks.getDbConfig,
@@ -23,6 +33,7 @@ vi.mock('$lib/server/db', () => ({
 
 describe('SMRT changes API', () => {
   beforeEach(() => {
+    mocks.shared = false;
     mocks.db.query.mockReset();
     mocks.ensureChangeFeedTable.mockReset();
     mocks.getDbConfig.mockReset();
@@ -85,6 +96,56 @@ describe('SMRT changes API', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "'since' must be a non-negative number",
+    });
+    expect(mocks.resolveDatabase).not.toHaveBeenCalled();
+  });
+
+  it('polls a shared feed only inside the native verified tenant context', async () => {
+    mocks.shared = true;
+    const subject = { tenantId: 'tenant-1', userId: 'user-1' };
+    mocks.getTenantScopedChangesSince.mockImplementation(async () => {
+      expect(getCurrentTenant()).toMatchObject({
+        ...subject,
+        metadata: { workspaceSubject: subject },
+      });
+      return { changes: [], cursor: 5 };
+    });
+
+    const response = await withTenant(
+      { ...subject, metadata: { workspaceSubject: subject } },
+      async () =>
+        await GET({
+          locals: { user: { id: subject.userId } },
+          url: new URL('https://iolaus.localhost/api/_changes?since=5'),
+        } as Parameters<typeof GET>[0]),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ changes: [], cursor: 5 });
+    expect(getCurrentTenant()).toBeUndefined();
+  });
+
+  it.each([
+    ['missing', {}],
+    [
+      'foreign',
+      { workspaceSubject: { tenantId: 'tenant-2', userId: 'user-1' } },
+    ],
+  ])('rejects a shared feed with a %s subject before database access', async (_label, metadata) => {
+    mocks.shared = true;
+
+    await expect(
+      withTenant(
+        { tenantId: 'tenant-1', userId: 'user-1', metadata },
+        async () =>
+          await GET({
+            locals: { user: { id: 'user-1' } },
+            url: new URL('https://iolaus.localhost/api/_changes?since=0'),
+          } as Parameters<typeof GET>[0]),
+      ),
+    ).rejects.toMatchObject({
+      status: 403,
+      body: { message: 'A verified workspace is required for live updates.' },
     });
     expect(mocks.resolveDatabase).not.toHaveBeenCalled();
   });

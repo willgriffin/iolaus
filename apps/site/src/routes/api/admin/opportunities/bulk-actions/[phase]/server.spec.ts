@@ -33,7 +33,23 @@ vi.mock('$lib/server/owner-principal', () => ({
   ownerPrincipalOptions: mocks.principalOptions,
 }));
 
-const locals = { user: { id: 'user-1' } } as never;
+const workspaceSubject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+const locals = {
+  membership: {
+    roleId: 'role-1',
+    status: 'active',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  },
+  permissions: ['workflow.application.review'],
+  tenantId: 'tenant-1',
+  user: { id: 'user-1' },
+  workspaceSubject,
+};
 
 function post(body: unknown): Request {
   return new Request(
@@ -76,7 +92,7 @@ describe('opportunity bulk-actions route', () => {
       agentClass: 'iolaus/owner',
       auditMetadata: { actionId: 'review', requestId: 'req-1' },
       onBehalfOfUserId: 'user-1',
-      principal: { runAsUserId: 'user-1', tenantId: null },
+      principal: { runAsUserId: 'user-1', tenantId: 'tenant-1' },
     });
     mocks.preview.mockResolvedValue({ ok: true, phase: 'preview' });
     mocks.apply.mockResolvedValue({ ok: true, phase: 'apply' });
@@ -96,6 +112,52 @@ describe('opportunity bulk-actions route', () => {
     } as never);
 
     expect(response.status).toBe(401);
+    expect(mocks.createAdapter).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing subject', { ...locals, workspaceSubject: undefined }],
+    [
+      'missing profile',
+      {
+        ...locals,
+        workspaceSubject: { tenantId: 'tenant-1', userId: 'user-1' },
+      },
+    ],
+    [
+      'revoked membership',
+      { ...locals, membership: { ...locals.membership, status: 'revoked' } },
+    ],
+    [
+      'missing role',
+      { ...locals, membership: { ...locals.membership, roleId: '' } },
+    ],
+    [
+      'foreign tenant',
+      {
+        ...locals,
+        workspaceSubject: { ...workspaceSubject, tenantId: 'tenant-2' },
+      },
+    ],
+    [
+      'foreign user',
+      {
+        ...locals,
+        workspaceSubject: { ...workspaceSubject, userId: 'user-2' },
+      },
+    ],
+  ])('rejects a %s before opening the state store or adapter', async (_label, invalidLocals) => {
+    const POST = await handler();
+
+    await expect(
+      POST({
+        locals: invalidLocals,
+        params: { phase: 'preview' },
+        request: post(validBody),
+      } as never),
+    ).rejects.toMatchObject({ status: 403 });
+
+    expect(mocks.createStore).not.toHaveBeenCalled();
     expect(mocks.createAdapter).not.toHaveBeenCalled();
   });
 
@@ -161,6 +223,9 @@ describe('opportunity bulk-actions route', () => {
     expect(target.filters).not.toHaveProperty('evil');
     expect(target.page).toBe(2);
     expect(target.candidateSkills).toEqual(['typescript']);
+    expect(mocks.createAdapter.mock.calls[0][0].workspaceSubject).toEqual(
+      workspaceSubject,
+    );
   });
 
   it('carries the numeric filters through to the fingerprinted target', async () => {
@@ -278,6 +343,7 @@ describe('opportunity bulk-actions route', () => {
         // over the audit stream returns executed and refused alike.
         action: 'data_surface.action.apply',
         actorUserId: 'user-1',
+        tenantId: 'tenant-1',
         metadata: expect.objectContaining({
           outcome: 'refused',
           reason: 'invalid_or_expired_confirmation',
@@ -294,7 +360,7 @@ describe('opportunity bulk-actions route', () => {
         action: 'data_surface.action.apply',
         actorUserId: 'user-1',
         onBehalfOfUserId: 'user-1',
-        tenantId: null,
+        tenantId: 'tenant-1',
       });
       return { ok: true, phase: 'apply' };
     });

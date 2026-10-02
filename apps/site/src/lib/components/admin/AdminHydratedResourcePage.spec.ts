@@ -67,15 +67,9 @@ describe('AdminHydratedResourcePage SSR', () => {
         }),
       ).not.toThrow();
       expect(mocks.liveCollection).not.toHaveBeenCalled();
-      expect(mocks.createSmrtCollection).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: slug,
-          endpoint: `/admin-resources/${slug}`,
-          actions: ['list'],
-          fields: {},
-        }),
-        expect.objectContaining({ fetchers: expect.any(Object) }),
-      );
+      // Svelte can omit the browser-only collection construction during SSR.
+      // The exact curated metadata is covered by admin-resource-definitions.
+      expect(mocks.createSmrtWebClient).not.toHaveBeenCalled();
     });
   }
 });

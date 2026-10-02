@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const environmentNames = [
+  'DATABASE_URL',
   'IOLAUS_OIDC_ADMIN_EMAILS',
   'IOLAUS_OIDC_CLIENT_ID',
   'IOLAUS_OIDC_REALM',
@@ -119,6 +120,7 @@ function event(
 describe('server bearer-session handling', () => {
   beforeEach(() => {
     Object.assign(process.env, {
+      DATABASE_URL: 'postgresql://localhost/iolaus_tests_hooks_test',
       IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.invalid',
       IOLAUS_OIDC_CLIENT_ID: 'iolaus-tests',
       IOLAUS_OIDC_REALM: 'iolaus',
@@ -314,6 +316,39 @@ describe('server bearer-session handling', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it('rejects a stale cookie permission snapshot after workspace verification revokes membership', async () => {
+    const requestEvent = event(null);
+    requestEvent.locals.user = {
+      email: 'owner@example.invalid',
+      id: 'user-1',
+      status: 'active',
+    };
+    requestEvent.locals.tenantId = 'tenant-1';
+    requestEvent.locals.membership = {
+      id: 'membership-1',
+      roleId: 'admin-role',
+      status: 'active',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    requestEvent.locals.permissions = ['opportunities.read'];
+    mocks.verifyWorkspaceSubject.mockImplementation(async (locals) => {
+      locals.membership = null;
+      locals.permissions = [];
+      return null;
+    });
+    const resolve = vi.fn(async () => new Response('unexpected'));
+    const { handle } = await import('./hooks.server');
+
+    const response = await handle({ event: requestEvent, resolve } as never);
+
+    expect(response.status).toBe(403);
+    expect(mocks.verifyWorkspaceSubject).toHaveBeenCalledWith(
+      requestEvent.locals,
+    );
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['/admin/opportunities'],
     ['/admin/resume-assets/resume-1/pdf'],
@@ -325,7 +360,7 @@ describe('server bearer-session handling', () => {
     requestEvent.locals.membership = {
       id: 'membership-1',
       roleId: 'viewer-role',
-      status: 'pending',
+      status: 'active',
       tenantId: 'tenant-1',
       userId: 'member-1',
     };
