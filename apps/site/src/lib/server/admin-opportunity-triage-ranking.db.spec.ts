@@ -10,6 +10,7 @@ import {
 } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import type { WorkspaceOpportunityQuery } from './admin-opportunity-query.js';
+import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
 
 const mocks = vi.hoisted(() => ({
   config: { type: 'sqlite' },
@@ -252,18 +253,18 @@ async function createTables(
      candidate_material_fingerprint, preferences_fingerprint, contract_version,
      status, eligibility_bucket, eligibility_priority, fit_score, match_readiness, excluded, updated_at)
     VALUES
-    ('assessment-reject-100', 'reject-100', 'tenant-a', 'user-a', 'profile-a', 'current-reject', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 100, 'assessable', TRUE, '2026-01-06T00:00:00Z'),
-    ('assessment-recommend-96', 'recommend-96', 'tenant-a', 'user-a', 'profile-a', 'current-recommend', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 96, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
-    ('assessment-score-96-tie', 'score-96-tie', 'tenant-a', 'user-a', 'profile-a', 'current-score-tie', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 96, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
-    ('assessment-unknown-90', 'unknown-90', 'tenant-a', 'user-a', 'profile-a', 'current-unknown', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'unknown', 9, 90, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
-    ('assessment-reject-20', 'reject-20', 'tenant-a', 'user-a', 'profile-a', 'current-reject-low', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 20, 'assessable', TRUE, '2026-01-06T00:00:00Z'),
-    ('assessment-matches', 'matches-list-context', 'tenant-a', 'user-a', 'profile-a', 'match-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-wrong-skill', 'wrong-skill', 'tenant-a', 'user-a', 'profile-a', 'wrong-skill-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-wrong-search', 'wrong-search', 'tenant-a', 'user-a', 'profile-a', 'wrong-search-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-wrong-status', 'wrong-status', 'tenant-a', 'user-a', 'profile-a', 'wrong-status-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-expired', 'expired', 'tenant-a', 'user-a', 'profile-a', 'expired-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-stale', 'stale', 'tenant-a', 'user-a', 'profile-a', 'stale-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
-    ('assessment-decided', 'decided', 'tenant-a', 'user-a', 'profile-a', 'decided-current', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z')`);
+    ('assessment-reject-100', 'reject-100', 'tenant-a', 'user-a', 'profile-a', 'current-reject', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 100, 'assessable', TRUE, '2026-01-06T00:00:00Z'),
+    ('assessment-recommend-96', 'recommend-96', 'tenant-a', 'user-a', 'profile-a', 'current-recommend', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 96, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
+    ('assessment-score-96-tie', 'score-96-tie', 'tenant-a', 'user-a', 'profile-a', 'current-score-tie', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 96, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
+    ('assessment-unknown-90', 'unknown-90', 'tenant-a', 'user-a', 'profile-a', 'current-unknown', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'unknown', 9, 90, 'assessable', FALSE, '2026-01-06T00:00:00Z'),
+    ('assessment-reject-20', 'reject-20', 'tenant-a', 'user-a', 'profile-a', 'current-reject-low', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 20, 'assessable', TRUE, '2026-01-06T00:00:00Z'),
+    ('assessment-matches', 'matches-list-context', 'tenant-a', 'user-a', 'profile-a', 'match-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-wrong-skill', 'wrong-skill', 'tenant-a', 'user-a', 'profile-a', 'wrong-skill-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-wrong-search', 'wrong-search', 'tenant-a', 'user-a', 'profile-a', 'wrong-search-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-wrong-status', 'wrong-status', 'tenant-a', 'user-a', 'profile-a', 'wrong-status-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-expired', 'expired', 'tenant-a', 'user-a', 'profile-a', 'expired-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-stale', 'stale', 'tenant-a', 'user-a', 'profile-a', 'stale-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z'),
+    ('assessment-decided', 'decided', 'tenant-a', 'user-a', 'profile-a', 'decided-current', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 80, 'assessable', FALSE, '2026-02-08T00:00:00Z')`);
   await database.query(`INSERT INTO ${decisionTable}
     (id, opportunity_id, tenant_id, owner_user_id, candidate_profile_id, decision, created_at)
     VALUES ('decision-decided', 'decided', 'tenant-a', 'user-a', 'profile-a', 'accept_to_apply', '2026-02-08T00:00:00Z')`);
@@ -562,11 +563,11 @@ function runSuite(
         VALUES
           ('readiness-a', 'readiness-assessable', 'tenant-a', 'user-a', 'profile-a',
            'readiness-a', 1, 'candidate-material', 'preferences',
-           'opportunity-assessment/v1', 'current', 'eligible', 1, 55,
+           '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 55,
            'assessable', FALSE, '2026-07-01T00:00:00Z'),
           ('readiness-b', 'readiness-incomplete', 'tenant-a', 'user-a', 'profile-a',
            'readiness-b', 1, 'candidate-material', 'preferences',
-           'opportunity-assessment/v1', 'current', 'eligible', 1, 99,
+           '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 99,
            'needs_evidence', FALSE, '2026-07-02T00:00:00Z')`);
       const { listOpportunityPageIds } = await import(
         './admin-opportunity-query'
@@ -699,10 +700,10 @@ function runSuite(
          candidate_material_fingerprint, preferences_fingerprint, contract_version,
          status, eligibility_bucket, eligibility_priority, fit_score, match_readiness, excluded, updated_at)
         VALUES
-          ('eligibility-assessment-canada-a', 'eligibility-canada-a', 'tenant-a', 'user-a', 'profile-a', 'canada-a', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 60, 'assessable', FALSE, '2026-04-01T00:00:00Z'),
-          ('eligibility-assessment-canada-b', 'eligibility-canada-b', 'tenant-a', 'user-a', 'profile-a', 'canada-b', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'eligible', 1, 60, 'assessable', FALSE, '2026-04-02T00:00:00Z'),
-          ('eligibility-assessment-sponsor', 'eligibility-sponsor-us', 'tenant-a', 'user-a', 'profile-a', 'sponsor-us', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'sponsorship_possible', 2, 60, 'assessable', FALSE, '2026-04-03T00:00:00Z'),
-          ('eligibility-assessment-conflict', 'eligibility-conflict', 'tenant-a', 'user-a', 'profile-a', 'conflict', 1, 'candidate-material', 'preferences', 'opportunity-assessment/v1', 'current', 'conflicting', 9, 60, 'assessable', FALSE, '2026-04-07T00:00:00Z')`);
+          ('eligibility-assessment-canada-a', 'eligibility-canada-a', 'tenant-a', 'user-a', 'profile-a', 'canada-a', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 60, 'assessable', FALSE, '2026-04-01T00:00:00Z'),
+          ('eligibility-assessment-canada-b', 'eligibility-canada-b', 'tenant-a', 'user-a', 'profile-a', 'canada-b', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'eligible', 1, 60, 'assessable', FALSE, '2026-04-02T00:00:00Z'),
+          ('eligibility-assessment-sponsor', 'eligibility-sponsor-us', 'tenant-a', 'user-a', 'profile-a', 'sponsor-us', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'sponsorship_possible', 2, 60, 'assessable', FALSE, '2026-04-03T00:00:00Z'),
+          ('eligibility-assessment-conflict', 'eligibility-conflict', 'tenant-a', 'user-a', 'profile-a', 'conflict', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'conflicting', 9, 60, 'assessable', FALSE, '2026-04-07T00:00:00Z')`);
       const { countOpportunityRecords, listOpportunityPageIds } = await import(
         './admin-opportunity-query'
       );
@@ -842,22 +843,22 @@ function runSuite(
          fit_score, match_readiness, excluded, updated_at)
         VALUES
           ('assessment-a-current', 'subject-a', 'tenant-a', 'user-a', 'profile-a',
-           'source-a', 1, 'candidate-a', 'preferences-a', 'opportunity-assessment/v1',
+           'source-a', 1, 'candidate-a', 'preferences-a', '${OPPORTUNITY_ASSESSMENT_VERSION}',
            'current', 'eligible', 1, 60, 'assessable', FALSE, '2026-06-01T00:00:00Z'),
           ('assessment-a-stale-source', 'subject-a', 'tenant-a', 'user-a', 'profile-a',
-           'old-source', 1, 'candidate-a', 'preferences-a', 'opportunity-assessment/v1',
+           'old-source', 1, 'candidate-a', 'preferences-a', '${OPPORTUNITY_ASSESSMENT_VERSION}',
            'current', 'eligible', 1, 99, 'assessable', FALSE, '2026-06-05T00:00:00Z'),
           ('assessment-a-stale-profile', 'subject-a', 'tenant-a', 'user-a', 'other-profile',
-           'source-a', 1, 'candidate-a', 'preferences-a', 'opportunity-assessment/v1',
+           'source-a', 1, 'candidate-a', 'preferences-a', '${OPPORTUNITY_ASSESSMENT_VERSION}',
            'current', 'eligible', 1, 98, 'assessable', FALSE, '2026-06-05T00:00:00Z'),
           ('assessment-a-stale-preferences', 'subject-a', 'tenant-a', 'user-a', 'profile-a',
-           'source-a', 1, 'candidate-a', 'old-preferences', 'opportunity-assessment/v1',
+           'source-a', 1, 'candidate-a', 'old-preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}',
            'current', 'eligible', 1, 97, 'assessable', FALSE, '2026-06-05T00:00:00Z'),
           ('assessment-a-stale-contract', 'subject-a', 'tenant-a', 'user-a', 'profile-a',
            'source-a', 1, 'candidate-a', 'preferences-a', 'old-contract',
            'current', 'eligible', 1, 96, 'assessable', FALSE, '2026-06-05T00:00:00Z'),
           ('assessment-b-foreign-high', 'subject-b', 'tenant-b', 'user-b', 'profile-b',
-           'source-b', 1, 'candidate-b', 'preferences-b', 'opportunity-assessment/v1',
+           'source-b', 1, 'candidate-b', 'preferences-b', '${OPPORTUNITY_ASSESSMENT_VERSION}',
            'current', 'eligible', 1, 100, 'assessable', FALSE, '2026-06-05T00:00:00Z')`);
       await database.query(`INSERT INTO ${prefix}decisions
         (id, opportunity_id, tenant_id, owner_user_id, candidate_profile_id,

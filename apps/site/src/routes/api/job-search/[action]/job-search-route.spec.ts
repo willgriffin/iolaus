@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  effectivePermissions: [] as string[],
   browse: vi.fn(async () => ({ items: [] })),
   digDeeper: vi.fn(async () => ({
     failed: [],
@@ -29,9 +30,48 @@ const mocks = vi.hoisted(() => ({
   verifyPosting: vi.fn(async () => ({ preflight: { state: 'live' } })),
 }));
 
-// The owner principal runs the real `executeAsPrincipal()` gate against an
-// in-memory database; only the workflow handlers behind it are mocked.
+// The native principal, context, operation gate and profile verifier stay real;
+// live identity and permission resolution are explicit route-unit fixtures.
+// owner-principal.spec.ts and mcp-app-server.spec.ts cover native RBAC rows.
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-users')>();
+  return {
+    ...actual,
+    UserCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'user-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    TenantCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'tenant-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    MembershipCollection: {
+      create: async () => ({
+        findByUserAndTenant: async (userId: string, tenantId: string) =>
+          userId === 'user-1' && tenantId === 'tenant-1'
+            ? { roleId: 'role-1', status: 'active', userId, tenantId }
+            : null,
+      }),
+    },
+  };
+});
+
 vi.mock('$lib/server/smrt', () => ({
+  getCollection: async (className: string) => {
+    if (className !== 'CandidateProfile')
+      throw new Error(`Unexpected fixture collection: ${className}`);
+    return {
+      get: async (id: string) =>
+        id === 'profile-1'
+          ? { id, active: true, ownerUserId: 'user-1', tenantId: 'tenant-1' }
+          : null,
+    };
+  },
   getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
 }));
 
@@ -110,6 +150,7 @@ function event({
   tenantId?: string | null;
   user?: { id: string } | null;
 }) {
+  mocks.effectivePermissions = [...permissions];
   return {
     locals: {
       membership: {
@@ -137,6 +178,30 @@ function event({
     url: new URL(`https://iolaus.localhost/api/job-search/${action}${query}`),
   };
 }
+
+// SMRT dependencies load their native runtime outside the app module mock, so
+// intercept its actual resolver method, rather than replacing the app export.
+// Its result is fixture-owned; the native context and exact operation catalog
+// assertion still run, and each deny case removes its required capability.
+beforeEach(async () => {
+  const { PermissionResolver } = await import('@happyvertical/smrt-users');
+  vi.spyOn(
+    PermissionResolver.prototype,
+    'resolvePermissions',
+  ).mockImplementation(async (userId: string, tenantId: string) => ({
+    permissions: new Set(
+      userId === 'user-1' && tenantId === 'tenant-1'
+        ? mocks.effectivePermissions
+        : [],
+    ),
+    membershipId: 'membership-fixture',
+    roleId: 'role-1',
+    groupIds: [],
+    deniedPermissionIds: [],
+    inheritedFromTenantId: null,
+    ancestorReadFromTenantIds: [],
+  }));
+});
 
 describe('job-search WebMCP route', () => {
   beforeEach(() => {

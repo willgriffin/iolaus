@@ -131,6 +131,7 @@ const mcpMocks = vi.hoisted(() => {
   }
 
   const state = {
+    effectivePermissions: [] as string[],
     applications: seedApplications(),
     generatorHandleToolCall: vi.fn(),
     generatorTools: vi.fn(async () =>
@@ -211,6 +212,34 @@ const mcpMocks = vi.hoisted(() => {
       state.tasks.length = 0;
       state.generatorHandleToolCall.mockClear();
       state.generatorTools.mockClear();
+    },
+  };
+});
+
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-users')>();
+  return {
+    ...actual,
+    UserCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'user-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    TenantCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'tenant-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    MembershipCollection: {
+      create: async () => ({
+        findByUserAndTenant: async (userId: string, tenantId: string) =>
+          userId === 'user-1' && tenantId === 'tenant-1'
+            ? { roleId: 'role-1', status: 'active', userId, tenantId }
+            : null,
+      }),
     },
   };
 });
@@ -367,6 +396,38 @@ vi.mock('./resume-variant-workflow.js', () => ({
     resumeVariantWorkflowMocks.syncResumeVariantApplicationApprovals,
 }));
 
+// SMRT dependencies load their native runtime outside the app module mock, so
+// intercept its actual resolver method, rather than replacing the app export.
+// Its result is fixture-owned; the native context and exact operation catalog
+// assertion still run, and each deny case removes its required capability.
+beforeEach(async () => {
+  const { PermissionResolver } = await import('@happyvertical/smrt-users');
+  vi.spyOn(
+    PermissionResolver.prototype,
+    'resolvePermissions',
+  ).mockImplementation(async (userId: string, tenantId: string) => ({
+    permissions: new Set(
+      userId === 'user-1' && tenantId === 'tenant-1'
+        ? mcpMocks.effectivePermissions
+        : [],
+    ),
+    membershipId: 'membership-fixture',
+    roleId: 'role-1',
+    groupIds: [],
+    deniedPermissionIds: [],
+    inheritedFromTenantId: null,
+    ancestorReadFromTenantIds: [],
+  }));
+});
+
+/** Install this call's explicit live permission fixture, then use the real service. */
+function callMcpToolWithAuthorityFixture(
+  options: Parameters<typeof callMcpTool>[0],
+) {
+  mcpMocks.effectivePermissions = [...(options.permissions ?? [])];
+  return callMcpTool(options);
+}
+
 describe('MCP public tool policy', () => {
   beforeEach(() => {
     mcpMocks.reset();
@@ -456,7 +517,7 @@ describe('MCP public tool policy', () => {
       providers: [{ created: 3, provider: 'greenhouse' }],
     });
 
-    const response = await callMcpTool({
+    const response = await callMcpToolWithAuthorityFixture({
       arguments: { historyLimit: 20, limit: 25, query: 'greenhouse' },
       name: 'job_search_list_source_health',
       permissions: ['sources.read', 'sourcecrawls.read'],
@@ -487,7 +548,7 @@ describe('MCP public tool policy', () => {
       limit: 20,
     });
 
-    const response = await callMcpTool({
+    const response = await callMcpToolWithAuthorityFixture({
       arguments: {
         limit: 20,
         sourceId: '11111111-1111-4111-8111-111111111111',
@@ -506,7 +567,7 @@ describe('MCP public tool policy', () => {
       status: 400,
     });
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: {},
         name: 'job_search_source_crawl_status',
         permissions: ['sources.read', 'sourcecrawls.read'],
@@ -521,7 +582,7 @@ describe('MCP public tool policy', () => {
 
   it('refuses source reads without both required read permissions', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { limit: 1 },
         name: 'job_search_list_source_health',
         permissions: ['sources.read'],
@@ -534,7 +595,7 @@ describe('MCP public tool policy', () => {
 
   it('refuses generated MCP writes the owner principal lacks permission for', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { accountStatus: 'needs_2fa', id: 'source-1' },
         name: 'source_update',
         permissions: ['sources.read'],
@@ -545,7 +606,7 @@ describe('MCP public tool policy', () => {
     expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
 
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { accountStatus: 'needs_2fa', id: 'source-1' },
         name: 'source_update',
         permissions: ['sources.update'],
@@ -933,7 +994,7 @@ describe('MCP public tool policy', () => {
 
   it('rejects non-object MCP tool arguments before calling the generator', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: [],
         name: 'source_update',
         ...owner,
@@ -976,7 +1037,7 @@ describe('MCP public tool policy', () => {
       'candidateanswer_list',
     ]) {
       await expect(
-        callMcpTool({
+        callMcpToolWithAuthorityFixture({
           arguments: { id: 'private-record' },
           name,
           user: { id: 'user-1' },
