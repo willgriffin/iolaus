@@ -23,6 +23,7 @@ export function getCurrentPartialOpportunityAssessmentProjection(
     value.unresolvedSourceClauseCount >= 0 &&
     Array.isArray(value.requirements) &&
     value.requirements.length === value.criterionCount &&
+    value.requirements.every((row) => row && typeof row === 'object') &&
     value.requirements.filter((row) => row.support === 'supported').length ===
       value.supportedCriterionCount &&
     value.requirements.every(
@@ -34,6 +35,8 @@ export function getCurrentPartialOpportunityAssessmentProjection(
         Array.isArray(row.candidateCitations) &&
         row.postingCitations.every(
           (citation) =>
+            citation &&
+            typeof citation === 'object' &&
             typeof citation.excerpt === 'string' &&
             typeof citation.clauseId === 'string' &&
             Number.isSafeInteger(citation.start) &&
@@ -43,6 +46,8 @@ export function getCurrentPartialOpportunityAssessmentProjection(
         ) &&
         row.candidateCitations.every(
           (citation) =>
+            citation &&
+            typeof citation === 'object' &&
             typeof citation.sourceId === 'string' &&
             typeof citation.title === 'string' &&
             typeof citation.excerpt === 'string',

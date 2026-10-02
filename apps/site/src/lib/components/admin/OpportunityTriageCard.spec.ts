@@ -239,6 +239,11 @@ it('shows current partial evidence alongside an unavailable full match without p
     latestScore: 99,
     partialAssessmentProjection: partialEvidence,
   });
+  expect(body).toContain('Partial assessment');
+  expect(body).toContain('Overall fit not yet established');
+  expect(body).not.toContain('Match assessment unavailable');
+  expect(body).not.toContain('No current assessment is available.');
+  expect(body).not.toContain('Run Assess to assess this posting');
   expect(body).toContain('1 supported criterion of 1 assessed');
   expect(body).toContain('2 unresolved source clauses');
   expect(body).toContain('No overall fit conclusion.');
@@ -246,4 +251,42 @@ it('shows current partial evidence alongside an unavailable full match without p
   expect(body).toContain('Maintained tested API integrations.');
   expect(body).not.toContain('99/100');
   expect(body).not.toContain('Strong match');
+});
+
+it.each([
+  { ...partialEvidence, sourceStatus: 'stale' },
+  { ...partialEvidence, criterionCount: 0 },
+])('preserves unavailable assessment messaging for invalid partial proof (%j)', (partialAssessmentProjection) => {
+  const { body } = renderCard({
+    id: 'partial-stale',
+    title: 'Engineer',
+    partialAssessmentProjection,
+  });
+  expect(body).toContain('Match assessment unavailable');
+  expect(body).not.toContain('Partial assessment');
+  expect(body).not.toContain('Overall fit not yet established');
+});
+
+it('retains current full-assessment messaging when partial evidence is also present', () => {
+  const { body } = renderCard({
+    id: 'full-current',
+    title: 'Engineer',
+    partialAssessmentProjection: partialEvidence,
+    assessmentProjection: {
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      matchReadiness: 'assessable',
+      ranking: { fitScore: 72, eligibilityPriority: 0 },
+      coverage: {
+        candidateTruncated: false,
+        postingTruncated: false,
+        requirementsTruncated: false,
+        requirementCount: 1,
+      },
+      reason: 'Current full assessment',
+    },
+  });
+  expect(body).toContain('72/100');
+  expect(body).not.toContain('Overall fit not yet established');
+  expect(body).not.toContain('Partial assessment');
 });
