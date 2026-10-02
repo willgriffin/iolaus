@@ -560,12 +560,23 @@ describe('target-aware truthful resume selection', () => {
     name: string;
     terms: string[];
     config: TailoringConfig;
+    variant?: TailoringConfig;
     expected: string;
   }> = [
     {
       name: 'matching catalog label wins the cap',
       terms: ['Node.js'],
       config: {},
+      expected: 'Target evidence',
+    },
+    {
+      name: 'existing naming-only auto variant still gets target selection',
+      terms: ['Node.js'],
+      config: {},
+      variant: {
+        name: 'Platform Engineer resume variant',
+        outputSlug: 'platform-engineer',
+      },
       expected: 'Target evidence',
     },
     {
@@ -615,7 +626,7 @@ describe('target-aware truthful resume selection', () => {
       expected: 'General evidence',
     },
   ];
-  it.each(cases)('$name', async ({ terms, config, expected }) => {
+  it.each(cases)('$name', async ({ terms, config, variant, expected }) => {
     const achievements = [
       {
         title: 'General evidence',
@@ -690,6 +701,7 @@ describe('target-aware truthful resume selection', () => {
       subject: PRIVATE_SUBJECT,
       targetOpportunityId: 'posting',
       targetSkillTerms: terms,
+      tailoring: variant,
       filesystem: {} as FilesystemInterface,
     });
     const options = mocks.generateResumeArtifacts.mock.calls.at(-1)?.[0];

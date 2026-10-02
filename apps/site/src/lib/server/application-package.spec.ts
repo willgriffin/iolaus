@@ -116,17 +116,23 @@ const mocks = vi.hoisted(() => ({
     }
   }),
   collections: new Map<string, ReturnType<typeof collection>>(),
-  generateResumeAsset: vi.fn(async () => ({
-    generatedAt: new Date('2026-06-05T12:00:00.000Z'),
-    generatedPath: 'generated-resumes/resume-generated',
-    htmlPath: 'generated-resumes/resume-generated/resume.html',
-    id: 'resume-generated',
-    markdownPath: 'generated-resumes/resume-generated/resume.md',
-    outputSlug: 'variant-slug',
-    pdfPath: 'generated-resumes/resume-generated/resume.pdf',
-    tailoringId: 'tailoring-1',
-    textPath: 'generated-resumes/resume-generated/resume.txt',
-  })),
+  generateResumeAsset: vi.fn(
+    async (
+      _options?: Parameters<
+        typeof import('./resume-admin').generateResumeAsset
+      >[0],
+    ) => ({
+      generatedAt: new Date('2026-06-05T12:00:00.000Z'),
+      generatedPath: 'generated-resumes/resume-generated',
+      htmlPath: 'generated-resumes/resume-generated/resume.html',
+      id: 'resume-generated',
+      markdownPath: 'generated-resumes/resume-generated/resume.md',
+      outputSlug: 'variant-slug',
+      pdfPath: 'generated-resumes/resume-generated/resume.pdf',
+      tailoringId: 'tailoring-1',
+      textPath: 'generated-resumes/resume-generated/resume.txt',
+    }),
+  ),
   publishedResume: { id: 'resume-default' },
   requireFreshPostingPreflight: vi.fn(
     async (_options?: { onClosed?: () => Promise<void> }) => ({
@@ -1237,6 +1243,61 @@ describe('generateApplicationPackage', () => {
         tailoringName: 'AI Engineer resume variant',
       }),
     );
+  });
+
+  it('keeps an existing auto-created empty variant eligible for target selection', async () => {
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          title: 'Platform Engineer',
+          requiredSkills: 'Node.js',
+          preferredSkills: '',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeVariant',
+      collection([
+        record({
+          id: 'auto-variant',
+          applicationId: 'app-auto-variant',
+          opportunityId: 'opp-1',
+          name: 'Platform Engineer resume variant',
+          outputSlug: 'platform-engineer',
+          emphasizeTags: '',
+          excludeTags: '',
+          titleOverride: '',
+          summaryOverride: '',
+          tailoringConfigId: '',
+          status: 'generated',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-auto-variant',
+          opportunityId: 'opp-1',
+          resumeMode: 'generate_tailored',
+          resumeVariantId: 'auto-variant',
+          coverLetterMode: 'none',
+        }),
+      ]),
+    );
+    await generateApplicationPackage('app-auto-variant');
+    const options = mocks.generateResumeAsset.mock.calls.at(-1)?.[0];
+    expect(options).toMatchObject({
+      targetOpportunityId: 'opp-1',
+      targetSkillTerms: ['Node.js'],
+      tailoring: {
+        name: 'Platform Engineer resume variant',
+        outputSlug: 'platform-engineer',
+      },
+    });
+    expect(options?.tailoring).not.toHaveProperty('emphasizeTags');
   });
 
   it('passes existing resume variant overrides into tailored generation', async () => {
