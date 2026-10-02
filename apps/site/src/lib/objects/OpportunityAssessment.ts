@@ -1,4 +1,5 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 /**
  * A machine-generated, candidate-private view of a global opportunity. This
@@ -7,23 +8,41 @@ import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
  */
 @smrt({
   tableName: 'opportunity_assessments',
+  conflictColumns: [
+    'tenant_id',
+    'owner_user_id',
+    'candidate_profile_id',
+    'opportunity_id',
+    'assessment_fingerprint',
+  ],
   api: { include: [] },
   cli: { include: [] },
   mcp: { include: [] },
 })
+@TenantScoped()
 export class OpportunityAssessment extends SmrtObject {
-  @field({ type: 'text' })
+  @tenantId()
   tenantId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   ownerUserId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   candidateProfileId = '';
   @field({ type: 'text' })
   opportunityId = '';
   @field({ type: 'text' })
   assessmentFingerprint = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   candidateMaterialFingerprint = '';
+  @field({ type: 'text' })
+  eligibilityBucket = 'unknown';
+  @field({ type: 'integer' })
+  eligibilityPriority = 2;
+  @field({ type: 'integer' })
+  fitScore = 0;
+  @field({ type: 'boolean' })
+  excluded = false;
+  @field({ type: 'text' })
+  preferencesFingerprint = '';
   @field({ type: 'text' })
   sourceContentFingerprint = '';
   @field({ type: 'integer' })

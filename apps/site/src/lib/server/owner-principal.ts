@@ -6,12 +6,12 @@ import {
   type PrincipalRun,
   PrincipalToolNotAllowedError,
 } from '@happyvertical/smrt-agents';
-import { OperationPermissionError, type User } from '@happyvertical/smrt-users';
+import { OperationPermissionError } from '@happyvertical/smrt-users';
 import { getAppConfig } from './app-config.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import { listOwnerToolNames } from './tool-catalog.js';
 import {
-  type WorkspaceSubject,
+  type WorkspaceSubjectLocals,
   workspaceSubjectFromLocals,
 } from './workspace-subject.js';
 
@@ -24,12 +24,7 @@ export const OWNER_AGENT_CLASS = getAppConfig().agentClass;
  * The slice of `App.Locals` the owner principal binds from. Both the cookie
  * session handler and the terminal Bearer path populate these.
  */
-export interface OwnerPrincipalLocals {
-  permissions?: readonly string[] | null;
-  tenantId?: string | null;
-  user?: Pick<User, 'id'> | null;
-  workspaceSubject?: WorkspaceSubject;
-}
+export type OwnerPrincipalLocals = WorkspaceSubjectLocals;
 
 export interface RunAsOwnerOptions {
   /** Audit action label, e.g. `webmcp.job_search_import_opportunity`. */

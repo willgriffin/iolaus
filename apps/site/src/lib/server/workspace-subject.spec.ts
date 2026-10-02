@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   findByUserAndTenant: vi.fn(),
   get: vi.fn(),
+  getTenant: vi.fn(),
+  getUser: vi.fn(),
   list: vi.fn(),
   getCurrentTenant: vi.fn(),
   permissions: vi.fn(),
+  withTenant: vi.fn(),
 }));
 
 vi.mock('@happyvertical/smrt-users', () => ({
@@ -18,10 +21,17 @@ vi.mock('@happyvertical/smrt-users', () => ({
   PermissionResolver: {
     create: vi.fn(async () => ({ resolvePermissions: mocks.permissions })),
   },
+  TenantCollection: {
+    create: vi.fn(async () => ({ get: mocks.getTenant })),
+  },
+  UserCollection: {
+    create: vi.fn(async () => ({ get: mocks.getUser })),
+  },
 }));
 
 vi.mock('@happyvertical/smrt-tenancy', () => ({
   getCurrentTenant: mocks.getCurrentTenant,
+  withTenant: mocks.withTenant,
 }));
 
 vi.mock('./db.js', () => ({ getSmrtOptions: vi.fn(() => ({ db: 'test' })) }));
@@ -32,10 +42,14 @@ vi.mock('./smrt.js', () => ({
 
 import {
   getCurrentWorkspaceSubject,
+  requireCandidateWorkspaceSubject,
+  requireCurrentCandidateWorkspaceSubject,
   requireCurrentWorkspaceSubject,
   resolveWorkspaceSubjectForProfile,
   verifyWorkspaceSubject,
   WorkspaceSubjectError,
+  withVerifiedWorkspaceSubject,
+  withWorkspaceSubjectForProfile,
 } from './workspace-subject';
 
 const locals = () => ({
@@ -64,17 +78,26 @@ describe('workspace subject', () => {
       tenantId: 'tenant-1',
       userId: 'user-1',
     });
+    mocks.getUser.mockResolvedValue({ id: 'user-1', isActive: () => true });
+    mocks.getTenant.mockResolvedValue({
+      id: 'tenant-1',
+      isActive: () => true,
+    });
     mocks.permissions.mockResolvedValue({
       permissions: new Set(['fresh.read']),
     });
     mocks.list.mockResolvedValue([
       {
+        active: true,
         id: 'profile-1',
         ownerUserId: 'user-1',
         profileKey: 'default',
         tenantId: 'tenant-1',
       },
     ]);
+    mocks.withTenant.mockImplementation(
+      async (_context: unknown, fn: () => Promise<unknown>) => await fn(),
+    );
   });
 
   it('re-reads an active exact membership and replaces stale permissions', async () => {
@@ -98,38 +121,48 @@ describe('workspace subject', () => {
       tenantId: 'tenant-1',
       userId: 'user-1',
     });
+    expect(requireCurrentCandidateWorkspaceSubject()).toEqual({
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
   });
 
-  it.each([
-    [null, 'missing membership'],
-    [
+  it('rejects missing, inactive, or foreign memberships', async () => {
+    const cases = [
+      null,
       { roleId: '', status: 'active', tenantId: 'tenant-1', userId: 'user-1' },
-      'role missing',
-    ],
-    [
       {
         roleId: 'role-1',
         status: 'pending',
         tenantId: 'tenant-1',
         userId: 'user-1',
       },
-      'inactive',
-    ],
-    [
       {
         roleId: 'role-1',
         status: 'active',
         tenantId: 'tenant-2',
         userId: 'user-1',
       },
-      'foreign tenant',
-    ],
-  ])('rejects %s', async (membership) => {
-    mocks.findByUserAndTenant.mockResolvedValue(membership);
+    ];
+    for (const membership of cases) {
+      mocks.findByUserAndTenant.mockResolvedValue(membership);
+      const requestLocals = locals();
+
+      await expect(verifyWorkspaceSubject(requestLocals)).resolves.toBeNull();
+      expect(requestLocals.membership).toBeNull();
+      expect(requestLocals.permissions).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['inactive user', 'getUser', { id: 'user-1', isActive: () => false }],
+    ['inactive tenant', 'getTenant', { id: 'tenant-1', isActive: () => false }],
+  ])('rejects an %s even with an active membership', async (_label, mock, row) => {
+    mocks[mock as 'getUser' | 'getTenant'].mockResolvedValue(row);
     const requestLocals = locals();
 
     await expect(verifyWorkspaceSubject(requestLocals)).resolves.toBeNull();
-    expect(requestLocals.membership).toBeNull();
     expect(requestLocals.permissions).toEqual([]);
   });
 
@@ -137,6 +170,7 @@ describe('workspace subject', () => {
     const requestLocals = locals();
     await verifyWorkspaceSubject(requestLocals);
     mocks.get.mockResolvedValue({
+      active: true,
       id: 'profile-1',
       ownerUserId: 'user-1',
       tenantId: 'tenant-1',
@@ -155,6 +189,7 @@ describe('workspace subject', () => {
       userId: 'user-1',
     });
     mocks.get.mockResolvedValue({
+      active: true,
       id: 'profile-1',
       ownerUserId: 'user-2',
       tenantId: 'tenant-1',
@@ -164,11 +199,122 @@ describe('workspace subject', () => {
     ).rejects.toBeInstanceOf(WorkspaceSubjectError);
   });
 
+  it('narrows only a subject carrying a selected profile', () => {
+    expect(() =>
+      requireCandidateWorkspaceSubject({
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      }),
+    ).toThrow(WorkspaceSubjectError);
+    expect(
+      requireCandidateWorkspaceSubject({
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      }),
+    ).toEqual({
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+  });
+
+  it('scopes a selected profile to one cloned context without changing siblings', async () => {
+    const requestLocals = locals();
+    await verifyWorkspaceSubject(requestLocals);
+    const originalContext = mocks.getCurrentTenant.mock.results.at(-1)
+      ?.value as {
+      metadata: Record<string, unknown>;
+    };
+    mocks.get.mockResolvedValue({
+      active: true,
+      id: 'profile-alt',
+      ownerUserId: 'user-1',
+      tenantId: 'tenant-1',
+    });
+
+    await expect(
+      resolveWorkspaceSubjectForProfile('profile-alt'),
+    ).resolves.toEqual(expect.objectContaining({ profileId: 'profile-alt' }));
+    expect(originalContext.metadata.workspaceSubject).toEqual(
+      expect.objectContaining({ profileId: 'profile-1' }),
+    );
+    await expect(
+      withWorkspaceSubjectForProfile('profile-alt', async (subject) => subject),
+    ).resolves.toEqual(expect.objectContaining({ profileId: 'profile-alt' }));
+    await expect(
+      withVerifiedWorkspaceSubject(
+        { profileId: 'profile-alt', tenantId: 'tenant-1', userId: 'user-1' },
+        async (subject) => subject,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ profileId: 'profile-alt' }));
+    expect(mocks.withTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          workspaceSubject: expect.objectContaining({
+            profileId: 'profile-alt',
+          }),
+        }),
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it('rejects a subject from a different principal context', async () => {
+    mocks.getCurrentTenant.mockReturnValue({
+      metadata: {},
+      tenantId: 'tenant-1',
+      userId: 'user-2',
+    });
+    await expect(
+      withVerifiedWorkspaceSubject(
+        { tenantId: 'tenant-1', userId: 'user-1' },
+        async () => 'unexpected',
+      ),
+    ).rejects.toBeInstanceOf(WorkspaceSubjectError);
+  });
+
   it('keeps profile authority absent when the verified owner has no default profile', async () => {
     mocks.list.mockResolvedValue([]);
     const requestLocals = locals();
 
     await expect(verifyWorkspaceSubject(requestLocals)).resolves.toEqual({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+  });
+
+  it('keeps profile authority absent for inactive or duplicate default profiles', async () => {
+    mocks.list.mockResolvedValue([
+      {
+        active: false,
+        id: 'profile-1',
+        ownerUserId: 'user-1',
+        profileKey: 'default',
+        tenantId: 'tenant-1',
+      },
+    ]);
+    await expect(verifyWorkspaceSubject(locals())).resolves.toEqual({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
+    mocks.list.mockResolvedValue([
+      {
+        active: true,
+        id: 'profile-1',
+        ownerUserId: 'user-1',
+        profileKey: 'default',
+        tenantId: 'tenant-1',
+      },
+      {
+        active: true,
+        id: 'profile-2',
+        ownerUserId: 'user-1',
+        profileKey: 'default',
+        tenantId: 'tenant-1',
+      },
+    ]);
+    await expect(verifyWorkspaceSubject(locals())).resolves.toEqual({
       tenantId: 'tenant-1',
       userId: 'user-1',
     });

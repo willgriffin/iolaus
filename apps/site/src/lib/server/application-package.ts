@@ -20,6 +20,7 @@ import {
   toOpportunityStatus,
 } from '../objects/lifecycle.js';
 import { resolveWritingAiProfileClient } from './ai-config.js';
+import { isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import {
   archiveApplicationsForClosedPosting,
@@ -31,6 +32,10 @@ import {
 } from './application-workflow.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import { parseRequiredAnswers } from './auto-submit-eligibility.js';
+import {
+  loadCurrentOpportunityReviewOverlays,
+  recordPrivateOpportunityReview,
+} from './opportunity-review-overlay.js';
 import {
   createPrivateRecord,
   getPrivateRecord,
@@ -686,54 +691,52 @@ export function normalizeOpportunityRating(value: unknown): number | null {
 
 export async function updateOpportunityReview(options: {
   /**
-   * The revision the caller resolved this row at. When supplied the write is
-   * pinned to it, so a row edited since then fails its compare-and-swap
-   * instead of overwriting the newer value. Bulk callers pass it because the
-   * gap between resolving a selection and applying to it is wide enough for
-   * another writer to land; single-row callers read and write in one step and
-   * can rely on the revision the load itself carried.
+   * Retained for route compatibility. Reviews are immutable Decision revisions,
+   * so a shared Opportunity revision cannot be used as a write fence.
    */
   expectedUpdatedAt?: Date | string;
   humanRating?: unknown;
   humanReviewNotes?: string;
   humanReviewStatus: string;
   opportunityId: string;
-  reviewedByProfileId?: string;
   subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
   const subject = requireWorkspaceSubject(options.subject);
-  const status = stringValue(options.humanReviewStatus);
+  const rawStatus = stringValue(options.humanReviewStatus);
+  const humanReviewStatus = rawStatus || 'needs_input';
   if (
-    status &&
-    !['needs_input', 'maybe', 'apply', 'reject', 'archived'].includes(status)
+    !['needs_input', 'maybe', 'apply', 'reject', 'archived'].includes(
+      humanReviewStatus,
+    )
   ) {
     error(400, 'Invalid opportunity review status.');
   }
-
-  const opportunity = (await getPrivateRecord(
-    'Opportunity',
-    options.opportunityId,
+  const humanRating = normalizeOpportunityRating(options.humanRating);
+  const humanReviewNotes = stringValue(options.humanReviewNotes);
+  const decision = (await recordPrivateOpportunityReview({
+    humanRating,
+    humanReviewNotes,
+    humanReviewStatus: humanReviewStatus as
+      | 'apply'
+      | 'archived'
+      | 'maybe'
+      | 'needs_input'
+      | 'reject',
+    opportunityId: stringValue(options.opportunityId),
     subject,
-  )) as MutableRecord | null;
-  if (!opportunity) {
-    error(404, 'Opportunity not found.');
-  }
+  })) as MutableRecord;
+  await decision.save();
 
-  Object.assign(opportunity, {
-    humanRating: normalizeOpportunityRating(options.humanRating),
-    humanReviewNotes: stringValue(options.humanReviewNotes),
-    humanReviewStatus: status,
-    reviewedAt: new Date(),
-    reviewedByProfileId: stringValue(options.reviewedByProfileId),
-    reviewedByUserId: stringValue(options.user?.id),
-  });
-  await opportunity.save(
-    options.expectedUpdatedAt
-      ? { expectedUpdatedAt: options.expectedUpdatedAt }
-      : undefined,
-  );
-  return jsonRecord(opportunity);
+  return {
+    ...jsonRecord(decision),
+    humanRating,
+    humanReviewNotes,
+    humanReviewStatus,
+    reviewedAt: decision.createdAt ?? decision.created_at ?? new Date(),
+    reviewedByProfileId: subject.profileId,
+    reviewedByUserId: subject.userId,
+  };
 }
 
 export async function bulkUpdateOpportunityReviews(options: {
@@ -741,7 +744,6 @@ export async function bulkUpdateOpportunityReviews(options: {
   humanReviewNotes?: string;
   humanReviewStatus: string;
   opportunityIds: string[];
-  reviewedByProfileId?: string;
   subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
@@ -758,32 +760,30 @@ export async function bulkUpdateOpportunityReviews(options: {
     error(400, 'Select at least one opportunity.');
   }
 
-  const ratingOverride = stringValue(options.humanRating);
-  const notesOverride = stringValue(options.humanReviewNotes);
-  const reviewedByProfileId = stringValue(options.reviewedByProfileId);
+  // Preserve only this subject's current private projection. Shared catalog
+  // fields are deliberately never read as defaults for a private review.
+  const currentReviews = await loadCurrentOpportunityReviewOverlays({
+    opportunityIds,
+    subject,
+  });
+  const overridesRating =
+    options.humanRating !== undefined && options.humanRating !== '';
+  const overridesNotes =
+    options.humanReviewNotes !== undefined && options.humanReviewNotes !== '';
   const records: Record<string, unknown>[] = [];
 
   for (const opportunityId of opportunityIds) {
-    const opportunity = (await getPrivateRecord(
-      'Opportunity',
-      opportunityId,
-      subject,
-    )) as MutableRecord | null;
-    if (!opportunity) {
-      error(404, 'Opportunity not found.');
-    }
-
+    const current = currentReviews.get(opportunityId);
     records.push(
       await updateOpportunityReview({
-        humanRating: ratingOverride
+        humanRating: overridesRating
           ? options.humanRating
-          : opportunity.humanRating,
-        humanReviewNotes:
-          notesOverride || stringValue(opportunity.humanReviewNotes),
+          : (current?.humanRating ?? null),
+        humanReviewNotes: overridesNotes
+          ? options.humanReviewNotes
+          : (current?.humanReviewNotes ?? ''),
         humanReviewStatus: status,
         opportunityId,
-        reviewedByProfileId:
-          reviewedByProfileId || stringValue(opportunity.reviewedByProfileId),
         subject,
         user: options.user,
       }),
@@ -810,11 +810,9 @@ export async function createDraftApplicationForOpportunity(options: {
   user?: Pick<User, 'id'> | null;
 }) {
   const subject = requireWorkspaceSubject(options.subject);
-  const opportunity = (await getPrivateRecord(
-    'Opportunity',
-    options.opportunityId,
-    subject,
-  )) as MutableRecord | null;
+  const opportunity = (await (
+    await getCollection('Opportunity')
+  ).get(options.opportunityId)) as unknown as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Opportunity not found.');
   }
@@ -834,7 +832,7 @@ export async function createDraftApplicationForOpportunity(options: {
   return await runWithFreshPostingPreflight({
     action: 'create_application_draft',
     onClosed: async () => {
-      await archiveApplicationsForClosedPosting(options.opportunityId);
+      await archiveApplicationsForClosedPosting(options.opportunityId, subject);
     },
     opportunity,
     overrideReason: options.preflightOverrideReason,
@@ -849,12 +847,7 @@ export async function createDraftApplicationForOpportunity(options: {
         const opportunity = (await opportunities.get(
           stringValue(currentOpportunity.id),
         )) as unknown as MutableRecord | null;
-        if (
-          !opportunity ||
-          !Object.entries(privateRecordWhere(subject)).every(
-            ([key, value]) => opportunity[key] === value,
-          )
-        ) {
+        if (!opportunity) {
           error(404, 'Opportunity not found.');
         }
         const existing = (await applicationCollection.list({
@@ -945,12 +938,15 @@ export async function createDraftApplicationForOpportunity(options: {
           await application.save();
         }
 
-        if (shouldMoveOpportunityIntoApplicationWorkflow(opportunity.status)) {
+        if (
+          !isSharedHosted() &&
+          shouldMoveOpportunityIntoApplicationWorkflow(opportunity.status)
+        ) {
           opportunity.status = 'apply';
           await opportunity.save();
         }
 
-        await syncApplicationWorkflowTasks(application);
+        await syncApplicationWorkflowTasks(application, subject);
         return jsonRecord(application);
       }),
     user: options.user,
@@ -1781,18 +1777,16 @@ export async function generateApplicationPackage(
   }
 
   const opportunityId = stringValue(application.opportunityId);
-  const opportunity = (await getPrivateRecord(
-    'Opportunity',
-    opportunityId,
-    subject,
-  )) as MutableRecord | null;
+  const opportunity = (await (
+    await getCollection('Opportunity')
+  ).get(opportunityId)) as unknown as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Application opportunity not found.');
   }
   return await runWithFreshPostingPreflight({
     action: 'generate_packet',
     onClosed: async () => {
-      await archiveApplicationsForClosedPosting(opportunityId);
+      await archiveApplicationsForClosedPosting(opportunityId, subject);
     },
     opportunity,
     overrideReason: options.preflightOverrideReason,
@@ -2068,7 +2062,7 @@ async function generateApplicationPackageAfterPreflight(options: {
         runType: 'application_packet',
         status: 'succeeded',
       });
-      await syncApplicationWorkflowTasks(application);
+      await syncApplicationWorkflowTasks(application, subject);
     });
     return jsonRecord(application);
   } catch (cause) {

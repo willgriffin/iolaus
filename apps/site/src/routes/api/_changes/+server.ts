@@ -5,8 +5,10 @@ import {
 } from '@happyvertical/smrt-core';
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { getDatabaseUrl, getDbConfig } from '$lib/server/db';
+import { assertWorkspaceEventContext } from '$lib/server/workspace-resource-policy';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
+  assertWorkspaceEventContext();
   if (!locals.user) {
     return json({ error: 'Unauthorized' }, { status: 401 });
   }

@@ -1,7 +1,28 @@
-import { describe, expect, it, vi } from 'vitest';
+import { SmrtJob } from '@happyvertical/smrt-jobs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AtsFilePart, AtsFormSchema } from './ats/types.js';
-import { runAutoSubmitApplicationJob } from './auto-submit-application-job.js';
+import {
+  enqueueAutoSubmitApplication,
+  runAutoSubmitApplicationJob,
+} from './auto-submit-application-job.js';
 import type { AutoSubmitEligibility } from './auto-submit-eligibility.js';
+
+const queueMocks = vi.hoisted(() => ({
+  privateRecord: vi.fn(),
+  subject: {
+    profileId: 'profile-1',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  } as { profileId: string; tenantId: string; userId: string } | null,
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  requireCurrentWorkspaceSubject: () => queueMocks.subject,
+}));
+vi.mock('./private-workspace.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./private-workspace.js')>()),
+  getPrivateRecord: queueMocks.privateRecord,
+}));
 
 const SCHEMA: AtsFormSchema = {
   ats: 'greenhouse',
@@ -77,6 +98,69 @@ function deps(over: Record<string, unknown> = {}) {
 }
 
 describe('runAutoSubmitApplicationJob', () => {
+  beforeEach(() => {
+    queueMocks.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    queueMocks.privateRecord.mockReset();
+    queueMocks.privateRecord.mockResolvedValue({
+      candidateProfileId: 'profile-1',
+      id: 'app-1',
+      ownerUserId: 'user-1',
+      tenantId: 'tenant-1',
+    });
+  });
+
+  it('captures the verified owner tuple before dedupe and rejects a foreign active job', async () => {
+    const created = {
+      id: 'job-1',
+      save: vi.fn(async () => {}),
+    };
+    const collection = {
+      create: vi.fn(async (payload) => Object.assign(created, payload)),
+      list: vi.fn(async (): Promise<SmrtJob[]> => []),
+    };
+
+    await enqueueAutoSubmitApplication(
+      'app-1',
+      { reason: 'manual' },
+      { collection },
+    );
+
+    expect(queueMocks.privateRecord).toHaveBeenCalledWith(
+      'Application',
+      'app-1',
+      queueMocks.subject,
+    );
+    expect(collection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          reason: 'manual',
+          runtimeWorkspaceSubject: queueMocks.subject,
+        }),
+      }),
+    );
+    await expect(
+      enqueueAutoSubmitApplication('app-1', { userId: 'forged' }),
+    ).rejects.toThrow('cannot set workspace ownership');
+
+    const foreignJob = new SmrtJob();
+    foreignJob.id = 'foreign-job';
+    foreignJob.args = {
+      runtimeWorkspaceSubject: {
+        profileId: 'profile-2',
+        tenantId: 'tenant-1',
+        userId: 'user-2',
+      },
+    };
+    collection.list.mockResolvedValueOnce([foreignJob]);
+    await expect(
+      enqueueAutoSubmitApplication('app-1', {}, { collection }),
+    ).rejects.toMatchObject({ code: 'application_not_found' });
+  });
+
   it('dry-run: persists the exact payload as an audit and never marks submitted', async () => {
     const resolveResume = vi.fn(async () => RESUME);
     const d = deps({ evaluate: async () => eligibility(), resolveResume });
@@ -110,6 +194,7 @@ describe('runAutoSubmitApplicationJob', () => {
     ]);
     expect(resolveResume).toHaveBeenCalledWith(
       expect.objectContaining({ resumeAssetId: 'resume-app-1' }),
+      queueMocks.subject,
     );
   });
 

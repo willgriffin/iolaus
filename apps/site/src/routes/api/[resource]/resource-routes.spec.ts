@@ -357,7 +357,7 @@ describe('generic resource API routes', () => {
     );
   });
 
-  it('records authenticated approval on REST application creation', async () => {
+  it('records authenticated approval without dispatching a private workflow from generic REST', async () => {
     const applications = routeMocks.collection();
     routeMocks.collections.set('Application', applications);
 
@@ -376,12 +376,7 @@ describe('generic resource API routes', () => {
       approvedByUserId: 'user-1',
       status: 'approved',
     });
-    expect(routeMocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvedByUserId: 'user-1',
-        status: 'approved',
-      }),
-    );
+    expect(routeMocks.syncApplicationWorkflowTasks).not.toHaveBeenCalled();
   });
 
   it('rejects system-managed application material locks on REST creation', async () => {
@@ -421,10 +416,10 @@ describe('generic resource API routes', () => {
     });
     expect(
       routeMocks.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalled();
+    ).not.toHaveBeenCalled();
   });
 
-  it('syncs recommendation review tasks after REST opportunity updates', async () => {
+  it('does not dispatch private recommendation tasks from a generic REST opportunity update', async () => {
     const opportunities = routeMocks.collection([
       { id: 'opp-1', status: 'found', title: 'Platform Engineer' },
     ]);
@@ -438,7 +433,7 @@ describe('generic resource API routes', () => {
     expect(response.status).toBe(200);
     expect(
       routeMocks.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalled();
+    ).not.toHaveBeenCalled();
   });
 
   it('syncs selected application approvals after REST resume variant writes', async () => {
@@ -455,7 +450,11 @@ describe('generic resource API routes', () => {
     expect(createResponse.status).toBe(201);
     expect(
       routeMocks.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('2');
+    ).toHaveBeenCalledWith('2', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
 
     const updateResponse = await itemPut({
       params: { id: 'variant-1', resource: 'resumevariants' },
@@ -465,10 +464,18 @@ describe('generic resource API routes', () => {
     expect(updateResponse.status).toBe(200);
     expect(
       routeMocks.reserveResumeVariantApplicationWrite,
-    ).toHaveBeenCalledWith('variant-1');
+    ).toHaveBeenCalledWith('variant-1', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
     expect(
       routeMocks.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('variant-1');
+    ).toHaveBeenCalledWith('variant-1', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
   });
 
   it('rejects unsafe REST resume variant updates before saving', async () => {
@@ -818,13 +825,7 @@ describe('generic resource API routes', () => {
       approvedByUserId: 'user-1',
       status: 'approved',
     });
-    expect(routeMocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvedByUserId: 'user-1',
-        id: 'app-1',
-        status: 'approved',
-      }),
-    );
+    expect(routeMocks.syncApplicationWorkflowTasks).not.toHaveBeenCalled();
   });
 
   it('preserves recorded application approval when REST updates send a blank approval id', async () => {
@@ -847,13 +848,7 @@ describe('generic resource API routes', () => {
     expect(applications.records[0]).toMatchObject({
       approvedByUserId: 'user-1',
     });
-    expect(routeMocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvedByUserId: 'user-1',
-        id: 'app-1',
-        status: 'approved',
-      }),
-    );
+    expect(routeMocks.syncApplicationWorkflowTasks).not.toHaveBeenCalled();
   });
 
   it('invalidates approval when REST updates change approved application materials', async () => {
@@ -882,13 +877,7 @@ describe('generic resource API routes', () => {
       resumeAssetId: 'resume-new',
       status: 'awaiting_user',
     });
-    expect(routeMocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'app-1',
-        resumeAssetId: 'resume-new',
-        status: 'awaiting_user',
-      }),
-    );
+    expect(routeMocks.syncApplicationWorkflowTasks).not.toHaveBeenCalled();
   });
 
   it('does not let a stale REST application update restore final approval', async () => {
@@ -1093,3 +1082,12 @@ describe('generic resource API routes', () => {
     expect(routeMocks.deleteSourceSchedule).toHaveBeenCalledWith('source-1');
   });
 });
+
+vi.mock('$lib/server/workspace-subject.js', () => ({
+  getCurrentWorkspaceSubject: () => ({
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+    profileId: 'profile-1',
+  }),
+  isCurrentWorkspaceOperator: () => true,
+}));

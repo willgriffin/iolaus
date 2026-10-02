@@ -4,14 +4,23 @@ import {
   SmrtObject,
   smrt,
 } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'decision_tags',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Tags inherit the decision's private workspace boundary.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class DecisionTag extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text', required: true })
+  ownerUserId = '';
+  @field({ type: 'text', required: true })
+  candidateProfileId = '';
   @field({ type: 'text', required: true })
   decisionId = '';
   @crossPackageRef('@happyvertical/smrt-tags:Tag', {

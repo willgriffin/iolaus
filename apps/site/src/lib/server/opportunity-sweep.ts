@@ -255,6 +255,12 @@ export async function sweepInactiveSourceOpportunities(
     user?: Pick<User, 'id'> | null;
   } = {},
 ): Promise<OpportunitySweepResult> {
+  const { isSharedHosted } = await import('./app-config.js');
+  if (isSharedHosted()) {
+    throw new Error(
+      'Shared workspace opportunity sweeps require an explicit operator dispatch.',
+    );
+  }
   const dryRun = options.dryRun !== false;
   const notSeenDays = sweepNotSeenDays(options.notSeenDays);
   const cutoff = sweepCutoff(notSeenDays, options.now ?? new Date());

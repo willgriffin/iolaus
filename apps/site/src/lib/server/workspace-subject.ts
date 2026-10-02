@@ -1,10 +1,12 @@
 import type { SmrtObject } from '@happyvertical/smrt-core';
-import { getCurrentTenant } from '@happyvertical/smrt-tenancy';
+import { getCurrentTenant, withTenant } from '@happyvertical/smrt-tenancy';
 import {
   MembershipCollection,
   MembershipStatus,
   PermissionResolver,
+  TenantCollection,
   type User,
+  UserCollection,
 } from '@happyvertical/smrt-users';
 import { isConfiguredOidcAdminEmail } from './administrative-auth.js';
 import { getAppConfig } from './app-config.js';
@@ -21,6 +23,15 @@ export interface WorkspaceSubject {
   userId: string;
 }
 
+/**
+ * A workspace identity whose selected candidate profile has been verified.
+ * Private record helpers accept the broader identity subject, then return this
+ * type only after rejecting a missing profile selector.
+ */
+export interface CandidateWorkspaceSubject extends WorkspaceSubject {
+  profileId: string;
+}
+
 export interface WorkspaceSubjectLocals {
   membership?: {
     roleId?: string | null;
@@ -28,7 +39,7 @@ export interface WorkspaceSubjectLocals {
     tenantId?: string | null;
     userId?: string | null;
   } | null;
-  permissions?: string[] | null;
+  permissions?: readonly string[] | null;
   tenantId?: string | null;
   user?: Pick<User, 'id'> | null;
   workspaceSubject?: WorkspaceSubject;
@@ -44,9 +55,33 @@ export class WorkspaceSubjectError extends Error {
   }
 }
 
+/**
+ * Narrow an authenticated workspace identity for candidate-owned operations.
+ * This validates shape only; callers that accept a new selector must still use
+ * `resolveWorkspaceSubjectForProfile` to prove profile ownership in storage.
+ */
+export function requireCandidateWorkspaceSubject(
+  subject: WorkspaceSubject | null | undefined,
+): CandidateWorkspaceSubject {
+  const tenantId = identifier(subject?.tenantId);
+  const userId = identifier(subject?.userId);
+  const profileId = identifier(subject?.profileId);
+  if (!tenantId || !userId || !profileId) {
+    throw new WorkspaceSubjectError(
+      403,
+      'A verified candidate profile workspace subject is required.',
+    );
+  }
+  return { profileId, tenantId, userId };
+}
+
 function identifier(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isActiveMembership(
@@ -75,9 +110,23 @@ export async function verifyWorkspaceSubject(
   const tenantId = identifier(locals.tenantId);
   if (!userId || !tenantId) return null;
 
-  const memberships = await MembershipCollection.create(getSmrtOptions());
-  const membership = await memberships.findByUserAndTenant(userId, tenantId);
+  const [users, tenants, memberships] = await Promise.all([
+    UserCollection.create(getSmrtOptions()),
+    TenantCollection.create(getSmrtOptions()),
+    MembershipCollection.create(getSmrtOptions()),
+  ]);
+  const [user, tenant, membership] = await Promise.all([
+    users.get({ id: userId }),
+    tenants.get({ id: tenantId }),
+    memberships.findByUserAndTenant(userId, tenantId),
+  ]);
   if (
+    !user ||
+    user.id !== userId ||
+    user.isActive() !== true ||
+    !tenant ||
+    tenant.id !== tenantId ||
+    tenant.isActive() !== true ||
     !membership ||
     membership.status !== MembershipStatus.ACTIVE ||
     !identifier(membership.roleId) ||
@@ -98,6 +147,7 @@ export async function verifyWorkspaceSubject(
   const subject = Object.freeze(
     profileId ? { ...baseSubject, profileId } : baseSubject,
   );
+  locals.user = user;
   locals.membership = membership;
   locals.permissions = [...permissions.permissions];
   locals.workspaceSubject = subject;
@@ -124,14 +174,17 @@ async function resolveDefaultWorkspaceProfileId(
   const records = await profiles.list({
     limit: 2,
     where: {
+      active: true,
       ownerUserId: subject.userId,
       profileKey: 'default',
       tenantId: subject.tenantId,
     },
   });
+  if (records.length !== 1) return undefined;
   const profile = records[0] as unknown as Record<string, unknown> | undefined;
   if (
     !profile ||
+    profile.active !== true ||
     String(profile.tenantId ?? '') !== subject.tenantId ||
     String(profile.ownerUserId ?? '') !== subject.userId ||
     String(profile.profileKey ?? '') !== 'default'
@@ -151,23 +204,27 @@ async function resolveDefaultWorkspaceProfileId(
 export function getCurrentWorkspaceSubject(): WorkspaceSubject | null {
   const context = getCurrentTenant();
   const candidate = context?.metadata?.workspaceSubject;
+  if (!isRecord(candidate) || !context?.tenantId || !context.userId) {
+    return null;
+  }
+  const tenantId = identifier(
+    typeof candidate.tenantId === 'string' ? candidate.tenantId : undefined,
+  );
+  const userId = identifier(
+    typeof candidate.userId === 'string' ? candidate.userId : undefined,
+  );
+  const profileId = identifier(
+    typeof candidate.profileId === 'string' ? candidate.profileId : undefined,
+  );
   if (
-    !candidate ||
-    typeof candidate !== 'object' ||
-    Array.isArray(candidate) ||
-    !context?.tenantId ||
-    !context.userId
+    !tenantId ||
+    !userId ||
+    tenantId !== context.tenantId ||
+    userId !== context.userId
   ) {
     return null;
   }
-  const subject = candidate as Partial<WorkspaceSubject>;
-  if (
-    subject.tenantId !== context.tenantId ||
-    subject.userId !== context.userId
-  ) {
-    return null;
-  }
-  return subject as WorkspaceSubject;
+  return profileId ? { profileId, tenantId, userId } : { tenantId, userId };
 }
 
 export function requireCurrentWorkspaceSubject(): WorkspaceSubject {
@@ -179,6 +236,11 @@ export function requireCurrentWorkspaceSubject(): WorkspaceSubject {
     );
   }
   return subject;
+}
+
+/** Return the current server-bound subject only when it includes a profile. */
+export function requireCurrentCandidateWorkspaceSubject(): CandidateWorkspaceSubject {
+  return requireCandidateWorkspaceSubject(requireCurrentWorkspaceSubject());
 }
 
 /**
@@ -208,8 +270,15 @@ export function isCurrentWorkspaceOperator(): boolean {
  */
 export async function resolveWorkspaceSubjectForProfile(
   profileId: string,
-): Promise<WorkspaceSubject> {
+): Promise<CandidateWorkspaceSubject> {
   const subject = requireCurrentWorkspaceSubject();
+  return await resolveVerifiedWorkspaceSubjectProfile(subject, profileId);
+}
+
+async function resolveVerifiedWorkspaceSubjectProfile(
+  subject: WorkspaceSubject,
+  profileId: string,
+): Promise<CandidateWorkspaceSubject> {
   const selectedId = identifier(profileId);
   if (!selectedId) {
     throw new WorkspaceSubjectError(
@@ -223,6 +292,7 @@ export async function resolveWorkspaceSubjectForProfile(
   if (
     !record ||
     String(record.id ?? '') !== selectedId ||
+    record.active !== true ||
     String(record.tenantId ?? '') !== subject.tenantId ||
     String(record.ownerUserId ?? '') !== subject.userId
   ) {
@@ -231,7 +301,20 @@ export async function resolveWorkspaceSubjectForProfile(
       'Candidate profile is outside this workspace.',
     );
   }
-  const selectedSubject = Object.freeze({ ...subject, profileId: selectedId });
+  return Object.freeze(
+    requireCandidateWorkspaceSubject({ ...subject, profileId: selectedId }),
+  );
+}
+
+/**
+ * Re-bind a server-resolved subject in a fresh principal context. The input is
+ * checked against the active SMRT context and any profile id is revalidated;
+ * callers must never construct this from route or tool arguments.
+ */
+export async function withVerifiedWorkspaceSubject<T>(
+  subject: WorkspaceSubject,
+  fn: (subject: WorkspaceSubject) => Promise<T>,
+): Promise<T> {
   const context = getCurrentTenant();
   if (
     !context ||
@@ -243,11 +326,32 @@ export async function resolveWorkspaceSubjectForProfile(
       'Workspace subject context is invalid.',
     );
   }
-  context.metadata = {
-    ...context.metadata,
-    workspaceSubject: selectedSubject,
-  };
-  return selectedSubject;
+  const verified = subject.profileId
+    ? await resolveVerifiedWorkspaceSubjectProfile(subject, subject.profileId)
+    : Object.freeze({ tenantId: subject.tenantId, userId: subject.userId });
+  return await withTenant(
+    {
+      ...context,
+      metadata: { ...context.metadata, workspaceSubject: verified },
+    },
+    async () => await fn(verified),
+  );
+}
+
+/**
+ * Run a profile-specific operation in a cloned public SMRT tenant context.
+ * The selected profile is bounded to this callback and cannot alter a sibling
+ * promise sharing the request's original context.
+ */
+export async function withWorkspaceSubjectForProfile<T>(
+  profileId: string,
+  fn: (subject: CandidateWorkspaceSubject) => Promise<T>,
+): Promise<T> {
+  const subject = await resolveWorkspaceSubjectForProfile(profileId);
+  return await withVerifiedWorkspaceSubject(
+    subject,
+    async (verified) => await fn(requireCandidateWorkspaceSubject(verified)),
+  );
 }
 
 /** Guard for pure callers that only have locals after the hook has run. */

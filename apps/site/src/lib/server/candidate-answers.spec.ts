@@ -23,7 +23,7 @@ vi.mock('./smrt.js', () => ({
     if (!found) throw new Error(`Missing collection ${className}`);
     return {
       list: async (options: Record<string, unknown> = {}) => {
-        let rows = found.records.map((record) => ({
+        let rows: Record<string, unknown>[] = found.records.map((record) => ({
           candidateProfileId: 'profile-1',
           ...(className === 'CandidateProfile' ? { id: 'profile-1' } : {}),
           ownerUserId: 'user-1',

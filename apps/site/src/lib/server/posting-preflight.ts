@@ -1,5 +1,6 @@
 import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
+import { resolveAgentAuditSubject } from './agent-audit-subject.js';
 import { recordAgentAudit } from './application-workflow.js';
 import { extractAshbyQuestions } from './ats/ashby.js';
 import { parseGreenhouseUrl } from './ats/greenhouse.js';
@@ -522,6 +523,9 @@ export async function recordPostingPreflight(options: {
   postingUrl?: string;
   user?: Pick<User, 'id'> | null;
 }) {
+  // Authorize before selecting or fetching an external URL. The subsequent
+  // audit repeats this binding immediately before its write.
+  await resolveAgentAuditSubject({ user: options.user });
   const postingUrls = [
     stringValue(options.postingUrl),
     stringValue(options.opportunity.canonicalUrl),

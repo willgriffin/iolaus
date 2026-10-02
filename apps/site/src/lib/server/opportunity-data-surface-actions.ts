@@ -44,14 +44,19 @@ import {
   OPPORTUNITY_TABLE_PAGE_SIZE,
   type OpportunityMatchingRow,
   type OpportunityQuery,
+  type WorkspaceOpportunityQuery,
 } from './admin-opportunity-query.js';
 import { updateOpportunityReview } from './application-package.js';
 import {
   enqueueOpportunityIntelligenceWithStatus,
   OpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { isOwnerAuthorityDenial } from './owner-principal.js';
 import { getCollection } from './smrt.js';
+import type { WorkspaceSubject } from './workspace-subject.js';
+import { withVerifiedWorkspaceSubject } from './workspace-subject.js';
+import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
 /** Review dispositions a bulk review may set. */
 const BULK_REVIEW_STATUSES = ['needs_input', 'maybe', 'apply', 'reject'];
@@ -70,6 +75,8 @@ export interface OpportunityBulkQueryTarget {
 
 export interface OpportunityDataSurfaceOptions {
   state: DataSurfaceActionStateStore;
+  /** The route's verified subject; selection and review never trust payload IDs. */
+  workspaceSubject: WorkspaceSubject & { profileId: string };
   /**
    * The filter state the caller claims. Supplied by the route from the
    * request body and validated against the fingerprint the caller returns, so
@@ -90,13 +97,17 @@ export interface OpportunityDataSurfaceOptions {
   runAsPrincipal?: DataSurfaceActionAdapterOptions['runAsPrincipal'];
 }
 
-function toQuery(target: OpportunityBulkQueryTarget): OpportunityQuery {
+function toQuery(
+  target: OpportunityBulkQueryTarget,
+  workspaceSubject: OpportunityDataSurfaceOptions['workspaceSubject'],
+): WorkspaceOpportunityQuery {
   return {
     candidateSkills: target.candidateSkills,
     filters: target.filters,
     reviewFilter: target.reviewFilter,
     search: target.search,
-  };
+    workspaceSubject,
+  } satisfies WorkspaceOpportunityQuery;
 }
 
 function rowIdList(rows: readonly OpportunityMatchingRow[]): string[] {
@@ -116,7 +127,6 @@ interface RowSnapshot {
   humanRating: unknown;
   humanReviewNotes: string;
   humanReviewStatus: string;
-  reviewedByProfileId: string;
   sourceContentFingerprint: string;
   status: string;
   updatedAt?: string;
@@ -138,6 +148,7 @@ function stringOf(value: unknown): string {
 async function loadRow(
   request: DataSurfaceServerActionRequest,
   rowId: DataSurfaceRowId,
+  workspaceSubject: OpportunityDataSurfaceOptions['workspaceSubject'],
 ): Promise<RowSnapshot | null> {
   let cache = rowCaches.get(request);
   if (!cache) {
@@ -150,12 +161,18 @@ async function loadRow(
 
   const collection = await getCollection('Opportunity');
   const row = (await collection.get(key)) as Record<string, unknown> | null;
+  const overlays = row
+    ? await loadCurrentOpportunityReviewOverlays({
+        opportunityIds: [key],
+        subject: workspaceSubject,
+      })
+    : null;
+  const review = overlays?.get(key) ?? null;
   const snapshot: RowSnapshot | null = row
     ? {
-        humanRating: row.humanRating,
-        humanReviewNotes: stringOf(row.humanReviewNotes),
-        humanReviewStatus: stringOf(row.humanReviewStatus),
-        reviewedByProfileId: stringOf(row.reviewedByProfileId),
+        humanRating: review?.humanRating ?? null,
+        humanReviewNotes: review?.humanReviewNotes ?? '',
+        humanReviewStatus: review?.humanReviewStatus ?? '',
         sourceContentFingerprint: stringOf(row.sourceContentFingerprint),
         status: stringOf(row.status),
         updatedAt: revisionByRequest.get(request)?.get(key),
@@ -169,7 +186,6 @@ function reviewPayload(payload: DataSurfaceJsonValue | undefined): {
   humanRating?: unknown;
   humanReviewNotes?: string;
   humanReviewStatus: string;
-  reviewedByProfileId?: string;
 } | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return null;
@@ -196,20 +212,10 @@ function reviewPayload(payload: DataSurfaceJsonValue | undefined): {
     return null;
   }
 
-  const reviewedByProfileId = record.reviewedByProfileId;
-  if (
-    reviewedByProfileId !== undefined &&
-    typeof reviewedByProfileId !== 'string'
-  ) {
-    return null;
-  }
-
   return {
     humanRating: rating,
     humanReviewNotes: typeof notes === 'string' ? notes : undefined,
     humanReviewStatus,
-    reviewedByProfileId:
-      typeof reviewedByProfileId === 'string' ? reviewedByProfileId : undefined,
   };
 }
 
@@ -221,7 +227,6 @@ const REVIEW_INPUT_SCHEMA = {
     humanReviewStatus: { type: 'string', enum: [...BULK_REVIEW_STATUSES] },
     humanRating: { type: ['integer', 'null'], minimum: 1, maximum: 10 },
     humanReviewNotes: { type: 'string', maxLength: MAX_REVIEW_NOTES_LENGTH },
-    reviewedByProfileId: { type: 'string' },
   },
 } as const;
 
@@ -351,16 +356,19 @@ export function createOpportunityDataSurfaceAdapter(
     execution: 'foreground',
     tool: OPPORTUNITY_BULK_REVIEW_TOOL,
     operation: {
-      id: 'opportunities:update',
-      collection: 'opportunities',
-      action: 'update',
+      id: 'workflow:application.review',
+      ...workspaceWorkflowOperation('application.review'),
     },
     authorize: () => true,
     eligible: async (invocation, rowId) => eligibleForReview(invocation, rowId),
     apply: async (invocation, rowId) => {
       const payload = reviewPayload(invocation.request.payload);
       if (!payload) return undefined;
-      const row = await loadRow(invocation.request, rowId);
+      const row = await loadRow(
+        invocation.request,
+        rowId,
+        options.workspaceSubject,
+      );
       // The selection resolved no revision for this row, so it did not exist
       // when the set was built. If it exists now it is a different row than
       // the operator confirmed, and there is nothing to pin the write to.
@@ -381,8 +389,7 @@ export function createOpportunityDataSurfaceAdapter(
         humanReviewNotes: payload.humanReviewNotes ?? row?.humanReviewNotes,
         humanReviewStatus: payload.humanReviewStatus,
         opportunityId: String(rowId),
-        reviewedByProfileId:
-          payload.reviewedByProfileId ?? row?.reviewedByProfileId,
+        subject: options.workspaceSubject,
         user: { id: invocation.run.context.userId ?? undefined },
       });
       return {
@@ -404,13 +411,16 @@ export function createOpportunityDataSurfaceAdapter(
     execution: 'foreground',
     tool: OPPORTUNITY_BULK_PROCESS_LLM_TOOL,
     operation: {
-      id: 'opportunities:update',
-      collection: 'opportunities',
-      action: 'update',
+      id: 'workflow:assessment.execute',
+      ...workspaceWorkflowOperation('assessment.execute'),
     },
     authorize: () => true,
     eligible: async (invocation, rowId) => {
-      const row = await loadRow(invocation.request, rowId);
+      const row = await loadRow(
+        invocation.request,
+        rowId,
+        options.workspaceSubject,
+      );
       if (!row) return { eligible: false, reason: 'not_found' };
       if (row.status === ARCHIVED_STATUS) {
         return { eligible: false, reason: 'invalid_status_transition' };
@@ -426,14 +436,18 @@ export function createOpportunityDataSurfaceAdapter(
     // inserts durable, idempotent intelligence jobs. The analysis itself
     // already runs in the jobs worker, so there is nothing left to defer.
     apply: async (invocation, rowId) => {
-      const result = await enqueueOpportunityIntelligenceWithStatus(
-        String(rowId),
-        {},
-        // The form action this replaces attributed each job to the operator.
-        // Without it every bulk-queued job records an empty
-        // `initiatedByUserId`, and the batch's own audit line cannot restore
-        // per-job attribution after the fact.
-        { user: { id: invocation.run.context.userId ?? undefined } },
+      const result = await withVerifiedWorkspaceSubject(
+        options.workspaceSubject,
+        async () =>
+          await enqueueOpportunityIntelligenceWithStatus(
+            String(rowId),
+            {},
+            // The form action this replaces attributed each job to the operator.
+            // Without it every bulk-queued job records an empty
+            // `initiatedByUserId`, and the batch's own audit line cannot restore
+            // per-job attribution after the fact.
+            {},
+          ),
       );
       // A row that already has an active job queued nothing. The adapter
       // classifies every normal return as `accepted`, so reporting this as a
@@ -451,7 +465,11 @@ export function createOpportunityDataSurfaceAdapter(
     invocation: DataSurfaceActionInvocation,
     rowId: DataSurfaceRowId,
   ): Promise<DataSurfaceActionEligibility> {
-    const row = await loadRow(invocation.request, rowId);
+    const row = await loadRow(
+      invocation.request,
+      rowId,
+      options.workspaceSubject,
+    );
     if (!row) return { eligible: false, reason: 'not_found' };
     if (row.status === ARCHIVED_STATUS) {
       return { eligible: false, reason: 'invalid_status_transition' };
@@ -476,7 +494,7 @@ export function createOpportunityDataSurfaceAdapter(
     selection: DataSurfaceSelectionReference,
   ): Promise<ResolvedDataSurfaceSelection> {
     const target = options.resolveQueryTarget(invocation.request);
-    const query = toQuery(target);
+    const query = toQuery(target, options.workspaceSubject);
     const queryFingerprint = createOpportunityQueryFingerprint(query);
 
     const rows = await resolveRows(selection, target, query, queryFingerprint);
@@ -497,7 +515,7 @@ export function createOpportunityDataSurfaceAdapter(
   async function resolveRows(
     selection: DataSurfaceSelectionReference,
     target: OpportunityBulkQueryTarget,
-    query: OpportunityQuery,
+    query: WorkspaceOpportunityQuery,
     queryFingerprint: string,
   ): Promise<OpportunityMatchingRow[]> {
     if (selection.scope === 'explicit-ids') {
@@ -515,10 +533,9 @@ export function createOpportunityDataSurfaceAdapter(
       // selection must not lose rows just because the filter matches more
       // than the cap.
       const known = new Map(
-        (await listOpportunityRevisionsByIds(ids)).map((row) => [
-          row.id,
-          row.updatedAt,
-        ]),
+        (
+          await listOpportunityRevisionsByIds(ids, options.workspaceSubject)
+        ).map((row) => [row.id, row.updatedAt]),
       );
       // Keep an id the lookup did not find. Dropping it here would shrink the
       // batch silently, because the adapter only reports outcomes for rows the
@@ -537,7 +554,10 @@ export function createOpportunityDataSurfaceAdapter(
         limit: OPPORTUNITY_TABLE_PAGE_SIZE,
         offset: (page - 1) * OPPORTUNITY_TABLE_PAGE_SIZE,
       });
-      return await listOpportunityRevisionsByIds(pageIds);
+      return await listOpportunityRevisionsByIds(
+        pageIds,
+        options.workspaceSubject,
+      );
     }
 
     // all-matching
@@ -580,7 +600,9 @@ export function createOpportunityDataSurfaceAdapter(
     requestFingerprintExtension: (request) => {
       const target = options.resolveQueryTarget(request);
       return {
-        queryFingerprint: createOpportunityQueryFingerprint(toQuery(target)),
+        queryFingerprint: createOpportunityQueryFingerprint(
+          toQuery(target, options.workspaceSubject),
+        ),
         page: target.page,
       };
     },

@@ -18,7 +18,7 @@ export class CandidateProfile extends SmrtObject {
   @tenantId()
   tenantId = '';
   /** Immutable authenticated owner, not a user-supplied profile field. */
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   ownerUserId = '';
   @field({ type: 'text' })
   profileKey = 'default';
@@ -46,6 +46,21 @@ export class CandidateProfile extends SmrtObject {
   githubUrl = '';
   @field({ type: 'text', sensitive: true })
   workAuthorization = '';
+  /** ISO country references; citizenship never implies work authorization. */
+  @field({ type: 'text', sensitive: true })
+  citizenshipsJson = '[]';
+  /** Current home country, not a representation of authorization. */
+  @field({ type: 'text', sensitive: true })
+  residenceCountryJson = '{}';
+  /** Candidate-selected target country for opportunity compatibility. */
+  @field({ type: 'text', sensitive: true })
+  targetWorkCountryJson = '{}';
+  /** Verified country authorizations with country/employer/conditional scope. */
+  @field({ type: 'text', sensitive: true })
+  authorizedWorkCountriesJson = '[]';
+  /** True only when the candidate confirms employer sponsorship is required. */
+  @field({ type: 'text', sensitive: true })
+  sponsorshipRequired = 'unknown';
   @field({ type: 'text', sensitive: true })
   summary = '';
   /** Structured facts retain whether a value was verified, safely derived, or unresolved. */

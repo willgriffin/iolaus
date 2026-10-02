@@ -1,6 +1,9 @@
 import type { SmrtObject } from '@happyvertical/smrt-core';
 import { getCollection } from './smrt.js';
-import type { WorkspaceSubject as VerifiedWorkspaceSubject } from './workspace-subject.js';
+import type {
+  CandidateWorkspaceSubject,
+  WorkspaceSubject as VerifiedWorkspaceSubject,
+} from './workspace-subject.js';
 
 /**
  * Verified request authority for candidate-owned records. The auth boundary
@@ -8,7 +11,10 @@ import type { WorkspaceSubject as VerifiedWorkspaceSubject } from './workspace-s
  * argument. `userId` is stored as `ownerUserId` to distinguish the acting
  * identity from reviewer/audit fields.
  */
-export type WorkspaceSubject = VerifiedWorkspaceSubject & { profileId: string };
+/** Private-record authority, available only after `requireWorkspaceSubject`. */
+export type WorkspaceSubject = CandidateWorkspaceSubject;
+/** Authenticated identity before a selected profile has been proven. */
+export type WorkspaceIdentitySubject = VerifiedWorkspaceSubject;
 
 type PrivateRecord = Record<string, unknown>;
 type PrivateCollection = {
@@ -16,6 +22,20 @@ type PrivateCollection = {
   get: (id: string) => Promise<PrivateRecord | null>;
   list: (options?: Record<string, unknown>) => Promise<PrivateRecord[]>;
 };
+
+export interface PrivateCollectionOptions {
+  /** Preserve a caller's transaction when a private mutation is transactional. */
+  db?: unknown;
+}
+
+async function privateCollection(
+  className: string,
+  options: PrivateCollectionOptions = {},
+): Promise<PrivateCollection> {
+  return (await getCollection<SmrtObject>(className, {
+    db: options.db as never,
+  })) as unknown as PrivateCollection;
+}
 
 function requiredId(value: unknown, label: string): string {
   const id = typeof value === 'string' ? value.trim() : '';
@@ -44,7 +64,7 @@ export class PrivateWorkspaceSubjectError extends Error {
 
 /** Reject incomplete or untrusted-shaped ownership context before any read. */
 export function requireWorkspaceSubject(
-  value: WorkspaceSubject,
+  value: WorkspaceIdentitySubject,
 ): WorkspaceSubject {
   return {
     profileId: requiredId(value?.profileId, 'candidate profile ID'),
@@ -91,11 +111,10 @@ export async function getPrivateRecord(
   className: string,
   id: string,
   subject: WorkspaceSubject,
+  options: PrivateCollectionOptions = {},
 ): Promise<PrivateRecord | null> {
   const recordId = requiredId(id, 'record ID');
-  const collection = (await getCollection<SmrtObject>(
-    className,
-  )) as unknown as PrivateCollection;
+  const collection = await privateCollection(className, options);
   const record = await collection.get(recordId);
   return recordOwnedBySubject(record, subject) ? record : null;
 }
@@ -105,10 +124,9 @@ export async function listPrivateRecords(
   className: string,
   subject: WorkspaceSubject,
   options: Record<string, unknown> = {},
+  collectionOptions: PrivateCollectionOptions = {},
 ): Promise<PrivateRecord[]> {
-  const collection = (await getCollection<SmrtObject>(
-    className,
-  )) as unknown as PrivateCollection;
+  const collection = await privateCollection(className, collectionOptions);
   const callerWhere =
     options.where && typeof options.where === 'object'
       ? (options.where as PrivateRecord)
@@ -127,6 +145,7 @@ export async function createPrivateRecord(
   className: string,
   subject: WorkspaceSubject,
   payload: PrivateRecord,
+  options: PrivateCollectionOptions = {},
 ): Promise<PrivateRecord> {
   const ownership = privateRecordWhere(subject);
   for (const [key, value] of Object.entries(ownership)) {
@@ -136,8 +155,6 @@ export async function createPrivateRecord(
       );
     }
   }
-  const collection = (await getCollection<SmrtObject>(
-    className,
-  )) as unknown as PrivateCollection;
+  const collection = await privateCollection(className, options);
   return await collection.create({ ...payload, ...ownership });
 }

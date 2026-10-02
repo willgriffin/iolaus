@@ -10,6 +10,7 @@ import {
   finalApprovalResumePdfDigest,
   finalApprovalResumePdfFilename,
 } from '../objects/application-approval-scope.js';
+import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import { applicationResumePdfFile } from './application-resume-file.js';
 import {
@@ -38,8 +39,16 @@ import {
   parseRequiredAnswers,
 } from './auto-submit-eligibility.js';
 import { getSmrtOptions } from './db.js';
+import {
+  getJobPrivateResource,
+  runtimeWorkspaceSubjectFromJobArgs,
+  withRuntimeWorkspaceSubject,
+} from './job-workspace-subject.js';
+import {
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getResumeFilesystem } from './resume-files.js';
-import { getCollection } from './smrt.js';
 
 export {
   AUTO_SUBMIT_APPLICATION_JOB_OBJECT_TYPE,
@@ -49,9 +58,8 @@ export {
   ensureAutoSubmitApplicationJobDedupe,
 } from './auto-submit-application-job-schema.js';
 
-export interface AutoSubmitApplicationJobArgs {
+export interface AutoSubmitApplicationJobArgs extends Record<string, unknown> {
   reason?: string;
-  userId?: string;
 }
 
 interface AutoSubmitApplicationJobCollection {
@@ -70,7 +78,6 @@ export interface EnqueueAutoSubmitApplicationOptions {
   collection?: AutoSubmitApplicationJobCollection;
   now?: Date;
   reason?: string;
-  user?: { id?: unknown } | null;
 }
 
 export type AutoSubmitOutcome =
@@ -90,10 +97,11 @@ export interface RunAutoSubmitApplicationJobDependencies {
   config?: AutoSubmitConfig;
   evaluate?: (
     application: Record<string, unknown>,
-    options: { config: AutoSubmitConfig },
+    options: { config: AutoSubmitConfig; subject: WorkspaceSubject },
   ) => Promise<AutoSubmitEligibility>;
   resolveResume?: (
     application: Record<string, unknown>,
+    subject: WorkspaceSubject,
   ) => Promise<AtsFilePart>;
   recordAudit?: typeof recordAgentAudit;
   routeToAnswerCollection?: typeof routeApplicationToAnswerCollection;
@@ -122,6 +130,7 @@ function stringValue(value: unknown): string {
 
 export async function resolveResumeFilePart(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<AtsFilePart> {
   const base: AtsFilePart = {
     fieldName: 'resume',
@@ -131,7 +140,7 @@ export async function resolveResumeFilePart(
     present: false,
   };
   try {
-    const resumeFile = await applicationResumePdfFile(application);
+    const resumeFile = await applicationResumePdfFile(application, subject);
     if (!resumeFile) return base;
     const filesystem = await getResumeFilesystem();
     if (!(await filesystem.exists(resumeFile.pdfPath))) return base;
@@ -155,6 +164,7 @@ export async function resolveResumeFilePart(
 async function defaultSetApplicationStatus(
   application: Record<string, unknown>,
   status: string,
+  subject: WorkspaceSubject,
 ): Promise<boolean> {
   // Jobs retain an object that may be older than a material edit, a final
   // approval, or a manual recording action. Patch only when the full material
@@ -162,23 +172,8 @@ async function defaultSetApplicationStatus(
   if (!(await commitApplicationIfCurrent(application, { status }))) {
     return false;
   }
-  await syncApplicationWorkflowTasks(application);
+  await syncApplicationWorkflowTasks(application, subject);
   return true;
-}
-
-async function assertApplicationExists(
-  applicationId: string,
-  options: Pick<EnqueueAutoSubmitApplicationOptions, 'applicationCollection'>,
-): Promise<void> {
-  const applications =
-    options.applicationCollection ?? (await getCollection('Application'));
-  const application = await applications.get(applicationId);
-  if (!application) {
-    throw new AutoSubmitApplicationEnqueueError(
-      'application_not_found',
-      'Application not found.',
-    );
-  }
 }
 
 async function findActiveAutoSubmitJob(
@@ -204,6 +199,10 @@ export async function enqueueAutoSubmitApplication(
   args: AutoSubmitApplicationJobArgs = {},
   options: EnqueueAutoSubmitApplicationOptions = {},
 ): Promise<SmrtJob> {
+  // Capture before every read/dedupe return so no unverified caller can learn
+  // whether another owner's application already has a queued job.
+  const jobArgs = withRuntimeWorkspaceSubject(args);
+  const subject = runtimeWorkspaceSubjectFromJobArgs(jobArgs);
   const normalizedApplicationId = applicationId.trim();
   if (!normalizedApplicationId) {
     throw new AutoSubmitApplicationEnqueueError(
@@ -211,7 +210,18 @@ export async function enqueueAutoSubmitApplication(
       'Application id is required.',
     );
   }
-  await assertApplicationExists(normalizedApplicationId, options);
+  if (
+    !(await getJobPrivateResource(
+      'Application',
+      normalizedApplicationId,
+      subject,
+    ))
+  ) {
+    throw new AutoSubmitApplicationEnqueueError(
+      'application_not_found',
+      'Application not found.',
+    );
+  }
 
   const collection = (options.collection ??
     (await SmrtJobCollection.create({
@@ -223,14 +233,28 @@ export async function enqueueAutoSubmitApplication(
     collection,
     normalizedApplicationId,
   );
-  if (existingJob) return existingJob;
+  if (existingJob) {
+    const existingSubject = runtimeWorkspaceSubjectFromJobArgs(
+      existingJob.args,
+    );
+    if (
+      existingSubject.tenantId !== subject.tenantId ||
+      existingSubject.userId !== subject.userId ||
+      existingSubject.profileId !== subject.profileId
+    ) {
+      throw new AutoSubmitApplicationEnqueueError(
+        'application_not_found',
+        'Application not found.',
+      );
+    }
+    return existingJob;
+  }
 
   try {
     const job = await collection.create({
       args: {
-        ...args,
+        ...jobArgs,
         reason: options.reason ?? args.reason ?? 'manual',
-        userId: stringValue(options.user?.id) || stringValue(args.userId),
       },
       // One-shot: a submission attempt must never silently re-run. Operators
       // requeue after inspecting the AgentRun.
@@ -256,7 +280,18 @@ export async function enqueueAutoSubmitApplication(
         collection,
         normalizedApplicationId,
       );
-      if (activeJob) return activeJob;
+      if (activeJob) {
+        const existingSubject = runtimeWorkspaceSubjectFromJobArgs(
+          activeJob.args,
+        );
+        if (
+          existingSubject.tenantId === subject.tenantId &&
+          existingSubject.userId === subject.userId &&
+          existingSubject.profileId === subject.profileId
+        ) {
+          return activeJob;
+        }
+      }
     }
     throw error;
   }
@@ -277,20 +312,25 @@ export interface MaybeEnqueueAutoSubmitResult {
  */
 export async function maybeEnqueueAutoSubmitOnApproval(
   application: Record<string, unknown> & { id?: unknown },
-  options: { user?: { id?: unknown } | null } = {},
+  options: {
+    subject: WorkspaceSubject;
+    user?: { id?: unknown } | null;
+  },
 ): Promise<MaybeEnqueueAutoSubmitResult> {
+  const subject = requireWorkspaceSubject(options.subject);
   const config = resolveAutoSubmitConfig();
   if (!autoSubmitFeatureActive(config)) {
     return { enqueued: false, code: 'feature_off' };
   }
 
-  const eligibility = await canAutoSubmit(application, { config });
+  const eligibility = await canAutoSubmit(application, { config, subject });
   // Approved but a required answer is missing: open the answer-collection CTA
   // (awaiting_user + collect task) rather than leaving it silently `approved`.
   if (eligibility.code === 'missing_answers') {
     await routeApplicationToAnswerCollection({
       application,
       questions: eligibility.missingQuestions,
+      subject,
     });
     return { enqueued: false, code: eligibility.code };
   }
@@ -305,10 +345,12 @@ export async function maybeEnqueueAutoSubmitOnApproval(
   await enqueueAutoSubmitApplication(
     stringValue(application.id),
     { reason: 'approval' },
-    { user: options.user ?? null },
+    {},
   );
 
-  if (!(await defaultSetApplicationStatus(application, 'submitting'))) {
+  if (
+    !(await defaultSetApplicationStatus(application, 'submitting', subject))
+  ) {
     return { enqueued: true, code: 'eligible' };
   }
 
@@ -323,6 +365,7 @@ export async function runAutoSubmitApplicationJob(
 ): Promise<AutoSubmitJobResult> {
   const applicationId = stringValue(application.id);
   if (!applicationId) throw new Error('Application id is required.');
+  const subject = requireCurrentPrivateWorkspaceSubject();
 
   const config = dependencies.config ?? resolveAutoSubmitConfig();
   const evaluate = dependencies.evaluate ?? canAutoSubmit;
@@ -331,7 +374,9 @@ export async function runAutoSubmitApplicationJob(
   const routeToAnswerCollection =
     dependencies.routeToAnswerCollection ?? routeApplicationToAnswerCollection;
   const setApplicationStatus =
-    dependencies.setApplicationStatus ?? defaultSetApplicationStatus;
+    dependencies.setApplicationStatus ??
+    ((candidate: Record<string, unknown>, status: string) =>
+      defaultSetApplicationStatus(candidate, status, subject));
 
   context?.logger?.info?.('Evaluating auto-submit eligibility.', {
     applicationId,
@@ -340,7 +385,7 @@ export async function runAutoSubmitApplicationJob(
     reason: args.reason ?? 'manual',
   });
 
-  const eligibility = await evaluate(application, { config });
+  const eligibility = await evaluate(application, { config, subject });
 
   // Missing answers are a collection loop, not a dead end.
   if (eligibility.code === 'missing_answers') {
@@ -357,6 +402,7 @@ export async function runAutoSubmitApplicationJob(
     await routeToAnswerCollection({
       application,
       questions: eligibility.missingQuestions,
+      subject,
     });
     return {
       outcome: 'awaiting_user',
@@ -433,7 +479,7 @@ export async function runAutoSubmitApplicationJob(
   }
 
   const answers = parseRequiredAnswers(application.requiredAnswersJson);
-  const resume = await resolveResume(application);
+  const resume = await resolveResume(application, subject);
   const approvedResumeDigest = finalApprovalResumePdfDigest(application);
   const approvedResumeFilename = finalApprovalResumePdfFilename(application);
   if (

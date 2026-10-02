@@ -11,9 +11,9 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 export class ResumeProfile extends SmrtObject {
   @tenantId()
   tenantId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   ownerUserId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   candidateProfileId = '';
   @field({ type: 'text' })
   profileKey = 'default';

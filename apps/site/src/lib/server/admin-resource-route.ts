@@ -50,12 +50,17 @@ import {
   syncRecommendedOpportunityDecisionTasks,
 } from './application-workflow';
 import { acceptFactCandidate, createFactIntakeFromText } from './fact-workflow';
+import {
+  loadCurrentOpportunityAssessmentProjections,
+  loadOpportunityAssessmentQueryContext,
+} from './opportunity-assessment-store';
 import { loadOpportunityDetails } from './opportunity-details';
 import { parseOpportunityReasonJson } from './opportunity-intelligence';
 import {
   enqueueOpportunityIntelligence,
   isOpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep';
 import {
   isOwnerAuthorityDenial,
@@ -63,6 +68,11 @@ import {
   runAsOwner,
 } from './owner-principal';
 import { latestPostingPreflightStatus } from './posting-preflight-status';
+import {
+  getPrivateRecord,
+  listPrivateRecords,
+  requireWorkspaceSubject,
+} from './private-workspace.js';
 import { getCollection } from './smrt';
 import {
   enqueueSourceCrawl,
@@ -70,16 +80,21 @@ import {
 } from './source-schedules';
 import {
   opportunityDigDeeperOperations,
-  opportunityReviewOperations,
   opportunitySweepOperations,
   postingPreflightOperations,
-  taskSyncOperations,
 } from './workflow-operations';
+import {
+  requireCandidateWorkspaceSubject,
+  type WorkspaceSubject,
+  withVerifiedWorkspaceSubject,
+  workspaceSubjectFromLocals,
+} from './workspace-subject.js';
+import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
 type AdminActor = Pick<User, 'id'> | null | undefined;
 
 interface AdminOperation {
-  action: 'create' | 'delete' | 'read' | 'update';
+  action: string;
   collection: string;
 }
 
@@ -128,19 +143,13 @@ async function runOwnerMutation<T>(
  * posting archives the applications and cancels their tasks instead.
  */
 const createDraftApplicationOperations = [
-  ...postingPreflightOperations,
-  { action: 'update', collection: 'opportunities' },
-  { action: 'read', collection: 'applications' },
-  { action: 'create', collection: 'applications' },
-  { action: 'update', collection: 'applications' },
-  { action: 'read', collection: 'resumeassets' },
-  ...taskSyncOperations,
+  workspaceWorkflowOperation('application.prepare'),
+  workspaceWorkflowOperation('task.sync'),
 ] satisfies AdminOperation[];
 
 const archiveApplicationOperations = [
-  { action: 'read', collection: 'applications' },
-  { action: 'update', collection: 'applications' },
-  ...taskSyncOperations,
+  workspaceWorkflowOperation('application.review'),
+  workspaceWorkflowOperation('task.sync'),
 ] satisfies AdminOperation[];
 
 /**
@@ -148,9 +157,7 @@ const archiveApplicationOperations = [
  * extracted fact, then updates the intake with the extraction result.
  */
 const createFactIntakeOperations = [
-  { action: 'create', collection: 'factintakes' },
-  { action: 'update', collection: 'factintakes' },
-  { action: 'create', collection: 'factcandidates' },
+  workspaceWorkflowOperation('profile.manage'),
 ] satisfies AdminOperation[];
 
 /**
@@ -165,23 +172,11 @@ const createFactIntakeOperations = [
  */
 function recommendationTaskOperations(decision: string): AdminOperation[] {
   return [
-    ...taskSyncOperations,
-    { action: 'read', collection: 'opportunities' },
-    { action: 'update', collection: 'opportunities' },
-    { action: 'create', collection: 'decisions' },
-    { action: 'read', collection: 'decisions' },
-    { action: 'read', collection: 'applications' },
+    workspaceWorkflowOperation('application.review'),
+    workspaceWorkflowOperation('task.sync'),
     ...(decision === 'accept_to_apply'
       ? ([
-          ...postingPreflightOperations,
-          { action: 'update', collection: 'decisions' },
-          { action: 'create', collection: 'applications' },
-          { action: 'update', collection: 'applications' },
-          { action: 'read', collection: 'companies' },
-          { action: 'update', collection: 'companies' },
-          { action: 'read', collection: 'sources' },
-          { action: 'create', collection: 'sources' },
-          { action: 'read', collection: 'evaluationscores' },
+          workspaceWorkflowOperation('application.prepare'),
         ] satisfies AdminOperation[])
       : []),
   ];
@@ -290,18 +285,6 @@ function stringValues(form: FormData, key: string): string[] {
   return form.getAll(key).map(stringValue).filter(Boolean);
 }
 
-async function optionalRelatedRecords(
-  className: string,
-  options: Record<string, unknown>,
-): Promise<AdminRecord[]> {
-  try {
-    const records = await (await getCollection(className)).list(options);
-    return records.map(serializeRecord);
-  } catch {
-    return [];
-  }
-}
-
 export interface OpportunityContextOptions {
   /**
    * Attach the `AgentRun` and `FactIntake` activity trail (issue #452).
@@ -314,6 +297,13 @@ export interface OpportunityContextOptions {
    * the bytes on the deck's first window.
    */
   includeActivity?: boolean;
+  /**
+   * The request subject established by the session hook. It is never derived
+   * from a URL, form, or client-selected profile. When it includes a candidate
+   * profile, the opportunity card receives only that workspace's safe
+   * assessment projection.
+   */
+  workspaceSubject?: WorkspaceSubject;
 }
 
 export async function attachOpportunityContext(
@@ -321,6 +311,9 @@ export async function attachOpportunityContext(
   options: OpportunityContextOptions = {},
 ): Promise<AdminRecord[]> {
   const includeActivity = options.includeActivity !== false;
+  const subject = options.workspaceSubject?.profileId
+    ? requireCandidateWorkspaceSubject(options.workspaceSubject)
+    : null;
   // Only fetch applications for opportunities on this page. A global row cap can
   // silently drop applications and misclassify the planning review filter.
   const opportunityIds = Array.from(
@@ -343,25 +336,23 @@ export async function attachOpportunityContext(
     ),
   );
 
-  const [applicationCollection, factIntakeCollection, companyCollection] =
-    await Promise.all([
-      getCollection('Application'),
-      includeActivity ? getCollection('FactIntake') : Promise.resolve(null),
-      companyIds.length > 0 ? getCollection('Company') : Promise.resolve(null),
-    ]);
   const [
     applications,
     factIntakes,
     latestScoreByOpportunity,
     agentRuns,
     companies,
+    assessmentProjections,
+    reviewOverlays,
   ] = await Promise.all([
-    applicationCollection.list({
-      where: { 'opportunityId in': opportunityIds },
-      orderBy: 'updated_at DESC',
-    }),
-    factIntakeCollection
-      ? factIntakeCollection.list({
+    subject
+      ? listPrivateRecords('Application', subject, {
+          where: { 'opportunityId in': opportunityIds },
+          orderBy: 'updated_at DESC',
+        })
+      : [],
+    includeActivity && subject
+      ? listPrivateRecords('FactIntake', subject, {
           where: {
             targetEntityType: 'Opportunity',
             'targetEntityId in': opportunityIds,
@@ -369,17 +360,37 @@ export async function attachOpportunityContext(
           orderBy: 'updated_at DESC',
         })
       : [],
-    latestEvaluationScoresByOpportunity(records),
+    latestEvaluationScoresByOpportunity(records, subject ?? undefined),
     includeActivity
-      ? optionalRelatedRecords('AgentRun', {
-          limit: 500,
-          where: { 'opportunityId in': opportunityIds },
-          orderBy: 'updated_at DESC',
+      ? subject
+        ? listPrivateRecords('AgentRun', subject, {
+            limit: 500,
+            where: { 'opportunityId in': opportunityIds },
+            orderBy: 'updated_at DESC',
+          })
+        : []
+      : [],
+    companyIds.length > 0
+      ? (await getCollection('Company')).list({
+          where: { 'id in': companyIds },
         })
       : [],
-    companyCollection
-      ? companyCollection.list({ where: { 'id in': companyIds } })
-      : [],
+    subject
+      ? loadCurrentOpportunityAssessmentProjections({
+          opportunities: records.map((record) => ({
+            id: record.id,
+            sourceContentFingerprint: record.sourceContentFingerprint,
+            sourceContentVersion: record.sourceContentVersion,
+          })),
+          subject,
+        })
+      : Promise.resolve(new Map<string, unknown>()),
+    subject
+      ? loadCurrentOpportunityReviewOverlays({
+          opportunityIds,
+          subject,
+        })
+      : Promise.resolve(new Map<string, unknown>()),
   ]);
 
   const companyById = new Map<string, AdminRecord>();
@@ -445,6 +456,13 @@ export async function attachOpportunityContext(
         : null;
     const relatedRecord = {
       ...record,
+      // This is an intentionally small, source-current projection. It is
+      // absent until a verified candidate profile has one; the UI renders that
+      // state as "unknown" and never falls back to another user's assessment.
+      assessmentProjection: record.id
+        ? (assessmentProjections.get(record.id) ?? null)
+        : null,
+      reviewOverlay: record.id ? (reviewOverlays.get(record.id) ?? null) : null,
       // Omitted rather than emptied when the activity trail was not read: an
       // empty array would claim this posting has no runs, which is a different
       // statement from "this surface did not ask".
@@ -498,6 +516,7 @@ function opportunityIdsFrom(records: AdminRecord[]): string[] {
 
 async function latestEvaluationScoresByOpportunity(
   opportunities: AdminRecord[],
+  workspaceSubject?: import('./workspace-subject.js').CandidateWorkspaceSubject,
 ): Promise<Map<string, AdminRecord>> {
   const latestScoreByOpportunity = new Map<string, AdminRecord>();
   const opportunityIds = opportunityIdsFrom(opportunities);
@@ -519,18 +538,17 @@ async function latestEvaluationScoresByOpportunity(
     ]),
   );
 
-  let scoreCollection: Awaited<ReturnType<typeof getCollection>>;
-  try {
-    scoreCollection = await getCollection('EvaluationScore');
-  } catch {
-    return latestScoreByOpportunity;
-  }
+  if (!workspaceSubject) return latestScoreByOpportunity;
 
   try {
-    const scores = await scoreCollection.list({
-      orderBy: 'updated_at DESC',
-      where: { 'opportunityId in': opportunityIds },
-    });
+    const scores = await listPrivateRecords(
+      'EvaluationScore',
+      workspaceSubject,
+      {
+        orderBy: 'updated_at DESC',
+        where: { 'opportunityId in': opportunityIds },
+      },
+    );
     for (const score of scores) {
       const serialized = serializeRecord(score);
       const opportunityId =
@@ -880,6 +898,7 @@ export function safeAdminReturnTo(value: string | null | undefined): string {
 export async function loadAdminResourcePageData(
   resourceSlug: string,
   url: URL,
+  workspaceSubject?: WorkspaceSubject,
 ): Promise<AdminResourcePageData> {
   const resource = requireAdminResource(resourceSlug);
   const requestedPage = positiveIntegerSearchParam(url, 'page', 1);
@@ -899,19 +918,33 @@ export async function loadAdminResourcePageData(
     const opportunityFilters = filterStateFromSearchParams(url.searchParams);
     const candidateSkills = candidateSkillSlugs();
     const shouldLoadFacetOptions = url.searchParams.has('facets');
+    const subject = workspaceSubject?.profileId
+      ? requireCandidateWorkspaceSubject(workspaceSubject)
+      : null;
+    const assessmentContext = subject
+      ? await loadOpportunityAssessmentQueryContext(subject)
+      : null;
     // Fingerprint exactly the query the count and page listing run, so the
     // digest the browser receives describes the rows the operator is shown.
     const opportunityQuery = {
+      ...assessmentContext,
       candidateSkills,
       filters: opportunityFilters,
       reviewFilter,
+      ...(subject ? { workspaceSubject: subject } : {}),
     };
     const opportunityQueryFingerprint =
       createOpportunityQueryFingerprint(opportunityQuery);
     const [totalRecords, opportunityFilterOptions] = await Promise.all([
-      countOpportunityRecords(opportunityQuery),
+      subject && assessmentContext
+        ? countOpportunityRecords(
+            opportunityQuery as Parameters<typeof countOpportunityRecords>[0],
+          )
+        : Promise.resolve(0),
       shouldLoadFacetOptions
-        ? listOpportunityFilterOptions(reviewFilter)
+        ? subject
+          ? listOpportunityFilterOptions(reviewFilter, subject)
+          : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS)
         : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS),
     ]);
     const pagination = createAdminListPagination(
@@ -919,13 +952,14 @@ export async function loadAdminResourcePageData(
       requestedPage,
       OPPORTUNITY_TABLE_PAGE_SIZE,
     );
-    const pageIds = await listOpportunityPageIds({
-      candidateSkills,
-      filters: opportunityFilters,
-      limit: pagination.pageSize,
-      offset: pagination.offset,
-      reviewFilter,
-    });
+    const pageIds =
+      subject && assessmentContext
+        ? await listOpportunityPageIds({
+            ...opportunityQuery,
+            limit: pagination.pageSize,
+            offset: pagination.offset,
+          } as Parameters<typeof listOpportunityPageIds>[0])
+        : [];
     const rawRecords =
       pageIds.length > 0
         ? await listAdminRecords(resource, {
@@ -945,6 +979,7 @@ export async function loadAdminResourcePageData(
       pageIds
         .map((id) => recordById.get(id))
         .filter((record): record is AdminRecord => Boolean(record)),
+      workspaceSubject ? { workspaceSubject } : {},
     );
 
     return {
@@ -1348,19 +1383,17 @@ export async function archiveApplicationAction(
 ) {
   const id = stringValue(applicationId);
   if (!id) error(404, 'Application not found');
+  const subject = requireWorkspaceSubject(workspaceSubjectFromLocals(locals));
 
   return await runOwnerMutation(
     locals,
     'archiveApplication',
     archiveApplicationOperations,
     async () => {
-      const applications = await getCollection('Application');
-      const application = await applications.get(id);
+      const application = await getPrivateRecord('Application', id, subject);
       if (!application) error(404, 'Application not found');
 
-      const result = await archiveApplicationForCleanup(
-        application as unknown as Record<string, unknown>,
-      );
+      const result = await archiveApplicationForCleanup(application, subject);
       return {
         ...result,
         message:
@@ -1418,17 +1451,20 @@ export async function reviewOpportunityAction(
 ) {
   const { updateOpportunityReview } = await import('./application-package.js');
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'reviewOpportunity',
-    opportunityReviewOperations,
+    workspaceWorkflowOperation('application.review'),
     (user) =>
       updateOpportunityReview({
         humanRating: stringValue(form.get('humanRating')),
         humanReviewNotes: stringValue(form.get('humanReviewNotes')),
         humanReviewStatus: lastStringValue(form, 'humanReviewStatus'),
         opportunityId: stringValue(form.get('opportunityId')),
-        reviewedByProfileId: stringValue(form.get('reviewedByProfileId')),
+        subject,
         user,
       }),
   );
@@ -1442,17 +1478,20 @@ export async function bulkReviewOpportunitiesAction(
     './application-package.js'
   );
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'bulkReviewOpportunities',
-    opportunityReviewOperations,
+    workspaceWorkflowOperation('application.review'),
     (user) =>
       bulkUpdateOpportunityReviews({
         humanRating: stringValue(form.get('humanRating')),
         humanReviewNotes: stringValue(form.get('humanReviewNotes')),
         humanReviewStatus: lastStringValue(form, 'humanReviewStatus'),
         opportunityIds: stringValues(form, 'opportunityId'),
-        reviewedByProfileId: stringValue(form.get('reviewedByProfileId')),
+        subject,
         user,
       }),
   );
@@ -1465,15 +1504,27 @@ export async function loadOpportunityDetailsAction(request: Request) {
 
 export async function processOpportunityWithLlmAction(
   request: Request,
-  user: AdminActor,
+  locals: OwnerPrincipalLocals,
 ) {
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   let job: Awaited<ReturnType<typeof enqueueOpportunityIntelligence>>;
   try {
-    job = await enqueueOpportunityIntelligence(
-      stringValue(form.get('opportunityId')),
-      { modes: 'all' },
-      { user },
+    job = await runOwnerMutation(
+      locals,
+      'processOpportunityWithLlm',
+      workspaceWorkflowOperation('assessment.execute'),
+      async () =>
+        await withVerifiedWorkspaceSubject(
+          subject,
+          async () =>
+            await enqueueOpportunityIntelligence(
+              stringValue(form.get('opportunityId')),
+              { modes: 'assessment' },
+            ),
+        ),
     );
   } catch (cause) {
     if (isOpportunityIntelligenceEnqueueError(cause)) {
@@ -1493,9 +1544,9 @@ export async function processOpportunityWithLlmAction(
 
 export async function processOpportunityAction(
   request: Request,
-  user: AdminActor,
+  locals: OwnerPrincipalLocals,
 ) {
-  return await processOpportunityWithLlmAction(request, user);
+  return await processOpportunityWithLlmAction(request, locals);
 }
 
 /**
@@ -1561,6 +1612,9 @@ export async function createDraftApplicationAction(
     './application-package.js'
   );
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'createDraftApplication',
@@ -1579,6 +1633,7 @@ export async function createDraftApplicationAction(
         ),
         requiredAnswers: stringValue(form.get('requiredAnswers')),
         resumeMode: stringValue(form.get('resumeMode')),
+        subject,
         user,
       }),
   );
@@ -1589,24 +1644,29 @@ export async function createFactIntakeAction(
   locals: OwnerPrincipalLocals,
 ) {
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'createFactIntake',
     createFactIntakeOperations,
-    (user) =>
+    () =>
       createFactIntakeFromText({
         intakeContext: stringValue(form.get('intakeContext')),
-        createdByProfileId: stringValue(form.get('createdByProfileId')),
         rawText: stringValue(form.get('rawText')),
         sourceKind: stringValue(form.get('sourceKind')),
+        subject,
         targetEntityId: stringValue(form.get('targetEntityId')),
         targetEntityType: stringValue(form.get('targetEntityType')),
-        user,
       }),
   );
 }
 
-export async function syncRecommendationTasksAction(resourceSlug: string) {
+export async function syncRecommendationTasksAction(
+  resourceSlug: string,
+  locals: OwnerPrincipalLocals,
+) {
   const resource = requireAdminResource(resourceSlug);
   if (resource.className !== 'Task') {
     return {
@@ -1614,8 +1674,16 @@ export async function syncRecommendationTasksAction(resourceSlug: string) {
       status: 'error',
     };
   }
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return {
-    ...(await syncRecommendedOpportunityDecisionTasks()),
+    ...(await runOwnerMutation(
+      locals,
+      'syncRecommendationTasks',
+      [workspaceWorkflowOperation('task.sync')],
+      async () => await syncRecommendedOpportunityDecisionTasks(subject),
+    )),
     status: 'synced',
   };
 }
@@ -1626,18 +1694,21 @@ export async function processRecommendationTaskAction(
 ) {
   const form = await request.formData();
   const decision = stringValue(form.get('decision'));
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'processRecommendationTask',
     recommendationTaskOperations(decision),
     (user) =>
       processRecommendationTask({
-        deciderProfileId: stringValue(form.get('deciderProfileId')),
         decision,
         preflightOverrideReason: stringValue(
           form.get('preflightOverrideReason'),
         ),
         reason: stringValue(form.get('reason')),
+        subject,
         taskId: stringValue(form.get('taskId')),
         user,
       }),
@@ -1649,18 +1720,21 @@ export async function acceptOpportunityAction(
   locals: OwnerPrincipalLocals,
 ) {
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   return await runOwnerMutation(
     locals,
     'acceptOpportunity',
     acceptOpportunityOperations,
     (user) =>
       acceptOpportunityForApplication({
-        deciderProfileId: stringValue(form.get('reviewedByProfileId')),
         opportunityId: stringValue(form.get('opportunityId')),
         preflightOverrideReason: stringValue(
           form.get('preflightOverrideReason'),
         ),
         reason: stringValue(form.get('humanReviewNotes')),
+        subject,
         user,
       }),
   );
@@ -1681,6 +1755,9 @@ export async function digDeeperOpportunityAction(
   locals: OwnerPrincipalLocals,
 ) {
   const form = await request.formData();
+  const subject = requireCandidateWorkspaceSubject(
+    workspaceSubjectFromLocals(locals),
+  );
   const notes = form.get('humanReviewNotes');
   const rating = form.get('humanRating');
   return await runOwnerMutation(
@@ -1697,7 +1774,7 @@ export async function digDeeperOpportunityAction(
         humanRating: rating === null ? undefined : stringValue(rating),
         humanReviewNotes: notes === null ? undefined : stringValue(notes),
         opportunityId: stringValue(form.get('opportunityId')),
-        reviewedByProfileId: stringValue(form.get('reviewedByProfileId')),
+        subject,
         user,
       });
     },
@@ -1735,7 +1812,10 @@ export async function verifyOpportunityPostingAction(
  * the queue back. List context preserves those filters and their ordering;
  * the shared queue adds the undecided constraint without the agent preset.
  */
-export async function triageQueueAction(request: Request) {
+export async function triageQueueAction(
+  request: Request,
+  workspaceSubject?: WorkspaceSubject,
+) {
   const form = await request.formData();
   const { loadTriageQueue, triageFiltersFromSearchParams, TRIAGE_QUEUE_SIZE } =
     await import('./opportunity-triage.js');
@@ -1753,6 +1833,7 @@ export async function triageQueueAction(request: Request) {
         : TRIAGE_QUEUE_SIZE,
     offset: Number.isFinite(offset) ? offset : 0,
     search: params.get('q') ?? undefined,
+    workspaceSubject,
   });
 
   // The preflight verdict is the one decision input the opportunity row does
@@ -1776,7 +1857,10 @@ export async function triageQueueAction(request: Request) {
   };
 }
 
-export async function researchCompanyAction(request: Request) {
+export async function researchCompanyAction(
+  request: Request,
+  locals: OwnerPrincipalLocals,
+) {
   const form = await request.formData();
   const companyId = stringValue(form.get('companyId'));
   if (!companyId) {
@@ -1786,6 +1870,9 @@ export async function researchCompanyAction(request: Request) {
     companyId,
     createdBy: 'owner',
     reason: stringValue(form.get('reason')),
+    subject: requireCandidateWorkspaceSubject(
+      workspaceSubjectFromLocals(locals),
+    ),
   });
   if (!result.researchTaskId) {
     return { message: 'Company not found.', status: 'error' };
@@ -1803,12 +1890,13 @@ export async function researchCompanyAction(request: Request) {
 
 export async function acceptFactCandidateAction(
   request: Request,
-  user: AdminActor,
+  locals: OwnerPrincipalLocals,
 ) {
   const form = await request.formData();
   return await acceptFactCandidate({
     candidateId: stringValue(form.get('candidateId')),
-    reviewedByProfileId: stringValue(form.get('reviewedByProfileId')),
-    user,
+    subject: requireCandidateWorkspaceSubject(
+      workspaceSubjectFromLocals(locals),
+    ),
   });
 }

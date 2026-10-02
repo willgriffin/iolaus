@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { seedSystemRolesWithPermissions } from './role-permissions';
+import {
+  iolausRolePermissionMatrix,
+  seedSystemRolesWithPermissions,
+} from './role-permissions';
+import { workspaceWorkflowCapabilitySlugs } from './workspace-workflow-capabilities';
 
 describe('seedSystemRolesWithPermissions', () => {
   it('opts into idempotent manifest permission and role mapping seeding', async () => {
@@ -8,6 +12,12 @@ describe('seedSystemRolesWithPermissions', () => {
     await seedSystemRolesWithPermissions({ seedSystemRoles });
 
     expect(seedSystemRoles).toHaveBeenCalledOnce();
-    expect(seedSystemRoles).toHaveBeenCalledWith({ seedPermissions: true });
+    expect(seedSystemRoles).toHaveBeenCalledWith({
+      permissionMatrix: iolausRolePermissionMatrix,
+      seedPermissions: true,
+    });
+    expect(iolausRolePermissionMatrix.member).toEqual(
+      expect.arrayContaining(workspaceWorkflowCapabilitySlugs),
+    );
   });
 });

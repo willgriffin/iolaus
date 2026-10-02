@@ -42,13 +42,13 @@ export const actions: Actions = {
     return await acceptOpportunityAction(request, locals);
   },
   processOpportunityWithLlm: async ({ locals, request }) => {
-    return await processOpportunityWithLlmAction(request, locals.user);
+    return await processOpportunityWithLlmAction(request, locals);
   },
   processOpportunity: async ({ locals, request }) => {
-    return await processOpportunityAction(request, locals.user);
+    return await processOpportunityAction(request, locals);
   },
-  researchCompany: async ({ request }) => {
-    return await researchCompanyAction(request);
+  researchCompany: async ({ locals, request }) => {
+    return await researchCompanyAction(request, locals);
   },
   createDraftApplication: async ({ locals, request }) => {
     return await createDraftApplicationAction(request, locals);

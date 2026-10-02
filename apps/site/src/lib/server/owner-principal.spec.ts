@@ -47,11 +47,11 @@ describe('owner principal tool catalog', () => {
         'opportunity_get',
         'opportunity_list',
         'opportunity_update',
-        'resumeposition_update',
         'source_update',
       ]),
     );
     expect(tools).not.toContain('candidateanswer_list');
+    expect(tools).not.toContain('resumeposition_update');
   });
 
   it('binds the signed-in user with the derived allow-list', async () => {

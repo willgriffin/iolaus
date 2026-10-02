@@ -31,6 +31,15 @@ const mocks = vi.hoisted(() => ({
       state: 'never_preflighted',
     }),
   ),
+  overlays: vi.fn(
+    async () =>
+      new Map([
+        [
+          'opp-1',
+          { humanRating: 7, humanReviewNotes: 'Existing private note.' },
+        ],
+      ]),
+  ),
   updateReview: vi.fn(async () => ({ id: 'opp-1' })),
   verify: vi.fn(async () => ({
     opportunityId: 'opp-1',
@@ -44,6 +53,10 @@ vi.mock('./smrt.js', () => ({
 
 vi.mock('./application-package.js', () => ({
   updateOpportunityReview: mocks.updateReview,
+}));
+
+vi.mock('./opportunity-review-overlay.js', () => ({
+  loadCurrentOpportunityReviewOverlays: mocks.overlays,
 }));
 
 vi.mock('./opportunity-intelligence-job.js', () => ({
@@ -66,6 +79,11 @@ async function digDeeper(overrides: Record<string, unknown> = {}) {
   const { digDeeperOnOpportunity } = await import('./opportunity-deep-dive');
   return await digDeeperOnOpportunity({
     opportunityId: 'opp-1',
+    subject: {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    },
     user: { id: 'owner-1' },
     ...overrides,
   });
@@ -83,6 +101,11 @@ describe('digDeeperOnOpportunity', () => {
       expect.objectContaining({
         humanReviewStatus: 'maybe',
         opportunityId: 'opp-1',
+        subject: {
+          profileId: 'profile-1',
+          tenantId: 'tenant-1',
+          userId: 'owner-1',
+        },
       }),
     );
     expect(mocks.enqueueIntelligence).toHaveBeenCalledWith(
@@ -159,13 +182,13 @@ describe('digDeeperOnOpportunity', () => {
     expect(result.failed).toEqual([]);
   });
 
-  it('keeps the notes and rating already on the record when none are supplied', async () => {
+  it('keeps the notes and rating in the private overlay when none are supplied', async () => {
     await digDeeper();
 
     expect(mocks.updateReview).toHaveBeenCalledWith(
       expect.objectContaining({
         humanRating: 7,
-        humanReviewNotes: 'Existing note.',
+        humanReviewNotes: 'Existing private note.',
       }),
     );
   });

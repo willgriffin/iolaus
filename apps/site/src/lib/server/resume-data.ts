@@ -28,7 +28,14 @@ import type {
 import experienceData from '../data/experience.json';
 import profileData from '../data/profile.json';
 import skillsData from '../data/skills.json';
+import { isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
+import {
+  getPrivateRecord,
+  privateRecordWhere,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import {
   LEGACY_RESUME_READ_PLAN,
   NORMALIZED_RESUME_READ_PLAN,
@@ -104,6 +111,68 @@ export interface ResumeProfileSummary {
   name: string;
 }
 
+const PRIVATE_RESUME_COLLECTIONS = new Set([
+  'Achievement',
+  'AchievementAttachment',
+  'AchievementTag',
+  'Attachment',
+  'CandidateProfile',
+  'CandidateProfileLink',
+  'Duty',
+  'DutyTag',
+  'Education',
+  'EducationTag',
+  'EmploymentRole',
+  'EmploymentRoleTag',
+  'Experience',
+  'ExperienceCompany',
+  'ExperienceRole',
+  'ExperienceTag',
+  'Project',
+  'ProjectAttachment',
+  'ProjectTag',
+  'ResumeAchievement',
+  'ResumeEducation',
+  'ResumeLink',
+  'ResumeOtherRole',
+  'ResumePosition',
+  'ResumeProfile',
+  'ResumeSkill',
+  'ResumeSkillCategory',
+  'ResumeSkillGroup',
+  'ResumeTailoringConfig',
+  'SkillCategory',
+  'SkillCategoryMember',
+  'SkillGroup',
+  'SkillGroupMember',
+]);
+
+export interface CandidateEvidenceSource {
+  id: string;
+  kind: 'achievement' | 'candidate_profile' | 'education' | 'project' | 'skill';
+  text: string;
+  title: string;
+}
+
+export interface WorkspaceCandidateEvidence {
+  candidate: {
+    authorizedWorkCountriesJson: string;
+    citizenshipsJson: string;
+    factsJson: string;
+    location: string;
+    preferencesJson: string;
+    residenceCountryJson: string;
+    sponsorshipRequired: boolean | 'unknown';
+    summary: string;
+    targetWorkCountryJson: string;
+    title: string;
+    workAuthorization: string;
+  };
+  evidence: CandidateEvidenceSource[];
+  fingerprint: string;
+  subject: WorkspaceSubject;
+}
+
 export function loadLegacyResumeSource(): ResumeSource {
   return {
     profile: profileData as Profile,
@@ -114,6 +183,24 @@ export function loadLegacyResumeSource(): ResumeSource {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function privateReadSubject(
+  subject?: WorkspaceSubject,
+): WorkspaceSubject | undefined {
+  if (subject) return requireWorkspaceSubject(subject);
+  if (isSharedHosted()) {
+    throw new Error('A verified candidate workspace subject is required.');
+  }
+  return undefined;
+}
+
+function emptyPublishedResumeSource(): ResumeSource {
+  return {
+    experience: { education: [], other: [], positions: [] },
+    profile: { email: '', links: [], name: '', summary: '', title: '' },
+    skills: { groups: [], skillGroups: [] },
+  };
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -701,9 +788,17 @@ export function assembleResumeSourceFromLegacyRecords(
 async function listRecords(
   className: string,
   orderBy = 'updated_at ASC',
+  subject?: WorkspaceSubject,
 ): Promise<ResumeRecord[]> {
   const collection = await getCollection(className);
-  const records = await collection.list({ limit: 1000, orderBy });
+  const scopedSubject = privateReadSubject(subject);
+  const records = await collection.list({
+    limit: 1000,
+    orderBy,
+    ...(scopedSubject && PRIVATE_RESUME_COLLECTIONS.has(className)
+      ? { where: privateRecordWhere(scopedSubject) }
+      : {}),
+  });
   return JSON.parse(JSON.stringify(records)) as ResumeRecord[];
 }
 
@@ -720,14 +815,25 @@ async function loadRecordSpec<K extends string>(
       inMemoryOrderBy?: string,
     ]
   >,
+  subject?: WorkspaceSubject,
 ): Promise<Record<K, ResumeRecord[]>> {
+  const scopedSubject = privateReadSubject(subject);
   const keys = Object.keys(spec) as K[];
   const plan = Object.fromEntries(
     keys.map((key) => {
       const [className, orderBy, readLimit] = spec[key];
       return [
         key,
-        { className, options: { limit: readLimit ?? 1000, orderBy } },
+        {
+          className,
+          options: {
+            limit: readLimit ?? 1000,
+            orderBy,
+            ...(scopedSubject && PRIVATE_RESUME_COLLECTIONS.has(className)
+              ? { where: privateRecordWhere(scopedSubject) }
+              : {}),
+          },
+        },
       ];
     }),
   ) as SmrtCollectionReadPlan;
@@ -759,28 +865,33 @@ async function loadRecordSpec<K extends string>(
 
 export async function loadNormalizedResumeSource(
   selection?: ResumeProfileSelection,
+  subject?: WorkspaceSubject,
 ): Promise<ResumeSource | null> {
   const records: ResumeSourceRecords = await loadRecordSpec(
     NORMALIZED_RESUME_READ_PLAN,
+    subject,
   );
   return assembleResumeSourceFromRecords(records, selection);
 }
 
 export async function loadLegacyAdminResumeSource(
   selection?: ResumeProfileSelection,
+  subject?: WorkspaceSubject,
 ): Promise<ResumeSource | null> {
   const records = (await loadRecordSpec(
     LEGACY_RESUME_READ_PLAN,
+    subject,
   )) as unknown as LegacyResumeSourceRecords;
   return assembleResumeSourceFromLegacyRecords(records, selection);
 }
 
 export async function loadAdminResumeSource(
   selection?: ResumeProfileSelection,
+  subject?: WorkspaceSubject,
 ): Promise<ResumeSource | null> {
   return (
-    (await loadNormalizedResumeSource(selection)) ??
-    (await loadLegacyAdminResumeSource(selection))
+    (await loadNormalizedResumeSource(selection, subject)) ??
+    (await loadLegacyAdminResumeSource(selection, subject))
   );
 }
 
@@ -793,6 +904,7 @@ export async function loadAdminResumeSource(
 export async function loadPublishedResumeSource(
   selection?: ResumeProfileSelection,
 ): Promise<ResumeSource> {
+  if (isSharedHosted()) return emptyPublishedResumeSource();
   return (await loadAdminResumeSource(selection)) ?? loadLegacyResumeSource();
 }
 
@@ -800,6 +912,7 @@ export async function loadPublishedResumeSource(
 export async function listPublishedResumeProfiles(): Promise<
   ResumeProfileSummary[]
 > {
+  if (isSharedHosted()) return [];
   return resumeProfileSummaries(
     await listRecords('CandidateProfile', 'profileKey ASC'),
   );
@@ -944,10 +1057,13 @@ export async function listResumeTailoringConfigs(): Promise<
 
 export async function getResumeTailoringConfig(
   id: string,
+  subject?: WorkspaceSubject,
 ): Promise<ResumeTailoringRecord | null> {
   if (!id) return null;
-  const collection = await getCollection('ResumeTailoringConfig');
-  const record = await collection.get(id);
+  const scopedSubject = privateReadSubject(subject);
+  const record = scopedSubject
+    ? await getPrivateRecord('ResumeTailoringConfig', id, scopedSubject)
+    : await (await getCollection('ResumeTailoringConfig')).get(id);
   return record
     ? parseTailoringConfigRecord(
         JSON.parse(JSON.stringify(record)) as ResumeRecord,
@@ -963,4 +1079,125 @@ export async function listResumeAssets(): Promise<ResumeRecord[]> {
 export async function getPublishedResumeAsset(): Promise<ResumeRecord | null> {
   const assets = await listResumeAssets();
   return assets.find((asset) => booleanValue(asset.isPublished)) ?? null;
+}
+
+function evidenceText(...values: unknown[]): string {
+  return values.map(stringValue).filter(Boolean).join('\n').slice(0, 4_000);
+}
+
+/**
+ * Load bounded candidate evidence for an authenticated selected profile.
+ *
+ * This is deliberately separate from public resume loading: the assessment
+ * engine receives a server-validated subject and cannot ask it to read a
+ * different profile by swapping an opaque id in tool input.
+ */
+export async function loadWorkspaceCandidateEvidence(
+  subject: WorkspaceSubject,
+): Promise<WorkspaceCandidateEvidence> {
+  const scopedSubject = requireWorkspaceSubject(subject);
+  const profile = await getPrivateRecord(
+    'CandidateProfile',
+    scopedSubject.profileId,
+    scopedSubject,
+  );
+  if (!profile) {
+    throw new Error('Candidate profile is outside this workspace.');
+  }
+
+  const source =
+    (await loadNormalizedResumeSource(undefined, scopedSubject)) ??
+    (await loadLegacyAdminResumeSource(undefined, scopedSubject));
+  const evidence: CandidateEvidenceSource[] = [];
+  const append = (next: CandidateEvidenceSource) => {
+    if (evidence.length < 200 && next.id && next.text) evidence.push(next);
+  };
+
+  append({
+    id: scopedSubject.profileId,
+    kind: 'candidate_profile',
+    text: evidenceText(profile.title, profile.summary),
+    title: stringValue(profile.name) || 'Candidate profile',
+  });
+  for (const position of source?.experience.positions ?? []) {
+    for (const project of position.projects ?? []) {
+      append({
+        id: stringValue(project.id),
+        kind: 'project',
+        text: evidenceText(project.name, project.summary),
+        title: stringValue(project.name) || 'Project',
+      });
+      for (const achievement of project.achievements ?? []) {
+        append({
+          id: `${stringValue(project.id)}:${stringValue(achievement.title)}`,
+          kind: 'achievement',
+          text: evidenceText(
+            achievement.title,
+            achievement.body,
+            achievement.metric,
+          ),
+          title: stringValue(achievement.title) || 'Achievement',
+        });
+      }
+    }
+    for (const achievement of position.achievements ?? []) {
+      append({
+        id: `${stringValue(position.id)}:${stringValue(achievement.title)}`,
+        kind: 'achievement',
+        text: evidenceText(
+          achievement.title,
+          achievement.body,
+          achievement.metric,
+        ),
+        title: stringValue(achievement.title) || 'Achievement',
+      });
+    }
+  }
+  for (const group of source?.skills.groups ?? []) {
+    for (const skill of group.skills ?? []) {
+      append({
+        id: stringValue(skill.id),
+        kind: 'skill',
+        text: stringValue(skill.label),
+        title: stringValue(skill.label) || 'Skill',
+      });
+    }
+  }
+  for (const education of source?.experience.education ?? []) {
+    append({
+      id: `${stringValue(education.title)}:${stringValue(education.institution)}`,
+      kind: 'education',
+      text: evidenceText(
+        education.title,
+        education.institution,
+        education.detail,
+      ),
+      title: stringValue(education.title) || 'Education',
+    });
+  }
+
+  const candidate: WorkspaceCandidateEvidence['candidate'] = {
+    authorizedWorkCountriesJson: stringValue(
+      profile.authorizedWorkCountriesJson,
+    ),
+    citizenshipsJson: stringValue(profile.citizenshipsJson),
+    factsJson: stringValue(profile.factsJson),
+    location: stringValue(profile.location),
+    preferencesJson: stringValue(profile.preferencesJson),
+    residenceCountryJson: stringValue(profile.residenceCountryJson),
+    // Missing or malformed data must remain unknown. Treating it as `false`
+    // would incorrectly claim that an applicant needs no sponsorship.
+    sponsorshipRequired:
+      typeof profile.sponsorshipRequired === 'boolean'
+        ? profile.sponsorshipRequired
+        : 'unknown',
+    summary: stringValue(profile.summary),
+    targetWorkCountryJson: stringValue(profile.targetWorkCountryJson),
+    title: stringValue(profile.title),
+    workAuthorization: stringValue(profile.workAuthorization),
+  };
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({ candidate, evidence, subject: scopedSubject }))
+    .digest('hex');
+  return { candidate, evidence, fingerprint, subject: scopedSubject };
 }

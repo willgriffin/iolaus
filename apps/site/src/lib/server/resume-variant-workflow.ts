@@ -156,7 +156,7 @@ export async function releaseResumeVariantApplicationWrite(
       await commitApplicationIfCurrent(application, { materialWriteLock: '' })
     ) {
       try {
-        await syncApplicationWorkflowTasks(application);
+        await syncApplicationWorkflowTasks(application, verifiedSubject);
       } catch {
         // Continue releasing every selected application before reporting the
         // task-sync failure to the caller.
@@ -209,7 +209,7 @@ export async function syncResumeVariantApplicationApprovals(
       }
       invalidated += 1;
     }
-    await syncApplicationWorkflowTasks(application);
+    await syncApplicationWorkflowTasks(application, verifiedSubject);
   }
 
   return { invalidated, selected: selectedApplications.length };

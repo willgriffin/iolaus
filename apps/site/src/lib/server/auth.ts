@@ -32,6 +32,7 @@ import {
 } from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 import { provisionHostedOidcUser } from './hosted-oidc-provisioning.js';
+import { seedSystemRolesWithPermissions } from './role-permissions.js';
 
 const appConfig = getAppConfig();
 
@@ -368,7 +369,7 @@ async function ensureSingleTenantAccess(user: User) {
   const tenants = await TenantCollection.create(options);
   const memberships = await MembershipCollection.create(options);
 
-  await roles.seedSystemRoles();
+  await seedSystemRolesWithPermissions(roles);
 
   const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
     appConfig.appId,
@@ -431,7 +432,7 @@ async function ensureHostedWorkspaceAccess(user: User) {
   const roles = await RoleCollection.create(options);
   const tenants = await TenantCollection.create(options);
   const memberships = await MembershipCollection.create(options);
-  await roles.seedSystemRoles();
+  await seedSystemRolesWithPermissions(roles);
 
   const slug = hostedWorkspaceTenantSlug(userId);
   let tenant = await tenants.findBySlug(slug);
@@ -452,10 +453,8 @@ async function ensureHostedWorkspaceAccess(user: User) {
     }
   }
 
-  const adminRole =
-    (await roles.findBySlug(DEFAULT_ROLE_SLUGS.ADMIN)) ??
-    (await roles.findBySlug(DEFAULT_ROLE_SLUGS.OWNER));
-  if (!adminRole?.id || !tenant.id) {
+  const memberRole = await roles.findBySlug(DEFAULT_ROLE_SLUGS.MEMBER);
+  if (!memberRole?.id || !tenant.id) {
     throw new Error(
       'Unable to resolve hosted workspace membership prerequisites.',
     );
@@ -464,7 +463,7 @@ async function ensureHostedWorkspaceAccess(user: User) {
   let membership = await memberships.findByUserAndTenant(userId, tenant.id);
   if (!membership) {
     membership = await memberships.create({
-      roleId: adminRole.id,
+      roleId: memberRole.id,
       status: MembershipStatus.ACTIVE,
       tenantId: tenant.id,
       userId,
@@ -472,10 +471,10 @@ async function ensureHostedWorkspaceAccess(user: User) {
     await membership.save();
   } else if (
     membership.status !== MembershipStatus.ACTIVE ||
-    membership.roleId !== adminRole.id
+    membership.roleId !== memberRole.id
   ) {
     membership.status = MembershipStatus.ACTIVE;
-    membership.roleId = adminRole.id;
+    membership.roleId = memberRole.id;
     await membership.save();
   }
   return { membership, tenant };

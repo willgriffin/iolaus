@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   review: vi.fn(async () => ({ status: 'reject' })),
   triageQueue: vi.fn(async () => ({ candidates: [], total: 0 })),
   verify: vi.fn(async () => ({ preflight: { state: 'live' } })),
+  workspaceSubjectFromLocals: vi.fn(),
 }));
 
 vi.mock('$lib/server/admin-resource-route', () => ({
@@ -32,6 +33,10 @@ vi.mock('$lib/server/admin-resource-route', () => ({
   verifyOpportunityPostingAction: mocks.verify,
 }));
 
+vi.mock('$lib/server/workspace-subject.js', () => ({
+  workspaceSubjectFromLocals: mocks.workspaceSubjectFromLocals,
+}));
+
 function event() {
   return {
     locals: { user: { id: 'owner-1' } },
@@ -50,6 +55,11 @@ function event() {
 describe('admin resource route triage actions', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockClear();
+    mocks.workspaceSubjectFromLocals.mockReturnValue({
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    });
   });
 
   it('serves the triage queue and both verdicts from the list route', async () => {
@@ -73,7 +83,11 @@ describe('admin resource route triage actions', () => {
     await actions.digDeeper(input);
     await actions.verifyPosting(input);
 
-    expect(mocks.triageQueue).toHaveBeenCalledWith(input.request);
+    expect(mocks.triageQueue).toHaveBeenCalledWith(input.request, {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    });
     expect(mocks.digDeeper).toHaveBeenCalledWith(input.request, input.locals);
     expect(mocks.verify).toHaveBeenCalledWith(input.request, input.locals);
     expect(input.locals.user?.id).toBe('owner-1');

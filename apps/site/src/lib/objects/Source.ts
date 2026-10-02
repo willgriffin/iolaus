@@ -53,6 +53,12 @@ export class Source extends SmrtObject {
   }
 
   async crawl(args: SourceCrawlJobArgs = {}, context?: JobExecutionContext) {
+    const { getAppConfig } = await import('../server/app-config.js');
+    if (getAppConfig().workspaceMode === 'shared') {
+      throw new Error(
+        'Shared workspace source crawls require an explicit operator dispatch.',
+      );
+    }
     const { runSourceCrawlJob } = await import('../server/source-crawl-job.js');
     return await runSourceCrawlJob(this, args, context);
   }

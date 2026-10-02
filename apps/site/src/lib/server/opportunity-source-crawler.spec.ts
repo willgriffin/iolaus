@@ -3695,7 +3695,7 @@ describe('opportunity source crawler discovery', () => {
       intelligenceEnqueued: 1,
       reused: 1,
     });
-    expect(syncRecommendedOpportunityDecisionTasks).toHaveBeenCalledOnce();
+    expect(syncRecommendedOpportunityDecisionTasks).not.toHaveBeenCalled();
     expect(cancelStaleOpportunityIntelligenceTasks).toHaveBeenCalledWith(
       'existing-opportunity',
       expect.any(String),
@@ -3868,7 +3868,7 @@ describe('opportunity source crawler discovery', () => {
       'found',
     );
     expect(opportunity.status).toBe('found');
-    expect(syncRecommendedOpportunityDecisionTasks).toHaveBeenCalledOnce();
+    expect(syncRecommendedOpportunityDecisionTasks).not.toHaveBeenCalled();
   });
 
   it('retries the source-content CAS against the winning concurrent version', async () => {

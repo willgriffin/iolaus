@@ -86,8 +86,13 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(async () => {}),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveDatabase: vi.fn(async () => ({ update: mocks.databaseUpdate })),
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  requireCurrentWorkspaceSubject: () => subject,
 }));
 
 vi.mock('./smrt.js', () => ({
@@ -676,6 +681,7 @@ describe('application review materials', () => {
     });
     expect(mocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
       applications.records[0],
+      subject,
     );
   });
 
@@ -1101,7 +1107,7 @@ describe('application review materials', () => {
     );
     expect(mocks.maybeEnqueueAutoSubmitOnApproval).toHaveBeenCalledWith(
       applications.records[0],
-      { user: { id: 'user-1' } },
+      { subject, user: { id: 'user-1' } },
     );
   });
 

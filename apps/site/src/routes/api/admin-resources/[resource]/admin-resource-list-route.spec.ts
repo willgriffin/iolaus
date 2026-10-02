@@ -3,15 +3,26 @@ import { GET } from './+server';
 
 const mocks = vi.hoisted(() => ({
   loadAdminResourcePageData: vi.fn(),
+  workspaceSubjectFromLocals: vi.fn(),
 }));
 
 vi.mock('$lib/server/admin-resource-route', () => ({
   loadAdminResourcePageData: mocks.loadAdminResourcePageData,
 }));
 
+vi.mock('$lib/server/workspace-subject.js', () => ({
+  workspaceSubjectFromLocals: mocks.workspaceSubjectFromLocals,
+}));
+
 describe('admin resource list API', () => {
   beforeEach(() => {
     mocks.loadAdminResourcePageData.mockReset();
+    mocks.workspaceSubjectFromLocals.mockReset();
+    mocks.workspaceSubjectFromLocals.mockReturnValue({
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
   });
 
   it('returns authenticated admin list records in a smrt-web list shape', async () => {
@@ -80,6 +91,7 @@ describe('admin resource list API', () => {
     expect(mocks.loadAdminResourcePageData).toHaveBeenCalledWith(
       'opportunities',
       url,
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
     );
   });
 

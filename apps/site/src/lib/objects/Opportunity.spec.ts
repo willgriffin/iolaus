@@ -46,7 +46,7 @@ describe('Opportunity TaskRunner loading', () => {
     expect(baseLoad).toHaveBeenCalledOnce();
   });
 
-  it('registers the queued object type and exposes the processIntelligence method', async () => {
+  it('registers the queued object type and rejects a shape-only fake job context', async () => {
     const registeredClass = ObjectRegistry.getClass(
       OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
     );
@@ -54,22 +54,18 @@ describe('Opportunity TaskRunner loading', () => {
 
     const opportunity = new Opportunity();
     opportunity.id = 'opp-1';
-    const args = { modes: 'all', userId: 'user-1' } as const;
-    const context = { logger: { error: vi.fn(), info: vi.fn() } } as never;
+    const args = { modes: 'all' } as const;
+    const context = {
+      job: { tenantId: 'tenant-1' },
+      logger: { error: vi.fn(), info: vi.fn() },
+    } as never;
     expect(typeof opportunity[OPPORTUNITY_INTELLIGENCE_METHOD]).toBe(
       'function',
     );
 
-    const result = await opportunity.processIntelligence(args, context);
-
-    expect(result).toEqual({
-      message: 'Processed opportunity intelligence.',
-      status: 'processed',
-    });
-    expect(runOpportunityIntelligenceJob).toHaveBeenCalledWith(
-      opportunity,
-      args,
-      context,
-    );
+    await expect(
+      opportunity.processIntelligence(args, context),
+    ).rejects.toThrow('active TaskRunner execution context');
+    expect(runOpportunityIntelligenceJob).not.toHaveBeenCalled();
   });
 });

@@ -24,8 +24,6 @@ import {
 } from '$lib/server/application-concurrency';
 import {
   normalizeAccountStatus,
-  syncApplicationWorkflowTasks,
-  syncRecommendedOpportunityDecisionTasks,
   syncSourceAccountTasks,
   validateSubmittedApplicationPayload,
 } from '$lib/server/application-workflow';
@@ -40,8 +38,13 @@ import {
   deleteSourceSchedule,
   syncSourceSchedule,
 } from '$lib/server/source-schedules';
+import {
+  assertGenericResourceAccess,
+  requireCandidateWorkspaceSubject,
+} from '$lib/server/workspace-resource-policy';
 
 function requireResourceClass(resource: string): string {
+  assertGenericResourceAccess();
   const resolved = resolveApiResource(resource);
   if (!resolved) throw error(404, 'Resource not found');
   return resolved.className;
@@ -331,7 +334,10 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
   >['reservation'] = null;
   if (className === 'ResumeVariant') {
     const { reservation, violation } =
-      await reserveResumeVariantApplicationWrite(id);
+      await reserveResumeVariantApplicationWrite(
+        id,
+        requireCandidateWorkspaceSubject(),
+      );
     if (violation) {
       error(409, violation);
     }
@@ -351,22 +357,23 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
           'Application changed before this update could be saved. Reload and review the current application.',
         );
       }
-      await syncApplicationWorkflowTasks(
-        item as unknown as Record<string, unknown>,
-      );
     } else {
       Object.assign(item, payload);
       await item.save();
     }
   } catch (cause) {
     if (resumeVariantReservation) {
-      await releaseResumeVariantApplicationWrite(resumeVariantReservation);
+      await releaseResumeVariantApplicationWrite(
+        resumeVariantReservation,
+        requireCandidateWorkspaceSubject(),
+      );
     }
     throw cause;
   }
   if (resumeVariantReservation) {
     const release = await releaseResumeVariantApplicationWrite(
       resumeVariantReservation,
+      requireCandidateWorkspaceSubject(),
     );
     if (!release.applicationLocksReleased) {
       error(
@@ -381,11 +388,11 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
       );
     }
   }
-  if (className === 'Opportunity') {
-    await syncRecommendedOpportunityDecisionTasks();
-  }
   if (className === 'ResumeVariant') {
-    await syncResumeVariantApplicationApprovals(id);
+    await syncResumeVariantApplicationApprovals(
+      id,
+      requireCandidateWorkspaceSubject(),
+    );
   }
   if (className === 'Source') {
     await syncSourceSchedule(
@@ -409,7 +416,10 @@ export const DELETE: RequestHandler = async ({ params }) => {
     serializeRecord(item),
   );
   if (className === 'ResumeVariant') {
-    const violation = await resumeVariantDeleteViolation(id);
+    const violation = await resumeVariantDeleteViolation(
+      id,
+      requireCandidateWorkspaceSubject(),
+    );
     if (violation) {
       error(400, violation);
     }

@@ -175,6 +175,50 @@ export class Opportunity extends SmrtObject {
     const { runOpportunityIntelligenceJob } = await import(
       '../server/opportunity-intelligence-job.js'
     );
-    return await runOpportunityIntelligenceJob(this, args, context);
+    const { requireActiveRunnerExecutionContext } = await import(
+      '../server/job-workspace-subject.js'
+    );
+    const runnerContext = requireActiveRunnerExecutionContext(context);
+    if (!('runtimeWorkspaceSubject' in args)) {
+      const { getAppConfig } = await import('../server/app-config.js');
+      if (getAppConfig().workspaceMode === 'shared') {
+        throw new Error(
+          'Shared workspace intelligence jobs require a bound workspace subject.',
+        );
+      }
+      return await runOpportunityIntelligenceJob(this, args, runnerContext);
+    }
+    const {
+      assertJobTenantMatchesRuntimeWorkspaceSubject,
+      runAsResolvedJobWorkspaceSubject,
+    } = await import('../server/job-workspace-subject.js');
+    return await runAsResolvedJobWorkspaceSubject(
+      args,
+      async (subject, run) => {
+        assertJobTenantMatchesRuntimeWorkspaceSubject(
+          runnerContext.job,
+          subject,
+        );
+        const { getAppConfig } = await import('../server/app-config.js');
+        const modes = Array.isArray(args.modes) ? args.modes : [args.modes];
+        if (
+          getAppConfig().workspaceMode === 'shared' &&
+          (modes.length !== 1 || modes[0] !== 'assessment')
+        ) {
+          throw new Error(
+            'Candidate-owned intelligence jobs only permit assessment mode.',
+          );
+        }
+        await run.assertOperation('opportunities', 'read');
+        const { workspaceWorkflowOperation } = await import(
+          '../server/workspace-workflow-capabilities.js'
+        );
+        const operation = workspaceWorkflowOperation('assessment.execute');
+        await run.assertOperation(operation.collection, operation.action);
+        return await runOpportunityIntelligenceJob(this, args, runnerContext, {
+          workspaceSubject: subject,
+        });
+      },
+    );
   }
 }

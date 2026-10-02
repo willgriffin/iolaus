@@ -7,35 +7,15 @@ import { apiResourceClasses, getApiResourceClass } from './api-resources';
  * resolve to the same class now that exposure derives from the decorators.
  */
 const legacySlugs: Record<string, string> = {
-  agentruns: 'AgentRun',
-  achievements: 'Achievement',
-  achievementattachments: 'AchievementAttachment',
-  achievementtags: 'AchievementTag',
-  applications: 'Application',
-  attachments: 'Attachment',
   companies: 'Company',
   companyattachments: 'CompanyAttachment',
   companyresearches: 'CompanyResearch',
   companytags: 'CompanyTag',
   decisions: 'Decision',
   decisiontags: 'DecisionTag',
-  duties: 'Duty',
-  dutytags: 'DutyTag',
-  education: 'Education',
-  educations: 'Education',
-  educationtags: 'EducationTag',
-  employmentroles: 'EmploymentRole',
-  employmentroletags: 'EmploymentRoleTag',
-  evaluationscores: 'EvaluationScore',
-  experiencecompanies: 'ExperienceCompany',
-  experienceroles: 'ExperienceRole',
-  experiences: 'Experience',
-  experiencetags: 'ExperienceTag',
   factcontents: 'FactContent',
   factevidences: 'FactEvidence',
   facts: 'Fact',
-  factcandidates: 'FactCandidate',
-  factintakes: 'FactIntake',
   factsources: 'FactSource',
   factsubjects: 'FactSubject',
   facttags: 'FactTag',
@@ -44,22 +24,10 @@ const legacySlugs: Record<string, string> = {
   opportunityplaces: 'OpportunityPlace',
   opportunityroles: 'OpportunityRole',
   opportunitytags: 'OpportunityTag',
-  preferencerules: 'PreferenceRule',
-  projectattachments: 'ProjectAttachment',
-  projects: 'Project',
-  projecttags: 'ProjectTag',
-  resumeassets: 'ResumeAsset',
-  resumetailoringconfigs: 'ResumeTailoringConfig',
-  resumevariants: 'ResumeVariant',
   sourcecrawlitems: 'SourceCrawlItem',
   sourcecrawls: 'SourceCrawl',
-  skillcategories: 'SkillCategory',
-  skillcategorymembers: 'SkillCategoryMember',
-  skillgroupmembers: 'SkillGroupMember',
-  skillgroups: 'SkillGroup',
   sources: 'Source',
   sourcetags: 'SourceTag',
-  tasks: 'Task',
 };
 
 describe('apiResourceClasses', () => {
@@ -82,14 +50,7 @@ describe('apiResourceClasses', () => {
     }
   });
 
-  it('exposes resume content classes under both slug spellings', () => {
-    expect(getApiResourceClass('resumeprofiles')).toBe('ResumeProfile');
-    expect(getApiResourceClass('resume_profiles')).toBe('ResumeProfile');
-    expect(getApiResourceClass('resumepositions')).toBe('ResumePosition');
-    expect(getApiResourceClass('resume_skill_categories')).toBe(
-      'ResumeSkillCategory',
-    );
-    expect(getApiResourceClass('agent_runs')).toBe('AgentRun');
+  it('exposes only public company research under its alternate table spelling', () => {
     expect(getApiResourceClass('company_research')).toBe('CompanyResearch');
   });
 
@@ -103,6 +64,23 @@ describe('apiResourceClasses', () => {
     expect(getApiResourceClass('cliauthrequests')).toBeUndefined();
     expect(getApiResourceClass('people')).toBeUndefined();
     expect(getApiResourceClass('employmentpersons')).toBeUndefined();
+    expect(getApiResourceClass('experiences')).toBeUndefined();
+    expect(getApiResourceClass('achievements')).toBeUndefined();
+    expect(getApiResourceClass('resumetailoringconfigs')).toBeUndefined();
+    expect(getApiResourceClass('resumeprofiles')).toBeUndefined();
+    expect(getApiResourceClass('resumepositions')).toBeUndefined();
+    expect(getApiResourceClass('tasks')).toBeUndefined();
+    expect(getApiResourceClass('agentruns')).toBeUndefined();
+    expect(getApiResourceClass('applications')).toBeUndefined();
+    expect(
+      getApiResourceClass('application_material_comments'),
+    ).toBeUndefined();
+    expect(getApiResourceClass('evaluationscores')).toBeUndefined();
+    expect(getApiResourceClass('factcandidates')).toBeUndefined();
+    expect(getApiResourceClass('factintakes')).toBeUndefined();
+    expect(getApiResourceClass('preferencerules')).toBeUndefined();
+    expect(getApiResourceClass('resumeassets')).toBeUndefined();
+    expect(getApiResourceClass('resumevariants')).toBeUndefined();
     expect(getApiResourceClass('users')).toBeUndefined();
     expect(getApiResourceClass('profiles')).toBeUndefined();
     expect(getApiResourceClass('sessions')).toBeUndefined();

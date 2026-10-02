@@ -11,7 +11,6 @@ import {
 } from '$lib/opportunity-filters';
 import {
   countOpportunityRecords,
-  listLatestOpportunityRelatedContext,
   listOpportunityPageIds,
 } from './admin-opportunity-query.js';
 import {
@@ -19,6 +18,10 @@ import {
   recordExplicitOpportunityDecision,
 } from './application-workflow.js';
 import { getDbConfig } from './db.js';
+import {
+  loadCurrentOpportunityAssessmentProjections,
+  loadOpportunityAssessmentQueryContext,
+} from './opportunity-assessment-store.js';
 import { loadOpportunityDetails } from './opportunity-details.js';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep.js';
 import { recordPostingPreflight } from './posting-preflight.js';
@@ -26,6 +29,11 @@ import {
   latestPostingPreflightStatus,
   postingPreflightStatusFromAgentRun,
 } from './posting-preflight-status.js';
+import {
+  listPrivateRecords,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import {
   createPublicHttpsFetch,
   PUBLIC_HTTPS_TIMEOUT_MS,
@@ -172,6 +180,11 @@ function boundedNumber(
   return number;
 }
 
+function sourceContentVersion(value: unknown): number {
+  const version = Number(value);
+  return Number.isInteger(version) && version >= 0 ? version : 0;
+}
+
 function booleanValue(value: unknown, fallback: boolean): boolean {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -292,7 +305,11 @@ function applicationAdminUrl(id: string): string {
   return `/admin/applications/${encodeURIComponent(id)}/`;
 }
 
-async function relatedContext(opportunities: MutableRecord[]) {
+async function relatedContext(
+  opportunities: MutableRecord[],
+  subject?: WorkspaceSubject,
+) {
+  const verifiedSubject = subject ? requireWorkspaceSubject(subject) : null;
   const ids = Array.from(
     new Set(
       opportunities.map((record) => stringValue(record.id)).filter(Boolean),
@@ -308,22 +325,46 @@ async function relatedContext(opportunities: MutableRecord[]) {
   if (ids.length === 0) {
     return {
       applications: new Map<string, Record<string, unknown>>(),
+      assessments: new Map<string, unknown>(),
       companies: new Map<string, Record<string, unknown>>(),
       scores: new Map<string, Record<string, unknown>>(),
     };
   }
 
-  const [relatedRows, companies] = await Promise.all([
-    getDbConfig().type === 'sqlite'
-      ? localLatestOpportunityRelatedContext(opportunities, ids)
-      : listLatestOpportunityRelatedContext(ids),
-    companyIds.length > 0
-      ? (await collection('Company')).list({
-          limit: companyIds.length,
-          where: { 'id in': companyIds },
-        })
-      : Promise.resolve([]),
-  ]);
+  const historyLimit = ids.length * LOCAL_RELATED_HISTORY_PER_OPPORTUNITY;
+  const [privateApplications, privateScores, assessments, companies] =
+    await Promise.all([
+      verifiedSubject
+        ? listPrivateRecords('Application', verifiedSubject, {
+            limit: historyLimit,
+            orderBy: 'updated_at DESC',
+            where: { 'opportunityId in': ids },
+          })
+        : Promise.resolve([]),
+      verifiedSubject
+        ? listPrivateRecords('EvaluationScore', verifiedSubject, {
+            limit: historyLimit,
+            orderBy: 'updated_at DESC',
+            where: { 'opportunityId in': ids },
+          })
+        : Promise.resolve([]),
+      verifiedSubject
+        ? loadCurrentOpportunityAssessmentProjections({
+            opportunities: opportunities.map((record) => ({
+              id: record.id,
+              sourceContentFingerprint: record.sourceContentFingerprint,
+              sourceContentVersion: record.sourceContentVersion,
+            })),
+            subject: verifiedSubject,
+          })
+        : Promise.resolve(new Map<string, unknown>()),
+      companyIds.length > 0
+        ? (await collection('Company')).list({
+            limit: companyIds.length,
+            where: { 'id in': companyIds },
+          })
+        : Promise.resolve([]),
+    ]);
 
   const companyById = new Map<string, Record<string, unknown>>();
   for (const company of companies) {
@@ -332,104 +373,43 @@ async function relatedContext(opportunities: MutableRecord[]) {
     if (id) companyById.set(id, serialized);
   }
 
-  const applications = new Map<string, Record<string, unknown>>();
-  const scores = new Map<string, Record<string, unknown>>();
-  for (const row of relatedRows) {
-    const opportunityId = stringValue(row.opportunityId);
-    if (!opportunityId) continue;
-    const applicationId = stringValue(row.applicationId);
-    if (applicationId) {
-      applications.set(opportunityId, {
-        id: applicationId,
-        opportunityId,
-        status: stringValue(row.applicationStatus),
-      });
-    }
-    const scoreId = stringValue(row.scoreId);
-    if (scoreId) {
-      scores.set(opportunityId, {
-        id: scoreId,
-        opportunityId,
-        recommendation: stringValue(row.recommendation),
-        score: row.score ?? null,
-        summary: stringValue(row.scoreSummary),
-      });
-    }
-  }
-
-  return {
-    applications,
-    companies: companyById,
-    scores,
-  };
-}
-
-async function localLatestOpportunityRelatedContext(
-  opportunities: MutableRecord[],
-  opportunityIds: string[],
-) {
-  const historyLimit =
-    opportunityIds.length * LOCAL_RELATED_HISTORY_PER_OPPORTUNITY;
-  const [applications, scores] = await Promise.all([
-    (await collection('Application')).list({
-      limit: historyLimit,
-      orderBy: 'updated_at DESC',
-      where: { 'opportunityId in': opportunityIds },
-    }),
-    (await collection('EvaluationScore')).list({
-      limit: historyLimit,
-      orderBy: 'updated_at DESC',
-      where: { 'opportunityId in': opportunityIds },
-    }),
-  ]);
   const opportunityById = new Map(
     opportunities.map((opportunity) => [
       stringValue(opportunity.id),
       opportunity,
     ]),
   );
-  const applicationByOpportunity = new Map<string, MutableRecord>();
-  for (const application of applications) {
+  const applications = new Map<string, Record<string, unknown>>();
+  for (const application of privateApplications) {
     const opportunityId = stringValue(application.opportunityId);
-    if (opportunityId && !applicationByOpportunity.has(opportunityId)) {
-      applicationByOpportunity.set(opportunityId, application);
+    if (opportunityId && !applications.has(opportunityId)) {
+      applications.set(opportunityId, jsonRecord(application));
     }
   }
-  const scoreByOpportunity = new Map<string, MutableRecord>();
-  for (const score of scores) {
+  const scores = new Map<string, Record<string, unknown>>();
+  for (const score of privateScores) {
     const opportunityId = stringValue(score.opportunityId);
     const opportunity = opportunityById.get(opportunityId);
     if (
-      opportunityId &&
-      opportunity &&
-      stringValue(score.sourceContentFingerprint) ===
-        stringValue(opportunity.sourceContentFingerprint) &&
-      (Boolean(stringValue(score.createdByProfileId)) ||
-        (Boolean(stringValue(opportunity.scoringMaterialFingerprint)) &&
-          stringValue(score.scoringMaterialFingerprint) ===
-            stringValue(opportunity.scoringMaterialFingerprint))) &&
-      (!scoreByOpportunity.has(opportunityId) ||
-        (Boolean(stringValue(score.createdByProfileId)) &&
-          !stringValue(
-            scoreByOpportunity.get(opportunityId)?.createdByProfileId,
-          )))
-    ) {
-      scoreByOpportunity.set(opportunityId, score);
-    }
+      !opportunityId ||
+      !opportunity ||
+      scores.has(opportunityId) ||
+      !stringValue(opportunity.sourceContentFingerprint) ||
+      stringValue(score.sourceContentFingerprint) !==
+        stringValue(opportunity.sourceContentFingerprint) ||
+      sourceContentVersion(score.sourceContentVersion) !==
+        sourceContentVersion(opportunity.sourceContentVersion)
+    )
+      continue;
+    scores.set(opportunityId, jsonRecord(score));
   }
-  return opportunityIds.map((opportunityId) => {
-    const application = applicationByOpportunity.get(opportunityId);
-    const score = scoreByOpportunity.get(opportunityId);
-    return {
-      applicationId: stringValue(application?.id),
-      applicationStatus: stringValue(application?.status),
-      opportunityId,
-      recommendation: stringValue(score?.recommendation),
-      score: typeof score?.score === 'number' ? score.score : null,
-      scoreId: stringValue(score?.id),
-      scoreSummary: stringValue(score?.summary),
-    };
-  });
+
+  return {
+    applications,
+    assessments,
+    companies: companyById,
+    scores,
+  };
 }
 
 function localReviewMatches(
@@ -468,12 +448,14 @@ async function browseLocalJobOpportunities({
   limit,
   offset,
   search,
+  subject,
 }: {
   decision: string;
   filters: OpportunityFilterState;
   limit: number;
   offset: number;
   search: string | undefined;
+  subject: WorkspaceSubject;
 }) {
   const opportunityCollection = await collection('Opportunity');
   const rawRecords = await opportunityCollection.list({
@@ -485,7 +467,7 @@ async function browseLocalJobOpportunities({
       `Local opportunity browsing is bounded to ${LOCAL_BROWSE_RECORD_LIMIT - 1} records; archive or deploy this data set before continuing.`,
     );
   }
-  const context = await relatedContext(rawRecords);
+  const context = await relatedContext(rawRecords, subject);
   const enriched = rawRecords.map((record) => {
     const id = stringValue(record.id);
     const score = context.scores.get(id);
@@ -530,6 +512,7 @@ function opportunitySummary(
   const application = context.applications.get(id);
   const company = context.companies.get(stringValue(record.companyId));
   const score = context.scores.get(id);
+  const assessment = context.assessments.get(id) ?? null;
   const applicationId = stringValue(application?.id);
   return {
     id,
@@ -551,6 +534,7 @@ function opportunitySummary(
     },
     score: score?.score ?? null,
     recommendation: stringValue(score?.recommendation),
+    assessment,
     humanRating: record.humanRating ?? null,
     summary: limitedText(record.descriptionSummary, 1200),
     requiredSkills: textList(record.requiredSkills),
@@ -566,7 +550,11 @@ function opportunitySummary(
   };
 }
 
-export async function browseJobOpportunities(input: Record<string, unknown>) {
+export async function browseJobOpportunities(
+  input: Record<string, unknown>,
+  subject: WorkspaceSubject,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const query = optionalString(input.query, 'Search query', 200);
   const limit = boundedInteger(input.limit, 'Limit', 1, 25, 10);
   const offset = boundedInteger(input.offset, 'Offset', 0, 1000, 0);
@@ -618,22 +606,29 @@ export async function browseJobOpportunities(input: Record<string, unknown>) {
       limit,
       offset,
       search,
+      subject: verifiedSubject,
     });
   }
+  const assessmentQueryContext =
+    await loadOpportunityAssessmentQueryContext(verifiedSubject);
   const [total, ids] = await Promise.all([
     countOpportunityRecords({
+      ...assessmentQueryContext,
       candidateSkills: [],
       filters,
       reviewFilter: decision,
       search,
+      workspaceSubject: verifiedSubject,
     }),
     listOpportunityPageIds({
+      ...assessmentQueryContext,
       candidateSkills: [],
       filters,
       limit,
       offset,
       reviewFilter: decision,
       search,
+      workspaceSubject: verifiedSubject,
     }),
   ]);
   const opportunityCollection = await collection('Opportunity');
@@ -647,7 +642,7 @@ export async function browseJobOpportunities(input: Record<string, unknown>) {
   const ordered = ids
     .map((id) => byId.get(id))
     .filter((record): record is MutableRecord => Boolean(record));
-  const context = await relatedContext(ordered);
+  const context = await relatedContext(ordered, verifiedSubject);
 
   return {
     items: ordered.map((record) => opportunitySummary(record, context)),
@@ -668,7 +663,11 @@ export async function browseJobOpportunities(input: Record<string, unknown>) {
  * `offset`. The verdict itself still goes through `job_search_record_decision`,
  * the one audited decision path.
  */
-export async function nextJobTriageCandidate(input: Record<string, unknown>) {
+export async function nextJobTriageCandidate(
+  input: Record<string, unknown>,
+  subject: WorkspaceSubject,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   // Loaded on demand: the triage queue reaches the admin resource loaders for
   // record hydration, and this module must stay cheap for every other tool.
   const { applyTriagePreset, nextTriageCandidate } = await import(
@@ -716,7 +715,7 @@ export async function nextJobTriageCandidate(input: Record<string, unknown>) {
     search: query || undefined,
   });
   const record = result.candidate as MutableRecord | null;
-  const context = await relatedContext(record ? [record] : []);
+  const context = await relatedContext(record ? [record] : [], verifiedSubject);
 
   return {
     candidate: record ? opportunitySummary(record, context) : null,
@@ -748,15 +747,12 @@ export async function nextJobTriageCandidate(input: Record<string, unknown>) {
 export async function digDeeperOnJobOpportunity(
   input: Record<string, unknown>,
   user: Actor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunityId = requiredString(
     input.opportunityId,
     'Opportunity id',
-    128,
-  );
-  const reviewedByProfileId = optionalString(
-    input.reviewedByProfileId,
-    'Reviewer profile id',
     128,
   );
   const { digDeeperOnOpportunity } = await import('./opportunity-deep-dive.js');
@@ -772,7 +768,7 @@ export async function digDeeperOnJobOpportunity(
         ? undefined
         : optionalString(input.reason, 'Reason', 2000),
     opportunityId,
-    reviewedByProfileId,
+    subject: verifiedSubject,
     user,
   });
 
@@ -785,7 +781,11 @@ export async function digDeeperOnJobOpportunity(
   };
 }
 
-export async function inspectJobOpportunity(input: Record<string, unknown>) {
+export async function inspectJobOpportunity(
+  input: Record<string, unknown>,
+  subject: WorkspaceSubject,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunityId = requiredString(
     input.opportunityId,
     'Opportunity id',
@@ -795,7 +795,7 @@ export async function inspectJobOpportunity(input: Record<string, unknown>) {
   const opportunity = await opportunities.get(opportunityId);
   if (!opportunity) error(404, 'Opportunity not found.');
   const [context, preflight] = await Promise.all([
-    relatedContext([opportunity]),
+    relatedContext([opportunity], verifiedSubject),
     latestPostingPreflightStatus(opportunityId),
   ]);
   const summary = opportunitySummary(opportunity, context);
@@ -1096,7 +1096,9 @@ export async function importJobOpportunity(
 export async function recordJobOpportunityDecision(
   input: Record<string, unknown>,
   user: Actor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunityId = requiredString(
     input.opportunityId,
     'Opportunity id',
@@ -1109,23 +1111,18 @@ export async function recordJobOpportunityDecision(
     'decision',
   );
   const reason = optionalString(input.reason, 'Reason', 2000);
-  const reviewedByProfileId = optionalString(
-    input.reviewedByProfileId,
-    'Reviewer profile id',
-    128,
-  );
   const result = await recordExplicitOpportunityDecision({
-    deciderProfileId: reviewedByProfileId,
     decision,
     opportunityId,
     reason,
+    subject: verifiedSubject,
     user,
   });
   const opportunity = await (await collection('Opportunity')).get(
     opportunityId,
   );
   if (!opportunity) error(404, 'Opportunity not found after decision.');
-  const context = await relatedContext([opportunity]);
+  const context = await relatedContext([opportunity], verifiedSubject);
 
   return {
     ...result,
@@ -1142,14 +1139,15 @@ export async function recordJobOpportunityDecision(
 export async function openJobApplication(
   input: Record<string, unknown>,
   user: Actor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunityId = requiredString(
     input.opportunityId,
     'Opportunity id',
     128,
   );
-  const applications = await collection('Application');
-  let [application] = await applications.list({
+  let [application] = await listPrivateRecords('Application', verifiedSubject, {
     limit: 1,
     orderBy: 'updated_at DESC',
     where: { opportunityId },
@@ -1159,22 +1157,18 @@ export async function openJobApplication(
 
   if (!application) {
     const result = await recordExplicitOpportunityDecision({
-      deciderProfileId: optionalString(
-        input.reviewedByProfileId,
-        'Reviewer profile id',
-        128,
-      ),
       decision: 'apply',
       opportunityId,
       reason:
         optionalString(input.reason, 'Reason', 2000) ||
         'Opened through the WebMCP job-search workflow.',
       reuseExistingApplication: true,
+      subject: verifiedSubject,
       user,
     });
     created = !result.applicationReused;
     decision = (result.decision as Record<string, unknown> | null) ?? null;
-    [application] = await applications.list({
+    [application] = await listPrivateRecords('Application', verifiedSubject, {
       limit: 1,
       orderBy: 'updated_at DESC',
       where: { opportunityId },

@@ -19,11 +19,13 @@ const mocks = vi.hoisted(() => {
     query,
     recordAgentAudit: vi.fn(),
     requestDatabase: vi.fn(),
+    shared: false,
     transaction,
   };
 });
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => ({
     query: mocks.query,
     transaction: mocks.transaction,
@@ -35,6 +37,7 @@ vi.mock('@happyvertical/smrt-users', () => ({
 }));
 
 vi.mock('./db.js', () => ({ getDbConfig: mocks.dbConfig }));
+vi.mock('./app-config.js', () => ({ isSharedHosted: () => mocks.shared }));
 
 vi.mock('./change-feed.js', () => ({
   bumpOpportunityChangeFeed: mocks.bumpChangeFeed,
@@ -84,6 +87,7 @@ async function sweep() {
 
 describe('opportunity-sweep', () => {
   beforeEach(() => {
+    mocks.shared = false;
     mocks.query.mockReset();
     mocks.transaction.mockClear();
     mocks.requestDatabase.mockReset();
@@ -97,6 +101,16 @@ describe('opportunity-sweep', () => {
     mocks.bumpChangeFeed.mockReset();
     mocks.bumpChangeFeed.mockResolvedValue(0);
     respondWith(3);
+  });
+
+  it('rejects the shared global sweep before any database query', async () => {
+    mocks.shared = true;
+    const { sweepInactiveSourceOpportunities } = await sweep();
+
+    await expect(
+      sweepInactiveSourceOpportunities({ dryRun: true, now: NOW }),
+    ).rejects.toThrow('explicit operator dispatch');
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 
   it('matches only undecided opportunities under an inactive source', async () => {

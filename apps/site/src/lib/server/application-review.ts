@@ -765,7 +765,7 @@ async function reviewMaterialsForFinalApprovalVerification(
 
 function finalApprovalAuditMatches(
   application: MutableRecord,
-  audit: MutableRecord,
+  audit: Record<string, unknown>,
 ): boolean {
   try {
     const snapshot = JSON.parse(
@@ -988,7 +988,6 @@ export async function loadApplicationReviewPageData(
     application: jsonRecord(reviewState.application),
     answersEditor: await loadApplicationAnswersEditorState(
       reviewState.application,
-      verifiedSubject,
       verifiedSubject,
     ),
     autoSubmit: summarizeApplicationFormAnswers(reviewState.application),
@@ -1228,7 +1227,7 @@ export async function requestApplicationMaterialTweaks(
       'Application changed before material revisions could be requested. Reload and review the current application.',
     );
   }
-  await syncApplicationWorkflowTasks(reviewState.application);
+  await syncApplicationWorkflowTasks(reviewState.application, verifiedSubject);
   return { commentsCreated: created, status: 'revision_requested' };
 }
 
@@ -1422,7 +1421,7 @@ export async function approveApplicationForSubmission(
     status: 'succeeded',
     user,
   });
-  await syncApplicationWorkflowTasks(reviewState.application);
+  await syncApplicationWorkflowTasks(reviewState.application, verifiedSubject);
 
   // When auto-submit is active and the application is eligible, move it to
   // "Pending submission" and enqueue the worker job. No-op (stays approved)
@@ -1432,7 +1431,10 @@ export async function approveApplicationForSubmission(
     const { maybeEnqueueAutoSubmitOnApproval } = await import(
       './auto-submit-application-job.js'
     );
-    await maybeEnqueueAutoSubmitOnApproval(reviewState.application, { user });
+    await maybeEnqueueAutoSubmitOnApproval(reviewState.application, {
+      subject: verifiedSubject,
+      user,
+    });
   } catch {
     // Approval already persisted; auto-submit can be retried by an operator.
   }
@@ -1452,8 +1454,8 @@ export async function recordApplicationSubmissionFromReview(
     applicationId,
     evidenceUrl: stringValue(form.get('submissionEvidenceUrl')),
     notes: stringValue(form.get('submissionNotes')),
-    profileId: verifiedSubject.profileId,
     submissionMethod: stringValue(form.get('submissionMethod')),
+    subject: verifiedSubject,
     submittedByRole: stringValue(form.get('submittedByRole')),
     taskId: stringValue(form.get('taskId')),
     user: { id: verifiedSubject.userId },
@@ -1475,6 +1477,7 @@ export async function recordApplicationSubmissionBlockerFromReview(
     blockerReason: stringValue(form.get('blockerReason')),
     blockerType: stringValue(form.get('blockerType')),
     notes: stringValue(form.get('blockerNotes')),
+    subject: verifiedSubject,
     taskId: stringValue(form.get('taskId')),
     user: { id: verifiedSubject.userId },
   });

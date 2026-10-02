@@ -10,16 +10,41 @@ import {
   resolveMcpToolClass,
 } from './api-exposure';
 
-const resumeContentClasses = [
+const privateEvidenceClasses = [
+  'Achievement',
+  'AchievementAttachment',
+  'AchievementTag',
+  'AgentRun',
+  'OpportunityIntelligenceRequest',
+  'OpportunityIntelligenceResult',
+  'Attachment',
+  'Duty',
+  'DutyTag',
+  'Education',
+  'EducationTag',
+  'EmploymentRole',
+  'EmploymentRoleTag',
+  'Experience',
+  'ExperienceCompany',
+  'ExperienceRole',
+  'ExperienceTag',
+  'Project',
+  'ProjectAttachment',
+  'ProjectTag',
   'ResumeAchievement',
   'ResumeEducation',
   'ResumeLink',
   'ResumeOtherRole',
   'ResumePosition',
-  'ResumeProfile',
   'ResumeSkill',
   'ResumeSkillCategory',
   'ResumeSkillGroup',
+  'ResumeTailoringConfig',
+  'SkillCategory',
+  'SkillCategoryMember',
+  'SkillGroup',
+  'SkillGroupMember',
+  'Task',
 ];
 
 async function discoverCliResources(): Promise<
@@ -60,7 +85,7 @@ describe('decorator-driven surface exposure', () => {
       ]),
     );
     const rest = listApiExposedResources();
-    expect(rest.length).toBeGreaterThan(50);
+    expect(rest.length).toBeGreaterThan(10);
     for (const resource of rest) {
       const discovered = cli.get(resource.className);
       expect(discovered, resource.className).toBeDefined();
@@ -84,34 +109,32 @@ describe('decorator-driven surface exposure', () => {
     }
   });
 
-  it('exposes the resume content classes on REST and MCP', () => {
+  it('keeps candidate evidence and audit records off generic REST and MCP surfaces', () => {
     const rest = new Set(listApiExposedResources().map((r) => r.className));
     const mcp = new Set(listMcpExposedResources().map((r) => r.className));
-    for (const className of resumeContentClasses) {
-      expect(rest.has(className), className).toBe(true);
-      expect(mcp.has(className), className).toBe(true);
+    for (const className of privateEvidenceClasses) {
+      expect(rest.has(className), className).toBe(false);
+      expect(mcp.has(className), className).toBe(false);
     }
-    expect(resolveApiResource('resumeprofiles')).toEqual({
-      actions: new Set(['list', 'get', 'create', 'update', 'delete']),
-      className: 'ResumeProfile',
-    });
-    expect(resolveMcpToolClass('resumeprofile_update')).toEqual({
-      actions: new Set(['list', 'get', 'create', 'update']),
-      className: 'ResumeProfile',
-    });
+    expect(resolveApiResource('experiences')).toBeUndefined();
+    expect(resolveMcpToolClass('achievement_list')).toBeUndefined();
+  });
+
+  it('marks mixed provider-ledger tables sensitive for native feed suppression', () => {
+    for (const className of [
+      'OpportunityIntelligenceRequest',
+      'OpportunityIntelligenceResult',
+    ]) {
+      const registered = ObjectRegistry.getClass(className) as unknown as {
+        config?: { sensitive?: unknown };
+      };
+      expect(registered.config?.sensitive, className).toBe(true);
+    }
   });
 
   it('resolves per-action includes from the decorator', () => {
-    expect([...(resolveApiResource('agentruns')?.actions ?? [])]).toEqual([
-      'list',
-      'get',
-    ]);
-    expect([...(resolveApiResource('applications')?.actions ?? [])]).toEqual([
-      'list',
-      'get',
-      'create',
-      'update',
-    ]);
+    expect(resolveApiResource('agentruns')).toBeUndefined();
+    expect(resolveApiResource('applications')).toBeUndefined();
     expect([
       ...(resolveApiResource('opportunity_intelligence_controls')?.actions ??
         []),
@@ -122,18 +145,21 @@ describe('decorator-driven surface exposure', () => {
     const hidden = listExposureCandidates().filter(
       (r) => r.apiActions.size === 0 && r.mcpActions.size === 0,
     );
-    expect(hidden.map((r) => r.className).sort()).toEqual([
-      'CandidateAnswer',
-      'CandidateProfile',
-      'CandidateProfileLink',
-      'CliAuthRequest',
-      // Data-surface action state. A preview token IS the authority it
-      // confers and an idempotency record holds another principal's action
-      // outcome, so neither may be readable through a generic surface.
-      'DataSurfaceIdempotencyRecord',
-      'DataSurfacePreviewToken',
-      'EmploymentPerson',
-    ]);
+    expect(hidden.map((r) => r.className)).toEqual(
+      expect.arrayContaining([
+        'CandidateAnswer',
+        'CandidateProfile',
+        'CandidateProfileLink',
+        'CliAuthRequest',
+        // Data-surface action state. A preview token IS the authority it
+        // confers and an idempotency record holds another principal's action
+        // outcome, so neither may be readable through a generic surface.
+        'DataSurfaceIdempotencyRecord',
+        'DataSurfacePreviewToken',
+        'EmploymentPerson',
+        ...privateEvidenceClasses,
+      ]),
+    );
     expect(resolveMcpToolClass('candidateanswer_list')).toBeUndefined();
     expect(resolveMcpToolClass('candidateprofile_get')).toBeUndefined();
     expect(resolveMcpToolClass('candidateprofilelink_get')).toBeUndefined();

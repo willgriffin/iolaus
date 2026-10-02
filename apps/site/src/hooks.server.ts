@@ -68,12 +68,21 @@ const authGuard: Handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 
+/** JWT access tokens for the canonical MCP resource are verified by its OAuth
+ * resource-auth handler. Opaque terminal bearer tokens keep the CLI path. */
+function isMcpOAuthJwt(pathname: string, token: string): boolean {
+  return (
+    pathname === '/api/mcp' &&
+    /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/u.test(token)
+  );
+}
+
 const bearerSessionHandler: Handle = async ({ event, resolve }) => {
   if (!event.locals.user) {
     const authorization = event.request.headers.get('authorization');
     const match = authorization?.match(/^Bearer\s+(.+)$/iu);
 
-    if (match) {
+    if (match && !isMcpOAuthJwt(event.url.pathname, match[1].trim())) {
       return await withBearerSessionContext(
         match[1].trim(),
         async (context) => {

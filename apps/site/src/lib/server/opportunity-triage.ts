@@ -10,13 +10,23 @@ import { createCandidateSkillMatcher } from '$lib/skill-matching';
 import { listAdminRecords, requireAdminResource } from './admin-data';
 import {
   countOpportunityRecords,
-  listCurrentOpportunityScores,
   listOpportunityPageIds,
   normalizeOpportunityRecommendation,
+  type WorkspaceOpportunityQuery,
 } from './admin-opportunity-query';
 import { attachOpportunityContext } from './admin-resource-route';
 import { getDbConfig } from './db.js';
+import {
+  loadCurrentOpportunityAssessmentProjections,
+  loadOpportunityAssessmentQueryContext,
+} from './opportunity-assessment-store.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { getCollection } from './smrt.js';
+import {
+  type CandidateWorkspaceSubject,
+  requireCandidateWorkspaceSubject,
+  type WorkspaceSubject,
+} from './workspace-subject.js';
 
 /**
  * Browser triage uses the current list filters and order, adding only the
@@ -93,6 +103,8 @@ export interface TriageQueueRequest {
   limit?: number;
   offset?: number;
   search?: string;
+  /** Verified request identity used only for that user's assessment overlay. */
+  workspaceSubject?: WorkspaceSubject;
 }
 
 export interface TriageQueue {
@@ -102,6 +114,22 @@ export interface TriageQueue {
   offset: number;
   /** Undecided opportunities matching the preset, before paging. */
   total: number;
+}
+
+function triageOpportunityContextOptions(workspaceSubject?: WorkspaceSubject) {
+  return workspaceSubject
+    ? { includeActivity: false, workspaceSubject }
+    : { includeActivity: false };
+}
+
+function candidateSubject(
+  subject: WorkspaceSubject | undefined,
+): CandidateWorkspaceSubject | null {
+  try {
+    return requireCandidateWorkspaceSubject(subject);
+  } catch {
+    return null;
+  }
 }
 
 function clampOffset(offset: number | undefined, total: number): number {
@@ -147,6 +175,28 @@ function triageScoreTieBreak(left: AdminRecord, right: AdminRecord): number {
   return getString(left, 'id').localeCompare(getString(right, 'id'));
 }
 
+function assessmentRanking(projection: unknown): {
+  excluded: boolean;
+  fitScore: number | null;
+} {
+  if (
+    !projection ||
+    typeof projection !== 'object' ||
+    Array.isArray(projection)
+  ) {
+    return { excluded: false, fitScore: null };
+  }
+  const ranking = (projection as { ranking?: unknown }).ranking;
+  if (!ranking || typeof ranking !== 'object' || Array.isArray(ranking)) {
+    return { excluded: false, fitScore: null };
+  }
+  const value = ranking as { excluded?: unknown; fitScore?: unknown };
+  return {
+    excluded: value.excluded === true,
+    fitScore: typeof value.fitScore === 'number' ? value.fitScore : null,
+  };
+}
+
 function sortSqliteTriage(
   candidates: AdminRecord[],
   filters: OpportunityFilterState,
@@ -181,11 +231,14 @@ async function loadSqliteTriageQueue({
   offset,
   search,
   triageRejectDepriority,
+  workspaceSubject,
 }: TriageQueueRequest & {
   hydrateContext: boolean;
   limit: number;
   triageRejectDepriority: boolean;
 }) {
+  const subject = candidateSubject(workspaceSubject);
+  if (!subject) return { candidates: [], limit, offset: 0, total: 0 };
   const opportunities = (await getCollection('Opportunity')) as unknown as {
     list: (options?: Record<string, unknown>) => Promise<unknown[]>;
   };
@@ -201,18 +254,38 @@ async function loadSqliteTriageQueue({
   const records = rows.map(
     (row) => JSON.parse(JSON.stringify(row)) as AdminRecord,
   );
-  const currentScores = await listCurrentOpportunityScores(
-    records
-      .map((record) => record.id)
-      .filter((id): id is string => typeof id === 'string'),
-  );
+  const opportunityIds = records
+    .map((record) => record.id)
+    .filter((id): id is string => typeof id === 'string');
+  const [assessmentProjections, reviewOverlays] = await Promise.all([
+    loadCurrentOpportunityAssessmentProjections({
+      opportunities: records.map((record) => ({
+        id: record.id,
+        sourceContentFingerprint: record.sourceContentFingerprint,
+        sourceContentVersion: record.sourceContentVersion,
+      })),
+      subject,
+    }),
+    loadCurrentOpportunityReviewOverlays({ opportunityIds, subject }),
+  ]);
   const candidates = records
     .map((record) => {
-      const score = record.id ? currentScores.get(record.id) : undefined;
+      const assessmentProjection = record.id
+        ? (assessmentProjections.get(record.id) ?? null)
+        : null;
+      const reviewOverlay = record.id
+        ? (reviewOverlays.get(record.id) ?? null)
+        : null;
+      const ranking = assessmentRanking(assessmentProjection);
       return {
         ...record,
-        latestRecommendation: score?.recommendation ?? '',
-        latestScore: score?.score ?? null,
+        assessmentProjection,
+        humanRating: reviewOverlay?.humanRating ?? null,
+        humanReviewNotes: reviewOverlay?.humanReviewNotes ?? '',
+        humanReviewStatus: reviewOverlay?.humanReviewStatus ?? '',
+        latestRecommendation: ranking.excluded ? 'reject' : '',
+        latestScore: ranking.fitScore,
+        reviewOverlay,
       };
     })
     .filter((record) => {
@@ -235,7 +308,10 @@ async function loadSqliteTriageQueue({
   const page = ordered.slice(resolvedOffset, resolvedOffset + limit);
   return {
     candidates: hydrateContext
-      ? await attachOpportunityContext(page, { includeActivity: false })
+      ? await attachOpportunityContext(
+          page,
+          triageOpportunityContextOptions(subject),
+        )
       : page,
     limit,
     offset: resolvedOffset,
@@ -259,7 +335,12 @@ export async function loadTriageQueue({
   limit = TRIAGE_QUEUE_SIZE,
   offset = 0,
   search,
+  workspaceSubject,
 }: TriageQueueRequest): Promise<TriageQueue> {
+  const subject = candidateSubject(workspaceSubject);
+  if (!subject) return { candidates: [], limit, offset: 0, total: 0 };
+  const assessmentContext =
+    await loadOpportunityAssessmentQueryContext(subject);
   const queueFilters =
     context === 'agent' ? applyTriagePreset(filters) : filters;
   const triageRejectDepriority =
@@ -273,14 +354,17 @@ export async function loadTriageQueue({
       offset,
       search,
       triageRejectDepriority,
+      workspaceSubject: subject,
     });
   }
-  const query = {
+  const query: WorkspaceOpportunityQuery = {
+    ...assessmentContext,
     candidateSkills,
     filters: queueFilters,
     reviewFilter: TRIAGE_REVIEW_FILTER,
     search: search?.trim() || undefined,
     triageRejectDepriority,
+    workspaceSubject: subject,
   };
   const total = await countOpportunityRecords(query);
   const resolvedOffset = clampOffset(offset, total);
@@ -321,7 +405,10 @@ export async function loadTriageQueue({
    * about 80% of the bytes the operator waits on for the first card.
    */
   const candidates = hydrateContext
-    ? await attachOpportunityContext(ordered, { includeActivity: false })
+    ? await attachOpportunityContext(
+        ordered,
+        triageOpportunityContextOptions(workspaceSubject),
+      )
     : ordered;
 
   return { candidates, limit, offset: resolvedOffset, total };

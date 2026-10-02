@@ -13,19 +13,29 @@ const subject = {
   userId: 'user-1',
 };
 
+type GeneratePackageOptions = Omit<
+  Parameters<typeof generatePackage>[1],
+  'subject'
+>;
+type CreateDraftOptions = Omit<Parameters<typeof createDraft>[0], 'subject'>;
+type UpdateReviewOptions = Omit<Parameters<typeof updateReview>[0], 'subject'>;
+type BulkUpdateReviewOptions = Omit<
+  Parameters<typeof updateReviews>[0],
+  'subject'
+>;
+
 const generateApplicationPackage = (
   applicationId: string,
-  options: Record<string, unknown> = {},
+  options: GeneratePackageOptions = {},
 ) => generatePackage(applicationId, { ...options, subject });
 
-const createDraftApplicationForOpportunity = (
-  options: Record<string, unknown>,
-) => createDraft({ ...options, subject });
+const createDraftApplicationForOpportunity = (options: CreateDraftOptions) =>
+  createDraft({ ...options, subject });
 
-const updateOpportunityReview = (options: Record<string, unknown>) =>
+const updateOpportunityReview = (options: UpdateReviewOptions) =>
   updateReview({ ...options, subject });
 
-const bulkUpdateOpportunityReviews = (options: Record<string, unknown>) =>
+const bulkUpdateOpportunityReviews = (options: BulkUpdateReviewOptions) =>
   updateReviews({ ...options, subject });
 
 type MockRecord = Record<string, unknown> & {
@@ -66,7 +76,11 @@ function collection(records: MockRecord[] = []) {
     list: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => {
       if (!where) return records;
       return records.filter((item) =>
-        Object.entries(where).every(([key, value]) => item[key] === value),
+        Object.entries(where).every(([key, value]) =>
+          Array.isArray(value)
+            ? value.includes(item[key])
+            : item[key] === value,
+        ),
       );
     }),
     records,
@@ -322,6 +336,7 @@ describe('opportunity review and draft applications', () => {
       collection([record({ id: 'opp-1', title: 'AI Engineer' })]),
     );
     mocks.collections.set('Application', collection());
+    mocks.collections.set('Decision', collection());
     mocks.collections.set('ResumeAsset', collection());
     mocks.commitApplicationIfCurrent.mockReset();
     mocks.commitApplicationIfCurrent.mockImplementation(
@@ -381,7 +396,7 @@ describe('opportunity review and draft applications', () => {
     expect(result).toMatchObject({
       humanRating: 7,
       humanReviewNotes: 'Needs another pass',
-      humanReviewStatus: '',
+      humanReviewStatus: 'needs_input',
     });
   });
 
@@ -402,6 +417,25 @@ describe('opportunity review and draft applications', () => {
       }),
     ]);
     mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set(
+      'Decision',
+      collection([
+        record({
+          decision: 'defer',
+          humanRating: 8,
+          id: 'review-1',
+          opportunityId: 'opp-1',
+          reason: 'Keep this note',
+        }),
+        record({
+          decision: 'defer',
+          humanRating: 5,
+          id: 'review-2',
+          opportunityId: 'opp-2',
+          reason: 'Keep this too',
+        }),
+      ]),
+    );
 
     const result = await bulkUpdateOpportunityReviews({
       humanReviewStatus: 'apply',
@@ -412,20 +446,33 @@ describe('opportunity review and draft applications', () => {
     expect(result).toMatchObject({
       count: 2,
       status: 'updated',
+      records: expect.arrayContaining([
+        expect.objectContaining({
+          humanRating: 8,
+          humanReviewNotes: 'Keep this note',
+          humanReviewStatus: 'apply',
+          opportunityId: 'opp-1',
+        }),
+        expect.objectContaining({
+          humanRating: 5,
+          humanReviewNotes: 'Keep this too',
+          humanReviewStatus: 'apply',
+          opportunityId: 'opp-2',
+        }),
+      ]),
     });
-    expect(opportunities.records[0]).toMatchObject({
-      humanRating: 8,
-      humanReviewNotes: 'Keep this note',
-      humanReviewStatus: 'apply',
-      reviewedByProfileId: 'profile-1',
-      reviewedByUserId: 'user-1',
-    });
-    expect(opportunities.records[1]).toMatchObject({
-      humanRating: 5,
-      humanReviewNotes: 'Keep this too',
-      humanReviewStatus: 'apply',
-      reviewedByUserId: 'user-1',
-    });
+    expect(opportunities.records).toEqual([
+      expect.objectContaining({
+        humanRating: 8,
+        humanReviewNotes: 'Keep this note',
+        id: 'opp-1',
+      }),
+      expect.objectContaining({
+        humanRating: 5,
+        humanReviewNotes: 'Keep this too',
+        id: 'opp-2',
+      }),
+    ]);
   });
 
   it('creates a draft application with default resume and no generated cover letter', async () => {
@@ -458,6 +505,7 @@ describe('opportunity review and draft applications', () => {
     expect(opportunity?.save).toHaveBeenCalled();
     expect(mocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
       expect.objectContaining({ opportunityId: 'opp-1' }),
+      subject,
     );
   });
 
@@ -499,6 +547,7 @@ describe('opportunity review and draft applications', () => {
 
     expect(mocks.archiveApplicationsForClosedPosting).toHaveBeenCalledWith(
       'opp-1',
+      subject,
     );
     expect(application).toMatchObject({ status: 'archived' });
     expect(secondApplication).toMatchObject({ status: 'archived' });

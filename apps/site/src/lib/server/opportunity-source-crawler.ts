@@ -19,10 +19,7 @@ import {
   getConfiguredUserAgent,
   getSafeOutboundHeaderValue,
 } from './app-config.js';
-import {
-  cancelStaleOpportunityIntelligenceTasks,
-  syncRecommendedOpportunityDecisionTasks,
-} from './application-workflow.js';
+import { cancelStaleOpportunityIntelligenceTasks } from './application-workflow.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
@@ -8114,7 +8111,6 @@ export async function crawlOpportunitySource(
     options.fencedOpportunityStatusUpdate ??
     defaultFencedOpportunityStatusUpdate;
   const enqueueBudget = { used: 0 };
-  let recommendationTasksNeedSync = false;
   const seenOpportunityIdentities = new Set<string>();
   const seenOpportunityIds = new Set<string>();
   /**
@@ -8456,7 +8452,8 @@ export async function crawlOpportunitySource(
           if (outcome === 'relisted') summary.relisted += 1;
           else summary.reused += 1;
         }
-        recommendationTasksNeedSync ||= result.recommendationInvalidated;
+        // Catalog crawls cannot create private recommendation tasks: they
+        // have no authenticated candidate workspace subject.
         if (result.materiallyChanged && !options.dryRun) {
           try {
             await cancelStaleOpportunityIntelligenceTasks(
@@ -8551,10 +8548,6 @@ export async function crawlOpportunitySource(
         }
         if (options.signal?.aborted) throw error;
       }
-    }
-
-    if (recommendationTasksNeedSync && !options.dryRun) {
-      await syncRecommendedOpportunityDecisionTasks();
     }
 
     if (sourceCrawlId && accountingWriter.durable !== false) {

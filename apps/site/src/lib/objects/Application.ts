@@ -15,9 +15,9 @@ import type { AutoSubmitApplicationJobArgs } from '../server/auto-submit-applica
 export class Application extends SmrtObject {
   @tenantId()
   tenantId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   ownerUserId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', required: true })
   candidateProfileId = '';
   @field({ type: 'text' })
   opportunityId = '';
@@ -126,13 +126,41 @@ export class Application extends SmrtObject {
     args: AutoSubmitApplicationJobArgs = {},
     context?: JobExecutionContext,
   ) {
-    const { runAutoSubmitApplicationJob } = await import(
-      '../server/auto-submit-application-job.js'
-    );
-    return await runAutoSubmitApplicationJob(
-      this as unknown as Record<string, unknown> & { id?: unknown },
+    const {
+      assertJobTenantMatchesRuntimeWorkspaceSubject,
+      getJobPrivateResource,
+      requireActiveRunnerExecutionContext,
+      runAsResolvedJobWorkspaceSubject,
+    } = await import('../server/job-workspace-subject.js');
+    const runnerContext = requireActiveRunnerExecutionContext(context);
+    return await runAsResolvedJobWorkspaceSubject(
       args,
-      context,
+      async (subject, run) => {
+        assertJobTenantMatchesRuntimeWorkspaceSubject(
+          runnerContext.job,
+          subject,
+        );
+        const { workspaceWorkflowOperation } = await import(
+          '../server/workspace-workflow-capabilities.js'
+        );
+        const operation = workspaceWorkflowOperation(
+          'application-auto-submit.execute',
+        );
+        await run.assertOperation(operation.collection, operation.action);
+        const application = await getJobPrivateResource(
+          'Application',
+          String(this.id ?? ''),
+          subject,
+        );
+        const { runAutoSubmitApplicationJob } = await import(
+          '../server/auto-submit-application-job.js'
+        );
+        return await runAutoSubmitApplicationJob(
+          application,
+          args,
+          runnerContext,
+        );
+      },
     );
   }
 }

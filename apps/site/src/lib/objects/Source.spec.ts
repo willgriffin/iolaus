@@ -2,9 +2,34 @@ import { ObjectRegistry, SmrtObject } from '@happyvertical/smrt-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Source } from './Source';
 
+const sourceJob = vi.hoisted(() => ({
+  run: vi.fn(),
+  shared: false,
+}));
+
+vi.mock('../server/app-config.js', () => ({
+  getAppConfig: () => ({
+    workspaceMode: sourceJob.shared ? 'shared' : 'private',
+  }),
+}));
+vi.mock('../server/source-crawl-job.js', () => ({
+  runSourceCrawlJob: sourceJob.run,
+}));
+
 describe('Source TaskRunner loading', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    sourceJob.shared = false;
+    sourceJob.run.mockReset();
+  });
+
+  it('rejects an unbound shared source crawl before the crawl handler runs', async () => {
+    sourceJob.shared = true;
+
+    await expect(new Source().crawl()).rejects.toThrow(
+      'explicit operator dispatch',
+    );
+    expect(sourceJob.run).not.toHaveBeenCalled();
   });
 
   it('accepts the runner object id argument before delegating to base loadFromId', async () => {
