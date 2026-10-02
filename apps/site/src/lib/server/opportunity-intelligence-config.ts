@@ -36,6 +36,85 @@ export const OPPORTUNITY_INTELLIGENCE_SCORING_MAX_INPUT_TOKENS_ENV =
 export const OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_DEFAULT = 3_000;
 export const OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX = 4_000;
 
+/** Separate native provider volume quotas; run/spend limits are unchanged. */
+export const OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS = {
+  typesafe: { requests: 1_000, inputTokens: 10_000_000 },
+  openai: { requests: 100, inputTokens: 1_000_000 },
+} as const;
+
+/** Server-authored contracts from the adapters that instantiate Typesafe. */
+export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
+  {
+    feature: 'opportunity-source-requirement-coverage',
+    profile: 'typesafe-opportunity-source-coverage',
+    versions: ['requirement-coverage-audit/v6-direct-literal'],
+    historicalVersions: ['requirement-coverage-audit/v4-keyed-binding'],
+  },
+  {
+    feature: 'opportunity-source-requirement-evidence',
+    profile: 'typesafe-opportunity-source-evidence',
+    versions: [
+      'requirement-evidence-audit/v1-decomposed',
+      'requirement-evidence-audit/v2-row-relevance',
+      'requirement-evidence-audit/v3-source-eligibility',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-assessment',
+    profile: 'typesafe-opportunity-assessment',
+    versions: ['opportunity-assessment/v6'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-assessment-partial',
+    profile: 'typesafe-opportunity-assessment-partial',
+    versions: ['opportunity-assessment-partial/v1'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-skill-match',
+    profile: 'typesafe-skills',
+    versions: ['skill-match/v3'],
+    historicalVersions: [],
+  },
+] as const;
+
+type ProviderVolumeIdentity = {
+  feature: string;
+  profile: string;
+  model: string;
+  promptVersion: string;
+  outputSchemaVersion: string;
+  preparedPayloadVersion: string;
+};
+
+/** Model labels/flags alone never select the larger JEV allowance. */
+export function opportunityIntelligenceProviderVolume(
+  identity: ProviderVolumeIdentity,
+): 'typesafe' | 'openai' {
+  const contract = OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS.find(
+    (row) =>
+      row.feature === identity.feature && row.profile === identity.profile,
+  );
+  const model =
+    identity.profile === 'typesafe-skills'
+      ? process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() || 'jev-latest'
+      : process.env.OPPORTUNITY_ASSESSMENT_DECISION_MODEL?.trim() ||
+        process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() ||
+        'jev-latest';
+  return contract &&
+    contract.versions.some(
+      (version) =>
+        identity.outputSchemaVersion === version &&
+        identity.promptVersion === version &&
+        identity.preparedPayloadVersion === version,
+    ) &&
+    identity.model === model
+    ? 'typesafe'
+    : 'openai';
+}
+
 export interface OpportunityIntelligenceBudgetConfig {
   circuit: { inputTokenThreshold: number; requestThreshold: number };
   crawl: { calls: number; inputTokens: number; spendMicros: number };

@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_ENV,
   OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_HARD_MAX,
+  OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS,
   OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
+  OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS,
   opportunityIntelligenceEnabled,
+  opportunityIntelligenceProviderVolume,
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
@@ -163,5 +166,63 @@ describe('opportunity intelligence enqueue config', () => {
       inputTokenCeiling: OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
       modelEnabled: true,
     });
+  });
+});
+
+describe('native provider volume contract classification', () => {
+  it('pins JEV 10x while retaining OpenAI bounds independently', () => {
+    expect(OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS).toEqual({
+      typesafe: { requests: 1000, inputTokens: 10000000 },
+      openai: { requests: 100, inputTokens: 1000000 },
+    });
+  });
+  it.each(
+    OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS.flatMap((row) =>
+      row.versions.map((version) => ({ ...row, version })),
+    ),
+  )('grants JEV only to exact configured native adapter $feature/$version', (contract) => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-assessment',
+    );
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_MODEL', 'configured-skills');
+    const identity = {
+      feature: contract.feature,
+      profile: contract.profile,
+      model:
+        contract.profile === 'typesafe-skills'
+          ? 'configured-skills'
+          : 'configured-assessment',
+      promptVersion: contract.version,
+      outputSchemaVersion: contract.version,
+      preparedPayloadVersion: contract.version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    for (const key of [
+      'feature',
+      'profile',
+      'model',
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [key]: 'untrusted',
+        }),
+      ).toBe('openai');
+  });
+  it('never grants JEV from a model name or supplied extra provider flag', () => {
+    const identity = {
+      feature: 'opportunity-extraction-chunk-1',
+      profile: 'opportunity-intelligence-extraction',
+      model: 'jev-latest',
+      promptVersion: 'unknown',
+      outputSchemaVersion: 'unknown',
+      preparedPayloadVersion: 'unknown',
+      provider: 'typesafe',
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('openai');
   });
 });

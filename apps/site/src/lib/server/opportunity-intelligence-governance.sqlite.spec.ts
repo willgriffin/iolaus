@@ -90,6 +90,8 @@ describe.each([
     );
     state.root = directory;
     state.keys = [];
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_MODEL', 'jev-test');
     const config = {
       type: 'sqlite' as const,
       url: `file:${join(directory, 'ledger.sqlite')}`,
@@ -112,7 +114,8 @@ describe.each([
       `CREATE TABLE source_crawls (id TEXT PRIMARY KEY, ${budgetColumns})`,
     );
     await db.query(`CREATE TABLE opportunity_intelligence_controls (
-      id TEXT PRIMARY KEY, control_key TEXT UNIQUE, enabled INTEGER DEFAULT 1,
+      id TEXT PRIMARY KEY, slug TEXT, context TEXT, created_at TEXT,
+      window_started_at TEXT DEFAULT CURRENT_TIMESTAMP, control_key TEXT UNIQUE, enabled INTEGER DEFAULT 1,
       circuit_state TEXT DEFAULT 'closed', circuit_reason TEXT DEFAULT '', opened_at TEXT,
       window_request_count INTEGER DEFAULT 0, window_input_tokens INTEGER DEFAULT 0,
       request_threshold INTEGER DEFAULT 100, input_token_threshold INTEGER DEFAULT 1000000,
@@ -148,6 +151,7 @@ describe.each([
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     try {
       await otherDb?.close?.();
       await db?.close?.();
@@ -160,6 +164,296 @@ describe.each([
     return (await db.query(`SELECT * FROM ${table} WHERE id = ?`, [id]))
       .rows[0];
   }
+
+  function jevReservation(
+    id: string,
+    overrides: Partial<OpportunityIntelligenceReservation> = {},
+  ) {
+    return reservation(id, {
+      feature: 'opportunity-source-requirement-evidence',
+      profile: 'typesafe-opportunity-source-evidence',
+      model: 'jev-test',
+      promptVersion: 'requirement-evidence-audit/v2-row-relevance',
+      outputSchemaVersion: 'requirement-evidence-audit/v2-row-relevance',
+      preparedPayloadVersion: 'requirement-evidence-audit/v2-row-relevance',
+      ...overrides,
+    });
+  }
+  async function volume(provider = 'typesafe') {
+    return (
+      await db.query(
+        'SELECT * FROM opportunity_intelligence_controls WHERE control_key = ?',
+        [`opportunity-intelligence:volume:${provider}`],
+      )
+    ).rows[0];
+  }
+  it('separates JEV quota from stricter OpenAI volume while preserving main failure gate', async () => {
+    await db.query(
+      'UPDATE opportunity_intelligence_controls SET request_threshold = 1 WHERE id = ?',
+      ['control-1'],
+    );
+    await db.query('UPDATE source_crawls SET intelligence_call_limit = 8');
+    expect(await store.reserve(jevReservation('jev-a'))).toMatchObject({
+      kind: 'owner',
+    });
+    expect(
+      await otherStore.reserve(
+        jevReservation('jev-b', { agentRunId: 'run-2' }),
+      ),
+    ).toMatchObject({ kind: 'owner' });
+    expect(await store.reserve(reservation('openai-a'))).toMatchObject({
+      kind: 'owner',
+    });
+    expect(
+      await store.reserve(
+        reservation('openai-refused', { agentRunId: 'run-2' }),
+      ),
+    ).toMatchObject({ kind: 'blocked', code: 'budget_exhausted' });
+    expect(
+      await row('opportunity_intelligence_controls', 'control-1'),
+    ).toMatchObject({ circuit_state: 'closed', window_request_count: 3 });
+    expect(
+      await otherStore.reserve(
+        jevReservation('jev-c', { agentRunId: 'run-2' }),
+      ),
+    ).toMatchObject({ kind: 'owner' });
+    expect(await volume()).toMatchObject({
+      request_threshold: 1000,
+      input_token_threshold: 10000000,
+      window_request_count: 3,
+    });
+    expect(await volume('openai')).toMatchObject({
+      request_threshold: 1,
+      window_request_count: 1,
+    });
+    await store.openCircuit('usage_accounting_missing');
+    expect(
+      await otherStore.reserve(jevReservation('after-fault')),
+    ).toMatchObject({ kind: 'blocked', code: 'circuit_open' });
+  });
+  it('bootstraps legacy bifrost-labeled native JEV history without changing its identity or charging OpenAI', async () => {
+    expect(await store.reserve(jevReservation('historic'))).toMatchObject({
+      kind: 'owner',
+    });
+    await db.query(
+      "UPDATE opportunity_intelligence_requests SET provider = 'bifrost'",
+    );
+    await db.query(
+      "DELETE FROM opportunity_intelligence_controls WHERE control_key = 'opportunity-intelligence:volume:typesafe'",
+    );
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-next');
+    expect(
+      await otherStore.reserve(
+        jevReservation('next', { model: 'jev-next', agentRunId: 'run-2' }),
+      ),
+    ).toMatchObject({ kind: 'owner' });
+    expect(await volume()).toMatchObject({
+      window_request_count: 2,
+      window_input_tokens: 20,
+    });
+    expect(
+      (
+        await db.query(
+          'SELECT provider FROM opportunity_intelligence_requests WHERE request_id = ?',
+          ['request-historic'],
+        )
+      ).rows[0],
+    ).toMatchObject({ provider: 'bifrost' });
+    expect(
+      (
+        await db.query(
+          'SELECT provider FROM opportunity_intelligence_requests WHERE request_id = ?',
+          ['request-next'],
+        )
+      ).rows[0],
+    ).toMatchObject({ provider: 'typesafe' });
+  });
+  it.each([
+    'requests',
+    'tokens',
+  ])('atomically enforces the last JEV %s slot across handles with loser rollback', async (dimension) => {
+    await db.query(
+      `INSERT INTO opportunity_intelligence_controls (id,control_key,window_started_at,window_request_count,window_input_tokens,request_threshold,input_token_threshold)
+      SELECT 'jev-volume','opportunity-intelligence:volume:typesafe',window_started_at,?,?,1000,10000000 FROM opportunity_intelligence_controls WHERE id = 'control-1'`,
+      [
+        dimension === 'requests' ? 999 : 0,
+        dimension === 'tokens' ? 9999990 : 0,
+      ],
+    );
+    const outcomes = await Promise.all([
+      store.reserve(jevReservation('last-a')),
+      otherStore.reserve(jevReservation('last-b', { agentRunId: 'run-2' })),
+    ]);
+    expect(outcomes.map((result) => result.kind).sort()).toEqual([
+      'blocked',
+      'owner',
+    ]);
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(1);
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_results')).rows,
+    ).toHaveLength(1);
+    expect(
+      await row('opportunity_intelligence_controls', 'control-1'),
+    ).toMatchObject({ circuit_state: 'closed', window_request_count: 1 });
+    expect(await volume()).toMatchObject(
+      dimension === 'requests'
+        ? { window_request_count: 1000 }
+        : { window_input_tokens: 10000000 },
+    );
+  });
+  it('synchronizes a provider projection only to the explicit main anchor and retains old ledger history', async () => {
+    await db.query(
+      "UPDATE opportunity_intelligence_controls SET window_started_at = '2000-01-01 00:00:00' WHERE id = 'control-1'",
+    );
+    expect(await store.reserve(jevReservation('prior-window'))).toMatchObject({
+      kind: 'owner',
+    });
+    await db.query(
+      "UPDATE opportunity_intelligence_requests SET started_at = '2001-01-01 00:00:00'",
+    );
+    await db.query(
+      "UPDATE opportunity_intelligence_controls SET window_started_at = '2002-01-01 00:00:00', window_request_count = 0, window_input_tokens = 0 WHERE id = 'control-1'",
+    );
+    expect(
+      await otherStore.reserve(
+        jevReservation('new-window', { agentRunId: 'run-2' }),
+      ),
+    ).toMatchObject({ kind: 'owner' });
+    expect(await volume()).toMatchObject({
+      window_started_at: '2002-01-01 00:00:00',
+      window_request_count: 1,
+    });
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(2);
+  });
+  it.each([
+    { anchored: true, column: 'request_threshold' },
+    { anchored: true, column: 'input_token_threshold' },
+    { anchored: false, column: 'request_threshold' },
+    { anchored: false, column: 'input_token_threshold' },
+  ])('preserves explicit zero OpenAI $column (anchored: $anchored)', async ({
+    anchored,
+    column,
+  }) => {
+    await db.query(
+      `UPDATE opportunity_intelligence_controls SET ${column} = 0 WHERE id = ?`,
+      ['control-1'],
+    );
+    if (!anchored)
+      await db.query(
+        'UPDATE opportunity_intelligence_controls SET window_started_at = NULL WHERE id = ?',
+        ['control-1'],
+      );
+    expect(await store.reserve(reservation('zero-openai'))).toMatchObject({
+      kind: 'blocked',
+      code: 'budget_exhausted',
+    });
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(0);
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_results')).rows,
+    ).toHaveLength(0);
+    expect(await volume('openai')).toBeUndefined();
+    expect(await row('agent_runs')).toMatchObject({
+      intelligence_reserved_calls: 0,
+      intelligence_reserved_input_tokens: 0,
+    });
+    expect(
+      await row('opportunity_intelligence_controls', 'control-1'),
+    ).toMatchObject({
+      circuit_state: 'closed',
+      window_request_count: 0,
+      window_input_tokens: 0,
+    });
+    if (anchored) {
+      expect(
+        await otherStore.reserve(jevReservation('zero-openai-jev')),
+      ).toMatchObject({ kind: 'owner' });
+      expect(await volume()).toMatchObject({
+        request_threshold: 1000,
+        input_token_threshold: 10000000,
+        window_request_count: 1,
+      });
+    }
+  });
+  it('fails closed on a missing accounted JEV anchor and leaves no provider request or run reservation', async () => {
+    await db.query(
+      "UPDATE opportunity_intelligence_controls SET window_started_at = NULL WHERE id = 'control-1'",
+    );
+    expect(await store.reserve(jevReservation('unaccounted'))).toMatchObject({
+      kind: 'blocked',
+      code: 'budget_missing',
+    });
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(0);
+    expect(await row('agent_runs')).toMatchObject({
+      intelligence_reserved_calls: 0,
+    });
+  });
+  it('charges a claimed JEV model with an unknown contract to stricter OpenAI quota', async () => {
+    await db.query(
+      'UPDATE opportunity_intelligence_controls SET request_threshold = 1 WHERE id = ?',
+      ['control-1'],
+    );
+    expect(
+      await store.reserve(
+        jevReservation('unknown-a', { promptVersion: 'unregistered/v1' }),
+      ),
+    ).toMatchObject({ kind: 'owner' });
+    expect(
+      await otherStore.reserve(
+        jevReservation('unknown-b', {
+          promptVersion: 'unregistered/v1',
+          agentRunId: 'run-2',
+        }),
+      ),
+    ).toMatchObject({ kind: 'blocked', code: 'budget_exhausted' });
+    expect(await volume('openai')).toMatchObject({
+      window_request_count: 1,
+      request_threshold: 1,
+    });
+    expect(await volume()).toBeUndefined();
+    expect(
+      await row('opportunity_intelligence_controls', 'control-1'),
+    ).toMatchObject({ circuit_state: 'closed' });
+  });
+  it('denies malformed provider counters through the shared accounting fault gate', async () => {
+    await db.query(`INSERT INTO opportunity_intelligence_controls (id,control_key,window_started_at,window_request_count,request_threshold,input_token_threshold)
+      SELECT 'bad-volume','opportunity-intelligence:volume:typesafe',window_started_at,'malformed',1000,10000000 FROM opportunity_intelligence_controls WHERE id = 'control-1'`);
+    expect(await store.reserve(jevReservation('bad-accounting'))).toMatchObject(
+      { kind: 'blocked', code: 'budget_missing' },
+    );
+    expect(
+      await row('opportunity_intelligence_controls', 'control-1'),
+    ).toMatchObject({
+      circuit_state: 'open',
+      circuit_reason: 'provider_window_accounting_invalid',
+    });
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(0);
+  });
+  it('rolls provider projection bootstrap back with a refused crawl budget', async () => {
+    await db.query(
+      'UPDATE source_crawls SET intelligence_spend_limit_micros = 1',
+    );
+    expect(await store.reserve(jevReservation('crawl-refused'))).toMatchObject({
+      kind: 'blocked',
+      code: 'budget_exhausted',
+    });
+    expect(await volume()).toBeUndefined();
+    expect(
+      (await db.query('SELECT * FROM opportunity_intelligence_requests')).rows,
+    ).toHaveLength(0);
+    expect(await row('agent_runs')).toMatchObject({
+      intelligence_reserved_calls: 0,
+    });
+  });
 
   it('proves INSERT ownership from the returned ID on the pinned native transaction', async () => {
     if (!db.transaction)

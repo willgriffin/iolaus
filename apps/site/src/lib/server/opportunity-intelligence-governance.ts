@@ -4,7 +4,10 @@ import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
 import { bumpOpportunityTableChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
+  OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS,
+  OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS,
   type OpportunityIntelligenceBudgetConfig,
+  opportunityIntelligenceProviderVolume,
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
@@ -451,6 +454,173 @@ async function settleBudgetRow(
   );
 }
 
+function windowTimestamp(value: unknown): number | null {
+  if (value instanceof Date)
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function validVolumeCounter(value: unknown): number {
+  const number = boundedNonNegativeIntegerValue(value, Number.MAX_SAFE_INTEGER);
+  if (number === null)
+    throw new ReservationBlocked(
+      blocked(
+        'budget_missing',
+        'Provider window accounting is missing or malformed.',
+      ),
+      'provider_window_accounting_invalid',
+    );
+  return number;
+}
+
+/** Called inside the main locked transaction; native ledger history is authority. */
+async function providerVolumeReservation(
+  db: SmrtDatabase,
+  control: DatabaseRow,
+  reservation: OpportunityIntelligenceReservation,
+  requestThreshold: number,
+  inputTokenThreshold: number,
+) {
+  const provider = opportunityIntelligenceProviderVolume(reservation);
+  const limits = OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS[provider];
+  const anchor = windowTimestamp(control.window_started_at);
+  if (anchor === null) {
+    if (provider === 'typesafe')
+      throw new ReservationBlocked(
+        blocked(
+          'budget_missing',
+          'An explicitly accounted native window is required for JEV admission.',
+        ),
+        'provider_window_anchor_missing',
+      );
+    // Older controls retain their conservative shared counters until an
+    // operator establishes an anchor. They cannot obtain the JEV allowance.
+    return {
+      provider,
+      id: '',
+      requests: validVolumeCounter(control.window_request_count) + 1,
+      tokens:
+        validVolumeCounter(control.window_input_tokens) +
+        reservation.reservedInputTokens,
+      requestThreshold: Math.min(requestThreshold, limits.requests),
+      inputTokenThreshold: Math.min(inputTokenThreshold, limits.inputTokens),
+    };
+  }
+  const key = `${OPPORTUNITY_INTELLIGENCE_CONTROL_KEY}:volume:${provider}`;
+  const existing = await db.query(
+    `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ?${governanceRowLock(db)}`,
+    [key],
+  );
+  if (existing.rows.length > 1)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider window identity is ambiguous.'),
+      'provider_window_accounting_invalid',
+    );
+  const row = queryRow(existing);
+  const rowAnchor = row ? windowTimestamp(row.window_started_at) : null;
+  if (row && rowAnchor === null)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider window anchor is malformed.'),
+      'provider_window_accounting_invalid',
+    );
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  for (const contract of OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS) {
+    const versions = [...contract.versions, ...contract.historicalVersions];
+    conditions.push(
+      `(q.feature = ? AND q.profile = ? AND r.output_schema_version IN (${versions.map(() => '?').join(', ')}))`,
+    );
+    params.push(contract.feature, contract.profile, ...versions);
+  }
+  const known = `q.provider IN ('bifrost', 'typesafe') AND (${conditions.join(' OR ')}) AND r.prompt_version = r.output_schema_version AND r.prepared_payload_version = r.output_schema_version`;
+  const filter = sqliteGovernanceDatabase(db)
+    ? 'datetime(q.started_at) >= datetime(?)'
+    : 'q.started_at >= ?';
+  const ledger = queryRow(
+    await db.query(
+      `SELECT COALESCE(SUM(CASE WHEN ${known} THEN 1 ELSE 0 END), 0) AS typesafe_requests,
+    COALESCE(SUM(CASE WHEN ${known} THEN q.reserved_input_tokens ELSE 0 END), 0) AS typesafe_tokens,
+    COUNT(*) AS total_requests, COALESCE(SUM(q.reserved_input_tokens), 0) AS total_tokens
+    FROM opportunity_intelligence_requests q LEFT JOIN opportunity_intelligence_results r
+      ON r.owner_request_id = q.request_id AND r.request_id = q.request_id AND r.idempotency_key = q.idempotency_key
+      AND r.opportunity_id = q.opportunity_id AND r.content_fingerprint = q.content_fingerprint AND r.input_fingerprint = q.input_fingerprint
+      AND r.feature = q.feature AND r.profile = q.profile AND r.model = q.model AND q.model <> ''
+      AND r.agent_run_id = q.agent_run_id AND COALESCE(r.source_crawl_id, '') = COALESCE(q.source_crawl_id, '')
+      AND COALESCE(r.source_crawl_item_id, '') = COALESCE(q.source_crawl_item_id, '')
+      AND COALESCE(r.tenant_id, '') = COALESCE(q.tenant_id, '') AND COALESCE(r.owner_user_id, '') = COALESCE(q.owner_user_id, '')
+      AND COALESCE(r.candidate_profile_id, '') = COALESCE(q.candidate_profile_id, '')
+    WHERE ${filter}`,
+      [...params, ...params, control.window_started_at],
+    ),
+  );
+  const typesafeRequests = validVolumeCounter(ledger?.typesafe_requests);
+  const typesafeTokens = validVolumeCounter(ledger?.typesafe_tokens);
+  const totalRequests = validVolumeCounter(ledger?.total_requests);
+  const totalTokens = validVolumeCounter(ledger?.total_tokens);
+  const historicRequests =
+    provider === 'typesafe'
+      ? typesafeRequests
+      : totalRequests - typesafeRequests;
+  const historicTokens =
+    provider === 'typesafe' ? typesafeTokens : totalTokens - typesafeTokens;
+  if (historicRequests < 0 || historicTokens < 0)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider ledger projection is inconsistent.'),
+      'provider_window_accounting_invalid',
+    );
+  const sameWindow = rowAnchor === anchor;
+  const requests =
+    Math.max(
+      historicRequests,
+      sameWindow ? validVolumeCounter(row?.window_request_count) : 0,
+    ) + 1;
+  const tokens =
+    Math.max(
+      historicTokens,
+      sameWindow ? validVolumeCounter(row?.window_input_tokens) : 0,
+    ) + reservation.reservedInputTokens;
+  let chosenRequests =
+    provider === 'typesafe'
+      ? limits.requests
+      : Math.min(requestThreshold, limits.requests);
+  let chosenTokens =
+    provider === 'typesafe'
+      ? limits.inputTokens
+      : Math.min(inputTokenThreshold, limits.inputTokens);
+  if (sameWindow && row) {
+    chosenRequests = Math.min(
+      chosenRequests,
+      validVolumeCounter(row.request_threshold),
+    );
+    chosenTokens = Math.min(
+      chosenTokens,
+      validVolumeCounter(row.input_token_threshold),
+    );
+  }
+  const id = row ? stringValue(row.id) : randomUUID();
+  if (!row)
+    await db.query(
+      `INSERT INTO opportunity_intelligence_controls
+    (id, slug, context, control_key, enabled, circuit_state, circuit_reason, window_request_count, window_input_tokens,
+     request_threshold, input_token_threshold, window_started_at, created_at, updated_at)
+    VALUES (?, ?, '', ?, TRUE, 'closed', '', 0, 0, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [id, key, key, chosenRequests, chosenTokens, control.window_started_at],
+    );
+  return {
+    provider,
+    id,
+    requests,
+    tokens,
+    requestThreshold: chosenRequests,
+    inputTokenThreshold: chosenTokens,
+  };
+}
+
 export class DatabaseOpportunityIntelligenceGovernanceStore
   implements OpportunityIntelligenceGovernanceStore
 {
@@ -592,9 +762,10 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
             );
           }
 
-          const nextRequests = numberValue(control.window_request_count) + 1;
+          const nextRequests =
+            validVolumeCounter(control.window_request_count) + 1;
           const nextTokens =
-            numberValue(control.window_input_tokens) +
+            validVolumeCounter(control.window_input_tokens) +
             reservation.reservedInputTokens;
           const requestThreshold = boundedNonNegativeIntegerValue(
             control.request_threshold,
@@ -607,12 +778,6 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
                 'Persisted opportunity intelligence request threshold is missing or invalid.',
               ),
               'request_volume_threshold_invalid',
-            );
-          }
-          if (requestThreshold > 0 && nextRequests > requestThreshold) {
-            throw new ReservationBlocked(
-              budgetBlock('circuit request volume'),
-              'request_volume_threshold',
             );
           }
           const inputTokenThreshold = boundedNonNegativeIntegerValue(
@@ -628,12 +793,21 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               'input_token_threshold_invalid',
             );
           }
-          if (inputTokenThreshold > 0 && nextTokens > inputTokenThreshold) {
+          const volume = await providerVolumeReservation(
+            transaction,
+            control,
+            reservation,
+            requestThreshold,
+            inputTokenThreshold,
+          );
+          if (volume.requests > volume.requestThreshold)
             throw new ReservationBlocked(
-              budgetBlock('circuit input tokens'),
-              'input_token_threshold',
+              budgetBlock(`${volume.provider} window requests`),
             );
-          }
+          if (volume.tokens > volume.inputTokenThreshold)
+            throw new ReservationBlocked(
+              budgetBlock(`${volume.provider} window input tokens`),
+            );
 
           const runBudget = await reserveBudgetRow(
             transaction,
@@ -692,7 +866,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
             reserved_input_tokens, reserved_spend_micros,
             started_at, created_at, updated_at
           ) VALUES (
-            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bifrost',
+            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             'started', 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
@@ -713,6 +887,7 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               reservation.inputFingerprint ?? '',
               reservation.profile,
               reservation.model,
+              volume.provider === 'typesafe' ? 'typesafe' : 'bifrost',
               reservation.estimatedInputTokens,
               reservation.inputTokenCeiling,
               reservation.maxOutputTokens,
@@ -729,6 +904,21 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
         `,
             [nextRequests, nextTokens, stringValue(control.id)],
           );
+          if (volume.id)
+            await transaction.query(
+              `UPDATE opportunity_intelligence_controls
+            SET window_request_count = ?, window_input_tokens = ?, request_threshold = ?, input_token_threshold = ?,
+                window_started_at = ?, last_request_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?`,
+              [
+                volume.requests,
+                volume.tokens,
+                volume.requestThreshold,
+                volume.inputTokenThreshold,
+                control.window_started_at,
+                volume.id,
+              ],
+            );
           return { kind: 'owner', reservation };
         });
       } catch (error) {

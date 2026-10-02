@@ -576,7 +576,7 @@ describe('opportunity intelligence governance', () => {
     expect(state.circuitReason).toBe('crawl_budget_missing');
   });
 
-  it('retains cumulative telemetry when both volume thresholds are disabled', async () => {
+  it('preserves explicit zero OpenAI thresholds in a legacy window', async () => {
     let persistedWindow: unknown[] = [];
     const transactionDb = {
       query: vi.fn(async (sql: string, parameters: unknown[] = []) => {
@@ -653,9 +653,10 @@ describe('opportunity intelligence governance', () => {
     };
 
     await expect(store.reserve(reservation)).resolves.toMatchObject({
-      kind: 'owner',
+      kind: 'blocked',
+      code: 'budget_exhausted',
     });
-    expect(persistedWindow).toEqual([251, 251_000, 'control-1']);
+    expect(persistedWindow).toEqual([]);
     expect(database.query).not.toHaveBeenCalled();
   });
 

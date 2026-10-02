@@ -18,6 +18,22 @@ Use `opportunities:intelligence-control stop` before investigating unexplained
 usage, repeated provider errors or an open circuit. Re-enable only after the
 deployment owner has verified configuration, accounting and the relevant tests.
 
+## Provider volume windows
+
+Native request and reserved-input volume is tracked separately for the configured
+Typesafe decision adapters and OpenAI adapters. The Typesafe window permits
+1,000 requests and 10,000,000 reserved input tokens. OpenAI remains limited to
+100 requests and 1,000,000 reserved input tokens, or a stricter persisted limit,
+including zero. A model name alone cannot select the Typesafe allowance: its
+feature, profile and version must match a server-authored adapter contract.
+
+Both buckets use the explicitly accounted shared window anchor and reconstruct
+existing usage from native request/result history. They are created lazily on
+reservation; deploying this code does not reset usage or renew the window.
+Exhausting one provider's volume denies that provider only. Disabled controls,
+operational failures and invalid accounting still use the shared circuit, and
+per-run, per-crawl and spend limits remain unchanged.
+
 Crawler rendering uses Crawl4AI only when its URL is explicitly configured via
 `HAVE_SPIDER_CRAWL4AI_URL`, `CRAWL4AI_URL` or `CRAWL4AI_BASE_URL`. Merely running
 inside Kubernetes never selects a private service. Without that configuration,
