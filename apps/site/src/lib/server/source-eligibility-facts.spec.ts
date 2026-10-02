@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { CandidateWorkEligibility } from './opportunity-assessment.js';
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 import {
   nominateSourceEligibilityFactOffers,
+  prepareCanonicalCapturedSourceEligibilityEvidenceAudit,
   prepareCanonicalSourceEligibilityEvidenceAudit,
   prepareSourceEligibilityEvidenceAudit,
   projectSourceEligibility,
   projectVerifiedSourceEligibility,
   resolveSourceEligibilityEvidenceAudit,
   type SourceEligibilityEvidence,
+  sourceEligibilityContextFromCapturedSource,
   sourceEligibilityFactKey,
   validateSourceEligibilityEvidence,
 } from './source-eligibility-facts.js';
@@ -87,6 +90,186 @@ const current = {
 };
 
 describe('source eligibility facts', () => {
+  it('uses only original captured ATS fields as exact v4 witnesses and invalidates metadata-only changes', () => {
+    const content = {
+      descriptionRaw: sourceText,
+      locationNotes: 'United States (Remote); Canada (Remote)',
+      workMode: 'remote',
+    };
+    const sourceContentFingerprint =
+      fingerprintOpportunitySourceContent(content);
+    const context = sourceEligibilityContextFromCapturedSource(
+      {
+        sourceText,
+        sourceContentFingerprint,
+        sourceContentVersion: 1,
+      },
+      JSON.stringify(content),
+    );
+    expect(context?.capturedFields).toEqual([
+      expect.objectContaining({
+        id: 'source-field:locationNotes',
+        path: 'sourceContentJson.locationNotes',
+        text: content.locationNotes,
+      }),
+      expect.objectContaining({
+        id: 'source-field:workMode',
+        path: 'sourceContentJson.workMode',
+        text: content.workMode,
+      }),
+    ]);
+    const prepared = prepareCanonicalCapturedSourceEligibilityEvidenceAudit({
+      clauses: [
+        { id: 'c0', start: 0, end: sourceText.length, text: sourceText },
+      ],
+      context: context!,
+    });
+    expect(prepared.auditVersion).toBe(
+      'source-eligibility-audit/v4-captured-source',
+    );
+    expect(prepared.clauseAliases).toEqual({ c0: 'c0' });
+    expect(prepared.request.state).toMatchObject({
+      sourceEligibilityClauses: [expect.objectContaining({ id: 'c0' })],
+      sourceEligibilityCapturedFields: [
+        expect.objectContaining({ id: 'source-field:locationNotes' }),
+        expect.objectContaining({ id: 'source-field:workMode' }),
+      ],
+    });
+    expect(
+      sourceEligibilityContextFromCapturedSource(
+        {
+          sourceText,
+          sourceContentFingerprint,
+          sourceContentVersion: 1,
+        },
+        JSON.stringify({ ...content, locationNotes: 'Remote in Canada only' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('resolves a captured ATS field only when it is the exact offered witness', () => {
+    const content = {
+      descriptionRaw: sourceText,
+      locationNotes: 'Canada (Remote)',
+      workMode: 'remote',
+    };
+    const context = sourceEligibilityContextFromCapturedSource(
+      {
+        sourceText,
+        sourceContentFingerprint: fingerprintOpportunitySourceContent(content),
+        sourceContentVersion: 1,
+      },
+      JSON.stringify(content),
+    )!;
+    const prepared = prepareSourceEligibilityEvidenceAudit({
+      clauses: [
+        {
+          id: 'clause:canonical-body',
+          start: 0,
+          end: sourceText.length,
+          text: sourceText,
+        },
+      ],
+      context,
+      offers: [
+        {
+          kind: 'work_country_allowed',
+          country: CA,
+          clauseIds: [],
+          capturedFieldIds: ['source-field:locationNotes'],
+        },
+        {
+          kind: 'remote_available',
+          clauseIds: [],
+          capturedFieldIds: ['source-field:workMode'],
+        },
+        { kind: 'sponsorship_offered', clauseIds: ['clause:canonical-body'] },
+      ],
+    });
+    const answers = Object.fromEntries(
+      Object.keys(prepared.request.questions).map((key) => {
+        if (key.endsWith('__evidence')) {
+          const choice = key.includes('work_country_allowed')
+            ? 'source-field:locationNotes'
+            : key.includes('remote_available')
+              ? 'source-field:workMode'
+              : 'c0';
+          return [key, { type: 'choice', choice, confidence: 0.96 }];
+        }
+        return [key, { type: 'predicate', probability: 0.96 }];
+      }),
+    );
+    const resolved = resolveSourceEligibilityEvidenceAudit(
+      prepared,
+      {
+        answers: answers as never,
+        model: 'jev-test',
+        provenance: { model: 'jev-test', provider: 'typesafe' },
+      },
+      'request:captured',
+    );
+    expect(resolved.facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          citations: [
+            expect.objectContaining({
+              path: 'sourceContentJson.locationNotes',
+              source: 'captured_field',
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(resolved.facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'sponsorship_offered',
+          citations: [
+            expect.objectContaining({ clauseId: 'clause:canonical-body' }),
+          ],
+        }),
+      ]),
+    );
+    expect(validateSourceEligibilityEvidence(context, resolved)).toBe(true);
+    const metadataOnlyChange = {
+      ...content,
+      // Source-content fingerprint normalization preserves this whitespace,
+      // while the exact captured-field hash must still invalidate evidence.
+      locationNotes: 'Canada  (Remote)',
+    };
+    const changedContext = sourceEligibilityContextFromCapturedSource(
+      {
+        sourceText,
+        sourceContentFingerprint: fingerprintOpportunitySourceContent(content),
+        sourceContentVersion: 1,
+      },
+      JSON.stringify(metadataOnlyChange),
+    );
+    expect(changedContext).toBeDefined();
+    expect(validateSourceEligibilityEvidence(changedContext!, resolved)).toBe(
+      false,
+    );
+  });
+
+  it('rejects partial captured metadata instead of falling back to V3', () => {
+    const clauses = [
+      { id: 'c0', start: 0, end: sourceText.length, text: sourceText },
+    ];
+    const legacy = prepareSourceEligibilityEvidenceAudit({
+      clauses,
+      context: current,
+      offers: [],
+    });
+    expect(legacy.auditVersion).toBe('source-eligibility-audit/v3');
+    expect(() =>
+      prepareSourceEligibilityEvidenceAudit({
+        clauses,
+        context: { ...current, capturedFields: [] },
+        offers: [],
+      }),
+    ).toThrow('Captured ATS eligibility fields must be exact and current');
+  });
+
   it('nominates only exact public country labels, maps UK to GB, and fails coverage closed on country overflow', () => {
     const clauses = [
       {

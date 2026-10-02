@@ -32,6 +32,7 @@ import { prepareOpportunityPosting } from './opportunity-posting-preparation.js'
 import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
 import {
   evaluateRequirementEvidenceAudit,
+  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
   requirementCoverageLedgerFingerprint,
@@ -42,10 +43,17 @@ import {
   assertOpportunitySourceExtractionNotAttempted,
   attestCompletedOpportunitySourceExtraction,
 } from './opportunity-requirement-coverage-source-stage-job.js';
+import {
+  assertOpportunityAssessmentScreenNotAttempted,
+  type CurrentOpportunityAssessmentScreen,
+  evaluateOpportunityAssessmentScreen,
+  prepareCurrentOpportunityAssessmentScreen,
+  readCurrentOpportunityAssessmentScreen,
+} from './opportunity-screening-provider.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 
-/** A separate source-only prerequisite job on the existing intelligence queue. */
+/** A profile-owned prerequisite job on the existing intelligence queue. */
 export const OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD =
   'prepareAssessmentCoverage';
 export const OPPORTUNITY_ASSESSMENT_DEPENDENCY_CONTRACT =
@@ -81,7 +89,10 @@ export type OpportunityAssessmentSourceStatus =
   | 'audit_pending'
   | 'audit_blocked'
   | 'operator_required'
-  | 'partial';
+  | 'partial'
+  | 'screening_pending'
+  | 'screening_excluded'
+  | 'screening_hold';
 
 export interface OpportunityAssessmentSourceDependency {
   dedupeKey: string;
@@ -169,6 +180,10 @@ export interface RunOpportunityAssessmentDependencyJobDependencies {
       assertCurrentAuthority: () => Promise<void>;
     },
   ) => Promise<SourcePreparationResult>;
+  prepareScreen?: typeof prepareCurrentOpportunityAssessmentScreen;
+  readScreen?: typeof readCurrentOpportunityAssessmentScreen;
+  evaluateScreen?: typeof evaluateOpportunityAssessmentScreen;
+  assertScreenNotAttempted?: typeof assertOpportunityAssessmentScreenNotAttempted;
   readCompletedExtraction?: typeof readCompletedSourceExtraction;
   readPartialEvidence?: typeof readPartialOpportunityRequirementEvidence;
   assertNotAttempted?: typeof assertOpportunitySourceExtractionNotAttempted;
@@ -508,6 +523,7 @@ async function preflightSourceEvidence(
   const { preflightCompletedOpportunityRequirementEvidenceAudit } =
     await import('./opportunity-requirement-coverage-source-stage-job.js');
   return preflightCompletedOpportunityRequirementEvidenceAudit(actual, {
+    auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
     limits: resolveOpportunityIntelligenceBudgetConfig().run,
     auditPricing: {
       configured: true,
@@ -618,6 +634,11 @@ export async function enqueueOpportunityAssessmentCoverage(
     sourcePreparationAgentRunId: _ignoredSourcePreparationAgentRunId,
     partialAssessmentEvidence: _ignoredPartialEvidence,
     sourceCoverageStage: _ignoredSourceStage,
+    skipScreening: _ignoredSkipScreening,
+    screeningOutcome: _ignoredScreeningOutcome,
+    screeningEvidence: _ignoredScreeningEvidence,
+    screeningInputFingerprint: _ignoredScreeningFingerprint,
+    candidatePreferences: _ignoredCandidatePreferences,
     ...callerArgs
   } = args;
   const enveloped = withRuntimeWorkspaceSubject(callerArgs);
@@ -701,11 +722,12 @@ export async function enqueueOpportunityAssessmentCoverage(
       terminalBridge,
     );
     let completed: AttestedCompletedSourceExtraction | undefined;
-    let sourceStatus: OpportunityAssessmentSourceStatus = 'extraction_pending';
+    let sourceStatus: OpportunityAssessmentSourceStatus = 'screening_pending';
     if (
       coverageOutcome.status === 'missing' ||
       (coverageOutcome.status === 'blocked' &&
-        coverageOutcome.reason === 'confidence')
+        (coverageOutcome.reason === 'confidence' ||
+          coverageOutcome.reason === 'structural'))
     ) {
       try {
         completed = await (
@@ -817,9 +839,9 @@ export async function enqueueOpportunityAssessmentCoverage(
 }
 
 /**
- * Runs only source preparation under the lifecycle lock. The subsequent
- * candidate continuation gets a new principal fence and re-reads the source
- * receipt, so no private payload is available to the provider phase.
+ * Screens new extraction intents under the profile principal before source work.
+ * Shared source preparation receives only its original run and source identity;
+ * the private continuation revalidates both source and screening receipts.
  */
 export async function runOpportunityAssessmentDependencyJob(
   opportunity: OpportunityRecord,
@@ -870,6 +892,16 @@ export async function runOpportunityAssessmentDependencyJob(
     dependencies.auditEvidence ?? evaluateRequirementEvidenceAudit;
   const preflightEvidence =
     dependencies.preflightEvidence ?? preflightSourceEvidence;
+  const prepareScreen =
+    dependencies.prepareScreen ?? prepareCurrentOpportunityAssessmentScreen;
+  const readScreen =
+    dependencies.readScreen ?? readCurrentOpportunityAssessmentScreen;
+  const evaluateScreen =
+    dependencies.evaluateScreen ?? evaluateOpportunityAssessmentScreen;
+  const assertScreenNotAttempted =
+    dependencies.assertScreenNotAttempted ??
+    assertOpportunityAssessmentScreenNotAttempted;
+  let requiredScreen: CurrentOpportunityAssessmentScreen | undefined;
   const preparation: {
     message: string;
     ready: boolean;
@@ -926,7 +958,8 @@ export async function runOpportunityAssessmentDependencyJob(
                 };
           if (
             initialCoverage.status === 'blocked' &&
-            initialCoverage.reason !== 'confidence'
+            initialCoverage.reason !== 'confidence' &&
+            initialCoverage.reason !== 'structural'
           )
             return {
               message: blockedCoverageMessage(initialCoverage.reason),
@@ -934,14 +967,47 @@ export async function runOpportunityAssessmentDependencyJob(
               sourceStatus: 'audit_blocked' as const,
             };
 
+          let activeScreen: CurrentOpportunityAssessmentScreen | undefined;
+          let screeningChanged = false;
           const fresh = async <T>(work: () => Promise<T>) =>
             await runAsRevalidated(
               subject,
               'assessment.execute',
               async (_fresh, principal) => {
                 await principal.assertOperation('opportunities', 'read');
-                if (!isCurrent(await getOpportunity(opportunityId)))
+                if (!isCurrent(await getOpportunity(opportunityId))) {
+                  screeningChanged = Boolean(activeScreen);
                   throw new Error('Source preparation is no longer current.');
+                }
+                if (activeScreen) {
+                  let currentScreen:
+                    | CurrentOpportunityAssessmentScreen
+                    | undefined;
+                  try {
+                    currentScreen = await readScreen({
+                      opportunityId,
+                      subject,
+                      requestId: activeScreen.requestId,
+                    });
+                  } catch {
+                    screeningChanged = true;
+                    throw new Error(
+                      'The source or active screening profile changed.',
+                    );
+                  }
+                  if (
+                    !currentScreen ||
+                    currentScreen.inputFingerprint !==
+                      activeScreen.inputFingerprint ||
+                    currentScreen.agentRunId !== activeScreen.agentRunId ||
+                    currentScreen.outcome !== activeScreen.outcome
+                  ) {
+                    screeningChanged = true;
+                    throw new Error(
+                      'The source or active screening profile changed.',
+                    );
+                  }
+                }
                 return await work();
               },
             );
@@ -1004,25 +1070,167 @@ export async function runOpportunityAssessmentDependencyJob(
                 sourceStatus: 'operator_required' as const,
               };
             }
-            await assertCurrentAuthority();
-            agentRunId = await startRun({
-              opportunityId,
-              sourceId: text(current.sourceId),
-              userId: subject.userId,
-              workspaceSubject: subject,
-            });
+            let preparedScreen: Awaited<ReturnType<typeof prepareScreen>>;
+            let screen: Awaited<ReturnType<typeof readScreen>>;
+            try {
+              preparedScreen = await prepareScreen(opportunityId, subject);
+              if (
+                preparedScreen.sourceIdentity.sourceContentFingerprint !==
+                  expected.fingerprint ||
+                preparedScreen.sourceIdentity.sourceContentVersion !==
+                  expected.version
+              )
+                throw new Error('Screening source is no longer current.');
+              if (!preparedScreen.profile.targetRoles.length)
+                return {
+                  message:
+                    'Screening is on hold: add your target role preferences before assessing this posting.',
+                  ready: false as const,
+                  sourceStatus: 'screening_hold' as const,
+                };
+              screen = await readScreen({ opportunityId, subject });
+              if (!screen)
+                await assertScreenNotAttempted(preparedScreen, {
+                  opportunityId,
+                  workspaceSubject: subject,
+                });
+            } catch {
+              return {
+                message:
+                  'Screening is on hold: verify the current posting and active profile, or review the prior attempt.',
+                ready: false as const,
+                sourceStatus: 'screening_hold' as const,
+              };
+            }
+            let runRecorded = false;
+            let startedScreenRun = false;
+            if (screen) {
+              agentRunId = screen.agentRunId;
+            } else {
+              await assertCurrentAuthority();
+              agentRunId = await startRun({
+                opportunityId,
+                sourceId: text(current.sourceId),
+                userId: subject.userId,
+                workspaceSubject: subject,
+              });
+              startedScreenRun = true;
+              try {
+                await recordRun(
+                  context,
+                  subject,
+                  expected,
+                  opportunityId,
+                  agentRunId,
+                );
+                runRecorded = true;
+                const screened = await evaluateScreen(preparedScreen, {
+                  agentRunId,
+                  opportunityId,
+                  contentFingerprint: expected.fingerprint,
+                  workspaceSubject: subject,
+                  signal: AbortSignal.timeout(
+                    OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
+                  ),
+                });
+                screen = await readScreen({
+                  opportunityId,
+                  subject,
+                  requestId: screened.requestId,
+                });
+                if (
+                  !screen ||
+                  screen.agentRunId !== agentRunId ||
+                  screen.inputFingerprint !== screened.inputFingerprint
+                )
+                  throw new Error('Screening receipt is no longer current.');
+              } catch (error) {
+                await finishRun(
+                  agentRunId,
+                  'failed',
+                  error instanceof Error ? error.message : String(error),
+                  subject,
+                );
+                return {
+                  message:
+                    'Screening is on hold: its current actual receipt requires review.',
+                  ready: false as const,
+                  sourceStatus: 'screening_hold' as const,
+                };
+              }
+            }
+            activeScreen = screen;
+            try {
+              await assertCurrentAuthority();
+            } catch {
+              return {
+                message:
+                  'Screening is on hold: the posting or active profile changed.',
+                ready: false as const,
+                sourceStatus: 'screening_hold' as const,
+              };
+            }
+            if (screen.screen.holdReasons.length) {
+              if (startedScreenRun)
+                await finishRun(agentRunId, 'succeeded', '', subject);
+              return {
+                message:
+                  'Screening is on hold: complete your target role preferences or clarify the posting before deeper matching.',
+                ready: false as const,
+                sourceStatus: 'screening_hold' as const,
+              };
+            }
+            if (screen.outcome === 'clear_mismatch') {
+              const evidence = screen.screen.evidence.filter((item) =>
+                screen.screen.mismatches.includes(item.dimension),
+              );
+              const citations = evidence
+                .map((item) => `“${item.witness.text}”`)
+                .join('; ');
+              if (startedScreenRun)
+                await finishRun(agentRunId, 'succeeded', '', subject);
+              if (!citations)
+                return {
+                  message:
+                    'Screening is on hold: its mismatch has no current source citation.',
+                  ready: false as const,
+                  sourceStatus: 'screening_hold' as const,
+                };
+              return {
+                message: `Screening found an explicit mismatch with your current profile: ${citations}`,
+                ready: false as const,
+                sourceStatus: 'screening_excluded' as const,
+              };
+            }
+            if (
+              (screen.outcome !== 'potentially_relevant' &&
+                screen.outcome !== 'uncertain') ||
+              !screen.screen.plausiblyRelevant
+            ) {
+              if (startedScreenRun)
+                await finishRun(agentRunId, 'succeeded', '', subject);
+              return {
+                message:
+                  'Screening is on hold: clarify role relevance before deeper matching.',
+                ready: false as const,
+                sourceStatus: 'screening_hold' as const,
+              };
+            }
+            requiredScreen = screen;
             const sourceJob = {
               sourceDependencyFingerprint: expected.sourceDependencyFingerprint,
               sourcePreparationAgentRunId: agentRunId,
             };
             try {
-              await recordRun(
-                context,
-                subject,
-                expected,
-                opportunityId,
-                agentRunId,
-              );
+              if (!runRecorded)
+                await recordRun(
+                  context,
+                  subject,
+                  expected,
+                  opportunityId,
+                  agentRunId,
+                );
+              await assertCurrentAuthority();
               const extracted = await prepareSource(opportunityId, {
                 agentRunId,
                 sourceExtractionStage: 'extract-only',
@@ -1065,6 +1273,13 @@ export async function runOpportunityAssessmentDependencyJob(
               const message =
                 error instanceof Error ? error.message : String(error);
               await finishRun(agentRunId, 'failed', message, subject);
+              if (screeningChanged)
+                return {
+                  message:
+                    'Screening is on hold: the posting or active profile changed.',
+                  ready: false as const,
+                  sourceStatus: 'screening_hold' as const,
+                };
               const failedCurrent = await getOpportunity(opportunityId);
               if (isCurrent(failedCurrent)) {
                 const failed = await readCoverageOutcome(
@@ -1196,11 +1411,38 @@ export async function runOpportunityAssessmentDependencyJob(
           }
           try {
             await assertCurrentAuthority();
+            const expectedExtraction = actual;
             await auditEvidence(plan.preparedAudit, {
               agentRunId,
               opportunityId,
               contentFingerprint: actual.context.sourceFingerprint,
               historicalReservation: actual.reservation,
+              resolveCompletedExtraction: async () => {
+                await assertCurrentAuthority();
+                const currentSource = await getOpportunity(opportunityId);
+                if (!isCurrent(currentSource))
+                  throw new Error('Source preparation is no longer current.');
+                const confirmed = await readCompleted(currentSource);
+                if (
+                  !confirmed ||
+                  confirmed.requestId !== expectedExtraction.requestId ||
+                  confirmed.agentRunId !== expectedExtraction.agentRunId ||
+                  !sameSubject(confirmed.workspaceSubject, subject) ||
+                  confirmed.ledgerFingerprint !==
+                    expectedExtraction.ledgerFingerprint ||
+                  JSON.stringify(confirmed.context) !==
+                    JSON.stringify(expectedExtraction.context) ||
+                  JSON.stringify(confirmed.reservation) !==
+                    JSON.stringify(expectedExtraction.reservation) ||
+                  typeof confirmed.sourceContentJson !== 'string' ||
+                  confirmed.sourceContentJson !==
+                    expectedExtraction.sourceContentJson
+                )
+                  throw new Error(
+                    'The source lifecycle changed before evidence transport.',
+                  );
+                return confirmed;
+              },
               signal: AbortSignal.timeout(
                 OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
               ),
@@ -1287,6 +1529,37 @@ export async function runOpportunityAssessmentDependencyJob(
           message: 'Skipped stale opportunity source.',
           status: 'skipped' as const,
         };
+      }
+      if (requiredScreen) {
+        let screened: CurrentOpportunityAssessmentScreen | undefined;
+        try {
+          screened = await readScreen({
+            opportunityId,
+            subject,
+            requestId: requiredScreen.requestId,
+          });
+        } catch {
+          return {
+            message:
+              'Screening is on hold: verify the current posting and active profile before assessment.',
+            status: 'skipped' as const,
+            sourceStatus: 'screening_hold' as const,
+          };
+        }
+        if (
+          !screened ||
+          screened.inputFingerprint !== requiredScreen.inputFingerprint ||
+          screened.agentRunId !== requiredScreen.agentRunId ||
+          screened.outcome !== requiredScreen.outcome ||
+          screened.screen.holdReasons.length ||
+          !screened.screen.plausiblyRelevant
+        )
+          return {
+            message:
+              'Screening is on hold: the posting or active profile changed before assessment.',
+            status: 'skipped' as const,
+            sourceStatus: 'screening_hold' as const,
+          };
       }
       await enqueueAssessment(opportunityId);
       return {

@@ -12,6 +12,7 @@ import {
   mergeRequirementCoverageRepair,
   normalizeRequirementCoverageForAudit,
   prepareRequirementCoverageRepair,
+  RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION,
   RECOVERABLE_PARTIAL_COVERAGE_VERSION,
   REQUIREMENT_COVERAGE_PAID_V4_PROMPT_VERSION,
   REQUIREMENT_COVERAGE_PAID_V4_SCHEMA_VERSION,
@@ -19,6 +20,7 @@ import {
   REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION,
   type RequirementCoverageContext,
   type RequirementCoverageExtractionContract,
+  recoverPartialRequirementCoverageFromCapturedSource,
   recoverPartialRequirementCoverageFromCompletedExtraction,
   requirementCoverageContextForOpportunity,
   requirementCoverageExtractionClauses,
@@ -925,6 +927,136 @@ describe('partial-only introductory duty recovery', () => {
     ).toBeUndefined();
     expect(
       recoverPartialRequirementCoverageFromCompletedExtraction(
+        { ...context, extractionContract: 'paid-v4-coverage-only4096' },
+        ledger,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('also exposes the same narrowly broken introductory links in the separate V2 view', () => {
+    const { context, ledger } = actualShape();
+    const v1 = recoverPartialRequirementCoverageFromCompletedExtraction(
+      context,
+      ledger,
+    );
+    const v2 = recoverPartialRequirementCoverageFromCapturedSource(
+      context,
+      ledger,
+    );
+    expect(v2?.version).toBe(RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION);
+    expect(v2?.ledger).toEqual(v1?.ledger);
+    expect(v2?.unresolvedClauses).toEqual(v1?.unresolvedClauses);
+    expect(v2?.fingerprint).not.toBe(v1?.fingerprint);
+  });
+});
+
+describe('partial-only captured source unresolved view', () => {
+  function actualShape() {
+    const context: RequirementCoverageContext = {
+      extractionContract: 'current',
+      sourceText: [
+        'About Northbeam',
+        'Northbeam builds tools.',
+        'Role Summary',
+        '- Ship code.',
+        '- Test code.',
+      ].join('\n'),
+      sourceFingerprint: 'captured-source',
+      sourceVersion: 1,
+      extractionFingerprint: 'completed-extraction',
+      preparedFingerprint: 'captured-prepared',
+    };
+    const ledger = buildRequirementCoverageSource(context);
+    const clauses = ledger.clauses;
+    if (clauses.length !== 5) throw new Error('Synthetic source shape changed');
+    ledger.requirements.push({
+      id: 'r1',
+      text: 'Ship code.',
+      clauseIds: [clauses[3].id],
+      importance: 'unknown',
+    });
+    ledger.dispositions = [
+      {
+        clauseId: clauses[0].id,
+        type: 'nonrequirement',
+        requirementIds: [],
+        exclusionRule: 'section_heading',
+      },
+      { clauseId: clauses[1].id, type: 'source_context', requirementIds: [] },
+      {
+        clauseId: clauses[2].id,
+        type: 'nonrequirement',
+        requirementIds: [],
+        exclusionRule: 'section_heading',
+      },
+      { clauseId: clauses[3].id, type: 'role_duty', requirementIds: ['r1'] },
+      { clauseId: clauses[4].id, type: 'role_duty', requirementIds: [] },
+    ];
+    return { context, ledger };
+  }
+
+  it('preserves unsupported exclusions and unmapped material literally as unresolved while retaining reciprocal rows', () => {
+    const { context, ledger } = actualShape();
+    const original = structuredClone(ledger);
+    const admission = validateRequirementCoverageAuditAdmission(
+      context,
+      ledger,
+    );
+    expect(admission.errors).toHaveLength(3);
+    const view = recoverPartialRequirementCoverageFromCapturedSource(
+      context,
+      ledger,
+    );
+    expect(view).toMatchObject({
+      version: RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION,
+      unresolvedClauses: [
+        {
+          clauseId: ledger.clauses[0].id,
+          originalRequirementIds: [],
+          reason: 'unsupported_nonrequirement_exclusion',
+        },
+        {
+          clauseId: ledger.clauses[2].id,
+          originalRequirementIds: [],
+          reason: 'unsupported_nonrequirement_exclusion',
+        },
+        {
+          clauseId: ledger.clauses[4].id,
+          originalRequirementIds: [],
+          reason: 'unmapped_material_clause',
+        },
+      ],
+    });
+    expect(view?.ledger).toEqual(original);
+    expect(view?.originalLedgerFingerprint).toBe(
+      createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+    );
+    expect(
+      validateRequirementCoverageAuditAdmission(context, view?.ledger)
+        .structuralComplete,
+    ).toBe(false);
+    expect(ledger).toEqual(original);
+  });
+
+  it('refuses non-exact spans, missing or foreign rows, and historical contracts', () => {
+    const { context, ledger } = actualShape();
+    const missing = structuredClone(ledger);
+    missing.requirements = [];
+    expect(
+      recoverPartialRequirementCoverageFromCapturedSource(context, missing),
+    ).toBeUndefined();
+    const foreign = structuredClone(ledger);
+    foreign.dispositions[3].requirementIds = ['foreign'];
+    expect(
+      recoverPartialRequirementCoverageFromCapturedSource(context, foreign),
+    ).toBeUndefined();
+    const forgedSpan = structuredClone(ledger);
+    forgedSpan.clauses[0].spanEnd -= 1;
+    expect(
+      recoverPartialRequirementCoverageFromCapturedSource(context, forgedSpan),
+    ).toBeUndefined();
+    expect(
+      recoverPartialRequirementCoverageFromCapturedSource(
         { ...context, extractionContract: 'paid-v4-coverage-only4096' },
         ledger,
       ),

@@ -4,6 +4,7 @@ import type { WorkspaceSubject } from './private-workspace.js';
 import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 import {
   projectVerifiedSourceEligibility,
+  type SourceEligibilityCitation,
   type SourceEligibilityConditionalPath,
   type SourceEligibilityEvidence,
   type SourceEligibilityEvidenceContext,
@@ -46,17 +47,31 @@ async function readAttestedSourceEligibilityEvidence(
 
 export type SourceEligibilityConditionalPathProjection = {
   facts: Array<{
-    citations: Array<{
-      end: number;
-      hash: string;
-      quote: string;
-      start: number;
-    }>;
+    citations: SourceEligibilityCitationProjection[];
     key: string;
   }>;
   kind: SourceEligibilityConditionalPath['kind'];
   status: SourceEligibilityConditionalPath['status'];
 };
+
+export type SourceEligibilityCitationProjection =
+  | {
+      end: number;
+      hash: string;
+      quote: string;
+      source: 'descriptionRaw';
+      start: number;
+    }
+  | {
+      field: 'locationNotes' | 'workMode';
+      hash: string;
+      path: `sourceContentJson.${'locationNotes' | 'workMode'}`;
+      quote: string;
+      /** Scalar field offsets, never offsets into descriptionRaw. */
+      start: number;
+      end: number;
+      source: 'captured_field';
+    };
 
 export type SourceEligibilityUiProjection = {
   conditionalPaths: SourceEligibilityConditionalPathProjection[];
@@ -131,10 +146,25 @@ function conditionalPathsForUi(
     status: path.status,
     facts: path.facts.map((fact) => ({
       key: fact.key,
-      citations: fact.citations.map((citation) => ({
-        ...citation,
-        quote: sourceText.slice(citation.start, citation.end),
-      })),
+      citations: fact.citations.map((citation) =>
+        citation.source === 'captured_field'
+          ? {
+              end: citation.text.length,
+              field: citation.field,
+              hash: citation.hash,
+              path: citation.path,
+              quote: citation.text,
+              source: 'captured_field' as const,
+              start: 0,
+            }
+          : {
+              end: citation.end,
+              hash: citation.hash,
+              quote: sourceText.slice(citation.start, citation.end),
+              source: 'descriptionRaw' as const,
+              start: citation.start,
+            },
+      ),
     })),
   }));
 }

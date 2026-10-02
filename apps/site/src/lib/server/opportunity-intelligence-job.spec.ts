@@ -105,7 +105,14 @@ describe('opportunity intelligence jobs', () => {
     };
     const result = await enqueueOpportunityIntelligenceWithStatus(
       'opp-1',
-      { partialAssessmentEvidence: true },
+      {
+        partialAssessmentEvidence: true,
+        skipScreening: true,
+        screeningOutcome: 'potentially_relevant',
+        screeningEvidence: { forged: true },
+        screeningInputFingerprint: 'forged',
+        candidatePreferences: { targetRoles: ['forged'] },
+      },
       {
         collection,
         opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
@@ -114,6 +121,9 @@ describe('opportunity intelligence jobs', () => {
     expect(result.stage).toBe('source_preparation');
     expect(result.job.id).toBe('source-preparation-job');
     expect(enqueueOpportunityAssessmentCoverage).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(enqueueOpportunityAssessmentCoverage).mock.calls[0]?.[1],
+    ).toEqual({});
     expect(loadWorkspaceCandidateEvidence).not.toHaveBeenCalled();
     expect(collection.create).not.toHaveBeenCalled();
     expect(collection.enqueueJob).not.toHaveBeenCalled();

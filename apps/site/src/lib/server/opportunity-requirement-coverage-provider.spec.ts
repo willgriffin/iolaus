@@ -27,6 +27,7 @@ import {
   preflightRequirementCoverageAudit,
   preflightRequirementCoverageLifecycle,
   preflightRequirementEvidenceAudit,
+  prepareCapturedSourceCompositeRequirementEvidenceAudit,
   prepareCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareRequirementEvidenceAudit,
@@ -34,6 +35,7 @@ import {
   REQUIREMENT_COVERAGE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_AUDIT_LEGACY_VERSION,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
@@ -48,6 +50,10 @@ import {
   resolveRequirementEvidenceAudit,
   validateVerifiedRequirementCoverage,
 } from './opportunity-requirement-coverage-provider.js';
+import {
+  fingerprintOpportunitySourceContent,
+  opportunityWithSourceContent,
+} from './opportunity-source-content.js';
 
 const publicPosting =
   "Build something people love\nWealthsimple is Canada’s leading financial innovator. The company offers a full suite of simple, sophisticated financial products across managed investing, do-it-yourself trading, cryptocurrency, tax filing, spending and saving. Wealthsimple currently serves more than 4 million Canadians and holds over $155 billion in assets under administration. The company was founded in 2014 by a team of financial experts and technology entrepreneurs, and is headquartered in Toronto, Canada.\n\nWe're proud of what we've built — and we're just getting started. Read our Culture Manual and learn more about how we work .\n\nAbout the team\nWe build the products and infrastructure that millions of Canadians trust with their financial lives. Data & Engineering at Wealthsimple spans everything from the client-facing apps to the systems running underneath them — and we hold ourselves to a high bar on both. We move fast, but we build thoughtfully: quality, security, and scalability aren’t trade-offs here, they’re the standard.\nThe Production Engineering team sits within Platform Experience, on the boundary between Platform and Product. Our mandate is to raise reliability across Wealthsimple’s most critical flows — reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements. We measure ourselves against two targets: 99.9% uptime on critical flows, and fewer than 1% of weekly active users experiencing errors in the app. If you want to work on hard problems with people who care deeply about craft, you’ll fit right in.\n \nAbout the role\nThis is a new role — one that doesn’t yet exist at Wealthsimple — and it’s a meaningful one. As a Staff Software Developer on Production Engineering, you’ll bring senior technical leadership to the work of making Wealthsimple more reliable at scale. You’ll work across platform and product teams, identify the highest-leverage reliability problems, and build solutions that don’t just fix the immediate issue but raise the floor for everyone. This isn’t a role where you sit in one corner of the codebase. It’s a role where you shape how engineering gets done across the company.\n \nWhat you’ll do\n\n- Improve the platform to prevent incidents — designing and driving adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services\n\n- Build tooling that reduces time to mitigation when incidents occur, including contributing to our in-house product on AI-assisted incident response\n\n- Own the investigation and follow-through on load test findings — translating results into concrete reliability improvements across critical flows\n\n- Work across platform and product engineering teams as a technical influencer — participating in architecture and readiness reviews, coaching service owners, and driving adoption of scalable reliability practices\n\n- Identify recurring failure patterns and design platform-level fixes that prevent them from showing up again in a different service\n\n- Contribute to the team’s reliability syncs with product engineering, helping align on incident themes, critical-flow risks, and the next highest-leverage initiatives\n\n \nSkills you bring\n\n- 8+ years of software engineering experience, with significant time in platform, infrastructure, or SRE work\n\n- Demonstrated track record of improving reliability at scale — reducing incidents, building guardrails, or driving operational standards across multiple teams\n\n- Strong proficiency in backend systems and distributed architecture; you can diagnose complex failure modes across a service mesh\n\n- Experience with load testing and capacity planning, and the ability to translate findings into concrete engineering improvements\n\n- Proven ability to work across engineering teams as a technical influencer — driving adoption of standards and practices without direct authority\n\n- Familiarity with Kubernetes, Helm, Argo and modern deployment tooling\n\n- Strong written and verbal communication — comfortable presenting findings and recommendations to both engineering teams and senior leadership\n\n \nWho you are\n\n- You think in systems — you’re not looking for the fix, you’re looking for what caused the problem and how to make sure it doesn’t happen elsewhere\n\n- You’re comfortable working without direct authority; you build credibility through the quality of your thinking and the clarity of your recommendations\n\n- You hold a high bar for operational excellence without making it someone else’s problem to catch up to — you bring people along\n\n- You’re energised by ambiguity, not slowed down by it; you know how to prioritise when everything feels urgent\n\n- You’re curious about where AI-assisted tooling is headed in reliability engineering, and you want to help shape how we use it — not just observe it from a distance\n\nWhy Wealthsimple?\n🌸 Top-tier health benefits and life insurance\n📈 Long-term group savings with employer match, through Wealthsimple for Business\n🌴 20 vacation days, 4 wellness days, and unlimited sick and mental health days per year*\n✈️ 90 days away: work outside Canada for up to 90 days per year*\n👥 Employee resource groups, including Rainbow (2SLGBTQ), Women of WS, and Black at WS\n🌎 We are a hybrid team with over 1,500 employees across North America. The people are one of the best parts of working here: you'll collaborate with incredibly talented, curious, and driven teammates who are deeply committed to doing great work.\n\n*Unlimited paid sick days, Wellness Days and the 90 day away program do not apply to certain roles.\n\nICYMI\nTechnology & Innovation at Wealthsimple: We move quickly and build thoughtfully. That means we're always looking for better ways to work — whether that's new tools, AI, or rethinking how we approach a problem. We don't expect you to have all the answers, but we do expect curiosity and a willingness to evolve alongside the products we're building.\n\nInclusion Statement: We're building products for a diverse world, and we need a diverse team to do it well. We strongly encourage applications from everyone, regardless of race, religion, colour, national origin, gender, sexual orientation, age, marital status, or disability status.\n\nAccessibility Statement: We're committed to an accessible hiring experience. If you need any accommodations throughout the interview process, please let us know — we'll work with you to make sure you have what you need. We also welcome any feedback on how we can better accommodate candidates with accessibility needs.\n\nAI in Hiring: We may use artificial intelligence (AI) tools to support parts of our hiring process, such as reviewing applications, analyzing resumes, or assessing responses. These tools assist our team but don't replace human judgment – all final hiring decisions are made by people. If you have questions about how your data is used, reach out to us.";
@@ -55,6 +61,7 @@ const publicPosting =
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
   attestCompleted: vi.fn(),
+  attestExtraction: vi.fn(),
   getAI: vi.fn(),
 }));
 vi.mock('@happyvertical/ai', async (importOriginal) => ({
@@ -66,6 +73,9 @@ vi.mock('@happyvertical/smrt-core', () => ({
 }));
 vi.mock('./opportunity-requirement-coverage-repair-job.js', () => ({
   attestCompletedOpportunityRequirementCoverageRepair: mocks.attestCompleted,
+}));
+vi.mock('./opportunity-requirement-coverage-source-stage-job.js', () => ({
+  attestCompletedOpportunitySourceExtraction: mocks.attestExtraction,
 }));
 vi.mock('./db.js', () => ({ getDbConfig: () => ({}) }));
 vi.mock('./smrt.js', () => ({
@@ -2894,6 +2904,520 @@ describe('explicit current-source eligibility aggregate', () => {
     ).toBeDefined();
     await expect(
       readVerifiedOpportunitySourceEligibilityEvidence(cached),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('opt-in captured source and paid-ledger recovery', () => {
+  beforeEach(() => vi.resetAllMocks());
+  function recoveryFixture() {
+    const opportunity = {
+      id: 'paid-recovery-role',
+      sourceContentJson: JSON.stringify({
+        locationNotes: 'Canada (Remote)',
+        workMode: 'remote',
+      }),
+      descriptionRaw: [
+        'What you’ll do',
+        'Ship new capabilities users love:',
+        '- Design and ship new Command skills.',
+        'Own the LLM layer:',
+        '- Maintain and evolve Command prompt architecture.',
+        'Build quality in:',
+        '- Write and expand Command eval harness.',
+      ].join('\n'),
+      sourceContentFingerprint: '',
+      sourceContentVersion: 1,
+    };
+    const captured = {
+      descriptionRaw: opportunity.descriptionRaw,
+      locationNotes: 'Canada (Remote)',
+      workMode: 'remote',
+    };
+    opportunity.sourceContentJson = JSON.stringify(captured);
+    opportunity.sourceContentFingerprint =
+      fingerprintOpportunitySourceContent(captured);
+    const context = requirementCoverageContextForOpportunity({
+      ...opportunity,
+      preparedPostingFingerprint: prepareOpportunityPosting({
+        ...opportunityWithSourceContent(opportunity),
+      }).fingerprint,
+    });
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.dispositions[0] = {
+      clauseId: ledger.clauses[0]!.id,
+      type: 'nonrequirement',
+      requirementIds: [],
+      exclusionRule: 'section_heading',
+    };
+    for (const [intro, bullet, id] of [
+      [1, 2, 'r4'],
+      [3, 4, 'r10'],
+      [5, 6, 'r16'],
+    ] as const) {
+      const clause = ledger.clauses[bullet]!;
+      ledger.requirements.push({
+        id,
+        text: clause.text.slice(2),
+        clauseIds: [clause.id],
+        importance: 'unknown',
+      });
+      for (const index of [intro, bullet])
+        ledger.dispositions[index] = {
+          clauseId: ledger.clauses[index]!.id,
+          type: 'role_duty',
+          requirementIds: [id],
+        };
+    }
+    const prepared = prepareCapturedSourceCompositeRequirementEvidenceAudit(
+      context,
+      ledger,
+      {
+        extractionRequestId: 'actual-extraction',
+        sourceContentJson: opportunity.sourceContentJson,
+      },
+    );
+    const output: DecisionResult = {
+      model: 'jev-latest',
+      provenance: { provider: 'typesafe', model: 'jev-latest' },
+      answers: Object.fromEntries(
+        Object.entries(prepared.request.questions).map(([key, question]) => {
+          if (question.type === 'choice') {
+            const selected = Object.hasOwn(
+              question.criteria,
+              'source-field:locationNotes',
+            )
+              ? 'source-field:locationNotes'
+              : (Object.keys(question.criteria).find((id) => id !== 'none') ??
+                'none');
+            return [
+              key,
+              {
+                type: 'choice' as const,
+                choice: selected,
+                confidence: 0.95,
+                probabilities: { [selected]: 0.95 },
+              },
+            ];
+          }
+          return [key, { type: 'predicate' as const, probability: 0.95 }];
+        }),
+      ),
+    };
+    const attested = {
+      requestId: 'actual-extraction',
+      sourceContentJson: opportunity.sourceContentJson,
+      opportunityId: opportunity.id,
+      agentRunId: 'original-run',
+      context,
+      ledger,
+      ledgerFingerprint: requirementCoverageLedgerFingerprint(ledger),
+      reservation: { calls: 1, reservedTokens: 10096 },
+    };
+    return { opportunity, context, ledger, prepared, output, attested };
+  }
+  it('audits captured ATS location and work mode without substituting mutable columns or body-only V3 receipts', async () => {
+    const captured = {
+      descriptionRaw: 'Requirements\nFamiliarity with Kubernetes.',
+      locationNotes: 'Canada (Remote)',
+      workMode: 'remote',
+    };
+    const opportunity = {
+      id: 'valid-captured-role',
+      descriptionRaw: captured.descriptionRaw,
+      sourceContentJson: JSON.stringify(captured),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(captured),
+      sourceContentVersion: 1,
+    };
+    const context = requirementCoverageContextForOpportunity({
+      ...opportunity,
+      preparedPostingFingerprint: prepareOpportunityPosting({
+        ...opportunityWithSourceContent(opportunity),
+      }).fingerprint,
+    });
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.requirements = [
+      {
+        id: 'k8',
+        text: ledger.clauses[1]!.text,
+        clauseIds: [ledger.clauses[1]!.id],
+        importance: 'unknown',
+      },
+    ];
+    ledger.dispositions = [
+      {
+        clauseId: ledger.clauses[0]!.id,
+        type: 'nonrequirement',
+        requirementIds: [],
+        exclusionRule: 'section_heading',
+      },
+      {
+        clauseId: ledger.clauses[1]!.id,
+        type: 'material_requirement',
+        requirementIds: ['k8'],
+      },
+    ];
+    const bodyOnly = prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+      context,
+      ledger,
+    );
+    const options = {
+      extractionRequestId: 'actual-valid-extraction',
+      sourceContentJson: opportunity.sourceContentJson,
+    };
+    const prepared = prepareCapturedSourceCompositeRequirementEvidenceAudit(
+      context,
+      ledger,
+      options,
+    );
+    expect(prepared.recovery).toBeUndefined();
+    expect(prepared.request.questions.c1_r0_support?.instructions).toContain(
+      'Source c1',
+    );
+    expect(prepared.request.questions.c1_r0_support?.instructions).toContain(
+      'Familiarity with Kubernetes.',
+    );
+    expect(prepared.request.questions.c1_r0_relevance?.instructions).toContain(
+      'Familiarity with Kubernetes.',
+    );
+    expect(prepared.request.state).toMatchObject({
+      sourceEligibilityClauses: ledger.clauses.map((clause, index) => ({
+        id: `c${index}`,
+        text: clause.text,
+      })),
+    });
+    expect(prepared.ledgerFingerprint).toBe(
+      requirementCoverageLedgerFingerprint(ledger),
+    );
+    expect(context.sourceText).not.toContain('Canada');
+    expect(bodyOnly.request.questions).not.toHaveProperty(
+      'source_eligibility__work_country_allowed__CA',
+    );
+    expect(bodyOnly.sourceEligibility!.context).not.toHaveProperty(
+      'capturedFields',
+    );
+    expect(prepared.sourceEligibility!.context.capturedFields).toEqual([
+      expect.objectContaining({
+        id: 'source-field:locationNotes',
+        path: 'sourceContentJson.locationNotes',
+        text: 'Canada (Remote)',
+      }),
+      expect.objectContaining({
+        id: 'source-field:workMode',
+        path: 'sourceContentJson.workMode',
+        text: 'remote',
+      }),
+    ]);
+    expect(prepared.request.questions).toHaveProperty(
+      'source_eligibility__work_country_allowed__CA',
+    );
+    expect(prepared.inputFingerprint).not.toBe(bodyOnly.inputFingerprint);
+    expect(() =>
+      prepareCapturedSourceCompositeRequirementEvidenceAudit(context, ledger, {
+        ...options,
+        sourceContentJson: JSON.stringify({
+          ...captured,
+          locationNotes: 'United States',
+        }),
+      }),
+    ).toThrow('canonical original JSON');
+    for (const [name, value] of Object.entries({
+      OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT: '4',
+      OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT: '80000',
+      OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS: '100000',
+    }))
+      vi.stubEnv(name, value);
+    try {
+      await expect(
+        evaluateRequirementEvidenceAudit(prepared, {
+          agentRunId: 'original-valid-run',
+          opportunityId: opportunity.id,
+          contentFingerprint: context.sourceFingerprint,
+          historicalReservation: { calls: 1, reservedTokens: 10096 },
+        }),
+      ).rejects.toThrow('actual current GLOBAL extraction receipt');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(
+      prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+        context,
+        ledger,
+      ),
+    ).toEqual(bodyOnly);
+  });
+  it('retains every original row and literal but never certifies broken introductions or invents a citation', () => {
+    const { context, ledger, prepared, output } = recoveryFixture();
+    const original = structuredClone(ledger);
+    expect(() => prepareRequirementEvidenceAudit(context, ledger)).toThrow(
+      'Exact native source mapping',
+    );
+    expect(() => prepareRequirementCoverageAudit(context, ledger)).toThrow();
+    expect(prepared.version).toBe(
+      REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+    );
+    expect(prepared.ledger).toEqual(original);
+    expect(prepared.recovery!.ledger.requirements).toEqual(
+      original.requirements,
+    );
+    expect(prepared.recovery!.unresolvedClauses).toHaveLength(3);
+    expect(Object.keys(prepared.bindings)).toHaveLength(9);
+    expect(
+      preflightRequirementEvidenceAudit(prepared, {
+        calls: 1,
+        reservedTokens: 10096,
+      }).fits,
+    ).toBe(true);
+    const audit = resolveRequirementEvidenceAudit(
+      prepared,
+      output,
+      'actual-v4-audit',
+    );
+    expect(audit.acceptedRequirementIds).toEqual(['r4', 'r10', 'r16']);
+    expect(audit.sourceEligibility!.facts).toContainEqual(
+      expect.objectContaining({
+        kind: 'work_country_allowed',
+        country: { code: 'CA', label: 'Canada' },
+        citations: [
+          expect.objectContaining({
+            source: 'captured_field',
+            id: 'source-field:locationNotes',
+            path: 'sourceContentJson.locationNotes',
+            text: 'Canada (Remote)',
+          }),
+        ],
+      }),
+    );
+    expect(audit.fullCoverage).toBe(false);
+    const partial = partialRequirementEvidenceFromAudit(prepared, audit);
+    expect(partial.unresolvedClauses).toHaveLength(3);
+    expect(
+      partial.unresolvedClauses.every(
+        (clause) => clause.reason === 'source_mapping',
+      ),
+    ).toBe(true);
+    expect(partial.unresolvedClauses.map((clause) => clause.text)).toEqual(
+      prepared.recovery!.unresolvedClauses.map(
+        (row) =>
+          ledger.clauses.find((clause) => clause.id === row.clauseId)!.text,
+      ),
+    );
+    expect(audit.recovery?.originalLedgerFingerprint).toBe(
+      requirementCoverageLedgerFingerprint(original),
+    );
+    expect(ledger).toEqual(original);
+    const tampered = structuredClone(audit);
+    tampered.recovery!.unresolvedClauses[0]!.originalRequirementIds = [
+      'invented',
+    ];
+    expect(() =>
+      partialRequirementEvidenceFromAudit(prepared, tampered),
+    ).toThrow('identity mismatch');
+  });
+  it('requires a fresh native extraction callback with the exact original run and historical reservation before governance', async () => {
+    const { opportunity, prepared, output, attested } = recoveryFixture();
+    for (const [name, value] of Object.entries({
+      OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT: '4',
+      OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT: '80000',
+      OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS: '100000',
+      TYPESAFE_API_KEY: 'unit-only',
+      OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION: '1',
+      OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION: '1',
+    }))
+      vi.stubEnv(name, value);
+    const { executeGovernedOpportunityIntelligenceRequest } = await import(
+      './opportunity-intelligence-governance.js'
+    );
+    const options = {
+      agentRunId: 'original-run',
+      opportunityId: opportunity.id,
+      contentFingerprint: prepared.context.sourceFingerprint,
+      historicalReservation: attested.reservation,
+    };
+    try {
+      for (const value of [
+        undefined,
+        { ...attested, ledgerFingerprint: 'forged' },
+        { ...attested, agentRunId: 'new-run' },
+        {
+          ...attested,
+          sourceContentJson: JSON.stringify({
+            locationNotes: 'United States',
+            workMode: 'onsite',
+          }),
+        },
+        { ...attested, reservation: { calls: 2, reservedTokens: 20000 } },
+      ]) {
+        await expect(
+          evaluateRequirementEvidenceAudit(prepared, {
+            ...options,
+            ...(value ? { resolveCompletedExtraction: async () => value } : {}),
+          }),
+        ).rejects.toThrow('actual current GLOBAL extraction receipt');
+      }
+      expect(
+        executeGovernedOpportunityIntelligenceRequest,
+      ).not.toHaveBeenCalled();
+      vi.mocked(
+        executeGovernedOpportunityIntelligenceRequest,
+      ).mockResolvedValueOnce({
+        output,
+        requestId: 'actual-v4-audit',
+        reused: false,
+      });
+      expect(
+        (
+          await evaluateRequirementEvidenceAudit(prepared, {
+            ...options,
+            resolveCompletedExtraction: async () => attested,
+          })
+        ).requestId,
+      ).toBe('actual-v4-audit');
+      expect(
+        executeGovernedOpportunityIntelligenceRequest,
+      ).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it('reconstructs recovery only from both native completed extraction and current actual GLOBAL v4 audit receipts', async () => {
+    const { opportunity, ledger, prepared, output, attested } =
+      recoveryFixture();
+    const audit = resolveRequirementEvidenceAudit(
+      prepared,
+      output,
+      'actual-v4-audit',
+    );
+    const cached = {
+      ...opportunity,
+      preparedPostingJson: JSON.stringify({
+        requirementCoverage: ledger,
+        requirementCoverageEvidenceAudit: audit,
+      }),
+    };
+    const row = {
+      output_json: JSON.stringify(output),
+      owner_request_id: 'actual-v4-audit',
+      request_id: 'actual-v4-audit',
+      opportunity_id: opportunity.id,
+      content_fingerprint: prepared.context.sourceFingerprint,
+      input_fingerprint: prepared.inputFingerprint,
+      feature: 'opportunity-source-requirement-evidence',
+      output_schema_version: prepared.version,
+      prompt_version: prepared.version,
+      prepared_payload_version: prepared.version,
+      model: 'jev-latest',
+      profile: 'typesafe-opportunity-source-evidence',
+      result_status: 'completed',
+      request_status: 'succeeded',
+      accounting_basis: 'actual',
+      actual_total_tokens: 200,
+      tenant_id: '',
+      owner_user_id: '',
+      candidate_profile_id: '',
+      request_tenant_id: '',
+      request_owner_user_id: '',
+      request_candidate_profile_id: '',
+    };
+    mocks.query.mockResolvedValue({ rows: [row] });
+    mocks.attestExtraction.mockRejectedValueOnce(
+      new Error('No native extraction proof'),
+    );
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.attestExtraction.mockResolvedValue(attested);
+    const current = await readPartialOpportunityRequirementEvidence(cached);
+    expect(current?.audit.fingerprint).toBe(audit.fingerprint);
+    expect(current?.unresolvedClauses).toHaveLength(3);
+    // Native SMRT IDs are prototype accessors, absent from object spread.
+    const native = Object.assign(
+      Object.create({
+        get id() {
+          return opportunity.id;
+        },
+      }),
+      Object.fromEntries(
+        Object.entries(cached).filter(([key]) => key !== 'id'),
+      ),
+    );
+    expect(native.id).toBe(opportunity.id);
+    expect(Object.hasOwn(native, 'id')).toBe(false);
+    expect({ ...native }.id).toBeUndefined();
+    mocks.attestExtraction.mockImplementation(async (canonical, selector) => {
+      if (
+        canonical.id !== opportunity.id ||
+        selector !== prepared.capturedSource!.extractionRequestId
+      )
+        throw new Error('Native extraction locator is required.');
+      return attested;
+    });
+    const nativeCurrent =
+      await readPartialOpportunityRequirementEvidence(native);
+    expect(nativeCurrent?.fingerprint).toBe(current?.fingerprint);
+    expect(nativeCurrent?.acceptedRequirements.length).toBeGreaterThan(0);
+    expect(mocks.attestExtraction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: opportunity.id }),
+      prepared.capturedSource!.extractionRequestId,
+    );
+    const facts =
+      await readVerifiedOpportunitySourceEligibilityEvidence(cached);
+    expect(facts?.sourceContext.sourceText).toBe(attested.context.sourceText);
+    expect(facts?.sourceContext.capturedFields).toEqual(
+      prepared.sourceEligibility!.context.capturedFields,
+    );
+    expect(
+      (
+        await readPartialOpportunityRequirementEvidence({
+          ...cached,
+          locationNotes: 'United States',
+          workMode: 'onsite',
+        })
+      )?.audit.fingerprint,
+    ).toBe(audit.fingerprint);
+    await expect(
+      readPartialOpportunityRequirementEvidence({
+        ...cached,
+        sourceContentJson: JSON.stringify({
+          descriptionRaw: cached.descriptionRaw,
+          locationNotes: 'United States',
+          workMode: 'onsite',
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    mocks.attestExtraction.mockResolvedValue({
+      ...attested,
+      ledgerFingerprint: 'forged',
+    });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.attestExtraction.mockResolvedValue(attested);
+    mocks.query.mockResolvedValue({
+      rows: [{ ...row, accounting_basis: 'conservative' }],
+    });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.query.mockResolvedValue({ rows: [row] });
+    await expect(
+      readPartialOpportunityRequirementEvidence({
+        ...cached,
+        sourceContentVersion: 2,
+      }),
+    ).resolves.toBeUndefined();
+    const badSelector = {
+      ...audit,
+      capturedSource: { ...audit.capturedSource, extractionRequestId: '' },
+    };
+    await expect(
+      readPartialOpportunityRequirementEvidence({
+        ...cached,
+        preparedPostingJson: JSON.stringify({
+          requirementCoverage: ledger,
+          requirementCoverageEvidenceAudit: badSelector,
+        }),
+      }),
     ).resolves.toBeUndefined();
   });
 });

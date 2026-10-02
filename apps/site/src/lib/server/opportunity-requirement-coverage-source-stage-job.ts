@@ -44,10 +44,12 @@ import {
   preflightRequirementCoverageAudit,
   preflightRequirementCoverageLifecycle,
   preflightRequirementEvidenceAudit,
+  prepareCapturedSourceCompositeRequirementEvidenceAudit,
   prepareCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readVerifiedOpportunitySourceEligibilityEvidence,
@@ -55,6 +57,11 @@ import {
   requirementCoverageSourceDependencyFingerprint,
   validateVerifiedRequirementCoverage,
 } from './opportunity-requirement-coverage-provider.js';
+import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
+import {
+  OPPORTUNITY_SCREENING_FEATURE,
+  OPPORTUNITY_SCREENING_PROFILE,
+} from './opportunity-screening-provider.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 import { requireSourceCrawlOperator } from './source-crawl-operator.js';
@@ -63,7 +70,8 @@ export const SOURCE_COVERAGE_STAGE_JOB_CONTRACT =
   'native-source-coverage-stage/v1';
 export type SourceRequirementEvidenceVersion =
   | typeof REQUIREMENT_EVIDENCE_AUDIT_VERSION
-  | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION;
+  | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+  | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION;
 export type SourceCoverageStageSelection =
   | { stage: 'extract' }
   | { stage: 'audit_completed_extraction'; extractionRequestId: string }
@@ -77,7 +85,8 @@ function sourceRequirementEvidenceVersion(
 ): SourceRequirementEvidenceVersion {
   if (
     value !== REQUIREMENT_EVIDENCE_AUDIT_VERSION &&
-    value !== REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+    value !== REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION &&
+    value !== REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
   )
     throw new Error('Source evidence audit contract is not current.');
   return value;
@@ -170,8 +179,10 @@ export async function attestCompletedOpportunitySourceExtraction(
     LEFT JOIN agent_runs a ON CAST(a.id AS TEXT) = CAST(q.agent_run_id AS TEXT)
     WHERE q.opportunity_id = ? AND q.content_fingerprint = ?
     AND q.agent_run_id = (SELECT agent_run_id FROM opportunity_intelligence_requests WHERE request_id = ?)
-    AND (q.feature LIKE 'opportunity-extraction-chunk-%' OR q.feature = 'opportunity-source-requirement-repair' OR q.feature = 'opportunity-source-requirement-coverage' OR q.feature = 'opportunity-source-requirement-evidence')
-    AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = '' AND COALESCE(q.candidate_profile_id, '') = ''`,
+    AND ((
+      (q.feature LIKE 'opportunity-extraction-chunk-%' OR q.feature = 'opportunity-source-requirement-repair' OR q.feature = 'opportunity-source-requirement-coverage' OR q.feature = 'opportunity-source-requirement-evidence')
+      AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = '' AND COALESCE(q.candidate_profile_id, '') = '')
+      OR q.feature = 'opportunity-screening')`,
     [opportunityId, context.sourceFingerprint, requestId],
   );
   const selected = rows.filter((row) => row.request_id === requestId);
@@ -226,6 +237,30 @@ export async function attestCompletedOpportunitySourceExtraction(
   const seen = new Set<string>();
   for (const row of rows) {
     const nativeId = identifier(row.request_id);
+    const screen = row.feature === OPPORTUNITY_SCREENING_FEATURE;
+    const ownedReceipt = screen
+      ? [
+          ['tenant_id', workspaceSubject.tenantId],
+          ['owner_user_id', workspaceSubject.userId],
+          ['candidate_profile_id', workspaceSubject.profileId],
+        ].every(
+          ([key, value]) =>
+            row[key] === value && row[`request_${key}`] === value,
+        )
+      : publicReceipt(row);
+    if (
+      screen &&
+      (row.profile !== OPPORTUNITY_SCREENING_PROFILE ||
+        row.prompt_version !== OPPORTUNITY_SCREENING_VERSION ||
+        row.output_schema_version !== OPPORTUNITY_SCREENING_VERSION ||
+        row.prepared_payload_version !== OPPORTUNITY_SCREENING_VERSION ||
+        typeof row.input_fingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/u.test(row.input_fingerprint))
+    ) {
+      throw new Error(
+        'Source lifecycle contains an invalid private screening contract; operator review is required.',
+      );
+    }
     if (
       seen.has(nativeId) ||
       row.agent_run_id !== agentRunId ||
@@ -234,7 +269,7 @@ export async function attestCompletedOpportunitySourceExtraction(
       row.run_tenant_id !== workspaceSubject.tenantId ||
       row.run_owner_user_id !== workspaceSubject.userId ||
       row.run_candidate_profile_id !== workspaceSubject.profileId ||
-      !publicReceipt(row) ||
+      !ownedReceipt ||
       row.owner_request_id !== nativeId ||
       row.result_request_id !== nativeId ||
       typeof row.result_idempotency_key !== 'string' ||
@@ -281,6 +316,10 @@ export async function attestCompletedOpportunitySourceExtraction(
     context,
     posting,
     output,
+    sourceContentJson:
+      typeof opportunity.sourceContentJson === 'string'
+        ? opportunity.sourceContentJson
+        : '',
     ledger,
     ledgerFingerprint: requirementCoverageLedgerFingerprint(ledger),
     reservation: history,
@@ -320,15 +359,24 @@ export function preflightCompletedOpportunityRequirementEvidenceAudit(
     options.auditContract ?? REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   );
   const preparedAudit =
-    version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
-      ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+      ? prepareCapturedSourceCompositeRequirementEvidenceAudit(
           attested.context,
           attested.ledger,
+          {
+            sourceContentJson: attested.sourceContentJson,
+            extractionRequestId: attested.requestId,
+          },
         )
-      : prepareCompositeRequirementEvidenceAudit(
-          attested.context,
-          attested.ledger,
-        );
+      : version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+        ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+            attested.context,
+            attested.ledger,
+          )
+        : prepareCompositeRequirementEvidenceAudit(
+            attested.context,
+            attested.ledger,
+          );
   const exact = preflightRequirementEvidenceAudit(
     preparedAudit,
     history,
@@ -751,6 +799,16 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 opportunityId,
                 contentFingerprint: actual.context.sourceFingerprint,
                 historicalReservation: actual.reservation,
+                ...(evidenceVersion ===
+                REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+                  ? {
+                      resolveCompletedExtraction: async () => {
+                        await assertCurrentAuthority();
+                        const native = await requireCurrentSource();
+                        return await attest(native, completed.requestId);
+                      },
+                    }
+                  : {}),
                 signal: AbortSignal.timeout(3 * 60 * 1000),
               });
               await assertCurrentAuthority();
@@ -784,7 +842,9 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 );
               if (
                 evidenceVersion ===
-                REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+                  REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION ||
+                evidenceVersion ===
+                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
               ) {
                 const eligibility = await (
                   dependencies.readEligibility ??
@@ -809,6 +869,24 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                   throw new Error(
                     'Completed source eligibility lacks its exact current native GLOBAL aggregate receipt.',
                   );
+                }
+                if (
+                  evidenceVersion ===
+                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+                ) {
+                  const expected =
+                    plan.preparedAudit.sourceEligibility?.context;
+                  if (
+                    !expected?.capturedFieldsFingerprint ||
+                    eligibility.sourceContext.capturedFieldsFingerprint !==
+                      expected.capturedFieldsFingerprint ||
+                    JSON.stringify(eligibility.sourceContext.capturedFields) !==
+                      JSON.stringify(expected.capturedFields)
+                  ) {
+                    throw new Error(
+                      'Completed captured-source eligibility fields lack their exact current native GLOBAL aggregate receipt.',
+                    );
+                  }
                 }
               }
               const video = nativeEvidence.audit.video;

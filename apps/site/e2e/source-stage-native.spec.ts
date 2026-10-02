@@ -75,6 +75,10 @@ interface Result {
   privateProjectionReload?: Json;
   privateProjectionAfterForge?: Json;
   privateProjectionAfterForgeAttempted?: boolean;
+  sourceEligibilityProjection?: Json;
+  screenEnqueue?: Json;
+  screenRefusal?: string;
+  screenReceipt?: Json;
 }
 const test = base.extend({
   // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture dependencies are destructured.
@@ -195,7 +199,9 @@ function actualCheckpoint(result: Result) {
   expect(result.afterExtraction.record.title).toBe(
     'Fictional staged source ' + result.scenario,
   );
-  expect(result.afterExtraction.record.workMode).toBe('');
+  expect(result.afterExtraction.record.workMode).toBe(
+    result.scenario.startsWith('captured-') ? 'remote' : '',
+  );
   expect(result.afterExtraction.record.employmentType).toBe('');
   expect(result.afterExtraction.record.recomputedPreparedFingerprint).toBe(
     result.afterExtraction.record.preparedPostingFingerprint,
@@ -216,6 +222,159 @@ test.beforeEach(() => {
     'Explicit fictional loopback transport and isolated native SQLite runtime required',
   );
   test.setTimeout(180_000);
+});
+
+test('native JEV-first screen excludes cited accountant duties before Luna or human review', async ({
+  baseURL: _baseURL,
+}, info) => {
+  const result = await nativeStage('screen-mismatch', info);
+  expect(result.screenRefusal).toBe('');
+  expect(result.providerEvents.map((event) => event.kind)).toEqual(['screen']);
+  const screen = result.providerEvents[0];
+  expect(screen.request.model).toBe('jev-latest');
+  expect(screen.job).toMatchObject({
+    method: 'prepareAssessmentCoverage',
+    status: 'running',
+  });
+  expect(Object.keys(screen.request.questions)).toHaveLength(14);
+  expect(result.final.requests).toHaveLength(1);
+  expect(result.final.requests[0]).toMatchObject({
+    feature: 'opportunity-screening',
+    status: 'succeeded',
+    accounting_basis: 'actual',
+    tenant_id: result.owner.tenantId,
+    owner_user_id: result.owner.userId,
+    candidate_profile_id: result.owner.profileId,
+  });
+  expect(
+    Number(result.final.requests[0].requested_max_output_tokens),
+  ).toBeGreaterThan(0);
+  expect(
+    Number(result.final.requests[0].requested_max_output_tokens),
+  ).toBeLessThanOrEqual(4096);
+  expect(result.screenReceipt).toMatchObject({
+    outcome: 'clear_mismatch',
+    requestId: result.final.requests[0].request_id,
+    agentRunId: result.final.requests[0].agent_run_id,
+    screen: {
+      mismatches: ['role_mismatch'],
+      plausiblyRelevant: false,
+      evidence: [
+        expect.objectContaining({
+          dimension: 'role_mismatch',
+          witness: expect.objectContaining({
+            text: expect.stringMatching(/tax returns|financial statements/iu),
+          }),
+        }),
+      ],
+    },
+  });
+  expect(result.final.receipts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        owner_request_id: result.screenReceipt?.requestId,
+        feature: 'opportunity-screening',
+        status: 'completed',
+        output_schema_version: 'opportunity-screening/v1-jev-first',
+        tenant_id: result.owner.tenantId,
+        owner_user_id: result.owner.userId,
+        candidate_profile_id: result.owner.profileId,
+      }),
+    ]),
+  );
+  expect(result.final.assessments).toHaveLength(0);
+  expect(result.final.tasks).toHaveLength(0);
+  expect(result.final.applications).toHaveLength(0);
+  expect(result.final.evaluationScores).toHaveLength(0);
+});
+
+test('native JEV-first screen carries an accounting-company software role into Luna on the same run', async ({
+  baseURL: _baseURL,
+}, info) => {
+  const result = await nativeStage('screen-relevant', info);
+  expect(result.screenRefusal).toBe('');
+  expect(result.providerEvents[0].kind).toBe('screen');
+  expect(result.providerEvents[0].request.model).toBe('jev-latest');
+  expect(
+    result.providerEvents.some((event) => event.kind === 'extraction'),
+  ).toBe(true);
+  expect(['potentially_relevant', 'uncertain']).toContain(
+    result.screenReceipt?.outcome,
+  );
+  expect(result.screenReceipt).toMatchObject({
+    screen: {
+      plausiblyRelevant: true,
+      mismatches: [],
+      holdReasons: [],
+      evidence: [
+        expect.objectContaining({
+          dimension: 'role_relevant',
+          witness: expect.objectContaining({
+            text: expect.stringMatching(/TypeScript|API integrations/u),
+          }),
+        }),
+      ],
+    },
+  });
+  const screenRequest = result.final.requests.find(
+    (row) => row.feature === 'opportunity-screening',
+  );
+  const extractionRequest = result.final.requests.find(
+    (row) => row.feature === 'opportunity-extraction-chunk-1',
+  );
+  expect(screenRequest).toMatchObject({
+    request_id: result.screenReceipt?.requestId,
+    status: 'succeeded',
+    accounting_basis: 'actual',
+  });
+  expect(extractionRequest).toMatchObject({
+    status: 'succeeded',
+    accounting_basis: 'actual',
+    agent_run_id: screenRequest?.agent_run_id,
+  });
+  expect(
+    result.final.requests.filter((row) => Number(row.actual_total_tokens) > 0)
+      .length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(
+    new Set(result.final.requests.map((row) => row.agent_run_id)).size,
+  ).toBe(1);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) =>
+        sum +
+        Number(row.reserved_input_tokens) +
+        Number(row.requested_max_output_tokens),
+      0,
+    ),
+  ).toBeLessThanOrEqual(80_000);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) => sum + Number(row.reserved_spend_micros),
+      0,
+    ),
+  ).toBeLessThanOrEqual(100_000);
+  expect(
+    result.final.agentRuns.filter(
+      (row) => Number(row.intelligence_actual_calls) > 0,
+    ),
+  ).toHaveLength(1);
+});
+
+test('native JEV-first screen holds invalid typed candidate material before provider transport', async ({
+  baseURL: _baseURL,
+}, info) => {
+  const result = await nativeStage('screen-invalid-material', info);
+  expect(result.providerEvents).toHaveLength(0);
+  expect(result.final.requests).toHaveLength(0);
+  expect(result.final.receipts).toHaveLength(0);
+  expect(result.final.assessments).toHaveLength(0);
+  expect(result.final.tasks).toHaveLength(0);
+  expect(result.final.applications).toHaveLength(0);
+  expect(result.final.evaluationScores).toHaveLength(0);
+  expect(result.final.jobs).toHaveLength(1);
+  expect(result.final.jobs[0].method).toBe('prepareAssessmentCoverage');
+  expect(result.screenReceipt).toBeUndefined();
 });
 
 test('native source stages retain a governed unverified checkpoint when exact audit is oversized; detail stays safely unavailable and actionable', async ({
@@ -677,6 +836,189 @@ test('native V3 eligibility resumes the completed GLOBAL extraction on its origi
     result.afterExtraction.record.preparedPostingJson.requirementCoverage
       ?.requirements,
   );
+  expect(result.verified?.complete).toBe(false);
+  noPrivateWrites(result);
+});
+
+test('native V4 captured-source recovery audits one completed extraction and exposes Canada remote fields absent from the body', async ({
+  baseURL: _baseURL,
+}, info) => {
+  const result = await nativeStage('captured-fitting', info);
+  actualCheckpoint(result);
+  if (!result.exact) throw new Error('V4 exact request missing');
+  const source = parsed(
+    String(result.afterExtraction.record.sourceContentJson),
+  );
+  expect(source.descriptionRaw).not.toMatch(/Canada|remote/i);
+  expect(source).toMatchObject({
+    locationNotes: 'Remote in Canada',
+    workMode: 'remote',
+  });
+  const extracted =
+    result.afterExtraction.record.preparedPostingJson.requirementCoverage;
+  expect(extracted?.requirements.length).toBeGreaterThan(0);
+  expect((extracted as Json).clauses).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ text: 'Role Summary', kind: 'body' }),
+    ]),
+  );
+  expect((extracted as Json).dispositions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: 'nonrequirement',
+        exclusionRule: 'section_heading',
+      }),
+    ]),
+  );
+  expect(result.refusal).toBe('');
+  expect(result.exact.preflight.fits).toBe(true);
+  expect(result.providerEvents.map((row) => row.kind)).toEqual([
+    'extraction',
+    'audit',
+  ]);
+  const decision = result.providerEvents[1];
+  expect(decision.request.model).toBe('jev-latest');
+  expect(decision.job).toMatchObject({
+    id: result.final.jobs[1].id,
+    method: 'prepareAssessmentCoverage',
+    status: 'running',
+  });
+  expect(decision.request.state).toEqual(result.exact.request.state);
+  expect(decision.request.state.sourceEligibilityCapturedFields).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: 'source-field:locationNotes',
+        path: 'sourceContentJson.locationNotes',
+        text: 'Remote in Canada',
+      }),
+      expect.objectContaining({
+        id: 'source-field:workMode',
+        path: 'sourceContentJson.workMode',
+        text: 'remote',
+      }),
+    ]),
+  );
+  expect(Object.keys(result.exact.request.questions)).toContain(
+    'source_eligibility__work_country_allowed__CA',
+  );
+  expect(result.final.jobs[1]).toMatchObject({
+    status: 'completed',
+    attempts: 1,
+  });
+  expect(parsed(result.final.jobs[1].args).sourceCoverageStage).toMatchObject({
+    stage: 'evidence_completed_extraction',
+    auditContract: 'requirement-evidence-audit/v4-captured-source-recovery',
+    extractionRequestId: result.selectedRequestId,
+  });
+  expect(result.final.requests).toHaveLength(2);
+  expect(result.final.requests[1]).toMatchObject({
+    feature: 'opportunity-source-requirement-evidence',
+    status: 'succeeded',
+    accounting_basis: 'actual',
+  });
+  expect(
+    new Set(result.final.requests.map((row) => row.agent_run_id)).size,
+  ).toBe(1);
+  expect(
+    result.final.agentRuns.filter(
+      (row) => Number(row.intelligence_actual_calls) > 0,
+    ),
+  ).toHaveLength(1);
+  const reservation = result.final.requests.reduce(
+    (sum, row) =>
+      sum +
+      Number(row.reserved_input_tokens) +
+      Number(row.requested_max_output_tokens),
+    0,
+  );
+  expect(reservation).toBe(result.exact.preflight.reservedTokens);
+  expect(reservation).toBeLessThanOrEqual(80_000);
+  expect(
+    result.final.requests.reduce(
+      (sum, row) => sum + Number(row.reserved_spend_micros),
+      0,
+    ),
+  ).toBeLessThanOrEqual(100_000);
+  const audit =
+    result.final.record.preparedPostingJson.requirementCoverageEvidenceAudit;
+  expect(audit).toMatchObject({
+    version: 'requirement-evidence-audit/v4-captured-source-recovery',
+    requestId: result.final.requests[1].request_id,
+    inputFingerprint: result.exact.inputFingerprint,
+    fullCoverage: false,
+    capturedSource: { extractionRequestId: result.selectedRequestId },
+    recovery: { extractionRequestId: result.selectedRequestId },
+  });
+  expect((audit?.recovery as Json | undefined)?.unresolvedClauses).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        reason: 'unsupported_nonrequirement_exclusion',
+      }),
+    ]),
+  );
+  expect(
+    result.final.receipts.find(
+      (row) => row.owner_request_id === audit?.requestId,
+    ),
+  ).toMatchObject({
+    feature: 'opportunity-source-requirement-evidence',
+    status: 'completed',
+    model: 'jev-latest',
+    output_schema_version:
+      'requirement-evidence-audit/v4-captured-source-recovery',
+  });
+  expect(result.final.eligibility).toMatchObject({
+    evidence: {
+      requestId: audit?.requestId,
+      aggregateFingerprint: result.exact.inputFingerprint,
+      sourceContentFingerprint: result.final.record.sourceContentFingerprint,
+      sourceContentVersion: result.final.record.sourceContentVersion,
+      capturedFieldsFingerprint: expect.any(String),
+    },
+    sourceContext: {
+      sourceContentFingerprint: result.final.record.sourceContentFingerprint,
+      sourceContentVersion: result.final.record.sourceContentVersion,
+      capturedFieldsFingerprint: expect.any(String),
+    },
+  });
+  expect(result.final.eligibility?.evidence.capturedFieldsFingerprint).toBe(
+    result.final.eligibility?.sourceContext.capturedFieldsFingerprint,
+  );
+  expect(result.final.eligibility?.evidence.facts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'work_country_allowed',
+        citations: expect.arrayContaining([
+          expect.objectContaining({
+            source: 'captured_field',
+            path: 'sourceContentJson.locationNotes',
+            text: 'Remote in Canada',
+          }),
+        ]),
+      }),
+      expect.objectContaining({
+        kind: 'remote_available',
+        citations: expect.arrayContaining([
+          expect.objectContaining({
+            source: 'captured_field',
+            path: 'sourceContentJson.workMode',
+            text: 'remote',
+          }),
+        ]),
+      }),
+    ]),
+  );
+  expect(result.sourceEligibilityProjection).toMatchObject({
+    sourceStatus: 'current',
+    sourceContentFingerprint: result.final.record.sourceContentFingerprint,
+    sourceContentVersion: result.final.record.sourceContentVersion,
+  });
+  expect(
+    result.final.record.preparedPostingJson.requirementCoverage?.audit,
+  ).toBeUndefined();
+  expect(
+    result.final.record.preparedPostingJson.requirementCoverage?.requirements,
+  ).toEqual(extracted?.requirements);
   expect(result.verified?.complete).toBe(false);
   noPrivateWrites(result);
 });

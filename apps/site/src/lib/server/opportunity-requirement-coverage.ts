@@ -9,6 +9,9 @@ export const REQUIREMENT_COVERAGE_VERSION = 'requirement-coverage/v1';
 /** A separate read view for exact introductory duty links in an actual extraction. */
 export const RECOVERABLE_PARTIAL_COVERAGE_VERSION =
   'requirement-coverage-partial-recovery/v1-intro-duty-link';
+/** Partial-only view that retains unsupported nonrequirement exclusions as unresolved. */
+export const RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION =
+  'requirement-coverage-partial-recovery/v2-captured-source-unresolved';
 export const REQUIREMENT_COVERAGE_REPAIR_VERSION =
   'requirement-coverage-repair/v1-delta4096';
 export const REQUIREMENT_COVERAGE_SOURCE_CONTRACT_VERSION =
@@ -99,6 +102,22 @@ export interface RecoverablePartialCoverage {
     clauseId: string;
     originalRequirementIds: string[];
     reason: 'nonreciprocal_introductory_duty_link';
+  }>;
+  fingerprint: string;
+}
+
+export interface RecoverableCapturedSourceCoverage {
+  version: typeof RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION;
+  originalLedgerFingerprint: string;
+  /** The original manifest and rows; only invalid introductory links may be removed. */
+  ledger: CoverageLedger;
+  unresolvedClauses: Array<{
+    clauseId: string;
+    originalRequirementIds: string[];
+    reason:
+      | 'nonreciprocal_introductory_duty_link'
+      | 'unsupported_nonrequirement_exclusion'
+      | 'unmapped_material_clause';
   }>;
   fingerprint: string;
 }
@@ -1123,6 +1142,194 @@ export function recoverPartialRequirementCoverageFromCompletedExtraction(
   const { audit: _audit, ...originalMaterial } = original;
   const originalLedgerFingerprint = hash(JSON.stringify(originalMaterial));
   const version = RECOVERABLE_PARTIAL_COVERAGE_VERSION;
+  return {
+    version,
+    originalLedgerFingerprint,
+    ledger,
+    unresolvedClauses,
+    fingerprint: hash(
+      JSON.stringify({
+        version,
+        originalLedgerFingerprint,
+        ledger,
+        unresolvedClauses,
+      }),
+    ),
+  };
+}
+
+/**
+ * Opt-in partial view over an attested completed extraction. An unsupported
+ * nonrequirement exclusion or material clause with no mapped row remains
+ * untouched and unresolved; neither is promoted to a heading, context, or
+ * criterion. The sole mutable part is the narrow V1 introductory-duty link.
+ * Callers must attest the actual current GLOBAL extraction receipt and its
+ * original ledger fingerprint before using this view.
+ */
+export function recoverPartialRequirementCoverageFromCapturedSource(
+  context: RequirementCoverageContext,
+  original: CoverageLedger,
+): RecoverableCapturedSourceCoverage | undefined {
+  if (
+    context.extractionContract !== 'current' ||
+    original.audit !== undefined ||
+    original.repair !== undefined
+  )
+    return undefined;
+  const admission = validateRequirementCoverageAuditAdmission(
+    context,
+    original,
+  );
+  if (
+    admission.structuralComplete ||
+    !admission.errors.length ||
+    admission.pendingContextClauseIds.length
+  )
+    return undefined;
+
+  const unresolvedClauses: RecoverableCapturedSourceCoverage['unresolvedClauses'] =
+    [];
+  const expectedOriginalErrors: string[] = [];
+  for (const [index, clause] of original.clauses.entries()) {
+    const disposition = original.dispositions[index];
+    if (disposition?.clauseId !== clause.id) return undefined;
+    const unsupportedExclusion = `Unsupported nonrequirement exclusion: ${clause.id}.`;
+    if (admission.errors.includes(unsupportedExclusion)) {
+      if (
+        disposition.type !== 'nonrequirement' ||
+        disposition.requirementIds.length !== 0 ||
+        disposition.auditPending !== undefined
+      )
+        return undefined;
+      unresolvedClauses.push({
+        clauseId: clause.id,
+        originalRequirementIds: [],
+        reason: 'unsupported_nonrequirement_exclusion',
+      });
+      expectedOriginalErrors.push(unsupportedExclusion);
+      continue;
+    }
+    const unmappedMaterial = `Material source clause has no lossless mapped requirement: ${clause.id}.`;
+    if (admission.errors.includes(unmappedMaterial)) {
+      if (
+        !['material_requirement', 'role_duty', 'role_context'].includes(
+          disposition.type,
+        ) ||
+        disposition.requirementIds.length !== 0 ||
+        disposition.exclusionRule !== undefined ||
+        disposition.auditPending !== undefined
+      )
+        return undefined;
+      unresolvedClauses.push({
+        clauseId: clause.id,
+        originalRequirementIds: [],
+        reason: 'unmapped_material_clause',
+      });
+      expectedOriginalErrors.push(unmappedMaterial);
+      continue;
+    }
+    for (const requirementId of disposition.requirementIds) {
+      const row = original.requirements.find(
+        (candidate) => candidate.id === requirementId,
+      );
+      if (row?.clauseIds.includes(clause.id)) continue;
+      const next = original.clauses[index + 1];
+      const nextDisposition = original.dispositions[index + 1];
+      if (
+        !row ||
+        disposition.type !== 'role_duty' ||
+        disposition.requirementIds.length !== 1 ||
+        disposition.exclusionRule !== undefined ||
+        disposition.auditPending !== undefined ||
+        clause.kind !== 'body' ||
+        !/^[^\n•-][^\n]*:$/u.test(clause.text) ||
+        !next ||
+        next.kind !== 'body' ||
+        next.section !== clause.section ||
+        next.spanStart <= clause.spanEnd ||
+        !/^[-•]\s+\S/u.test(next.text) ||
+        row.clauseIds.length !== 1 ||
+        row.clauseIds[0] !== next.id ||
+        nextDisposition?.clauseId !== next.id ||
+        nextDisposition.type !== 'role_duty' ||
+        !nextDisposition.requirementIds.includes(requirementId)
+      )
+        return undefined;
+      unresolvedClauses.push({
+        clauseId: clause.id,
+        originalRequirementIds: [requirementId],
+        reason: 'nonreciprocal_introductory_duty_link',
+      });
+      expectedOriginalErrors.push(
+        `Broken reciprocal requirement mapping: ${clause.id}/${requirementId}.`,
+      );
+    }
+  }
+  if (
+    !unresolvedClauses.length ||
+    !original.requirements.some((row) =>
+      row.clauseIds.some((id) =>
+        original.dispositions.some(
+          (disposition) =>
+            disposition.clauseId === id &&
+            disposition.requirementIds.includes(row.id),
+        ),
+      ),
+    ) ||
+    admission.errors.length !== expectedOriginalErrors.length ||
+    admission.errors.some((error) => !expectedOriginalErrors.includes(error)) ||
+    admission.uncoveredClauseIds.length !== unresolvedClauses.length ||
+    admission.uncoveredClauseIds.some(
+      (id) => !unresolvedClauses.some((entry) => entry.clauseId === id),
+    )
+  )
+    return undefined;
+
+  const introIds = new Set(
+    unresolvedClauses
+      .filter(
+        (entry) => entry.reason === 'nonreciprocal_introductory_duty_link',
+      )
+      .map((entry) => entry.clauseId),
+  );
+  const ledger: CoverageLedger = {
+    ...original,
+    clauses: original.clauses.map((clause) => ({ ...clause })),
+    requirements: original.requirements.map((row) => ({
+      ...row,
+      clauseIds: [...row.clauseIds],
+    })),
+    dispositions: original.dispositions.map((row) => ({
+      ...row,
+      requirementIds: introIds.has(row.clauseId) ? [] : [...row.requirementIds],
+    })),
+  };
+  const recoveredAdmission = validateRequirementCoverageAuditAdmission(
+    context,
+    ledger,
+  );
+  const expectedRecoveredErrors = unresolvedClauses.map((entry) =>
+    entry.reason === 'nonreciprocal_introductory_duty_link'
+      ? `Material source clause has no lossless mapped requirement: ${entry.clauseId}.`
+      : entry.reason === 'unsupported_nonrequirement_exclusion'
+        ? `Unsupported nonrequirement exclusion: ${entry.clauseId}.`
+        : `Material source clause has no lossless mapped requirement: ${entry.clauseId}.`,
+  );
+  if (
+    recoveredAdmission.structuralComplete ||
+    recoveredAdmission.errors.length !== expectedRecoveredErrors.length ||
+    recoveredAdmission.errors.some(
+      (error) => !expectedRecoveredErrors.includes(error),
+    ) ||
+    recoveredAdmission.uncoveredClauseIds.length !== unresolvedClauses.length ||
+    recoveredAdmission.uncoveredClauseIds.some(
+      (id) => !unresolvedClauses.some((entry) => entry.clauseId === id),
+    )
+  )
+    return undefined;
+  const { audit: _audit, ...originalMaterial } = original;
+  const originalLedgerFingerprint = hash(JSON.stringify(originalMaterial));
+  const version = RECOVERABLE_CAPTURED_SOURCE_COVERAGE_VERSION;
   return {
     version,
     originalLedgerFingerprint,

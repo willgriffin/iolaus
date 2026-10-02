@@ -243,15 +243,30 @@ the entire result from a current, succeeded GLOBAL request/result with positive
 actual usage. Persisted JSON, old v1/v2 receipts, and diagnostic results cannot
 supply source eligibility facts. Candidate comparison remains private.
 
-The explicit `requirement-evidence-audit/v4-reciprocal-uncertainty` path admits
-only the native helper's narrowly recognized broken introductory-duty links.
-All original rows and literal clauses remain intact. Those introductions are
-retained with their original IDs and exact spans as unresolved source mappings,
-not converted to context or certified by another row. The evaluator requires a
-fresh completed GLOBAL extraction attestation matching the original request,
-ledger, AgentRun and historical reservations before governance. The reader
-independently checks that original receipt as well as the actual v4 audit.
-The default strict full audit and prior v1/v2/v3 request layouts stay unchanged.
+The explicit `requirement-evidence-audit/v4-captured-source-recovery` path
+retains the original paid extraction ledger and adds ordered, exact
+`sourceContentJson.locationNotes` and `sourceContentJson.workMode` witnesses.
+Their paths, literal values and hashes bind the request; mutable Opportunity
+columns cannot nominate a witness. Both an affirmative predicate and the selected
+exact witness must reach 0.85. Captured-source coverage means review of all body
+clauses and present fields, rather than an employer guarantee.
+
+The opt-in native helper retains narrowly broken introductory-duty links,
+unsupported nonrequirement exclusions and unmapped material clauses as unresolved
+source scopes. All original rows, literal clauses and spans remain intact; no
+criterion or citation is synthesized, and unresolved scopes cannot become
+context or complete coverage. Valid reciprocal rows are audited independently.
+The evaluator requires a fresh completed GLOBAL extraction attestation matching
+the original request, ledger, AgentRun, captured JSON and historical reservations
+before governance. The reader independently checks that original receipt and
+the current actual GLOBAL v4 audit. Strict full validation and paid v1/v2/v3
+request layouts remain unchanged. Exact admission includes every historical
+reservation; oversized saved roles decline without another extraction. The V4
+encoding retains literal statements in row predicates and shares every exact body
+clause once under deterministic `cN` aliases. Witness choices retain every offered
+option; aliases resolve back to canonical clause IDs before citation validation.
+The full alias layout, question bindings and request are fingerprinted. V3 body
+choices and all earlier paid request layouts remain unchanged.
 
 `partialAssessmentEvidence` is an explicit server opt-in. The partial reader
 requires the new canonical feature/schema's completed GLOBAL request/result,
@@ -285,3 +300,41 @@ an implementation boundary; it does not claim an actual semantic canary passed.
 | Native authority | Orphan, foreign, conservative, zero-usage or diagnostic result refused; source changes invalidate |
 | Private evidence only | Full candidate catalog retained; supported/uncertain only; exact canonical citation provenance |
 | Safe persistence | Distinct partial contract/status, neutral unknown eligibility, no ranking projection or EvaluationScore |
+
+## JEV-first screening before new extraction
+
+Ordinary Assess reuses a current full or partial native proof first. A new paid
+extraction requires a coarse `opportunity-screening/v1-jev-first` decision from
+captured posting text and original ATS title, location and work-mode fields,
+using only the selected profile's explicit role/work-mode preferences and typed
+work-country, authorization and sponsorship facts. Missing target-role preferences
+hold before any provider reservation; the profile title is not a preference.
+
+The fourteen fixed predicate/witness answers distinguish a clear mismatch,
+potential relevance and uncertainty. A cited mismatch is a screening exclusion,
+not a human rejection. Company industry, absent skills, citizenship and missing
+immigration evidence do not establish incompatibility. Sponsorship offers remain
+separate conditional paths. Unknown constraints remain uncertain; materially
+unestablished role relevance holds expensive work.
+
+The native PRIVATE request/result must match the current source, selected owner
+and profile, actual successful usage and exact prepared request. Completed run
+usage plus outstanding reservations must fit the unchanged native limits. The
+same source AgentRun carries the screen and any subsequent extraction/audit;
+failed exact identities cannot be retried under a new run. Dynamic output
+reservation includes every offered witness probability. Oversized requests hold
+without clipping source evidence or increasing limits.
+
+Already-paid extraction checkpoints resume compact V4 auditing without another
+Luna request. Inherited native object IDs are retained explicitly when rebuilding
+receipt contexts; mutable JSON alone never authorizes a current proof. Legacy
+paid contracts retain their exact replay path.
+
+| Screening behavior | Required regression |
+| --- | --- |
+| Cited role mismatch | Accountant duties stop before Luna and human-review mutation |
+| Company/role distinction | Software work at an accounting company remains potentially relevant or uncertain |
+| Profile prerequisites | Null preferences are missing; malformed typed context and empty target roles cause zero transport |
+| Receipt currentness | Foreign, stale, orphaned, conservative and over-budget proofs are refused; settled run counters replay correctly |
+| Lifecycle continuity | Relevant screen, extraction and source audit use one original AgentRun with its existing counters |
+| Saved-base continuation | Native inherited ID and exact paid extraction receipt reconstruct the same V4 proof without new Luna |

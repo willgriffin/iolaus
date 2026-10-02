@@ -2,6 +2,7 @@ import type { DecisionResult } from '@happyvertical/ai';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
 import type { JobExecutionContext, SmrtJob } from '@happyvertical/smrt-jobs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { processOpportunityWithLlm } from './opportunity-details.js';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import {
   buildRequirementCoverageSource,
@@ -13,6 +14,7 @@ import {
   type PreparedRequirementEvidenceAudit,
   partialRequirementEvidenceFromAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   requirementCoverageLedgerFingerprint,
   resolveRequirementCoverageAudit,
@@ -25,7 +27,12 @@ import {
   runOpportunityRequirementCoverageSourceStageJob,
   SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
 } from './opportunity-requirement-coverage-source-stage-job.js';
-import { opportunityWithSourceContent } from './opportunity-source-content.js';
+import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
+import {
+  fingerprintOpportunitySourceContent,
+  opportunityWithSourceContent,
+} from './opportunity-source-content.js';
+import type { SourceEligibilityEvidenceContext } from './source-eligibility-facts.js';
 
 type Dependencies = NonNullable<
   Parameters<typeof runOpportunityRequirementCoverageSourceStageJob>[3]
@@ -78,7 +85,10 @@ const subject = {
   userId: 'user-1',
   profileId: 'profile-1',
 };
-function fixture(descriptionRaw = 'Requirements\nBuild reliable software.') {
+function fixture(
+  descriptionRaw = 'Requirements\nBuild reliable software.',
+  capturedFields?: { locationNotes: string; workMode: string },
+) {
   const opportunity: Record<string, unknown> = {
     id: 'opportunity-1',
     title: 'Source stage role',
@@ -86,6 +96,16 @@ function fixture(descriptionRaw = 'Requirements\nBuild reliable software.') {
     sourceContentFingerprint: 'source-1',
     sourceContentVersion: 1,
   };
+  if (capturedFields) {
+    const content = {
+      title: opportunity.title,
+      descriptionRaw,
+      ...capturedFields,
+    };
+    opportunity.sourceContentJson = JSON.stringify(content);
+    opportunity.sourceContentFingerprint =
+      fingerprintOpportunitySourceContent(content);
+  }
   const posting = prepareOpportunityPosting(
     opportunityWithSourceContent(opportunity),
   );
@@ -298,6 +318,74 @@ describe('native staged source receipt attestation', () => {
         f.db,
       ),
     ).rejects.toThrow();
+  });
+  it.each([
+    'owned',
+    'zero-spend-forgery',
+    'foreign',
+    'global',
+    'failed',
+    'contract',
+    'source-selector',
+  ])('carries only authentic same-run PRIVATE screen reservation (%s) without GLOBAL authority', async (caseName) => {
+    const f = fixture();
+    const screen: Record<string, unknown> = {
+      ...f.row,
+      owner_request_id: 'screen-request',
+      result_request_id: 'screen-request',
+      request_id: 'screen-request',
+      result_idempotency_key: 'screen-key',
+      request_idempotency_key: 'screen-key',
+      feature: 'opportunity-screening',
+      request_feature: 'opportunity-screening',
+      profile: 'typesafe-opportunity-screening',
+      request_profile: 'typesafe-opportunity-screening',
+      model: 'jev-test',
+      request_model: 'jev-test',
+      prompt_version: OPPORTUNITY_SCREENING_VERSION,
+      output_schema_version: OPPORTUNITY_SCREENING_VERSION,
+      prepared_payload_version: OPPORTUNITY_SCREENING_VERSION,
+      input_fingerprint: 'b'.repeat(64),
+      request_input_fingerprint: 'b'.repeat(64),
+      tenant_id: subject.tenantId,
+      request_tenant_id: subject.tenantId,
+      owner_user_id: subject.userId,
+      request_owner_user_id: subject.userId,
+      candidate_profile_id: subject.profileId,
+      request_candidate_profile_id: subject.profileId,
+      reserved_input_tokens: 1000,
+      requested_max_output_tokens: 800,
+      reserved_spend_micros: 25,
+      output_json: JSON.stringify({
+        privateCandidatePreference: 'must-never-enter-public-source',
+      }),
+    };
+    if (caseName === 'zero-spend-forgery') screen.reserved_spend_micros = 0;
+    if (caseName === 'foreign') screen.request_owner_user_id = 'foreign-owner';
+    if (caseName === 'global') screen.tenant_id = screen.request_tenant_id = '';
+    if (caseName === 'failed') screen.request_status = 'failed';
+    if (caseName === 'contract')
+      screen.output_schema_version = 'unrecognized-screen';
+    const read = attestCompletedOpportunitySourceExtraction(
+      f.opportunity,
+      caseName === 'source-selector'
+        ? String(screen.request_id)
+        : 'native-request-1',
+      { query: vi.fn(async () => ({ rows: [f.row, screen] })) },
+    );
+    if (caseName === 'owned') {
+      const attested = await read;
+      expect(attested.reservation).toEqual({
+        calls: 2,
+        reservedTokens: 11896,
+        spendMicros: 2673,
+      });
+      expect(attested.output).toEqual(JSON.parse(String(f.row.output_json)));
+      expect(JSON.stringify(attested.ledger)).not.toContain(
+        'must-never-enter-public-source',
+      );
+    } else await expect(read).rejects.toThrow();
+    expect(processOpportunityWithLlm).not.toHaveBeenCalled();
   });
   it('carries full and evidence audit reservations in the same native lifecycle', async () => {
     const f = fixture();
@@ -903,6 +991,233 @@ describe('native staged source job fences', () => {
       expect(evidenceAudit).not.toHaveBeenCalled();
       expect(readEligibility).not.toHaveBeenCalled();
     } else expect(evidenceAudit).toHaveBeenCalledOnce();
+    expect(j.deps.extract).not.toHaveBeenCalled();
+    expect(j.deps.audit).not.toHaveBeenCalled();
+    expect(j.deps.startRun).not.toHaveBeenCalled();
+  });
+  it('requires native captured source JSON for pure V4 admission while preserving V3 replay', async () => {
+    const f = fixture();
+    const completed = await attestCompletedOpportunitySourceExtraction(
+      f.opportunity,
+      'native-request-1',
+      f.db,
+    );
+    const options = {
+      auditPricing: {
+        configured: true,
+        inputMicrosPerMillion: 1,
+        outputMicrosPerMillion: 1,
+      },
+      limits: { calls: 4, inputTokens: 80000, spendMicros: 100000 },
+    };
+    expect(() =>
+      preflightCompletedOpportunityRequirementEvidenceAudit(completed, {
+        ...options,
+        auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+      }),
+    ).toThrow('Captured source metadata');
+    expect(
+      preflightCompletedOpportunityRequirementEvidenceAudit(completed, {
+        ...options,
+        auditContract: REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+      }).admitted,
+    ).toBe(true);
+  });
+  it.each([
+    'published',
+    'missing-captured-proof',
+    'foreign-captured-fields',
+    'changed-captured-source',
+    'budget',
+  ])('explicit V4 native captured-source evidence enforces %s without resetting extraction', async (caseName) => {
+    const f = fixture('Requirements\nBuild reliable software.', {
+      locationNotes: 'Canada',
+      workMode: 'Remote',
+    });
+    const completed = await attestCompletedOpportunitySourceExtraction(
+      f.opportunity,
+      'native-request-1',
+      f.db,
+    );
+    f.opportunity.preparedPostingJson = JSON.stringify({
+      retained: 'paid-original',
+      requirementCoverage: completed.ledger,
+    });
+    const originalJson = f.opportunity.preparedPostingJson;
+    if (caseName === 'budget')
+      completed.reservation = {
+        calls: 2,
+        reservedTokens: 79999,
+        spendMicros: 99999,
+      };
+    const j = jobFixture(f.opportunity, {
+      contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
+      stage: 'evidence_completed_extraction',
+      auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+      extractionRequestId: completed.requestId,
+      extractionInputFingerprint: completed.context.extractionFingerprint,
+      ledgerFingerprint: completed.ledgerFingerprint,
+    });
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION', '1');
+    vi.stubEnv(
+      'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+      '1',
+    );
+    let recorded:
+      | ReturnType<typeof partialRequirementEvidenceFromAudit>
+      | undefined;
+    let capturedContext: SourceEligibilityEvidenceContext | undefined;
+    const invokeAfterAttestation = vi.fn();
+    const evidenceAudit: NonNullable<Dependencies['evidenceAudit']> = vi.fn(
+      async (
+        prepared: PreparedRequirementEvidenceAudit,
+        options: Parameters<NonNullable<Dependencies['evidenceAudit']>>[1],
+      ) => {
+        expect(prepared.version).toBe(
+          REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+        );
+        expect(prepared.ledgerFingerprint).toBe(completed.ledgerFingerprint);
+        expect(prepared.capturedSource?.extractionRequestId).toBe(
+          completed.requestId,
+        );
+        expect(prepared.capturedSource?.sourceContentJson).toBe(
+          completed.sourceContentJson,
+        );
+        expect(options.agentRunId).toBe('original-run');
+        expect(options.historicalReservation).toEqual(completed.reservation);
+        if (caseName === 'changed-captured-source')
+          f.opportunity.sourceContentJson = JSON.stringify({
+            ...JSON.parse(String(f.opportunity.sourceContentJson)),
+            locationNotes: 'United States',
+          });
+        const reattested = await options.resolveCompletedExtraction?.();
+        expect(reattested).toMatchObject({
+          requestId: completed.requestId,
+          agentRunId: 'original-run',
+          ledgerFingerprint: completed.ledgerFingerprint,
+          sourceContentJson: completed.sourceContentJson,
+          reservation: completed.reservation,
+        });
+        invokeAfterAttestation();
+        capturedContext = prepared.sourceEligibility?.context;
+        const answers: DecisionResult['answers'] = Object.fromEntries(
+          Object.entries(prepared.request.questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? {
+                  type: 'choice',
+                  choice: 'none',
+                  confidence: 1,
+                  probabilities: Object.fromEntries(
+                    Object.keys(question.criteria).map((choice) => [
+                      choice,
+                      choice === 'none' ? 1 : 0,
+                    ]),
+                  ),
+                }
+              : {
+                  type: 'predicate',
+                  probability:
+                    key.startsWith('source_eligibility__') &&
+                    !key.startsWith('source_eligibility__coverage__')
+                      ? 0.1
+                      : 0.999,
+                },
+          ]),
+        );
+        const audit = resolveRequirementEvidenceAudit(
+          prepared,
+          {
+            model: 'jev-test',
+            provenance: { model: 'jev-test', provider: 'typesafe' },
+            answers,
+          },
+          'native-v4-request',
+        );
+        recorded = partialRequirementEvidenceFromAudit(prepared, audit);
+        return audit;
+      },
+    );
+    const readEligibility: NonNullable<Dependencies['readEligibility']> = vi.fn(
+      async () => {
+        if (
+          caseName === 'missing-captured-proof' ||
+          !recorded?.audit.sourceEligibility ||
+          !capturedContext
+        )
+          return undefined;
+        return {
+          evidence: recorded.audit.sourceEligibility,
+          sourceContext: {
+            ...capturedContext,
+            ...(caseName === 'foreign-captured-fields'
+              ? { capturedFieldsFingerprint: 'foreign-captured-fields' }
+              : {}),
+          },
+        };
+      },
+    );
+    const update = vi.fn(
+      async (_id: string, _fp: string, updates: Record<string, unknown>) => {
+        Object.assign(f.opportunity, updates);
+        return true;
+      },
+    );
+    const attest: NonNullable<Dependencies['attest']> = vi.fn(
+      async (native: Parameters<NonNullable<Dependencies['attest']>>[0]) =>
+        caseName === 'budget'
+          ? completed
+          : await attestCompletedOpportunitySourceExtraction(
+              native,
+              completed.requestId,
+              f.db,
+            ),
+    );
+    const result = runOpportunityRequirementCoverageSourceStageJob(
+      'opportunity-1',
+      j.context,
+      subject,
+      {
+        ...j.deps,
+        attest,
+        evidenceAudit,
+        readEvidence: vi.fn(async () => recorded),
+        readEligibility,
+        transaction: async <T>(work: (db: TransactionDatabase) => Promise<T>) =>
+          await work({} as TransactionDatabase),
+        update,
+      },
+    );
+    if (caseName === 'published') {
+      await expect(result).resolves.toMatchObject({ status: 'processed' });
+      expect(readEligibility).toHaveBeenCalledOnce();
+      expect(update).toHaveBeenCalledOnce();
+      expect(
+        capturedContext?.capturedFields?.map((field) => field.path),
+      ).toEqual([
+        'sourceContentJson.locationNotes',
+        'sourceContentJson.workMode',
+      ]);
+      expect(capturedContext?.sourceText).toBe(completed.context.sourceText);
+      expect(
+        JSON.parse(String(f.opportunity.preparedPostingJson)),
+      ).toMatchObject({
+        retained: 'paid-original',
+        requirementCoverageEvidenceAudit: {
+          version: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+          requestId: 'native-v4-request',
+          capturedSource: { extractionRequestId: completed.requestId },
+        },
+      });
+    } else {
+      await expect(result).rejects.toThrow();
+      expect(update).not.toHaveBeenCalled();
+      expect(f.opportunity.preparedPostingJson).toBe(originalJson);
+    }
+    if (caseName === 'budget') expect(evidenceAudit).not.toHaveBeenCalled();
+    if (caseName === 'budget' || caseName === 'changed-captured-source')
+      expect(invokeAfterAttestation).not.toHaveBeenCalled();
+    else expect(invokeAfterAttestation).toHaveBeenCalledOnce();
     expect(j.deps.extract).not.toHaveBeenCalled();
     expect(j.deps.audit).not.toHaveBeenCalled();
     expect(j.deps.startRun).not.toHaveBeenCalled();

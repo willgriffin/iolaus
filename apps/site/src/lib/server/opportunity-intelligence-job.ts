@@ -322,7 +322,15 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
   args: OpportunityIntelligenceJobArgs = {},
   options: EnqueueOpportunityIntelligenceOptions = {},
 ): Promise<OpportunityIntelligenceEnqueueResult> {
-  const { partialAssessmentEvidence: _ignoredPartial, ...candidateArgs } = args;
+  const {
+    partialAssessmentEvidence: _ignoredPartial,
+    skipScreening: _ignoredSkipScreening,
+    screeningOutcome: _ignoredScreeningOutcome,
+    screeningEvidence: _ignoredScreeningEvidence,
+    screeningInputFingerprint: _ignoredScreeningFingerprint,
+    candidatePreferences: _ignoredCandidatePreferences,
+    ...candidateArgs
+  } = args;
   const envelopedArgs = withRuntimeWorkspaceSubject(candidateArgs);
   const subject = runtimeWorkspaceSubjectFromJobArgs(envelopedArgs);
   const requestedModes = Array.isArray(args.modes) ? args.modes : [args.modes];
@@ -357,17 +365,21 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
         'Source preparation requires native job enqueue capability.',
       );
     }
-    return await enqueueOpportunityAssessmentCoverage(opportunityId, args, {
-      ...options,
-      ...(options.collection && enqueueJob
-        ? {
-            collection: {
-              enqueueJob: enqueueJob.bind(options.collection),
-              list: options.collection.list.bind(options.collection),
-            },
-          }
-        : { collection: undefined }),
-    });
+    return await enqueueOpportunityAssessmentCoverage(
+      opportunityId,
+      candidateArgs,
+      {
+        ...options,
+        ...(options.collection && enqueueJob
+          ? {
+              collection: {
+                enqueueJob: enqueueJob.bind(options.collection),
+                list: options.collection.list.bind(options.collection),
+              },
+            }
+          : { collection: undefined }),
+      },
+    );
   }
   // Candidate evidence is loaded only after the recorded global prerequisite
   // is current; source preparation jobs never capture this material.

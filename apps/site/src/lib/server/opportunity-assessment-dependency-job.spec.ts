@@ -6,10 +6,18 @@ import type { SmrtJob } from '@happyvertical/smrt-jobs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeWorkspaceSubject } from './job-workspace-subject.js';
 import type { readRecordedRequirementCoverageOutcome } from './opportunity-requirement-coverage-provider.js';
+import type {
+  assertOpportunityAssessmentScreenNotAttempted,
+  CurrentOpportunityAssessmentScreen,
+  evaluateOpportunityAssessmentScreen,
+  prepareCurrentOpportunityAssessmentScreen,
+  readCurrentOpportunityAssessmentScreen,
+} from './opportunity-screening-provider.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 
 const state = vi.hoisted(() => ({
   subject: { profileId: 'profile-a', tenantId: 'tenant-a', userId: 'user-a' },
+  screenReceipt: undefined as CurrentOpportunityAssessmentScreen | undefined,
 }));
 
 type ReadCoverageOutcome = typeof readRecordedRequirementCoverageOutcome;
@@ -21,6 +29,11 @@ const mocks = vi.hoisted(() => ({
   coverageOutcome: vi.fn<ReadCoverageOutcome>(async () => ({
     status: 'missing' as const,
   })),
+  prepareScreen: vi.fn<typeof prepareCurrentOpportunityAssessmentScreen>(),
+  readScreen: vi.fn<typeof readCurrentOpportunityAssessmentScreen>(),
+  evaluateScreen: vi.fn<typeof evaluateOpportunityAssessmentScreen>(),
+  assertScreenNotAttempted:
+    vi.fn<typeof assertOpportunityAssessmentScreenNotAttempted>(),
   finishRun: vi.fn(async () => {}),
   jobCollection: { get: vi.fn() },
   prepareSource: vi.fn(),
@@ -98,6 +111,12 @@ vi.mock('./application-workflow.js', () => ({
     action: () => Promise<unknown>,
   ) => await action(),
 }));
+vi.mock('./opportunity-screening-provider.js', () => ({
+  prepareCurrentOpportunityAssessmentScreen: mocks.prepareScreen,
+  readCurrentOpportunityAssessmentScreen: mocks.readScreen,
+  evaluateOpportunityAssessmentScreen: mocks.evaluateScreen,
+  assertOpportunityAssessmentScreenNotAttempted: mocks.assertScreenNotAttempted,
+}));
 vi.mock('./opportunity-details.js', () => ({
   defaultFencedOpportunityUpdate: vi.fn(async () => true),
   processOpportunityWithLlm: mocks.prepareSource,
@@ -118,6 +137,8 @@ vi.mock('./opportunity-requirement-coverage.js', () => ({
   }),
 }));
 vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
+  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION:
+    'requirement-evidence-audit/v4-captured-source-recovery',
   readPartialOpportunityRequirementEvidence: mocks.partialEvidence,
   evaluateRequirementEvidenceAudit: mocks.auditEvidence,
   requirementCoverageLedgerFingerprint: () => 'ledger-a',
@@ -174,6 +195,147 @@ function queuedJob(overrides: Record<string, unknown> = {}) {
   } as unknown as SmrtJob;
 }
 
+// These adapters test routing against an already authenticated native receipt;
+// pure answer parsing and native PRIVATE joins have independent specifications.
+function preparedScreenFixture(
+  targetRoles: string[] = ['Software engineer'],
+): Awaited<ReturnType<typeof prepareCurrentOpportunityAssessmentScreen>> {
+  const sourceContentJson = JSON.stringify({
+    descriptionRaw: 'Remote within the United States only.',
+    title: 'Software engineer',
+  });
+  const profile = {
+    targetRoles,
+    workModes: [],
+    authorizedWorkCountries: [],
+    sponsorshipRequired: 'unknown' as const,
+  };
+  const request: Awaited<
+    ReturnType<typeof prepareCurrentOpportunityAssessmentScreen>
+  >['request'] = {
+    state: {
+      Source: 'Remote within the United States only.',
+      Candidate: profile,
+    },
+    questions: {},
+  };
+  for (const dimension of [
+    'role_mismatch',
+    'country_mismatch',
+    'work_mode_mismatch',
+    'authorization_mismatch',
+    'role_relevant',
+    'unresolved_constraint',
+    'sponsorship_path',
+  ]) {
+    request.questions[dimension] = {
+      type: 'predicate',
+      instructions: `Evaluate ${dimension}.`,
+    };
+    request.questions[`${dimension}__evidence`] = {
+      type: 'choice',
+      instructions: 'Choose an exact source witness.',
+      criteria: {
+        s0: null,
+        'field:title': null,
+        none: 'No exact source witness.',
+      },
+    };
+  }
+  return {
+    version: 'opportunity-screening/v1-jev-first',
+    sourceIdentity: {
+      sourceContentFingerprint: 'source-a',
+      sourceContentVersion: 4,
+    },
+    sourceContentJson,
+    sourceFingerprint: 'screen-source-fp',
+    profile,
+    profileFingerprint: 'current-profile-fp',
+    witnesses: [
+      {
+        id: 's0',
+        path: 'sourceContentJson.descriptionRaw',
+        text: 'Remote within the United States only.',
+        spanStart: 0,
+        spanEnd: 'Remote within the United States only.'.length,
+      },
+      {
+        id: 'field:title',
+        path: 'sourceContentJson.title',
+        text: 'Software engineer',
+      },
+    ],
+    request,
+    inputFingerprint: 'pure-screen-fp',
+    requestBytes: Buffer.byteLength(JSON.stringify(request), 'utf8'),
+    maxOutputTokens: 3600,
+  };
+}
+
+function screenReceipt(
+  overrides: Partial<CurrentOpportunityAssessmentScreen> = {},
+): CurrentOpportunityAssessmentScreen {
+  const status = overrides.outcome ?? 'potentially_relevant';
+  const requestId = overrides.requestId ?? 'screen-request';
+  const isMismatch = status === 'clear_mismatch';
+  const text = isMismatch
+    ? 'Remote within the United States only.'
+    : 'Software engineer';
+  return {
+    agentRunId: 'run-1',
+    requestId,
+    inputFingerprint: 'owned-screen-fp',
+    reservation: { calls: 1, reservedTokens: 3600, spendMicros: 10 },
+    screen: {
+      version: 'opportunity-screening/v1-jev-first',
+      status,
+      requestId,
+      inputFingerprint: 'pure-screen-fp',
+      sourceFingerprint: 'screen-source-fp',
+      profileFingerprint: 'current-profile-fp',
+      sourceIdentity: {
+        sourceContentFingerprint: 'source-a',
+        sourceContentVersion: 4,
+      },
+      model: 'jev-fixture',
+      provenance: { provider: 'typesafe', model: 'jev-fixture' },
+      holdReasons: [],
+      plausiblyRelevant: !isMismatch,
+      mismatches: isMismatch ? ['country_mismatch'] : [],
+      uncertainties: status === 'uncertain' ? ['work_mode_missing'] : [],
+      conditionalPaths: [],
+      probabilities: {
+        role_mismatch: 0.01,
+        country_mismatch: isMismatch ? 0.99 : 0.01,
+        work_mode_mismatch: 0.01,
+        authorization_mismatch: 0.01,
+        role_relevant: isMismatch ? 0.01 : 0.99,
+        unresolved_constraint: status === 'uncertain' ? 0.99 : 0.01,
+        sponsorship_path: 0.01,
+      },
+      evidence: [
+        {
+          dimension: isMismatch ? 'country_mismatch' : 'role_relevant',
+          probability: 0.99,
+          confidence: 0.99,
+          witness: isMismatch
+            ? {
+                id: 's0',
+                path: 'sourceContentJson.descriptionRaw',
+                text,
+                spanStart: 0,
+                spanEnd: text.length,
+              }
+            : { id: 'field:title', path: 'sourceContentJson.title', text },
+        },
+      ],
+    },
+    outcome: status,
+    ...overrides,
+  };
+}
+
 const noPriorSourceJobBridge = async () => undefined;
 
 function coverageArgs(overrides: Record<string, unknown> = {}) {
@@ -202,6 +364,18 @@ describe('opportunity assessment coverage dependency job', () => {
       tenantId: 'tenant-a',
       userId: 'user-a',
     };
+    state.screenReceipt = undefined;
+    mocks.prepareScreen.mockReset();
+    mocks.prepareScreen.mockResolvedValue(preparedScreenFixture());
+    mocks.readScreen.mockReset();
+    mocks.readScreen.mockImplementation(async () => state.screenReceipt);
+    mocks.evaluateScreen.mockReset();
+    mocks.evaluateScreen.mockImplementation(async (_prepared, options) => {
+      state.screenReceipt = screenReceipt({ agentRunId: options.agentRunId });
+      return state.screenReceipt;
+    });
+    mocks.assertScreenNotAttempted.mockReset();
+    mocks.assertScreenNotAttempted.mockResolvedValue(undefined);
     mocks.finishRun.mockClear();
     mocks.jobCollection.get.mockReset();
     mocks.coverageOutcome.mockReset();
@@ -218,6 +392,279 @@ describe('opportunity assessment coverage dependency job', () => {
     mocks.auditEvidence.mockResolvedValue({});
   });
 
+  it.each([
+    false,
+    true,
+  ])('stops a cited clear mismatch privately before Luna (cached=%s)', async (cached) => {
+    const receipt = screenReceipt({ outcome: 'clear_mismatch' });
+    if (cached) state.screenReceipt = receipt;
+    else
+      mocks.evaluateScreen.mockImplementation(async () => {
+        state.screenReceipt = receipt;
+        return receipt;
+      });
+    const enqueueAssessment = vi.fn(async () => {});
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        enqueueAssessment,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_excluded',
+    });
+    expect(result.message).toContain('Remote within the United States only.');
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.auditEvidence).not.toHaveBeenCalled();
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+    expect(mocks.startRun).toHaveBeenCalledTimes(cached ? 0 : 1);
+    expect(mocks.evaluateScreen).toHaveBeenCalledTimes(cached ? 0 : 1);
+    if (cached) expect(mocks.recordRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'invalid_context',
+    'oversized_context',
+  ])('holds unusable screening context %s before any new reservation', async (reason) => {
+    mocks.prepareScreen.mockRejectedValue(new Error(reason));
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+  });
+
+  it('holds known empty target role preferences before any screen or Luna reservation', async () => {
+    mocks.prepareScreen.mockResolvedValue(preparedScreenFixture([]));
+    const enqueueAssessment = vi.fn(async () => {});
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        enqueueAssessment,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(result.message).toContain('target role preferences');
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.recordRun).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.auditEvidence).not.toHaveBeenCalled();
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a failed exact private screening identity or reset its run', async () => {
+    mocks.assertScreenNotAttempted.mockRejectedValue(
+      new Error('prior failed identity'),
+    );
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+  });
+
+  it('holds material role uncertainty while preserving its actual screening receipt', async () => {
+    const receipt = screenReceipt({ outcome: 'uncertain' });
+    receipt.screen.holdReasons = ['target_roles_missing'];
+    state.screenReceipt = receipt;
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(result.message).toContain('target role preferences');
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'potentially_relevant',
+    'uncertain',
+  ] as const)('continues a plausible %s screen using its original run', async (outcome) => {
+    state.screenReceipt = screenReceipt({
+      outcome,
+      agentRunId: 'original-screen-run',
+    });
+    state.screenReceipt.screen.plausiblyRelevant = true;
+    const enqueueAssessment = vi.fn(async () => {});
+    let ready = false;
+    mocks.coverageOutcome.mockImplementation(async () =>
+      ready ? { status: 'ready' } : { status: 'missing' },
+    );
+    mocks.prepareSource.mockImplementation(async (_id, options) => {
+      expect(options.agentRunId).toBe('original-screen-run');
+      await options.assertCurrentAuthority();
+      ready = true;
+      return { status: 'processed', message: 'saved source' };
+    });
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        enqueueAssessment,
+      },
+    );
+    expect(result.status).toBe('prepared');
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).toHaveBeenCalledOnce();
+    expect(enqueueAssessment).toHaveBeenCalledWith('opp-1');
+  });
+
+  it('requires an actual completed screen before new Luna and carries its original run', async () => {
+    const order: string[] = [];
+    let ready = false;
+    mocks.coverageOutcome.mockImplementation(async () =>
+      ready ? { status: 'ready' } : { status: 'missing' },
+    );
+    mocks.evaluateScreen.mockImplementation(async (_prepared, options) => {
+      order.push('private-screen');
+      state.screenReceipt = screenReceipt({ agentRunId: options.agentRunId });
+      return state.screenReceipt;
+    });
+    mocks.prepareSource.mockImplementation(async (_id, options) => {
+      order.push('Luna');
+      expect(state.screenReceipt).toBeDefined();
+      expect(options.agentRunId).toBe(state.screenReceipt?.agentRunId);
+      await options.assertCurrentAuthority();
+      ready = true;
+      return { status: 'processed', message: 'source saved' };
+    });
+    const enqueueAssessment = vi.fn(async () => {});
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        enqueueAssessment,
+      },
+    );
+    expect(result.status).toBe('prepared');
+    expect(order).toEqual(['private-screen', 'Luna']);
+    expect(mocks.startRun).toHaveBeenCalledOnce();
+    expect(mocks.recordRun).toHaveBeenCalledWith(
+      expect.anything(),
+      state.subject,
+      expect.anything(),
+      'opp-1',
+      'run-1',
+    );
+    expect(enqueueAssessment).toHaveBeenCalledOnce();
+  });
+
+  it('holds a changed active profile before new Luna even after screening transport completed', async () => {
+    mocks.readScreen.mockResolvedValue(undefined);
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(mocks.evaluateScreen).toHaveBeenCalledOnce();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+  });
+
+  it('replays owned current screening proof again before private continuation', async () => {
+    let ready = false;
+    mocks.coverageOutcome.mockImplementation(async () =>
+      ready ? { status: 'ready' } : { status: 'missing' },
+    );
+    mocks.prepareSource.mockImplementation(async (_id, options) => {
+      await options.assertCurrentAuthority();
+      ready = true;
+      state.screenReceipt = undefined;
+      return { status: 'processed', message: 'source saved' };
+    });
+    const enqueueAssessment = vi.fn(async () => {});
+    const result = await runOpportunityAssessmentDependencyJob(
+      opportunity(),
+      coverageArgs(),
+      {} as never,
+      state.subject,
+      {
+        getOpportunity: async () => opportunity(),
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        enqueueAssessment,
+      },
+    );
+    expect(result).toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'screening_hold',
+    });
+    expect(mocks.prepareSource).toHaveBeenCalledOnce();
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+  });
+
   it('captures the current subject, derives immutable source identity, and submits through native enqueueJob', async () => {
     const job = queuedJob();
     const collection = {
@@ -231,6 +678,11 @@ describe('opportunity assessment coverage dependency job', () => {
         contentVersion: 999,
         reason: 'manual',
         sourcePreparationAgentRunId: 'forged-agent-run',
+        skipScreening: true,
+        screeningOutcome: 'potentially_relevant',
+        screeningEvidence: { fake: true },
+        screeningInputFingerprint: 'forged',
+        candidatePreferences: { targetRoles: ['forged'] },
       },
       {
         collection,
@@ -271,6 +723,19 @@ describe('opportunity assessment coverage dependency job', () => {
       (collection.enqueueJob.mock.calls[0]![0].args as Record<string, unknown>)
         .sourcePreparationAgentRunId,
     ).toBeUndefined();
+    const persisted = collection.enqueueJob.mock.calls[0]![0].args as Record<
+      string,
+      unknown
+    >;
+    for (const key of [
+      'skipScreening',
+      'screeningOutcome',
+      'screeningEvidence',
+      'screeningInputFingerprint',
+      'candidatePreferences',
+    ])
+      expect(persisted).not.toHaveProperty(key);
+    expect(result.sourceStatus).toBe('screening_pending');
   });
 
   it('dedupes only an exact active owner/source tuple', async () => {
@@ -989,7 +1454,233 @@ describe('opportunity assessment coverage dependency job', () => {
     });
   });
 
+  for (const version of [
+    'requirement-evidence-audit/v1-decomposed',
+    'requirement-evidence-audit/v2-row-relevance',
+    'requirement-evidence-audit/v3-source-eligibility',
+  ]) {
+    it(`reuses current actual ${version} source proof without another source call`, async () => {
+      const readCompletedExtraction = vi.fn();
+      const preflightEvidence = vi.fn();
+      const auditEvidence = vi.fn();
+      const enqueueAssessment = vi.fn();
+      const result = await runOpportunityAssessmentDependencyJob(
+        opportunity(),
+        coverageArgs(),
+        {} as never,
+        state.subject,
+        {
+          getOpportunity: async () => opportunity(),
+          readPriorSourceJobBridge: noPriorSourceJobBridge,
+          readPartialEvidence: async () =>
+            ({
+              audit: { version },
+              acceptedRequirements: [{ id: 'actual-row' }],
+              fingerprint: 'actual-current',
+            }) as never,
+          readCompletedExtraction,
+          preflightEvidence,
+          auditEvidence,
+          enqueueAssessment,
+        },
+      );
+      expect(result).toMatchObject({
+        status: 'prepared',
+        sourceStatus: 'partial',
+      });
+      expect(readCompletedExtraction).not.toHaveBeenCalled();
+      expect(preflightEvidence).not.toHaveBeenCalled();
+      expect(auditEvidence).not.toHaveBeenCalled();
+      expect(mocks.startRun).not.toHaveBeenCalled();
+      expect(mocks.prepareSource).not.toHaveBeenCalled();
+      expect(mocks.prepareScreen).not.toHaveBeenCalled();
+      expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+      expect(enqueueAssessment).toHaveBeenCalledOnce();
+    });
+  }
+
+  for (const admitted of [true, false]) {
+    it(`selects V4 captured-source eligibility/video in the ordinary source preflight and preserves original reservations when admission is ${admitted}`, async () => {
+      vi.stubEnv(
+        'OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION',
+        '113',
+      );
+      vi.stubEnv(
+        'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
+        '227',
+      );
+      const reservation = {
+        calls: 1,
+        reservedTokens: 10096,
+        spendMicros: 2648,
+      };
+      const sourceRunId = admitted ? 'run-1' : 'original-source-run';
+      let extracted = !admitted;
+      const actual = {
+        requestId: 'paid-extraction',
+        opportunityId: 'opp-1',
+        sourceContentJson: '{"captured":"original-source"}',
+        agentRunId: sourceRunId,
+        workspaceSubject: state.subject,
+        context: {
+          sourceFingerprint: 'source-a',
+          sourceVersion: 4,
+          extractionFingerprint: 'exact-current',
+        },
+        ledgerFingerprint: 'ledger-a',
+        ledger: {},
+        posting: { fingerprint: 'prepared', version: 'v1' },
+        reservation,
+      } as never;
+      const preparedAudit = {
+        version: 'requirement-evidence-audit/v4-captured-source-recovery',
+      };
+      mocks.preflightEvidence.mockClear();
+      mocks.preflightEvidence.mockResolvedValueOnce({
+        preparedAudit,
+        admitted,
+      });
+      let audited = false;
+      const auditEvidence = vi.fn<
+        NonNullable<
+          import('./opportunity-assessment-dependency-job.js').RunOpportunityAssessmentDependencyJobDependencies['auditEvidence']
+        >
+      >(async (_prepared, options) => {
+        expect(await options.resolveCompletedExtraction?.()).toEqual(actual);
+        audited = true;
+        return {} as never;
+      });
+      const enqueueAssessment = vi.fn();
+      const readCompletedExtraction = vi.fn(async () =>
+        extracted ? actual : undefined,
+      );
+      const prepareSource = vi.fn<
+        NonNullable<
+          import('./opportunity-assessment-dependency-job.js').RunOpportunityAssessmentDependencyJobDependencies['prepareSource']
+        >
+      >(async (_id, options) => {
+        expect(options.sourceExtractionStage).toBe('extract-only');
+        await options.assertCurrentAuthority();
+        extracted = true;
+        return { status: 'processed', message: 'checkpoint saved' };
+      });
+      try {
+        const result = await runOpportunityAssessmentDependencyJob(
+          opportunity({ preparedPostingJson: '{"requirementCoverage":{}}' }),
+          coverageArgs(),
+          {} as never,
+          state.subject,
+          {
+            getOpportunity: async () =>
+              opportunity({
+                preparedPostingJson: '{"requirementCoverage":{}}',
+              }),
+            readPriorSourceJobBridge: noPriorSourceJobBridge,
+            readCompletedExtraction,
+            prepareSource,
+            readPartialEvidence: async () =>
+              audited
+                ? ({
+                    acceptedRequirements: [{ id: 'actual-row' }],
+                    fingerprint: 'actual',
+                  } as never)
+                : undefined,
+            auditEvidence,
+            enqueueAssessment,
+            recordSourcePreparationRun: mocks.recordRun,
+          },
+        );
+        expect(mocks.preflightEvidence).toHaveBeenCalledWith(
+          actual,
+          expect.objectContaining({
+            auditContract:
+              'requirement-evidence-audit/v4-captured-source-recovery',
+            limits: expect.any(Object),
+            auditPricing: {
+              configured: true,
+              inputMicrosPerMillion: 113,
+              outputMicrosPerMillion: 227,
+            },
+          }),
+        );
+        expect(mocks.prepareSource).not.toHaveBeenCalled();
+        if (admitted) {
+          expect(mocks.startRun).toHaveBeenCalledOnce();
+          expect(prepareSource).toHaveBeenCalledOnce();
+          expect(result).toMatchObject({
+            status: 'prepared',
+            sourceStatus: 'partial',
+          });
+          expect(auditEvidence).toHaveBeenCalledWith(
+            preparedAudit,
+            expect.objectContaining({
+              agentRunId: sourceRunId,
+              historicalReservation: reservation,
+            }),
+          );
+          expect(enqueueAssessment).toHaveBeenCalledOnce();
+        } else {
+          expect(mocks.startRun).not.toHaveBeenCalled();
+          expect(prepareSource).not.toHaveBeenCalled();
+          expect(result).toMatchObject({
+            status: 'skipped',
+            sourceStatus: 'audit_blocked',
+          });
+          expect(auditEvidence).not.toHaveBeenCalled();
+          expect(enqueueAssessment).not.toHaveBeenCalled();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  }
+
+  it('allows structural source refusal to enqueue only after an actual same-subject completed extraction is attested', async () => {
+    mocks.coverageOutcome.mockResolvedValue({
+      status: 'blocked',
+      reason: 'structural',
+    });
+    const actual = {
+      agentRunId: 'paid-source-run',
+      workspaceSubject: state.subject,
+    } as never;
+    const readCompletedExtraction = vi.fn(async () => actual);
+    const collection = {
+      enqueueJob: vi.fn(async (data) => queuedJob(data)),
+      list: vi.fn(async () => []),
+    };
+    await expect(
+      enqueueOpportunityAssessmentCoverage(
+        'opp-1',
+        {},
+        {
+          collection,
+          opportunityCollection: { get: vi.fn(async () => opportunity()) },
+          readCompletedExtraction,
+        },
+      ),
+    ).resolves.toMatchObject({ enqueued: true, sourceStatus: 'audit_pending' });
+    expect(readCompletedExtraction).toHaveBeenCalledOnce();
+    readCompletedExtraction.mockResolvedValueOnce(undefined as never);
+    await expect(
+      enqueueOpportunityAssessmentCoverage(
+        'opp-1',
+        {},
+        {
+          collection,
+          opportunityCollection: { get: vi.fn(async () => opportunity()) },
+          readCompletedExtraction,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'source_coverage_blocked' });
+    expect(collection.enqueueJob).toHaveBeenCalledOnce();
+  });
+
   it('resumes actual source evidence on its original run without another extraction or a new run', async () => {
+    mocks.coverageOutcome.mockResolvedValue({
+      status: 'blocked',
+      reason: 'structural',
+    });
     const actual = {
       requestId: 'actual-extraction',
       agentRunId: 'original-source-run',

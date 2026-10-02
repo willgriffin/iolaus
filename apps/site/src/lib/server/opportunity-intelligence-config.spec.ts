@@ -213,6 +213,56 @@ describe('native provider volume contract classification', () => {
         }),
       ).toBe('openai');
   });
+  it('classifies only the exact private screening adapter contract under its configured model', () => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-screen-model',
+    );
+    const version = 'opportunity-screening/v1-jev-first';
+    const identity = {
+      feature: 'opportunity-screening',
+      profile: 'typesafe-opportunity-screening',
+      model: 'configured-screen-model',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        profile: 'typesafe-opportunity-source-evidence',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-untrusted-prefix',
+      }),
+    ).toBe('openai');
+  });
+  it('classifies the exact captured-source V4 adapter and denies the superseded reciprocal-only tuple', () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-latest');
+    const version = 'requirement-evidence-audit/v4-captured-source-recovery';
+    const identity = {
+      feature: 'opportunity-source-requirement-evidence',
+      profile: 'typesafe-opportunity-source-evidence',
+      model: 'jev-latest',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    const superseded = 'requirement-evidence-audit/v4-reciprocal-uncertainty';
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: superseded,
+        outputSchemaVersion: superseded,
+        preparedPayloadVersion: superseded,
+      }),
+    ).toBe('openai');
+  });
   it('never grants JEV from a model name or supplied extra provider flag', () => {
     const identity = {
       feature: 'opportunity-extraction-chunk-1',

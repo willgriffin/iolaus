@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 
 type Json = Record<string, unknown>;
 export interface SourceStageProviderEvent {
-  kind: 'extraction' | 'audit' | 'private';
+  kind: 'extraction' | 'audit' | 'private' | 'screen';
   request: Json;
   job?: Json;
   failed: boolean;
@@ -26,7 +26,12 @@ async function payload(request: IncomingMessage): Promise<Json> {
 /** Only the loopback provider transport is fictional; SDK/governance/jobs are native. */
 export async function startSourceStageProvider(
   readJob: () => Promise<Json | undefined>,
-  options: { failExtraction?: boolean; partialEvidence?: boolean } = {},
+  options: {
+    capturedRecovery?: boolean;
+    failExtraction?: boolean;
+    partialEvidence?: boolean;
+    screeningOutcome?: 'mismatch' | 'relevant' | 'invalid-material';
+  } = {},
 ) {
   const events: SourceStageProviderEvent[] = [];
   const server = createServer(async (request, response) => {
@@ -38,14 +43,21 @@ export async function startSourceStageProvider(
       const extraction = path.endsWith('/chat/completions');
       if (!extraction && !path.endsWith('/systemone'))
         throw new Error('Unexpected fictional stage endpoint');
+      const screening =
+        !extraction &&
+        'Source' in object(body.state) &&
+        'Candidate' in object(body.state) &&
+        Object.keys(object(body.questions)).includes('role_mismatch__evidence');
       const privateAssessment =
         !extraction && 'candidates' in object(body.state);
       events.push({
         kind: extraction
           ? 'extraction'
-          : privateAssessment
-            ? 'private'
-            : 'audit',
+          : screening
+            ? 'screen'
+            : privateAssessment
+              ? 'private'
+              : 'audit',
         request: body,
         job: await readJob(),
         failed: extraction && Boolean(options.failExtraction),
@@ -95,6 +107,13 @@ export async function startSourceStageProvider(
               type: 'source_context',
               requirementIds: [],
             };
+          if (options.capturedRecovery && clause.text === 'Role Summary')
+            return {
+              clauseId: clause.id,
+              type: 'nonrequirement',
+              requirementIds: [],
+              exclusionRule: 'section_heading',
+            };
           const id = 'literal_' + index;
           requirements.push({
             id,
@@ -136,6 +155,75 @@ export async function startSourceStageProvider(
             },
           }),
         );
+      } else if (screening) {
+        const questions = object(body.questions);
+        if (Object.keys(questions).length !== 14)
+          throw new Error('Exact private screening question set required');
+        const witnesses = object(body.state).Source;
+        if (!Array.isArray(witnesses))
+          throw new Error('Screening source witnesses missing');
+        const offered = witnesses.map(object);
+        const affirmed =
+          options.screeningOutcome === 'mismatch'
+            ? 'role_mismatch'
+            : 'role_relevant';
+        const answer = Object.fromEntries(
+          Object.entries(questions).map(([key, value]) => {
+            const question = object(value);
+            const dimension = key.replace(/__evidence$/u, '');
+            if (question.type === 'choice') {
+              const criteria = object(question.criteria);
+              const sourceWitness = offered.find(
+                (row) =>
+                  typeof row.text === 'string' &&
+                  (affirmed === 'role_mismatch'
+                    ? /prepare tax returns|financial statements/iu.test(
+                        row.text,
+                      )
+                    : /build accessible TypeScript|tested API integrations/iu.test(
+                        row.text,
+                      )),
+              );
+              const witness =
+                dimension === affirmed &&
+                typeof sourceWitness?.id === 'string' &&
+                Object.hasOwn(criteria, sourceWitness.id)
+                  ? sourceWitness.id
+                  : 'none';
+              if (!Object.hasOwn(criteria, witness))
+                throw new Error('Screening offered witness missing');
+              return [
+                key,
+                {
+                  type: 'choice',
+                  choice: witness,
+                  confidence: 0.9,
+                  probabilities: Object.fromEntries(
+                    Object.keys(criteria).map((candidate) => [
+                      candidate,
+                      candidate === witness
+                        ? 0.9
+                        : 0.1 / Math.max(1, Object.keys(criteria).length - 1),
+                    ]),
+                  ),
+                },
+              ];
+            }
+            if (question.type !== 'noul' && question.type !== 'predicate')
+              throw new Error('Exact screening predicate wire required');
+            return [
+              key,
+              { type: 'noul', noul: key === affirmed ? 0.99 : 0.01 },
+            ];
+          }),
+        );
+        response.end(
+          JSON.stringify({
+            model: body.model,
+            answers: answer,
+            usage: { input_tokens: 100, output_tokens: 100 },
+          }),
+        );
       } else {
         const questions = object(body.questions);
         if (
@@ -152,6 +240,11 @@ export async function startSourceStageProvider(
         )
           ? (object(body.state).sourceEligibilityClauses as Json[])
           : [];
+        const capturedFields = Array.isArray(
+          object(body.state).sourceEligibilityCapturedFields,
+        )
+          ? (object(body.state).sourceEligibilityCapturedFields as Json[])
+          : [];
         const answers = Object.fromEntries(
           Object.entries(questions).map(([key, value]) => {
             const question = object(value);
@@ -163,11 +256,22 @@ export async function startSourceStageProvider(
                 throw new Error('Unexpected fictional stage choice');
               const criteria = object(question.criteria);
               const witness =
+                options.capturedRecovery &&
                 key === 'source_eligibility__remote_available__evidence'
-                  ? eligibilityClauses.find(
-                      (row) => row.text === 'Remote role.',
+                  ? capturedFields.find(
+                      (row) => row.id === 'source-field:workMode',
                     )?.id
-                  : undefined;
+                  : options.capturedRecovery &&
+                      key ===
+                        'source_eligibility__work_country_allowed__CA__evidence'
+                    ? capturedFields.find(
+                        (row) => row.id === 'source-field:locationNotes',
+                      )?.id
+                    : key === 'source_eligibility__remote_available__evidence'
+                      ? eligibilityClauses.find(
+                          (row) => row.text === 'Remote role.',
+                        )?.id
+                      : undefined;
               const selected =
                 typeof witness === 'string' && Object.hasOwn(criteria, witness)
                   ? witness
@@ -197,7 +301,9 @@ export async function startSourceStageProvider(
                 type: 'noul',
                 noul: key.startsWith('source_eligibility__')
                   ? key.startsWith('source_eligibility__coverage__') ||
-                    key === 'source_eligibility__remote_available'
+                    key === 'source_eligibility__remote_available' ||
+                    (options.capturedRecovery &&
+                      key === 'source_eligibility__work_country_allowed__CA')
                     ? 0.99
                     : 0.01
                   : key.endsWith('_contains_candidate_criterion') ||

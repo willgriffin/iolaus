@@ -6,6 +6,10 @@ import {
   normalizeCountryReference,
 } from './country-reference.js';
 import type { CandidateWorkEligibility } from './opportunity-assessment.js';
+import {
+  fingerprintOpportunitySourceContent,
+  parseOpportunitySourceContent,
+} from './opportunity-source-content.js';
 
 /** Public, source-only fact contract. Candidate data never enters this value. */
 export const SOURCE_ELIGIBILITY_FACT_VERSION = 'source-eligibility-facts/v1';
@@ -16,6 +20,12 @@ export const SOURCE_ELIGIBILITY_FACT_VERSION = 'source-eligibility-facts/v1';
  */
 export const SOURCE_ELIGIBILITY_AUDIT_VERSION =
   'source-eligibility-audit/v3' as const;
+/**
+ * Opt-in aggregate sidecar that adds original ATS location metadata. It is
+ * intentionally separate from the body-only v3 receipt contract.
+ */
+export const SOURCE_ELIGIBILITY_CAPTURED_SOURCE_AUDIT_VERSION =
+  'source-eligibility-audit/v4-captured-source' as const;
 export const SOURCE_ELIGIBILITY_CONFIDENCE = 0.85;
 
 export const SOURCE_ELIGIBILITY_FACT_KINDS = [
@@ -41,12 +51,38 @@ export const SOURCE_ELIGIBILITY_CONSTRAINT_KINDS = [
 export type SourceEligibilityConstraintKind =
   (typeof SOURCE_ELIGIBILITY_CONSTRAINT_KINDS)[number];
 
-export interface SourceEligibilityCitation {
+export type SourceEligibilityCapturedFieldName = 'locationNotes' | 'workMode';
+
+export interface SourceEligibilityClauseCitation {
   clauseId: string;
   end: number;
   hash: string;
+  /** Missing on v3 historical receipts; both forms mean descriptionRaw. */
+  source?: 'descriptionRaw';
   start: number;
 }
+
+/** Exact scalar from the original parsed sourceContentJson, never Opportunity. */
+export interface SourceEligibilityCapturedField {
+  field: SourceEligibilityCapturedFieldName;
+  hash: string;
+  id: `source-field:${SourceEligibilityCapturedFieldName}`;
+  path: `sourceContentJson.${SourceEligibilityCapturedFieldName}`;
+  text: string;
+}
+
+export interface SourceEligibilityCapturedFieldCitation {
+  field: SourceEligibilityCapturedFieldName;
+  hash: string;
+  id: `source-field:${SourceEligibilityCapturedFieldName}`;
+  path: `sourceContentJson.${SourceEligibilityCapturedFieldName}`;
+  source: 'captured_field';
+  text: string;
+}
+
+export type SourceEligibilityCitation =
+  | SourceEligibilityClauseCitation
+  | SourceEligibilityCapturedFieldCitation;
 
 export interface SourceEligibilityFact {
   citations: SourceEligibilityCitation[];
@@ -74,13 +110,20 @@ export interface SourceEligibilityClause {
  */
 export interface SourceEligibilityFactOffer {
   clauseIds: string[];
+  /** Optional exact original ATS field witnesses in the v4 sidecar only. */
+  capturedFieldIds?: Array<SourceEligibilityCapturedField['id']>;
   country?: CountryReference;
   constraint?: SourceEligibilityConstraintKind;
   kind: SourceEligibilityFactKind;
 }
 
 export interface PreparedSourceEligibilityAudit {
+  auditVersion:
+    | typeof SOURCE_ELIGIBILITY_AUDIT_VERSION
+    | typeof SOURCE_ELIGIBILITY_CAPTURED_SOURCE_AUDIT_VERSION;
   clauses: SourceEligibilityClause[];
+  /** V4-only compact request aliases; canonical IDs remain in `clauses`. */
+  clauseAliases?: Record<string, string>;
   context: SourceEligibilityEvidenceContext;
   /** More distinct source-country candidates than the audited cap means unknown. */
   countryOverflow: boolean;
@@ -102,6 +145,8 @@ export interface SourceEligibilityCoverage {
 /** Materialized only after the aggregate reader has verified a GLOBAL receipt. */
 export interface SourceEligibilityEvidence {
   aggregateFingerprint: string;
+  /** Required when evidence came from the opt-in captured-source v4 sidecar. */
+  capturedFieldsFingerprint?: string;
   coverage: SourceEligibilityCoverage;
   facts: SourceEligibilityFact[];
   requestId: string;
@@ -112,9 +157,18 @@ export interface SourceEligibilityEvidence {
 
 /** Current captured source used to revalidate exact, public citations. */
 export interface SourceEligibilityEvidenceContext {
+  /** Present only on the opt-in captured-source v4 context. */
+  capturedFields?: SourceEligibilityCapturedField[];
+  capturedFieldsFingerprint?: string;
   sourceContentFingerprint: string;
   sourceContentVersion: number;
   sourceText: string;
+}
+
+export interface SourceEligibilityCapturedEvidenceContext
+  extends SourceEligibilityEvidenceContext {
+  capturedFields: SourceEligibilityCapturedField[];
+  capturedFieldsFingerprint: string;
 }
 
 /**
@@ -182,6 +236,77 @@ function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function capturedFieldHash(
+  path: SourceEligibilityCapturedField['path'],
+  value: string,
+): string {
+  return hash(`${path}\u0000${value}`);
+}
+
+/** Stable identity for the exact original ATS metadata supplied to v4. */
+export function sourceEligibilityCapturedFieldsFingerprint(
+  fields: readonly SourceEligibilityCapturedField[],
+): string {
+  return stableHash(
+    fields.map((field) => ({
+      field: field.field,
+      hash: field.hash,
+      id: field.id,
+      path: field.path,
+    })),
+  );
+}
+
+/**
+ * Reconstructs attested metadata from the canonical captured source JSON.
+ * A caller cannot attach fields from mutable Opportunity columns or silently
+ * substitute a body different from the captured description.
+ */
+export function sourceEligibilityContextFromCapturedSource(
+  input: {
+    sourceContentFingerprint: string;
+    sourceContentVersion: number;
+    sourceText?: string;
+  },
+  sourceContentJson: unknown,
+): SourceEligibilityCapturedEvidenceContext | undefined {
+  const content = parseOpportunitySourceContent(sourceContentJson);
+  if (
+    !content ||
+    !input.sourceContentFingerprint ||
+    !Number.isSafeInteger(input.sourceContentVersion) ||
+    input.sourceContentVersion < 1 ||
+    fingerprintOpportunitySourceContent(content) !==
+      input.sourceContentFingerprint
+  )
+    return undefined;
+  const sourceText =
+    typeof content.descriptionRaw === 'string' ? content.descriptionRaw : '';
+  if (input.sourceText !== undefined && input.sourceText !== sourceText)
+    return undefined;
+  const fields: SourceEligibilityCapturedField[] = [];
+  for (const field of ['locationNotes', 'workMode'] as const) {
+    const value = content[field];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const path = `sourceContentJson.${field}` as const;
+    fields.push({
+      field,
+      hash: capturedFieldHash(path, value),
+      id: `source-field:${field}`,
+      path,
+      text: value,
+    });
+  }
+  return {
+    capturedFields: fields,
+    capturedFieldsFingerprint:
+      sourceEligibilityCapturedFieldsFingerprint(fields),
+    sourceContentFingerprint: input.sourceContentFingerprint,
+    sourceContentVersion: input.sourceContentVersion,
+    sourceText,
+  };
+}
+
 function probability(value: unknown): value is number {
   return (
     typeof value === 'number' &&
@@ -225,6 +350,21 @@ const coverageQuestions = {
     'Did this audit inspect every captured clause for explicit remote, onsite, hybrid, and timezone work-arrangement restrictions for this role? Answer true when the complete captured source was reviewed, whether or not a restriction was stated. This attests source-review coverage only; it does not mean the employer guarantees an absence of restrictions.',
 } as const;
 
+const capturedCoverageQuestions = {
+  authorization:
+    'Did this audit inspect every captured posting clause and supplied original ATS field for explicit work-authorization and sponsorship restrictions? Answer true when the complete captured source was reviewed, whether or not a restriction was stated. This attests source-review coverage only; it does not mean the employer guarantees an absence of restrictions.',
+  geography:
+    'Did this audit inspect every captured posting clause and supplied original ATS field for explicit country, province/state, city, and other geographic work-location restrictions? Answer true when the complete captured source was reviewed, whether or not a restriction was stated. This attests source-review coverage only; it does not mean the employer guarantees an absence of restrictions.',
+  workArrangement:
+    'Did this audit inspect every captured posting clause and supplied original ATS field for explicit remote, onsite, hybrid, and timezone work-arrangement restrictions? Answer true when the complete captured source was reviewed, whether or not a restriction was stated. This attests source-review coverage only; it does not mean the employer guarantees an absence of restrictions.',
+} as const;
+
+function coverageQuestionsFor(context: SourceEligibilityEvidenceContext) {
+  return validCapturedFields(context)
+    ? capturedCoverageQuestions
+    : coverageQuestions;
+}
+
 function factInstructions(fact: SourceEligibilityFactOffer): string {
   const country = countryForFact(fact);
   switch (fact.kind) {
@@ -258,10 +398,10 @@ function validExactClauses(
     !Number.isSafeInteger(context.sourceContentVersion) ||
     context.sourceContentVersion < 1 ||
     typeof context.sourceText !== 'string' ||
-    !clauses.length ||
     clauses.length > 128
   )
     return false;
+  if (!clauses.length && !context.capturedFields?.length) return false;
   let cursor = 0;
   const ids = new Set<string>();
   for (const clause of clauses) {
@@ -283,11 +423,66 @@ function validExactClauses(
   return !context.sourceText.slice(cursor).trim();
 }
 
+function validCapturedFields(
+  context: SourceEligibilityEvidenceContext,
+): context is SourceEligibilityCapturedEvidenceContext {
+  if (!context.capturedFields || !context.capturedFieldsFingerprint)
+    return false;
+  const ids = new Set<string>();
+  for (const field of context.capturedFields) {
+    if (
+      !field ||
+      (field.field !== 'locationNotes' && field.field !== 'workMode') ||
+      field.id !== `source-field:${field.field}` ||
+      field.path !== `sourceContentJson.${field.field}` ||
+      !field.text.trim() ||
+      field.hash !== capturedFieldHash(field.path, field.text) ||
+      ids.has(field.id)
+    )
+      return false;
+    ids.add(field.id);
+  }
+  return (
+    context.capturedFieldsFingerprint ===
+    sourceEligibilityCapturedFieldsFingerprint(context.capturedFields)
+  );
+}
+
+function capturedFieldsFor(
+  context: SourceEligibilityEvidenceContext,
+): SourceEligibilityCapturedField[] {
+  return validCapturedFields(context) ? context.capturedFields : [];
+}
+
+function clauseAliasesFor(
+  context: SourceEligibilityEvidenceContext,
+  clauses: SourceEligibilityClause[],
+): Record<string, string> | undefined {
+  if (!validCapturedFields(context)) return undefined;
+  return Object.fromEntries(
+    clauses.map((clause, index) => [clause.id, `c${index}`]),
+  );
+}
+
+function validClauseAliases(
+  aliases: Record<string, string> | undefined,
+  clauses: SourceEligibilityClause[],
+): aliases is Record<string, string> {
+  if (!aliases || Object.keys(aliases).length !== clauses.length) return false;
+  return clauses.every((clause, index) => aliases[clause.id] === `c${index}`);
+}
+
 function validOffer(
   offer: SourceEligibilityFactOffer,
   clauses: SourceEligibilityClause[],
+  context: SourceEligibilityEvidenceContext,
 ): boolean {
-  if (!factKinds.has(offer.kind) || offer.clauseIds.length < 1) return false;
+  const capturedFieldIds = offer.capturedFieldIds ?? [];
+  if (
+    !factKinds.has(offer.kind) ||
+    (!offer.clauseIds.length && !capturedFieldIds.length)
+  )
+    return false;
   const fact = { ...offer, key: sourceEligibilityFactKey(offer) };
   if (countryFactKinds.has(offer.kind) && !countryForFact(fact)) return false;
   if (!countryFactKinds.has(offer.kind) && offer.country !== undefined)
@@ -297,10 +492,16 @@ function validOffer(
       return false;
   } else if (offer.constraint !== undefined) return false;
   const known = new Set(clauses.map((clause) => clause.id));
+  const knownFields = new Set(
+    capturedFieldsFor(context).map((field) => field.id),
+  );
   return (
     offer.clauseIds.length <= clauses.length &&
     new Set(offer.clauseIds).size === offer.clauseIds.length &&
-    offer.clauseIds.every((id) => known.has(id))
+    offer.clauseIds.every((id) => known.has(id)) &&
+    capturedFieldIds.length <= knownFields.size &&
+    new Set(capturedFieldIds).size === capturedFieldIds.length &&
+    capturedFieldIds.every((id) => knownFields.has(id))
   );
 }
 
@@ -349,13 +550,18 @@ for (const [alias, code] of [
   if (country) countryAliases.set(alias, country);
 }
 
-function matchingClauseIds(
-  clauses: SourceEligibilityClause[],
+interface SourceEligibilityWitness {
+  id: string;
+  text: string;
+}
+
+function matchingWitnessIds(
+  witnesses: SourceEligibilityWitness[],
   matcher: (text: string) => boolean,
 ): string[] {
-  return clauses
-    .filter((clause) => matcher(clause.text))
-    .map((clause) => clause.id);
+  return witnesses
+    .filter((witness) => matcher(witness.text))
+    .map((witness) => witness.id);
 }
 
 /**
@@ -367,17 +573,30 @@ function matchingClauseIds(
 export function nominateSourceEligibilityFactOffers(
   clauses: SourceEligibilityClause[],
 ): { countryOverflow: boolean; offers: SourceEligibilityFactOffer[] } {
+  return nominateEligibilityFactOffers(
+    clauses.map((clause) => ({ id: clause.id, text: clause.text })),
+    new Set(clauses.map((clause) => clause.id)),
+  );
+}
+
+function nominateEligibilityFactOffers(
+  witnesses: SourceEligibilityWitness[],
+  clauseIds: Set<string>,
+): { countryOverflow: boolean; offers: SourceEligibilityFactOffer[] } {
   const countries = new Map<
     string,
-    { country: CountryReference; clauseIds: string[] }
+    { country: CountryReference; witnessIds: string[] }
   >();
-  for (const clause of clauses) {
-    const normalized = clause.text.normalize('NFKC').toLocaleLowerCase('en');
+  for (const witness of witnesses) {
+    const normalized = witness.text.normalize('NFKC').toLocaleLowerCase('en');
     for (const [label, country] of countryAliases) {
       if (!wholeWord(normalized, label)) continue;
-      const current = countries.get(country.code) ?? { country, clauseIds: [] };
-      if (!current.clauseIds.includes(clause.id))
-        current.clauseIds.push(clause.id);
+      const current = countries.get(country.code) ?? {
+        country,
+        witnessIds: [],
+      };
+      if (!current.witnessIds.includes(witness.id))
+        current.witnessIds.push(witness.id);
       countries.set(country.code, current);
     }
   }
@@ -387,10 +606,28 @@ export function nominateSourceEligibilityFactOffers(
   const countryOverflow = nominatedCountries.length > 4;
   const selectedCountries = nominatedCountries.slice(0, 4);
   const offers: SourceEligibilityFactOffer[] = selectedCountries.flatMap(
-    ({ country, clauseIds }) => [
-      { kind: 'work_country_allowed', country, clauseIds },
-      { kind: 'work_country_required', country, clauseIds },
-      { kind: 'existing_authorization_required', country, clauseIds },
+    ({ country, witnessIds }) => [
+      offerFromWitnesses(
+        'work_country_allowed',
+        country,
+        undefined,
+        witnessIds,
+        clauseIds,
+      ),
+      offerFromWitnesses(
+        'work_country_required',
+        country,
+        undefined,
+        witnessIds,
+        clauseIds,
+      ),
+      offerFromWitnesses(
+        'existing_authorization_required',
+        country,
+        undefined,
+        witnessIds,
+        clauseIds,
+      ),
     ],
   );
   const append = (
@@ -398,9 +635,11 @@ export function nominateSourceEligibilityFactOffers(
     matcher: (text: string) => boolean,
     constraint?: SourceEligibilityConstraintKind,
   ) => {
-    const clauseIds = matchingClauseIds(clauses, matcher);
-    if (clauseIds.length)
-      offers.push({ kind, clauseIds, ...(constraint ? { constraint } : {}) });
+    const witnessIds = matchingWitnessIds(witnesses, matcher);
+    if (witnessIds.length)
+      offers.push(
+        offerFromWitnesses(kind, undefined, constraint, witnessIds, clauseIds),
+      );
   };
   append('remote_available', (value) => /\bremote\b/iu.test(value));
   append('remote_worldwide_allowed', (value) =>
@@ -421,11 +660,39 @@ export function nominateSourceEligibilityFactOffers(
   append('relocation_offered', (value) => /\brelocation\b/iu.test(value));
   // Exact witness choice covers every clause because local constraints cannot
   // be safely inferred from a hard-coded city/province list.
-  const allClauseIds = clauses.map((clause) => clause.id);
+  const allWitnessIds = witnesses.map((witness) => witness.id);
   for (const constraint of SOURCE_ELIGIBILITY_CONSTRAINT_KINDS) {
-    offers.push({ kind: 'constraint', constraint, clauseIds: allClauseIds });
+    offers.push(
+      offerFromWitnesses(
+        'constraint',
+        undefined,
+        constraint,
+        allWitnessIds,
+        clauseIds,
+      ),
+    );
   }
   return { countryOverflow, offers };
+}
+
+function offerFromWitnesses(
+  kind: SourceEligibilityFactKind,
+  country: CountryReference | undefined,
+  constraint: SourceEligibilityConstraintKind | undefined,
+  witnessIds: string[],
+  clauseIds: Set<string>,
+): SourceEligibilityFactOffer {
+  const sourceClauseIds = witnessIds.filter((id) => clauseIds.has(id));
+  const capturedFieldIds = witnessIds.filter(
+    (id) => !clauseIds.has(id),
+  ) as Array<SourceEligibilityCapturedField['id']>;
+  return {
+    kind,
+    ...(country ? { country } : {}),
+    ...(constraint ? { constraint } : {}),
+    clauseIds: sourceClauseIds,
+    ...(capturedFieldIds.length ? { capturedFieldIds } : {}),
+  };
 }
 
 /** Canonical source-only factory used by the aggregate provider. */
@@ -434,6 +701,36 @@ export function prepareCanonicalSourceEligibilityEvidenceAudit(input: {
   context: SourceEligibilityEvidenceContext;
 }): PreparedSourceEligibilityAudit {
   const nomination = nominateSourceEligibilityFactOffers(input.clauses);
+  return prepareSourceEligibilityEvidenceAudit({
+    ...input,
+    offers: nomination.offers,
+    countryOverflow: nomination.countryOverflow,
+  });
+}
+
+/**
+ * New opt-in aggregate factory. It adds only attested original ATS fields and
+ * intentionally leaves body-only v3 preparation/replay unchanged.
+ */
+export function prepareCanonicalCapturedSourceEligibilityEvidenceAudit(input: {
+  clauses: SourceEligibilityClause[];
+  context: SourceEligibilityCapturedEvidenceContext;
+}): PreparedSourceEligibilityAudit {
+  if (!validCapturedFields(input.context))
+    throw new Error(
+      'Captured ATS eligibility fields must be exact and current.',
+    );
+  const witnesses = [
+    ...input.clauses.map((clause) => ({ id: clause.id, text: clause.text })),
+    ...input.context.capturedFields.map((field) => ({
+      id: field.id,
+      text: field.text,
+    })),
+  ];
+  const nomination = nominateEligibilityFactOffers(
+    witnesses,
+    new Set(input.clauses.map((clause) => clause.id)),
+  );
   return prepareSourceEligibilityEvidenceAudit({
     ...input,
     offers: nomination.offers,
@@ -457,8 +754,18 @@ export function prepareSourceEligibilityEvidenceAudit(input: {
       'Eligibility source clauses must losslessly cover current source text.',
     );
   if (
+    (input.context.capturedFields !== undefined ||
+      input.context.capturedFieldsFingerprint !== undefined) &&
+    !validCapturedFields(input.context)
+  )
+    throw new Error(
+      'Captured ATS eligibility fields must be exact and current.',
+    );
+  if (
     input.offers.length > 24 ||
-    input.offers.some((offer) => !validOffer(offer, input.clauses))
+    input.offers.some(
+      (offer) => !validOffer(offer, input.clauses, input.context),
+    )
   )
     throw new Error(
       'Eligibility offers must be bounded exact source witnesses.',
@@ -470,19 +777,38 @@ export function prepareSourceEligibilityEvidenceAudit(input: {
       throw new Error(`Duplicate eligibility fact offer: ${key}`);
     keys.add(key);
   }
+  const selectedCoverageQuestions = coverageQuestionsFor(input.context);
+  const capturedSource = validCapturedFields(input.context);
+  const auditVersion = capturedSource
+    ? SOURCE_ELIGIBILITY_CAPTURED_SOURCE_AUDIT_VERSION
+    : SOURCE_ELIGIBILITY_AUDIT_VERSION;
+  const clauseAliases = clauseAliasesFor(input.context, input.clauses);
   const request: DecisionRequest = {
     state: {
       sourceEligibilityClauses: input.clauses.map((clause) => ({
-        id: clause.id,
+        id: clauseAliases?.[clause.id] ?? clause.id,
         text: clause.text,
       })),
+      ...(validCapturedFields(input.context)
+        ? {
+            sourceEligibilityCapturedFields: input.context.capturedFields.map(
+              (field) => ({
+                id: field.id,
+                path: field.path,
+                text: field.text,
+              }),
+            ),
+          }
+        : {}),
     },
     questions: {
       ...Object.fromEntries(
-        Object.entries(coverageQuestions).map(([scope, instructions]) => [
-          `source_eligibility__coverage__${scope}`,
-          { type: 'predicate' as const, instructions },
-        ]),
+        Object.entries(selectedCoverageQuestions).map(
+          ([scope, instructions]) => [
+            `source_eligibility__coverage__${scope}`,
+            { type: 'predicate' as const, instructions },
+          ],
+        ),
       ),
       ...Object.fromEntries(
         input.offers.flatMap((offer) => {
@@ -499,9 +825,15 @@ export function prepareSourceEligibilityEvidenceAudit(input: {
               sourceEligibilityEvidenceQuestionKey(key),
               {
                 type: 'choice' as const,
-                instructions: `Choose the exact supplied source clause that explicitly proves ${key}, or none if no supplied clause proves it.`,
+                instructions: capturedSource
+                  ? `Choose the exact supplied source witness ID that explicitly proves ${key}. Body cN is the exact state.sourceEligibilityClauses entry with id cN; source-field IDs name original ATS fields. Choose none if no supplied witness proves it.`
+                  : `Choose the exact supplied source clause that explicitly proves ${key}, or none if no supplied clause proves it.`,
                 criteria: Object.fromEntries([
-                  ...offer.clauseIds.map((id) => [id, null]),
+                  ...offer.clauseIds.map((id) => [
+                    clauseAliases?.[id] ?? id,
+                    null,
+                  ]),
+                  ...(offer.capturedFieldIds ?? []).map((id) => [id, null]),
                   ['none', 'No supplied clause explicitly proves this fact.'],
                 ]),
               },
@@ -512,14 +844,20 @@ export function prepareSourceEligibilityEvidenceAudit(input: {
     },
   };
   const material = {
-    version: SOURCE_ELIGIBILITY_AUDIT_VERSION,
+    version: auditVersion,
     context: input.context,
     clauses: input.clauses,
+    ...(clauseAliases ? { clauseAliases } : {}),
     offers: input.offers,
     countryOverflow: input.countryOverflow === true,
     request,
   };
-  return { ...material, fingerprint: stableHash(material) };
+  return {
+    ...material,
+    auditVersion,
+    ...(clauseAliases ? { clauseAliases } : {}),
+    fingerprint: stableHash(material),
+  };
 }
 
 /**
@@ -547,8 +885,15 @@ export function resolveSourceEligibilityEvidenceAudit(
     geography: false,
     workArrangement: false,
   };
-  for (const scope of Object.keys(coverageQuestions) as Array<
-    keyof typeof coverageQuestions
+  const selectedCoverageQuestions = coverageQuestionsFor(prepared.context);
+  if (
+    prepared.auditVersion ===
+      SOURCE_ELIGIBILITY_CAPTURED_SOURCE_AUDIT_VERSION &&
+    !validClauseAliases(prepared.clauseAliases, prepared.clauses)
+  )
+    throw new Error('Captured-source eligibility aliases must be canonical.');
+  for (const scope of Object.keys(selectedCoverageQuestions) as Array<
+    keyof typeof selectedCoverageQuestions
   >) {
     const answer = result.answers[`source_eligibility__coverage__${scope}`];
     if (answer?.type !== 'predicate' || !probability(answer.probability))
@@ -558,6 +903,15 @@ export function resolveSourceEligibilityEvidenceAudit(
   }
   const clauses = new Map(
     prepared.clauses.map((clause) => [clause.id, clause]),
+  );
+  const canonicalClauseIdByAlias = new Map(
+    Object.entries(prepared.clauseAliases ?? {}).map(([id, alias]) => [
+      alias,
+      id,
+    ]),
+  );
+  const capturedFields = new Map(
+    capturedFieldsFor(prepared.context).map((field) => [field.id, field]),
   );
   const facts: SourceEligibilityFact[] = [];
   for (const offer of prepared.offers) {
@@ -573,9 +927,14 @@ export function resolveSourceEligibilityEvidenceAudit(
       !probability(selected.confidence)
     )
       throw new Error(`Malformed eligibility fact answer: ${key}`);
+    const selectedCanonicalClauseId =
+      canonicalClauseIdByAlias.get(selected.choice) ?? selected.choice;
     if (
       selected.choice !== 'none' &&
-      !offer.clauseIds.includes(selected.choice)
+      !offer.clauseIds.includes(selectedCanonicalClauseId) &&
+      !(offer.capturedFieldIds ?? []).includes(
+        selected.choice as SourceEligibilityCapturedField['id'],
+      )
     )
       throw new Error(`Eligibility fact selected an unoffered clause: ${key}`);
     if (
@@ -584,10 +943,13 @@ export function resolveSourceEligibilityEvidenceAudit(
       selected.choice === 'none'
     )
       continue;
-    const clause = clauses.get(selected.choice);
-    if (!clause)
+    const clause = clauses.get(selectedCanonicalClauseId);
+    const field = capturedFields.get(
+      selected.choice as SourceEligibilityCapturedField['id'],
+    );
+    if (!clause && !field)
       throw new Error(
-        `Eligibility fact selected an unavailable clause: ${key}`,
+        `Eligibility fact selected an unavailable witness: ${key}`,
       );
     facts.push({
       kind: offer.kind,
@@ -596,14 +958,26 @@ export function resolveSourceEligibilityEvidenceAudit(
         : {}),
       ...(offer.constraint ? { constraint: offer.constraint } : {}),
       key,
-      citations: [
-        {
-          clauseId: clause.id,
-          start: clause.start,
-          end: clause.end,
-          hash: hash(clause.text),
-        },
-      ],
+      citations: clause
+        ? [
+            {
+              clauseId: clause.id,
+              start: clause.start,
+              end: clause.end,
+              hash: hash(clause.text),
+              source: 'descriptionRaw' as const,
+            },
+          ]
+        : [
+            {
+              field: field!.field,
+              hash: field!.hash,
+              id: field!.id,
+              path: field!.path,
+              source: 'captured_field' as const,
+              text: field!.text,
+            },
+          ],
     });
   }
   const material = {
@@ -612,6 +986,11 @@ export function resolveSourceEligibilityEvidenceAudit(
     requestId,
     sourceContentFingerprint: prepared.context.sourceContentFingerprint,
     sourceContentVersion: prepared.context.sourceContentVersion,
+    ...(validCapturedFields(prepared.context)
+      ? {
+          capturedFieldsFingerprint: prepared.context.capturedFieldsFingerprint,
+        }
+      : {}),
     coverage: prepared.countryOverflow
       ? { authorization: false, geography: false, workArrangement: false }
       : coverage,
@@ -622,11 +1001,25 @@ export function resolveSourceEligibilityEvidenceAudit(
 
 function validCitation(
   citation: unknown,
-  sourceText: string,
+  context: SourceEligibilityEvidenceContext,
 ): citation is SourceEligibilityCitation {
   if (!citation || typeof citation !== 'object' || Array.isArray(citation))
     return false;
   const value = citation as Record<string, unknown>;
+  if (value.source === 'captured_field') {
+    const field = capturedFieldsFor(context).find(
+      (candidate) => candidate.id === value.id,
+    );
+    return (
+      field !== undefined &&
+      value.field === field.field &&
+      value.path === field.path &&
+      value.text === field.text &&
+      value.hash === field.hash
+    );
+  }
+  if (value.source !== undefined && value.source !== 'descriptionRaw')
+    return false;
   const start = value.start;
   const end = value.end;
   return (
@@ -637,11 +1030,11 @@ function validCitation(
     Number.isSafeInteger(end) &&
     start >= 0 &&
     end > start &&
-    end <= sourceText.length &&
+    end <= context.sourceText.length &&
     typeof value.hash === 'string' &&
     /^[a-f0-9]{64}$/iu.test(value.hash) &&
-    Boolean(sourceText.slice(start, end).trim()) &&
-    hash(sourceText.slice(start, end)) === value.hash
+    Boolean(context.sourceText.slice(start, end).trim()) &&
+    hash(context.sourceText.slice(start, end)) === value.hash
   );
 }
 
@@ -661,6 +1054,14 @@ export function validateSourceEligibilityEvidence(
     evidence.sourceContentVersion !== context.sourceContentVersion ||
     !context.sourceContentFingerprint ||
     context.sourceContentVersion < 1 ||
+    (context.capturedFields === undefined) !==
+      (context.capturedFieldsFingerprint === undefined) ||
+    (context.capturedFields !== undefined && !validCapturedFields(context)) ||
+    (validCapturedFields(context) &&
+      evidence.capturedFieldsFingerprint !==
+        context.capturedFieldsFingerprint) ||
+    (!validCapturedFields(context) &&
+      evidence.capturedFieldsFingerprint !== undefined) ||
     !evidence.coverage ||
     typeof evidence.coverage.geography !== 'boolean' ||
     typeof evidence.coverage.workArrangement !== 'boolean' ||
@@ -682,9 +1083,7 @@ export function validateSourceEligibilityEvidence(
       !Array.isArray(fact.citations) ||
       fact.citations.length < 1 ||
       fact.citations.length > 12 ||
-      !fact.citations.every((citation) =>
-        validCitation(citation, context.sourceText),
-      )
+      !fact.citations.every((citation) => validCitation(citation, context))
     )
       return false;
     keys.add(fact.key);

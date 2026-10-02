@@ -11,6 +11,7 @@ import { requirementCoverageContextForOpportunity } from '../src/lib/server/oppo
 import {
   preflightRequirementCoverageAudit,
   preflightRequirementEvidenceAudit,
+  prepareCapturedSourceCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareRequirementEvidenceAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
@@ -20,10 +21,12 @@ import {
   validateVerifiedRequirementCoverage,
 } from '../src/lib/server/opportunity-requirement-coverage-provider.js';
 import { enqueueOpportunityRequirementCoverageSourceStage } from '../src/lib/server/opportunity-requirement-coverage-source-stage-job.js';
+import { readCurrentOpportunityAssessmentScreen } from '../src/lib/server/opportunity-screening-provider.js';
 import {
   fingerprintOpportunitySourceContent,
   opportunityWithSourceContent,
 } from '../src/lib/server/opportunity-source-content.js';
+import { loadCurrentSourceEligibilityProjections } from '../src/lib/server/opportunity-source-eligibility-projection.js';
 import { loadWorkspaceCandidateEvidence } from '../src/lib/server/resume-data.js';
 import { getCollection } from '../src/lib/server/smrt.js';
 import { withSyntheticDemoOwnerContext } from '../src/lib/server/synthetic-demo-fixture.js';
@@ -66,19 +69,31 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
   tenantId: string;
 };
 const scenario = process.argv[2];
+const screeningStage = scenario.startsWith('screen-');
+const screeningVariant = screeningStage ? scenario.slice('screen-'.length) : '';
 const privateStage = scenario.startsWith('private-');
 const privateVariant = privateStage ? scenario.slice('private-'.length) : '';
 const eligibilityStage = scenario.startsWith('eligibility-');
+const capturedStage = scenario.startsWith('captured-');
 const evidenceStage =
-  privateStage || scenario.startsWith('evidence-') || eligibilityStage;
+  privateStage ||
+  scenario.startsWith('evidence-') ||
+  eligibilityStage ||
+  capturedStage;
 const variant = privateStage
   ? 'fitting'
-  : eligibilityStage
-    ? scenario.slice('eligibility-'.length)
-    : evidenceStage
-      ? scenario.slice('evidence-'.length)
-      : scenario;
+  : screeningStage
+    ? 'fitting'
+    : capturedStage
+      ? scenario.slice('captured-'.length)
+      : eligibilityStage
+        ? scenario.slice('eligibility-'.length)
+        : evidenceStage
+          ? scenario.slice('evidence-'.length)
+          : scenario;
 if (
+  (screeningStage &&
+    !['mismatch', 'relevant', 'invalid-material'].includes(screeningVariant)) ||
   (privateStage &&
     !['fitting', 'stale-source', 'stale-candidate', 'foreign-proof'].includes(
       privateVariant,
@@ -109,6 +124,10 @@ const provider = await startSourceStageProvider(
   {
     failExtraction: variant === 'failed-retry',
     partialEvidence: evidenceStage,
+    capturedRecovery: capturedStage,
+    screeningOutcome: screeningStage
+      ? (screeningVariant as 'mismatch' | 'relevant' | 'invalid-material')
+      : undefined,
   },
 );
 process.env.HAVE_AI_BASE_URL = provider.url;
@@ -116,17 +135,27 @@ process.env.HAVE_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_BASE_URL = provider.url;
 const opportunities = await getCollection('Opportunity');
 const large = variant === 'oversize';
 const source = {
-  title: 'Fictional staged source ' + scenario,
-  descriptionRaw:
-    'Remote role.\nRequirements\n' +
-    (large
-      ? Array.from(
-          { length: 90 },
-          (_, i) =>
-            'Must verify fixture case ' + String(i).padStart(3, '0') + '.',
-        ).join('\n')
-      : 'You must maintain tested API integrations.\nYou must build accessible TypeScript interfaces.'),
-  workMode: '',
+  title: screeningStage
+    ? screeningVariant === 'mismatch'
+      ? 'Staff Accountant'
+      : 'Software Engineer at Fictional Accounting Co'
+    : 'Fictional staged source ' + scenario,
+  descriptionRaw: screeningStage
+    ? screeningVariant === 'mismatch'
+      ? 'Prepare tax returns and financial statements as an accountant.\nReconcile client ledgers and file tax documents.'
+      : 'Build accessible TypeScript interfaces for an accounting software product.\nMaintain tested API integrations used by customers.'
+    : capturedStage
+      ? 'Role Summary\nRequirements\nYou must maintain tested API integrations.\nYou must build accessible TypeScript interfaces.'
+      : 'Remote role.\nRequirements\n' +
+        (large
+          ? Array.from(
+              { length: 90 },
+              (_, i) =>
+                'Must verify fixture case ' + String(i).padStart(3, '0') + '.',
+            ).join('\n')
+          : 'You must maintain tested API integrations.\nYou must build accessible TypeScript interfaces.'),
+  ...(capturedStage ? { locationNotes: 'Remote in Canada' } : {}),
+  workMode: capturedStage || screeningStage ? 'remote' : '',
   employmentType: '',
   postedAt: '2020-01-01T00:00:00.000Z',
 };
@@ -237,6 +266,87 @@ async function service() {
     await runner.stop();
   }
 }
+if (screeningStage) {
+  let screenEnqueue: Json | undefined;
+  let screenRefusal = '';
+  let screenReceipt: Json | undefined;
+  const before = await snapshot();
+  try {
+    await asOwner(async () => {
+      const candidates = await getCollection('CandidateProfile');
+      const profile = await candidates.get(
+        { id: fixture.profileId },
+        { cache: false },
+      );
+      if (!profile) throw new Error('Screening fixture candidate missing');
+      Object.assign(profile, {
+        preferencesJson: JSON.stringify({
+          targetRoles: ['Software Engineer'],
+          workModes: ['remote'],
+        }),
+        targetWorkCountryJson:
+          screeningVariant === 'invalid-material'
+            ? '{invalid-native-country-json'
+            : JSON.stringify({ code: 'CA', label: 'Canada' }),
+        authorizedWorkCountriesJson: JSON.stringify([
+          { country: { code: 'CA', label: 'Canada' }, scope: 'country' },
+        ]),
+        sponsorshipRequired: false,
+      });
+      await profile.save();
+    });
+    const queued = await asOwner(
+      async () =>
+        await enqueueOpportunityIntelligenceWithStatus(id, {
+          modes: 'assessment',
+        }),
+    );
+    screenEnqueue = {
+      stage: queued.stage,
+      sourceStatus: queued.sourceStatus,
+      jobId: queued.job.id,
+    };
+    jobId = String(queued.job.id);
+    await service();
+    screenReceipt = (await asOwner(
+      async () =>
+        await readCurrentOpportunityAssessmentScreen({
+          opportunityId: id,
+          subject: {
+            tenantId: fixture.tenantId,
+            userId: fixture.userId,
+            profileId: fixture.profileId,
+          },
+        }),
+    )) as unknown as Json | undefined;
+  } catch (error) {
+    screenRefusal = error instanceof Error ? error.message : String(error);
+  }
+  const final = await snapshot();
+  const resultPath = root + '/source-stage-result-' + id + '.json';
+  writeFileSync(
+    resultPath,
+    JSON.stringify({
+      scenario,
+      id,
+      owner: {
+        tenantId: fixture.tenantId,
+        userId: fixture.userId,
+        profileId: fixture.profileId,
+      },
+      afterExtraction: before,
+      providerEvents: provider.events,
+      screenEnqueue,
+      screenRefusal,
+      screenReceipt,
+      final,
+    }),
+    { mode: 0o600 },
+  );
+  console.log('IOLAUS_SOURCE_STAGE_RESULT:' + JSON.stringify({ resultPath }));
+  await provider.close();
+  process.exit(0);
+}
 let refusal = '';
 let afterExtraction: Awaited<ReturnType<typeof snapshot>> | undefined;
 let exact: Json | undefined;
@@ -251,6 +361,7 @@ let privateProjection: Json | undefined;
 let privateProjectionReload: Json | undefined;
 let privateProjectionAfterForge: Json | undefined;
 let privateProjectionAfterForgeAttempted = false;
+let sourceEligibilityProjection: Json | undefined;
 try {
   const extractionJob = await asOwner(
     async () =>
@@ -272,15 +383,24 @@ try {
     const prepared = JSON.parse(String(record.preparedPostingJson));
     const context = requirementCoverageContextForOpportunity(record);
     if (evidenceStage) {
-      const audit = eligibilityStage
-        ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+      const audit = capturedStage
+        ? prepareCapturedSourceCompositeRequirementEvidenceAudit(
             context,
             prepared.requirementCoverage,
+            {
+              sourceContentJson: String(record.sourceContentJson),
+              extractionRequestId: selectedRequestId,
+            },
           )
-        : prepareRequirementEvidenceAudit(
-            context,
-            prepared.requirementCoverage,
-          );
+        : eligibilityStage
+          ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+              context,
+              prepared.requirementCoverage,
+            )
+          : prepareRequirementEvidenceAudit(
+              context,
+              prepared.requirementCoverage,
+            );
       exact = {
         request: audit.request,
         inputFingerprint: audit.inputFingerprint,
@@ -339,7 +459,12 @@ try {
                       evidenceVersion:
                         'requirement-evidence-audit/v3-source-eligibility' as const,
                     }
-                  : {}),
+                  : capturedStage
+                    ? {
+                        evidenceVersion:
+                          'requirement-evidence-audit/v4-captured-source-recovery' as const,
+                      }
+                    : {}),
               },
         ),
     );
@@ -378,6 +503,19 @@ try {
     refusal = error instanceof Error ? error.message : String(error);
   }
   let final = await snapshot();
+  if (capturedStage && variant === 'fitting') {
+    sourceEligibilityProjection = await asOwner(async () => {
+      const projections = await loadCurrentSourceEligibilityProjections({
+        opportunities: [await current()],
+        subject: {
+          tenantId: fixture.tenantId,
+          userId: fixture.userId,
+          profileId: fixture.profileId,
+        },
+      });
+      return projections.get(id);
+    });
+  }
   if (privateStage) {
     if (!final.partial?.acceptedRequirements.length)
       throw new Error('Native GLOBAL partial source proof missing');
@@ -580,6 +718,7 @@ try {
       privateProjectionReload,
       privateProjectionAfterForge,
       privateProjectionAfterForgeAttempted,
+      sourceEligibilityProjection,
       providerEvents: provider.events,
       final,
       verified,

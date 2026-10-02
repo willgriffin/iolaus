@@ -57,7 +57,14 @@ export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
       'requirement-evidence-audit/v1-decomposed',
       'requirement-evidence-audit/v2-row-relevance',
       'requirement-evidence-audit/v3-source-eligibility',
+      'requirement-evidence-audit/v4-captured-source-recovery',
     ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-screening',
+    profile: 'typesafe-opportunity-screening',
+    versions: ['opportunity-screening/v1-jev-first'],
     historicalVersions: [],
   },
   {
