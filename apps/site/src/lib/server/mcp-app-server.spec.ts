@@ -1,6 +1,24 @@
+import './manifest-preload.js';
 import { mountMcpRoute } from '@happyvertical/smrt-app-mcp/sveltekit';
-import { getCurrentTenant, withTenant } from '@happyvertical/smrt-tenancy';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTestDatabase } from '@happyvertical/smrt-core';
+import {
+  getCurrentTenant,
+  withSystemContext,
+  withTenant,
+} from '@happyvertical/smrt-tenancy';
+import {
+  MembershipCollection,
+  MembershipStatus,
+  PermissionCollection,
+  RoleCollection,
+  RolePermissionCollection,
+  TenantCollection,
+  TenantStatus,
+  UserCollection,
+  UserStatus,
+} from '@happyvertical/smrt-users';
+import type { DatabaseInterface } from '@happyvertical/sql';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
 import {
   IOLAUS_MCP_APP_RESOURCE,
@@ -9,16 +27,23 @@ import {
 } from './mcp-app-server.js';
 
 const workflows = vi.hoisted(() => ({
+  database: undefined as DatabaseInterface | undefined,
   getProfile: vi.fn(),
   inspectApplication: vi.fn(),
 }));
 
-// Keep executeAsPrincipal and the workspace verifier real; only storage and
-// the workflow body are bounded fixtures for native-context regression.
+// Keep live identity, membership, role permissions, executeAsPrincipal and the
+// workspace verifier native. Only candidate storage and the workflow body are
+// bounded fixtures for this native-context regression.
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async () => ({ get: workflows.getProfile })),
-  getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
+  getRequestScopedSmrtOptions: vi.fn(() => ({ db: workflows.database })),
 }));
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),
+  getSmrtOptions: () => ({ db: workflows.database }),
+}));
+
 vi.mock('./application-inspect-webmcp.js', () => ({
   inspectJobApplication: workflows.inspectApplication,
 }));
@@ -73,17 +98,80 @@ function toolsListRequest() {
 }
 
 describe('Iolaus MCP Apps server', () => {
-  beforeEach(() => {
+  let nativeSubject: { profileId: string; tenantId: string; userId: string };
+  let membershipId: string;
+  let roleId: string;
+  let permissionId: string;
+
+  beforeEach(async () => {
     workflows.getProfile.mockReset();
     workflows.inspectApplication.mockReset();
+    workflows.database = await getTestDatabase({
+      classes: [
+        'Group',
+        'GroupMember',
+        'GroupRole',
+        'Membership',
+        'MembershipOverride',
+        'Permission',
+        'Role',
+        'RolePermission',
+        'Session',
+        'Tenant',
+        'TenantPermissionOverride',
+        'User',
+      ],
+    });
+    const options = { db: workflows.database };
+    const users = await UserCollection.create(options);
+    const tenants = await TenantCollection.create(options);
+    const roles = await RoleCollection.create(options);
+    const user = await users.create({
+      email: 'mcp-owner@example.invalid',
+      status: UserStatus.ACTIVE,
+    });
+    const tenant = await tenants.create({
+      name: 'MCP workspace fixture',
+      status: TenantStatus.ACTIVE,
+    });
+    const role = await roles.create({ name: 'MCP inspector' });
+    if (!user.id || !tenant.id || !role.id)
+      throw new Error('Missing native MCP identity ID');
+    roleId = role.id;
+    nativeSubject = {
+      profileId: 'profile-1',
+      tenantId: tenant.id,
+      userId: user.id,
+    };
+    const memberships = await MembershipCollection.create(options);
+    const membership = await memberships.create({
+      roleId,
+      tenantId: tenant.id,
+      userId: user.id,
+      status: MembershipStatus.ACTIVE,
+    });
+    if (!membership.id) throw new Error('Missing native membership ID');
+    membershipId = membership.id;
+    const permissions = await PermissionCollection.create(options);
+    const permission = await permissions.create({
+      name: 'Inspect application',
+      slug: 'workflow.application.inspect',
+    });
+    if (!permission.id) throw new Error('Missing native permission ID');
+    permissionId = permission.id;
+    await (await RolePermissionCollection.create(options)).addPermission(
+      roleId,
+      permissionId,
+    );
+  });
+
+  afterEach(async () => {
+    await workflows.database?.close?.();
+    workflows.database = undefined;
   });
 
   it('rebinds the verified selected profile inside the fresh native principal context', async () => {
-    const subject = {
-      profileId: 'profile-1',
-      tenantId: 'tenant-1',
-      userId: 'owner-1',
-    };
+    const subject = { ...nativeSubject };
     const locals = {
       ...subjectLocals(subject),
       permissions: ['workflow.application.inspect'],
@@ -124,23 +212,67 @@ describe('Iolaus MCP Apps server', () => {
   });
 
   it.each([
-    { ownerUserId: 'foreign-user', tenantId: 'tenant-1', active: true },
-    { ownerUserId: 'owner-1', tenantId: 'foreign-tenant', active: true },
-    { ownerUserId: 'owner-1', tenantId: 'tenant-1', active: false },
-  ])('rejects a selected profile that no longer belongs to the active principal (%j)', async (profile) => {
+    'foreign user',
+    'foreign tenant',
+    'inactive profile',
+  ])('rejects a selected profile that no longer belongs to the active principal (%s)', async (kind) => {
     const locals = {
-      ...subjectLocals({
-        profileId: 'profile-1',
-        tenantId: 'tenant-1',
-        userId: 'owner-1',
-      }),
+      ...subjectLocals(nativeSubject),
       permissions: ['workflow.application.inspect'],
     };
-    workflows.getProfile.mockResolvedValue({ id: 'profile-1', ...profile });
+    workflows.getProfile.mockResolvedValue({
+      id: nativeSubject.profileId,
+      ownerUserId:
+        kind === 'foreign user' ? 'foreign-user' : nativeSubject.userId,
+      tenantId:
+        kind === 'foreign tenant' ? 'foreign-tenant' : nativeSubject.tenantId,
+      active: kind !== 'inactive profile',
+    });
     const result = await mcpAppServer.callTool({
       name: 'job_search_inspect_application',
       arguments: { applicationId: '11111111-1111-4111-8111-111111111111' },
       principal: resolveMcpAppPrincipal(locals),
+    });
+    expect(result.isError).toBe(true);
+    expect(workflows.inspectApplication).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'membership',
+    'permission',
+  ])('denies a request-minted principal after native %s revocation despite its stale permission snapshot', async (kind) => {
+    const locals = {
+      ...subjectLocals(nativeSubject),
+      permissions: ['workflow.application.inspect'],
+    };
+    const principal = resolveMcpAppPrincipal(locals);
+    expect(principal).not.toBeNull();
+    workflows.getProfile.mockResolvedValue({
+      id: nativeSubject.profileId,
+      active: true,
+      tenantId: nativeSubject.tenantId,
+      ownerUserId: nativeSubject.userId,
+    });
+    await withSystemContext(async () => {
+      const options = { db: workflows.database };
+      if (kind === 'permission') {
+        await (await RolePermissionCollection.create(options)).removePermission(
+          roleId,
+          permissionId,
+        );
+      } else {
+        const membership = await (
+          await MembershipCollection.create(options)
+        ).get(membershipId);
+        if (!membership) throw new Error('Missing native membership');
+        membership.status = MembershipStatus.INACTIVE;
+        await membership.save();
+      }
+    });
+    const result = await mcpAppServer.callTool({
+      name: 'job_search_inspect_application',
+      arguments: { applicationId: '11111111-1111-4111-8111-111111111111' },
+      principal,
     });
     expect(result.isError).toBe(true);
     expect(workflows.inspectApplication).not.toHaveBeenCalled();

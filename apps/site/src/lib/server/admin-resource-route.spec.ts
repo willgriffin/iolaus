@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     collections,
+    effectivePermissions: [] as string[],
     countAdminResourceRecords: vi.fn(),
     countOpportunityRecords: vi.fn(),
     createAdminRecord: vi.fn(),
@@ -119,8 +120,37 @@ vi.mock('./application-package', () => ({
   updateOpportunityReview: mocks.updateOpportunityReview,
 }));
 
-// The owner principal runs the real `executeAsPrincipal()` gate against an
-// in-memory database; only the workflow writers behind it are mocked.
+// These route units retain the native principal/operation gate, while identity
+// rows and the resolver result are explicit fixtures. Native RBAC revocation
+// is exercised against real tables in owner-principal.spec.ts.
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-users')>();
+  return {
+    ...actual,
+    UserCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'user-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    TenantCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'tenant-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    MembershipCollection: {
+      create: async () => ({
+        findByUserAndTenant: async (userId: string, tenantId: string) =>
+          userId === 'user-1' && tenantId === 'tenant-1'
+            ? { roleId: 'role-1', status: 'active', userId, tenantId }
+            : null,
+      }),
+    },
+  };
+});
+
 vi.mock('./smrt', () => ({
   getCollection: mocks.getCollection,
   getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
@@ -191,6 +221,7 @@ const workspaceSubject = {
 };
 
 function ownerLocals(permissions: string[] = ownerPermissions) {
+  mocks.effectivePermissions = [...permissions];
   return {
     membership: {
       roleId: 'role-1',
@@ -219,6 +250,30 @@ function auditEntries(info: { mock: { calls: unknown[][] } }) {
         entry?.event === 'owner_principal.audit',
     );
 }
+
+// SMRT dependencies load their native runtime outside the app module mock, so
+// intercept its actual resolver method, rather than replacing the app export.
+// Its result is fixture-owned; the native context and exact operation catalog
+// assertion still run, and each deny case removes its required capability.
+beforeEach(async () => {
+  const { PermissionResolver } = await import('@happyvertical/smrt-users');
+  vi.spyOn(
+    PermissionResolver.prototype,
+    'resolvePermissions',
+  ).mockImplementation(async (userId: string, tenantId: string) => ({
+    permissions: new Set(
+      userId === 'user-1' && tenantId === 'tenant-1'
+        ? mocks.effectivePermissions
+        : [],
+    ),
+    membershipId: 'membership-fixture',
+    roleId: 'role-1',
+    groupIds: [],
+    deniedPermissionIds: [],
+    inheritedFromTenantId: null,
+    ancestorReadFromTenantIds: [],
+  }));
+});
 
 describe('admin-resource-route', () => {
   beforeEach(() => {
