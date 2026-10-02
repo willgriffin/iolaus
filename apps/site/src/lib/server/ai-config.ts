@@ -15,6 +15,8 @@ export type OpportunityIntelligenceProfileSelection = 'openai' | 'zai';
 
 export const OPPORTUNITY_INTELLIGENCE_PROFILE_ENV =
   'OPPORTUNITY_INTELLIGENCE_PROFILE';
+/** Existing configured Bifrost chat ceiling; planners must reserve this limit. */
+export const AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS = 4_096;
 export const OPPORTUNITY_INTELLIGENCE_PROFILES = {
   openai: {
     apiKeyEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
@@ -360,7 +362,7 @@ export async function resolveAiProfileClient(
       baseUrl,
       generationLimits: {
         maxImagesPerRequest: 1,
-        maxOutputTokens: 4_096,
+        maxOutputTokens: AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
         maxReasoningTokens: 1_024,
         onExceeded: 'error',
       },
