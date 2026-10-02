@@ -49,10 +49,23 @@ function subjectFromLocals(locals: App.Locals): WorkspaceSubject {
 
 async function runResumeMutation<T>(
   locals: App.Locals,
-  fn: (subject: WorkspaceSubject) => Promise<T>,
+  fn: (
+    subject: WorkspaceSubject,
+    assertWriteAllowed: () => Promise<void>,
+  ) => Promise<T>,
 ): Promise<T> {
   const subject = subjectFromLocals(locals);
   const operation = workspaceWorkflowOperation('profile.manage');
+  const assertWriteAllowed = async () => {
+    await runAsOwner(
+      locals,
+      async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+        await withVerifiedWorkspaceSubject(subject, async () => undefined);
+      },
+      { action: 'admin.resume.write' },
+    );
+  };
   try {
     return await runAsOwner(
       locals,
@@ -60,7 +73,8 @@ async function runResumeMutation<T>(
         await run.assertOperation(operation.collection, operation.action);
         return await withVerifiedWorkspaceSubject(
           subject,
-          async (verified) => await fn(requireWorkspaceSubject(verified)),
+          async (verified) =>
+            await fn(requireWorkspaceSubject(verified), assertWriteAllowed),
         );
       },
       { action: 'admin.resume.manage' },
@@ -111,6 +125,7 @@ async function updateRecord(
   form: FormData,
   keys: string[],
   subject: WorkspaceSubject,
+  assertWriteAllowed: () => Promise<void>,
 ) {
   const id = String(form.get('id') ?? '');
   if (!id) return { ok: false, error: 'Missing record id' };
@@ -132,6 +147,7 @@ async function updateRecord(
   }
   if (typeof record.save !== 'function')
     return { ok: false, error: 'Record cannot be saved' };
+  await assertWriteAllowed();
   await record.save();
   return await savedResumeData();
 }
@@ -215,7 +231,8 @@ export const actions: Actions = {
     const tailoringId = String(form.get('tailoringId') ?? '');
     return await runResumeMutation(
       locals,
-      async (subject) => await generateResumeAsset({ tailoringId, subject }),
+      async (subject, assertWriteAllowed) =>
+        await generateResumeAsset({ tailoringId, subject, assertWriteAllowed }),
     );
   },
   regenerate: async ({ locals, request }) => {
@@ -223,11 +240,12 @@ export const actions: Actions = {
     try {
       const asset = await runResumeMutation(
         locals,
-        async (subject) =>
+        async (subject, assertWriteAllowed) =>
           await regenerateResumeAsset(
             String(form.get('assetId') ?? ''),
             undefined,
             subject,
+            assertWriteAllowed,
           ),
       );
       return {
@@ -254,11 +272,12 @@ export const actions: Actions = {
     const form = await request.formData();
     return await runResumeMutation(
       locals,
-      async (subject) =>
+      async (subject, assertWriteAllowed) =>
         await publishResumeAsset(
           String(form.get('assetId') ?? ''),
           undefined,
           subject,
+          assertWriteAllowed,
         ),
     );
   },
@@ -266,7 +285,7 @@ export const actions: Actions = {
     const form = await request.formData();
     return await runResumeMutation(
       locals,
-      async (subject) =>
+      async (subject, assertWriteAllowed) =>
         await updateRecord(
           'CandidateProfile',
           form,
@@ -287,6 +306,7 @@ export const actions: Actions = {
             'isDefault',
           ],
           subject,
+          assertWriteAllowed,
         ),
     );
   },
@@ -294,7 +314,7 @@ export const actions: Actions = {
     const form = await request.formData();
     return await runResumeMutation(
       locals,
-      async (subject) =>
+      async (subject, assertWriteAllowed) =>
         await updateRecord(
           'Experience',
           form,
@@ -310,6 +330,7 @@ export const actions: Actions = {
             'sortOrder',
           ],
           subject,
+          assertWriteAllowed,
         ),
     );
   },
@@ -317,7 +338,7 @@ export const actions: Actions = {
     const form = await request.formData();
     return await runResumeMutation(
       locals,
-      async (subject) =>
+      async (subject, assertWriteAllowed) =>
         await updateRecord(
           'Education',
           form,
@@ -331,6 +352,7 @@ export const actions: Actions = {
             'sortOrder',
           ],
           subject,
+          assertWriteAllowed,
         ),
     );
   },
@@ -338,25 +360,31 @@ export const actions: Actions = {
     const form = await request.formData();
     const id = String(form.get('profileId') ?? '');
     if (!id) return { ok: false, error: 'Missing profile id' };
-    return await runResumeMutation(locals, async (subject) => {
-      const profile = await getPrivateRecord('CandidateProfile', id, subject);
-      if (!profile) error(404, 'Profile not found.');
-      const collection = await getCollection('CandidateProfile');
-      const records = (await collection.list({
-        limit: 1000,
-        where: candidateProfileWhere(subject),
-      })) as unknown as RecordLike[];
-      for (const record of records) {
-        if (
-          record.tenantId !== subject.tenantId ||
-          record.ownerUserId !== subject.userId
-        )
-          continue;
-        record.isDefault = record.id === id;
-        if (record.id === id) record.active = true;
-        if (typeof record.save === 'function') await record.save();
-      }
-      return await savedResumeData();
-    });
+    return await runResumeMutation(
+      locals,
+      async (subject, assertWriteAllowed) => {
+        const profile = await getPrivateRecord('CandidateProfile', id, subject);
+        if (!profile) error(404, 'Profile not found.');
+        const collection = await getCollection('CandidateProfile');
+        const records = (await collection.list({
+          limit: 1000,
+          where: candidateProfileWhere(subject),
+        })) as unknown as RecordLike[];
+        for (const record of records) {
+          if (
+            record.tenantId !== subject.tenantId ||
+            record.ownerUserId !== subject.userId
+          )
+            continue;
+          record.isDefault = record.id === id;
+          if (record.id === id) record.active = true;
+          if (typeof record.save === 'function') {
+            await assertWriteAllowed();
+            await record.save();
+          }
+        }
+        return await savedResumeData();
+      },
+    );
   },
 };

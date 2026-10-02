@@ -6,12 +6,16 @@ import {
   type PrincipalRun,
   PrincipalToolNotAllowedError,
 } from '@happyvertical/smrt-agents';
+import { getCurrentTenant } from '@happyvertical/smrt-tenancy';
 import { OperationPermissionError } from '@happyvertical/smrt-users';
 import { getAppConfig } from './app-config.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import { listOwnerToolNames } from './tool-catalog.js';
 import {
+  revalidateWorkspaceIdentity,
+  WorkspaceSubjectError,
   type WorkspaceSubjectLocals,
+  withVerifiedWorkspaceSubject,
   workspaceSubjectFromLocals,
 } from './workspace-subject.js';
 
@@ -102,10 +106,8 @@ export function logOwnerPrincipalAudit(entry: PrincipalAuditEntry): void {
 /**
  * Run `fn` as the signed-in owner inside `executeAsPrincipal()`.
  *
- * Single-user application: there is no `TenantAgent` ceiling and no second
- * persona, Postgres RLS stays off, and the session's resolved permission
- * snapshot is published so `run.assertOperation()` is the one enforcement
- * gate for every agent-driven mutation.
+ * Native permission resolution reads current roles at each entry; request
+ * permission snapshots must never grant authority across a write boundary.
  */
 /**
  * The owner principal binding as plain options, without running anything.
@@ -123,6 +125,10 @@ export async function ownerPrincipalOptions(
   const locals = localsFrom(source);
   const userId = requireOwnerUserId(locals);
   const allowedTools = options.allowedTools ?? (await listOwnerToolNames());
+  const principal = ownerPrincipalBinding(locals, allowedTools);
+  if (principal.tenantId) {
+    await revalidateWorkspaceIdentity({ tenantId: principal.tenantId, userId });
+  }
 
   return {
     ...getRequestScopedSmrtOptions(),
@@ -131,9 +137,8 @@ export async function ownerPrincipalOptions(
     audit: logOwnerPrincipalAudit,
     auditMetadata: options.auditMetadata,
     onBehalfOfUserId: userId,
-    permissions: [...(locals.permissions ?? [])],
     postgresRls: false,
-    principal: ownerPrincipalBinding(locals, allowedTools),
+    principal,
   };
 }
 
@@ -144,7 +149,24 @@ export async function runAsOwner<T>(
 ): Promise<T> {
   return await executeAsPrincipal(
     await ownerPrincipalOptions(source, options),
-    fn,
+    async (run) => {
+      const locals = localsFrom(source);
+      if (locals.workspaceSubject) {
+        return await withVerifiedWorkspaceSubject(
+          workspaceSubjectFromLocals(locals),
+          async () => await fn(run),
+        );
+      }
+      const context = getCurrentTenant();
+      if (context?.tenantId) {
+        const { user } = await revalidateWorkspaceIdentity({
+          tenantId: context.tenantId,
+          userId: requireOwnerUserId(locals),
+        });
+        context.user = user;
+      }
+      return await fn(run);
+    },
   );
 }
 
@@ -156,7 +178,8 @@ export async function runAsOwner<T>(
 export function isOwnerAuthorityDenial(error: unknown): boolean {
   return (
     error instanceof PrincipalToolNotAllowedError ||
-    error instanceof OperationPermissionError
+    error instanceof OperationPermissionError ||
+    error instanceof WorkspaceSubjectError
   );
 }
 

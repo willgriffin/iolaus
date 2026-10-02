@@ -36,7 +36,7 @@ interface GenerateResumeAssetOptions {
    * their opportunity lifecycle lock without coupling canonical resume work to
    * that lock.
    */
-  assertWriteAllowed?: () => void;
+  assertWriteAllowed?: () => void | Promise<void>;
   failureNote?: string;
   filesystem?: FilesystemInterface;
   sourcePath?: string;
@@ -341,6 +341,7 @@ export async function generateResumeAsset(
     : await loadPublishedResumeSource();
   if (!source)
     error(400, 'No resume source is available for this candidate profile.');
+  await options.assertWriteAllowed?.();
   const tailoringRecord = options.tailoringId
     ? await getResumeTailoringConfig(options.tailoringId, subject)
     : await ensureCanonicalResumeTailoringConfig(subject);
@@ -358,7 +359,7 @@ export async function generateResumeAsset(
       stringValue(tailoring?.name),
   );
   const tailoringId = options.tailoringId || stringValue(tailoringRecord?.id);
-  options.assertWriteAllowed?.();
+  await options.assertWriteAllowed?.();
   const asset = await collection.create({
     applicationId: stringValue(options.applicationId),
     assetType: 'resume',
@@ -393,6 +394,7 @@ export async function generateResumeAsset(
     const filesystem = options.filesystem ?? (await getResumeFilesystem());
     const { generateResumeArtifacts, getDefaultPuppeteerExecutablePath } =
       await import('@willgriffin/iolaus-resume');
+    await options.assertWriteAllowed?.();
     const artifact = await generateResumeArtifacts({
       executablePath: await getDefaultPuppeteerExecutablePath(),
       filesystem,
@@ -408,7 +410,7 @@ export async function generateResumeAsset(
     });
 
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
     } catch (cause) {
       await Promise.all(
         [
@@ -443,10 +445,10 @@ export async function generateResumeAsset(
       textPath: artifact.textPath,
       title,
     });
-    options.assertWriteAllowed?.();
+    await options.assertWriteAllowed?.();
     await asset.save();
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
     } catch (cause) {
       await Promise.all([
         (async () => {
@@ -477,7 +479,7 @@ export async function generateResumeAsset(
     // If a guarded application workflow lost its lifecycle lock, do not turn
     // this into a visible failed asset after another request may have closed
     // the application.
-    options.assertWriteAllowed?.();
+    await options.assertWriteAllowed?.();
     Object.assign(asset, {
       notes:
         options.failureNote ??
@@ -485,7 +487,7 @@ export async function generateResumeAsset(
       status: 'failed',
     });
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
       await asset.save();
     } catch {
       // Preserve the generation failure when its status cannot be persisted.
@@ -500,6 +502,7 @@ export async function regenerateResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
   subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ) {
   const id = assetId.trim();
   if (!id) {
@@ -519,6 +522,7 @@ export async function regenerateResumeAsset(
 
   const record = asset as unknown as Record<string, unknown>;
   return await generateResumeAsset({
+    assertWriteAllowed,
     applicationId: stringValue(record.applicationId),
     filesystem,
     subject: scopedSubject,
@@ -687,13 +691,20 @@ export async function publishResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
   subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ) {
   if (!assetId) {
     error(400, 'Missing resume asset ID.');
   }
 
   return await withCanonicalResumePublicationLock(
-    async () => await publishResumeAssetUnlocked(assetId, filesystem, subject),
+    async () =>
+      await publishResumeAssetUnlocked(
+        assetId,
+        filesystem,
+        subject,
+        assertWriteAllowed,
+      ),
   );
 }
 
@@ -701,15 +712,23 @@ async function publishResumeAssetUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
   subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ): Promise<ResumeRecord> {
-  return (await publishResumeAssetWithPdfUnlocked(assetId, filesystem, subject))
-    .asset;
+  return (
+    await publishResumeAssetWithPdfUnlocked(
+      assetId,
+      filesystem,
+      subject,
+      assertWriteAllowed,
+    )
+  ).asset;
 }
 
 async function publishResumeAssetWithPdfUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
   subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ): Promise<PublishedResumeAsset> {
   const collection = await getCollection('ResumeAsset');
   const scopedSubject = subject ? requireWorkspaceSubject(subject) : undefined;
@@ -763,6 +782,7 @@ async function publishResumeAssetWithPdfUnlocked(
       mutable.isPublished = state.isPublished;
       mutable.status = state.status;
       mutable.publishedAt = state.publishedAt;
+      await assertWriteAllowed?.();
       await record.save();
     }),
   );
@@ -772,11 +792,13 @@ async function publishResumeAssetWithPdfUnlocked(
     publishedAt: now,
     status: 'published',
   });
+  await assertWriteAllowed?.();
   await assetRecord.save();
 
   // The asset PDF is immutable and is the source of truth for public reads.
   // Update this compatibility alias only after publication state is durable, so
   // a failed state transition cannot expose an uncommitted candidate.
+  await assertWriteAllowed?.();
   try {
     if (!isSharedHosted())
       await fs.write(PUBLISHED_RESUME_PDF_PATH, bufferValue(pdf), {

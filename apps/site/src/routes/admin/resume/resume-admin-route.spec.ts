@@ -261,8 +261,62 @@ describe('private resume route scope', () => {
       'profile.manage',
     );
     expect(mocks.generateResumeAsset).toHaveBeenCalledWith({
+      assertWriteAllowed: expect.any(Function),
       subject: SUBJECT,
       tailoringId: 'owned-tailoring',
     });
+  });
+});
+
+describe('resume mutation write guard wiring', () => {
+  it('supplies generation with a fresh native capability and subject guard', async () => {
+    mocks.generateResumeAsset.mockImplementationOnce(async (options) => {
+      await options.assertWriteAllowed();
+      return { id: 'resume-1' };
+    });
+    const form = new FormData();
+    form.set('tailoringId', 'tailoring-1');
+    await actions.generate!({
+      locals: LOCALS,
+      request: { formData: async () => form },
+    } as never);
+    expect(mocks.generateResumeAsset).toHaveBeenCalledWith({
+      tailoringId: 'tailoring-1',
+      subject: SUBJECT,
+      assertWriteAllowed: expect.any(Function),
+    });
+    expect(mocks.assertOperation).toHaveBeenCalledTimes(2);
+    expect(mocks.assertOperation.mock.calls[0]).toEqual(
+      mocks.assertOperation.mock.calls[1],
+    );
+  });
+
+  it.each([
+    'regenerate',
+    'publish',
+  ] as const)('passes the write guard through %s', async (action) => {
+    const service =
+      action === 'regenerate'
+        ? mocks.regenerateResumeAsset
+        : mocks.publishResumeAsset;
+    service.mockImplementationOnce(
+      async (_id, _fs, _subject, assertWriteAllowed) => {
+        await assertWriteAllowed();
+        return { id: 'resume-1' };
+      },
+    );
+    const form = new FormData();
+    form.set('assetId', 'resume-1');
+    await actions[action]!({
+      locals: LOCALS,
+      request: { formData: async () => form },
+    } as never);
+    expect(service).toHaveBeenCalledWith(
+      'resume-1',
+      undefined,
+      SUBJECT,
+      expect.any(Function),
+    );
+    expect(mocks.assertOperation).toHaveBeenCalledTimes(2);
   });
 });

@@ -217,6 +217,37 @@ describe('nextPublishedAssetStates', () => {
 });
 
 describe('publishResumeAsset', () => {
+  it('rechecks authority after awaited PDF reads before publication state or alias writes', async () => {
+    const asset = record({
+      id: 'resume-1',
+      pdfPath: 'resume.pdf',
+      isPublished: false,
+    });
+    mocks.collections.set('ResumeAsset', collection([asset]));
+    let allowed = true;
+    const filesystem = {
+      read: vi.fn(async () => {
+        allowed = false;
+        return Buffer.from('%PDF-1.4');
+      }),
+      write: vi.fn(async () => {}),
+    };
+    const assertWriteAllowed = async () => {
+      await Promise.resolve();
+      if (!allowed) throw new Error('authority revoked');
+    };
+    await expect(
+      publishResumeAsset(
+        'resume-1',
+        filesystem as unknown as FilesystemInterface,
+        undefined,
+        assertWriteAllowed,
+      ),
+    ).rejects.toThrow('authority revoked');
+    expect(asset.save).not.toHaveBeenCalled();
+    expect(filesystem.write).not.toHaveBeenCalled();
+  });
+
   it('rejects application-owned materials as canonical resume candidates', async () => {
     const applicationAsset = record({
       applicationId: 'app-1',
@@ -608,6 +639,49 @@ describe('generateResumeAsset', () => {
 
     expect(resumeAssets.delete).toHaveBeenCalledWith('resume-locked');
     expect(resumeAssets.records).toHaveLength(0);
+    expect(filesystem.delete).toHaveBeenCalledTimes(4);
+  });
+
+  it('awaits a denied authority guard before creating an asset or starting the renderer', async () => {
+    const resumeAssets = collection();
+    mocks.collections.set('ResumeAsset', resumeAssets);
+    const assertWriteAllowed = vi.fn(async () => {
+      throw new Error('authority revoked');
+    });
+    await expect(generateResumeAsset({ assertWriteAllowed })).rejects.toThrow(
+      'authority revoked',
+    );
+    expect(resumeAssets.create).not.toHaveBeenCalled();
+    expect(mocks.generateResumeArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('awaits authority after rendering and cleans artifacts without saving a denied asset', async () => {
+    const resumeAssets = collection();
+    mocks.collections.set('ResumeAsset', resumeAssets);
+    mocks.collections.set('ResumeTailoringConfig', collection());
+    const filesystem = { delete: vi.fn(async (_path: string) => {}) };
+    let allowed = true;
+    mocks.generateResumeArtifacts.mockImplementationOnce(async () => {
+      allowed = false;
+      return {
+        htmlPath: 'resume.html',
+        markdownPath: 'resume.md',
+        pdfPath: 'resume.pdf',
+        textPath: 'resume.txt',
+      } as never;
+    });
+    const assertWriteAllowed = async () => {
+      await Promise.resolve();
+      if (!allowed) throw new Error('authority revoked');
+    };
+    await expect(
+      generateResumeAsset({
+        assertWriteAllowed,
+        filesystem: filesystem as unknown as FilesystemInterface,
+      }),
+    ).rejects.toThrow('authority revoked');
+    expect(resumeAssets.records[0]?.save).not.toHaveBeenCalled();
+    expect(resumeAssets.records[0]).not.toHaveProperty('pdfPath');
     expect(filesystem.delete).toHaveBeenCalledTimes(4);
   });
 

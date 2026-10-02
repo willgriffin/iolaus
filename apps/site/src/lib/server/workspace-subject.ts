@@ -11,7 +11,7 @@ import {
 import { isConfiguredOidcAdminEmail } from './administrative-auth.js';
 import { getAppConfig } from './app-config.js';
 import { getSmrtOptions } from './db.js';
-import { getCollection } from './smrt.js';
+import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
 /**
  * Server-verified identity for a private workspace request. This is the only
@@ -98,22 +98,15 @@ function isActiveMembership(
   );
 }
 
-/**
- * Re-read the live membership and permission set. Session snapshots are never
- * sufficient workspace authority: suspension and role changes take effect on
- * the next request, for both browser cookies and CLI bearer sessions.
- */
-export async function verifyWorkspaceSubject(
-  locals: WorkspaceSubjectLocals,
-): Promise<WorkspaceSubject | null> {
-  const userId = identifier(locals.user?.id);
-  const tenantId = identifier(locals.tenantId);
-  if (!userId || !tenantId) return null;
-
+/** Re-read identity at a mutation boundary without changing the selected profile. */
+export async function revalidateWorkspaceIdentity(
+  subject: Pick<WorkspaceSubject, 'tenantId' | 'userId'>,
+) {
+  const { tenantId, userId } = subject;
   const [users, tenants, memberships] = await Promise.all([
-    UserCollection.create(getSmrtOptions()),
-    TenantCollection.create(getSmrtOptions()),
-    MembershipCollection.create(getSmrtOptions()),
+    UserCollection.create(getRequestScopedSmrtOptions()),
+    TenantCollection.create(getRequestScopedSmrtOptions()),
+    MembershipCollection.create(getRequestScopedSmrtOptions()),
   ]);
   const [user, tenant, membership] = await Promise.all([
     users.get({ id: userId }),
@@ -133,10 +126,47 @@ export async function verifyWorkspaceSubject(
     membership.userId !== userId ||
     membership.tenantId !== tenantId
   ) {
+    throw new WorkspaceSubjectError(
+      403,
+      'Workspace identity is no longer active.',
+    );
+  }
+
+  if (
+    getAppConfig().runtimeProfile !== 'local' &&
+    getAppConfig().workspaceMode === 'private' &&
+    !isConfiguredOidcAdminEmail(user.email)
+  ) {
+    throw new WorkspaceSubjectError(
+      403,
+      'Workspace owner is no longer authorized.',
+    );
+  }
+  return { membership, user };
+}
+
+/**
+ * Re-read the live membership and permission set. Session snapshots are never
+ * sufficient workspace authority: suspension and role changes take effect on
+ * the next request, for both browser cookies and CLI bearer sessions.
+ */
+export async function verifyWorkspaceSubject(
+  locals: WorkspaceSubjectLocals,
+): Promise<WorkspaceSubject | null> {
+  const userId = identifier(locals.user?.id);
+  const tenantId = identifier(locals.tenantId);
+  if (!userId || !tenantId) return null;
+
+  let identity: Awaited<ReturnType<typeof revalidateWorkspaceIdentity>>;
+  try {
+    identity = await revalidateWorkspaceIdentity({ tenantId, userId });
+  } catch (cause) {
+    if (!(cause instanceof WorkspaceSubjectError)) throw cause;
     locals.membership = null;
     locals.permissions = [];
     return null;
   }
+  const { membership, user } = identity;
 
   const resolver = await PermissionResolver.create(getSmrtOptions());
   const permissions = await resolver.resolvePermissions(userId, tenantId, {
@@ -326,12 +356,14 @@ export async function withVerifiedWorkspaceSubject<T>(
       'Workspace subject context is invalid.',
     );
   }
+  const { user } = await revalidateWorkspaceIdentity(subject);
   const verified = subject.profileId
     ? await resolveVerifiedWorkspaceSubjectProfile(subject, subject.profileId)
     : Object.freeze({ tenantId: subject.tenantId, userId: subject.userId });
   return await withTenant(
     {
       ...context,
+      user,
       metadata: { ...context.metadata, workspaceSubject: verified },
     },
     async () => await fn(verified),

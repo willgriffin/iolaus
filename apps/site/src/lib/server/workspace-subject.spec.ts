@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   getCurrentTenant: vi.fn(),
   permissions: vi.fn(),
+  privateHosted: false,
+  operatorAllowed: true,
   withTenant: vi.fn(),
 }));
 
@@ -34,9 +36,20 @@ vi.mock('@happyvertical/smrt-tenancy', () => ({
   withTenant: mocks.withTenant,
 }));
 
+vi.mock('./app-config.js', () => ({
+  getAppConfig: () => ({
+    runtimeProfile: mocks.privateHosted ? 'hosted' : 'local',
+    workspaceMode: mocks.privateHosted ? 'private' : 'shared',
+  }),
+}));
+vi.mock('./administrative-auth.js', () => ({
+  isConfiguredOidcAdminEmail: () => mocks.operatorAllowed,
+}));
+
 vi.mock('./db.js', () => ({ getSmrtOptions: vi.fn(() => ({ db: 'test' })) }));
 
 vi.mock('./smrt.js', () => ({
+  getRequestScopedSmrtOptions: vi.fn(() => ({ db: 'test' })),
   getCollection: vi.fn(async () => ({ get: mocks.get, list: mocks.list })),
 }));
 
@@ -46,6 +59,7 @@ import {
   requireCurrentCandidateWorkspaceSubject,
   requireCurrentWorkspaceSubject,
   resolveWorkspaceSubjectForProfile,
+  revalidateWorkspaceIdentity,
   verifyWorkspaceSubject,
   WorkspaceSubjectError,
   withVerifiedWorkspaceSubject,
@@ -67,6 +81,8 @@ const locals = () => ({
 describe('workspace subject', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.privateHosted = false;
+    mocks.operatorAllowed = true;
     mocks.getCurrentTenant.mockReturnValue({
       metadata: {},
       tenantId: 'tenant-1',
@@ -272,6 +288,33 @@ describe('workspace subject', () => {
         async () => 'unexpected',
       ),
     ).rejects.toBeInstanceOf(WorkspaceSubjectError);
+  });
+
+  it.each([
+    ['suspended user', 'getUser', { id: 'user-1', isActive: () => false }],
+    ['inactive tenant', 'getTenant', { id: 'tenant-1', isActive: () => false }],
+    ['removed membership', 'findByUserAndTenant', null],
+  ])('rechecks %s when rebinding a previously verified subject', async (_label, mock, value) => {
+    await verifyWorkspaceSubject(locals());
+    mocks[
+      mock as 'getUser' | 'getTenant' | 'findByUserAndTenant'
+    ].mockResolvedValue(value);
+    const callback = vi.fn(async () => 'unexpected');
+    await expect(
+      withVerifiedWorkspaceSubject(
+        { tenantId: 'tenant-1', userId: 'user-1' },
+        callback,
+      ),
+    ).rejects.toBeInstanceOf(WorkspaceSubjectError);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('denies a removed private-hosted operator at the live identity fence', async () => {
+    mocks.privateHosted = true;
+    mocks.operatorAllowed = false;
+    await expect(
+      revalidateWorkspaceIdentity({ tenantId: 'tenant-1', userId: 'user-1' }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 
   it('keeps profile authority absent when the verified owner has no default profile', async () => {

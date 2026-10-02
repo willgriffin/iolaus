@@ -1,5 +1,23 @@
-import { OperationPermissionError } from '@happyvertical/smrt-users';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import './manifest-preload.js';
+import { getTestDatabase } from '@happyvertical/smrt-core';
+import {
+  getCurrentTenant,
+  withSystemContext,
+} from '@happyvertical/smrt-tenancy';
+import {
+  MembershipCollection,
+  MembershipStatus,
+  OperationPermissionError,
+  PermissionCollection,
+  RoleCollection,
+  RolePermissionCollection,
+  TenantCollection,
+  TenantStatus,
+  UserCollection,
+  UserStatus,
+} from '@happyvertical/smrt-users';
+import type { DatabaseInterface } from '@happyvertical/sql';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { opportunityDataSurfaceToolNames } from '$lib/opportunity-bulk-workflows';
 import { jobSearchWebMcpToolDefinitions } from '$lib/webmcp';
 import {
@@ -11,13 +29,67 @@ import {
   resolveOwnerPrincipalBinding,
   runAsOwner,
 } from './owner-principal';
+import { generateResumeAsset } from './resume-admin';
 import { listOwnerToolNames } from './tool-catalog';
+import { WorkspaceSubjectError } from './workspace-subject';
+import { workspaceWorkflowOperation } from './workspace-workflow-capabilities';
 
-// The real `executeAsPrincipal()` gate runs against an in-memory database so
-// these specs exercise the fail-closed tool ceiling and the catalog permission
-// check without Postgres.
+const fixture = vi.hoisted(() => ({
+  database: undefined as DatabaseInterface | undefined,
+  profile: {} as Record<string, unknown>,
+  assets: [] as (Record<string, unknown> & {
+    save: ReturnType<typeof vi.fn>;
+  })[],
+  renderer: vi.fn(),
+  filesystem: { delete: vi.fn(async (_path: string) => {}) },
+}));
+
+// Identity, membership, roles, PermissionResolver and executeAsPrincipal stay
+// native; only the external renderer and candidate record adapters are stand-ins.
+vi.mock('./db.js', () => ({
+  getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),
+  getSmrtOptions: () => ({ db: fixture.database }),
+}));
 vi.mock('./smrt.js', () => ({
-  getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
+  getRequestScopedSmrtOptions: () => ({ db: fixture.database }),
+  getCollection: async (name: string) => {
+    if (name === 'CandidateProfile')
+      return { get: async () => fixture.profile };
+    if (name === 'ResumeAsset')
+      return {
+        create: async (data: Record<string, unknown>) => {
+          const asset = { ...data, id: 'asset-1', save: vi.fn(async () => {}) };
+          fixture.assets.push(asset);
+          return asset;
+        },
+        delete: async () => {
+          fixture.assets.length = 0;
+        },
+      };
+    throw new Error(`Unexpected fixture collection: ${name}`);
+  },
+}));
+vi.mock('./app-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./app-config.js')>()),
+  getAppConfig: () => ({
+    agentClass: 'owner-fixture',
+    runtimeProfile: 'local',
+    workspaceMode: 'shared',
+  }),
+  isSharedHosted: () => false,
+}));
+vi.mock('./resume-data.js', () => ({
+  loadAdminResumeSource: async () => ({ profile: { name: 'Candidate' } }),
+  getResumeTailoringConfig: async () => ({ id: 'tailoring-1', config: {} }),
+}));
+vi.mock('./resume-tailoring-configs.js', () => ({
+  ensureCanonicalResumeTailoringConfig: async () => {
+    throw new Error('The fixture requires explicit tailoring');
+  },
+}));
+vi.mock('@willgriffin/iolaus-resume', () => ({
+  generateResumeArtifacts: fixture.renderer,
+  getDefaultPuppeteerExecutablePath: async () => undefined,
 }));
 
 const owner = {
@@ -25,6 +97,83 @@ const owner = {
   tenantId: 'tenant-1',
   user: { id: 'user-1' },
 };
+
+let membershipId: string;
+let roleId: string;
+let profilePermissionId: string;
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+  fixture.assets = [];
+  fixture.renderer.mockReset();
+  fixture.renderer.mockResolvedValue({
+    htmlPath: 'resume.html',
+    markdownPath: 'resume.md',
+    pdfPath: 'resume.pdf',
+    textPath: 'resume.txt',
+  });
+  fixture.database = await getTestDatabase({
+    classes: [
+      'Group',
+      'GroupMember',
+      'GroupRole',
+      'Membership',
+      'MembershipOverride',
+      'Permission',
+      'Role',
+      'RolePermission',
+      'Session',
+      'Tenant',
+      'TenantPermissionOverride',
+      'User',
+    ],
+  });
+  const options = { db: fixture.database };
+  const user = await (await UserCollection.create(options)).create({
+    email: 'owner@example.invalid',
+    status: UserStatus.ACTIVE,
+  });
+  const tenant = await (await TenantCollection.create(options)).create({
+    name: 'Workspace',
+    status: TenantStatus.ACTIVE,
+  });
+  const role = await (await RoleCollection.create(options)).create({
+    name: 'Owner fixture',
+  });
+  if (!user.id || !tenant.id || !role.id)
+    throw new Error('Missing identity fixture ID');
+  owner.user = { id: user.id };
+  owner.tenantId = tenant.id;
+  roleId = role.id;
+  const membership = await (await MembershipCollection.create(options)).create({
+    userId: user.id,
+    tenantId: tenant.id,
+    roleId,
+    status: MembershipStatus.ACTIVE,
+  });
+  if (!membership.id) throw new Error('Missing membership fixture ID');
+  membershipId = membership.id;
+  const permissions = await PermissionCollection.create(options);
+  const rolePermissions = await RolePermissionCollection.create(options);
+  for (const slug of [...owner.permissions, 'workflow.profile.manage']) {
+    const permission = await permissions.create({ name: slug, slug });
+    if (!permission.id) throw new Error('Missing permission fixture ID');
+    await rolePermissions.addPermission(roleId, permission.id);
+    if (slug === 'workflow.profile.manage') profilePermissionId = permission.id;
+  }
+  fixture.profile = {
+    id: 'profile-1',
+    active: true,
+    tenantId: tenant.id,
+    ownerUserId: user.id,
+  };
+});
+
+afterEach(async () => {
+  await fixture.database?.close?.();
+  fixture.database = undefined;
+});
 
 describe('owner principal tool catalog', () => {
   it('derives a non-empty allow-list containing every job_search tool and the generated MCP tools', async () => {
@@ -57,8 +206,8 @@ describe('owner principal tool catalog', () => {
   it('binds the signed-in user with the derived allow-list', async () => {
     const binding = await resolveOwnerPrincipalBinding(owner);
 
-    expect(binding.runAsUserId).toBe('user-1');
-    expect(binding.tenantId).toBe('tenant-1');
+    expect(binding.runAsUserId).toBe(owner.user.id);
+    expect(binding.tenantId).toBe(owner.tenantId);
     expect(binding.allowedTools).toContain('job_search_import_opportunity');
     expect(ownerPrincipalBinding({ user: { id: 'u' } }, ['x'])).toEqual({
       allowedTools: ['x'],
@@ -112,7 +261,7 @@ describe('runAsOwner', () => {
     expect(result.allowedTools).toEqual(await listOwnerToolNames());
   });
 
-  it('asserts operations against the published session permission snapshot', async () => {
+  it('asserts operations against live native role permissions', async () => {
     const result = await runAsOwner(owner, async (run) => {
       const allowed = await run.assertOperation('opportunities', 'update');
       let denied: unknown = null;
@@ -127,7 +276,9 @@ describe('runAsOwner', () => {
     expect(result.allowed).toMatchObject({ allowed: true });
     expect(result.denied).toBeInstanceOf(OperationPermissionError);
     expect(isOwnerAuthorityDenial(result.denied)).toBe(true);
-    expect(result.permissions).toEqual(owner.permissions);
+    expect(result.permissions.sort()).toEqual(
+      [...owner.permissions, 'workflow.profile.manage'].sort(),
+    );
     expect(isOwnerAuthorityDenial(new Error('other'))).toBe(false);
   });
 
@@ -160,13 +311,130 @@ describe('runAsOwner', () => {
     const entry = audits[0] as Record<string, unknown>;
     expect(entry).toMatchObject({
       action: 'admin.reviewOpportunity',
-      actorUserId: 'user-1',
+      actorUserId: owner.user.id,
       agentClass: OWNER_AGENT_CLASS,
       event: 'owner_principal.audit',
       metadata: { collection: 'opportunities' },
-      onBehalfOfUserId: 'user-1',
-      tenantId: 'tenant-1',
+      onBehalfOfUserId: owner.user.id,
+      tenantId: owner.tenantId,
     });
     expect(typeof entry.timestamp).toBe('string');
+  });
+});
+
+describe('owner authority write fences (native SQLite RBAC)', () => {
+  function locals() {
+    return {
+      ...owner,
+      permissions: [...owner.permissions, 'workflow.profile.manage'],
+      membership: {
+        roleId,
+        status: 'active',
+        tenantId: owner.tenantId,
+        userId: owner.user.id,
+      },
+      workspaceSubject: {
+        profileId: 'profile-1',
+        tenantId: owner.tenantId,
+        userId: owner.user.id,
+      },
+    };
+  }
+
+  async function revoke(kind: string) {
+    await withSystemContext(async () => {
+      const options = { db: fixture.database };
+      if (kind === 'permission') {
+        await (await RolePermissionCollection.create(options)).removePermission(
+          roleId,
+          profilePermissionId,
+        );
+      } else {
+        const membership = await (
+          await MembershipCollection.create(options)
+        ).get(membershipId);
+        if (!membership) throw new Error('Missing membership');
+        membership.status = MembershipStatus.INACTIVE;
+        await membership.save();
+      }
+    });
+  }
+
+  it.each([
+    'membership',
+    'permission',
+  ])('denies %s revoked after the hook despite its stale snapshot', async (kind) => {
+    const requestLocals = locals();
+    const write = vi.fn();
+    await revoke(kind);
+    const operation = workspaceWorkflowOperation('profile.manage');
+    await expect(
+      runAsOwner(requestLocals, async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+        write();
+      }),
+    ).rejects.toBeInstanceOf(
+      kind === 'permission' ? OperationPermissionError : WorkspaceSubjectError,
+    );
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('preserves the selected owned profile and fresh user in the native callback', async () => {
+    const requestLocals = locals();
+    await runAsOwner(requestLocals, async (run) => {
+      const operation = workspaceWorkflowOperation('profile.manage');
+      await run.assertOperation(operation.collection, operation.action);
+      expect(getCurrentTenant()?.metadata?.workspaceSubject).toEqual(
+        requestLocals.workspaceSubject,
+      );
+      expect(getCurrentTenant()?.user).toMatchObject({
+        id: owner.user.id,
+        email: 'owner@example.invalid',
+      });
+    });
+    fixture.profile.ownerUserId = 'other-owner';
+    await expect(
+      runAsOwner(requestLocals, async () => 'unexpected'),
+    ).rejects.toBeInstanceOf(WorkspaceSubjectError);
+  });
+
+  it.each([
+    'membership',
+    'permission',
+  ])('cleans rendered artifacts and denies metadata persistence when %s is revoked during rendering', async (kind) => {
+    const requestLocals = locals();
+    const operation = workspaceWorkflowOperation('profile.manage');
+    const assertWriteAllowed = async () =>
+      await runAsOwner(requestLocals, async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+      });
+    fixture.renderer.mockImplementationOnce(async () => {
+      await revoke(kind);
+      return {
+        htmlPath: 'resume.html',
+        markdownPath: 'resume.md',
+        pdfPath: 'resume.pdf',
+        textPath: 'resume.txt',
+      };
+    });
+    await expect(
+      runAsOwner(requestLocals, async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+        return await generateResumeAsset({
+          subject: requestLocals.workspaceSubject,
+          tailoringId: 'tailoring-1',
+          filesystem: fixture.filesystem as never,
+          assertWriteAllowed,
+        });
+      }),
+    ).rejects.toBeInstanceOf(
+      kind === 'permission' ? OperationPermissionError : WorkspaceSubjectError,
+    );
+    expect(fixture.renderer).toHaveBeenCalledTimes(1);
+    expect(fixture.assets[0]?.save).not.toHaveBeenCalled();
+    expect(fixture.assets[0]).not.toHaveProperty('pdfPath');
+    expect(
+      fixture.filesystem.delete.mock.calls.map(([path]) => path).sort(),
+    ).toEqual(['resume.html', 'resume.md', 'resume.pdf', 'resume.txt']);
   });
 });
