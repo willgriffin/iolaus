@@ -1113,7 +1113,9 @@ function citedSupportSql(
   support: Map<string, CurrentCitedOpportunitySupport>,
   values: unknown[],
 ): string {
-  if (!support.size) return 'NULL';
+  // PostgreSQL rejects a bare NULL in ORDER BY as a non-integer constant.
+  // Keep unsupported rows unranked while retaining the stable fallback order.
+  if (!support.size) return 'CAST(NULL AS INTEGER)';
   const branches = [...support]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(
@@ -1139,7 +1141,7 @@ function orderBySql(
   const assessableFit = `CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END`;
   switch (sort) {
     case 'cited_support':
-      return `${options.citedSupport ?? 'NULL'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${options.citedSupport ?? 'CAST(NULL AS INTEGER)'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'eligibility':
       return `${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'newest':

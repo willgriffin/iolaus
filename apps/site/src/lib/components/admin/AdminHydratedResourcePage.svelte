@@ -1,6 +1,9 @@
 <script lang="ts">
 import { liveCollection } from '@happyvertical/smrt-svelte/web';
-import { createSmrtCollection } from '@happyvertical/smrt-web';
+import {
+  createSmrtCollection,
+  invalidateSmrtWebCollections,
+} from '@happyvertical/smrt-web';
 import { onDestroy, onMount, untrack } from 'svelte';
 import { browser } from '$app/environment';
 import { page } from '$app/state';
@@ -71,6 +74,8 @@ const cachedPayload = browser
   ? getCachedAdminResourceListPayload(queryScope)
   : null;
 let acceptsPayload = true;
+let listFetchError = $state<string | null>(null);
+let listFetchPending = false;
 let formObservationReady = $state(false);
 let lastForm = $state<unknown>(undefined);
 let currentData = $state<ResourcePageData>(
@@ -94,18 +99,40 @@ function resourceDataFromPayload(
 
 function receiveListPayload(payload: AdminResourceListPayload): void {
   if (!acceptsPayload) return;
+  listFetchError = null;
   rememberAdminResourceListPayload(queryScope, payload);
   currentData = resourceDataFromPayload(payload);
 }
 
+const resourceClient = getAdminSmrtWebClient();
+const resourceFetchers = createAdminResourceFetchers(
+  resourceSlug,
+  initialSearch,
+  receiveListPayload,
+);
 const resourceCollection = createSmrtCollection(resourceDefinition, {
   capabilities: createAdminLiveInvalidationCapabilities(resourceSlug),
-  client: getAdminSmrtWebClient() ?? undefined,
-  fetchers: createAdminResourceFetchers(
-    resourceSlug,
-    initialSearch,
-    receiveListPayload,
-  ),
+  client: resourceClient ?? undefined,
+  fetchers: {
+    ...resourceFetchers,
+    list: async (params) => {
+      listFetchPending = true;
+      try {
+        return await resourceFetchers.list(params);
+      } catch (error) {
+        // Observe the authenticated read itself: the live-query/preload
+        // lifecycle can remain pending after an asynchronous HTTP failure.
+        if (acceptsPayload)
+          listFetchError =
+            error instanceof Error
+              ? error.message
+              : 'Unable to load this admin resource.';
+        throw error;
+      } finally {
+        listFetchPending = false;
+      }
+    },
+  },
   scope: queryScope,
   staleTimeMs: 0,
 });
@@ -124,19 +151,18 @@ const hydratedRecords = $derived.by(() => {
   );
 });
 const requestError = $derived(
-  resourceView?.isError
-    ? resourceView.error instanceof Error
-      ? resourceView.error.message
-      : String(resourceView.error ?? 'Unable to load this admin resource.')
-    : null,
+  listFetchError ??
+    (currentData.loading && resourceView?.isError
+      ? resourceView.error instanceof Error
+        ? resourceView.error.message
+        : String(resourceView.error ?? 'Unable to load this admin resource.')
+      : null),
 );
 const isInitialLoad = $derived(
-  Boolean(currentData.loading) &&
-    !resourceView?.isReady &&
-    !resourceView?.isError,
+  Boolean(currentData.loading) && !resourceView?.isReady && !requestError,
 );
 const isCachedRevalidation = $derived(
-  Boolean(cachedPayload) && !resourceView?.isReady && !resourceView?.isError,
+  Boolean(cachedPayload) && !resourceView?.isReady && !requestError,
 );
 const hydratedData = $derived({
   ...currentData,
@@ -144,10 +170,16 @@ const hydratedData = $derived({
   loading: isInitialLoad,
   records: hydratedRecords,
   refreshing: isCachedRevalidation,
-  stale: isCachedRevalidation,
+  stale:
+    isCachedRevalidation || Boolean(requestError && currentData.records.length),
 });
 
 function retryListLoad(): void {
+  if (!acceptsPayload || listFetchPending) return;
+  // preload observes the existing collection lifecycle. Invalidate through
+  // SMRT's public cache seam so Retry starts a fresh read of the same query.
+  if (resourceClient)
+    invalidateSmrtWebCollections(resourceClient, [resourceDefinition.name]);
   void resourceCollection.preload().catch(() => undefined);
 }
 

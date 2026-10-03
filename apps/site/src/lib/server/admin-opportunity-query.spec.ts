@@ -373,6 +373,95 @@ describe('admin-opportunity-query', () => {
     expect(mocks.query.mock.calls.at(-1)?.[0]).toContain('WHERE FALSE');
   });
 
+  for (const dialect of ['sqlite', 'postgres'] as const) {
+    it.runIf(
+      dialect === 'sqlite' ||
+        Boolean(process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL),
+    )(
+      `keeps empty or stale cited support sortable and paginated on native ${dialect}`,
+      async () => {
+        const url = process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL ?? '';
+        if (
+          dialect === 'postgres' &&
+          !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname)
+        )
+          throw new Error(
+            'Query regression requires a local PostgreSQL test database.',
+          );
+        const db = await getDatabase(
+          dialect === 'sqlite'
+            ? { type: 'sqlite', url: ':memory:', cache: false }
+            : { type: 'postgres', url, cache: false },
+        );
+        const session =
+          dialect === 'postgres' ? await db.acquireSession?.() : null;
+        if (dialect === 'postgres' && !session) {
+          await db.close?.();
+          throw new Error('PostgreSQL regression requires a pinned session.');
+        }
+        const executor = session ?? db;
+        mocks.requestDatabase.mockReturnValue(executor);
+        mocks.dbConfig.mockReturnValue({ type: dialect });
+        try {
+          await executor.query(
+            'CREATE TEMP TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+          );
+          for (const [id, updatedAt] of [
+            ['b', '2026-10-02'],
+            ['a', '2026-10-02'],
+            ['c', '2026-10-01'],
+          ])
+            await executor.query(
+              'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+              id,
+              'found',
+              updatedAt,
+              `fp-${id}`,
+              1,
+            );
+          const { listOpportunityPageIds } = await import(
+            './admin-opportunity-query'
+          );
+          for (const stale of [false, true]) {
+            mocks.privatePartials.mockResolvedValue(
+              stale ? [{ opportunityId: 'b' }] : [],
+            );
+            mocks.source.mockResolvedValue({
+              toJSON: () => ({
+                id: 'b',
+                sourceContentFingerprint: 'fp-b',
+                sourceContentVersion: 1,
+              }),
+            });
+            // A saved partial that fails current receipt/profile replay remains unranked.
+            mocks.partialProjections.mockResolvedValue(new Map());
+            for (const sortDirection of ['asc', 'desc'] as const) {
+              const query = {
+                candidateSkills: [],
+                filters: {
+                  ...DEFAULT_OPPORTUNITY_FILTERS,
+                  sort: 'cited_support' as const,
+                  sortDirection,
+                },
+                reviewFilter: 'all',
+                workspaceSubject: WORKSPACE_SUBJECT,
+              };
+              expect(
+                await listOpportunityPageIds({ ...query, limit: 2, offset: 0 }),
+              ).toEqual(['a', 'b']);
+              expect(
+                await listOpportunityPageIds({ ...query, limit: 2, offset: 2 }),
+              ).toEqual(['c']);
+            }
+          }
+        } finally {
+          await session?.release();
+          await db.close?.();
+        }
+      },
+    );
+  }
+
   for (const sortDirection of ['asc', 'desc'] as const) {
     it(`orders validated support ${sortDirection} before SQLite page slicing, pinning source identity and putting absent proof last`, async () => {
       const db = await getDatabase({
