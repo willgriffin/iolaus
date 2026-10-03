@@ -1,9 +1,11 @@
 <script lang="ts">
 import {
+  CollectionList,
   DataTable,
   type DataTableColumn,
   type SortState,
 } from '@happyvertical/smrt-ui/data';
+import { Button, Pagination } from '@happyvertical/smrt-ui/ui';
 import Building2 from '@lucide/svelte/icons/building-2';
 import ExternalLink from '@lucide/svelte/icons/external-link';
 import Heart from '@lucide/svelte/icons/heart';
@@ -126,6 +128,19 @@ let {
 const POSTED_PRESETS = [7, 14, 30, 90];
 const REVIEW_STORAGE_KEY = 'iolaus.admin.opportunities.review';
 const SORT_STORAGE_KEY = 'iolaus.admin.opportunities.sort';
+const VIEW_STORAGE_KEY = 'iolaus.admin.opportunities.view.v1';
+type OpportunityView = 'list' | 'columns' | 'table';
+const opportunityViews: { value: OpportunityView; label: string }[] = [
+  { value: 'list', label: 'List' },
+  { value: 'columns', label: 'Columns' },
+  { value: 'table', label: 'Table' },
+];
+let opportunityView = $state<OpportunityView>('table');
+
+function setOpportunityView(value: OpportunityView): void {
+  opportunityView = value;
+  writePreference(VIEW_STORAGE_KEY, value);
+}
 const OPPORTUNITY_SORT_VALUES: readonly OpportunitySort[] = [
   'best',
   'eligibility',
@@ -209,6 +224,14 @@ $effect(() => {
 });
 
 onMount(() => {
+  const storedView = readPreference(VIEW_STORAGE_KEY);
+  if (
+    storedView === 'list' ||
+    storedView === 'columns' ||
+    storedView === 'table'
+  ) {
+    opportunityView = storedView;
+  }
   const cleanupRefreshListeners = installOpportunityListRefreshListeners();
   const url = new URL(page.url);
   let changed = removeActionSearchParams(url.searchParams);
@@ -754,6 +777,24 @@ const skillSearchInUse = $derived(
 
 const visibleRecords = $derived(records);
 const tableSelected = $derived(new Set<string | number>(selectedIds));
+const pageIds = $derived(
+  visibleRecords.map((record: AdminRecord) => String(record.id)),
+);
+const allPageSelected = $derived(
+  pageIds.length > 0 && pageIds.every((id: string) => selectedIds.has(id)),
+);
+const somePageSelected = $derived(
+  pageIds.some((id: string) => selectedIds.has(id)),
+);
+
+function togglePageSelection(): void {
+  const next = new Set(selectedIds);
+  for (const id of pageIds) {
+    if (allPageSelected) next.delete(id);
+    else next.add(id);
+  }
+  onSelectedIdsChange?.(next);
+}
 
 function handleSelectionChange(ids: Set<string | number>): void {
   onSelectedIdsChange?.(new Set([...ids].map(String)));
@@ -860,6 +901,15 @@ const resultCountLabel = $derived.by(() => {
     <a class="triage-link" href={shortlistHref}>
       <Heart size={15} strokeWidth={2.2} /> Shortlist
     </a>
+    <div class="view-selector" role="group" aria-label="Opportunity view">
+      {#each opportunityViews as view}
+        <Button
+          variant={opportunityView === view.value ? 'primary' : 'secondary'}
+          aria-pressed={opportunityView === view.value}
+          onclick={() => setOpportunityView(view.value)}
+        >{view.label}</Button>
+      {/each}
+    </div>
     <AddUrlIntake />
     <span class="result-count">{resultCountLabel}</span>
   </div>
@@ -952,6 +1002,7 @@ const resultCountLabel = $derived.by(() => {
   {/snippet}
 
 
+  {#if opportunityView === 'table'}
   <DataTable
     data={visibleRecords}
     columns={tableColumns}
@@ -983,6 +1034,56 @@ const resultCountLabel = $derived.by(() => {
     dense
     cell={opportunityCell}
   />
+  {:else}
+    <section aria-label="Opportunities" aria-busy={loading || refreshing}>
+      {@render tableToolbar()}
+      {#if error}
+        <div role="alert">{error instanceof Error ? error.message : error}
+          {#if onRetry}<Button variant="secondary" onclick={onRetry}>Retry</Button>{/if}
+        </div>
+      {/if}
+      {#if refreshing}<p role="status">Refreshing opportunities…</p>
+      {:else if stale}<p role="status">Showing previously loaded opportunities.</p>{/if}
+      <label class="page-selection">
+        <input type="checkbox" aria-label="Select all rows on this page"
+          checked={allPageSelected} indeterminate={somePageSelected && !allPageSelected}
+          disabled={visibleRecords.length === 0 || loading} onchange={togglePageSelection} />
+        Select this page
+      </label>
+      <CollectionList
+        items={visibleRecords} itemKey="id" title="title"
+        layout={opportunityView === 'columns' ? 'grid' : 'list'}
+        selectable selected={tableSelected} onselectionchange={handleSelectionChange}
+        {loading} item={collectionOpportunity}
+      />
+      <Pagination currentPage={pagination.page} totalPages={pagination.totalPages}
+        onPageChange={navigateToPage} aria-label="Opportunity pages" />
+    </section>
+  {/if}
+
+  {#snippet collectionOpportunity({ item: record }: { item: AdminRecord; index: number; selected: boolean })}
+    <div class="collection-opportunity">
+      <button type="button" class="collection-review" onclick={() => handleRowClick(record)}
+        aria-label={`Review ${str(record, 'title') || 'Untitled opportunity'}`}>
+        <strong>{str(record, 'title') || 'Untitled opportunity'}</strong>
+        <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
+        <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
+        <span class="eligibility-label">{eligibilityLabel(record)}</span>
+        <span>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
+        <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
+      </button>
+      {#if postingUrlFor(record)}
+        <a href={postingUrlFor(record)} target="_blank" rel="noreferrer">View posting</a>
+      {/if}
+      <SourceOpportunityEligibility projection={record.sourceEligibilityProjection}
+        sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} compact />
+      <OpportunityScreeningSummary {record} compact />
+      {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
+        <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
+      {:else}<span class="table-meta">No current cited support assessment</span>{/if}
+    </div>
+  {/snippet}
 
   {#if drawerOpen}
     <button
@@ -1266,6 +1367,17 @@ const resultCountLabel = $derived.by(() => {
 </div>
 
 <style>
+  .view-selector { display: inline-flex; flex-wrap: wrap; gap: 0; }
+  .view-selector :global(.button) { border-radius: 0; min-height: 44px; }
+  .view-selector :global(.button:first-child) { border-start-start-radius: var(--smrt-radius-medium); border-end-start-radius: var(--smrt-radius-medium); }
+  .view-selector :global(.button:last-child) { border-start-end-radius: var(--smrt-radius-medium); border-end-end-radius: var(--smrt-radius-medium); }
+  .view-selector :global(.button[aria-pressed='true']) { box-shadow: inset 0 0 0 2px currentColor; }
+  .page-selection { display: flex; align-items: center; gap: var(--smrt-spacing-2); min-height: 44px; }
+  .page-selection input { width: 1.125rem; height: 1.125rem; }
+  .collection-opportunity { display: grid; gap: var(--smrt-spacing-2); min-width: 0; }
+  .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .collection-review:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
+
   .card-list-wrap {
     display: grid;
     gap: 14px;

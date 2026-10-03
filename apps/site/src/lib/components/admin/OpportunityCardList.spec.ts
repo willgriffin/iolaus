@@ -41,6 +41,13 @@ function renderList(
 }
 
 describe('OpportunityCardList assessment readiness', () => {
+  it('renders accessible view controls with Table selected during SSR', () => {
+    const { body } = renderList();
+    expect(body).toContain('aria-label="Opportunity view"');
+    expect(body.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(body).toContain('Table');
+    expect(body).toContain('<table');
+  });
   it('shows the coarse screen and explicit screened-out view without promoting a legacy fit score', () => {
     const quote = 'This role requires working in the United States.';
     const { body } = renderList({
