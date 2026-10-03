@@ -27,7 +27,10 @@ import {
   runOpportunityRequirementCoverageSourceStageJob,
   SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
 } from './opportunity-requirement-coverage-source-stage-job.js';
-import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
+import {
+  OPPORTUNITY_SCREENING_V1_VERSION,
+  OPPORTUNITY_SCREENING_VERSION,
+} from './opportunity-screening.js';
 import {
   fingerprintOpportunitySourceContent,
   opportunityWithSourceContent,
@@ -321,6 +324,7 @@ describe('native staged source receipt attestation', () => {
   });
   it.each([
     'owned',
+    'owned-v1',
     'zero-spend-forgery',
     'foreign',
     'global',
@@ -360,6 +364,11 @@ describe('native staged source receipt attestation', () => {
         privateCandidatePreference: 'must-never-enter-public-source',
       }),
     };
+    if (caseName === 'owned-v1') {
+      screen.prompt_version = OPPORTUNITY_SCREENING_V1_VERSION;
+      screen.output_schema_version = OPPORTUNITY_SCREENING_V1_VERSION;
+      screen.prepared_payload_version = OPPORTUNITY_SCREENING_V1_VERSION;
+    }
     if (caseName === 'zero-spend-forgery') screen.reserved_spend_micros = 0;
     if (caseName === 'foreign') screen.request_owner_user_id = 'foreign-owner';
     if (caseName === 'global') screen.tenant_id = screen.request_tenant_id = '';
@@ -373,7 +382,7 @@ describe('native staged source receipt attestation', () => {
         : 'native-request-1',
       { query: vi.fn(async () => ({ rows: [f.row, screen] })) },
     );
-    if (caseName === 'owned') {
+    if (caseName === 'owned' || caseName === 'owned-v1') {
       const attested = await read;
       expect(attested.reservation).toEqual({
         calls: 2,

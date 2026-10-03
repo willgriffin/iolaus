@@ -18,6 +18,7 @@ import {
 } from '$lib/opportunity-assessment-projection';
 import { getNumber, getString, parseSkillList } from '$lib/opportunity-filters';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
+import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
@@ -171,6 +172,7 @@ const facts = $derived(
   </div>
 
   <aside class="card-aside" aria-label="Decision">
+    <OpportunityScreeningSummary {record} />
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
       <p>Eligibility: {assessmentEligibilityLabels[assessment.buckets[0]]}</p>

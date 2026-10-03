@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   count: vi.fn(async () => 0),
   citedSupport: vi.fn(async () => new Map()),
   sourceEligibility: vi.fn(async () => new Map()),
+  screeningExclusions: vi.fn(async () => new Map()),
   dbConfig: vi.fn(() => ({ type: 'postgres' })),
   currentScores: vi.fn(async (_ids: string[]) => new Map()),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -28,6 +29,7 @@ vi.mock('./admin-opportunity-query', () => ({
   listOpportunityPageIds: mocks.pageIds,
   loadCurrentCitedOpportunitySupport: mocks.citedSupport,
   loadCurrentSourceOpportunityEligibility: mocks.sourceEligibility,
+  loadCurrentScreenedOpportunityExclusions: mocks.screeningExclusions,
   normalizeOpportunityRecommendation: (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : '',
 }));
@@ -109,6 +111,7 @@ describe('opportunity triage preset', () => {
     mocks.count.mockResolvedValue(0);
     mocks.citedSupport.mockResolvedValue(new Map());
     mocks.sourceEligibility.mockResolvedValue(new Map());
+    mocks.screeningExclusions.mockResolvedValue(new Map());
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
@@ -117,6 +120,62 @@ describe('opportunity triage preset', () => {
     mocks.assessmentProjections.mockResolvedValue(new Map());
     mocks.reviewOverlays.mockResolvedValue(new Map());
     installProjectionFromLegacyScoreFixture();
+  });
+
+  it('removes only current screening mismatches before local triage count and slicing', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue(
+      ['excluded', 'stale', 'unknown', 'decided'].map((id) => ({
+        id,
+        status: 'found',
+        title: id,
+        sourceContentFingerprint: id === 'stale' ? 'new-source' : `fp-${id}`,
+        sourceContentVersion: 1,
+        updatedAt: '2026-10-02',
+        firstSeenAt: '2026-10-01',
+      })),
+    );
+    mocks.screeningExclusions.mockResolvedValue(
+      new Map(
+        ['excluded', 'stale', 'decided'].map((id) => [
+          id,
+          {
+            sourceContentFingerprint: `fp-${id}`,
+            sourceContentVersion: 1,
+            projection: {
+              mode: 'coarse_screen',
+              sourceStatus: 'current',
+              status: 'clear_mismatch',
+              excludeFromDefaultTriage: true,
+              evidence: [{ witness: { text: 'Literal posting restriction.' } }],
+            },
+          },
+        ]),
+      ),
+    );
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([['decided', { humanReviewStatus: 'apply' }]]),
+    );
+    const { loadTriageQueue } = await triage();
+    const request: Parameters<typeof loadTriageQueue>[0] = {
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'newest' as const },
+      context: 'list',
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      hydrateContext: false,
+      limit: 1,
+    };
+    const queue = await loadTriageQueue(request);
+    expect(queue.total).toBe(2);
+    expect(queue.candidates.map(({ id }) => id)).toEqual(['stale']);
+    expect(queue.candidates[0]?.screeningProjection).toBeNull();
+    mocks.screeningExclusions.mockResolvedValue(new Map());
+    const changed = await loadTriageQueue({
+      ...request,
+      workspaceSubject: { ...TEST_WORKSPACE_SUBJECT, profileId: 'new-profile' },
+    });
+    expect(changed.total).toBe(3);
+    expect(changed.candidates.map(({ id }) => id)).toEqual(['excluded']);
+    expect(mocks.count).not.toHaveBeenCalled();
   });
 
   for (const sortDirection of ['asc', 'desc'] as const) {

@@ -12,6 +12,7 @@ import {
   countOpportunityRecords,
   listOpportunityPageIds,
   loadCurrentCitedOpportunitySupport,
+  loadCurrentScreenedOpportunityExclusions,
   loadCurrentSourceOpportunityEligibility,
   normalizeOpportunityRecommendation,
   type WorkspaceOpportunityQuery,
@@ -264,6 +265,7 @@ async function loadSqliteTriageQueue({
     sourceEligibilityProjections,
     reviewOverlays,
     citedSupport,
+    screeningExclusions,
   ] = await Promise.all([
     loadCurrentOpportunityAssessmentProjections({
       opportunities: records.map((record) => ({
@@ -278,6 +280,7 @@ async function loadSqliteTriageQueue({
     filters.sort === 'cited_support'
       ? loadCurrentCitedOpportunitySupport(subject)
       : Promise.resolve(new Map()),
+    loadCurrentScreenedOpportunityExclusions(subject),
   ]);
   const candidates = records
     .map((record) => {
@@ -308,11 +311,22 @@ async function loadSqliteTriageQueue({
           ? currentSupport.projection
           : null;
       const ranking = assessmentRanking(assessmentProjection);
+      const screening = record.id
+        ? screeningExclusions.get(record.id)
+        : undefined;
+      const screeningProjection =
+        screening &&
+        screening.sourceContentFingerprint ===
+          record.sourceContentFingerprint &&
+        screening.sourceContentVersion === record.sourceContentVersion
+          ? screening.projection
+          : null;
       return {
         ...record,
         assessmentProjection,
         sourceEligibilityProjection,
         partialAssessmentProjection,
+        screeningProjection,
         humanRating: reviewOverlay?.humanRating ?? null,
         humanReviewNotes: reviewOverlay?.humanReviewNotes ?? '',
         humanReviewStatus: reviewOverlay?.humanReviewStatus ?? '',
@@ -329,6 +343,7 @@ async function loadSqliteTriageQueue({
         (filters.status !== 'all' ||
           getString(record, 'status') !== 'archived') &&
         !DECISION_STATUSES.has(review) &&
+        !record.screeningProjection?.excludeFromDefaultTriage &&
         matchesTriageSearch(record, search) &&
         matchesOpportunity(record, filters, {
           hasSkill: createCandidateSkillMatcher(candidateSkills ?? []),

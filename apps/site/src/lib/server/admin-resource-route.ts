@@ -42,6 +42,7 @@ import {
   createOpportunityQueryFingerprint,
   listOpportunityFilterOptions,
   listOpportunityPageIds,
+  loadOpportunityScreeningProjectionPages,
   OPPORTUNITY_TABLE_PAGE_SIZE,
 } from './admin-opportunity-query';
 import {
@@ -362,6 +363,7 @@ export async function attachOpportunityContext(
     partialAssessmentProjections,
     reviewOverlays,
     videoRequirementsByOpportunity,
+    screeningProjections,
   ] = await Promise.all([
     subject
       ? listPrivateRecords('Application', subject, {
@@ -422,6 +424,9 @@ export async function attachOpportunityContext(
         })
       : Promise.resolve(new Map<string, unknown>()),
     loadCurrentOpportunityVideoRequirementsProjections(records),
+    subject
+      ? loadOpportunityScreeningProjectionPages(records, subject)
+      : Promise.resolve(new Map()),
   ]);
 
   const companyById = new Map<string, AdminRecord>();
@@ -485,6 +490,9 @@ export async function attachOpportunityContext(
       typeof record.companyId === 'string'
         ? companyById.get(record.companyId)
         : null;
+    const screening = record.id
+      ? screeningProjections.get(record.id)
+      : undefined;
     const relatedRecord = {
       ...record,
       // This is an intentionally small, source-current projection. It is
@@ -499,6 +507,13 @@ export async function attachOpportunityContext(
       sourceEligibilityProjection: record.id
         ? (sourceEligibilityProjections.get(record.id) ?? null)
         : null,
+      screeningProjection:
+        screening &&
+        screening.sourceContentFingerprint ===
+          record.sourceContentFingerprint &&
+        screening.sourceContentVersion === record.sourceContentVersion
+          ? screening
+          : null,
       videoRequirements:
         (record.id
           ? (videoRequirementsByOpportunity.get(record.id) ?? null)

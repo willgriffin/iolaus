@@ -64,7 +64,10 @@ export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
   {
     feature: 'opportunity-screening',
     profile: 'typesafe-opportunity-screening',
-    versions: ['opportunity-screening/v1-jev-first'],
+    versions: [
+      'opportunity-screening/v1-jev-first',
+      'opportunity-screening/v2-lossless-groups',
+    ],
     historicalVersions: [],
   },
   {

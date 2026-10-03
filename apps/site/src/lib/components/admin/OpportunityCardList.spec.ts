@@ -41,6 +41,58 @@ function renderList(
 }
 
 describe('OpportunityCardList assessment readiness', () => {
+  it('shows the coarse screen and explicit screened-out view without promoting a legacy fit score', () => {
+    const quote = 'This role requires working in the United States.';
+    const { body } = renderList({
+      reviewFilters: [
+        { label: 'Unsorted', value: 'unsorted' },
+        { label: 'Screened out', value: 'screened_out' },
+      ],
+      records: [
+        {
+          id: 'screened-role',
+          title: 'Platform role',
+          latestScore: 99,
+          sourceContentFingerprint: 'source',
+          sourceContentVersion: 1,
+          sourceContentJson: JSON.stringify({ descriptionRaw: quote }),
+          screeningProjection: {
+            version: 'opportunity-screening-projection/v1',
+            mode: 'coarse_screen',
+            sourceStatus: 'current',
+            status: 'clear_mismatch',
+            excludeFromDefaultTriage: true,
+            requestId: 'owned',
+            sourceContentFingerprint: 'source',
+            sourceContentVersion: 1,
+            sourceFingerprint: 'a'.repeat(64),
+            profileFingerprint: 'b'.repeat(64),
+            inputFingerprint: 'c'.repeat(64),
+            evidence: [
+              {
+                dimension: 'country_mismatch',
+                probability: 0.95,
+                confidence: 0.95,
+                witness: {
+                  id: 's0',
+                  path: 'sourceContentJson.descriptionRaw',
+                  text: quote,
+                },
+              },
+            ],
+            conditionalPaths: [],
+            uncertainties: [],
+            holdReasons: [],
+          },
+        },
+      ],
+    });
+    expect(body).toContain('Coarse screening:');
+    expect(body).toContain('Screened out');
+    expect(body).toContain('value="screened_out"');
+    expect(body).toContain(quote);
+    expect(body).not.toContain('99/100');
+  });
   it.each([
     {
       matchReadiness: 'assessable',

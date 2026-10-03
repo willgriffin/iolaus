@@ -79,6 +79,87 @@ function renderOpportunity(
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('shows coarse cited screening independently of fit and hides stale screening', () => {
+    const quote = 'We are hiring software engineers.';
+    const record = {
+      id: 'opp-1',
+      latestScore: 99,
+      humanReviewStatus: 'apply',
+      reviewOverlay: {
+        humanReviewStatus: 'apply',
+        humanReviewNotes: 'Owner decision',
+      },
+      sourceContentFingerprint: 'source',
+      sourceContentVersion: 1,
+      sourceContentJson: JSON.stringify({ descriptionRaw: quote }),
+      screeningProjection: {
+        version: 'opportunity-screening-projection/v1',
+        mode: 'coarse_screen',
+        sourceStatus: 'current',
+        status: 'potentially_relevant',
+        excludeFromDefaultTriage: false,
+        requestId: 'owned',
+        sourceContentFingerprint: 'source',
+        sourceContentVersion: 1,
+        sourceFingerprint: 'a'.repeat(64),
+        profileFingerprint: 'b'.repeat(64),
+        inputFingerprint: 'c'.repeat(64),
+        evidence: [
+          {
+            dimension: 'role_relevant',
+            probability: 0.95,
+            confidence: 0.95,
+            witness: {
+              id: 's0',
+              path: 'sourceContentJson.descriptionRaw',
+              text: quote,
+            },
+          },
+        ],
+        conditionalPaths: [],
+        uncertainties: [],
+        holdReasons: [],
+      },
+    };
+    const { body } = renderOpportunity(record);
+    expect(body).toContain('Potentially relevant');
+    expect(body).toContain('does not establish overall fit');
+    expect(body).toContain(quote);
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).toContain('No current assessment is available.');
+    expect(body).toContain('Earlier intelligence recommendation');
+    const screening = body.match(
+      /<section[^>]*aria-label="Coarse opportunity screening"[\s\S]*?<\/section>/,
+    )?.[0];
+    expect(screening).toBeDefined();
+    expect(screening).not.toContain('99/100');
+    const established = renderOpportunity({
+      ...record,
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 72 },
+        reason: 'Current established assessment.',
+      },
+    });
+    expect(established.body).toContain('Match score: 72/100');
+    expect(established.body).toContain('Potentially relevant');
+    expect(record.humanReviewStatus).toBe('apply');
+    expect(record.reviewOverlay).toEqual({
+      humanReviewStatus: 'apply',
+      humanReviewNotes: 'Owner decision',
+    });
+    expect(
+      renderOpportunity({ ...record, sourceContentVersion: 2 }).body,
+    ).not.toContain('Coarse screening:');
+  });
   it.each([
     false,
     true,

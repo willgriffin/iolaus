@@ -24,6 +24,7 @@ import {
 import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
+import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
 import PartialOpportunityEvidence, {
@@ -990,6 +991,7 @@ $effect(() => {
   {/if}
 
   {#if isOpportunityRecord}
+    <OpportunityScreeningSummary record={data.record} />
     <section class="panel record-intelligence" aria-label="Your opportunity assessment">
       <div class="intel-head">
         <span class="field-kicker">Your opportunity assessment</span>

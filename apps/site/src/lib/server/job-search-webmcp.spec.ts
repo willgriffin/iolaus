@@ -159,6 +159,7 @@ vi.mock('./admin-opportunity-query.js', () => ({
   countOpportunityRecords: mocks.count,
   listLatestOpportunityRelatedContext: mocks.relatedContext,
   listOpportunityPageIds: mocks.ids,
+  loadOpportunityScreeningProjectionPages: vi.fn(async () => new Map()),
 }));
 
 vi.mock('./opportunity-assessment-store.js', () => ({

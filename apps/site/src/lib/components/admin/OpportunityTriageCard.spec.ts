@@ -14,6 +14,62 @@ function renderCard(record: AdminRecord, props: Record<string, unknown> = {}) {
 }
 
 describe('OpportunityTriageCard', () => {
+  it('separates coarse relevance from unknown fit and retains human review state', () => {
+    const quote = 'We are hiring software engineers.';
+    const record = {
+      id: 'screened-role',
+      title: 'Platform role',
+      humanReviewStatus: 'apply',
+      reviewOverlay: {
+        humanReviewStatus: 'apply',
+        humanReviewNotes: 'Owner decision',
+      },
+      latestScore: 99,
+      sourceContentFingerprint: 'source',
+      sourceContentVersion: 1,
+      sourceContentJson: JSON.stringify({ descriptionRaw: quote }),
+      screeningProjection: {
+        version: 'opportunity-screening-projection/v1',
+        mode: 'coarse_screen',
+        sourceStatus: 'current',
+        status: 'potentially_relevant',
+        excludeFromDefaultTriage: false,
+        requestId: 'owned',
+        sourceContentFingerprint: 'source',
+        sourceContentVersion: 1,
+        sourceFingerprint: 'a'.repeat(64),
+        profileFingerprint: 'b'.repeat(64),
+        inputFingerprint: 'c'.repeat(64),
+        evidence: [
+          {
+            dimension: 'role_relevant',
+            probability: 0.95,
+            confidence: 0.95,
+            witness: {
+              id: 's0',
+              path: 'sourceContentJson.descriptionRaw',
+              text: quote,
+            },
+          },
+        ],
+        conditionalPaths: [],
+        uncertainties: [],
+        holdReasons: [],
+      },
+    };
+    const { body } = renderCard(record);
+    expect(body).toContain('Potentially relevant');
+    expect(body).toContain('does not establish overall fit');
+    expect(body).toContain(quote);
+    expect(body).not.toContain('99/100');
+    expect(record.humanReviewStatus).toBe('apply');
+    expect(record.reviewOverlay).toEqual({
+      humanReviewStatus: 'apply',
+      humanReviewNotes: 'Owner decision',
+    });
+    const unavailable = renderCard({ ...record, screeningProjection: null });
+    expect(unavailable.body).not.toContain('Coarse screening:');
+  });
   it('renders the posting and the card utilities', () => {
     const { body } = renderCard({
       companyName: 'Northwind',

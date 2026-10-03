@@ -46,6 +46,7 @@ import {
 } from '$lib/opportunity-bulk-workflows';
 import {
   filterStateFromSearchParams,
+  OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
 import SourceControlList from '../sources/SourceControlList.svelte';
@@ -60,6 +61,7 @@ const TASK_COLLAPSED_LANES_STORAGE_KEY =
 const opportunityReviewFilters = [
   { label: 'All', value: 'all' },
   { label: 'Unsorted', value: 'unsorted' },
+  { label: 'Screened out', value: OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER },
   { label: 'Applied', value: 'apply' },
   { label: 'Maybe', value: 'maybe' },
   { label: 'Rejected', value: 'reject' },

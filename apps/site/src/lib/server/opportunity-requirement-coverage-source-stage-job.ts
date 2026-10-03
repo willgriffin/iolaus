@@ -57,7 +57,7 @@ import {
   requirementCoverageSourceDependencyFingerprint,
   validateVerifiedRequirementCoverage,
 } from './opportunity-requirement-coverage-provider.js';
-import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
+import { OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS } from './opportunity-screening.js';
 import {
   OPPORTUNITY_SCREENING_FEATURE,
   OPPORTUNITY_SCREENING_PROFILE,
@@ -251,9 +251,11 @@ export async function attestCompletedOpportunitySourceExtraction(
     if (
       screen &&
       (row.profile !== OPPORTUNITY_SCREENING_PROFILE ||
-        row.prompt_version !== OPPORTUNITY_SCREENING_VERSION ||
-        row.output_schema_version !== OPPORTUNITY_SCREENING_VERSION ||
-        row.prepared_payload_version !== OPPORTUNITY_SCREENING_VERSION ||
+        !OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.some(
+          (version) => row.prompt_version === version,
+        ) ||
+        row.output_schema_version !== row.prompt_version ||
+        row.prepared_payload_version !== row.prompt_version ||
         typeof row.input_fingerprint !== 'string' ||
         !/^[a-f0-9]{64}$/u.test(row.input_fingerprint))
     ) {

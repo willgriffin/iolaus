@@ -3,8 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { assessmentDecisionOutputTokenCeiling } from './opportunity-assessment.js';
 import {
   OPPORTUNITY_SCREENING_MAX_OUTPUT_TOKENS,
+  OPPORTUNITY_SCREENING_MAX_REQUEST_BYTES,
+  OPPORTUNITY_SCREENING_V1_VERSION,
+  OPPORTUNITY_SCREENING_VERSION,
   type OpportunityScreeningDimension,
   OpportunityScreeningPreparationError,
+  type OpportunityScreeningVersion,
   type PreparedOpportunityScreening,
   prepareOpportunityScreening,
   resolveOpportunityScreening,
@@ -25,6 +29,7 @@ const profile = {
 function prepare(
   body = 'Build software for an accounting platform.',
   extras: Record<string, unknown> = {},
+  version: OpportunityScreeningVersion = OPPORTUNITY_SCREENING_VERSION,
 ) {
   const source = {
     descriptionRaw: body,
@@ -33,12 +38,15 @@ function prepare(
     workMode: 'remote',
     ...extras,
   };
-  return prepareOpportunityScreening({
-    sourceContentJson: JSON.stringify(source),
-    sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
-    sourceContentVersion: 2,
-    profile,
-  });
+  return prepareOpportunityScreening(
+    {
+      sourceContentJson: JSON.stringify(source),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(source),
+      sourceContentVersion: 2,
+      profile,
+    },
+    { version },
+  );
 }
 function distribution(
   prepared: PreparedOpportunityScreening,
@@ -94,7 +102,7 @@ function resolve(
 }
 
 describe('JEV-first coarse opportunity screening', () => {
-  it('offers every exact body line and immutable ATS field once in a fixed bounded request', () => {
+  it('offers lossless contiguous body groups and immutable ATS fields once in a fixed bounded request', () => {
     const body = 'First literal line.\n\n  Second literal line.\r\nThird line.';
     const prepared = prepare(body);
     expect(Object.keys(prepared.request.questions)).toHaveLength(14);
@@ -102,6 +110,8 @@ describe('JEV-first coarse opportunity screening', () => {
       assessmentDecisionOutputTokenCeiling(prepared.request),
     );
     expect(OPPORTUNITY_SCREENING_MAX_OUTPUT_TOKENS).toBe(4096);
+    expect(OPPORTUNITY_SCREENING_MAX_REQUEST_BYTES).toBe(32_768);
+    expect(prepared.version).toBe(OPPORTUNITY_SCREENING_VERSION);
     expect(prepared.requestBytes).toBe(
       Buffer.byteLength(JSON.stringify(prepared.request), 'utf8'),
     );
@@ -109,6 +119,12 @@ describe('JEV-first coarse opportunity screening', () => {
       (w) => w.path === 'sourceContentJson.descriptionRaw',
     ))
       expect(body.slice(witness.spanStart, witness.spanEnd)).toBe(witness.text);
+    expect(
+      prepared.witnesses
+        .filter((w) => w.path === 'sourceContentJson.descriptionRaw')
+        .map((w) => w.text)
+        .join(''),
+    ).toBe(body);
     for (const question of Object.values(prepared.request.questions))
       if (question.type === 'choice')
         expect(Object.keys(question.criteria)).toEqual([
@@ -119,26 +135,97 @@ describe('JEV-first coarse opportunity screening', () => {
       prepared.witnesses.filter((w) => w.path === 'sourceContentJson.title'),
     ).toEqual([
       {
-        id: 'field:title',
+        id: 't',
         path: 'sourceContentJson.title',
         text: 'Software engineer',
       },
     ]);
   });
-  it('reserves every full choice distribution: 43 witnesses admit, 44 hold without truncation', () => {
+  it('preserves every literal code unit over dense lines with bounded full choice vectors', () => {
+    const body = `\r\n  \tLeading whitespace.\r${Array.from(
+      { length: 160 },
+      (_, index) => `Repeated literal line 😀 ${index % 3}.\r\n\n`,
+    ).join('')}\tTrailing whitespace.\n\r\n`;
+    const prepared = prepare(body);
+    const groups = prepared.witnesses.filter(
+      (w) => w.path === 'sourceContentJson.descriptionRaw',
+    );
+    expect(groups.length).toBeLessThanOrEqual(16);
+    expect(prepared.witnesses.length).toBeLessThanOrEqual(19);
+    expect(prepared.maxOutputTokens).toBe(2251);
+    expect(prepared.requestBytes).toBeLessThanOrEqual(32_768);
+    expect(groups.map((w) => w.text).join('')).toBe(body);
+    let end = 0;
+    for (const witness of groups) {
+      expect(witness.spanStart).toBe(end);
+      expect(body.slice(witness.spanStart, witness.spanEnd)).toBe(witness.text);
+      end = witness.spanEnd!;
+    }
+    expect(end).toBe(body.length);
+    expect(() => prepare(body, {}, OPPORTUNITY_SCREENING_V1_VERSION)).toThrow(
+      'lossless screening witness bound',
+    );
+    expect(Object.keys(prepared.request.questions)).toHaveLength(14);
+    expect(
+      (
+        prepared.request.state as {
+          Source: Array<{ id: string; text: string }>;
+        }
+      ).Source,
+    ).toEqual(prepared.witnesses.map(({ id, text }) => ({ id, text })));
+    expect(
+      prepared.witnesses
+        .filter((w) => w.id === 't' || w.id === 'l' || w.id === 'w')
+        .map((w) => w.id),
+    ).toEqual(['t', 'l', 'w']);
+    const result = answers(prepared, { role_relevant: 't' });
+    for (const answer of Object.values(result.answers))
+      if (answer.type === 'choice') {
+        expect(Object.keys(answer.probabilities)).toEqual([
+          ...prepared.witnesses.map((w) => w.id),
+          'none',
+        ]);
+        expect(
+          Object.values(answer.probabilities).reduce((sum, n) => sum + n, 0),
+        ).toBeCloseTo(1);
+      }
+    expect(
+      resolveOpportunityScreening(prepared, result, 'actual-dense-request')
+        .status,
+    ).toBe('potentially_relevant');
+  });
+  it('keeps a long indivisible line whole rather than cutting or omitting its material', () => {
+    const body = `\n${'literal 😀 '.repeat(1600)}\r\n`;
+    const prepared = prepare(body);
+    const groups = prepared.witnesses.filter(
+      (w) => w.path === 'sourceContentJson.descriptionRaw',
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[1]?.text).toBe(body.slice(1));
+    expect(groups.map((w) => w.text).join('')).toBe(body);
+    expect(() => prepare('literal '.repeat(5000))).toThrow(
+      'lossless screening request bound',
+    );
+  });
+  it('replays historical V1 full choice distributions: 43 witnesses admit, 44 hold without truncation', () => {
     const body = Array.from(
       { length: 40 },
       (_, index) => `Exact source line ${index}.`,
     ).join('\n');
-    const prepared = prepare(body);
+    const prepared = prepare(body, {}, OPPORTUNITY_SCREENING_V1_VERSION);
+    expect(prepared.version).toBe(OPPORTUNITY_SCREENING_V1_VERSION);
     expect(prepared.witnesses).toHaveLength(43);
     expect(prepared.maxOutputTokens).toBe(4043);
     expect(prepared.maxOutputTokens).toBe(
       assessmentDecisionOutputTokenCeiling(prepared.request),
     );
-    expect(() => prepare(`${body}\nOne further exact source line.`)).toThrow(
-      'Full screening choice distributions',
-    );
+    expect(() =>
+      prepare(
+        `${body}\nOne further exact source line.`,
+        {},
+        OPPORTUNITY_SCREENING_V1_VERSION,
+      ),
+    ).toThrow('Full screening choice distributions');
     const result = answers(prepared, { role_relevant: 'field:title' });
     for (const [key, answer] of Object.entries(result.answers))
       if (answer.type === 'choice')
@@ -147,6 +234,32 @@ describe('JEV-first coarse opportunity screening', () => {
       resolveOpportunityScreening(prepared, result, 'actual-boundary-request')
         .status,
     ).toBe('potentially_relevant');
+    const grouped = prepare(body);
+    expect(grouped.witnesses.length).toBeLessThanOrEqual(19);
+    expect(grouped.maxOutputTokens).toBeLessThanOrEqual(2251);
+    expect(grouped.inputFingerprint).not.toBe(prepared.inputFingerprint);
+    expect(grouped.profileFingerprint).toBe(prepared.profileFingerprint);
+    expect(grouped.sourceIdentity).toEqual(prepared.sourceIdentity);
+    expect(
+      prepare(`${body}\nOne further exact source line.`).maxOutputTokens,
+    ).toBeLessThanOrEqual(2251);
+    const changed = structuredClone(prepared);
+    changed.version = OPPORTUNITY_SCREENING_VERSION;
+    expect(() =>
+      resolveOpportunityScreening(changed, result, 'actual-version-tamper'),
+    ).toThrow('modified');
+    expect(() =>
+      prepare(
+        body,
+        {},
+        'opportunity-screening/invented' as OpportunityScreeningVersion,
+      ),
+    ).toThrow('Unsupported screening material version');
+    changed.version =
+      'opportunity-screening/invented' as OpportunityScreeningVersion;
+    expect(() =>
+      resolveOpportunityScreening(changed, result, 'actual-unknown-version'),
+    ).toThrow('Unsupported screening material version');
   });
   it('routes source-backed software duties at an accounting company as potentially relevant', () => {
     const prepared = prepare();
@@ -209,7 +322,7 @@ describe('JEV-first coarse opportunity screening', () => {
     const result = resolve(prepared, {
       country_mismatch: 's0',
       sponsorship_path: 's0',
-      role_relevant: 'field:title',
+      role_relevant: 't',
     });
     expect(result.status).toBe('uncertain');
     expect(result.mismatches).toEqual(['country_mismatch']);
@@ -252,7 +365,7 @@ describe('JEV-first coarse opportunity screening', () => {
     );
     expect(
       resolve(prepared, {
-        role_relevant: 'field:title',
+        role_relevant: 't',
         unresolved_constraint: 's0',
       }).status,
     ).toBe('uncertain');

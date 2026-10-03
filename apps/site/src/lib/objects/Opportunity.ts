@@ -238,9 +238,6 @@ export class Opportunity extends SmrtObject {
     args: OpportunityAssessmentDependencyJobArgs = {},
     context?: JobExecutionContext,
   ) {
-    const { runOpportunityAssessmentDependencyJob } = await import(
-      '../server/opportunity-assessment-dependency-job.js'
-    );
     const {
       assertJobTenantMatchesRuntimeWorkspaceSubject,
       requireActiveRunnerExecutionContext,
@@ -255,6 +252,17 @@ export class Opportunity extends SmrtObject {
           subject,
         );
         await run.assertOperation('opportunities', 'read');
+        if (args.screeningOnly !== undefined) {
+          const { runOpportunityScreeningOnlyJob } = await import(
+            '../server/opportunity-screening-job.js'
+          );
+          return await runOpportunityScreeningOnlyJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
         if (args.sourceCoverageStage !== undefined) {
           const { runOpportunityRequirementCoverageSourceStageJob } =
             await import(
@@ -290,6 +298,9 @@ export class Opportunity extends SmrtObject {
         );
         const operation = workspaceWorkflowOperation('assessment.execute');
         await run.assertOperation(operation.collection, operation.action);
+        const { runOpportunityAssessmentDependencyJob } = await import(
+          '../server/opportunity-assessment-dependency-job.js'
+        );
         return await runOpportunityAssessmentDependencyJob(
           this as unknown as Record<string, unknown>,
           args,

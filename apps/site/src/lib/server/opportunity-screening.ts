@@ -10,10 +10,19 @@ import {
   parseOpportunitySourceContent,
 } from './opportunity-source-content.js';
 
-export const OPPORTUNITY_SCREENING_VERSION =
+export const OPPORTUNITY_SCREENING_V1_VERSION =
   'opportunity-screening/v1-jev-first' as const;
+export const OPPORTUNITY_SCREENING_VERSION =
+  'opportunity-screening/v2-lossless-groups' as const;
+export const OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS = [
+  OPPORTUNITY_SCREENING_V1_VERSION,
+  OPPORTUNITY_SCREENING_VERSION,
+] as const;
+export type OpportunityScreeningVersion =
+  (typeof OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS)[number];
 export const OPPORTUNITY_SCREENING_MAX_OUTPUT_TOKENS = 4096;
 export const OPPORTUNITY_SCREENING_MAX_REQUEST_BYTES = 32_768;
+const maxBodyGroups = 16;
 const threshold = 0.85;
 const dimensions = [
   'role_mismatch',
@@ -53,7 +62,7 @@ export interface OpportunityScreeningProfile {
   workModes: string[];
 }
 export interface PreparedOpportunityScreening {
-  version: typeof OPPORTUNITY_SCREENING_VERSION;
+  version: OpportunityScreeningVersion;
   sourceIdentity: {
     sourceContentFingerprint: string;
     sourceContentVersion: number;
@@ -69,7 +78,7 @@ export interface PreparedOpportunityScreening {
   maxOutputTokens: number;
 }
 export interface OpportunityScreeningResult {
-  version: typeof OPPORTUNITY_SCREENING_VERSION;
+  version: OpportunityScreeningVersion;
   status: OpportunityScreeningStatus;
   requestId: string;
   inputFingerprint: string;
@@ -251,7 +260,16 @@ function makePrepared(
   sourceContentJson: string,
   sourceIdentity: PreparedOpportunityScreening['sourceIdentity'],
   profile: OpportunityScreeningProfile,
+  version: OpportunityScreeningVersion,
 ): PreparedOpportunityScreening {
+  if (
+    version !== OPPORTUNITY_SCREENING_V1_VERSION &&
+    version !== OPPORTUNITY_SCREENING_VERSION
+  )
+    throw new OpportunityScreeningPreparationError(
+      'invalid_context',
+      'Unsupported screening material version.',
+    );
   const source = parseOpportunitySourceContent(sourceContentJson);
   if (
     !source ||
@@ -268,16 +286,44 @@ function makePrepared(
       'Screening needs the current original captured source identity and nonempty body.',
     );
   const witnesses: OpportunityScreeningWitness[] = [];
-  for (const match of source.descriptionRaw.matchAll(/[^\r\n]+/gu)) {
-    if (!match[0].trim()) continue;
-    witnesses.push({
-      id: `s${witnesses.length}`,
-      path: 'sourceContentJson.descriptionRaw',
-      text: match[0],
-      spanStart: match.index,
-      spanEnd: match.index + match[0].length,
-    });
+  if (version === OPPORTUNITY_SCREENING_V1_VERSION) {
+    // Historical preparations retain their exact original witness identities.
+    for (const match of source.descriptionRaw.matchAll(/[^\r\n]+/gu)) {
+      if (!match[0].trim()) continue;
+      witnesses.push({
+        id: `s${witnesses.length}`,
+        path: 'sourceContentJson.descriptionRaw',
+        text: match[0],
+        spanStart: match.index,
+        spanEnd: match.index + match[0].length,
+      });
+    }
+  } else {
+    // Physical line boundaries are formatting only, never classification.
+    // Include separators and blank lines so the contiguous spans partition
+    // every original UTF-16 code unit without cutting a line or surrogate pair.
+    const lineEnds = Array.from(
+      source.descriptionRaw.matchAll(/\r\n|\r|\n/gu),
+      (match) => match.index + match[0].length,
+    );
+    if (lineEnds.at(-1) !== source.descriptionRaw.length)
+      lineEnds.push(source.descriptionRaw.length);
+    const linesPerGroup = Math.ceil(lineEnds.length / maxBodyGroups);
+    let spanStart = 0;
+    for (let index = 0; index < lineEnds.length; index += linesPerGroup) {
+      const spanEnd =
+        lineEnds[Math.min(index + linesPerGroup, lineEnds.length) - 1]!;
+      witnesses.push({
+        id: `s${witnesses.length}`,
+        path: 'sourceContentJson.descriptionRaw',
+        text: source.descriptionRaw.slice(spanStart, spanEnd),
+        spanStart,
+        spanEnd,
+      });
+      spanStart = spanEnd;
+    }
   }
+  const fieldAliases = { title: 't', locationNotes: 'l', workMode: 'w' };
   for (const field of ['title', 'locationNotes', 'workMode'] as const) {
     const value = source[field];
     if (value !== undefined && value !== null && typeof value !== 'string')
@@ -287,7 +333,10 @@ function makePrepared(
       );
     if (typeof value === 'string' && value.trim())
       witnesses.push({
-        id: `field:${field}`,
+        id:
+          version === OPPORTUNITY_SCREENING_V1_VERSION
+            ? `field:${field}`
+            : fieldAliases[field],
         path: `sourceContentJson.${field}`,
         text: value,
       });
@@ -360,7 +409,7 @@ function makePrepared(
   });
   const profileFingerprint = hash(profile);
   return {
-    version: OPPORTUNITY_SCREENING_VERSION,
+    version,
     sourceIdentity,
     sourceContentJson,
     sourceFingerprint,
@@ -371,7 +420,7 @@ function makePrepared(
     requestBytes,
     maxOutputTokens,
     inputFingerprint: hash({
-      version: OPPORTUNITY_SCREENING_VERSION,
+      version,
       sourceFingerprint,
       profileFingerprint,
       request,
@@ -379,12 +428,16 @@ function makePrepared(
     }),
   };
 }
-export function prepareOpportunityScreening(input: {
-  sourceContentJson: string;
-  sourceContentFingerprint: string;
-  sourceContentVersion: number;
-  profile: Record<string, unknown>;
-}): PreparedOpportunityScreening {
+/** New work uses V2; replay callers must pass the trusted historical version. */
+export function prepareOpportunityScreening(
+  input: {
+    sourceContentJson: string;
+    sourceContentFingerprint: string;
+    sourceContentVersion: number;
+    profile: Record<string, unknown>;
+  },
+  options: { version?: OpportunityScreeningVersion } = {},
+): PreparedOpportunityScreening {
   return makePrepared(
     input.sourceContentJson,
     {
@@ -392,6 +445,7 @@ export function prepareOpportunityScreening(input: {
       sourceContentVersion: input.sourceContentVersion,
     },
     opportunityScreeningProfileFromNative(input.profile),
+    options.version ?? OPPORTUNITY_SCREENING_VERSION,
   );
 }
 function probability(value: number) {
@@ -417,6 +471,7 @@ export function resolveOpportunityScreening(
     prepared.sourceContentJson,
     prepared.sourceIdentity,
     canonicalProfile,
+    prepared.version,
   );
   if (hash(canonical) !== hash(prepared))
     throw new Error('Screening request was modified after preparation.');

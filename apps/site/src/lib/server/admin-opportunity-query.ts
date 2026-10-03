@@ -3,12 +3,15 @@ import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import {
   DECISION_REVIEW_STATUSES,
+  OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER,
   type OpportunityFilterOptions,
   type OpportunityFilterState,
+  opportunityScreeningReviewMode,
 } from '$lib/opportunity-filters';
 import { getDbConfig } from './db.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
 import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
+import type { OpportunityScreeningProjection } from './opportunity-screening-projection.js';
 import type { SourceEligibilityUiProjection } from './opportunity-source-eligibility-projection.js';
 import type { WorkspaceSubject } from './workspace-subject.js';
 
@@ -367,7 +370,11 @@ function reviewWhereSql(
   // Branch on the same value the fingerprint hashes: it trims, so `' all '`
   // must select no review filter rather than an equality that matches nothing.
   const review = reviewFilter.trim();
-  if (!review || review === 'all') {
+  if (
+    !review ||
+    review === 'all' ||
+    review === OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER
+  ) {
     return { needsApplication: false, needsReview: false, where: [] };
   }
   void workspaceSubject;
@@ -828,6 +835,152 @@ export type CurrentSourceOpportunityEligibility = {
   projection: SourceEligibilityUiProjection;
 };
 
+export type CurrentScreenedOpportunityExclusion = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection: OpportunityScreeningProjection;
+};
+
+/** One uncached profile snapshot per operation, with bounded native receipt replay. */
+export async function loadOpportunityScreeningProjectionPages(
+  opportunities: Record<string, unknown>[],
+  subject: WorkspaceSubject,
+): Promise<Map<string, OpportunityScreeningProjection>> {
+  const result = new Map<string, OpportunityScreeningProjection>();
+  if (!hasCandidateWorkspaceSubject(subject) || !opportunities.length)
+    return result;
+  const [
+    {
+      loadCurrentOpportunityScreeningProjections,
+      OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT,
+    },
+    { getCollection },
+  ] = await Promise.all([
+    import('./opportunity-screening-projection.js'),
+    import('./smrt.js'),
+  ]);
+  let profilePromise: Promise<Record<string, unknown> | null> | undefined;
+  const getProfile = async (id: string) => {
+    profilePromise ??= (async () => {
+      const native = await (await getCollection('CandidateProfile')).get(
+        { id },
+        { cache: false },
+      );
+      return (native?.toJSON() as Record<string, unknown> | null) ?? null;
+    })();
+    return await profilePromise;
+  };
+  for (
+    let start = 0;
+    start < opportunities.length;
+    start += OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT
+  ) {
+    const page = opportunities.slice(
+      start,
+      start + OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT,
+    );
+    const requested = new Set(page.map((row) => row.id));
+    const projections = await loadCurrentOpportunityScreeningProjections(
+      { opportunities: page, subject },
+      { getProfile },
+    );
+    for (const [id, projection] of projections)
+      if (requested.has(id)) result.set(id, projection);
+  }
+  return result;
+}
+
+/** Receipt selectors nominate IDs only. Only native current replay may hide a row. */
+export async function loadCurrentScreenedOpportunityExclusions(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentScreenedOpportunityExclusion>> {
+  const result = new Map<string, CurrentScreenedOpportunityExclusion>();
+  if (!hasCandidateWorkspaceSubject(subject)) return result;
+  const {
+    OPPORTUNITY_SCREENING_RECEIPT_FEATURE,
+    OPPORTUNITY_SCREENING_RECEIPT_PROFILE,
+  } = await import('./opportunity-screening-projection.js');
+  const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const values: unknown[] = [
+    OPPORTUNITY_SCREENING_RECEIPT_FEATURE,
+    OPPORTUNITY_SCREENING_RECEIPT_PROFILE,
+  ];
+  const selectors = await queryOpportunitySql(
+    db,
+    dialect,
+    `SELECT DISTINCT r.opportunity_id AS id
+    FROM opportunity_intelligence_results r JOIN opportunity_intelligence_requests q
+      ON q.request_id = r.owner_request_id AND q.idempotency_key = r.idempotency_key
+      AND q.opportunity_id = r.opportunity_id AND q.agent_run_id = r.agent_run_id
+      AND q.content_fingerprint = r.content_fingerprint AND q.input_fingerprint = r.input_fingerprint
+      AND q.feature = r.feature AND q.model = r.model AND q.profile = r.profile
+    JOIN opportunities o ON CAST(o.id AS TEXT) = r.opportunity_id
+      AND o.source_content_fingerprint = r.content_fingerprint
+    WHERE r.feature = $1 AND r.profile = $2
+      AND r.status = 'completed' AND q.status = 'succeeded'
+      AND q.accounting_basis = 'actual' AND q.actual_total_tokens > 0
+      AND (${privateSubjectWhereSql('r', subject, values)})
+      AND (${privateSubjectWhereSql('q', subject, values)})
+    ORDER BY r.opportunity_id ASC`,
+    values,
+  );
+  const ids = [
+    ...new Set(
+      rowsFromResult(selectors).flatMap((row) =>
+        typeof row.id === 'string' && row.id ? [row.id] : [],
+      ),
+    ),
+  ];
+  const projections = await loadOpportunityScreeningProjectionPages(
+    ids.map((id) => ({ id })),
+    subject,
+  );
+  for (const [id, projection] of projections) {
+    if (
+      projection.excludeFromDefaultTriage &&
+      projection.status === 'clear_mismatch' &&
+      projection.holdReasons.length === 0
+    )
+      result.set(id, {
+        sourceContentFingerprint: projection.sourceContentFingerprint,
+        sourceContentVersion: projection.sourceContentVersion,
+        projection,
+      });
+  }
+  return result;
+}
+
+function screeningWhereSql(
+  reviewFilter: string,
+  dialect: OpportunityQueryDialect,
+  exclusions: Map<string, CurrentScreenedOpportunityExclusion>,
+  values: unknown[],
+): string | null {
+  const mode = opportunityScreeningReviewMode(reviewFilter);
+  if (!mode) return null;
+  if (!exclusions.size) return mode === 'only' ? 'FALSE' : null;
+  const tuples = [...exclusions]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, current]) => ({
+      id,
+      fingerprint: current.sourceContentFingerprint,
+      version: current.sourceContentVersion,
+    }));
+  const payload = pushParam(values, JSON.stringify(tuples));
+  const match =
+    dialect === 'sqlite'
+      ? `EXISTS (SELECT 1 FROM json_each(${payload}) screen
+      WHERE CAST(o.id AS TEXT) = json_extract(screen.value, '$.id')
+        AND o.source_content_fingerprint = json_extract(screen.value, '$.fingerprint')
+        AND o.source_content_version = json_extract(screen.value, '$.version'))`
+      : `EXISTS (SELECT 1 FROM jsonb_to_recordset(${payload}::jsonb) AS screen(id text, fingerprint text, version bigint)
+      WHERE CAST(o.id AS TEXT) = screen.id
+        AND o.source_content_fingerprint = screen.fingerprint
+        AND o.source_content_version = screen.version)`;
+  return mode === 'only' ? match : `NOT ${match}`;
+}
+
 /** Public receipt rows nominate IDs only; native replay and the active profile decide eligibility. */
 export async function loadCurrentSourceOpportunityEligibility(
   subject: WorkspaceSubject,
@@ -1013,6 +1166,10 @@ export function createOpportunityWhereSql(
     string,
     CurrentSourceOpportunityEligibility
   > = new Map(),
+  screeningExclusions: Map<
+    string,
+    CurrentScreenedOpportunityExclusion
+  > = new Map(),
 ): {
   joins: string[];
   values: unknown[];
@@ -1045,7 +1202,17 @@ export function createOpportunityWhereSql(
   if (review.needsReview || filters.needsReview) {
     joins.push(latestReviewJoinSql(dialect, query.workspaceSubject, values));
   }
-  const where = [...review.where, ...filters.where];
+  const screen = screeningWhereSql(
+    query.reviewFilter,
+    dialect,
+    screeningExclusions,
+    values,
+  );
+  const where = [
+    ...review.where,
+    ...filters.where,
+    ...(screen ? [screen] : []),
+  ];
   return {
     joins,
     values,
@@ -1203,7 +1370,15 @@ export async function listOpportunityMatchingIds(
   const sourceEligibility = query.filters.eligibilityBuckets.length
     ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
     : new Map();
-  const built = createOpportunityWhereSql(query, dialect, sourceEligibility);
+  const screeningExclusions = opportunityScreeningReviewMode(query.reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(query.workspaceSubject)
+    : new Map();
+  const built = createOpportunityWhereSql(
+    query,
+    dialect,
+    sourceEligibility,
+    screeningExclusions,
+  );
   const limitPlaceholder = pushParam(built.values, limit);
   const sql = `SELECT o.id, o.updated_at AS "updatedAt"
     FROM opportunities o
@@ -1283,10 +1458,14 @@ export async function countOpportunityRecords(
   const sourceEligibility = query.filters.eligibilityBuckets.length
     ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
     : new Map();
+  const screeningExclusions = opportunityScreeningReviewMode(query.reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(query.workspaceSubject)
+    : new Map();
   const { joins, values, whereSql } = createOpportunityWhereSql(
     query,
     dialect,
     sourceEligibility,
+    screeningExclusions,
   );
   const result = await queryOpportunitySql(
     db,
@@ -1322,6 +1501,9 @@ export async function listOpportunityPageIds({
   const sourceEligibility = needsSourceEligibility(filters)
     ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
     : new Map();
+  const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
+    : new Map();
   const query = createOpportunityWhereSql(
     {
       candidateSkills,
@@ -1334,6 +1516,7 @@ export async function listOpportunityPageIds({
     },
     dialect,
     sourceEligibility,
+    screeningExclusions,
   );
   const needsAssessmentForSort =
     filters.sort === 'best' ||
@@ -1561,8 +1744,17 @@ export async function listOpportunityFilterOptions(
   if (review.needsReview) {
     joins.push(latestReviewJoinSql(dialect, workspaceSubject, values));
   }
-  const whereSql =
-    review.where.length > 0 ? `WHERE ${review.where.join('\n AND ')}` : '';
+  const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
+    : new Map();
+  const screen = screeningWhereSql(
+    reviewFilter,
+    dialect,
+    screeningExclusions,
+    values,
+  );
+  const where = [...review.where, ...(screen ? [screen] : [])];
+  const whereSql = where.length > 0 ? `WHERE ${where.join('\n AND ')}` : '';
   if (dialect === 'sqlite') {
     const sql = `WITH RECURSIVE scoped AS (
         SELECT o.*

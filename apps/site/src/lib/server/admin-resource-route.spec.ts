@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => {
       assessmentPreferencesFingerprint: 'preferences-test',
     })),
     loadCurrentOpportunityReviewOverlays: vi.fn(async () => new Map()),
+    loadOpportunityScreeningProjectionPages: vi.fn(async () => new Map()),
     loadCurrentOpportunityVideoRequirementsProjections: vi.fn(
       async () => new Map(),
     ),
@@ -194,6 +195,8 @@ vi.mock('./admin-opportunity-query', () => ({
   createOpportunityQueryFingerprint: mocks.createOpportunityQueryFingerprint,
   listOpportunityFilterOptions: mocks.listOpportunityFilterOptions,
   listOpportunityPageIds: mocks.listOpportunityPageIds,
+  loadOpportunityScreeningProjectionPages:
+    mocks.loadOpportunityScreeningProjectionPages,
   OPPORTUNITY_TABLE_PAGE_SIZE: 100,
 }));
 
@@ -330,6 +333,8 @@ describe('admin-resource-route', () => {
     });
     mocks.loadCurrentOpportunityReviewOverlays.mockReset();
     mocks.loadCurrentOpportunityReviewOverlays.mockResolvedValue(new Map());
+    mocks.loadOpportunityScreeningProjectionPages.mockReset();
+    mocks.loadOpportunityScreeningProjectionPages.mockResolvedValue(new Map());
     mocks.loadCurrentOpportunityVideoRequirementsProjections.mockReset();
     mocks.loadCurrentOpportunityVideoRequirementsProjections.mockResolvedValue(
       new Map(),
@@ -1130,6 +1135,53 @@ describe('admin-resource-route', () => {
     );
     expect(unfiltered.records).toHaveLength(2);
     expect(unfiltered.pagination.totalRecords).toBe(2);
+  });
+
+  it('attaches cited coarse screening separately from assessment and human decisions', async () => {
+    const opportunity = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'source-v1',
+      sourceContentVersion: 1,
+      title: 'Platform Engineer',
+    };
+    const screening = {
+      mode: 'coarse_screen',
+      sourceStatus: 'current',
+      sourceContentFingerprint: 'source-v1',
+      sourceContentVersion: 1,
+      status: 'clear_mismatch',
+      excludeFromDefaultTriage: true,
+      evidence: [{ witness: { text: 'Must work in the stated location.' } }],
+    };
+    mocks.loadOpportunityScreeningProjectionPages.mockResolvedValue(
+      new Map([['opp-1', screening]]),
+    );
+    const humanReview = {
+      humanReviewStatus: 'apply',
+      humanReviewNotes: 'Human choice.',
+    };
+    mocks.loadCurrentOpportunityReviewOverlays.mockResolvedValue(
+      new Map([['opp-1', humanReview]]),
+    );
+    const { attachOpportunityContext } = await import('./admin-resource-route');
+    const [record] = await attachOpportunityContext([opportunity], {
+      workspaceSubject,
+    });
+    expect(mocks.loadOpportunityScreeningProjectionPages).toHaveBeenCalledWith(
+      [opportunity],
+      workspaceSubject,
+    );
+    expect(record?.screeningProjection).toEqual(screening);
+    expect(record?.reviewOverlay).toEqual(humanReview);
+    expect(record?.assessmentProjection).toBeNull();
+    expect(record?.latestScore).toBeNull();
+    expect(record?.latestRecommendation).toBe('');
+    const [staleRecord] = await attachOpportunityContext(
+      [{ ...opportunity, sourceContentVersion: 2 }],
+      { workspaceSubject },
+    );
+    expect(staleRecord?.screeningProjection).toBeNull();
+    expect(staleRecord?.reviewOverlay).toEqual(humanReview);
   });
 
   it('attaches only the verified workspace assessment projection', async () => {

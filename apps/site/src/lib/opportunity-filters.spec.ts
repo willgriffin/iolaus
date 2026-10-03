@@ -8,6 +8,7 @@ import {
   matchesOpportunity,
   normalizeFilterState,
   type OpportunityFilterState,
+  opportunityScreeningReviewMode,
   parseSkillList,
   sortOpportunities,
   writeFilterStateSearchParams,
@@ -21,6 +22,15 @@ function filters(
 
 const matchAll = { hasSkill: () => true };
 const matchNone = { hasSkill: () => false };
+
+describe('coarse screening review views', () => {
+  it('hides proof only in the default untriaged view and keeps human views independent', () => {
+    expect(opportunityScreeningReviewMode(' unsorted ')).toBe('exclude');
+    expect(opportunityScreeningReviewMode('screened_out')).toBe('only');
+    for (const review of ['all', 'apply', 'maybe', 'reject', 'archived'])
+      expect(opportunityScreeningReviewMode(review)).toBeNull();
+  });
+});
 
 function eligibilityRecord(
   eligibilityBucket: string,

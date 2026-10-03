@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   source: vi.fn(),
   partialProjections: vi.fn(),
   sourceEligibility: vi.fn(),
+  screeningProjections: vi.fn(),
 }));
 
 const WORKSPACE_SUBJECT = {
@@ -48,6 +49,12 @@ vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
 vi.mock('./opportunity-source-eligibility-projection.js', () => ({
   loadCurrentSourceEligibilityProjections: mocks.sourceEligibility,
 }));
+vi.mock('./opportunity-screening-projection.js', () => ({
+  OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT: 100,
+  OPPORTUNITY_SCREENING_RECEIPT_FEATURE: 'opportunity-screening',
+  OPPORTUNITY_SCREENING_RECEIPT_PROFILE: 'typesafe-opportunity-screening',
+  loadCurrentOpportunityScreeningProjections: mocks.screeningProjections,
+}));
 vi.mock('./smrt.js', () => ({
   getCollection: async () => ({ get: mocks.source }),
 }));
@@ -61,6 +68,8 @@ describe('admin-opportunity-query', () => {
     mocks.partialProjections.mockResolvedValue(new Map());
     mocks.sourceEligibility.mockReset();
     mocks.sourceEligibility.mockResolvedValue(new Map());
+    mocks.screeningProjections.mockReset();
+    mocks.screeningProjections.mockResolvedValue(new Map());
     mocks.dbConfig.mockReset();
     mocks.dbConfig.mockReturnValue({});
     mocks.query.mockReset();
@@ -69,6 +78,299 @@ describe('admin-opportunity-query', () => {
     mocks.requestDatabase.mockReturnValue(undefined);
     mocks.scopedQuery.mockReset();
     mocks.scopedQuery.mockResolvedValue({ rows: [] });
+  });
+
+  it('replays screening selectors in pages of 100 with one uncached owned profile read', async () => {
+    const ids = Array.from({ length: 205 }, (_, index) => `screen-${index}`);
+    mocks.query.mockResolvedValue({ rows: ids.map((id) => ({ id })) });
+    const profile = { id: WORKSPACE_SUBJECT.profileId, active: true };
+    mocks.source.mockResolvedValue({ toJSON: () => profile });
+    mocks.screeningProjections.mockImplementation(
+      async (
+        {
+          opportunities,
+          subject,
+        }: { opportunities: Array<{ id: string }>; subject: unknown },
+        { getProfile }: { getProfile: (id: string) => Promise<unknown> },
+      ) => {
+        expect(subject).toEqual(WORKSPACE_SUBJECT);
+        expect(await getProfile(WORKSPACE_SUBJECT.profileId)).toEqual(profile);
+        return new Map(
+          opportunities.flatMap(({ id }) =>
+            id === 'screen-0'
+              ? [
+                  [
+                    id,
+                    {
+                      sourceContentFingerprint: 'current',
+                      sourceContentVersion: 1,
+                      status: 'clear_mismatch',
+                      excludeFromDefaultTriage: true,
+                      holdReasons: [],
+                    },
+                  ],
+                ]
+              : [],
+          ),
+        );
+      },
+    );
+    const { loadCurrentScreenedOpportunityExclusions } = await import(
+      './admin-opportunity-query'
+    );
+
+    expect(
+      [
+        ...(await loadCurrentScreenedOpportunityExclusions(WORKSPACE_SUBJECT)),
+      ].map(([id]) => id),
+    ).toEqual(['screen-0']);
+    expect(
+      mocks.screeningProjections.mock.calls.map(
+        ([input]) => input.opportunities.length,
+      ),
+    ).toEqual([100, 100, 5]);
+    expect(mocks.source).toHaveBeenCalledOnce();
+    expect(mocks.source).toHaveBeenCalledWith(
+      { id: WORKSPACE_SUBJECT.profileId },
+      { cache: false },
+    );
+    const [sql, ...values] = mocks.query.mock.calls[0];
+    expect(sql).toContain("q.accounting_basis = 'actual'");
+    expect(sql).toContain("r.status = 'completed' AND q.status = 'succeeded'");
+    expect(sql).toContain('r.tenant_id');
+    expect(sql).toContain('q.candidate_profile_id');
+    expect(sql).not.toContain('output_json');
+    expect(values).toEqual([
+      'opportunity-screening',
+      'typesafe-opportunity-screening',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+      'tenant-a',
+      'user-a',
+      'profile-a',
+    ]);
+  });
+
+  it('never uses a nominated receipt status without successful current projection replay', async () => {
+    mocks.query.mockResolvedValue({
+      rows: [{ id: 'orphan', status: 'clear_mismatch' }],
+    });
+    const { loadCurrentScreenedOpportunityExclusions } = await import(
+      './admin-opportunity-query'
+    );
+    expect(
+      await loadCurrentScreenedOpportunityExclusions(WORKSPACE_SUBJECT),
+    ).toEqual(new Map());
+    expect(mocks.screeningProjections).toHaveBeenCalledOnce();
+    expect(mocks.source).not.toHaveBeenCalled();
+  });
+
+  it('filters screening before SQLite count, pages and all-matching selection while retaining stale, unknown and human decisions', async () => {
+    const db = await getDatabase({
+      type: 'sqlite',
+      url: ':memory:',
+      cache: false,
+    });
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    const ids = ['excluded', 'stale', 'version', 'unknown', 'human'];
+    const selector = vi.fn(async (sql: string, ...values: unknown[]) =>
+      sql.includes('SELECT DISTINCT r.opportunity_id AS id')
+        ? { rows: ids.map((id) => ({ id })) }
+        : await db.query(sql, ...values),
+    );
+    mocks.requestDatabase.mockReturnValue({ query: selector });
+    mocks.screeningProjections.mockImplementation(
+      async ({
+        opportunities,
+        subject,
+      }: {
+        opportunities: Array<{ id: string }>;
+        subject: typeof WORKSPACE_SUBJECT;
+      }) =>
+        subject.profileId !== 'profile-a'
+          ? new Map()
+          : new Map(
+              opportunities
+                .filter(({ id }) => id !== 'unknown')
+                .map(({ id }) => [
+                  id,
+                  {
+                    sourceContentFingerprint: `fp-${id}`,
+                    sourceContentVersion: 1,
+                    status: 'clear_mismatch',
+                    excludeFromDefaultTriage: true,
+                    holdReasons: [],
+                  },
+                ]),
+            ),
+    );
+    try {
+      await db.query(
+        'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, posted_at TEXT, first_seen_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+      );
+      await db.query(
+        'CREATE TABLE decisions (id TEXT PRIMARY KEY, opportunity_id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, decision TEXT, created_at TEXT)',
+      );
+      for (const id of ids)
+        await db.query(
+          'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?, ?, ?)',
+          id,
+          'found',
+          '2026-10-02',
+          '2026-10-01',
+          '2026-10-01',
+          id === 'stale' ? 'new-source' : `fp-${id}`,
+          id === 'version' ? 2 : 1,
+        );
+      await db.query(
+        "INSERT INTO decisions VALUES ('decision', 'human', ?, ?, ?, 'accept_to_apply', '2026-10-02')",
+        WORKSPACE_SUBJECT.tenantId,
+        WORKSPACE_SUBJECT.userId,
+        WORKSPACE_SUBJECT.profileId,
+      );
+      const {
+        countOpportunityRecords,
+        listOpportunityPageIds,
+        listOpportunityMatchingIds,
+      } = await import('./admin-opportunity-query');
+      const query = {
+        candidateSkills: [],
+        filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'newest' as const },
+        reviewFilter: 'unsorted',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(await countOpportunityRecords(query)).toBe(3);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 0 }),
+      ).toEqual(['stale']);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 1 }),
+      ).toEqual(['unknown']);
+      expect(
+        (await listOpportunityMatchingIds(query, { limit: 10 })).map(
+          ({ id }) => id,
+        ),
+      ).toEqual(['stale', 'unknown', 'version']);
+      expect(
+        await listOpportunityPageIds({
+          ...query,
+          reviewFilter: 'screened_out',
+          limit: 10,
+          offset: 0,
+        }),
+      ).toEqual(['excluded', 'human']);
+      expect(
+        await countOpportunityRecords({ ...query, reviewFilter: 'all' }),
+      ).toBe(5);
+      expect(
+        await listOpportunityPageIds({
+          ...query,
+          reviewFilter: 'apply',
+          limit: 10,
+          offset: 0,
+        }),
+      ).toEqual(['human']);
+      expect(
+        await countOpportunityRecords({
+          ...query,
+          workspaceSubject: {
+            ...WORKSPACE_SUBJECT,
+            profileId: 'changed-profile',
+          },
+        }),
+      ).toBe(5);
+      const sql = selector.mock.calls.find(([statement]) =>
+        statement.includes('json_each'),
+      )?.[0];
+      expect(sql).toContain(
+        "o.source_content_version = json_extract(screen.value, '$.version')",
+      );
+      expect(sql).toContain('NOT EXISTS');
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it('uses one typed PostgreSQL tuple payload and keeps explicit screened-out queries out of human review predicates', async () => {
+    const { createOpportunityWhereSql } = await import(
+      './admin-opportunity-query'
+    );
+    const exclusions = new Map([
+      [
+        'current',
+        {
+          sourceContentFingerprint: 'fp',
+          sourceContentVersion: 2,
+          projection: {},
+        },
+      ],
+    ]) as never;
+    const query = {
+      candidateSkills: [],
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      reviewFilter: 'screened_out',
+      workspaceSubject: WORKSPACE_SUBJECT,
+    };
+    const built = createOpportunityWhereSql(
+      query,
+      'postgres',
+      new Map(),
+      exclusions,
+    );
+    expect(built.whereSql).toContain('jsonb_to_recordset');
+    expect(built.whereSql).toContain(
+      'screen(id text, fingerprint text, version bigint)',
+    );
+    expect(built.whereSql).toContain(
+      'o.source_content_fingerprint = screen.fingerprint',
+    );
+    expect(built.joins).toEqual([]);
+    expect(built.values).toHaveLength(2);
+    expect(createOpportunityWhereSql(query).whereSql).toContain('FALSE');
+  });
+
+  it('scopes facet options to the same current screened-out source tuples', async () => {
+    mocks.query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes('SELECT DISTINCT r.opportunity_id AS id')
+        ? [{ id: 'excluded' }]
+        : [{ statuses: ['found'] }],
+    }));
+    mocks.screeningProjections.mockResolvedValue(
+      new Map([
+        [
+          'excluded',
+          {
+            sourceContentFingerprint: 'current-source',
+            sourceContentVersion: 3,
+            status: 'clear_mismatch',
+            excludeFromDefaultTriage: true,
+            holdReasons: [],
+          },
+        ],
+      ]),
+    );
+    const { listOpportunityFilterOptions } = await import(
+      './admin-opportunity-query'
+    );
+    expect(
+      (await listOpportunityFilterOptions('screened_out', WORKSPACE_SUBJECT))
+        .statuses,
+    ).toEqual(['found']);
+    const [sql, ...values] = mocks.query.mock.calls.at(-1) ?? [];
+    expect(sql).toContain('WITH scoped AS');
+    expect(sql).toContain('WHERE EXISTS (SELECT 1 FROM jsonb_to_recordset');
+    expect(sql).toContain('o.source_content_version = screen.version');
+    expect(values).toEqual([
+      JSON.stringify([
+        { id: 'excluded', fingerprint: 'current-source', version: 3 },
+      ]),
+    ]);
+
+    mocks.query.mockClear();
+    mocks.screeningProjections.mockResolvedValue(new Map());
+    await listOpportunityFilterOptions('screened_out', WORKSPACE_SUBJECT);
+    expect(mocks.query.mock.calls.at(-1)?.[0]).toContain('WHERE FALSE');
   });
 
   for (const sortDirection of ['asc', 'desc'] as const) {
@@ -969,7 +1271,7 @@ describe('admin-opportunity-query', () => {
       triageRejectDepriority: true,
       workspaceSubject: WORKSPACE_SUBJECT,
     });
-    const [triageSql] = mocks.query.mock.calls[0] ?? [];
+    const [triageSql] = mocks.query.mock.calls.at(-1) ?? [];
     expect(triageSql).toContain(
       'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
@@ -990,7 +1292,7 @@ describe('admin-opportunity-query', () => {
       reviewFilter: 'unsorted',
       workspaceSubject: WORKSPACE_SUBJECT,
     });
-    const [browseSql] = mocks.query.mock.calls[0] ?? [];
+    const [browseSql] = mocks.query.mock.calls.at(-1) ?? [];
     expect(browseSql).not.toContain('CASE WHEN latest_assessment.excluded');
   });
 
@@ -1045,7 +1347,7 @@ describe('admin-opportunity-query', () => {
       workspaceSubject: WORKSPACE_SUBJECT,
     });
 
-    const [sql] = mocks.query.mock.calls[0] ?? [];
+    const [sql] = mocks.query.mock.calls.at(-1) ?? [];
     expect(sql).toContain(
       'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END',
     );
@@ -1231,7 +1533,8 @@ describe('admin-opportunity-query', () => {
     });
 
     const [applySql, ...applyParams] = mocks.query.mock.calls[0] ?? [];
-    const [unsortedSql, ...unsortedParams] = mocks.query.mock.calls[1] ?? [];
+    const [unsortedSql, ...unsortedParams] =
+      mocks.query.mock.calls.at(-1) ?? [];
     expect(applySql).toContain('FROM decisions d');
     expect(applySql).toContain('latest_review.decision IS NULL');
     expect(applySql).toContain("latest_review.decision = 'accept_to_apply'");

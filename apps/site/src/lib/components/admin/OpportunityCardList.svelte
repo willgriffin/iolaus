@@ -48,6 +48,7 @@ import {
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
+import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import PartialOpportunityEvidence, {
@@ -923,6 +924,7 @@ const resultCountLabel = $derived.by(() => {
         {/if}
       </div>
       <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} compact />
+      <OpportunityScreeningSummary {record} compact />
     {:else if column.id === 'company'}
       <span class="table-meta"><Building2 size={13} strokeWidth={2.2} /> {companyLabel(record)}</span>
     {:else if column.id === 'location'}

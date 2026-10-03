@@ -304,7 +304,7 @@ an implementation boundary; it does not claim an actual semantic canary passed.
 ## JEV-first screening before new extraction
 
 Ordinary Assess reuses a current full or partial native proof first. A new paid
-extraction requires a coarse `opportunity-screening/v1-jev-first` decision from
+extraction requires a coarse `opportunity-screening/v2-lossless-groups` decision from
 captured posting text and original ATS title, location and work-mode fields,
 using only the selected profile's explicit role/work-mode preferences and typed
 work-country, authorization and sponsorship facts. Missing target-role preferences
@@ -325,6 +325,18 @@ failed exact identities cannot be retried under a new run. Dynamic output
 reservation includes every offered witness probability. Oversized requests hold
 without clipping source evidence or increasing limits.
 
+V2 preserves every captured body character in at most sixteen contiguous groups
+of complete lines, alongside the three original ATS fields. This bounds the full
+witness distributions without deleting posting text. Historical V1 receipts use
+their original preparation and replay contract.
+
+`enqueueOpportunityScreeningOnly` runs the same governed screen through the native
+TaskRunner's dedicated `opportunity-screening` queue and stops after its current
+PRIVATE receipt. It never enqueues
+extraction or candidate matching. Current cited mismatches can be excluded from
+default triage before counts and pagination; the explicit Screened out view shows
+their reasons. Human decisions and full assessment scores remain independent.
+
 Already-paid extraction checkpoints resume compact V4 auditing without another
 Luna request. Inherited native object IDs are retained explicitly when rebuilding
 receipt contexts; mutable JSON alone never authorizes a current proof. Legacy
@@ -338,3 +350,6 @@ paid contracts retain their exact replay path.
 | Receipt currentness | Foreign, stale, orphaned, conservative and over-budget proofs are refused; settled run counters replay correctly |
 | Lifecycle continuity | Relevant screen, extraction and source audit use one original AgentRun with its existing counters |
 | Saved-base continuation | Native inherited ID and exact paid extraction receipt reconstruct the same V4 proof without new Luna |
+| Screening only | One screen and zero extraction, matching, or human-review writes; stale intent and failed identities deny before transport |
+| Lossless bounds | Complete body reconstruction, all offered probabilities, unchanged caps, and exact historical V1 replay |
+| Current list projection | Actual PRIVATE joins, registered PostgreSQL columns, stale/foreign proof denial, and exclusion before counts/pagination |

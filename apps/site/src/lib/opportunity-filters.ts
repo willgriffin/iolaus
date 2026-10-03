@@ -32,6 +32,20 @@ export const OPPORTUNITY_STATUS_ORDER = [
  */
 export const DECISION_REVIEW_STATUSES = ['apply', 'maybe', 'reject'] as const;
 
+/** A separate coarse-screen view; it is independent of human dispositions. */
+export const OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER = 'screened_out';
+
+export function opportunityScreeningReviewMode(
+  reviewFilter: string,
+): 'exclude' | 'only' | null {
+  const review = reviewFilter.trim();
+  return review === 'unsorted'
+    ? 'exclude'
+    : review === OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER
+      ? 'only'
+      : null;
+}
+
 export type OpportunitySort =
   | 'best'
   | 'eligibility'
