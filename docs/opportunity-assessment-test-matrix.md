@@ -304,13 +304,13 @@ an implementation boundary; it does not claim an actual semantic canary passed.
 ## JEV-first screening before new extraction
 
 Ordinary Assess reuses a current full or partial native proof first. A new paid
-extraction requires a coarse `opportunity-screening/v2-lossless-groups` decision from
+extraction requires a coarse `opportunity-screening/v4-independent-source-entailment` decision from
 captured posting text and original ATS title, location and work-mode fields,
 using only the selected profile's explicit role/work-mode preferences and typed
 work-country, authorization and sponsorship facts. Missing target-role preferences
 hold before any provider reservation; the profile title is not a preference.
 
-The fourteen fixed predicate/witness answers distinguish a clear mismatch,
+The fourteen fixed claim/support predicates distinguish a clear mismatch,
 potential relevance and uncertainty. A cited mismatch is a screening exclusion,
 not a human rejection. Company industry, absent skills, citizenship and missing
 immigration evidence do not establish incompatibility. Sponsorship offers remain
@@ -322,13 +322,27 @@ and profile, actual successful usage and exact prepared request. Completed run
 usage plus outstanding reservations must fit the unchanged native limits. The
 same source AgentRun carries the screen and any subsequent extraction/audit;
 failed exact identities cannot be retried under a new run. Dynamic output
-reservation includes every offered witness probability. Oversized requests hold
+reservation includes every typed answer. Oversized requests hold
 without clipping source evidence or increasing limits.
 
 V2 preserves every captured body character in at most sixteen contiguous groups
 of complete lines, alongside the three original ATS fields. This bounds the full
-witness distributions without deleting posting text. Historical V1 receipts use
-their original preparation and replay contract.
+witness distributions without deleting posting text. V3 retains this grouping,
+repeats the complete claim in each evidence question, and asks for the first
+independently valid witness in source order. Both claim probability and witness
+confidence must still reach .85. Missing sponsorship preference remains visible
+without alone blocking coarse role relevance; an unresolved source constraint
+still holds, and relevance never establishes immigration eligibility. Historical
+V1, V2 and V3 receipts retain their original preparation and resolution contracts.
+
+V4 replaces categorical passage selection with an independent binary source
+entailment question for each claim. Both the claim and the support probability
+must reach .85. Multiple valid passages no longer compete for one citation's
+probability. An admitted conclusion cites the complete original body and exact
+captured ATS fields as reviewed context, rather than claiming that an arbitrarily
+selected excerpt independently proves it. The UI labels that scope and checks
+every context citation against the captured source. This remains a coarse screen,
+not a fit score, work-authorization conclusion or human rejection.
 
 `enqueueOpportunityScreeningOnly` runs the same governed screen through the native
 TaskRunner's dedicated `opportunity-screening` queue and stops after its current
@@ -351,5 +365,18 @@ paid contracts retain their exact replay path.
 | Lifecycle continuity | Relevant screen, extraction and source audit use one original AgentRun with its existing counters |
 | Saved-base continuation | Native inherited ID and exact paid extraction receipt reconstruct the same V4 proof without new Luna |
 | Screening only | One screen and zero extraction, matching, or human-review writes; stale intent and failed identities deny before transport |
-| Lossless bounds | Complete body reconstruction, all offered probabilities, unchanged caps, and exact historical V1 replay |
+| Lossless bounds | Complete body reconstruction, all offered probabilities, unchanged caps, and exact historical V1/V2 replay |
+| Self-contained evidence | Full matching claim and deterministic witness order; unrelated country evidence cannot establish a role claim; low-confidence or unoffered witnesses remain unaccepted |
+| Coarse relevance | Missing sponsorship preference stays visible; a cited relevant role may pass screening while supported source constraints and conditional authorization remain uncertain |
 | Current list projection | Actual PRIVATE joins, registered PostgreSQL columns, stale/foreign proof denial, and exclusion before counts/pagination |
+
+### Independent entailment regression contract (#150)
+
+| Behavior/invariant | Reachable trigger and positive case | Negative/failure case | Actor/context and executor | Runtime/edge | Test level/command |
+| --- | --- | --- | --- | --- | --- |
+| Independent support at .85 | V4 high claim + high support admits complete-context evidence | High claim/low support and low claim/high support remain unestablished | Pure explicit profile/source; no persistence transaction | Node typed JEV batch; malformed/extra/missing/nonfinite/mixed choice answers deny | `vitest run opportunity-screening.spec.ts` (package-relative full paths) |
+| Exact lossless context | Multiple supporting body passages and all original ATS fields retained once | Modified body/span/ATS context/fingerprint or unsupported version denies | Pure source/profile reconstruction; no native writes | UTF-16 body offsets; request <=32768 bytes, output <=4096 | Pure spec and token-free actual control sizing |
+| Coarse semantics unchanged | Software duties at an accounting company; explicit sales duties; explicit US-only physical work location | Adjacent roles/unsupported restriction/missing skills/citizenship never imply incompatibility; sponsorship stays conditional | Explicit typed work facts only; country authorization distinct from residence | JEV independent binary questions; uncertainty retained | Pure fixtures plus fixed governed positive/negative/adjacent controls |
+| Historical/current native proof | Current valid V4 PRIVATE receipt wins over exact valid V3 | Duplicate same-version, foreign/stale/orphaned/conservative/mixed-version receipts deny; a saturated bounded receipt query withholds the page instead of falling back to an older exclusion | Verified tenant/user/profile; joined request/result and original bounded AgentRun | Existing PostgreSQL native schema/SQL unchanged | Provider/projection/job/config focused specs; actual joined production readback |
+| Honest context presentation | Full body and exact original ATS title/location/work mode shown as reviewed context | Missing/reordered/tampered context fields or forged scope withheld | Owned current server projection, UI citation validation; no mutation | Svelte SSR; literal markup escaped | `vitest run src/lib/components/admin/OpportunityScreeningSummary.spec.ts`, static check and authenticated reload |
+| No repeat or deeper spend | Dedicated screening-only native TaskRunner uses new V4 identity | Failed identity never retry; ordinary pending job/sources/Luna/Sol untouched | Daily sole operator, fresh authority before reservation/persistence | Native accounting actual+conservative <=$.25, original run caps retained | Fixed8 controls with preflight, terminal usage/currentness and queue proof |

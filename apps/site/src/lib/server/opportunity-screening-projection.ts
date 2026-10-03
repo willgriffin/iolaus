@@ -251,6 +251,8 @@ export async function loadCurrentOpportunityScreeningProjections(
     return result;
   const database =
     dependencies.database ?? (await resolveDatabase(getDbConfig()));
+  const queryLimit =
+    ids.length * OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.length + 1;
   const found = await database.query(
     `SELECT r.owner_request_id, r.request_id AS result_request_id, r.output_json,
     r.idempotency_key AS result_key, q.idempotency_key AS request_key, r.agent_run_id,
@@ -295,9 +297,12 @@ export async function loadCurrentOpportunityScreeningProjections(
       subject.tenantId,
       subject.userId,
       subject.profileId,
-      ids.length * 2 + 1,
+      queryLimit,
     ],
   );
+  // A saturated historical receipt page cannot prove that the newest current
+  // contract was included. Preserve visibility instead of applying old exclusions.
+  if (found.rows.length >= queryLimit) return result;
   const allowed = new Set(ids);
   const grouped = new Map<string, Row[]>();
   for (const row of found.rows)
@@ -310,10 +315,21 @@ export async function loadCurrentOpportunityScreeningProjections(
       grouped.set(row.opportunity_id, group);
     }
   for (const [id, rows] of grouped) {
-    const valid = rows
-      .map((row) => projectRow(row, profile, subject))
-      .filter((row): row is OpportunityScreeningProjection => !!row);
-    if (valid.length === 1) result.set(id, valid[0]!);
+    const valid = rows.flatMap((row) => {
+      const projection = projectRow(row, profile, subject);
+      return projection
+        ? [{ version: row.output_schema_version, projection }]
+        : [];
+    });
+    for (const version of [
+      ...OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS,
+    ].reverse()) {
+      const selected = valid.filter((row) => row.version === version);
+      if (!selected.length) continue;
+      if (selected.length === 1) result.set(id, selected[0]!.projection);
+      // Ambiguity at the newest attested version cannot authorize an old result.
+      break;
+    }
   }
   return result;
 }

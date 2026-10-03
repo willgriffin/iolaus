@@ -147,6 +147,92 @@ describe('OpportunityScreeningSummary', () => {
     expect(body).not.toContain('Screened out');
     expect(body).toContain('Preferred roles are not established.');
   });
+  const capturedContext = {
+    ...source,
+    title: 'Platform Engineer',
+    locationNotes: 'Canada',
+    workMode: 'remote',
+  };
+  const contextEvidence = {
+    ...projection.evidence[0],
+    dimension: 'role_relevant',
+    evidenceScope: 'captured_source_context',
+    contextWitnesses: [
+      { id: 't', path: 'sourceContentJson.title', text: capturedContext.title },
+      {
+        id: 'l',
+        path: 'sourceContentJson.locationNotes',
+        text: capturedContext.locationNotes,
+      },
+      {
+        id: 'w',
+        path: 'sourceContentJson.workMode',
+        text: capturedContext.workMode,
+      },
+    ],
+  };
+  const contextRecord = {
+    ...record,
+    sourceContentJson: JSON.stringify(capturedContext),
+    screeningProjection: {
+      ...projection,
+      status: 'potentially_relevant',
+      excludeFromDefaultTriage: false,
+      evidence: [contextEvidence],
+    },
+  };
+  it('labels independent entailment as complete captured context with exact ATS citations', () => {
+    const { body } = render(OpportunityScreeningSummary, {
+      props: { record: contextRecord },
+    });
+    expect(body).toContain('Potentially relevant');
+    expect(body).toContain(
+      'Supported by the complete captured posting and ATS context.',
+    );
+    expect(body).toContain('Reviewed source context');
+    expect(body).toContain(quote);
+    expect(body).toContain(capturedContext.title);
+    expect(body).toContain('Captured ATS location');
+    expect(body).not.toMatch(/Strong match|work authorization established/);
+  });
+  it.each([
+    { ...contextEvidence, evidenceScope: 'invented' },
+    { ...contextEvidence, contextWitnesses: [] },
+    { ...contextEvidence, contextWitnesses: undefined },
+    {
+      ...contextEvidence,
+      witness: { ...witness, spanStart: 1, text: quote.slice(1) },
+    },
+    {
+      ...contextEvidence,
+      contextWitnesses: [
+        contextEvidence.contextWitnesses[1],
+        contextEvidence.contextWitnesses[0],
+        contextEvidence.contextWitnesses[2],
+      ],
+    },
+    {
+      ...contextEvidence,
+      contextWitnesses: contextEvidence.contextWitnesses.map((item) => ({
+        ...item,
+        text: 'Uncaptured',
+      })),
+    },
+    { ...contextEvidence, evidenceScope: undefined },
+  ])('withholds forged or incomplete whole-context citations %#', (evidence) => {
+    const { body } = render(OpportunityScreeningSummary, {
+      props: {
+        record: {
+          ...contextRecord,
+          screeningProjection: {
+            ...contextRecord.screeningProjection,
+            evidence: [evidence],
+          },
+        },
+      },
+    });
+    expect(body).not.toContain('Coarse opportunity screening');
+  });
   it.each([
     { screeningProjection: null },
     { screeningProjection: { ...projection, version: 'future' } },

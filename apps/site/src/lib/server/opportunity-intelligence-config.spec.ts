@@ -213,12 +213,16 @@ describe('native provider volume contract classification', () => {
         }),
       ).toBe('openai');
   });
-  it('classifies only the exact private screening adapter contract under its configured model', () => {
+  it.each([
+    'opportunity-screening/v1-jev-first',
+    'opportunity-screening/v2-lossless-groups',
+    'opportunity-screening/v3-self-contained-evidence',
+    'opportunity-screening/v4-independent-source-entailment',
+  ] as const)('classifies only the exact private screening adapter %s under its configured model', (version) => {
     vi.stubEnv(
       'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
       'configured-screen-model',
     );
-    const version = 'opportunity-screening/v1-jev-first';
     const identity = {
       feature: 'opportunity-screening',
       profile: 'typesafe-opportunity-screening',
@@ -228,6 +232,21 @@ describe('native provider volume contract classification', () => {
       preparedPayloadVersion: version,
     };
     expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    const otherVersion =
+      version === 'opportunity-screening/v2-lossless-groups'
+        ? 'opportunity-screening/v3-self-contained-evidence'
+        : 'opportunity-screening/v2-lossless-groups';
+    for (const field of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [field]: otherVersion,
+        }),
+      ).toBe('openai');
     expect(
       opportunityIntelligenceProviderVolume({
         ...identity,

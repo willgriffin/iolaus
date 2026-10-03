@@ -114,6 +114,34 @@ export function currentOpportunityScreening(
         ? original.includes(witness.text)
         : original === witness.text;
     };
+    const validContext = (
+      item: OpportunityScreeningProjection['evidence'][number],
+    ) => {
+      if (item.evidenceScope === undefined)
+        return item.contextWitnesses === undefined;
+      if (
+        item.evidenceScope !== 'captured_source_context' ||
+        item.witness.path !== 'sourceContentJson.descriptionRaw' ||
+        item.witness.spanStart !== 0 ||
+        item.witness.spanEnd !== source.descriptionRaw?.length ||
+        item.witness.text !== source.descriptionRaw ||
+        !Array.isArray(item.contextWitnesses)
+      )
+        return false;
+      const fields = ['title', 'locationNotes', 'workMode'].filter(
+        (field) => typeof source[field] === 'string' && source[field].trim(),
+      );
+      return (
+        item.contextWitnesses.length === fields.length &&
+        item.contextWitnesses.every(
+          (witness, index) =>
+            witness.path === `sourceContentJson.${fields[index]}` &&
+            witness.spanStart === undefined &&
+            witness.spanEnd === undefined &&
+            validWitness(witness),
+        )
+      );
+    };
     if (
       !value.evidence.every(
         (item) =>
@@ -125,18 +153,28 @@ export function currentOpportunityScreening(
           Number.isFinite(item.confidence) &&
           item.confidence >= 0.85 &&
           item.confidence <= 1 &&
-          validWitness(item.witness),
+          validWitness(item.witness) &&
+          validContext(item),
       ) ||
       !value.conditionalPaths.every(
         (path) =>
           path &&
           path.kind === 'offered_sponsorship' &&
           validWitness(path.witness) &&
+          validContext({
+            ...path,
+            dimension: 'sponsorship_path',
+            probability: 1,
+            confidence: 1,
+          }) &&
           value.evidence.some(
             (item) =>
               item.dimension === 'sponsorship_path' &&
               item.witness.id === path.witness.id &&
-              item.witness.text === path.witness.text,
+              item.witness.text === path.witness.text &&
+              item.evidenceScope === path.evidenceScope &&
+              JSON.stringify(item.contextWitnesses) ===
+                JSON.stringify(path.contextWitnesses),
           ),
       )
     )
@@ -197,7 +235,18 @@ const postingHref = $derived.by(() => {
       <summary onclick={(event) => event.stopPropagation()}>Screening reasons and source quotes</summary>
       {#each current.evidence as item}
         <p class="reason">{dimensions[item.dimension]}</p>
-        <blockquote><span class="quote">{item.witness.text}</span><cite>{#if postingHref}<a href={postingHref} target="_blank" rel="noreferrer noopener">Captured posting</a>{:else}Captured posting{/if}</cite></blockquote>
+        {#if item.evidenceScope === 'captured_source_context'}
+          <p class="scope">Supported by the complete captured posting and ATS context.</p>
+          <details class="context">
+            <summary onclick={(event) => event.stopPropagation()}>Reviewed source context</summary>
+            <blockquote><span class="quote">{item.witness.text}</span><cite>{#if postingHref}<a href={postingHref} target="_blank" rel="noreferrer noopener">Captured posting</a>{:else}Captured posting{/if}</cite></blockquote>
+            {#each item.contextWitnesses ?? [] as witness}
+              <blockquote><span class="quote">{witness.text}</span><cite>Captured ATS {witness.path === 'sourceContentJson.title' ? 'title' : witness.path === 'sourceContentJson.locationNotes' ? 'location' : 'work mode'}</cite></blockquote>
+            {/each}
+          </details>
+        {:else}
+          <blockquote><span class="quote">{item.witness.text}</span><cite>{#if postingHref}<a href={postingHref} target="_blank" rel="noreferrer noopener">Captured posting</a>{:else}Captured posting{/if}</cite></blockquote>
+        {/if}
       {/each}
       {#if !current.evidence.length}<p>No cited conclusion is established.</p>{/if}
       {#each [...new Set([...current.uncertainties, ...current.holdReasons])] as reason}

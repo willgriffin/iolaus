@@ -88,10 +88,12 @@ const principal: PrincipalRun = {
   },
   assertOperation: mocks.assertOperation,
 };
-function fixture(mismatch = false) {
+function fixture(mismatch = false, evidenceSupport = 0.99) {
   const source = {
-    title: 'Software engineer',
-    descriptionRaw: 'Build reliable software.',
+    title: mismatch ? 'Accountant' : 'Software engineer',
+    descriptionRaw: mismatch
+      ? 'Prepare accurate tax returns.'
+      : 'Build reliable software.',
     locationNotes: 'Canada',
     workMode: 'Remote',
   };
@@ -181,7 +183,14 @@ function fixture(mismatch = false) {
           return [
             key,
             q.type === 'predicate'
-              ? { type: 'predicate', probability: yes ? 0.99 : 0.01 }
+              ? {
+                  type: 'predicate',
+                  probability: yes
+                    ? key.endsWith('__evidence')
+                      ? evidenceSupport
+                      : 0.99
+                    : 0.01,
+                }
               : {
                   type: 'choice',
                   choice: selected,
@@ -299,6 +308,32 @@ describe('native screening-only job', () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
     expect(f.job.args).toEqual(f.args);
     expect(f.deps.getJob).toHaveBeenCalledWith('job-1');
+  });
+  it('keeps a high mismatch claim with low independent V4 entailment on hold and starts no downstream work', async () => {
+    const f = fixture(true, 0.1);
+    const result = await runOpportunityScreeningOnlyJob(
+      'opportunity-1',
+      f.args,
+      f.context,
+      subject,
+      f.deps,
+    );
+    expect(result).toMatchObject({
+      status: 'screening_hold',
+      holdReasons: expect.arrayContaining(['uncited_role_mismatch']),
+      receipt: {
+        outcome: 'uncertain',
+        screen: { mismatches: [], evidence: [] },
+      },
+    });
+    expect(f.transport).toHaveBeenCalledExactlyOnceWith('typesafe');
+    expect(f.deps.finishRun).toHaveBeenCalledExactlyOnceWith(
+      'run-1',
+      'succeeded',
+      '',
+      subject,
+    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
   it.each([
     'runner',

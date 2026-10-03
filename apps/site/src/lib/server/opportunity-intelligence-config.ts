@@ -67,6 +67,8 @@ export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
     versions: [
       'opportunity-screening/v1-jev-first',
       'opportunity-screening/v2-lossless-groups',
+      'opportunity-screening/v3-self-contained-evidence',
+      'opportunity-screening/v4-independent-source-entailment',
     ],
     historicalVersions: [],
   },

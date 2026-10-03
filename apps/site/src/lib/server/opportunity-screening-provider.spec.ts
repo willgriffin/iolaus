@@ -358,7 +358,90 @@ describe('PRIVATE JEV-first governed native screening', () => {
     );
   });
   it.each([
+    0.1, 0.9,
+  ])('requires independent V4 source support for an affirmative mismatch (support=%s)', async (support) => {
+    const f = fixture();
+    f.profile.preferencesJson = JSON.stringify({
+      targetRoles: ['Accounting'],
+      workModes: ['Remote'],
+    });
+    const prepared = await prepareCurrentOpportunityAssessmentScreen(
+      'opportunity-1',
+      subject,
+      f.deps,
+    );
+    expect(
+      Object.values(prepared.request.questions).every(
+        (q) => q.type === 'predicate',
+      ),
+    ).toBe(true);
+    const output = decision(prepared, true);
+    output.answers.role_mismatch__evidence = {
+      type: 'predicate',
+      probability: support,
+    };
+    mocks.decide.mockResolvedValue(output);
+    const receipt = await evaluateOpportunityAssessmentScreen(
+      prepared,
+      {
+        agentRunId: 'original-run',
+        opportunityId: 'opportunity-1',
+        contentFingerprint: String(f.opportunity.sourceContentFingerprint),
+        workspaceSubject: subject,
+        store: f.store,
+      },
+      f.deps,
+    );
+    expect(receipt.outcome).toBe(
+      support >= 0.85 ? 'clear_mismatch' : 'uncertain',
+    );
+    if (support >= 0.85) {
+      expect(receipt.screen.evidence).toMatchObject([
+        {
+          dimension: 'role_mismatch',
+          probability: 0.99,
+          confidence: support,
+          evidenceScope: 'captured_source_context',
+          witness: {
+            id: 'source:context',
+            path: 'sourceContentJson.descriptionRaw',
+            text: 'Build reliable software.',
+            spanStart: 0,
+            spanEnd: 'Build reliable software.'.length,
+          },
+          contextWitnesses: expect.arrayContaining([
+            expect.objectContaining({
+              path: 'sourceContentJson.title',
+              text: 'Software engineer',
+            }),
+            expect.objectContaining({
+              path: 'sourceContentJson.locationNotes',
+              text: 'Canada',
+            }),
+            expect.objectContaining({
+              path: 'sourceContentJson.workMode',
+              text: 'Remote',
+            }),
+          ]),
+        },
+      ]);
+    } else {
+      expect(receipt.screen.mismatches).toEqual([]);
+      expect(receipt.screen.evidence).toEqual([]);
+      expect(receipt.screen.holdReasons).toContain('uncited_role_mismatch');
+    }
+    expect(mocks.decide).toHaveBeenCalledOnce();
+    expect(f.completeSpy).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        accountingBasis: 'actual',
+        status: 'succeeded',
+      }),
+    );
+  });
+  it.each([
     'malformed',
+    'legacy-choice-in-v4',
     'post-provider-profile',
     'post-provider-source',
   ])('accounts actual returned usage for %s failure and does not publish a successful receipt', async (caseName) => {
@@ -371,6 +454,21 @@ describe('PRIVATE JEV-first governed native screening', () => {
     mocks.decide.mockImplementation(async () => {
       const result = decision(prepared);
       if (caseName === 'malformed') delete result.answers.role_relevant;
+      if (caseName === 'legacy-choice-in-v4') {
+        const selected = prepared.witnesses[0]!.id;
+        const offered = [...prepared.witnesses.map((w) => w.id), 'none'];
+        result.answers.role_relevant__evidence = {
+          type: 'choice',
+          choice: selected,
+          confidence: 0.9,
+          probabilities: Object.fromEntries(
+            offered.map((key) => [
+              key,
+              key === selected ? 0.9 : 0.1 / (offered.length - 1),
+            ]),
+          ),
+        };
+      }
       if (caseName === 'post-provider-profile')
         f.profile.preferencesJson = JSON.stringify({
           targetRoles: ['Accounting'],
@@ -403,7 +501,7 @@ describe('PRIVATE JEV-first governed native screening', () => {
       }),
     );
     expect(f.row?.result_status).toBe('failed');
-    if (caseName === 'malformed') {
+    if (caseName === 'malformed' || caseName === 'legacy-choice-in-v4') {
       await expect(
         assertOpportunityAssessmentScreenNotAttempted(
           prepared,

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import type { DecisionResult } from '@happyvertical/ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS,
   OPPORTUNITY_SCREENING_V1_VERSION,
+  OPPORTUNITY_SCREENING_V2_VERSION,
+  OPPORTUNITY_SCREENING_VERSION,
   type OpportunityScreeningVersion,
   type PreparedOpportunityScreening,
   prepareOpportunityScreening,
@@ -181,7 +184,31 @@ describe('current owned coarse screening projections', () => {
       status: 'clear_mismatch',
       excludeFromDefaultTriage: true,
       sourceStatus: 'current',
-      evidence: [{ witness: { text: f.source.descriptionRaw } }],
+      evidence: [
+        {
+          evidenceScope: 'captured_source_context',
+          witness: {
+            id: 'source:context',
+            text: f.source.descriptionRaw,
+            spanStart: 0,
+            spanEnd: f.source.descriptionRaw.length,
+          },
+          contextWitnesses: expect.arrayContaining([
+            expect.objectContaining({
+              path: 'sourceContentJson.title',
+              text: f.source.title,
+            }),
+            expect.objectContaining({
+              path: 'sourceContentJson.locationNotes',
+              text: f.source.locationNotes,
+            }),
+            expect.objectContaining({
+              path: 'sourceContentJson.workMode',
+              text: f.source.workMode,
+            }),
+          ]),
+        },
+      ],
     });
     expect(result.get('opportunity')).not.toHaveProperty('score');
     expect(result.get('opportunity')).not.toHaveProperty('fit');
@@ -196,6 +223,9 @@ describe('current owned coarse screening projections', () => {
     expect(f.query.mock.calls[0]?.[0]).toContain(
       'r.prompt_version = r.output_schema_version',
     );
+    expect(f.query.mock.calls[0]?.[1].at(-1)).toBe(
+      2 * OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.length + 1,
+    );
   });
   it('retains explicitly recorded V1 using its exact old request material', async () => {
     vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
@@ -208,6 +238,221 @@ describe('current owned coarse screening projections', () => {
         )
       ).get('old')?.requestId,
     ).toBe('request');
+  });
+  it('prefers the newest re-attested contract for the same current source and profile regardless of row order', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const older = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const current = fixture('opportunity', OPPORTUNITY_SCREENING_VERSION);
+    current.row.output_json = JSON.stringify(decision(current.prepared, false));
+    for (const rows of [
+      [older.row, current.row],
+      [current.row, older.row],
+    ]) {
+      current.query.mockResolvedValue({ rows });
+      expect(
+        (
+          await loadCurrentOpportunityScreeningProjections(
+            { opportunities: [current.opportunity], subject },
+            current.deps,
+          )
+        ).get('opportunity'),
+      ).toMatchObject({
+        status: 'potentially_relevant',
+        excludeFromDefaultTriage: false,
+        inputFingerprint: current.row.input_fingerprint,
+      });
+    }
+    expect(current.query.mock.calls[0]?.[1].at(-1)).toBe(
+      OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.length + 1,
+    );
+  });
+  it('retains a valid V2 receipt when no valid newer contract is present', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const f = fixture('opportunity', OPPORTUNITY_SCREENING_V2_VERSION);
+    expect(
+      (
+        await loadCurrentOpportunityScreeningProjections(
+          { opportunities: [f.opportunity], subject },
+          f.deps,
+        )
+      ).get('opportunity'),
+    ).toMatchObject({
+      status: 'clear_mismatch',
+      inputFingerprint: f.row.input_fingerprint,
+    });
+  });
+  it('fails closed when historical profile receipts saturate the bounded page and may omit current V4', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const older = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const current = fixture();
+    current.row.output_json = JSON.stringify(decision(current.prepared, false));
+    const historical = Array.from({ length: 4 }, (_, index) => ({
+      ...older.row,
+      request_id: `historical-${index}`,
+      owner_request_id: `historical-${index}`,
+      result_request_id: `historical-${index}`,
+      request_key: `historical-key-${index}`,
+      result_key: `historical-key-${index}`,
+      input_fingerprint: hash({ historicalProfileMaterial: index }),
+    }));
+    const saturated = [older.row, ...historical];
+    expect(saturated).toHaveLength(
+      OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.length + 1,
+    );
+    expect(saturated).not.toContain(current.row);
+    for (const rows of [saturated, [...saturated].reverse()]) {
+      current.query.mockResolvedValue({ rows });
+      expect(
+        (
+          await loadCurrentOpportunityScreeningProjections(
+            { opportunities: [current.opportunity], subject },
+            current.deps,
+          )
+        ).size,
+      ).toBe(0);
+    }
+    expect(current.query.mock.calls[0]?.[1].at(-1)).toBe(5);
+    // Below the boundary the independently valid older receipt still replays.
+    current.query.mockResolvedValue({ rows: saturated.slice(0, 4) });
+    expect(
+      (
+        await loadCurrentOpportunityScreeningProjections(
+          { opportunities: [current.opportunity], subject },
+          current.deps,
+        )
+      ).get('opportunity'),
+    ).toMatchObject({
+      status: 'clear_mismatch',
+      inputFingerprint: older.row.input_fingerprint,
+    });
+  });
+  it('fails closed for duplicate valid newest-version receipts without falling back to a valid V3 receipt', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const older = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const current = fixture();
+    const duplicate = {
+      ...current.row,
+      request_id: 'second',
+      owner_request_id: 'second',
+      result_request_id: 'second',
+    };
+    for (const rows of [
+      [older.row, current.row, duplicate],
+      [duplicate, older.row, current.row],
+    ]) {
+      current.query.mockResolvedValue({ rows });
+      expect(
+        (
+          await loadCurrentOpportunityScreeningProjections(
+            { opportunities: [current.opportunity], subject },
+            current.deps,
+          )
+        ).size,
+      ).toBe(0);
+    }
+  });
+  it('never lets an invalid, foreign, or unsupported newer row override a valid V3 receipt', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const older = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const current = fixture();
+    for (const patch of [
+      { input_fingerprint: 'stale' },
+      { request_owner_user_id: 'foreign' },
+      { run_candidate_profile_id: 'foreign' },
+      { accounting_basis: 'conservative' },
+      { output_json: 'malformed' },
+      { prompt_version: OPPORTUNITY_SCREENING_V2_VERSION },
+      {
+        prompt_version: 'invented',
+        output_schema_version: 'invented',
+        prepared_payload_version: 'invented',
+      },
+    ]) {
+      current.query.mockResolvedValue({
+        rows: [{ ...current.row, ...patch }, older.row],
+      });
+      expect(
+        (
+          await loadCurrentOpportunityScreeningProjections(
+            { opportunities: [current.opportunity], subject },
+            current.deps,
+          )
+        ).get('opportunity'),
+      ).toMatchObject({
+        status: 'clear_mismatch',
+        inputFingerprint: older.row.input_fingerprint,
+      });
+    }
+  });
+  it('selects a valid V4 uncertain result above a valid V3 mismatch when independent support is low', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const older = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const current = fixture();
+    const output = decision(current.prepared);
+    output.answers.role_mismatch__evidence = {
+      type: 'predicate',
+      probability: 0.1,
+    };
+    current.row.output_json = JSON.stringify(output);
+    current.query.mockResolvedValue({ rows: [older.row, current.row] });
+    const projected = (
+      await loadCurrentOpportunityScreeningProjections(
+        { opportunities: [current.opportunity], subject },
+        current.deps,
+      )
+    ).get('opportunity');
+    expect(projected).toMatchObject({
+      status: 'uncertain',
+      excludeFromDefaultTriage: false,
+      inputFingerprint: current.row.input_fingerprint,
+      evidence: [],
+      holdReasons: expect.arrayContaining(['uncited_role_mismatch']),
+    });
+  });
+  it('rejects mixed V4 choice answers and malformed evidence probabilities as native authority', async () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
+    const current = fixture();
+    const legacy = fixture(
+      'opportunity',
+      'opportunity-screening/v3-self-contained-evidence',
+    );
+    const legacyAnswer = decision(legacy.prepared).answers
+      .role_mismatch__evidence;
+    const invalidAnswers: DecisionResult['answers'][string][] = [
+      legacyAnswer!,
+      { type: 'predicate', probability: NaN },
+      { type: 'predicate', probability: 1.1 },
+    ];
+    for (const answer of invalidAnswers) {
+      const output = decision(current.prepared);
+      output.answers.role_mismatch__evidence = answer;
+      current.query.mockResolvedValue({
+        rows: [{ ...current.row, output_json: JSON.stringify(output) }],
+      });
+      expect(
+        (
+          await loadCurrentOpportunityScreeningProjections(
+            { opportunities: [current.opportunity], subject },
+            current.deps,
+          )
+        ).size,
+      ).toBe(0);
+    }
   });
   it('keeps source-relevant and materially uncertain outcomes visible without score or exclusion', async () => {
     vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-test');
