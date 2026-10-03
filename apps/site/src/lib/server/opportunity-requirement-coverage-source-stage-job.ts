@@ -68,6 +68,10 @@ import { requireSourceCrawlOperator } from './source-crawl-operator.js';
 
 export const SOURCE_COVERAGE_STAGE_JOB_CONTRACT =
   'native-source-coverage-stage/v1';
+export const OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE =
+  'opportunity-assessment-pilot';
+export const OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT =
+  'native-source-evidence-audit-pilot/v1';
 export type SourceRequirementEvidenceVersion =
   | typeof REQUIREMENT_EVIDENCE_AUDIT_VERSION
   | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
@@ -446,6 +450,30 @@ export async function enqueueOpportunityRequirementCoverageSourceStage(
   opportunityId: string,
   selection: SourceCoverageStageSelection,
 ): Promise<SmrtJob> {
+  return await enqueueSourceStage(opportunityId, selection, false);
+}
+
+/** Saved paid extraction only, with no private continuation or extraction fallback. */
+export async function enqueueOpportunityRequirementEvidenceAuditPilot(
+  opportunityId: string,
+  extractionRequestId: string,
+): Promise<SmrtJob> {
+  return await enqueueSourceStage(
+    opportunityId,
+    {
+      stage: 'evidence_completed_extraction',
+      extractionRequestId,
+      evidenceVersion: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+    },
+    true,
+  );
+}
+
+async function enqueueSourceStage(
+  opportunityId: string,
+  selection: SourceCoverageStageSelection,
+  pilot: boolean,
+): Promise<SmrtJob> {
   identifier(opportunityId);
   requireSourceCrawlOperator();
   const evidenceVersion =
@@ -501,7 +529,9 @@ export async function enqueueOpportunityRequirementCoverageSourceStage(
             objectId: opportunityId,
             objectType: '@willgriffin/iolaus-site:Opportunity',
             method: 'prepareAssessmentCoverage',
-            queue: 'opportunity-intelligence',
+            queue: pilot
+              ? OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE
+              : 'opportunity-intelligence',
             tenantId: subject.tenantId,
             maxAttempts: 1,
             timeout: 3 * 60 * 1000,
@@ -515,6 +545,12 @@ export async function enqueueOpportunityRequirementCoverageSourceStage(
               sourceCoverageStage: {
                 contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
                 stage: selection.stage,
+                ...(pilot
+                  ? {
+                      pilotContract:
+                        OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+                    }
+                  : {}),
                 ...(selection.stage === 'evidence_completed_extraction'
                   ? { auditContract: evidenceVersion }
                   : {}),
@@ -565,7 +601,10 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
 ) {
   const runner = requireActiveRunnerExecutionContext(context);
   if (
-    runner.job.queue !== 'opportunity-intelligence' ||
+    ![
+      'opportunity-intelligence',
+      OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE,
+    ].includes(runner.job.queue) ||
     runner.job.objectType !== '@willgriffin/iolaus-site:Opportunity' ||
     runner.job.method !== 'prepareAssessmentCoverage' ||
     runner.job.tenantId !== subject.tenantId
@@ -583,7 +622,10 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
   const getJob =
     dependencies.getJob ??
     (async (id: string) =>
-      await (await SmrtJobCollection.create(getSmrtOptions())).get(id));
+      await (await SmrtJobCollection.create(getSmrtOptions())).get(
+        { id },
+        { cache: false },
+      ));
   const runFresh = dependencies.runFresh ?? runAsRevalidatedJobWorkspaceSubject;
   const fresh = async <T>(work: () => Promise<T>) =>
     await runFresh(subject, 'audit.record', async (_fresh, run) => {
@@ -641,6 +683,55 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
           throw new Error(
             'Source stage requires an explicit native operator intent.',
           );
+        const pilot =
+          runner.job.queue ===
+          OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE;
+        if (
+          pilot
+            ? intent.pilotContract !==
+                OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT ||
+              intent.stage !== 'evidence_completed_extraction' ||
+              intent.auditContract !==
+                REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+              job.maxAttempts !== 1
+            : intent.pilotContract !== undefined
+        )
+          throw new Error(
+            'Source evidence pilot queue does not match its server-captured intent.',
+          );
+        const assertPilotJob = async () => {
+          if (!pilot) return;
+          const current = await getJob(identifier(runner.job.jobId));
+          if (
+            !current ||
+            current.id !== job.id ||
+            current.status !== 'running' ||
+            current.attempts !== runner.job.attempt ||
+            current.maxAttempts !== 1 ||
+            current.tenantId !== subject.tenantId ||
+            current.queue !== runner.job.queue ||
+            current.objectType !== runner.job.objectType ||
+            current.method !== runner.job.method ||
+            current.objectId !== opportunityId ||
+            JSON.stringify(current.args.sourceCoverageStage) !==
+              JSON.stringify(intent) ||
+            [
+              'contentFingerprint',
+              'contentVersion',
+              'sourceDependencyFingerprint',
+            ].some((key) => current.args[key] !== job.args[key]) ||
+            ['tenantId', 'userId', 'profileId'].some(
+              (key) =>
+                runtimeWorkspaceSubjectFromJobArgs(current.args)[
+                  key as keyof RuntimeWorkspaceSubject
+                ] !== subject[key as keyof RuntimeWorkspaceSubject],
+            )
+          )
+            throw new Error(
+              'Source evidence pilot durable authority is not current.',
+            );
+        };
+        await assertPilotJob();
         const evidenceVersion =
           intent.stage === 'evidence_completed_extraction'
             ? sourceRequirementEvidenceVersion(intent.auditContract)
@@ -695,6 +786,7 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
           await job.save();
           const assertCurrentAuthority = async () =>
             await fresh(async () => {
+              await assertPilotJob();
               await requireCurrentSource();
             });
           const persist = async (
@@ -710,6 +802,7 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 throw new Error(
                   'Source stage publication identity is invalid.',
                 );
+              await assertPilotJob();
               await requireCurrentSource();
               return await (
                 dependencies.transaction ?? runOpportunityLifecycleTransaction

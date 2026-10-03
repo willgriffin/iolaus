@@ -23,6 +23,9 @@ import {
 import {
   assertOpportunitySourceExtractionNotAttempted,
   attestCompletedOpportunitySourceExtraction,
+  enqueueOpportunityRequirementEvidenceAuditPilot,
+  OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+  OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE,
   preflightCompletedOpportunityRequirementEvidenceAudit,
   runOpportunityRequirementCoverageSourceStageJob,
   SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
@@ -45,6 +48,18 @@ type TransactionDatabase = Parameters<
 >[0];
 
 const runnerState = vi.hoisted(() => ({ active: undefined as unknown }));
+const enqueueMocks = vi.hoisted(() => ({
+  db: undefined as unknown,
+  enqueue: vi.fn(),
+}));
+vi.mock('@happyvertical/smrt-core', () => ({
+  resolveDatabase: async () => enqueueMocks.db,
+}));
+vi.mock('@happyvertical/smrt-jobs', () => ({
+  SmrtJobCollection: {
+    create: async () => ({ enqueueJob: enqueueMocks.enqueue }),
+  },
+}));
 vi.mock('./db.js', () => ({
   getDbConfig: () => ({}),
   getSmrtOptions: () => ({}),
@@ -482,6 +497,100 @@ describe('native staged source receipt attestation', () => {
 });
 
 describe('native staged source job fences', () => {
+  it('captures only the saved native extraction in a fixed source-only pilot enqueue', async () => {
+    const f = fixture('Requirements\nBuild reliable software.', {
+      locationNotes: 'Canada',
+      workMode: 'Remote',
+    });
+    enqueueMocks.db = f.db;
+    enqueueMocks.enqueue.mockResolvedValue({ id: 'pilot-job' });
+    const { getCollection } = await import('./smrt.js');
+    const get = vi.fn(async () => ({ toJSON: () => f.opportunity }));
+    vi.mocked(getCollection).mockResolvedValue({ get } as unknown as Awaited<
+      ReturnType<typeof getCollection>
+    >);
+    const { withRuntimeWorkspaceSubject, runAsRevalidatedJobWorkspaceSubject } =
+      await import('./job-workspace-subject.js');
+    vi.mocked(withRuntimeWorkspaceSubject).mockReturnValue({
+      runtimeWorkspaceSubject: subject,
+    });
+    const j = jobFixture(f.opportunity, {});
+    vi.mocked(runAsRevalidatedJobWorkspaceSubject).mockImplementation(
+      j.deps.runFresh,
+    );
+    const { withOpportunityLifecycleLock } = await import(
+      './application-workflow.js'
+    );
+    vi.mocked(withOpportunityLifecycleLock).mockImplementation(j.deps.withLock);
+    await enqueueOpportunityRequirementEvidenceAuditPilot(
+      'opportunity-1',
+      'native-request-1',
+    );
+    expect(get).toHaveBeenCalledWith({ id: 'opportunity-1' }, { cache: false });
+    expect(enqueueMocks.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE,
+        method: 'prepareAssessmentCoverage',
+        maxAttempts: 1,
+        tenantId: subject.tenantId,
+        args: expect.objectContaining({
+          sourceCoverageStage: expect.objectContaining({
+            stage: 'evidence_completed_extraction',
+            auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+            extractionRequestId: 'native-request-1',
+            pilotContract:
+              OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+          }),
+        }),
+      }),
+    );
+    expect(j.deps.extract).not.toHaveBeenCalled();
+  });
+  it.each([
+    'extract',
+    'audit_completed_extraction',
+    'evidence_completed_extraction',
+  ])('refuses an unbranded or incompatible %s on the pilot queue before transport', async (stage) => {
+    const f = fixture();
+    const j = jobFixture(f.opportunity, {
+      contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
+      stage,
+      auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+    });
+    j.context.job.queue = OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE;
+    j.job.queue = OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE;
+    j.job.maxAttempts = 1;
+    await expect(
+      runOpportunityRequirementCoverageSourceStageJob(
+        'opportunity-1',
+        j.context,
+        subject,
+        j.deps,
+      ),
+    ).rejects.toThrow('pilot queue');
+    expect(j.deps.extract).not.toHaveBeenCalled();
+    expect(j.deps.audit).not.toHaveBeenCalled();
+    expect(j.deps.startRun).not.toHaveBeenCalled();
+  });
+  it('refuses a pilot-branded source intent on the ordinary shared queue', async () => {
+    const f = fixture();
+    const j = jobFixture(f.opportunity, {
+      contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
+      stage: 'evidence_completed_extraction',
+      auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+      pilotContract: OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+    });
+    await expect(
+      runOpportunityRequirementCoverageSourceStageJob(
+        'opportunity-1',
+        j.context,
+        subject,
+        j.deps,
+      ),
+    ).rejects.toThrow('pilot queue');
+    expect(j.deps.extract).not.toHaveBeenCalled();
+    expect(j.deps.startRun).not.toHaveBeenCalled();
+  });
   it('uses a separately loaded durable job with plain runner context and extraction-only source options', async () => {
     const f = fixture();
     const j = jobFixture(f.opportunity, {
@@ -975,7 +1084,7 @@ describe('native staged source job fences', () => {
         update,
       },
     );
-    if (caseName === 'published') {
+    if (caseName === 'published' || caseName === 'pilot-published') {
       await expect(result).resolves.toMatchObject({ status: 'processed' });
       expect(readEligibility).toHaveBeenCalledOnce();
       expect(update).toHaveBeenCalledOnce();
@@ -1037,6 +1146,7 @@ describe('native staged source job fences', () => {
     'missing-captured-proof',
     'foreign-captured-fields',
     'changed-captured-source',
+    'pilot-published',
     'budget',
   ])('explicit V4 native captured-source evidence enforces %s without resetting extraction', async (caseName) => {
     const f = fixture('Requirements\nBuild reliable software.', {
@@ -1067,6 +1177,15 @@ describe('native staged source job fences', () => {
       extractionInputFingerprint: completed.context.extractionFingerprint,
       ledgerFingerprint: completed.ledgerFingerprint,
     });
+    if (caseName === 'pilot-published') {
+      j.context.job.queue = OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE;
+      j.job.queue = OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE;
+      j.job.maxAttempts = 1;
+      j.job.args.sourceCoverageStage = {
+        ...(j.job.args.sourceCoverageStage as Record<string, unknown>),
+        pilotContract: OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+      };
+    }
     vi.stubEnv('OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION', '1');
     vi.stubEnv(
       'OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION',
@@ -1197,7 +1316,7 @@ describe('native staged source job fences', () => {
         update,
       },
     );
-    if (caseName === 'published') {
+    if (caseName === 'published' || caseName === 'pilot-published') {
       await expect(result).resolves.toMatchObject({ status: 'processed' });
       expect(readEligibility).toHaveBeenCalledOnce();
       expect(update).toHaveBeenCalledOnce();
