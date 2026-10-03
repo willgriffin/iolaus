@@ -47,6 +47,7 @@ import {
   filtersForOpportunityTableSort,
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
+import AddUrlIntake from './AddUrlIntake.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
@@ -859,6 +860,7 @@ const resultCountLabel = $derived.by(() => {
     <a class="triage-link" href={shortlistHref}>
       <Heart size={15} strokeWidth={2.2} /> Shortlist
     </a>
+    <AddUrlIntake />
     <span class="result-count">{resultCountLabel}</span>
   </div>
 

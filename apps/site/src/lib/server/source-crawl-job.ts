@@ -142,7 +142,39 @@ export async function runSourceCrawlJob(
   });
 
   try {
+    let publicIntakeOptions = {};
+    if (args.reason === 'url_intake') {
+      try {
+        publicIntakeOptions = await (
+          await import('./url-intake-source-fetch.js')
+        ).publicUrlIntakeCrawlOptions(String(source.url ?? ''));
+      } catch (cause) {
+        // The guarded root fetch precedes the crawler's durable crawl transition.
+        // Settle only this exact queued request, under the existing native fence.
+        if (sourceCrawlId && jobId) {
+          const terminalized = await writeFence(
+            async () =>
+              await (
+                dependencies.failRequestedCrawl ??
+                failQueuedRequestedSourceCrawl
+              )({
+                error:
+                  cause instanceof Error ? cause : new Error(String(cause)),
+                jobId,
+                sourceCrawlId,
+                sourceId: String(source.id ?? ''),
+              }),
+          );
+          if (!terminalized)
+            throw new SourceCrawlOwnershipError(
+              'Source crawl refused without ownership of its queued request.',
+            );
+        }
+        throw cause;
+      }
+    }
     const summary = await crawlSource(source, {
+      ...publicIntakeOptions,
       includeGeneric: args.includeGeneric !== false,
       writeFence: dependencies.writeFence,
       ...(args.runtimeWorkspaceSubject ? { intelligenceEnqueueCap: 0 } : {}),

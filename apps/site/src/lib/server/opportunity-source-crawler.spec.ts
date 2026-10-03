@@ -43,6 +43,8 @@ import {
   resolveRootPosting,
   sourceIsCrawlable,
 } from './opportunity-source-crawler';
+import { createPublicHttpsFetch } from './public-https';
+import { publicUrlIntakeCrawlOptions } from './url-intake-source-fetch';
 
 describe('primary ATS source candidate metadata', () => {
   it('preserves explicit Greenhouse board identity and all source locations', async () => {
@@ -5779,6 +5781,38 @@ it('records Contra login diagnostics when the authenticated source returns no ca
 });
 
 describe('job-board adapter engine', () => {
+  it('uses the supplied guarded static context for actual generic index discovery', async () => {
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          '<a href="/careers/jobs/123">Senior Software Engineer</a>',
+        ),
+    );
+    const options = await publicUrlIntakeCrawlOptions(
+      'https://careers.example.com/careers',
+      {
+        fetchFactory: (config) =>
+          createPublicHttpsFetch({
+            ...config,
+            lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+            transport,
+          }),
+      },
+    );
+    const scrape = vi.spyOn(options.adapterContext, 'scrapeIndex');
+    const candidates = await discoverOpportunityCandidates(
+      { url: 'https://careers.example.com/careers' },
+      { ...options, includeGeneric: true },
+    );
+    expect(scrape).toHaveBeenCalledWith('https://careers.example.com/careers');
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        postingUrl: 'https://careers.example.com/careers/jobs/123',
+        title: 'Senior Software Engineer',
+      }),
+    ]);
+    expect(transport).toHaveBeenCalledOnce();
+  });
   it('routes Elastic duplicate gh_jid URLs to the official board and preserves the posting identity', async () => {
     const fetchImpl = vi.fn(async (input: string | URL) =>
       String(input).endsWith('/boards/elastic')

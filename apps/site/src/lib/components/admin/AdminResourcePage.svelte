@@ -50,6 +50,7 @@ import {
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
 import SourceControlList from '../sources/SourceControlList.svelte';
+import AddUrlIntake from './AddUrlIntake.svelte';
 import AdminRecordValue from './AdminRecordValue.svelte';
 import ApplicationCardList from './ApplicationCardList.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
@@ -1332,6 +1333,7 @@ function taskMeta(record: AdminRecord): string {
         <h1>{data.resource.label}</h1>
         <p>{data.resource.description}</p>
       </div>
+      {#if isSourceResource}<AddUrlIntake />{/if}
       {#if (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
           {isSourceResource ? 'Add a job source' : `New ${data.resource.singularLabel}`}

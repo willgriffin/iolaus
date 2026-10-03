@@ -4,6 +4,11 @@ import { runSourceCrawlJob } from './source-crawl-job';
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
+  publicIntakeOptions: vi.fn(),
+}));
+
+vi.mock('./url-intake-source-fetch.js', () => ({
+  publicUrlIntakeCrawlOptions: mocks.publicIntakeOptions,
 }));
 
 vi.mock('@happyvertical/smrt-core', async (importOriginal) => {
@@ -97,6 +102,93 @@ describe('runSourceCrawlJob', () => {
 
   beforeEach(() => {
     mocks.query.mockReset();
+    mocks.publicIntakeOptions.mockReset();
+  });
+
+  it('uses the public-only intake transport while preserving the native zero-intelligence cap and write fence', async () => {
+    const safe = {
+      fetchImpl: vi.fn(),
+      spider: { fetch: vi.fn() },
+      adapterContext: { fetchPage: vi.fn(), scrapeIndex: vi.fn() },
+    };
+    mocks.publicIntakeOptions.mockResolvedValue(safe);
+    const source = {
+      id: 'source-1',
+      url: 'https://careers.example.com',
+      isActive: true,
+      sourceRole: 'root',
+      parentSourceId: null,
+      refreshCadence: 'ad_hoc',
+      save: vi.fn(),
+    };
+    const crawlSource = vi.fn(async () => summary);
+    const writeFence = vi.fn(
+      async (work: () => Promise<unknown>) => await work(),
+    );
+    await runSourceCrawlJob(
+      source,
+      {
+        reason: 'url_intake',
+        limit: 25,
+        runtimeWorkspaceSubject: {
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          profileId: 'profile-1',
+        },
+      },
+      undefined,
+      { crawlSource, syncSchedule: vi.fn(), writeFence: writeFence as never },
+    );
+    expect(mocks.publicIntakeOptions).toHaveBeenCalledWith(source.url);
+    expect(crawlSource).toHaveBeenCalledWith(
+      source,
+      expect.objectContaining({
+        ...safe,
+        limit: 25,
+        intelligenceEnqueueCap: 0,
+        writeFence,
+      }),
+    );
+  });
+
+  it('terminalizes only the bound queued request when guarded intake root fetching fails before crawling', async () => {
+    mocks.publicIntakeOptions.mockRejectedValue(
+      new Error('private destination'),
+    );
+    const source = {
+      id: 'source-1',
+      url: 'https://careers.example.com',
+      isActive: true,
+      sourceRole: 'root',
+      parentSourceId: null,
+      save: vi.fn(),
+    };
+    const crawlSource = vi.fn();
+    const failRequestedCrawl = vi.fn(async () => true);
+    const writeFence = vi.fn(
+      async (work: () => Promise<unknown>) => await work(),
+    );
+    await expect(
+      runSourceCrawlJob(
+        source,
+        { reason: 'url_intake', sourceCrawlId: 'crawl-1' },
+        { job: { jobId: 'job-1' } } as never,
+        {
+          crawlSource,
+          syncSchedule: vi.fn(),
+          failRequestedCrawl,
+          writeFence: writeFence as never,
+        },
+      ),
+    ).rejects.toThrow('private destination');
+    expect(crawlSource).not.toHaveBeenCalled();
+    expect(failRequestedCrawl).toHaveBeenCalledWith({
+      sourceId: 'source-1',
+      sourceCrawlId: 'crawl-1',
+      jobId: 'job-1',
+      error: expect.any(Error),
+    });
+    expect(writeFence).toHaveBeenCalledTimes(2);
   });
 
   it.each([

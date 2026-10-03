@@ -452,6 +452,8 @@ type FencedOpportunityBackfillUpdate = (
 ) => Promise<boolean>;
 
 export interface CrawlOpportunitySourcesOptions {
+  /** Explicit intake may supply a public-only context; ordinary callers retain the native default. */
+  adapterContext?: AdapterContext;
   /** Fresh native operator scope around catalog/accounting persistence. */
   writeFence?: SourceCrawlWriteFence;
   dryRun?: boolean;
@@ -5469,11 +5471,11 @@ export async function discoverOpportunityCandidates(
   source: SourceLike,
   options: Pick<
     CrawlOpportunitySourcesOptions,
-    'fetchImpl' | 'includeGeneric' | 'spider'
+    'adapterContext' | 'fetchImpl' | 'includeGeneric' | 'spider'
   > = {},
 ): Promise<OpportunitySourceCandidate[]> {
   const registry = getJobAdapterRegistry();
-  const ctx = lazyAdapterContext();
+  const ctx = options.adapterContext ?? lazyAdapterContext();
   const jobSource: JobBoardSource = {
     searchQuery: stringValue(source.searchQuery),
     url: stringValue(source.url),
