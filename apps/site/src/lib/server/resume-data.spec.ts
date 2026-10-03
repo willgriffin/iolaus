@@ -685,6 +685,82 @@ describe('assembleResumeSourceFromRecords', () => {
 });
 
 describe('assembleResumeSourceFromLegacyRecords', () => {
+  it('keeps normalized and legacy canonical bytes unchanged while excluding incomplete education and other roles', () => {
+    const expected: ResumeSource = {
+      profile: {
+        name: 'Fictional Candidate',
+        title: '',
+        email: '',
+        summary: '',
+        links: [],
+      },
+      skills: { skillGroups: [], groups: [] },
+      experience: {
+        positions: [],
+        other: [
+          {
+            role: 'Engineer',
+            company: 'Example',
+            period: '2020',
+            body: 'Original body',
+            tags: [],
+          },
+        ],
+        education: [
+          {
+            title: 'Degree',
+            institution: 'Example',
+            detail: 'Original detail',
+          },
+        ],
+      },
+    };
+    const normalized = normalizedRecordsFromSource(expected);
+    const legacy = legacyRecordsFromSource(expected);
+    // The existing assembler normalizes strings before its membership filter.
+    for (const records of [normalized, legacy]) {
+      records.education[0].title = '  Degree  ';
+      records.otherRoles[0].role = '  Engineer  ';
+    }
+    const baseline = [
+      assembleResumeSourceFromRecords(normalized),
+      assembleResumeSourceFromLegacyRecords(legacy),
+    ];
+    for (const records of [normalized, legacy]) {
+      records.education.push({
+        id: 'whitespace-education',
+        title: ' ',
+        institution: '',
+        detail: ' ',
+      });
+      records.otherRoles.push({
+        id: 'whitespace-other',
+        role: ' ',
+        company: ' ',
+        period: ' ',
+        body: '',
+        tags: [],
+      });
+      records.education.push({
+        id: 'incomplete-education',
+        title: 'Hidden degree',
+        detail: '',
+      });
+      records.otherRoles.push({
+        id: 'incomplete-other',
+        role: 'Hidden role',
+        company: '',
+        period: '2022',
+      });
+    }
+    for (const [index, assembled] of [
+      assembleResumeSourceFromRecords(normalized),
+      assembleResumeSourceFromLegacyRecords(legacy),
+    ].entries()) {
+      expect(assembled).toEqual(expected);
+      expect(JSON.stringify(assembled)).toBe(JSON.stringify(baseline[index]));
+    }
+  });
   it('reconstructs the legacy JSON resume shape from old resume admin records', () => {
     const legacy = loadLegacyResumeSource();
 

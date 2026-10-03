@@ -38,6 +38,10 @@ import {
   type WorkspaceSubject,
 } from './private-workspace.js';
 import {
+  isCanonicalEducationEntry,
+  isCanonicalOtherRoleEntry,
+} from './resume-canonical-membership.js';
+import {
   LEGACY_RESUME_READ_PLAN,
   NORMALIZED_RESUME_READ_PLAN,
 } from './resume-read-plans.js';
@@ -668,7 +672,7 @@ export function assembleResumeSourceFromRecords(
       body: stringValue(record.body),
       tags: splitList(record.tags),
     }))
-    .filter((role) => role.role && role.company && role.period);
+    .filter(isCanonicalOtherRoleEntry);
 
   const education: Education[] = [...records.education]
     .sort(bySortOrder)
@@ -677,7 +681,7 @@ export function assembleResumeSourceFromRecords(
       institution: stringValue(record.institution),
       detail: stringValue(record.detail),
     }))
-    .filter((item) => item.title && item.detail);
+    .filter(isCanonicalEducationEntry);
 
   return {
     profile,
@@ -792,7 +796,7 @@ export function assembleResumeSourceFromLegacyRecords(
       body: stringValue(record.body),
       tags: splitList(record.tags),
     }))
-    .filter((role) => role.role && role.company && role.period);
+    .filter(isCanonicalOtherRoleEntry);
 
   const education: Education[] = [...records.education]
     .sort(bySortOrder)
@@ -801,7 +805,7 @@ export function assembleResumeSourceFromLegacyRecords(
       institution: stringValue(record.institution),
       detail: stringValue(record.detail),
     }))
-    .filter((item) => item.title && item.detail);
+    .filter(isCanonicalEducationEntry);
 
   return {
     profile,
