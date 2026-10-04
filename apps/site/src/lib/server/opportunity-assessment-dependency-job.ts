@@ -28,10 +28,12 @@ import {
   finishOpportunityIntelligenceAgentRun,
   startOpportunityIntelligenceAgentRun,
 } from './opportunity-intelligence-governance.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
 import {
   evaluateRequirementEvidenceAudit,
+  prepareCapturedSourceCompositeRequirementEvidenceAudit,
   REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
@@ -50,6 +52,7 @@ import {
   prepareCurrentOpportunityAssessmentScreen,
   readCurrentOpportunityAssessmentScreen,
 } from './opportunity-screening-provider.js';
+import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 
@@ -63,6 +66,170 @@ export const OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE =
   'opportunity-intelligence';
 export const OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE =
   '@willgriffin/iolaus-site:Opportunity';
+
+/** Fixed server-owned route; caller queue names are never accepted. */
+export const OPPORTUNITY_ASSESSMENT_PILOT_QUEUE =
+  'opportunity-assessment-pilot';
+export const OPPORTUNITY_ASSESSMENT_PILOT_CONTRACT =
+  'opportunity-assessment-pilot/v1';
+export const OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT =
+  'opportunity-assessment-fresh-pilot/v1';
+export function opportunityAssessmentPilotIntent(
+  screen: CurrentOpportunityAssessmentScreen,
+  freshSource = false,
+) {
+  return {
+    contract: freshSource
+      ? OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT
+      : OPPORTUNITY_ASSESSMENT_PILOT_CONTRACT,
+    screeningRequestId: screen.requestId,
+    screeningInputFingerprint: screen.inputFingerprint,
+  };
+}
+export async function requireCurrentOpportunityAssessmentPilotScreen(
+  opportunityId: string,
+  subject: RuntimeWorkspaceSubject,
+) {
+  const screen = await readCurrentOpportunityAssessmentScreen({
+    opportunityId,
+    subject,
+  });
+  if (
+    !screen ||
+    screen.screen.version !== OPPORTUNITY_SCREENING_VERSION ||
+    screen.outcome !== 'potentially_relevant' ||
+    !screen.screen.plausiblyRelevant ||
+    screen.screen.holdReasons.length
+  )
+    throw new Error(
+      'Assessment pilot requires a current actual potentially relevant V4 PRIVATE screen.',
+    );
+  return screen;
+}
+
+export function opportunityAssessmentJobQueue(
+  args: Record<string, unknown>,
+): string {
+  if (args.assessmentPilot === undefined)
+    return OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE;
+  const intent = args.assessmentPilot;
+  if (
+    !intent ||
+    typeof intent !== 'object' ||
+    Array.isArray(intent) ||
+    Object.keys(intent).length !== 3 ||
+    typeof (intent as Record<string, unknown>).screeningRequestId !==
+      'string' ||
+    !(intent as Record<string, unknown>).screeningRequestId ||
+    typeof (intent as Record<string, unknown>).screeningInputFingerprint !==
+      'string' ||
+    !(intent as Record<string, unknown>).screeningInputFingerprint ||
+    ![
+      OPPORTUNITY_ASSESSMENT_PILOT_CONTRACT,
+      OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT,
+    ].includes(String((intent as Record<string, unknown>).contract))
+  )
+    throw new Error('Assessment pilot routing intent is invalid.');
+  return OPPORTUNITY_ASSESSMENT_PILOT_QUEUE;
+}
+
+/** Fresh extraction authority exists only on this exact server-authored durable contract. */
+export function opportunityAssessmentPilotAllowsFreshSource(
+  args: Record<string, unknown>,
+): boolean {
+  return (
+    opportunityAssessmentJobQueue(args) ===
+      OPPORTUNITY_ASSESSMENT_PILOT_QUEUE &&
+    (args.assessmentPilot as Record<string, unknown>).contract ===
+      OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT
+  );
+}
+async function assertFreshPilotHumanReview(
+  opportunityId: string,
+  subject: RuntimeWorkspaceSubject,
+) {
+  const review = (
+    await loadCurrentOpportunityReviewOverlays({
+      opportunityIds: [opportunityId],
+      subject,
+    })
+  ).get(opportunityId);
+  if (review && ['reject', 'archived'].includes(review.humanReviewStatus))
+    throw new Error(
+      'The current human review prevents fresh pilot extraction.',
+    );
+}
+
+/** Authenticate the server-captured pilot route against a freshly loaded durable job. */
+export async function assertOpportunityAssessmentPilotJobRouting(
+  opportunityId: string,
+  args: Record<string, unknown>,
+  context: JobExecutionContext,
+  subject: RuntimeWorkspaceSubject,
+): Promise<void> {
+  const runner = requireActiveRunnerExecutionContext(context);
+  const queue = opportunityAssessmentJobQueue(args);
+  if (runner.job.queue !== queue)
+    throw new Error('Assessment job queue does not match its server intent.');
+  if (queue !== OPPORTUNITY_ASSESSMENT_PILOT_QUEUE) return;
+  const screen = await requireCurrentOpportunityAssessmentPilotScreen(
+    opportunityId,
+    subject,
+  );
+  if (
+    JSON.stringify(args.assessmentPilot) !==
+    JSON.stringify(
+      opportunityAssessmentPilotIntent(
+        screen,
+        opportunityAssessmentPilotAllowsFreshSource(args),
+      ),
+    )
+  )
+    throw new Error(
+      'Assessment pilot screening material is no longer current.',
+    );
+  if (opportunityAssessmentPilotAllowsFreshSource(args))
+    await assertFreshPilotHumanReview(opportunityId, subject);
+  const method =
+    args.assessmentCoverageContract === undefined
+      ? 'processIntelligence'
+      : OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD;
+  const job = await (await SmrtJobCollection.create(getSmrtOptions())).get(
+    { id: runner.job.jobId },
+    { cache: false },
+  );
+  if (
+    !job ||
+    job.id !== runner.job.jobId ||
+    job.status !== 'running' ||
+    job.attempts !== runner.job.attempt ||
+    job.maxAttempts !== 1 ||
+    job.tenantId !== subject.tenantId ||
+    runner.job.tenantId !== subject.tenantId ||
+    job.objectId !== opportunityId ||
+    job.objectType !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
+    runner.job.objectType !== job.objectType ||
+    job.method !== method ||
+    runner.job.method !== method ||
+    job.queue !== queue ||
+    opportunityAssessmentJobQueue(job.args) !== queue ||
+    !sameSubject(runtimeWorkspaceSubjectFromJobArgs(job.args), subject) ||
+    !sameSubject(runtimeWorkspaceSubjectFromJobArgs(args), subject) ||
+    [
+      'contentFingerprint',
+      'contentVersion',
+      'scoringMaterialFingerprint',
+      'assessmentCoverageContract',
+      'assessmentCoverageDedupeKey',
+      'sourceDependencyFingerprint',
+      'partialAssessmentEvidence',
+    ].some((key) => job.args[key] !== args[key]) ||
+    JSON.stringify(job.args.assessmentPilot) !==
+      JSON.stringify(args.assessmentPilot) ||
+    JSON.stringify(job.args.modes) !== JSON.stringify(args.modes)
+  )
+    throw new Error('Assessment pilot durable authority is not current.');
+}
 
 export interface OpportunityAssessmentDependencyJobArgs
   extends Record<string, unknown> {
@@ -264,12 +431,16 @@ function sourceIdentityMatches(
 export function opportunityAssessmentCoverageDedupeKey(options: {
   sourceDependencyFingerprint: string;
   subject: RuntimeWorkspaceSubject;
+  freshPilot?: boolean;
 }): string {
   const { subject } = options;
   return `assessment-coverage-job/v1:${createHash('sha256')
     .update(
       JSON.stringify({
         contract: OPPORTUNITY_ASSESSMENT_DEPENDENCY_CONTRACT,
+        ...(options.freshPilot
+          ? { pilotContract: OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT }
+          : {}),
         profileId: subject.profileId,
         sourceDependencyFingerprint: options.sourceDependencyFingerprint,
         tenantId: subject.tenantId,
@@ -301,7 +472,7 @@ function jobMatchesSourceDependency(
   sourceDependencyFingerprint: string,
 ): boolean {
   if (
-    job.queue !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE ||
+    job.queue !== opportunityAssessmentJobQueue(job.args) ||
     job.objectType !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
     job.objectId !== opportunityId ||
     job.method !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD ||
@@ -320,6 +491,7 @@ function jobMatchesSourceDependency(
         opportunityAssessmentCoverageDedupeKey({
           sourceDependencyFingerprint,
           subject,
+          freshPilot: opportunityAssessmentPilotAllowsFreshSource(args),
         }) &&
       args.contentFingerprint === source.fingerprint &&
       args.contentVersion === source.version &&
@@ -358,7 +530,7 @@ function terminalSourceJobBridge(
 ): SourceJobBridge | undefined {
   if (
     !['completed', 'failed', 'cancelled'].includes(job.status) ||
-    job.queue !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE ||
+    job.queue !== opportunityAssessmentJobQueue(job.args) ||
     job.objectType !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
     job.objectId !== opportunityId ||
     job.method !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD ||
@@ -381,6 +553,7 @@ function terminalSourceJobBridge(
       opportunityAssessmentCoverageDedupeKey({
         sourceDependencyFingerprint,
         subject: storedSubject,
+        freshPilot: opportunityAssessmentPilotAllowsFreshSource(args),
       }) ||
     args.contentFingerprint !== source.fingerprint ||
     args.contentVersion !== source.version ||
@@ -414,7 +587,7 @@ async function loadCurrentSourceJob(
     throw new Error('Source preparation job link cannot be persisted.');
   }
   const jobs = await SmrtJobCollection.create(getSmrtOptions());
-  const job = await jobs.get(durableJobId);
+  const job = await jobs.get({ id: durableJobId }, { cache: false });
   if (!job) throw new Error('Source preparation job link cannot be persisted.');
   return job;
 }
@@ -437,7 +610,10 @@ async function readPriorSourceJobBridge(
   const runnerContext = requireActiveRunnerExecutionContext(context);
   if (
     runnerContext.job.tenantId !== subject.tenantId ||
-    runnerContext.job.queue !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE ||
+    ![
+      OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+      OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+    ].includes(runnerContext.job.queue) ||
     runnerContext.job.objectType !==
       OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
     runnerContext.job.method !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD
@@ -447,6 +623,7 @@ async function readPriorSourceJobBridge(
   const job = await loadCurrentSourceJob(context);
   if (
     job.status !== 'running' ||
+    job.queue !== runnerContext.job.queue ||
     job.attempts !== runnerContext.job.attempt ||
     !jobMatchesSourceDependency(
       job,
@@ -574,7 +751,10 @@ async function recordSourcePreparationRun(
   if (
     !durableJobId ||
     runnerContext.job.tenantId !== subject.tenantId ||
-    runnerContext.job.queue !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE ||
+    ![
+      OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+      OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+    ].includes(runnerContext.job.queue) ||
     runnerContext.job.objectType !==
       OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
     runnerContext.job.method !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD
@@ -590,8 +770,9 @@ async function recordSourcePreparationRun(
     !agentRunId ||
     job.tenantId !== subject.tenantId ||
     job.status !== 'running' ||
+    job.queue !== runnerContext.job.queue ||
     job.attempts !== runnerContext.job.attempt ||
-    job.queue !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE ||
+    job.queue !== opportunityAssessmentJobQueue(job.args) ||
     job.objectType !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE ||
     job.objectId !== opportunityId ||
     job.method !== OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD ||
@@ -606,6 +787,7 @@ async function recordSourcePreparationRun(
       opportunityAssessmentCoverageDedupeKey({
         sourceDependencyFingerprint: expected.sourceDependencyFingerprint,
         subject,
+        freshPilot: opportunityAssessmentPilotAllowsFreshSource(jobArgs),
       })
   ) {
     throw new Error('Source preparation job link cannot be persisted.');
@@ -623,6 +805,58 @@ export async function enqueueOpportunityAssessmentCoverage(
   args: OpportunityAssessmentDependencyJobArgs = {},
   options: EnqueueOpportunityAssessmentDependencyOptions = {},
 ): Promise<OpportunityAssessmentDependencyEnqueueResult> {
+  return await enqueueAssessmentCoverage(opportunityId, args, options, false);
+}
+
+/** Pilot resumes paid source only; it never authorizes new extraction. */
+export async function enqueueOpportunityAssessmentCoveragePilot(
+  opportunityId: string,
+  options: EnqueueOpportunityAssessmentDependencyOptions = {},
+): Promise<OpportunityAssessmentDependencyEnqueueResult> {
+  const subject = runtimeWorkspaceSubjectFromJobArgs(
+    withRuntimeWorkspaceSubject({}),
+  );
+  return await runAsRevalidatedJobWorkspaceSubject(
+    subject,
+    'assessment.execute',
+    async (_current, run) => {
+      await run.assertOperation('opportunities', 'read');
+      return await enqueueAssessmentCoverage(opportunityId, {}, options, true);
+    },
+  );
+}
+
+/** Explicit fresh pilot authorization; normal and saved-only enqueue cannot select it. */
+export async function enqueueOpportunityAssessmentCoverageFreshPilot(
+  opportunityId: string,
+  options: EnqueueOpportunityAssessmentDependencyOptions = {},
+): Promise<OpportunityAssessmentDependencyEnqueueResult> {
+  const subject = runtimeWorkspaceSubjectFromJobArgs(
+    withRuntimeWorkspaceSubject({}),
+  );
+  return await runAsRevalidatedJobWorkspaceSubject(
+    subject,
+    'assessment.execute',
+    async (_current, run) => {
+      await run.assertOperation('opportunities', 'read');
+      return await enqueueAssessmentCoverage(
+        opportunityId,
+        {},
+        options,
+        true,
+        true,
+      );
+    },
+  );
+}
+
+async function enqueueAssessmentCoverage(
+  opportunityId: string,
+  args: OpportunityAssessmentDependencyJobArgs,
+  options: EnqueueOpportunityAssessmentDependencyOptions,
+  pilot: boolean,
+  freshSource = false,
+): Promise<OpportunityAssessmentDependencyEnqueueResult> {
   const normalizedOpportunityId = text(opportunityId);
   if (!normalizedOpportunityId) {
     throw new OpportunityAssessmentDependencyEnqueueError(
@@ -631,6 +865,7 @@ export async function enqueueOpportunityAssessmentCoverage(
     );
   }
   const {
+    assessmentPilot: _ignoredPilot,
     sourcePreparationAgentRunId: _ignoredSourcePreparationAgentRunId,
     partialAssessmentEvidence: _ignoredPartialEvidence,
     sourceCoverageStage: _ignoredSourceStage,
@@ -641,7 +876,25 @@ export async function enqueueOpportunityAssessmentCoverage(
     candidatePreferences: _ignoredCandidatePreferences,
     ...callerArgs
   } = args;
-  const enveloped = withRuntimeWorkspaceSubject(callerArgs);
+  const baseArgs = withRuntimeWorkspaceSubject(callerArgs);
+  const currentSubject = runtimeWorkspaceSubjectFromJobArgs(baseArgs);
+  if (freshSource)
+    await assertFreshPilotHumanReview(normalizedOpportunityId, currentSubject);
+  const enveloped = {
+    ...baseArgs,
+    ...(pilot
+      ? {
+          assessmentPilot: opportunityAssessmentPilotIntent(
+            await requireCurrentOpportunityAssessmentPilotScreen(
+              normalizedOpportunityId,
+              currentSubject,
+            ),
+            freshSource,
+          ),
+        }
+      : {}),
+  };
+  const queue = opportunityAssessmentJobQueue(enveloped);
   const subject = runtimeWorkspaceSubjectFromJobArgs(enveloped);
   const getOpportunity = options.opportunityCollection
     ? async (id: string) =>
@@ -681,12 +934,27 @@ export async function enqueueOpportunityAssessmentCoverage(
     });
     const sourceDependencyFingerprint =
       requirementCoverageSourceDependencyFingerprint(opportunity);
+    const requestedDedupeKey = opportunityAssessmentCoverageDedupeKey({
+      sourceDependencyFingerprint,
+      subject,
+      freshPilot: freshSource,
+    });
+    const matchesRequestedPilotIntent = (job: SmrtJob) =>
+      !pilot ||
+      (job.args.assessmentCoverageDedupeKey === requestedDedupeKey &&
+        JSON.stringify(job.args.assessmentPilot) ===
+          JSON.stringify(enveloped.assessmentPilot));
     const candidates = await collection.list({
       limit: 100,
       where: {
         method: OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD,
         objectId: normalizedOpportunityId,
-        queue: OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+        queue: pilot
+          ? [
+              OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+              OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+            ]
+          : OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
       },
     });
     // Prefer this profile's terminal row when present. A same-tenant row from
@@ -762,6 +1030,7 @@ export async function enqueueOpportunityAssessmentCoverage(
       candidates.some(
         (job) =>
           job.status === 'failed' &&
+          matchesRequestedPilotIntent(job) &&
           job.lastError ===
             'This idempotency key has a prior terminal failure and requires operator review.' &&
           jobMatchesSourceDependency(
@@ -785,14 +1054,29 @@ export async function enqueueOpportunityAssessmentCoverage(
         'The current source preparation attempt requires operator review before assessment can resume.',
       );
     }
-    const active = candidates.find((job) =>
-      activeJobMatches(
-        job,
-        normalizedOpportunityId,
-        subject,
-        source,
-        sourceDependencyFingerprint,
-      ),
+    if (
+      pilot &&
+      !freshSource &&
+      coverageOutcome.status !== 'ready' &&
+      !completed &&
+      !(await readPartialOpportunityRequirementEvidence(opportunity))
+        ?.acceptedRequirements.length
+    )
+      throw new OpportunityAssessmentDependencyEnqueueError(
+        'source_coverage_blocked',
+        'Assessment pilot requires a current paid extraction or recorded source proof; new extraction is not permitted.',
+      );
+    const active = candidates.find(
+      (job) =>
+        job.queue === queue &&
+        matchesRequestedPilotIntent(job) &&
+        activeJobMatches(
+          job,
+          normalizedOpportunityId,
+          subject,
+          source,
+          sourceDependencyFingerprint,
+        ),
     );
     if (active) {
       return {
@@ -807,10 +1091,7 @@ export async function enqueueOpportunityAssessmentCoverage(
       args: {
         ...enveloped,
         assessmentCoverageContract: OPPORTUNITY_ASSESSMENT_DEPENDENCY_CONTRACT,
-        assessmentCoverageDedupeKey: opportunityAssessmentCoverageDedupeKey({
-          sourceDependencyFingerprint,
-          subject,
-        }),
+        assessmentCoverageDedupeKey: requestedDedupeKey,
         contentFingerprint: source.fingerprint,
         contentVersion: source.version,
         sourceDependencyFingerprint,
@@ -818,12 +1099,12 @@ export async function enqueueOpportunityAssessmentCoverage(
           options.reason ??
           (text(enveloped.reason) || 'assessment_prerequisite'),
       },
-      maxAttempts: 2,
+      maxAttempts: pilot ? 1 : 2,
       method: OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD,
       objectId: normalizedOpportunityId,
       objectType: OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE,
       priority: 80,
-      queue: OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+      queue,
       runAt: options.now ?? new Date(),
       tenantId: subject.tenantId,
       timeout: OPPORTUNITY_ASSESSMENT_DEPENDENCY_TIMEOUT_MS,
@@ -856,10 +1137,21 @@ export async function runOpportunityAssessmentDependencyJob(
 }> {
   const opportunityId = text(opportunity.id);
   if (!opportunityId) throw new Error('Opportunity id is required.');
+  const queue = opportunityAssessmentJobQueue(args);
+  const pilot = queue === OPPORTUNITY_ASSESSMENT_PILOT_QUEUE;
+  const freshSource = opportunityAssessmentPilotAllowsFreshSource(args);
+  if (pilot || context.job?.queue === OPPORTUNITY_ASSESSMENT_PILOT_QUEUE)
+    await assertOpportunityAssessmentPilotJobRouting(
+      opportunityId,
+      args,
+      context,
+      subject,
+    );
   const expected = requiredSourceArgs(args);
   const dedupeKey = opportunityAssessmentCoverageDedupeKey({
     sourceDependencyFingerprint: expected.sourceDependencyFingerprint,
     subject,
+    freshPilot: freshSource,
   });
   if (args.assessmentCoverageDedupeKey !== dedupeKey) {
     throw new Error('Assessment coverage job ownership identity is invalid.');
@@ -914,6 +1206,13 @@ export async function runOpportunityAssessmentDependencyJob(
         'assessment.execute',
         async (_subject, run) => {
           await run.assertOperation('opportunities', 'read');
+          if (pilot)
+            await assertOpportunityAssessmentPilotJobRouting(
+              opportunityId,
+              args,
+              context,
+              subject,
+            );
           const isCurrent = (
             current: OpportunityRecord | null,
           ): current is OpportunityRecord =>
@@ -975,6 +1274,13 @@ export async function runOpportunityAssessmentDependencyJob(
               'assessment.execute',
               async (_fresh, principal) => {
                 await principal.assertOperation('opportunities', 'read');
+                if (pilot)
+                  await assertOpportunityAssessmentPilotJobRouting(
+                    opportunityId,
+                    args,
+                    context,
+                    subject,
+                  );
                 if (!isCurrent(await getOpportunity(opportunityId))) {
                   screeningChanged = Boolean(activeScreen);
                   throw new Error('Source preparation is no longer current.');
@@ -1049,6 +1355,13 @@ export async function runOpportunityAssessmentDependencyJob(
             return {
               message:
                 'Source evidence preparation belongs to another workspace subject; its operator must complete it.',
+              ready: false as const,
+              sourceStatus: 'operator_required' as const,
+            };
+          if (!actual && pilot && !freshSource)
+            return {
+              message:
+                'Assessment pilot requires a current paid extraction; new extraction is not permitted.',
               ready: false as const,
               sourceStatus: 'operator_required' as const,
             };
@@ -1316,6 +1629,156 @@ export async function runOpportunityAssessmentDependencyJob(
             agentRunId,
           );
           await assertCurrentAuthority();
+          const completedExtraction = actual;
+          const canonicalPrepared =
+            prepareCapturedSourceCompositeRequirementEvidenceAudit(
+              completedExtraction.context,
+              completedExtraction.ledger,
+              {
+                sourceContentJson: completedExtraction.sourceContentJson,
+                extractionRequestId: completedExtraction.requestId,
+              },
+            );
+          const publishEvidence = async (
+            evidence: Awaited<ReturnType<typeof auditEvidence>>,
+          ) => {
+            await assertCurrentAuthority();
+            const refreshed = await getOpportunity(opportunityId);
+            if (!isCurrent(refreshed))
+              return {
+                message: 'Skipped stale opportunity source.',
+                ready: false as const,
+              };
+            const confirmed = await readCompleted(refreshed);
+            if (
+              !confirmed ||
+              confirmed.requestId !== completedExtraction.requestId ||
+              confirmed.agentRunId !== completedExtraction.agentRunId ||
+              !sameSubject(confirmed.workspaceSubject, subject) ||
+              confirmed.ledgerFingerprint !==
+                completedExtraction.ledgerFingerprint ||
+              JSON.stringify(confirmed.context) !==
+                JSON.stringify(completedExtraction.context) ||
+              confirmed.sourceContentJson !==
+                completedExtraction.sourceContentJson
+            )
+              throw new Error(
+                'Source lifecycle changed before evidence publication.',
+              );
+            const refreshedCache = JSON.parse(
+              String(refreshed.preparedPostingJson || '{}'),
+            );
+            if (
+              !refreshedCache ||
+              typeof refreshedCache !== 'object' ||
+              Array.isArray(refreshedCache)
+            )
+              throw new Error('Invalid current source preparation cache.');
+            const preparedPostingJson = JSON.stringify({
+              ...refreshedCache,
+              requirementCoverage: completedExtraction.ledger,
+              requirementCoverageEvidenceAudit: evidence,
+            });
+            const exactEvidence = (
+              value: Awaited<ReturnType<typeof readPartialEvidence>>,
+            ) =>
+              Boolean(
+                value &&
+                  value.audit.version === canonicalPrepared.version &&
+                  value.audit.requestId === evidence.requestId &&
+                  value.audit.fingerprint === evidence.fingerprint &&
+                  value.audit.inputFingerprint ===
+                    canonicalPrepared.inputFingerprint &&
+                  value.audit.ledgerFingerprint ===
+                    completedExtraction.ledgerFingerprint &&
+                  value.context.sourceFingerprint ===
+                    completedExtraction.context.sourceFingerprint &&
+                  value.context.sourceVersion ===
+                    completedExtraction.context.sourceVersion &&
+                  value.context.sourceText ===
+                    completedExtraction.context.sourceText &&
+                  value.capturedSource?.extractionRequestId ===
+                    completedExtraction.requestId &&
+                  value.capturedSource.sourceContentJson ===
+                    completedExtraction.sourceContentJson,
+              );
+            // This leaf selects a native receipt; it never establishes authority.
+            const replay = await readPartialEvidence({
+              ...refreshed,
+              preparedPostingJson,
+            });
+            if (!exactEvidence(replay))
+              throw new Error(
+                'Completed source evidence lacks its exact native GLOBAL actual receipt.',
+              );
+            if (
+              !(await persist(opportunityId, expected.fingerprint, {
+                preparedPostingJson,
+                preparedPostingFingerprint:
+                  completedExtraction.posting.fingerprint,
+                preparedPostingVersion: completedExtraction.posting.version,
+                updated_at: new Date(),
+              }))
+            )
+              return {
+                message: 'Discarded stale source evidence audit result.',
+                ready: false as const,
+              };
+            await assertCurrentAuthority();
+            const published = await getOpportunity(opportunityId);
+            if (!isCurrent(published))
+              throw new Error(
+                'Source evidence publication is no longer current.',
+              );
+            const partial = await readPartialEvidence(published);
+            if (!exactEvidence(partial))
+              throw new Error(
+                'Published source evidence lacks its exact current native GLOBAL receipt.',
+              );
+            return partial?.acceptedRequirements.length
+              ? {
+                  message: 'Prepared recorded partial source evidence.',
+                  ready: true as const,
+                  sourceStatus: 'partial' as const,
+                }
+              : {
+                  message:
+                    'Source audit recorded no verified applicant excerpts; overall match remains uncertain.',
+                  ready: false as const,
+                  sourceStatus: 'audit_blocked' as const,
+                };
+          };
+          // A completed native audit is sunk work. Replay it before reserving a
+          // hypothetical additional call, including when the run is now full.
+          await assertCurrentAuthority();
+          const recordedSource = await getOpportunity(opportunityId);
+          if (!isCurrent(recordedSource))
+            throw new Error(
+              'Source evidence publication is no longer current.',
+            );
+          const recordedCache = JSON.parse(
+            String(recordedSource.preparedPostingJson || '{}'),
+          );
+          if (
+            !recordedCache ||
+            typeof recordedCache !== 'object' ||
+            Array.isArray(recordedCache)
+          )
+            throw new Error('Invalid current source preparation cache.');
+          const recorded = await readPartialEvidence({
+            ...recordedSource,
+            preparedPostingJson: JSON.stringify({
+              ...recordedCache,
+              requirementCoverage: completedExtraction.ledger,
+              requirementCoverageEvidenceAudit: {
+                capturedSource: {
+                  extractionRequestId: completedExtraction.requestId,
+                },
+              },
+            }),
+          });
+          if (recorded?.audit.version === canonicalPrepared.version)
+            return await publishEvidence(recorded.audit);
           let plan: Awaited<ReturnType<typeof preflightEvidence>>;
           try {
             plan = await preflightEvidence(actual);
@@ -1409,10 +1872,11 @@ export async function runOpportunityAssessmentDependencyJob(
                 ready: false as const,
               };
           }
+          let evidence: Awaited<ReturnType<typeof auditEvidence>>;
           try {
             await assertCurrentAuthority();
             const expectedExtraction = actual;
-            await auditEvidence(plan.preparedAudit, {
+            evidence = await auditEvidence(plan.preparedAudit, {
               agentRunId,
               opportunityId,
               contentFingerprint: actual.context.sourceFingerprint,
@@ -1462,26 +1926,7 @@ export async function runOpportunityAssessmentDependencyJob(
               sourceStatus: 'operator_required' as const,
             };
           }
-          await assertCurrentAuthority();
-          const refreshed = await getOpportunity(opportunityId);
-          if (!isCurrent(refreshed))
-            return {
-              message: 'Skipped stale opportunity source.',
-              ready: false as const,
-            };
-          const partial = await readPartialEvidence(refreshed);
-          return partial?.acceptedRequirements.length
-            ? {
-                message: 'Prepared recorded partial source evidence.',
-                ready: true as const,
-                sourceStatus: 'partial' as const,
-              }
-            : {
-                message:
-                  'Source audit recorded no verified applicant excerpts; overall match remains uncertain.',
-                ready: false as const,
-                sourceStatus: 'audit_blocked' as const,
-              };
+          return await publishEvidence(evidence);
         },
       ),
   );
@@ -1500,17 +1945,28 @@ export async function runOpportunityAssessmentDependencyJob(
     (async (id: string) => {
       // The main intelligence queue now imports this prerequisite helper, so
       // keep the continuation edge dynamic instead of making a module cycle.
-      const { enqueueWorkspaceOpportunityIntelligenceWithStatus } =
-        await import('./opportunity-intelligence-job.js');
-      return await enqueueWorkspaceOpportunityIntelligenceWithStatus(id, {
-        modes: 'assessment',
-      });
+      const {
+        enqueueWorkspaceOpportunityIntelligenceWithStatus,
+        enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
+      } = await import('./opportunity-intelligence-job.js');
+      return pilot
+        ? await enqueueWorkspaceOpportunityAssessmentPilotWithStatus(id)
+        : await enqueueWorkspaceOpportunityIntelligenceWithStatus(id, {
+            modes: 'assessment',
+          });
     });
   return await runAsRevalidated(
     subject,
     'assessment.execute',
     async (_currentSubject, run) => {
       await run.assertOperation('opportunities', 'read');
+      if (pilot)
+        await assertOpportunityAssessmentPilotJobRouting(
+          opportunityId,
+          args,
+          context,
+          subject,
+        );
       const current = await getOpportunity(opportunityId);
       if (
         !sourceIdentityMatches(current, expected) ||

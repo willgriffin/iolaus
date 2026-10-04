@@ -177,9 +177,10 @@ export class Opportunity extends SmrtObject {
     args: OpportunityIntelligenceJobArgs = {},
     context?: JobExecutionContext,
   ) {
-    const { runOpportunityIntelligenceJob } = await import(
-      '../server/opportunity-intelligence-job.js'
-    );
+    const {
+      runOpportunityIntelligenceJob,
+      assertOpportunityAssessmentPilotJobRouting,
+    } = await import('../server/opportunity-intelligence-job.js');
     const { requireActiveRunnerExecutionContext } = await import(
       '../server/job-workspace-subject.js'
     );
@@ -220,6 +221,16 @@ export class Opportunity extends SmrtObject {
         );
         const operation = workspaceWorkflowOperation('assessment.execute');
         await run.assertOperation(operation.collection, operation.action);
+        if (
+          args.assessmentPilot !== undefined ||
+          runnerContext.job.queue === 'opportunity-assessment-pilot'
+        )
+          await assertOpportunityAssessmentPilotJobRouting(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
         return await runOpportunityIntelligenceJob(this, args, runnerContext, {
           workspaceSubject: subject,
         });
@@ -252,6 +263,17 @@ export class Opportunity extends SmrtObject {
           subject,
         );
         await run.assertOperation('opportunities', 'read');
+        if (args.resumeFitReview !== undefined) {
+          const { runOpportunityResumeFitReviewJob } = await import(
+            '../server/opportunity-resume-fit-review-job.js'
+          );
+          return await runOpportunityResumeFitReviewJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
         if (args.screeningOnly !== undefined) {
           const { runOpportunityScreeningOnlyJob } = await import(
             '../server/opportunity-screening-job.js'

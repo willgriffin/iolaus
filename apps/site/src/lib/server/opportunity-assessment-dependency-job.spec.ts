@@ -44,6 +44,15 @@ const mocks = vi.hoisted(() => ({
   assertNotAttempted: vi.fn(async () => {}),
   auditEvidence: vi.fn(async () => ({})),
   preflightEvidence: vi.fn(async () => ({ preparedAudit: {}, admitted: true })),
+  prepareEvidence: vi.fn(),
+  persist: vi.fn(
+    async (
+      _id: string,
+      _fingerprint: string,
+      _updates: Record<string, unknown>,
+    ) => true,
+  ),
+  humanReviews: vi.fn(async () => new Map()),
 }));
 
 function testPrincipalRun(
@@ -118,7 +127,7 @@ vi.mock('./opportunity-screening-provider.js', () => ({
   assertOpportunityAssessmentScreenNotAttempted: mocks.assertScreenNotAttempted,
 }));
 vi.mock('./opportunity-details.js', () => ({
-  defaultFencedOpportunityUpdate: vi.fn(async () => true),
+  defaultFencedOpportunityUpdate: mocks.persist,
   processOpportunityWithLlm: mocks.prepareSource,
 }));
 vi.mock('./opportunity-intelligence-governance.js', () => ({
@@ -131,7 +140,8 @@ vi.mock('./opportunity-assessment-input.js', () => ({
       ? { fingerprint: 'coverage', ledger: { id: 'ledger' } }
       : undefined,
 }));
-vi.mock('./opportunity-requirement-coverage.js', () => ({
+vi.mock('./opportunity-requirement-coverage.js', async (original) => ({
+  ...(await original<typeof import('./opportunity-requirement-coverage.js')>()),
   requirementCoverageContextForOpportunity: () => ({
     sourceFingerprint: 'source-a',
   }),
@@ -141,6 +151,7 @@ vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
     'requirement-evidence-audit/v4-captured-source-recovery',
   readPartialOpportunityRequirementEvidence: mocks.partialEvidence,
   evaluateRequirementEvidenceAudit: mocks.auditEvidence,
+  prepareCapturedSourceCompositeRequirementEvidenceAudit: mocks.prepareEvidence,
   requirementCoverageLedgerFingerprint: () => 'ledger-a',
   readRecordedRequirementCoverageOutcome: mocks.coverageOutcome,
   requirementCoverageSourceDependencyFingerprint: () =>
@@ -154,6 +165,10 @@ vi.mock('./opportunity-requirement-coverage-source-stage-job.js', () => ({
 }));
 vi.mock('./opportunity-intelligence-job.js', () => ({
   enqueueWorkspaceOpportunityIntelligenceWithStatus: vi.fn(),
+  enqueueWorkspaceOpportunityAssessmentPilotWithStatus: vi.fn(),
+}));
+vi.mock('./opportunity-review-overlay.js', () => ({
+  loadCurrentOpportunityReviewOverlays: mocks.humanReviews,
 }));
 vi.mock('./smrt.js', () => ({ getCollection: vi.fn() }));
 vi.mock('./db.js', () => ({
@@ -162,7 +177,14 @@ vi.mock('./db.js', () => ({
 }));
 
 import {
+  type OpportunityAssessmentDependencyJobArgs,
   enqueueOpportunityAssessmentCoverage,
+  enqueueOpportunityAssessmentCoveragePilot,
+  enqueueOpportunityAssessmentCoverageFreshPilot,
+  OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT,
+  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+  opportunityAssessmentPilotIntent,
+  assertOpportunityAssessmentPilotJobRouting,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_CONTRACT,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE,
@@ -357,6 +379,50 @@ function coverageArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function recordedEvidenceFixture(
+  actual: import('./opportunity-requirement-coverage-source-stage-job.js').AttestedCompletedSourceExtraction,
+  inputFingerprint = 'canonical-audit',
+): import('./opportunity-requirement-coverage-provider.js').PartialOpportunityRequirementEvidence {
+  return {
+    mode: 'partial',
+    context: actual.context,
+    ledger: actual.ledger,
+    capturedSource: {
+      extractionRequestId: actual.requestId,
+      sourceContentJson: actual.sourceContentJson,
+    },
+    audit: {
+      version: 'requirement-evidence-audit/v4-captured-source-recovery',
+      requestId: 'actual-source-audit',
+      fingerprint: 'actual-audit-fingerprint',
+      ledgerFingerprint: actual.ledgerFingerprint,
+      inputFingerprint,
+      capturedSource: {
+        extractionRequestId: actual.requestId,
+        sourceContentJsonFingerprint: 'captured-original',
+      },
+      answerProbabilities: {},
+      rowSupport: {},
+      clausePrecision: {},
+      clauseRecall: {},
+      clauseContext: {},
+      acceptedRequirementIds: ['actual-row'],
+      unresolvedClauseIds: [],
+      fullCoverage: false,
+    },
+    acceptedRequirements: [
+      {
+        id: 'actual-row',
+        text: 'Build reliable software.',
+        clauseIds: ['c1'],
+        importance: 'unknown',
+      },
+    ],
+    unresolvedClauses: [],
+    fingerprint: 'actual-partial-fingerprint',
+  };
+}
+
 describe('opportunity assessment coverage dependency job', () => {
   beforeEach(() => {
     state.subject = {
@@ -376,6 +442,8 @@ describe('opportunity assessment coverage dependency job', () => {
     });
     mocks.assertScreenNotAttempted.mockReset();
     mocks.assertScreenNotAttempted.mockResolvedValue(undefined);
+    mocks.humanReviews.mockReset();
+    mocks.humanReviews.mockResolvedValue(new Map());
     mocks.finishRun.mockClear();
     mocks.jobCollection.get.mockReset();
     mocks.coverageOutcome.mockReset();
@@ -390,8 +458,564 @@ describe('opportunity assessment coverage dependency job', () => {
     mocks.assertNotAttempted.mockResolvedValue(undefined);
     mocks.auditEvidence.mockReset();
     mocks.auditEvidence.mockResolvedValue({});
+    mocks.prepareEvidence.mockReset();
+    mocks.prepareEvidence.mockReturnValue({
+      version: 'requirement-evidence-audit/v4-captured-source-recovery',
+      inputFingerprint: 'canonical-audit',
+    });
+    mocks.persist.mockReset();
+    mocks.persist.mockResolvedValue(true);
   });
 
+  function pilotScreen() {
+    const receipt = screenReceipt();
+    receipt.screen.version =
+      'opportunity-screening/v4-independent-source-entailment';
+    state.screenReceipt = receipt;
+    return receipt;
+  }
+  function pilotRuntime(freshSource = false) {
+    const screen = pilotScreen();
+    const args: OpportunityAssessmentDependencyJobArgs = coverageArgs({
+      assessmentPilot: opportunityAssessmentPilotIntent(screen, freshSource),
+      assessmentCoverageDedupeKey: opportunityAssessmentCoverageDedupeKey({
+        sourceDependencyFingerprint: 'source-contract-fingerprint',
+        subject: state.subject,
+        freshPilot: freshSource,
+      }),
+    });
+    const job = queuedJob({
+      args: structuredClone(args),
+      queue: OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+      status: 'running',
+      attempts: 1,
+      maxAttempts: 1,
+    });
+    mocks.jobCollection.get.mockResolvedValue(job);
+    const context = {
+      job: {
+        jobId: 'job-1',
+        attempt: 1,
+        tenantId: state.subject.tenantId,
+        method: job.method,
+        objectType: job.objectType,
+        queue: job.queue,
+      },
+    } as import('@happyvertical/smrt-jobs').JobExecutionContext;
+    return { args, job, context };
+  }
+  it('captures a distinct fresh contract and dedupe while preserving saved-only enqueue denial', async () => {
+    const screen = pilotScreen();
+    const collection = {
+      enqueueJob: vi.fn(async (data) => queuedJob(data)),
+      list: vi.fn(async () => []),
+    };
+    const options = {
+      collection,
+      opportunityCollection: { get: vi.fn(async () => opportunity()) },
+      readCompletedExtraction: vi.fn(async () => undefined),
+    };
+    await expect(
+      enqueueOpportunityAssessmentCoveragePilot('opp-1', options),
+    ).rejects.toThrow('new extraction is not permitted');
+    const result = await enqueueOpportunityAssessmentCoverageFreshPilot(
+      'opp-1',
+      options,
+    );
+    expect(result.job.queue).toBe(OPPORTUNITY_ASSESSMENT_PILOT_QUEUE);
+    expect(result.job.args.assessmentPilot).toEqual(
+      opportunityAssessmentPilotIntent(screen, true),
+    );
+    expect(result.job.args.assessmentPilot).toMatchObject({
+      contract: OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT,
+    });
+    expect(result.job.args.assessmentCoverageDedupeKey).not.toBe(
+      coverageArgs().assessmentCoverageDedupeKey,
+    );
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+  it.each([
+    'human',
+    'screen',
+    'failed-source',
+  ])('fresh enqueue denies %s without authorizing paid extraction', async (cause) => {
+    pilotScreen();
+    if (cause === 'human')
+      mocks.humanReviews.mockResolvedValue(
+        new Map([['opp-1', { humanReviewStatus: 'reject' }]]),
+      );
+    if (cause === 'screen') state.screenReceipt!.outcome = 'clear_mismatch';
+    const collection = {
+      enqueueJob: vi.fn(async (data) => queuedJob(data)),
+      list: vi.fn(async () => []),
+    };
+    await expect(
+      enqueueOpportunityAssessmentCoverageFreshPilot('opp-1', {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => opportunity()) },
+        readCompletedExtraction: async () => {
+          if (cause === 'failed-source')
+            throw new Error('Failed native identity');
+          return undefined;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(collection.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+  it.each([
+    [true, 'pending'],
+    [false, 'pending'],
+    [true, 'failed'],
+    [false, 'failed'],
+  ] as const)('keeps requested fresh=%s separate from the opposite pilot %s job', async (freshSource, status) => {
+    const screen = pilotScreen();
+    mocks.partialEvidence.mockResolvedValue({
+      acceptedRequirements: [{ id: 'actual-row' }],
+    });
+    const opposite = queuedJob({
+      queue: OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+      status,
+      lastError:
+        status === 'failed'
+          ? 'This idempotency key has a prior terminal failure and requires operator review.'
+          : undefined,
+      args: coverageArgs({
+        assessmentPilot: opportunityAssessmentPilotIntent(screen, !freshSource),
+        assessmentCoverageDedupeKey: opportunityAssessmentCoverageDedupeKey({
+          sourceDependencyFingerprint: 'source-contract-fingerprint',
+          subject: state.subject,
+          freshPilot: !freshSource,
+        }),
+        sourcePreparationAgentRunId: 'server-source-run',
+      }),
+    });
+    const collection = {
+      enqueueJob: vi.fn(async (data) => queuedJob(data)),
+      list: vi.fn(async () => [opposite]),
+    };
+    const enqueue = freshSource
+      ? enqueueOpportunityAssessmentCoverageFreshPilot
+      : enqueueOpportunityAssessmentCoveragePilot;
+    const result = await enqueue('opp-1', {
+      collection,
+      opportunityCollection: { get: vi.fn(async () => opportunity()) },
+      readCompletedExtraction: async () => undefined,
+    });
+    expect(result.enqueued).toBe(true);
+    expect(collection.enqueueJob).toHaveBeenCalledOnce();
+    expect(result.job.args.assessmentPilot).toEqual(
+      opportunityAssessmentPilotIntent(screen, freshSource),
+    );
+    expect(result.job.args.assessmentCoverageDedupeKey).not.toBe(
+      opposite.args.assessmentCoverageDedupeKey,
+    );
+    expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+  it.each([
+    'complete',
+    'audit-budget',
+    'failed-source',
+    'stale-screen',
+    'paid-resume',
+    'forged-replay',
+    'publication-stale',
+  ])('fresh pilot uses the original paid screen run through extract-only and compact V4 (%s)', async (cause) => {
+    const f = pilotRuntime(true);
+    const coverage = await vi.importActual<
+      typeof import('./opportunity-requirement-coverage.js')
+    >('./opportunity-requirement-coverage.js');
+    const postingModule = await import('./opportunity-posting-preparation.js');
+    const provider = await vi.importActual<
+      typeof import('./opportunity-requirement-coverage-provider.js')
+    >('./opportunity-requirement-coverage-provider.js');
+    const sourceContent = await import('./opportunity-source-content.js');
+    const captured = sourceContent.parseOpportunitySourceContent({
+      title: 'Software engineer',
+      descriptionRaw: 'Build reliable software.',
+      locationNotes: 'Canada',
+      workMode: 'Remote',
+    })!;
+    const sourceFingerprint =
+      sourceContent.fingerprintOpportunitySourceContent(captured);
+    f.args.contentFingerprint = sourceFingerprint;
+    f.job.args.contentFingerprint = sourceFingerprint;
+    state.screenReceipt!.screen.sourceIdentity.sourceContentFingerprint =
+      sourceFingerprint;
+    const preparedScreen = preparedScreenFixture();
+    preparedScreen.sourceIdentity.sourceContentFingerprint = sourceFingerprint;
+    mocks.prepareScreen.mockResolvedValue(preparedScreen);
+    const current: Record<string, unknown> & ReturnType<typeof opportunity> =
+      opportunity({
+        sourceContentFingerprint: sourceFingerprint,
+        title: 'Software engineer',
+        descriptionRaw: 'Build reliable software.',
+        sourceContentJson: JSON.stringify(captured),
+      });
+    const posting = postingModule.prepareOpportunityPosting(current);
+    const context = coverage.requirementCoverageContextForOpportunity({
+      ...current,
+      preparedPostingFingerprint: posting.fingerprint,
+    });
+    const ledger = coverage.buildRequirementCoverageSource(context);
+    const body = ledger.clauses.find((clause) => clause.kind === 'body')!;
+    ledger.requirements = [
+      {
+        id: 'r1',
+        text: body.text,
+        clauseIds: [body.id],
+        importance: 'unknown',
+      },
+    ];
+    ledger.dispositions = ledger.dispositions.map((row) =>
+      row.clauseId === body.id
+        ? {
+            clauseId: body.id,
+            type: 'material_requirement' as const,
+            requirementIds: ['r1'],
+          }
+        : row,
+    );
+    const actual: Awaited<
+      ReturnType<
+        NonNullable<
+          import('./opportunity-assessment-dependency-job.js').RunOpportunityAssessmentDependencyJobDependencies['readCompletedExtraction']
+        >
+      >
+    > = {
+      requestId: 'actual-luna',
+      opportunityId: 'opp-1',
+      agentRunId: 'run-1',
+      workspaceSubject: state.subject,
+      context,
+      posting,
+      output: {},
+      sourceContentJson: String(current.sourceContentJson),
+      ledger,
+      ledgerFingerprint: 'ledger-a',
+      reservation: { calls: 2, reservedTokens: 13696, spendMicros: 2658 },
+    };
+    const preparedAudit =
+      provider.prepareCapturedSourceCompositeRequirementEvidenceAudit(
+        context,
+        ledger,
+        {
+          sourceContentJson: String(current.sourceContentJson),
+          extractionRequestId: 'actual-luna',
+        },
+      );
+    mocks.prepareEvidence.mockReturnValue(preparedAudit);
+    const recordedEvidence = recordedEvidenceFixture(
+      actual,
+      preparedAudit.inputFingerprint,
+    );
+    let extracted = cause === 'paid-resume',
+      audited = cause === 'paid-resume';
+    if (extracted)
+      current.preparedPostingJson = JSON.stringify({
+        requirementCoverage: ledger,
+      });
+    const publications: Record<string, unknown>[] = [];
+    mocks.persist.mockImplementation(async (_id, _fingerprint, updates) => {
+      publications.push(updates);
+      Object.assign(current, updates);
+      return true;
+    });
+    const readCompletedExtraction = vi.fn(async () =>
+      extracted ? actual : undefined,
+    );
+    const prepareSource = vi.fn(async (_id, options) => {
+      expect(options).toMatchObject({
+        agentRunId: 'run-1',
+        sourceExtractionStage: 'extract-only',
+        expectedSourceContentFingerprint: sourceFingerprint,
+        sourceContentVersion: 4,
+      });
+      await options.assertCurrentAuthority();
+      if (cause === 'failed-source')
+        throw new Error('Provider failed with actual usage');
+      extracted = true;
+      current.preparedPostingJson = JSON.stringify({
+        requirementCoverage: ledger,
+      });
+      if (cause === 'stale-screen')
+        state.screenReceipt!.inputFingerprint = 'changed-profile';
+      return {
+        status: 'processed' as const,
+        message: 'Saved actual extraction',
+      };
+    });
+    const preflightEvidence = vi.fn(async () => ({
+      preparedAudit,
+      admitted: cause !== 'audit-budget' && cause !== 'paid-resume',
+    }));
+    const auditEvidence: NonNullable<
+      import('./opportunity-assessment-dependency-job.js').RunOpportunityAssessmentDependencyJobDependencies['auditEvidence']
+    > = vi.fn(async (prepared, options) => {
+      expect(prepared.version).toBe(
+        'requirement-evidence-audit/v4-captured-source-recovery',
+      );
+      expect(options.agentRunId).toBe('run-1');
+      expect(options.historicalReservation).toEqual(actual.reservation);
+      expect(await options.resolveCompletedExtraction?.()).toEqual(actual);
+      audited = true;
+      return recordedEvidence.audit;
+    });
+    const intelligence = await import('./opportunity-intelligence-job.js');
+    const enqueue = vi.mocked(
+      intelligence.enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
+    );
+    enqueue.mockReset();
+    enqueue.mockResolvedValue({
+      enqueued: true,
+      job: queuedJob({ queue: OPPORTUNITY_ASSESSMENT_PILOT_QUEUE }),
+    });
+    const result = runOpportunityAssessmentDependencyJob(
+      current,
+      f.args,
+      f.context,
+      state.subject,
+      {
+        getOpportunity: async () => current,
+        readCoverageOutcome: mocks.coverageOutcome,
+        readPriorSourceJobBridge: noPriorSourceJobBridge,
+        recordSourcePreparationRun: mocks.recordRun,
+        readCompletedExtraction,
+        prepareSource,
+        preflightEvidence,
+        auditEvidence,
+        readPartialEvidence: async (native) => {
+          const cache = JSON.parse(String(native.preparedPostingJson || '{}'));
+          if (
+            !audited ||
+            cache.requirementCoverageEvidenceAudit?.capturedSource
+              ?.extractionRequestId !== actual.requestId
+          )
+            return undefined;
+          if (cause === 'publication-stale')
+            state.screenReceipt!.inputFingerprint =
+              'changed-after-actual-replay';
+          return cause === 'forged-replay'
+            ? {
+                ...recordedEvidence,
+                audit: {
+                  ...recordedEvidence.audit,
+                  inputFingerprint: 'forged-input',
+                },
+              }
+            : recordedEvidence;
+        },
+      },
+    );
+    if (cause === 'failed-source')
+      await expect(result).rejects.toThrow('actual usage');
+    else if (cause === 'stale-screen')
+      await expect(result).rejects.toThrow(
+        'Assessment pilot screening material is no longer current',
+      );
+    else if (cause === 'publication-stale')
+      await expect(result).rejects.toThrow(
+        'screening material is no longer current',
+      );
+    else if (cause === 'forged-replay')
+      await expect(result).rejects.toThrow(
+        'exact native GLOBAL actual receipt',
+      );
+    else
+      await expect(result).resolves.toMatchObject({
+        status:
+          cause === 'complete' || cause === 'paid-resume'
+            ? 'prepared'
+            : 'skipped',
+      });
+    if (cause === 'paid-resume') expect(prepareSource).not.toHaveBeenCalled();
+    else expect(prepareSource).toHaveBeenCalledOnce();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    if (cause === 'complete' || cause === 'paid-resume') {
+      if (cause === 'paid-resume') {
+        expect(preflightEvidence).not.toHaveBeenCalled();
+        expect(auditEvidence).not.toHaveBeenCalled();
+      } else expect(auditEvidence).toHaveBeenCalledOnce();
+      expect(publications).toHaveLength(1);
+      expect(
+        JSON.parse(String(current.preparedPostingJson))
+          .requirementCoverageEvidenceAudit,
+      ).toEqual(recordedEvidence.audit);
+      expect(enqueue).toHaveBeenCalledWith('opp-1');
+      expect(mocks.recordRun).toHaveBeenCalledWith(
+        f.context,
+        state.subject,
+        expect.any(Object),
+        'opp-1',
+        'run-1',
+      );
+    } else {
+      if (cause === 'forged-replay' || cause === 'publication-stale')
+        expect(auditEvidence).toHaveBeenCalledOnce();
+      else expect(auditEvidence).not.toHaveBeenCalled();
+      expect(publications).toHaveLength(0);
+      expect(enqueue).not.toHaveBeenCalled();
+    }
+    if (cause === 'audit-budget') expect(extracted).toBe(true);
+    if (cause === 'failed-source') {
+      expect(mocks.finishRun).toHaveBeenCalledWith(
+        'run-1',
+        'failed',
+        expect.stringContaining('actual usage'),
+        state.subject,
+      );
+      readCompletedExtraction.mockRejectedValue(
+        new Error('Failed identity cannot resume'),
+      );
+      await expect(
+        runOpportunityAssessmentDependencyJob(
+          current,
+          f.args,
+          f.context,
+          state.subject,
+          {
+            getOpportunity: async () => current,
+            readCoverageOutcome: mocks.coverageOutcome,
+            readPriorSourceJobBridge: noPriorSourceJobBridge,
+            readCompletedExtraction,
+            prepareSource,
+          },
+        ),
+      ).resolves.toMatchObject({ sourceStatus: 'operator_required' });
+      expect(prepareSource).toHaveBeenCalledOnce();
+    }
+  });
+  it('captures only the fixed owned pilot queue and refuses missing paid source before enqueue', async () => {
+    pilotScreen();
+    const job = queuedJob();
+    const collection = {
+      enqueueJob: vi.fn(async (data) => Object.assign(job, data)),
+      list: vi.fn(async () => []),
+    };
+    const options = {
+      collection,
+      opportunityCollection: { get: vi.fn(async () => opportunity()) },
+      readCompletedExtraction: vi.fn(async () => undefined),
+    };
+    await expect(
+      enqueueOpportunityAssessmentCoveragePilot('opp-1', options),
+    ).rejects.toThrow('new extraction is not permitted');
+    expect(collection.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    mocks.coverageOutcome.mockResolvedValue({ status: 'ready' });
+    const result = await enqueueOpportunityAssessmentCoveragePilot(
+      'opp-1',
+      options,
+    );
+    expect(result.job.queue).toBe(OPPORTUNITY_ASSESSMENT_PILOT_QUEUE);
+    expect(collection.enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+        maxAttempts: 1,
+        args: expect.objectContaining({
+          assessmentPilot: opportunityAssessmentPilotIntent(
+            state.screenReceipt!,
+          ),
+        }),
+      }),
+    );
+  });
+  it('reuses the saved source and continues private JEV on the pilot queue with zero extraction', async () => {
+    const f = pilotRuntime();
+    mocks.coverageOutcome.mockResolvedValue({ status: 'ready' });
+    const intelligence = await import('./opportunity-intelligence-job.js');
+    const enqueue = vi
+      .spyOn(
+        intelligence,
+        'enqueueWorkspaceOpportunityAssessmentPilotWithStatus',
+      )
+      .mockResolvedValue({
+        enqueued: true,
+        job: queuedJob({ queue: OPPORTUNITY_ASSESSMENT_PILOT_QUEUE }),
+      });
+    try {
+      await expect(
+        runOpportunityAssessmentDependencyJob(
+          opportunity(),
+          f.args,
+          f.context,
+          state.subject,
+          {
+            getOpportunity: async () => opportunity(),
+            readCoverageOutcome: mocks.coverageOutcome,
+            readPriorSourceJobBridge: noPriorSourceJobBridge,
+          },
+        ),
+      ).resolves.toMatchObject({ status: 'prepared' });
+      expect(enqueue).toHaveBeenCalledWith('opp-1');
+      expect(mocks.prepareSource).not.toHaveBeenCalled();
+      expect(mocks.startRun).not.toHaveBeenCalled();
+      expect(mocks.jobCollection.get).toHaveBeenCalledWith(
+        { id: 'job-1' },
+        { cache: false },
+      );
+    } finally {
+      enqueue.mockRestore();
+    }
+  });
+  it.each([
+    'queue',
+    'owner',
+    'source',
+    'screen',
+    'contract',
+  ])('rejects mismatched %s pilot authority before source or private continuation', async (cause) => {
+    const f = pilotRuntime();
+    if (cause === 'queue')
+      f.context.job.queue = OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE;
+    if (cause === 'owner') f.job.tenantId = 'foreign';
+    if (cause === 'source') f.job.args.contentVersion = 999;
+    if (cause === 'screen')
+      state.screenReceipt!.inputFingerprint = 'new-private-material';
+    if (cause === 'contract')
+      (f.args.assessmentPilot as Record<string, unknown>).contract =
+        'arbitrary';
+    await expect(
+      assertOpportunityAssessmentPilotJobRouting(
+        'opp-1',
+        f.args,
+        f.context,
+        state.subject,
+      ),
+    ).rejects.toThrow();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+  it('pilot runtime with no completed extraction refuses rather than starting screen or Luna', async () => {
+    const f = pilotRuntime();
+    const enqueueAssessment = vi.fn();
+    await expect(
+      runOpportunityAssessmentDependencyJob(
+        opportunity(),
+        f.args,
+        f.context,
+        state.subject,
+        {
+          getOpportunity: async () => opportunity(),
+          readCoverageOutcome: mocks.coverageOutcome,
+          readPriorSourceJobBridge: noPriorSourceJobBridge,
+          readCompletedExtraction: async () => undefined,
+          enqueueAssessment,
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: 'skipped',
+      sourceStatus: 'operator_required',
+    });
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.prepareSource).not.toHaveBeenCalled();
+    expect(mocks.evaluateScreen).not.toHaveBeenCalled();
+    expect(enqueueAssessment).not.toHaveBeenCalled();
+  });
   it.each([
     false,
     true,
@@ -1548,7 +2172,7 @@ describe('opportunity assessment coverage dependency job', () => {
       >(async (_prepared, options) => {
         expect(await options.resolveCompletedExtraction?.()).toEqual(actual);
         audited = true;
-        return {} as never;
+        return recordedEvidenceFixture(actual).audit;
       });
       const enqueueAssessment = vi.fn();
       const readCompletedExtraction = vi.fn(async () =>
@@ -1579,12 +2203,7 @@ describe('opportunity assessment coverage dependency job', () => {
             readCompletedExtraction,
             prepareSource,
             readPartialEvidence: async () =>
-              audited
-                ? ({
-                    acceptedRequirements: [{ id: 'actual-row' }],
-                    fingerprint: 'actual',
-                  } as never)
-                : undefined,
+              audited ? recordedEvidenceFixture(actual) : undefined,
             auditEvidence,
             enqueueAssessment,
             recordSourcePreparationRun: mocks.recordRun,
@@ -1696,17 +2315,14 @@ describe('opportunity assessment coverage dependency job', () => {
       reservation: { calls: 2, reservedTokens: 30000, spendMicros: 3000 },
     } as never;
     let recorded = false;
-    const partial = {
-      acceptedRequirements: [{ id: 'verified-row' }],
-      fingerprint: 'partial-source',
-    };
+    const partial = recordedEvidenceFixture(actual);
     const readCompleted = vi.fn(async () => actual);
     const readPartialEvidence = vi.fn(async () =>
       recorded ? (partial as never) : undefined,
     );
     const auditEvidence = vi.fn(async () => {
       recorded = true;
-      return {} as never;
+      return partial.audit;
     });
     const preflightEvidence = vi.fn(async () => ({
       preparedAudit: {} as never,
@@ -1736,7 +2352,7 @@ describe('opportunity assessment coverage dependency job', () => {
     });
     expect(mocks.startRun).not.toHaveBeenCalled();
     expect(mocks.prepareSource).not.toHaveBeenCalled();
-    expect(readCompleted).toHaveBeenCalledTimes(2);
+    expect(readCompleted).toHaveBeenCalledTimes(3);
     expect(preflightEvidence).toHaveBeenCalledWith(actual);
     expect(auditEvidence).toHaveBeenCalledWith(
       {},
@@ -1851,7 +2467,7 @@ describe('opportunity assessment coverage dependency job', () => {
     const readCompleted = vi.fn(async () => (extracted ? actual : undefined));
     const auditEvidence = vi.fn(async () => {
       audited = true;
-      return {} as never;
+      return recordedEvidenceFixture(actual).audit;
     });
     const enqueueAssessment = vi.fn();
     await expect(
@@ -1873,12 +2489,7 @@ describe('opportunity assessment coverage dependency job', () => {
             admitted: true,
           }),
           readPartialEvidence: async () =>
-            audited
-              ? ({
-                  acceptedRequirements: [{ id: 'source-row' }],
-                  fingerprint: 'partial',
-                } as never)
-              : undefined,
+            audited ? recordedEvidenceFixture(actual) : undefined,
           enqueueAssessment,
         },
       ),

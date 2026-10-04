@@ -12,9 +12,12 @@ import {
 import { buildRequirementCoverageSource } from './opportunity-requirement-coverage.js';
 import {
   partialRequirementEvidenceFromAudit,
+  prepareQuarantinedSourceCompositeRequirementEvidenceAudit,
   prepareRequirementEvidenceAudit,
   resolveRequirementEvidenceAudit,
 } from './opportunity-requirement-coverage-provider.js';
+
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 
 const mocks = vi.hoisted(() => ({
   readEvidence: vi.fn(),
@@ -437,4 +440,125 @@ describe('partial private requirement evidence', () => {
       expect(JSON.stringify(prepared.request.state)).toContain(skill);
     }
   });
+});
+
+it('reconstructs canonical V5 evidence without restoring quarantined criteria to the private matcher', () => {
+  const captured = {
+    descriptionRaw: 'Requirements\nBuild reliable systems.\nReview designs.',
+  };
+  const context = {
+    sourceText: captured.descriptionRaw,
+    sourceFingerprint: fingerprintOpportunitySourceContent(captured),
+    sourceVersion: 1,
+    extractionFingerprint: 'current-extraction',
+    extractionContract: 'current' as const,
+  };
+  const ledger = buildRequirementCoverageSource(context);
+  ledger.requirements = [
+    {
+      id: 'bad',
+      text: ledger.clauses[1]!.text,
+      clauseIds: [ledger.clauses[1]!.id, ledger.clauses[2]!.id],
+      importance: 'unknown',
+    },
+    {
+      id: 'good',
+      text: ledger.clauses[2]!.text,
+      clauseIds: [ledger.clauses[2]!.id],
+      importance: 'unknown',
+    },
+  ];
+  ledger.dispositions = [
+    {
+      clauseId: ledger.clauses[0]!.id,
+      type: 'nonrequirement',
+      requirementIds: [],
+      exclusionRule: 'section_heading',
+    },
+    {
+      clauseId: ledger.clauses[1]!.id,
+      type: 'role_duty',
+      requirementIds: ['bad'],
+    },
+    {
+      clauseId: ledger.clauses[2]!.id,
+      type: 'role_duty',
+      requirementIds: ['good'],
+    },
+  ];
+  const source = prepareQuarantinedSourceCompositeRequirementEvidenceAudit(
+    context,
+    ledger,
+    {
+      extractionRequestId: 'actual-extraction',
+      sourceContentJson: JSON.stringify(captured),
+    },
+  );
+  const output: DecisionResult = {
+    model: 'test',
+    provenance: { provider: 'typesafe', model: 'test' },
+    answers: Object.fromEntries(
+      Object.entries(source.request.questions).map(([key, question]) => [
+        key,
+        question.type === 'choice'
+          ? {
+              type: 'choice' as const,
+              choice: 'none',
+              confidence: 1,
+              probabilities: Object.fromEntries(
+                Object.keys(question.criteria).map((id) => [
+                  id,
+                  id === 'none' ? 1 : 0,
+                ]),
+              ),
+            }
+          : { type: 'predicate' as const, probability: 0.95 },
+      ]),
+    ),
+  };
+  const evidence = partialRequirementEvidenceFromAudit(
+    source,
+    resolveRequirementEvidenceAudit(source, output, 'actual-source'),
+  );
+  const prepared = preparePartialOpportunityAssessment({
+    opportunityId: 'role',
+    evidence,
+    candidateMaterialFingerprint: 'candidate',
+    candidateSources: [
+      {
+        id: 'employment:design',
+        kind: 'employment',
+        title: 'Systems engineer',
+        text: 'Reviewed architectural designs.',
+      },
+    ],
+  });
+  expect(prepared.requirements.map((row) => row.id)).toEqual([
+    'role:partial:good',
+  ]);
+  expect(evidence.ledger.requirements.map((row) => row.id)).toEqual([
+    'bad',
+    'good',
+  ]);
+  expect(evidence.unresolvedClauses).toHaveLength(2);
+  const mutated = structuredClone(evidence);
+  mutated.acceptedRequirements.push({
+    ...ledger.requirements[0]!,
+    importance: 'unknown',
+  });
+  expect(() =>
+    preparePartialOpportunityAssessment({
+      opportunityId: 'role',
+      evidence: mutated,
+      candidateMaterialFingerprint: 'candidate',
+      candidateSources: [
+        {
+          id: 'employment:design',
+          kind: 'employment',
+          title: 'Systems engineer',
+          text: 'Reviewed architectural designs.',
+        },
+      ],
+    }),
+  ).toThrow('Partial accepted excerpts changed');
 });

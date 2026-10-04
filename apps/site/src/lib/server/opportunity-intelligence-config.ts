@@ -58,6 +58,7 @@ export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
       'requirement-evidence-audit/v2-row-relevance',
       'requirement-evidence-audit/v3-source-eligibility',
       'requirement-evidence-audit/v4-captured-source-recovery',
+      'requirement-evidence-audit/v5-quarantined-source-recovery',
     ],
     historicalVersions: [],
   },

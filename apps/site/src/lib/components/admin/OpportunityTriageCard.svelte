@@ -23,6 +23,7 @@ import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte'
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
+import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 /**
@@ -187,6 +188,7 @@ const facts = $derived(
       {/if}
       <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} />
       <PartialOpportunityEvidence projection={record.partialAssessmentProjection} />
+      <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
     <section class="panel" aria-label="Facts">

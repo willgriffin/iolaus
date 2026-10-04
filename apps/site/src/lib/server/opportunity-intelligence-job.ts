@@ -6,6 +6,7 @@ import {
   SmrtJobCollection,
   type SmrtJobData,
 } from '@happyvertical/smrt-jobs';
+import { withOpportunityLifecycleLock } from './application-workflow.js';
 import { getAppConfig } from './app-config.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
@@ -13,9 +14,17 @@ import {
   type RuntimeWorkspaceSubject,
   runtimeWorkspaceSubjectFromJobArgs,
   withRuntimeWorkspaceSubject,
+  runAsRevalidatedJobWorkspaceSubject,
 } from './job-workspace-subject.js';
 import {
   enqueueOpportunityAssessmentCoverage,
+  enqueueOpportunityAssessmentCoveragePilot,
+  enqueueOpportunityAssessmentCoverageFreshPilot,
+  opportunityAssessmentPilotIntent,
+  requireCurrentOpportunityAssessmentPilotScreen,
+  opportunityAssessmentJobQueue,
+  assertOpportunityAssessmentPilotJobRouting,
+  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
   OpportunityAssessmentDependencyEnqueueError,
   type OpportunityAssessmentSourceDependency,
   type OpportunityAssessmentSourceStatus,
@@ -51,6 +60,8 @@ import { OPPORTUNITY_SOURCE_CONTENT_FINGERPRINT_VERSION } from './opportunity-so
 import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 import { getCollection } from './smrt.js';
 import { getCurrentWorkspaceSubject } from './workspace-subject.js';
+
+export { assertOpportunityAssessmentPilotJobRouting } from './opportunity-assessment-dependency-job.js';
 
 export {
   ensureOpportunityIntelligenceJobDedupe,
@@ -246,6 +257,7 @@ async function findActiveOpportunityIntelligenceJobInCollection(
   opportunityId: string,
   contentFingerprint = '',
   scoringMaterialFingerprint = '',
+  queue = OPPORTUNITY_INTELLIGENCE_QUEUE,
 ): Promise<SmrtJob | null> {
   const jobs = await collection.list({
     ...(contentFingerprint ? {} : { limit: 1 }),
@@ -254,7 +266,7 @@ async function findActiveOpportunityIntelligenceJobInCollection(
       method: OPPORTUNITY_INTELLIGENCE_METHOD,
       objectId: opportunityId,
       objectType: OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
-      queue: OPPORTUNITY_INTELLIGENCE_QUEUE,
+      queue,
       status: ['pending', 'running'],
     },
   });
@@ -322,7 +334,66 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
   args: OpportunityIntelligenceJobArgs = {},
   options: EnqueueOpportunityIntelligenceOptions = {},
 ): Promise<OpportunityIntelligenceEnqueueResult> {
+  return await enqueueWorkspaceAssessment(opportunityId, args, options, false);
+}
+
+/** Fixed, candidate-owned pilot path; this API never accepts caller queue or modes. */
+export async function enqueueWorkspaceOpportunityAssessmentPilotWithStatus(
+  opportunityId: string,
+  options: EnqueueOpportunityIntelligenceOptions = {},
+): Promise<OpportunityIntelligenceEnqueueResult> {
+  const subject = runtimeWorkspaceSubjectFromJobArgs(
+    withRuntimeWorkspaceSubject({}),
+  );
+  return await runAsRevalidatedJobWorkspaceSubject(
+    subject,
+    'assessment.execute',
+    async (_current, run) => {
+      await run.assertOperation('opportunities', 'read');
+      return await enqueueWorkspaceAssessment(
+        opportunityId,
+        { modes: 'assessment' },
+        options,
+        true,
+      );
+    },
+  );
+}
+
+/** Explicit server-owned fresh-source pilot; caller args cannot confer this permission. */
+export async function enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus(
+  opportunityId: string,
+  options: EnqueueOpportunityIntelligenceOptions = {},
+): Promise<OpportunityIntelligenceEnqueueResult> {
+  const subject = runtimeWorkspaceSubjectFromJobArgs(
+    withRuntimeWorkspaceSubject({}),
+  );
+  return await runAsRevalidatedJobWorkspaceSubject(
+    subject,
+    'assessment.execute',
+    async (_current, run) => {
+      await run.assertOperation('opportunities', 'read');
+      return await enqueueWorkspaceAssessment(
+        opportunityId,
+        { modes: 'assessment' },
+        options,
+        true,
+        true,
+      );
+    },
+  );
+}
+
+async function enqueueWorkspaceAssessment(
+  opportunityId: string,
+  args: OpportunityIntelligenceJobArgs,
+  options: EnqueueOpportunityIntelligenceOptions,
+  pilot: boolean,
+  freshSource = false,
+): Promise<OpportunityIntelligenceEnqueueResult> {
   const {
+    assessmentPilot: _ignoredPilot,
+    queue: _ignoredQueue,
     partialAssessmentEvidence: _ignoredPartial,
     skipScreening: _ignoredSkipScreening,
     screeningOutcome: _ignoredScreeningOutcome,
@@ -331,7 +402,21 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
     candidatePreferences: _ignoredCandidatePreferences,
     ...candidateArgs
   } = args;
-  const envelopedArgs = withRuntimeWorkspaceSubject(candidateArgs);
+  const baseArgs = withRuntimeWorkspaceSubject(candidateArgs);
+  const currentSubject = runtimeWorkspaceSubjectFromJobArgs(baseArgs);
+  const envelopedArgs = {
+    ...baseArgs,
+    ...(pilot
+      ? {
+          assessmentPilot: opportunityAssessmentPilotIntent(
+            await requireCurrentOpportunityAssessmentPilotScreen(
+              opportunityId,
+              currentSubject,
+            ),
+          ),
+        }
+      : {}),
+  };
   const subject = runtimeWorkspaceSubjectFromJobArgs(envelopedArgs);
   const requestedModes = Array.isArray(args.modes) ? args.modes : [args.modes];
   if (requestedModes.length === 1 && requestedModes[0] === 'extract') {
@@ -365,21 +450,29 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
         'Source preparation requires native job enqueue capability.',
       );
     }
-    return await enqueueOpportunityAssessmentCoverage(
-      opportunityId,
-      candidateArgs,
-      {
-        ...options,
-        ...(options.collection && enqueueJob
-          ? {
-              collection: {
-                enqueueJob: enqueueJob.bind(options.collection),
-                list: options.collection.list.bind(options.collection),
-              },
-            }
-          : { collection: undefined }),
-      },
-    );
+    const dependencyOptions = {
+      ...options,
+      ...(options.collection && enqueueJob
+        ? {
+            collection: {
+              enqueueJob: enqueueJob.bind(options.collection),
+              list: options.collection.list.bind(options.collection),
+            },
+          }
+        : { collection: undefined }),
+    };
+    return pilot
+      ? await (freshSource
+          ? enqueueOpportunityAssessmentCoverageFreshPilot
+          : enqueueOpportunityAssessmentCoveragePilot)(
+          opportunityId,
+          dependencyOptions,
+        )
+      : await enqueueOpportunityAssessmentCoverage(
+          opportunityId,
+          candidateArgs,
+          dependencyOptions,
+        );
   }
   // Candidate evidence is loaded only after the recorded global prerequisite
   // is current; source preparation jobs never capture this material.
@@ -399,18 +492,22 @@ export async function enqueueWorkspaceOpportunityIntelligenceWithStatus(
         : {}),
       subject,
     });
-  const result = await enqueueOpportunityIntelligenceInternal(
-    opportunityId,
-    {
-      ...envelopedArgs,
-      modes:
-        envelopedArgs.modes ?? ('assessment' as OpportunityIntelligenceMode),
-      scoringMaterialFingerprint: subjectMaterialFingerprint,
-      partialAssessmentEvidence: !fullReady,
-    },
-    options,
-    subject,
-  );
+  const submit = async () =>
+    await enqueueOpportunityIntelligenceInternal(
+      opportunityId,
+      {
+        ...envelopedArgs,
+        modes:
+          envelopedArgs.modes ?? ('assessment' as OpportunityIntelligenceMode),
+        scoringMaterialFingerprint: subjectMaterialFingerprint,
+        partialAssessmentEvidence: !fullReady,
+      },
+      options,
+      subject,
+    );
+  const result = pilot
+    ? await withOpportunityLifecycleLock(opportunityId, submit)
+    : await submit();
   return {
     ...result,
     stage: 'private_assessment',
@@ -441,8 +538,19 @@ async function enqueueOpportunityIntelligenceInternal(
   const requestedVersion = positiveInteger(args.contentVersion);
   const modes = Array.isArray(args.modes) ? args.modes : [args.modes];
   const sourceOnlyExtraction = modes.length === 1 && modes[0] === 'extract';
+  const queue = runtimeWorkspaceSubject
+    ? opportunityAssessmentJobQueue(args)
+    : OPPORTUNITY_INTELLIGENCE_QUEUE;
+  const {
+    assessmentPilot: _ignoredPilot,
+    queue: _ignoredQueue,
+    ...safeArgs
+  } = args;
   const resolvedArgs: OpportunityIntelligenceJobArgs = {
-    ...args,
+    ...safeArgs,
+    ...(queue === OPPORTUNITY_ASSESSMENT_PILOT_QUEUE
+      ? { assessmentPilot: args.assessmentPilot }
+      : {}),
     ...(sourceOnlyExtraction
       ? {
           scoringMaterialFingerprint:
@@ -473,13 +581,15 @@ async function enqueueOpportunityIntelligenceInternal(
     (await SmrtJobCollection.create({
       ...getSmrtOptions(),
     }))) as OpportunityIntelligenceJobCollection;
-  if (!options.collection) await ensureOpportunityIntelligenceJobDedupe();
+  if (!options.collection && queue === OPPORTUNITY_INTELLIGENCE_QUEUE)
+    await ensureOpportunityIntelligenceJobDedupe();
 
   const existingJob = await findActiveOpportunityIntelligenceJobInCollection(
     collection,
     normalizedOpportunityId,
     stringValue(resolvedArgs.contentFingerprint),
     stringValue(resolvedArgs.scoringMaterialFingerprint),
+    queue,
   );
   if (existingJob) {
     if (runtimeWorkspaceSubject) {
@@ -503,7 +613,7 @@ async function enqueueOpportunityIntelligenceInternal(
       objectId: normalizedOpportunityId,
       objectType: OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
       priority: 80,
-      queue: OPPORTUNITY_INTELLIGENCE_QUEUE,
+      queue,
       runAt: options.now ?? new Date(),
       ...(runtimeWorkspaceSubject
         ? { tenantId: runtimeWorkspaceSubject.tenantId }
@@ -537,6 +647,7 @@ async function enqueueOpportunityIntelligenceInternal(
       normalizedOpportunityId,
       stringValue(resolvedArgs.contentFingerprint),
       stringValue(resolvedArgs.scoringMaterialFingerprint),
+      queue,
     );
     if (activeJob) {
       if (runtimeWorkspaceSubject) {
@@ -597,6 +708,24 @@ export async function runOpportunityIntelligenceJob(
     };
   }
 
+  const assertPilot = async () => {
+    if (
+      args.assessmentPilot !== undefined ||
+      context?.job?.queue === OPPORTUNITY_ASSESSMENT_PILOT_QUEUE
+    ) {
+      if (!context || !dependencies.workspaceSubject)
+        throw new Error(
+          'Assessment pilot requires its native private context.',
+        );
+      await assertOpportunityAssessmentPilotJobRouting(
+        opportunityId,
+        args,
+        context,
+        dependencies.workspaceSubject,
+      );
+    }
+  };
+  await assertPilot();
   const processor = dependencies.processor ?? processOpportunityIntelligence;
   let partialAssessmentEvidence = false;
   if (args.partialAssessmentEvidence) {
@@ -691,6 +820,7 @@ export async function runOpportunityIntelligenceJob(
         : null,
       workspaceSubject: dependencies.workspaceSubject,
     });
+    await assertPilot();
   } catch (error) {
     if (agentRunId) {
       await finishRun(

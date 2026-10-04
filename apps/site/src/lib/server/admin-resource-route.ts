@@ -66,6 +66,7 @@ import {
   isOpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job';
 import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
+import { loadCurrentOpportunityResumeFitReviewProjections } from './opportunity-resume-fit-review-projection.js';
 import { opportunityWithSourceContent } from './opportunity-source-content';
 import { loadCurrentSourceEligibilityProjections } from './opportunity-source-eligibility-projection.js';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep';
@@ -364,6 +365,7 @@ export async function attachOpportunityContext(
     reviewOverlays,
     videoRequirementsByOpportunity,
     screeningProjections,
+    resumeFitReviewProjections,
   ] = await Promise.all([
     subject
       ? listPrivateRecords('Application', subject, {
@@ -426,6 +428,9 @@ export async function attachOpportunityContext(
     loadCurrentOpportunityVideoRequirementsProjections(records),
     subject
       ? loadOpportunityScreeningProjectionPages(records, subject)
+      : Promise.resolve(new Map()),
+    subject
+      ? loadCurrentOpportunityResumeFitReviewProjections({ opportunities: records, subject })
       : Promise.resolve(new Map()),
   ]);
 
@@ -531,6 +536,9 @@ export async function attachOpportunityContext(
         ),
       partialAssessmentProjection: record.id
         ? (partialAssessmentProjections.get(record.id) ?? null)
+        : null,
+      resumeFitReviewProjection: record.id
+        ? (resumeFitReviewProjections.get(record.id) ?? null)
         : null,
       reviewOverlay: record.id ? (reviewOverlays.get(record.id) ?? null) : null,
       // Omitted rather than emptied when the activity trail was not read: an

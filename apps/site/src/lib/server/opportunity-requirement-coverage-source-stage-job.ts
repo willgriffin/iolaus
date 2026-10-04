@@ -45,11 +45,13 @@ import {
   preflightRequirementCoverageLifecycle,
   preflightRequirementEvidenceAudit,
   prepareCapturedSourceCompositeRequirementEvidenceAudit,
+  prepareQuarantinedSourceCompositeRequirementEvidenceAudit,
   prepareCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readVerifiedOpportunitySourceEligibilityEvidence,
@@ -72,10 +74,13 @@ export const OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE =
   'opportunity-assessment-pilot';
 export const OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT =
   'native-source-evidence-audit-pilot/v1';
+export const OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT =
+  'native-quarantined-source-evidence-audit-pilot/v1';
 export type SourceRequirementEvidenceVersion =
   | typeof REQUIREMENT_EVIDENCE_AUDIT_VERSION
   | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
-  | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION;
+  | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+  | typeof REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION;
 export type SourceCoverageStageSelection =
   | { stage: 'extract' }
   | { stage: 'audit_completed_extraction'; extractionRequestId: string }
@@ -90,7 +95,8 @@ function sourceRequirementEvidenceVersion(
   if (
     value !== REQUIREMENT_EVIDENCE_AUDIT_VERSION &&
     value !== REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION &&
-    value !== REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+    value !== REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION &&
+    value !== REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
   )
     throw new Error('Source evidence audit contract is not current.');
   return value;
@@ -365,8 +371,8 @@ export function preflightCompletedOpportunityRequirementEvidenceAudit(
     options.auditContract ?? REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   );
   const preparedAudit =
-    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
-      ? prepareCapturedSourceCompositeRequirementEvidenceAudit(
+    version === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+      ? prepareQuarantinedSourceCompositeRequirementEvidenceAudit(
           attested.context,
           attested.ledger,
           {
@@ -374,15 +380,24 @@ export function preflightCompletedOpportunityRequirementEvidenceAudit(
             extractionRequestId: attested.requestId,
           },
         )
-      : version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
-        ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+      : version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+        ? prepareCapturedSourceCompositeRequirementEvidenceAudit(
             attested.context,
             attested.ledger,
+            {
+              sourceContentJson: attested.sourceContentJson,
+              extractionRequestId: attested.requestId,
+            },
           )
-        : prepareCompositeRequirementEvidenceAudit(
-            attested.context,
-            attested.ledger,
-          );
+        : version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
+          ? prepareSourceEligibilityCompositeRequirementEvidenceAudit(
+              attested.context,
+              attested.ledger,
+            )
+          : prepareCompositeRequirementEvidenceAudit(
+              attested.context,
+              attested.ledger,
+            );
   const exact = preflightRequirementEvidenceAudit(
     preparedAudit,
     history,
@@ -469,6 +484,22 @@ export async function enqueueOpportunityRequirementEvidenceAuditPilot(
   );
 }
 
+/** Explicit quarantine recovery of an existing paid source; never new extraction. */
+export async function enqueueOpportunityQuarantinedRequirementEvidenceAuditPilot(
+  opportunityId: string,
+  extractionRequestId: string,
+): Promise<SmrtJob> {
+  return await enqueueSourceStage(
+    opportunityId,
+    {
+      stage: 'evidence_completed_extraction',
+      extractionRequestId,
+      evidenceVersion: REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+    },
+    true,
+  );
+}
+
 async function enqueueSourceStage(
   opportunityId: string,
   selection: SourceCoverageStageSelection,
@@ -548,7 +579,10 @@ async function enqueueSourceStage(
                 ...(pilot
                   ? {
                       pilotContract:
-                        OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+                        evidenceVersion ===
+                        REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+                          ? OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT
+                          : OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
                     }
                   : {}),
                 ...(selection.stage === 'evidence_completed_extraction'
@@ -689,10 +723,15 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
         if (
           pilot
             ? intent.pilotContract !==
-                OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT ||
+                (intent.auditContract ===
+                REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+                  ? OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT
+                  : OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT) ||
               intent.stage !== 'evidence_completed_extraction' ||
-              intent.auditContract !==
-                REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+              (intent.auditContract !==
+                REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION &&
+                intent.auditContract !==
+                  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION) ||
               job.maxAttempts !== 1
             : intent.pilotContract !== undefined
         )
@@ -895,7 +934,9 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 contentFingerprint: actual.context.sourceFingerprint,
                 historicalReservation: actual.reservation,
                 ...(evidenceVersion ===
-                REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+                evidenceVersion ===
+                  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
                   ? {
                       resolveCompletedExtraction: async () => {
                         await assertCurrentAuthority();
@@ -939,7 +980,9 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 evidenceVersion ===
                   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION ||
                 evidenceVersion ===
-                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+                evidenceVersion ===
+                  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
               ) {
                 const eligibility = await (
                   dependencies.readEligibility ??
@@ -967,7 +1010,9 @@ export async function runOpportunityRequirementCoverageSourceStageJob(
                 }
                 if (
                   evidenceVersion ===
-                  REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+                    REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+                  evidenceVersion ===
+                    REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
                 ) {
                   const expected =
                     plan.preparedAudit.sourceEligibility?.context;

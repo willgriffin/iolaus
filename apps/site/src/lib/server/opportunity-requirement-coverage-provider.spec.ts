@@ -29,6 +29,7 @@ import {
   preflightRequirementEvidenceAudit,
   prepareCapturedSourceCompositeRequirementEvidenceAudit,
   prepareCompositeRequirementEvidenceAudit,
+  prepareQuarantinedSourceCompositeRequirementEvidenceAudit,
   prepareRequirementCoverageAudit,
   prepareRequirementEvidenceAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
@@ -37,6 +38,7 @@ import {
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
   readVerifiedOpportunityRequirementCoverage,
@@ -3418,6 +3420,228 @@ describe('opt-in captured source and paid-ledger recovery', () => {
           requirementCoverageEvidenceAudit: badSelector,
         }),
       }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('explicit quarantined-source V5 receipt replay', () => {
+  beforeEach(() => vi.resetAllMocks());
+  function fixture() {
+    const captured = {
+      descriptionRaw:
+        'Requirements\nBuild reliable systems.\nReview architectural designs.\nMaintain production services.\nUnresolved literal section',
+      locationNotes: 'Canada',
+      workMode: 'remote',
+    };
+    const opportunity = {
+      id: 'quarantine-role',
+      descriptionRaw: captured.descriptionRaw,
+      sourceContentJson: JSON.stringify(captured),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(captured),
+      sourceContentVersion: 1,
+    };
+    const context = requirementCoverageContextForOpportunity({
+      ...opportunity,
+      preparedPostingFingerprint: prepareOpportunityPosting({
+        ...opportunityWithSourceContent(opportunity),
+      }).fingerprint,
+    });
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.requirements = [1, 2, 3].map((index) => ({
+      id: `r${index}`,
+      text: ledger.clauses[index]!.text,
+      clauseIds: [ledger.clauses[index]!.id],
+      importance: 'unknown' as const,
+    }));
+    ledger.requirements[0]!.clauseIds.push(ledger.clauses[2]!.id);
+    ledger.dispositions = ledger.clauses.map((clause, index) =>
+      index === 0
+        ? {
+            clauseId: clause.id,
+            type: 'nonrequirement' as const,
+            requirementIds: [],
+            exclusionRule: 'section_heading' as const,
+          }
+        : index === 4
+          ? {
+              clauseId: clause.id,
+              type: 'unknown' as const,
+              requirementIds: [],
+            }
+          : {
+              clauseId: clause.id,
+              type: 'role_duty' as const,
+              requirementIds: [`r${index}`],
+            },
+    );
+    const options = {
+      sourceContentJson: opportunity.sourceContentJson,
+      extractionRequestId: 'actual-quarantine-extraction',
+    };
+    const prepared = prepareQuarantinedSourceCompositeRequirementEvidenceAudit(
+      context,
+      ledger,
+      options,
+    );
+    const output: DecisionResult = {
+      model: 'jev-latest',
+      provenance: { provider: 'typesafe', model: 'jev-latest' },
+      answers: Object.fromEntries(
+        Object.entries(prepared.request.questions).map(([key, question]) => [
+          key,
+          question.type === 'choice'
+            ? {
+                type: 'choice' as const,
+                choice: 'none',
+                confidence: 0.95,
+                probabilities: Object.fromEntries(
+                  Object.keys(question.criteria).map((id) => [
+                    id,
+                    id === 'none' ? 1 : 0,
+                  ]),
+                ),
+              }
+            : { type: 'predicate' as const, probability: 0.95 },
+        ]),
+      ),
+    };
+    const attested = {
+      requestId: options.extractionRequestId,
+      opportunityId: opportunity.id,
+      agentRunId: 'original-run',
+      context,
+      ledger,
+      ledgerFingerprint: requirementCoverageLedgerFingerprint(ledger),
+      reservation: { calls: 1, reservedTokens: 10096 },
+      sourceContentJson: opportunity.sourceContentJson,
+    };
+    return {
+      opportunity,
+      context,
+      ledger,
+      options,
+      prepared,
+      output,
+      attested,
+    };
+  }
+  it('quarantines the whole bad row while auditing valid siblings and retaining every original row/span', () => {
+    const { context, ledger, options, prepared, output } = fixture();
+    expect(prepared.version).toBe(
+      REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+    );
+    expect(prepared.ledger).toEqual(ledger);
+    expect(prepared.ledgerFingerprint).toBe(
+      requirementCoverageLedgerFingerprint(ledger),
+    );
+    expect(
+      prepared.recovery && 'quarantinedRequirementIds' in prepared.recovery
+        ? prepared.recovery.quarantinedRequirementIds
+        : [],
+    ).toEqual(['r1']);
+    expect(
+      Object.values(prepared.bindings).some(
+        (binding) =>
+          binding.requirementId === 'r1' ||
+          binding.requirementIds?.includes('r1'),
+      ),
+    ).toBe(false);
+    expect(
+      Object.values(prepared.bindings).some(
+        (binding) =>
+          binding.clauseId === ledger.clauses[2]!.id &&
+          binding.requirementId === 'r2',
+      ),
+    ).toBe(true);
+    const audit = resolveRequirementEvidenceAudit(
+      prepared,
+      output,
+      'actual-v5',
+    );
+    expect(audit.acceptedRequirementIds).toEqual(['r2', 'r3']);
+    expect(audit.fullCoverage).toBe(false);
+    expect(audit.unresolvedClauseIds).toContain(ledger.clauses[2]!.id);
+    expect(audit.unresolvedClauseIds).toContain(ledger.clauses[4]!.id);
+    expect(
+      partialRequirementEvidenceFromAudit(
+        prepared,
+        audit,
+      ).acceptedRequirements.flatMap((row) => row.clauseIds),
+    ).not.toContain(ledger.clauses[1]!.id);
+    expect(
+      validateRequirementCoverageAuditAdmission(context, ledger)
+        .structuralComplete,
+    ).toBe(false);
+    expect(() =>
+      prepareCapturedSourceCompositeRequirementEvidenceAudit(
+        context,
+        ledger,
+        options,
+      ),
+    ).toThrow('Exact native source mapping');
+    const forged = structuredClone(audit);
+    forged.acceptedRequirementIds.unshift('r1');
+    expect(() => partialRequirementEvidenceFromAudit(prepared, forged)).toThrow(
+      'identity',
+    );
+  });
+  it('replays V5 only after exact native extraction plus joined current GLOBAL receipt proof', async () => {
+    const { opportunity, ledger, prepared, output, attested } = fixture();
+    const audit = resolveRequirementEvidenceAudit(
+      prepared,
+      output,
+      'actual-v5',
+    );
+    const cached = {
+      ...opportunity,
+      preparedPostingJson: JSON.stringify({
+        requirementCoverage: ledger,
+        requirementCoverageEvidenceAudit: audit,
+      }),
+    };
+    const row = {
+      output_json: JSON.stringify(output),
+      owner_request_id: 'actual-v5',
+      request_id: 'actual-v5',
+      opportunity_id: opportunity.id,
+      content_fingerprint: prepared.context.sourceFingerprint,
+      input_fingerprint: prepared.inputFingerprint,
+      feature: 'opportunity-source-requirement-evidence',
+      output_schema_version: prepared.version,
+      prompt_version: prepared.version,
+      prepared_payload_version: prepared.version,
+      model: 'jev-latest',
+      profile: 'typesafe-opportunity-source-evidence',
+      result_status: 'completed',
+      request_status: 'succeeded',
+      accounting_basis: 'actual',
+      actual_total_tokens: 200,
+      tenant_id: '',
+      owner_user_id: '',
+      candidate_profile_id: '',
+      request_tenant_id: '',
+      request_owner_user_id: '',
+      request_candidate_profile_id: '',
+    };
+    mocks.query.mockResolvedValue({ rows: [row] });
+    mocks.attestExtraction.mockResolvedValue(attested);
+    expect(
+      (await readPartialOpportunityRequirementEvidence(cached))?.audit
+        .fingerprint,
+    ).toBe(audit.fingerprint);
+    mocks.attestExtraction.mockResolvedValue({
+      ...attested,
+      ledgerFingerprint: 'forged',
+    });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
+    ).resolves.toBeUndefined();
+    mocks.attestExtraction.mockResolvedValue(attested);
+    mocks.query.mockResolvedValue({
+      rows: [{ ...row, input_fingerprint: 'foreign' }],
+    });
+    await expect(
+      readPartialOpportunityRequirementEvidence(cached),
     ).resolves.toBeUndefined();
   });
 });

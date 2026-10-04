@@ -15,6 +15,7 @@ import {
   partialRequirementEvidenceFromAudit,
   REQUIREMENT_EVIDENCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   requirementCoverageLedgerFingerprint,
   resolveRequirementCoverageAudit,
@@ -24,6 +25,8 @@ import {
   assertOpportunitySourceExtractionNotAttempted,
   attestCompletedOpportunitySourceExtraction,
   enqueueOpportunityRequirementEvidenceAuditPilot,
+  enqueueOpportunityQuarantinedRequirementEvidenceAuditPilot,
+  OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
   OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
   OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_QUEUE,
   preflightCompletedOpportunityRequirementEvidenceAudit,
@@ -189,6 +192,32 @@ function fixture(
     query: vi.fn(async (_sql: string, _params: unknown[]) => ({ rows: [row] })),
   };
   return { opportunity, context, ledger, row, db };
+}
+
+function quarantinedFixture() {
+  const f = fixture(
+    'Requirements\nBuild reliable software.\nMaintain deployment tooling.',
+    {
+      locationNotes: 'Canada',
+      workMode: 'Remote',
+    },
+  );
+  const second = f.ledger.clauses.filter(
+    (clause) => clause.kind === 'body',
+  )[1]!;
+  f.ledger.requirements.push({
+    id: 'r2',
+    text: second.text,
+    clauseIds: [second.id],
+    importance: 'unknown',
+  });
+  f.ledger.dispositions = f.ledger.dispositions.map((row) =>
+    row.clauseId === second.id
+      ? { clauseId: second.id, type: 'role_duty' as const, requirementIds: [] }
+      : row,
+  );
+  f.row.output_json = JSON.stringify({ requirementCoverage: f.ledger });
+  return f;
 }
 
 function jobFixture(
@@ -497,11 +526,17 @@ describe('native staged source receipt attestation', () => {
 });
 
 describe('native staged source job fences', () => {
-  it('captures only the saved native extraction in a fixed source-only pilot enqueue', async () => {
-    const f = fixture('Requirements\nBuild reliable software.', {
-      locationNotes: 'Canada',
-      workMode: 'Remote',
-    });
+  it.each([
+    REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+    REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+  ])('captures only the saved native extraction in a fixed %s source-only pilot enqueue', async (evidenceVersion) => {
+    const f =
+      evidenceVersion === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+        ? quarantinedFixture()
+        : fixture('Requirements\nBuild reliable software.', {
+            locationNotes: 'Canada',
+            workMode: 'Remote',
+          });
     enqueueMocks.db = f.db;
     enqueueMocks.enqueue.mockResolvedValue({ id: 'pilot-job' });
     const { getCollection } = await import('./smrt.js');
@@ -522,10 +557,11 @@ describe('native staged source job fences', () => {
       './application-workflow.js'
     );
     vi.mocked(withOpportunityLifecycleLock).mockImplementation(j.deps.withLock);
-    await enqueueOpportunityRequirementEvidenceAuditPilot(
-      'opportunity-1',
-      'native-request-1',
-    );
+    const enqueue =
+      evidenceVersion === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+        ? enqueueOpportunityQuarantinedRequirementEvidenceAuditPilot
+        : enqueueOpportunityRequirementEvidenceAuditPilot;
+    await enqueue('opportunity-1', 'native-request-1');
     expect(get).toHaveBeenCalledWith({ id: 'opportunity-1' }, { cache: false });
     expect(enqueueMocks.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -536,10 +572,13 @@ describe('native staged source job fences', () => {
         args: expect.objectContaining({
           sourceCoverageStage: expect.objectContaining({
             stage: 'evidence_completed_extraction',
-            auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+            auditContract: evidenceVersion,
             extractionRequestId: 'native-request-1',
             pilotContract:
-              OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+              evidenceVersion ===
+              REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+                ? OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT
+                : OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
           }),
         }),
       }),
@@ -1141,18 +1180,28 @@ describe('native staged source job fences', () => {
       }).admitted,
     ).toBe(true);
   });
-  it.each([
-    'published',
-    'missing-captured-proof',
-    'foreign-captured-fields',
-    'changed-captured-source',
-    'pilot-published',
-    'budget',
-  ])('explicit V4 native captured-source evidence enforces %s without resetting extraction', async (caseName) => {
-    const f = fixture('Requirements\nBuild reliable software.', {
-      locationNotes: 'Canada',
-      workMode: 'Remote',
-    });
+  it.each(
+    [
+      REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+      REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+    ].flatMap((version) =>
+      [
+        'published',
+        'missing-captured-proof',
+        'foreign-captured-fields',
+        'changed-captured-source',
+        'pilot-published',
+        'budget',
+      ].map((caseName) => [version, caseName] as const),
+    ),
+  )('explicit %s native captured-source evidence enforces %s without resetting extraction', async (evidenceVersion, caseName) => {
+    const f =
+      evidenceVersion === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+        ? quarantinedFixture()
+        : fixture('Requirements\nBuild reliable software.', {
+            locationNotes: 'Canada',
+            workMode: 'Remote',
+          });
     const completed = await attestCompletedOpportunitySourceExtraction(
       f.opportunity,
       'native-request-1',
@@ -1172,7 +1221,7 @@ describe('native staged source job fences', () => {
     const j = jobFixture(f.opportunity, {
       contract: SOURCE_COVERAGE_STAGE_JOB_CONTRACT,
       stage: 'evidence_completed_extraction',
-      auditContract: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+      auditContract: evidenceVersion,
       extractionRequestId: completed.requestId,
       extractionInputFingerprint: completed.context.extractionFingerprint,
       ledgerFingerprint: completed.ledgerFingerprint,
@@ -1183,7 +1232,11 @@ describe('native staged source job fences', () => {
       j.job.maxAttempts = 1;
       j.job.args.sourceCoverageStage = {
         ...(j.job.args.sourceCoverageStage as Record<string, unknown>),
-        pilotContract: OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
+        pilotContract:
+          evidenceVersion ===
+          REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+            ? OPPORTUNITY_QUARANTINED_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT
+            : OPPORTUNITY_REQUIREMENT_EVIDENCE_AUDIT_PILOT_CONTRACT,
       };
     }
     vi.stubEnv('OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION', '1');
@@ -1201,9 +1254,7 @@ describe('native staged source job fences', () => {
         prepared: PreparedRequirementEvidenceAudit,
         options: Parameters<NonNullable<Dependencies['evidenceAudit']>>[1],
       ) => {
-        expect(prepared.version).toBe(
-          REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
-        );
+        expect(prepared.version).toBe(evidenceVersion);
         expect(prepared.ledgerFingerprint).toBe(completed.ledgerFingerprint);
         expect(prepared.capturedSource?.extractionRequestId).toBe(
           completed.requestId,
@@ -1320,6 +1371,22 @@ describe('native staged source job fences', () => {
       await expect(result).resolves.toMatchObject({ status: 'processed' });
       expect(readEligibility).toHaveBeenCalledOnce();
       expect(update).toHaveBeenCalledOnce();
+      const publishedCache = JSON.parse(
+        String(f.opportunity.preparedPostingJson),
+      );
+      expect(publishedCache.requirementCoverage).toEqual(completed.ledger);
+      expect(
+        requirementCoverageLedgerFingerprint(
+          publishedCache.requirementCoverage,
+        ),
+      ).toBe(completed.ledgerFingerprint);
+      if (
+        evidenceVersion ===
+        REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+      ) {
+        expect(recorded?.audit.acceptedRequirementIds).not.toContain('r2');
+        expect(recorded?.unresolvedClauses.length).toBeGreaterThan(0);
+      }
       expect(
         capturedContext?.capturedFields?.map((field) => field.path),
       ).toEqual([
@@ -1332,7 +1399,7 @@ describe('native staged source job fences', () => {
       ).toMatchObject({
         retained: 'paid-original',
         requirementCoverageEvidenceAudit: {
-          version: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+          version: evidenceVersion,
           requestId: 'native-v4-request',
           capturedSource: { extractionRequestId: completed.requestId },
         },

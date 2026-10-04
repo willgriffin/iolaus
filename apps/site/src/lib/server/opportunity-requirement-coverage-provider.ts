@@ -35,6 +35,10 @@ import {
   requirementCoverageContextForOpportunity,
   validateRequirementCoverageAuditAdmission,
 } from './opportunity-requirement-coverage.js';
+import {
+  type QuarantinedSourceCoverage,
+  quarantinePartialRequirementCoverageFromCompletedExtraction,
+} from './opportunity-requirement-coverage-quarantine.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import {
   type PreparedOpportunityVideoRequirements,
@@ -1076,11 +1080,14 @@ export const REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION =
   'requirement-evidence-audit/v3-source-eligibility';
 export const REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION =
   'requirement-evidence-audit/v4-captured-source-recovery';
+export const REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION =
+  'requirement-evidence-audit/v5-quarantined-source-recovery';
 export type RequirementEvidenceAuditVersion =
   | typeof REQUIREMENT_EVIDENCE_AUDIT_VERSION
   | typeof REQUIREMENT_EVIDENCE_AUDIT_LEGACY_VERSION
   | typeof REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION
-  | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION;
+  | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+  | typeof REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION;
 const REQUIREMENT_EVIDENCE_FEATURE = 'opportunity-source-requirement-evidence';
 const REQUIREMENT_EVIDENCE_PROFILE = 'typesafe-opportunity-source-evidence';
 export interface RequirementEvidenceBinding {
@@ -1099,7 +1106,7 @@ export interface PreparedRequirementEvidenceAudit {
   bindings: Record<string, RequirementEvidenceBinding>;
   deterministicHeadingClauseIds: string[];
   inputFingerprint: string;
-  recovery?: RecoverableCapturedSourceCoverage & {
+  recovery?: (RecoverableCapturedSourceCoverage | QuarantinedSourceCoverage) & {
     extractionRequestId: string;
   };
   capturedSource?: { sourceContentJson: string; extractionRequestId: string };
@@ -1128,7 +1135,11 @@ export interface RequirementEvidenceAudit {
     extractionRequestId: string;
     originalLedgerFingerprint: string;
     recoveryFingerprint: string;
-    unresolvedClauses: RecoverableCapturedSourceCoverage['unresolvedClauses'];
+    unresolvedClauses: (
+      | RecoverableCapturedSourceCoverage
+      | QuarantinedSourceCoverage
+    )['unresolvedClauses'];
+    quarantinedRequirementIds?: string[];
   };
   sourceEligibilityAnswers?: DecisionResult['answers'];
   sourceEligibility?: SourceEligibilityEvidence;
@@ -1190,16 +1201,25 @@ export function prepareRequirementEvidenceAudit(
     version !== REQUIREMENT_EVIDENCE_AUDIT_VERSION &&
     version !== REQUIREMENT_EVIDENCE_AUDIT_LEGACY_VERSION &&
     version !== REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION &&
-    version !== REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+    version !== REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION &&
+    version !== REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
   )
     throw new Error('Unsupported source evidence contract.');
+  const capturedVersion =
+    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+    version === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION;
   const recovered =
-    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
-      ? recoverPartialRequirementCoverageFromCapturedSource(context, ledger)
-      : undefined;
+    version === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+      ? quarantinePartialRequirementCoverageFromCompletedExtraction(
+          context,
+          ledger,
+        )
+      : version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+        ? recoverPartialRequirementCoverageFromCapturedSource(context, ledger)
+        : undefined;
   const extractionRequestId = options.extractionRequestId;
   if (
-    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION &&
+    capturedVersion &&
     (!validSourceExtractionSelector(extractionRequestId) ||
       typeof options.sourceContentJson !== 'string')
   )
@@ -1215,7 +1235,7 @@ export function prepareRequirementEvidenceAudit(
       'Exact native source mapping is required before evidence auditing.',
     );
   const capturedSource =
-    version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION &&
+    capturedVersion &&
     validSourceExtractionSelector(extractionRequestId) &&
     typeof options.sourceContentJson === 'string'
       ? { sourceContentJson: options.sourceContentJson, extractionRequestId }
@@ -1231,9 +1251,20 @@ export function prepareRequirementEvidenceAudit(
     context,
     ledger,
   );
+  const quarantined = new Set(
+    recovery && 'quarantinedRequirementIds' in recovery
+      ? recovery.quarantinedRequirementIds
+      : [],
+  );
   const excluded = new Set([
     ...deterministicHeadingClauseIds,
-    ...(recovery?.unresolvedClauses.map((row) => row.clauseId) ?? []),
+    ...(recovery?.unresolvedClauses
+      .filter(
+        (row) =>
+          !('quarantinedRequirementIds' in recovery) ||
+          row.reason !== 'broken_reciprocal_requirement_mapping',
+      )
+      .map((row) => row.clauseId) ?? []),
   ]);
   // Display-only literal headings. This cannot exclude a clause or certify it.
   const headings = ledger.clauses.filter(
@@ -1259,9 +1290,9 @@ export function prepareRequirementEvidenceAudit(
     const disposition = auditLedger.dispositions.find(
       (row) => row.clauseId === clause.id,
     )!;
-    const rows = disposition.requirementIds.map(
-      (id) => ledger.requirements.find((row) => row.id === id)!,
-    );
+    const rows = disposition.requirementIds
+      .filter((id) => !quarantined.has(id))
+      .map((id) => ledger.requirements.find((row) => row.id === id)!);
     if (
       disposition.type === 'source_context' ||
       disposition.type === 'nonrequirement' ||
@@ -1493,10 +1524,17 @@ function composeSourceEligibilityEvidence(
 export function prepareCapturedSourceCompositeRequirementEvidenceAudit(
   context: RequirementCoverageContext,
   original: CoverageLedger,
-  options: { sourceContentJson: string; extractionRequestId: string },
+  options: {
+    sourceContentJson: string;
+    extractionRequestId: string;
+    version?:
+      | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+      | typeof REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION;
+  },
 ): PreparedRequirementEvidenceAudit {
   const base = prepareCompositeRequirementEvidenceAudit(context, original, {
-    version: REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+    version:
+      options.version ?? REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
     ...options,
   });
   const capturedContext = sourceEligibilityContextFromCapturedSource(
@@ -1523,6 +1561,21 @@ export function prepareCapturedSourceCompositeRequirementEvidenceAudit(
     });
   return compactCapturedSourceEvidenceRequest(
     composeSourceEligibilityEvidence(base, sourceEligibility),
+  );
+}
+
+export function prepareQuarantinedSourceCompositeRequirementEvidenceAudit(
+  context: RequirementCoverageContext,
+  original: CoverageLedger,
+  options: { sourceContentJson: string; extractionRequestId: string },
+): PreparedRequirementEvidenceAudit {
+  return prepareCapturedSourceCompositeRequirementEvidenceAudit(
+    context,
+    original,
+    {
+      ...options,
+      version: REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+    },
   );
 }
 
@@ -1706,6 +1759,11 @@ export function resolveRequirementEvidenceAudit(
   const acceptedRequirementIds = prepared.ledger.requirements
     .filter(
       (row) =>
+        !(
+          prepared.recovery &&
+          'quarantinedRequirementIds' in prepared.recovery &&
+          prepared.recovery.quarantinedRequirementIds.includes(row.id)
+        ) &&
         pass(rowSupport[row.id]) &&
         (prepared.version === REQUIREMENT_EVIDENCE_AUDIT_LEGACY_VERSION
           ? row.clauseIds.every((id) => pass(clausePrecision[id]))
@@ -1801,6 +1859,12 @@ export function resolveRequirementEvidenceAudit(
               prepared.recovery.originalLedgerFingerprint,
             recoveryFingerprint: prepared.recovery.fingerprint,
             unresolvedClauses: prepared.recovery.unresolvedClauses,
+            ...('quarantinedRequirementIds' in prepared.recovery
+              ? {
+                  quarantinedRequirementIds:
+                    prepared.recovery.quarantinedRequirementIds,
+                }
+              : {}),
           },
         }
       : {}),
@@ -2038,14 +2102,6 @@ export async function readPartialOpportunityRequirementEvidence(
   ) {
     try {
       const context = requirementCoverageContextForOpportunity(canonical);
-      const prepared = prepareCapturedSourceCompositeRequirementEvidenceAudit(
-        context,
-        ledger,
-        {
-          sourceContentJson: opportunity.sourceContentJson,
-          extractionRequestId: extractionSelector,
-        },
-      );
       const { attestCompletedOpportunitySourceExtraction } = await import(
         './opportunity-requirement-coverage-source-stage-job.js'
       );
@@ -2054,16 +2110,37 @@ export async function readPartialOpportunityRequirementEvidence(
         extractionSelector,
       );
       if (
-        actual.ledgerFingerprint === prepared.ledgerFingerprint &&
+        actual.ledgerFingerprint ===
+          requirementCoverageLedgerFingerprint(ledger) &&
         requirementCoverageLedgerFingerprint(actual.ledger) ===
-          prepared.ledgerFingerprint &&
+          actual.ledgerFingerprint &&
         hash(actual.context) === hash(context)
       ) {
-        const audit = await readRecordedRequirementEvidenceAudit(
-          opportunityId,
-          prepared,
-        );
-        if (audit) return partialRequirementEvidenceFromAudit(prepared, audit);
+        for (const version of [
+          REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
+          REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+        ] as const) {
+          let prepared: PreparedRequirementEvidenceAudit;
+          try {
+            prepared = prepareCapturedSourceCompositeRequirementEvidenceAudit(
+              context,
+              ledger,
+              {
+                sourceContentJson: opportunity.sourceContentJson,
+                extractionRequestId: extractionSelector,
+                version,
+              },
+            );
+          } catch {
+            continue;
+          }
+          const audit = await readRecordedRequirementEvidenceAudit(
+            opportunityId,
+            prepared,
+          );
+          if (audit)
+            return partialRequirementEvidenceFromAudit(prepared, audit);
+        }
       }
     } catch {
       // A missing or rejected V4 receipt cannot invalidate paid legacy evidence.
@@ -2197,7 +2274,8 @@ export async function evaluateRequirementEvidenceAudit(
       'Source evidence requires a current recorded lifecycle within the aggregate budget.',
     );
   const canonical =
-    prepared.version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+    prepared.version === REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION ||
+    prepared.version === REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
       ? prepareCapturedSourceCompositeRequirementEvidenceAudit(
           prepared.context,
           prepared.ledger,
@@ -2205,6 +2283,9 @@ export async function evaluateRequirementEvidenceAudit(
             extractionRequestId:
               prepared.capturedSource?.extractionRequestId ?? '',
             sourceContentJson: prepared.capturedSource?.sourceContentJson ?? '',
+            version: prepared.version as
+              | typeof REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION
+              | typeof REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
           },
         )
       : prepared.version === REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION

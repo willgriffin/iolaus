@@ -294,4 +294,89 @@ describe('native provider volume contract classification', () => {
     };
     expect(opportunityIntelligenceProviderVolume(identity)).toBe('openai');
   });
+  it('keeps historical and catalog-alias Sol review contracts on unchanged OpenAI quotas and pricing', () => {
+    const historical = 'opportunity-resume-fit-review/v1-advisory';
+    const current = 'opportunity-resume-fit-review/v2-catalog-aliases';
+    const identity = {
+      feature: 'opportunity-resume-fit-review',
+      profile: 'opportunity-intelligence-scoring',
+      model: 'openai/gpt-6.1-sol',
+      promptVersion: current,
+      outputSchemaVersion: current,
+      preparedPayloadVersion: current,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: historical,
+        outputSchemaVersion: historical,
+        preparedPayloadVersion: historical,
+      }),
+    ).toBe('openai');
+    for (const key of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [key]: historical,
+        }),
+      ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-latest',
+      }),
+    ).toBe('openai');
+    expect(pricingForOpportunityIntelligenceModel(identity.model)).toEqual({
+      configured: true,
+      inputMicrosPerMillion: 2_000_000,
+      outputMicrosPerMillion: 10_000_000,
+    });
+  });
+  it('classifies only the exact V5 quarantine tuple and preserves paid V4 classification', () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-latest');
+    const version = 'requirement-evidence-audit/v5-quarantined-source-recovery';
+    const legacy = 'requirement-evidence-audit/v4-captured-source-recovery';
+    const identity = {
+      feature: 'opportunity-source-requirement-evidence',
+      profile: 'typesafe-opportunity-source-evidence',
+      model: 'jev-latest',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: legacy,
+        outputSchemaVersion: legacy,
+        preparedPayloadVersion: legacy,
+      }),
+    ).toBe('typesafe');
+    for (const key of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({ ...identity, [key]: legacy }),
+      ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-unregistered',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        profile: 'typesafe-unregistered',
+      }),
+    ).toBe('openai');
+  });
 });

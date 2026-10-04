@@ -30,6 +30,7 @@ import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
+import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import ResourceFormFields from './ResourceFormFields.svelte';
 import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
@@ -1020,6 +1021,7 @@ $effect(() => {
       {/if}
       <SourceOpportunityEligibility projection={data.record.sourceEligibilityProjection} sourceContentFingerprint={data.record.sourceContentFingerprint} sourceContentVersion={data.record.sourceContentVersion} />
       <PartialOpportunityEvidence projection={data.record.partialAssessmentProjection} />
+      <OpportunityResumeFitReview projection={data.record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={data.record.videoRequirements} />
     </section>
   {/if}

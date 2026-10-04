@@ -57,6 +57,7 @@ import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte'
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
+import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 type WorkflowOption = { label: string; value: string };
@@ -987,6 +988,7 @@ const resultCountLabel = $derived.by(() => {
       </span>
       <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
     {:else if column.id === 'citedSupport'}
+      <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} compact />
       {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
         <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
       {:else}
@@ -1082,6 +1084,7 @@ const resultCountLabel = $derived.by(() => {
       {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
         <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
       {:else}<span class="table-meta">No current cited support assessment</span>{/if}
+      <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} compact />
     </div>
   {/snippet}
 

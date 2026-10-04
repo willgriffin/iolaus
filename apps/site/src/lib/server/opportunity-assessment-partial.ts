@@ -26,6 +26,7 @@ import {
   prepareRequirementEvidenceAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
   readPartialOpportunityRequirementEvidence,
+  REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
 } from './opportunity-requirement-coverage-provider.js';
 import {
   createPrivateRecord,
@@ -182,6 +183,13 @@ export function preparePartialOpportunityAssessment(input: {
           input.evidence.ledger,
           {
             ...input.evidence.capturedSource,
+            ...(input.evidence.audit.version ===
+            REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION
+              ? {
+                  version:
+                    REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+                }
+              : {}),
           },
         )
       : input.evidence.audit.sourceEligibility

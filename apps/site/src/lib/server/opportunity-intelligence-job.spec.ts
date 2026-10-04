@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   enqueueOpportunityIntelligence,
   enqueueOpportunityIntelligenceWithStatus,
+  enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
+  enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus,
   findActiveOpportunityIntelligenceJob,
   OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
   OPPORTUNITY_INTELLIGENCE_METHOD,
@@ -61,7 +63,49 @@ vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
     () => 'source-coverage-contract-seed',
   ),
 }));
+vi.mock('./application-workflow.js', () => ({
+  withOpportunityLifecycleLock: async <T>(
+    _id: string,
+    work: () => Promise<T>,
+  ) => await work(),
+}));
+vi.mock('./job-workspace-subject.js', async (original) => ({
+  ...(await original<typeof import('./job-workspace-subject.js')>()),
+  runAsRevalidatedJobWorkspaceSubject: async <T>(
+    subject: unknown,
+    _capability: unknown,
+    work: (current: unknown, run: unknown) => Promise<T>,
+  ) => await work(subject, { assertOperation: async () => undefined }),
+}));
 vi.mock('./opportunity-assessment-dependency-job.js', () => ({
+  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE: 'opportunity-assessment-pilot',
+  opportunityAssessmentPilotIntent: (screen: {
+    requestId: string;
+    inputFingerprint: string;
+  }) => ({
+    contract: 'opportunity-assessment-pilot/v1',
+    screeningRequestId: screen.requestId,
+    screeningInputFingerprint: screen.inputFingerprint,
+  }),
+  opportunityAssessmentJobQueue: (args: Record<string, unknown>) =>
+    args.assessmentPilot
+      ? 'opportunity-assessment-pilot'
+      : 'opportunity-intelligence',
+  requireCurrentOpportunityAssessmentPilotScreen: vi.fn(async () => ({
+    requestId: 'current-v4-screen',
+    inputFingerprint: 'screen-fp',
+  })),
+  assertOpportunityAssessmentPilotJobRouting: vi.fn(),
+  enqueueOpportunityAssessmentCoverageFreshPilot: vi.fn(async () => ({
+    enqueued: true,
+    job: { id: 'fresh-source-job' },
+    stage: 'source_preparation',
+  })),
+  enqueueOpportunityAssessmentCoveragePilot: vi.fn(async () => ({
+    enqueued: true,
+    job: { id: 'pilot-source-job' },
+    stage: 'source_preparation',
+  })),
   OpportunityAssessmentDependencyEnqueueError: class extends Error {},
   enqueueOpportunityAssessmentCoverage: vi.fn(async () => ({
     enqueued: true,
@@ -71,7 +115,7 @@ vi.mock('./opportunity-assessment-dependency-job.js', () => ({
   })),
 }));
 
-function jobRecord(data: Record<string, unknown>) {
+function jobRecord<T extends Record<string, unknown>>(data: T) {
   return {
     id: String(data.id ?? ''),
     save: vi.fn(async () => {}),
@@ -87,6 +131,162 @@ describe('opportunity intelligence jobs', () => {
     vi.clearAllMocks();
   });
 
+  it('fresh API uses only the trusted fresh dependency and consumes permission on private paid-proof reuse', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const dependency = await import(
+      './opportunity-assessment-dependency-job.js'
+    );
+    const options = {
+      opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+    };
+    await enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus(
+      'opp-1',
+      options,
+    );
+    expect(
+      dependency.enqueueOpportunityAssessmentCoverageFreshPilot,
+    ).toHaveBeenCalledOnce();
+    expect(
+      dependency.enqueueOpportunityAssessmentCoveragePilot,
+    ).not.toHaveBeenCalled();
+    expect(
+      dependency.enqueueOpportunityAssessmentCoverage,
+    ).not.toHaveBeenCalled();
+    workspace.coverageReady = true;
+    const collection = {
+      list: vi.fn(async () => []),
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'private', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    const result =
+      await enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus('opp-1', {
+        ...options,
+        collection,
+      });
+    expect(result.job.args.assessmentPilot).toMatchObject({
+      contract: 'opportunity-assessment-pilot/v1',
+    });
+    expect(result.job.queue).toBe('opportunity-assessment-pilot');
+  });
+  it('keeps the existing ordinary pending job untouched and enqueues the fixed private pilot route', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const ordinary = jobRecord({
+      id: '6d5-ordinary',
+      queue: OPPORTUNITY_INTELLIGENCE_QUEUE,
+      status: 'pending',
+    });
+    const list = vi.fn(
+      async (options: { where?: Record<string, unknown> } = {}) =>
+        options.where?.queue === ordinary.queue
+          ? [ordinary as unknown as SmrtJob]
+          : [],
+    );
+    const collection = {
+      list,
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'pilot', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    const result = await enqueueWorkspaceOpportunityAssessmentPilotWithStatus(
+      'opp-1',
+      {
+        collection,
+        opportunityCollection: {
+          get: vi.fn(async () => ({
+            id: 'opp-1',
+            sourceContentFingerprint: 'fp',
+            sourceContentVersion: 1,
+          })),
+        },
+      },
+    );
+    expect(result.job.id).toBe('pilot');
+    expect(collection.enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: 'opportunity-assessment-pilot',
+        maxAttempts: 1,
+        args: expect.objectContaining({
+          modes: 'assessment',
+          assessmentPilot: {
+            contract: 'opportunity-assessment-pilot/v1',
+            screeningRequestId: 'current-v4-screen',
+            screeningInputFingerprint: 'screen-fp',
+          },
+        }),
+      }),
+    );
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          queue: 'opportunity-assessment-pilot',
+        }),
+      }),
+    );
+    expect(ordinary.status).toBe('pending');
+    expect(ordinary.save).not.toHaveBeenCalled();
+  });
+  it('routes a missing source prerequisite to the fixed pilot API instead of ordinary enqueue', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const {
+      enqueueOpportunityAssessmentCoveragePilot,
+      enqueueOpportunityAssessmentCoverage,
+    } = await import('./opportunity-assessment-dependency-job.js');
+    await enqueueWorkspaceOpportunityAssessmentPilotWithStatus('opp-1', {
+      opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+    });
+    expect(enqueueOpportunityAssessmentCoveragePilot).toHaveBeenCalledOnce();
+    expect(enqueueOpportunityAssessmentCoverage).not.toHaveBeenCalled();
+  });
+  it('ordinary caller cannot switch queues with forged pilot or queue flags', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const collection = {
+      list: vi.fn(async () => []),
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'ordinary', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      {
+        assessmentPilot: { contract: 'opportunity-assessment-pilot/v1' },
+        queue: 'opportunity-resume-fit-review',
+        modes: 'assessment',
+      },
+      {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+      },
+    );
+    const data = collection.enqueueJob.mock.calls[0]?.[0];
+    expect(data?.queue).toBe(OPPORTUNITY_INTELLIGENCE_QUEUE);
+    expect(data?.args?.assessmentPilot).toBeUndefined();
+    expect(data?.args?.queue).toBeUndefined();
+  });
   it('queues source preparation before loading private evidence when coverage is missing', async () => {
     workspace.subject = {
       profileId: 'profile-1',
