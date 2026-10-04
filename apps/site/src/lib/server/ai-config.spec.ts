@@ -124,6 +124,54 @@ describe('AI config profiles', () => {
     ).rejects.toThrow('is not the pinned openai/gpt-6.1-sol');
   });
 
+  it('selects exact registered Luna or Sol only for owned resume reviews without unpinning legacy scoring', async () => {
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
+      'dedicated-virtual-key',
+    );
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_RESUME_FIT_REVIEW_MODEL',
+      'openai/gpt-6-luna',
+    );
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6.1-sol',
+    );
+    const {
+      resolveOpportunityResumeFitReviewAiProfileClient,
+      resolveOpportunityResumeFitReviewModel,
+      resolveOpportunityIntelligenceScoringAiProfileClient,
+    } = await import('./ai-config');
+    expect(resolveOpportunityResumeFitReviewModel()).toBe('openai/gpt-6-luna');
+    await expect(
+      resolveOpportunityResumeFitReviewAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-scoring',
+    });
+    expect(getAI).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        defaultModel: 'openai/gpt-6-luna',
+        apiKey: 'dedicated-virtual-key',
+      }),
+    );
+    await expect(
+      resolveOpportunityResumeFitReviewAiProfileClient({
+        model: 'openai/gpt-6.1-sol',
+      }),
+    ).resolves.toMatchObject({ model: 'openai/gpt-6.1-sol' });
+    await expect(
+      resolveOpportunityIntelligenceScoringAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6.1-sol',
+      profile: 'opportunity-intelligence-scoring',
+    });
+    await expect(
+      resolveOpportunityResumeFitReviewAiProfileClient({
+        model: 'openai/gpt-6-astra',
+      }),
+    ).rejects.toThrow('exact registered');
+  });
   it('rejects injected opportunity-intelligence clients outside tests', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv(

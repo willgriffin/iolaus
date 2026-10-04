@@ -6,6 +6,7 @@ const projection = {
   version: 'opportunity-resume-fit-review-projection/v1',
   mode: 'advisory',
   sourceStatus: 'current',
+  model: 'openai/gpt-6.1-sol',
   coverage: {
     candidateSourceCount: 150,
     reviewedRequirementIds: ['r1', 'r2'],
@@ -46,6 +47,23 @@ const projection = {
   ],
 };
 describe('OpportunityResumeFitReview', () => {
+  it('labels the attested Luna and Sol models without changing the advisory qualifier', () => {
+    for (const [model, label] of [
+      ['openai/gpt-6-luna', 'Luna'],
+      ['openai/gpt-6.1-sol', 'Sol'],
+    ]) {
+      const { body } = render(OpportunityResumeFitReview, {
+        props: { projection: { ...projection, model } },
+      });
+      expect(body).toContain(`Model: ${label} (${model})`);
+      expect(body).toContain('Overall fit remains unknown.');
+    }
+    expect(
+      render(OpportunityResumeFitReview, {
+        props: { projection: { ...projection, model: 'claimed-model' } },
+      }).body,
+    ).not.toContain('Resume review');
+  });
   it('renders advisory strengths, uncertain seniority, exact quotes and coverage without a fit or eligibility conclusion', () => {
     const { body } = render(OpportunityResumeFitReview, {
       props: { projection },

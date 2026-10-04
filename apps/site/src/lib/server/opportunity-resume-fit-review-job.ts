@@ -19,7 +19,6 @@ import {
 } from './opportunity-intelligence-governance.js';
 import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import {
-  OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
   assertOpportunityResumeFitReviewNotAttempted,
   evaluateOpportunityResumeFitReview,
   prepareCurrentOpportunityResumeFitReview,
@@ -170,7 +169,8 @@ async function currentMaterial(
     prepared,
     intent: {
       contract: OPPORTUNITY_RESUME_FIT_REVIEW_JOB_CONTRACT,
-      reviewVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+      reviewVersion: prepared.version,
+      reviewModel: prepared.model,
       fingerprint: prepared.fingerprint,
       candidateMaterialFingerprint: prepared.candidateMaterialFingerprint,
       evidenceFingerprint: prepared.evidenceFingerprint,
@@ -333,6 +333,8 @@ export async function runOpportunityResumeFitReviewJob(
         const confirmed = await read(current.opportunity, subject);
         if (
           !confirmed ||
+          cached.model !== current.prepared.model ||
+          confirmed.model !== current.prepared.model ||
           hash(cached) !== hash(confirmed) ||
           cached.fingerprint !== current.prepared.fingerprint
         )
@@ -380,6 +382,7 @@ export async function runOpportunityResumeFitReviewJob(
         )(current.opportunity, subject);
         if (
           !actual ||
+          actual.model !== current.prepared.model ||
           actual.agentRunId !== agentRunId ||
           hash(actual) !== hash(review) ||
           actual.fingerprint !== current.prepared.fingerprint
@@ -399,7 +402,11 @@ export async function runOpportunityResumeFitReviewJob(
         });
         const publishedMaterial = await assertCurrent();
         const published = await read(publishedMaterial.opportunity, subject);
-        if (!published || hash(published) !== hash(actual))
+        if (
+          !published ||
+          published.model !== publishedMaterial.prepared.model ||
+          hash(published) !== hash(actual)
+        )
           throw new Error(
             'Resume review has no current published PRIVATE assessment.',
           );

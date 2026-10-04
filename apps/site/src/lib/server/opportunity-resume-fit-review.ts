@@ -3,7 +3,9 @@ import type { AIMessage } from '@happyvertical/ai';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import {
   AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
-  resolveOpportunityIntelligenceScoringAiProfileClient,
+  type OpportunityResumeFitReviewModel,
+  resolveOpportunityResumeFitReviewAiProfileClient,
+  resolveOpportunityResumeFitReviewModel,
 } from './ai-config.js';
 import { getDbConfig } from './db.js';
 import { requireJsonObjectFromText } from './llm-json.js';
@@ -39,6 +41,15 @@ import { getCollection } from './smrt.js';
 
 export const OPPORTUNITY_RESUME_FIT_REVIEW_VERSION =
   'opportunity-resume-fit-review/v2-catalog-aliases';
+export const OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION =
+  'opportunity-resume-fit-review/v3-exact-quotes';
+export type OpportunityResumeFitReviewVersion =
+  | typeof OPPORTUNITY_RESUME_FIT_REVIEW_VERSION
+  | typeof OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION;
+export interface OpportunityResumeFitReviewOptions {
+  model?: OpportunityResumeFitReviewModel;
+  version?: OpportunityResumeFitReviewVersion;
+}
 export const OPPORTUNITY_RESUME_FIT_REVIEW_FEATURE =
   'opportunity-resume-fit-review';
 export const OPPORTUNITY_RESUME_FIT_REVIEW_PROFILE =
@@ -47,12 +58,44 @@ export const OPPORTUNITY_RESUME_FIT_REVIEW_MODEL = 'openai/gpt-6.1-sol';
 export const OPPORTUNITY_RESUME_FIT_REVIEW_VISIBLE_OUTPUT_TOKENS = 3500;
 export const OPPORTUNITY_RESUME_FIT_REVIEW_REASONING_TOKENS = 1024;
 const NOTE_LIMIT = 48;
+const QUOTE_LIMIT = 128;
+function selectedReviewVersion(
+  model: OpportunityResumeFitReviewModel,
+  version?: OpportunityResumeFitReviewVersion,
+): OpportunityResumeFitReviewVersion {
+  const selected =
+    version ??
+    (model === 'openai/gpt-6-luna'
+      ? OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION
+      : OPPORTUNITY_RESUME_FIT_REVIEW_VERSION);
+  if (
+    selected !== OPPORTUNITY_RESUME_FIT_REVIEW_VERSION &&
+    selected !== OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION
+  )
+    throw new Error('Unsupported owned review version.');
+  return selected;
+}
+/** Largest escaped quote window from actual offered text bounds every legal shorter quote. */
+function maximumQuote(text: string): string {
+  let maximum = text.slice(0, QUOTE_LIMIT);
+  let bytes = Buffer.byteLength(JSON.stringify(maximum));
+  for (let start = 1; start + QUOTE_LIMIT <= text.length; start++) {
+    const quote = text.slice(start, start + QUOTE_LIMIT);
+    const size = Buffer.byteLength(JSON.stringify(quote));
+    if (size > bytes) {
+      maximum = quote;
+      bytes = size;
+    }
+  }
+  return maximum;
+}
 type Row = Record<string, unknown>;
 const hash = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export interface PreparedOpportunityResumeFitReview {
-  version: typeof OPPORTUNITY_RESUME_FIT_REVIEW_VERSION;
+  version: OpportunityResumeFitReviewVersion;
+  model: OpportunityResumeFitReviewModel;
   opportunityId: string;
   fingerprint: string;
   candidateMaterialFingerprint: string;
@@ -76,11 +119,11 @@ export interface PreparedOpportunityResumeFitReview {
   sourceComplete: boolean;
   outputShapeBytes: number;
   maximumSerializedOutput: string;
-  visibleOutputTokens: typeof OPPORTUNITY_RESUME_FIT_REVIEW_VISIBLE_OUTPUT_TOKENS;
+  visibleOutputTokens: number;
   reasoningTokens: typeof OPPORTUNITY_RESUME_FIT_REVIEW_REASONING_TOKENS;
 }
 export interface OpportunityResumeFitReviewResult {
-  contractVersion: typeof OPPORTUNITY_RESUME_FIT_REVIEW_VERSION;
+  contractVersion: OpportunityResumeFitReviewVersion;
   mode: 'advisory';
   requestId: string;
   agentRunId: string;
@@ -90,7 +133,7 @@ export interface OpportunityResumeFitReviewResult {
   evidenceFingerprint: string;
   sourceContentFingerprint: string;
   sourceContentVersion: number;
-  model: typeof OPPORTUNITY_RESUME_FIT_REVIEW_MODEL;
+  model: OpportunityResumeFitReviewModel;
   provider: 'bifrost';
   coverage: {
     candidateSourceCount: number;
@@ -123,12 +166,18 @@ export interface OpportunityResumeFitReviewResult {
 }
 
 /** Full catalog only: no source selection, excerpt clipping or evidence-count cap. */
-export function prepareOpportunityResumeFitReview(input: {
-  opportunityId: string;
-  source: PartialOpportunityRequirementEvidence;
-  candidateSources: CandidateEvidenceSource[];
-  candidateMaterialFingerprint: string;
-}): PreparedOpportunityResumeFitReview {
+export function prepareOpportunityResumeFitReview(
+  input: {
+    opportunityId: string;
+    source: PartialOpportunityRequirementEvidence;
+    candidateSources: CandidateEvidenceSource[];
+    candidateMaterialFingerprint: string;
+  },
+  options: OpportunityResumeFitReviewOptions = {},
+): PreparedOpportunityResumeFitReview {
+  const model = resolveOpportunityResumeFitReviewModel(options.model);
+  const version = selectedReviewVersion(model, options.version);
+  const quoteVersion = version === OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION;
   const source = input.source;
   if (
     !input.opportunityId ||
@@ -219,6 +268,22 @@ export function prepareOpportunityResumeFitReview(input: {
     },
     { role: 'user', content: JSON.stringify(payload) },
   ];
+  if (quoteVersion) {
+    const system = messages[0]!;
+    system.content = String(system.content)
+      .replace(
+        '"candidate":[{"id":"cN","start":0,"end":1}],"posting":[{"id":"pN","start":0,"end":1}]',
+        '"candidate":[{"id":"cN","quote":"exact substring"}],"posting":[{"id":"pN","quote":"exact substring"}]',
+      )
+      .replace(
+        'Citation spans are nonempty UTF-16 offsets into the exact candidate text or posting clause text; do not generate quotation text.',
+        `Citations must quote an EXACT, UNIQUE contiguous substring of the selected candidate text or linked posting clause, at most ${QUOTE_LIMIT} UTF-16 characters. Use a meaningful excerpt of at least 16 characters, or the entire text if shorter. Do not compute offsets, paraphrase, normalize whitespace, or quote repeated/ambiguous text.`,
+      )
+      .replace(
+        'citation offsets are relative to that clause.',
+        'posting quotes must be exact substrings of that selected clause.',
+      );
+  }
   // Every row must fit the configured chat output cap. Worst escaped note and
   // longest legal numeric offsets are retained in this admission envelope.
   const maximumCandidateLength = Math.max(
@@ -227,29 +292,69 @@ export function prepareOpportunityResumeFitReview(input: {
   const maximumClauseLength = Math.max(
     ...clauses.map((row) => row.text.length),
   );
+  const maximumCandidateQuote = quoteVersion
+    ? candidates
+        .map((row) => maximumQuote(row.text))
+        .reduce(
+          (largest, quote) =>
+            Buffer.byteLength(JSON.stringify(quote)) >
+            Buffer.byteLength(JSON.stringify(largest))
+              ? quote
+              : largest,
+          '',
+        )
+    : '';
   const maximumSerializedOutput = JSON.stringify({
     requirements: requirements.map((row) => ({
       id: row.key,
       status: 'uncertain',
       seniority: 'not_applicable',
       note: '\ud800'.repeat(NOTE_LIMIT),
-      candidate: [0, 1].map(() => ({
-        id: `c${candidates.length - 1}`,
-        start: maximumCandidateLength,
-        end: maximumCandidateLength,
-      })),
+      candidate: [0, 1].map(() =>
+        quoteVersion
+          ? { id: `c${candidates.length - 1}`, quote: maximumCandidateQuote }
+          : {
+              id: `c${candidates.length - 1}`,
+              start: maximumCandidateLength,
+              end: maximumCandidateLength,
+            },
+      ),
       posting: [
-        {
-          id: `p${clauses.length - 1}`,
-          start: maximumClauseLength,
-          end: maximumClauseLength,
-        },
+        quoteVersion
+          ? {
+              id: `p${clauses.length - 1}`,
+              quote: row.clauseKeys
+                .map((key) =>
+                  maximumQuote(
+                    clauses.find((clause) => clause.key === key)!.text,
+                  ),
+                )
+                .reduce(
+                  (largest, quote) =>
+                    Buffer.byteLength(JSON.stringify(quote)) >
+                    Buffer.byteLength(JSON.stringify(largest))
+                      ? quote
+                      : largest,
+                  '',
+                ),
+            }
+          : {
+              id: `p${clauses.length - 1}`,
+              start: maximumClauseLength,
+              end: maximumClauseLength,
+            },
       ],
     })),
   });
   const outputShapeBytes = Buffer.byteLength(maximumSerializedOutput, 'utf8');
-  const material: Omit<PreparedOpportunityResumeFitReview, 'fingerprint'> = {
-    version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+  const material: Omit<
+    PreparedOpportunityResumeFitReview,
+    'fingerprint' | 'model'
+  > & { model?: OpportunityResumeFitReviewModel } = {
+    version,
+    // Sol is already bound by the exact historical V2 contract. Its material
+    // remains byte-identical; every alternative model is explicitly hashed.
+    ...(model !== OPPORTUNITY_RESUME_FIT_REVIEW_MODEL ? { model } : {}),
     opportunityId: input.opportunityId,
     candidateMaterialFingerprint: input.candidateMaterialFingerprint,
     evidenceFingerprint: source.fingerprint,
@@ -263,15 +368,18 @@ export function prepareOpportunityResumeFitReview(input: {
     sourceComplete: unresolvedClauseIds.length === 0,
     outputShapeBytes,
     maximumSerializedOutput,
-    visibleOutputTokens: OPPORTUNITY_RESUME_FIT_REVIEW_VISIBLE_OUTPUT_TOKENS,
+    visibleOutputTokens: quoteVersion
+      ? AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS
+      : OPPORTUNITY_RESUME_FIT_REVIEW_VISIBLE_OUTPUT_TOKENS,
     reasoningTokens: OPPORTUNITY_RESUME_FIT_REVIEW_REASONING_TOKENS,
   };
-  return { ...material, fingerprint: hash(material) };
+  return { ...material, model, fingerprint: hash(material) };
 }
 
 export async function prepareCurrentOpportunityResumeFitReview(
   opportunity: Row,
   subject: WorkspaceSubject,
+  options: OpportunityResumeFitReviewOptions = {},
 ) {
   const owned = requireWorkspaceSubject(subject);
   const profile = await (await getCollection('CandidateProfile')).get(
@@ -321,12 +429,15 @@ export async function prepareCurrentOpportunityResumeFitReview(
     catalog: candidate.fingerprint,
     profile: freshProfile,
   });
-  return prepareOpportunityResumeFitReview({
-    opportunityId: String(opportunity.id ?? ''),
-    source,
-    candidateSources: candidate.evidence,
-    candidateMaterialFingerprint,
-  });
+  return prepareOpportunityResumeFitReview(
+    {
+      opportunityId: String(opportunity.id ?? ''),
+      source,
+      candidateSources: candidate.evidence,
+      candidateMaterialFingerprint,
+    },
+    options,
+  );
 }
 
 export function opportunityResumeFitReviewInputFingerprint(
@@ -350,7 +461,7 @@ export async function preflightOpportunityResumeFitReview(
   );
   const inputTokenCount = await countOpportunityInputTokens(
     prepared.messages,
-    OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+    prepared.model,
     counter,
   );
   const visibleOutputTokens = prepared.visibleOutputTokens;
@@ -362,7 +473,7 @@ export async function preflightOpportunityResumeFitReview(
   const reservedTokens = inputTokenCeiling + maxOutputTokens;
   let outputShapeTokens = conservativeTokenEstimate(
     prepared.maximumSerializedOutput,
-    OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+    prepared.model,
   );
   if (counter) {
     try {
@@ -376,9 +487,7 @@ export async function preflightOpportunityResumeFitReview(
   const reservedSpendMicros = reservedRequestSpendMicros({
     inputTokens: inputTokenCeiling,
     maxOutputTokens,
-    pricing: pricingForOpportunityIntelligenceModel(
-      OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
-    ),
+    pricing: pricingForOpportunityIntelligenceModel(prepared.model),
   });
   return {
     requestBytes,
@@ -431,6 +540,23 @@ function span(value: unknown, text: string) {
   )
     throw new Error('Citation splits a source character.');
   return { start, end, quote: text.slice(start, end) };
+}
+function quoteSpan(value: unknown, text: string) {
+  const citation = object(value);
+  exactKeys(citation, ['id', 'quote']);
+  if (
+    typeof citation.quote !== 'string' ||
+    citation.quote.length > QUOTE_LIMIT ||
+    citation.quote.trim().length < Math.min(16, text.length)
+  )
+    throw new Error('Invalid review quote.');
+  const start = text.indexOf(citation.quote);
+  if (start < 0 || text.indexOf(citation.quote, start + 1) !== -1)
+    throw new Error('Review quote must match exactly one source occurrence.');
+  return span(
+    { id: citation.id, start, end: start + citation.quote.length },
+    text,
+  );
 }
 export function resolveOpportunityResumeFitReview(
   prepared: PreparedOpportunityResumeFitReview,
@@ -493,7 +619,9 @@ export function resolveOpportunityResumeFitReview(
         sourceId: source.id,
         title: source.title,
         kind: source.kind,
-        ...span(citation, source.text),
+        ...(prepared.version === OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION
+          ? quoteSpan(citation, source.text)
+          : span(citation, source.text)),
       };
     });
     const postingCitations = row.posting.map((value) => {
@@ -501,7 +629,10 @@ export function resolveOpportunityResumeFitReview(
       const source = prepared.clauses.find((item) => item.key === citation.id);
       if (!source || !criterion.clauseKeys.includes(source.key))
         throw new Error('Unoffered posting citation.');
-      const selected = span(citation, source.text);
+      const selected =
+        prepared.version === OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION
+          ? quoteSpan(citation, source.text)
+          : span(citation, source.text);
       return {
         clauseId: source.id,
         start: source.spanStart + selected.start,
@@ -529,7 +660,7 @@ export function resolveOpportunityResumeFitReview(
     };
   });
   return {
-    contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    contractVersion: prepared.version,
     mode: 'advisory',
     requestId,
     agentRunId,
@@ -539,7 +670,7 @@ export function resolveOpportunityResumeFitReview(
     evidenceFingerprint: prepared.evidenceFingerprint,
     sourceContentFingerprint: prepared.sourceContentFingerprint,
     sourceContentVersion: prepared.sourceContentVersion,
-    model: OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+    model: prepared.model,
     provider: 'bifrost',
     coverage: {
       candidateSourceCount: prepared.candidates.length,
@@ -568,7 +699,7 @@ export async function assertOpportunityResumeFitReviewNotAttempted(
       prepared.sourceContentFingerprint,
       OPPORTUNITY_RESUME_FIT_REVIEW_FEATURE,
       OPPORTUNITY_RESUME_FIT_REVIEW_PROFILE,
-      OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+      prepared.model,
       owned.tenantId,
       owned.userId,
       owned.profileId,
@@ -600,11 +731,12 @@ export async function evaluateOpportunityResumeFitReview(
     throw new Error(
       'Resume review material is not current or changed after preparation.',
     );
-  const client = await resolveOpportunityIntelligenceScoringAiProfileClient({
+  const client = await resolveOpportunityResumeFitReviewAiProfileClient({
+    model: prepared.model,
     usageTags: { feature: OPPORTUNITY_RESUME_FIT_REVIEW_FEATURE },
   });
-  if (!client || client.model !== OPPORTUNITY_RESUME_FIT_REVIEW_MODEL)
-    throw new Error('The pinned dedicated Sol scoring profile is required.');
+  if (!client || client.model !== prepared.model)
+    throw new Error('The selected dedicated review profile is required.');
   const preflight = await preflightOpportunityResumeFitReview(
     prepared,
     client.aiClient.countTokens?.bind(client.aiClient),
@@ -632,7 +764,7 @@ export async function evaluateOpportunityResumeFitReview(
         contentFingerprint: prepared.sourceContentFingerprint,
         feature: OPPORTUNITY_RESUME_FIT_REVIEW_FEATURE,
         inputFingerprint,
-        model: OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+        model: prepared.model,
         profile: OPPORTUNITY_RESUME_FIT_REVIEW_PROFILE,
         promptVersion: prepared.version,
         outputSchemaVersion: prepared.version,
@@ -641,7 +773,7 @@ export async function evaluateOpportunityResumeFitReview(
       invoke: async (governedRequestId) => {
         await options.revalidateMaterial();
         const response = await client.aiClient.chat(prepared.messages, {
-          model: OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+          model: prepared.model,
           maxTokens: preflight.visibleOutputTokens,
           reasoning: { effort: 'low', maxTokens: preflight.reasoningTokens },
           responseFormat: { type: 'json_object' },
@@ -684,6 +816,7 @@ export async function evaluateOpportunityResumeFitReview(
 export async function readCurrentOpportunityResumeFitReviewReceipt(
   opportunity: Row,
   subject: WorkspaceSubject,
+  options: OpportunityResumeFitReviewOptions = {},
 ): Promise<OpportunityResumeFitReviewResult | undefined> {
   const owned = requireWorkspaceSubject(subject);
   let prepared: PreparedOpportunityResumeFitReview;
@@ -691,6 +824,7 @@ export async function readCurrentOpportunityResumeFitReviewReceipt(
     prepared = await prepareCurrentOpportunityResumeFitReview(
       opportunity,
       owned,
+      options,
     );
   } catch {
     return undefined;
@@ -714,7 +848,7 @@ export async function readCurrentOpportunityResumeFitReviewReceipt(
       inputFingerprint,
       OPPORTUNITY_RESUME_FIT_REVIEW_FEATURE,
       OPPORTUNITY_RESUME_FIT_REVIEW_PROFILE,
-      OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+      prepared.model,
       prepared.version,
       prepared.version,
       prepared.version,
@@ -733,8 +867,7 @@ export async function readCurrentOpportunityResumeFitReviewReceipt(
     !row.agent_run_id ||
     !['running', 'succeeded'].includes(String(row.run_status)) ||
     Number(row.requested_max_output_tokens) !==
-      OPPORTUNITY_RESUME_FIT_REVIEW_VISIBLE_OUTPUT_TOKENS +
-        OPPORTUNITY_RESUME_FIT_REVIEW_REASONING_TOKENS ||
+      prepared.visibleOutputTokens + prepared.reasoningTokens ||
     !Number.isSafeInteger(Number(row.reserved_spend_micros)) ||
     Number(row.reserved_spend_micros) <= 0
   )
@@ -781,10 +914,14 @@ export async function readCurrentOpportunityResumeFitReviewReceipt(
 export async function readCurrentOpportunityResumeFitReview(
   opportunity: Row,
   subject: WorkspaceSubject,
+  options: OpportunityResumeFitReviewOptions = {},
 ): Promise<OpportunityResumeFitReviewResult | undefined> {
   const where = {
     opportunityId: String(opportunity.id ?? ''),
-    contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    contractVersion: selectedReviewVersion(
+      resolveOpportunityResumeFitReviewModel(options.model),
+      options.version,
+    ),
     status: 'advisory',
   };
   const selector = await listPrivateRecords('OpportunityAssessment', subject, {
@@ -795,6 +932,7 @@ export async function readCurrentOpportunityResumeFitReview(
   const actual = await readCurrentOpportunityResumeFitReviewReceipt(
     opportunity,
     subject,
+    options,
   );
   if (!actual) return undefined;
   const records = await listPrivateRecords('OpportunityAssessment', subject, {
@@ -845,7 +983,7 @@ export async function storeOpportunityResumeFitReview(input: {
   const where = {
     opportunityId: input.prepared.opportunityId,
     assessmentFingerprint: actual.fingerprint,
-    contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    contractVersion: input.prepared.version,
   };
   if (
     (

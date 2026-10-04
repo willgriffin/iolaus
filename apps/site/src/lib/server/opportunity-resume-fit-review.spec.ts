@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildRequirementCoverageSource } from './opportunity-requirement-coverage.js';
 import type { PartialOpportunityRequirementEvidence } from './opportunity-requirement-coverage-provider.js';
@@ -5,6 +6,7 @@ import {
   assertOpportunityResumeFitReviewNotAttempted,
   evaluateOpportunityResumeFitReview,
   OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
   opportunityResumeFitReviewInputFingerprint,
   preflightOpportunityResumeFitReview,
@@ -28,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
   chat: vi.fn(),
   countTokens: vi.fn(),
+  clientModel: vi.fn(),
 }));
 vi.mock('@happyvertical/smrt-core', () => ({
   resolveDatabase: async () => ({ query: mocks.query }),
@@ -57,8 +60,19 @@ vi.mock('./opportunity-intelligence-governance.js', () => ({
 }));
 vi.mock('./ai-config.js', () => ({
   AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS: 4096,
-  resolveOpportunityIntelligenceScoringAiProfileClient: async () => ({
-    model: 'openai/gpt-6.1-sol',
+  resolveOpportunityResumeFitReviewModel: (model?: string) => {
+    const selected =
+      model ??
+      (process.env.BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL ||
+        'openai/gpt-6.1-sol');
+    if (!['openai/gpt-6-luna', 'openai/gpt-6.1-sol'].includes(selected))
+      throw new Error('exact registered');
+    return selected;
+  },
+  resolveOpportunityResumeFitReviewAiProfileClient: async (options: {
+    model: string;
+  }) => ({
+    model: mocks.clientModel() ?? options.model,
     timeout: 30000,
     aiClient: { chat: mocks.chat, countTokens: mocks.countTokens },
   }),
@@ -191,6 +205,26 @@ function output(
     }),
   };
 }
+function quoteOutput(
+  prepared: ReturnType<typeof prepareOpportunityResumeFitReview>,
+) {
+  return {
+    requirements: prepared.requirements.map((criterion) => {
+      const candidate = prepared.candidates.at(-1)!;
+      const posting = prepared.clauses.find(
+        (clause) => clause.key === criterion.clauseKeys[0],
+      )!;
+      return {
+        id: criterion.key,
+        status: 'strength',
+        seniority: 'not_applicable',
+        note: 'Explicit attributed source evidence.',
+        candidate: [{ id: candidate.key, quote: candidate.text.slice(0, 128) }],
+        posting: [{ id: posting.key, quote: posting.text.slice(0, 128) }],
+      };
+    }),
+  };
+}
 function resolve(
   prepared: ReturnType<typeof prepareOpportunityResumeFitReview>,
   value: unknown = output(prepared),
@@ -231,7 +265,10 @@ async function receipt(
   };
 }
 beforeEach(() => {
+  vi.unstubAllEnvs();
+  vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL', '');
   vi.clearAllMocks();
+  mocks.clientModel.mockReset();
   for (const [key, value] of Object.entries({
     OPPORTUNITY_INTELLIGENCE_ENABLED: 'true',
     OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT: '4',
@@ -501,6 +538,248 @@ describe('bounded complete-catalog Sol advisory review', () => {
       value = output(prepared);
     value.requirements[0]!.note = note;
     expect(() => resolve(prepared, value)).toThrow('Invalid');
+  });
+  it('binds Luna selection and registered pricing while explicit Sol retains its exact historical V2 material hash', async () => {
+    const value = fixture();
+    const input = {
+      opportunityId: 'role-1',
+      ...value,
+      candidateMaterialFingerprint: 'candidate-model',
+    };
+    const sol = prepareOpportunityResumeFitReview(input, {
+      model: 'openai/gpt-6.1-sol',
+    });
+    const { model: _model, fingerprint: _fingerprint, ...legacyMaterial } = sol;
+    expect(sol.fingerprint).toBe(
+      createHash('sha256').update(JSON.stringify(legacyMaterial)).digest('hex'),
+    );
+    const luna = prepareOpportunityResumeFitReview(input, {
+      model: 'openai/gpt-6-luna',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    });
+    expect(luna.model).toBe('openai/gpt-6-luna');
+    expect(luna.messages).toEqual(sol.messages);
+    expect(luna.candidates).toHaveLength(150);
+    expect(luna.fingerprint).not.toBe(sol.fingerprint);
+    expect(opportunityResumeFitReviewInputFingerprint(luna, SUBJECT)).not.toBe(
+      opportunityResumeFitReviewInputFingerprint(sol, SUBJECT),
+    );
+    const budget = await preflightOpportunityResumeFitReview(
+      luna,
+      async (text) => (text === luna.maximumSerializedOutput ? 1000 : 20000),
+    );
+    expect(budget.reservedSpendMicros).toBe(4262);
+    expect(budget.maxOutputTokens).toBe(4524);
+    expect(resolve(luna).model).toBe('openai/gpt-6-luna');
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6-luna',
+    );
+    expect((await current()).model).toBe('openai/gpt-6-luna');
+    expect(
+      prepareOpportunityResumeFitReview(input, {
+        version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+      }).fingerprint,
+    ).toBe(luna.fingerprint);
+    expect(
+      prepareOpportunityResumeFitReview(input, { model: 'openai/gpt-6.1-sol' })
+        .fingerprint,
+    ).toBe(sol.fingerprint);
+    expect(() =>
+      prepareOpportunityResumeFitReview(input, { model: 'invented' as never }),
+    ).toThrow('registered');
+  });
+  it('reads historical Sol only with an explicit model selector and never falls back from current Luna', async () => {
+    const sol = await current();
+    const actualReceipt = await receipt(sol);
+    mocks.query.mockImplementation(async (_sql, params) => ({
+      rows: params.includes('openai/gpt-6.1-sol') ? [actualReceipt] : [],
+    }));
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6-luna',
+    );
+    await expect(
+      readCurrentOpportunityResumeFitReviewReceipt(OPPORTUNITY, SUBJECT),
+    ).resolves.toBeUndefined();
+    expect(
+      (
+        await readCurrentOpportunityResumeFitReviewReceipt(
+          OPPORTUNITY,
+          SUBJECT,
+          { model: 'openai/gpt-6.1-sol' },
+        )
+      )?.model,
+    ).toBe('openai/gpt-6.1-sol');
+  });
+  it('uses only the selected Luna client/model and denies changed model material before transport', async () => {
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6-luna',
+    );
+    const prepared = await current();
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify(quoteOutput(prepared)),
+      usage: USAGE,
+    });
+    const result = await evaluateOpportunityResumeFitReview(prepared, {
+      opportunity: OPPORTUNITY,
+      subject: SUBJECT,
+      agentRunId: 'run-1',
+      revalidateMaterial: async () => {},
+    });
+    expect(result.model).toBe('openai/gpt-6-luna');
+    expect(mocks.governed).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        identity: expect.objectContaining({ model: 'openai/gpt-6-luna' }),
+      }),
+    );
+    expect(mocks.chat).toHaveBeenLastCalledWith(
+      prepared.messages,
+      expect.objectContaining({
+        model: 'openai/gpt-6-luna',
+        maxTokens: 4096,
+        reasoning: { effort: 'low', maxTokens: 1024 },
+      }),
+    );
+    mocks.clientModel.mockReturnValue('openai/gpt-6.1-sol');
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toThrow('selected dedicated');
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL',
+      'openai/gpt-6.1-sol',
+    );
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toThrow('not current');
+    mocks.query.mockResolvedValue({ rows: [] });
+    await assertOpportunityResumeFitReviewNotAttempted(prepared, SUBJECT);
+    expect(mocks.query).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.arrayContaining(['openai/gpt-6-luna']),
+    );
+  });
+  it('derives unique exact V3 quote spans and original citations without changing explicit V2 material', () => {
+    const value = fixture();
+    value.candidateSources[149] = {
+      ...value.candidateSources[149]!,
+      text: 'Distinct 😀platform engineering experience.',
+    };
+    const input = {
+      opportunityId: 'role-1',
+      ...value,
+      candidateMaterialFingerprint: 'candidate-quotes',
+    };
+    const v2 = prepareOpportunityResumeFitReview(input, {
+      model: 'openai/gpt-6.1-sol',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    });
+    const { model: _model, fingerprint: _fingerprint, ...oldMaterial } = v2;
+    expect(v2.fingerprint).toBe(
+      createHash('sha256').update(JSON.stringify(oldMaterial)).digest('hex'),
+    );
+    const v3 = prepareOpportunityResumeFitReview(input, {
+      model: 'openai/gpt-6-luna',
+    });
+    expect(v3.version).toBe(OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION);
+    expect(v3.candidates).toHaveLength(150);
+    expect(v3.visibleOutputTokens).toBe(4096);
+    const answer = quoteOutput(v3);
+    answer.requirements[0]!.candidate[0]!.quote =
+      '😀platform engineering experience.';
+    const result = resolve(v3, answer);
+    expect(result.contractVersion).toBe(
+      OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
+    );
+    expect(result.requirements[0]!.candidateCitations[0]).toMatchObject({
+      sourceId: 'employment:149',
+      start: 9,
+      end: 43,
+      quote: '😀platform engineering experience.',
+    });
+    expect(result.requirements[0]!.postingCitations[0]!.clauseId).toBe(
+      value.source.acceptedRequirements[0]!.clauseIds[0],
+    );
+    expect(String(v3.messages[0]?.content)).toContain('EXACT, UNIQUE');
+    expect(String(v2.messages[0]?.content)).toContain('UTF-16 offsets');
+    expect(() => resolve(v2, answer)).toThrow('Unexpected');
+    expect(() => resolve(v3, output(v3))).toThrow('Unexpected');
+  });
+  it.each([
+    'missing',
+    'repeated',
+    'short',
+    'foreign',
+    'wrong_parent',
+  ])('rejects V3 %s quote evidence without normalization or invented spans', (kind) => {
+    const value = fixture();
+    if (kind === 'repeated')
+      value.candidateSources[149]!.text =
+        'Explicit engineering evidence. Explicit engineering evidence.';
+    const prepared = prepareOpportunityResumeFitReview(
+      {
+        opportunityId: 'role-1',
+        ...value,
+        candidateMaterialFingerprint: 'candidate-quotes',
+      },
+      { model: 'openai/gpt-6-luna' },
+    );
+    const answer = quoteOutput(prepared);
+    if (kind === 'missing')
+      answer.requirements[0]!.candidate[0]!.quote =
+        'owned Kubernetes production services during role 149.';
+    if (kind === 'repeated')
+      answer.requirements[0]!.candidate[0]!.quote =
+        'Explicit engineering evidence.';
+    if (kind === 'short') answer.requirements[0]!.candidate[0]!.quote = 'Owned';
+    if (kind === 'foreign') answer.requirements[0]!.candidate[0]!.id = 'c999';
+    if (kind === 'wrong_parent') answer.requirements[0]!.posting[0]!.id = 'p0';
+    expect(() => resolve(prepared, answer)).toThrow();
+  });
+  it('reserves all V3 quote-envelope output and reasoning, holding over4096 without clipping any offered text', async () => {
+    const value = fixture();
+    value.candidateSources[149]!.text = '\"\\'.repeat(100);
+    const prepared = prepareOpportunityResumeFitReview(
+      {
+        opportunityId: 'role-1',
+        ...value,
+        candidateMaterialFingerprint: 'candidate-escaped',
+      },
+      { model: 'openai/gpt-6-luna' },
+    );
+    const envelope = JSON.parse(prepared.maximumSerializedOutput);
+    expect(envelope.requirements).toHaveLength(prepared.requirements.length);
+    expect(envelope.requirements[0].candidate).toHaveLength(2);
+    expect(envelope.requirements[0].candidate[0].quote).toHaveLength(128);
+    expect(envelope.requirements[0].candidate[0]).not.toHaveProperty('start');
+    const budget = await preflightOpportunityResumeFitReview(
+      prepared,
+      async (text) =>
+        text === prepared.maximumSerializedOutput ? 2000 : 20000,
+    );
+    expect(budget.maxOutputTokens).toBe(5120);
+    expect(budget.reservedSpendMicros).toBe(4560);
+    expect(budget.fits).toBe(true);
+    const denied = await preflightOpportunityResumeFitReview(
+      prepared,
+      async (text) =>
+        text === prepared.maximumSerializedOutput ? 4097 : 20000,
+    );
+    expect(denied.fits).toBe(false);
+    expect(prepared.candidates[149]!.text).toBe(
+      value.candidateSources[149]!.text,
+    );
   });
   it('requires authentic governed identity and rejects fabricated or missing rows', async () => {
     const prepared = await current();

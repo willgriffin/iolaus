@@ -523,6 +523,64 @@ export async function resolveOpportunityIntelligenceScoringAiProfileClient(
   );
 }
 
+export const OPPORTUNITY_RESUME_FIT_REVIEW_MODELS = [
+  'openai/gpt-6-luna',
+  'openai/gpt-6.1-sol',
+] as const;
+export type OpportunityResumeFitReviewModel =
+  (typeof OPPORTUNITY_RESUME_FIT_REVIEW_MODELS)[number];
+export function resolveOpportunityResumeFitReviewModel(
+  model?: string,
+): OpportunityResumeFitReviewModel {
+  const selected =
+    model ??
+    (envValue('BIFROST_OPPORTUNITY_RESUME_FIT_REVIEW_MODEL') ||
+      envValue('BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL') ||
+      OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.model);
+  if (
+    !OPPORTUNITY_RESUME_FIT_REVIEW_MODELS.some(
+      (allowed) => allowed === selected,
+    )
+  )
+    throw new Error(
+      'Owned resume review requires an exact registered Luna or Sol model.',
+    );
+  return selected as OpportunityResumeFitReviewModel;
+}
+/** Owned advisory review only. Legacy scoring remains pinned to Sol. */
+export async function resolveOpportunityResumeFitReviewAiProfileClient(
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  if (options.aiClient && envValue('NODE_ENV') !== 'test')
+    throw new Error(
+      'Injected opportunity-intelligence clients are test-only; production must use the dedicated Bifrost profile.',
+    );
+  const model = resolveOpportunityResumeFitReviewModel(options.model);
+  const {
+    apiKey: _apiKey,
+    baseUrl: _baseUrl,
+    timeout: _timeout,
+    model: _model,
+    ...profileOptions
+  } = options;
+  const resolved = await resolveAiProfileClient(
+    OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.profile,
+    {
+      ...profileOptions,
+      model,
+      apiKey: envValue(
+        OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.apiKeyEnv,
+      ),
+      requireProfileApiKey: true,
+    },
+  );
+  if (resolved && resolved.model !== model)
+    throw new Error(
+      'Owned resume review client does not match its selected model.',
+    );
+  return resolved;
+}
+
 export async function resolveOpenAiOpportunityIntelligenceCanaryClient(
   options: AiProfileClientOptions = {},
 ): Promise<AiProfileClient | null> {

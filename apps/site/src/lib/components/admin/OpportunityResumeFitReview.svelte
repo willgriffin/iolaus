@@ -18,7 +18,8 @@ function citation(value: unknown): value is Record<string, unknown> {
 /** Presentation validation only; the server's actual private receipt reader establishes authority. */
 export function getCurrentOpportunityResumeFitReviewProjection(value: unknown): OpportunityResumeFitReviewProjection | null {
   if (!object(value) || value.version !== 'opportunity-resume-fit-review-projection/v1'
-    || value.mode !== 'advisory' || value.sourceStatus !== 'current' || !object(value.coverage)
+    || value.mode !== 'advisory' || value.sourceStatus !== 'current'
+    || !['openai/gpt-6.1-sol', 'openai/gpt-6-luna'].includes(String(value.model)) || !object(value.coverage)
     || value.coverage.fullFit !== 'unknown' || !Number.isInteger(value.coverage.candidateSourceCount)
     || Number(value.coverage.candidateSourceCount) < 1 || typeof value.coverage.sourceComplete !== 'boolean'
     || !ids(value.coverage.reviewedRequirementIds) || !ids(value.coverage.unresolvedClauseIds)
@@ -52,6 +53,7 @@ const strengths = $derived(current?.requirements.filter((row) => row.status === 
 {#if current}
   <div class="resume-fit-review" class:compact role="group" aria-label="Advisory resume review">
     <p class="review-label">Resume review · {strengths} {strengths === 1 ? 'strength' : 'strengths'} · {current.requirements.length - strengths} uncertain</p>
+    <p>Model: {current.model === 'openai/gpt-6-luna' ? 'Luna' : 'Sol'} ({current.model})</p>
     <p>Advisory review of {current.requirements.length} {current.requirements.length === 1 ? 'criterion' : 'criteria'} using {current.coverage.candidateSourceCount} candidate {current.coverage.candidateSourceCount === 1 ? 'source' : 'sources'}. Overall fit remains unknown.</p>
     <p>{current.coverage.sourceComplete ? 'Captured source coverage is complete for this review.' : `Source coverage is incomplete: ${current.coverage.unresolvedClauseIds.length} unresolved source ${current.coverage.unresolvedClauseIds.length === 1 ? 'clause' : 'clauses'}.`}</p>
     <details open={!compact}>

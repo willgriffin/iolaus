@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => ({ read: vi.fn(), list: vi.fn() }));
 vi.mock('./opportunity-resume-fit-review.js', () => ({
   readCurrentOpportunityResumeFitReview: mocks.read,
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION:
-    'opportunity-resume-fit-review/v1-advisory',
+    'opportunity-resume-fit-review/v2-catalog-aliases',
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION:
+    'opportunity-resume-fit-review/v3-exact-quotes',
 }));
 vi.mock('./private-workspace.js', () => ({ listPrivateRecords: mocks.list }));
 vi.mock('./smrt.js', () => ({
@@ -16,9 +18,10 @@ vi.mock('./smrt.js', () => ({
 }));
 const subject = { tenantId: 'tenant', userId: 'user', profileId: 'profile' };
 const result = {
-  contractVersion: 'opportunity-resume-fit-review/v1-advisory',
+  contractVersion: 'opportunity-resume-fit-review/v2-catalog-aliases',
   inputFingerprint: 'private-input',
   requestId: 'private-receipt',
+  model: 'openai/gpt-6.1-sol',
   coverage: {
     candidateSourceCount: 1,
     reviewedRequirementIds: ['r1'],
@@ -67,7 +70,10 @@ describe('current private resume fit review projection', () => {
     expect(mocks.list).toHaveBeenCalledWith('OpportunityAssessment', subject, {
       where: {
         'opportunityId in': ['opportunity'],
-        contractVersion: 'opportunity-resume-fit-review/v1-advisory',
+        'contractVersion in': [
+          'opportunity-resume-fit-review/v2-catalog-aliases',
+          'opportunity-resume-fit-review/v3-exact-quotes',
+        ],
         status: 'advisory',
       },
     });
@@ -75,12 +81,62 @@ describe('current private resume fit review projection', () => {
       version: 'opportunity-resume-fit-review-projection/v1',
       mode: 'advisory',
       sourceStatus: 'current',
+      model: result.model,
       coverage: result.coverage,
       requirements: result.requirements,
     });
     expect(projection).not.toHaveProperty('requestId');
     expect(projection).not.toHaveProperty('fitScore');
     expect(projection?.requirements).not.toBe(result.requirements);
+  });
+  it('propagates the attested model instead of a saved JSON model claim', async () => {
+    mocks.read.mockResolvedValue({ ...result, model: 'openai/gpt-6-luna' });
+    const projections = await loadCurrentOpportunityResumeFitReviewProjections({
+      opportunities: [
+        {
+          id: 'opportunity',
+          model: 'openai/gpt-6.1-sol',
+          assessmentJson: '{"model":"openai/gpt-6.1-sol"}',
+        },
+      ],
+      subject,
+    });
+    expect(projections.get('opportunity')?.model).toBe('openai/gpt-6-luna');
+  });
+  it('locates historical V2 and new V3 saved rows while the selected attested reader decides currentness', async () => {
+    mocks.list.mockImplementation(async (_name, _subject, options) => {
+      expect(options.where['contractVersion in']).toEqual([
+        'opportunity-resume-fit-review/v2-catalog-aliases',
+        'opportunity-resume-fit-review/v3-exact-quotes',
+      ]);
+      return [{ opportunityId: 'sol-v2' }, { opportunityId: 'luna-v3' }];
+    });
+    mocks.read.mockImplementation(async (record) =>
+      record.id === 'sol-v2' ? result : undefined,
+    );
+    const projections = await loadCurrentOpportunityResumeFitReviewProjections({
+      opportunities: [{ id: 'sol-v2' }, { id: 'luna-v3' }],
+      subject,
+    });
+    expect(projections.get('sol-v2')?.model).toBe('openai/gpt-6.1-sol');
+    expect(projections.has('luna-v3')).toBe(false);
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    mocks.read.mockImplementation(async (record) =>
+      record.id === 'luna-v3'
+        ? {
+            ...result,
+            contractVersion: 'opportunity-resume-fit-review/v3-exact-quotes',
+            model: 'openai/gpt-6-luna',
+          }
+        : undefined,
+    );
+    const afterModelSelection =
+      await loadCurrentOpportunityResumeFitReviewProjections({
+        opportunities: [{ id: 'sol-v2' }, { id: 'luna-v3' }],
+        subject,
+      });
+    expect(afterModelSelection.has('sol-v2')).toBe(false);
+    expect(afterModelSelection.get('luna-v3')?.model).toBe('openai/gpt-6-luna');
   });
   it('omits absent, stale or foreign receipts rejected by the attested reader', async () => {
     mocks.read.mockResolvedValue(null);

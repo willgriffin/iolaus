@@ -1,4 +1,5 @@
 import {
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
   type OpportunityResumeFitReviewResult,
   readCurrentOpportunityResumeFitReview,
@@ -14,6 +15,7 @@ export interface OpportunityResumeFitReviewProjection {
   version: 'opportunity-resume-fit-review-projection/v1';
   mode: 'advisory';
   sourceStatus: 'current';
+  model: OpportunityResumeFitReviewResult['model'];
   coverage: OpportunityResumeFitReviewResult['coverage'];
   requirements: OpportunityResumeFitReviewResult['requirements'];
 }
@@ -38,7 +40,10 @@ export async function loadCurrentOpportunityResumeFitReviewProjections(input: {
   const saved = await listPrivateRecords('OpportunityAssessment', subject, {
     where: {
       'opportunityId in': uniqueOpportunities.map((record) => record.id),
-      contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+      'contractVersion in': [
+        OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+        OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
+      ],
       status: 'advisory',
     },
   });
@@ -61,6 +66,7 @@ export async function loadCurrentOpportunityResumeFitReviewProjections(input: {
           version: 'opportunity-resume-fit-review-projection/v1',
           mode: 'advisory',
           sourceStatus: 'current',
+          model: result.model,
           coverage: structuredClone(result.coverage),
           requirements: structuredClone(result.requirements),
         });

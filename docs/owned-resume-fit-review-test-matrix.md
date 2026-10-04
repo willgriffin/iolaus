@@ -51,3 +51,27 @@ The corrected focused factory/config suite passed 60 tests (`/tmp/iolaus-152-sol
 
 
 Final native admission of the other six current partial assessments found no affordable Sol continuation. Their unchanged complete-catalog reservations range from $0.080896 to $0.087080, above the remaining $0.064197; Render additionally requires a 4,161-token legal response, exceeding the 3,500 visible contract. No further requests were made. The terminal outcome is seven current JEV partial assessments and one current Northbeam advisory review. There is no verified full-fit score. Source collection, failed request history and the unrelated ordinary pending job remain unchanged.
+
+
+## Configured Luna continuation
+
+The user explicitly increased the cumulative assessment cohort budget by $0.50, from $0.25 to $0.75. This is the operator's cumulative actual-plus-conservative admission guard; the prior cost anchor and $0.185803 basis remain intact. Native per-run $0.10, 80K tokens, provider windows and output bounds are unchanged.
+
+Owned review selection uses the dedicated `BIFROST_OPPORTUNITY_RESUME_FIT_REVIEW_MODEL` key. It accepts only registered Luna or Sol models and requires the existing dedicated intelligence key/profile. Legacy scoring remains pinned to Sol and extraction remains separately pinned to Luna. Luna is included in prepared material, model-specific pricing, governed identity, actual result, receipt lookup and durable native intent. Explicit Sol replay retains its exact historical V2 fingerprint. Current Luna never falls back to a Sol result.
+
+The affected factory/client/native/DTO/component suites passed 88 tests, including exact historical Sol hash, Luna pricing and new identity, wrong-model client/result denial, model drift and truthful model labels. The coherent isolated static check has zero errors and warnings. Independent targeted review is clean. Northbeam's complete Luna preflight admits the same 150 evidence records and 11 source criteria, with 26 source clauses unresolved: 19,023 input plus 4,524 reserved output tokens, $0.004165 at the registered Luna rates. Render still exceeds the visible-output envelope and is held. Actual comparison and continuation receipts are recorded after native execution.
+
+
+### Exact-quote review contract
+
+The first configured Luna V2 request failed citation-span validation after transport. Its actual 10,787 input and 1,329 output tokens cost $0.001744 and remain accounted under the original failed identity. No review was published, and the failed result did not retain the response; the offending citation cannot be identified. The prior successful Sol record remains intact.
+
+The separate `opportunity-resume-fit-review/v3-exact-quotes` contract requests offered evidence aliases and exact, unique quotes instead of model-computed numerical offsets. Native code derives UTF-16 offsets only for an exact contiguous unique substring, checks character boundaries, and restores original identities. Missing, ambiguous, too-short, foreign or unlinked quotes fail closed; no normalization or fuzzy repair is used. Explicit V2 Sol replay retains its original prompt, fingerprint, span schema and output reservation. V3 retains all 150 records and every admitted criterion, and reserves all 4,096 visible plus 1,024 reasoning tokens under the existing native profile limit.
+
+Focused factory, native-job and projection validation passed 70 tests (`/tmp/iolaus-152-v3-quote-focused-r1-20261003.log`). The coherent isolated static check found zero errors and warnings (`/tmp/iolaus-152-v3-quote-static-r1-20261003.log`); independent quote/currentness review was clean, and SMRT freshness reported zero issues. Northbeam's exact native V3 preflight counted 19,114 input tokens and a 3,997-token complete legal response envelope, reserving 24,234 total tokens and $0.004472. Its new identity is separate from both the failed Luna V2 request and historical Sol review.
+
+
+The single corrected V3 Luna transport also failed the typed criterion-row guard, with actual usage of 10,826 input and 1,272 output tokens costing $0.001719. No Luna review was published. That guard checks ordered criterion aliases, status/seniority enums, bounded single-line notes and citation-array cardinality; the generic failure does not identify which condition failed. The new failed V3 identity is retained separately, and neither Luna failure is retried. Continuation remains held pending an evidence-backed diagnosis. The historical Sol advisory and all seven current JEV partial assessments remain preserved. The cumulative actual-plus-conservative basis is $0.189266 under the user-authorized $0.75 cap.
+
+
+The trial is stopped after those two actual failures. No Luna review or further cohort is authorized by the failed quality gate. The operator restores the exact pre-trial dedicated review setting, preserving the working Sol view and all Luna capability/failed receipts; this is a configuration rollback with no provider invocation or automatic retry. The user-authorized cumulative $0.75 budget remains in force. A follow-up should identify structured field-validation failures without exposing private evidence and evaluate a native structured-response schema before any future trial. Neither a specific offending field nor an underlying model/provider defect is established by the retained receipts.

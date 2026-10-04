@@ -11,6 +11,7 @@ import {
 } from './opportunity-resume-fit-review-job.js';
 import {
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
   type PreparedOpportunityResumeFitReview,
   type OpportunityResumeFitReviewResult,
 } from './opportunity-resume-fit-review.js';
@@ -78,7 +79,9 @@ vi.mock('./opportunity-screening-provider.js', () => ({
 }));
 vi.mock('./opportunity-resume-fit-review.js', () => ({
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION:
-    'opportunity-resume-fit-review/v1-advisory',
+    'opportunity-resume-fit-review/v2-catalog-aliases',
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION:
+    'opportunity-resume-fit-review/v3-exact-quotes',
   prepareCurrentOpportunityResumeFitReview: mocks.prepare,
   preflightOpportunityResumeFitReview: mocks.preflight,
   readCurrentOpportunityResumeFitReview: mocks.read,
@@ -95,7 +98,9 @@ type NativeJob = NonNullable<
     ReturnType<NonNullable<OpportunityResumeFitReviewJobDependencies['getJob']>>
   >
 >;
-function fixture() {
+function fixture(
+  model: PreparedOpportunityResumeFitReview['model'] = 'openai/gpt-6.1-sol',
+) {
   const opportunity = {
     id: 'opportunity',
     sourceContentFingerprint: 'source-fp',
@@ -109,9 +114,16 @@ function fixture() {
     name: 'Candidate',
   };
   const prepared: PreparedOpportunityResumeFitReview = {
-    version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    version:
+      model === 'openai/gpt-6-luna'
+        ? OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION
+        : OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    model,
     opportunityId: 'opportunity',
-    fingerprint: 'prepared',
+    fingerprint:
+      model === 'openai/gpt-6.1-sol'
+        ? 'prepared'
+        : hash({ material: 'prepared', model }),
     candidateMaterialFingerprint: 'complete-catalog',
     evidenceFingerprint: 'actual-global-evidence',
     sourceContentFingerprint: 'source-fp',
@@ -142,7 +154,7 @@ function fixture() {
         },
       ],
     }),
-    visibleOutputTokens: 3500,
+    visibleOutputTokens: model === 'openai/gpt-6-luna' ? 4096 : 3500,
     reasoningTokens: 1024,
   };
   const screen: CurrentOpportunityAssessmentScreen = {
@@ -182,7 +194,7 @@ function fixture() {
     },
   };
   const review: OpportunityResumeFitReviewResult = {
-    contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    contractVersion: prepared.version,
     mode: 'advisory',
     agentRunId: 'sol-run',
     requestId: 'actual-sol',
@@ -192,7 +204,7 @@ function fixture() {
     evidenceFingerprint: prepared.evidenceFingerprint,
     sourceContentFingerprint: prepared.sourceContentFingerprint,
     sourceContentVersion: 1,
-    model: 'openai/gpt-6.1-sol',
+    model,
     provider: 'bifrost',
     coverage: {
       candidateSourceCount: 1,
@@ -205,7 +217,8 @@ function fixture() {
   };
   const intent = {
     contract: OPPORTUNITY_RESUME_FIT_REVIEW_JOB_CONTRACT,
-    reviewVersion: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+    reviewVersion: prepared.version,
+    reviewModel: prepared.model,
     fingerprint: prepared.fingerprint,
     candidateMaterialFingerprint: prepared.candidateMaterialFingerprint,
     evidenceFingerprint: prepared.evidenceFingerprint,
@@ -284,12 +297,12 @@ function fixture() {
       requestBytes: 1000,
       inputTokenCount: 200,
       inputTokenCeiling: 1000,
-      maxOutputTokens: 4524,
-      visibleOutputTokens: 3500 as const,
+      maxOutputTokens: prepared.visibleOutputTokens + 1024,
+      visibleOutputTokens: prepared.visibleOutputTokens,
       reasoningTokens: 1024 as const,
       outputShapeTokens: 40,
-      reservedTokens: 5524,
-      reservedSpendMicros: 47240,
+      reservedTokens: 1000 + prepared.visibleOutputTokens + 1024,
+      reservedSpendMicros: model === 'openai/gpt-6-luna' ? 2660 : 47240,
       calls: 1,
       fits: true,
     })),
@@ -376,6 +389,84 @@ describe('native dedicated resume review', () => {
     expect(f.deps.startRun).not.toHaveBeenCalled();
     expect(f.deps.store).not.toHaveBeenCalled();
   });
+  it('executes the newly captured Luna review without reusing or changing the historical Sol receipt', async () => {
+    const old = fixture();
+    old.reuse();
+    const savedSol = structuredClone(old.review);
+    const f = fixture('openai/gpt-6-luna');
+    const currentRead = f.deps.read!;
+    f.deps.read = vi.fn(
+      async (
+        ...args: Parameters<
+          NonNullable<OpportunityResumeFitReviewJobDependencies['read']>
+        >
+      ) =>
+        old.review.fingerprint === f.prepared.fingerprint &&
+        old.review.model === f.prepared.model
+          ? old.review
+          : await currentRead(...args),
+    );
+    expect(f.prepared.fingerprint).not.toBe(old.prepared.fingerprint);
+    expect(f.args.resumeFitReview).toMatchObject({
+      reviewModel: 'openai/gpt-6-luna',
+      reviewVersion: OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
+      fingerprint: f.prepared.fingerprint,
+    });
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).resolves.toMatchObject({
+      reused: false,
+      review: { model: 'openai/gpt-6-luna' },
+    });
+    expect(f.transport).toHaveBeenCalledOnce();
+    expect(f.deps.evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'openai/gpt-6-luna' }),
+      expect.any(Object),
+    );
+    expect(f.deps.store).toHaveBeenCalledOnce();
+    expect(old.review).toEqual(savedSol);
+  });
+  it.each([
+    'cached',
+    'completed',
+    'published',
+  ])('refuses a Sol %s result for a model-pinned Luna intent', async (stage) => {
+    const f = fixture('openai/gpt-6-luna');
+    if (stage === 'cached') f.reuse();
+    if (stage !== 'published') f.review.model = 'openai/gpt-6.1-sol';
+    else {
+      const currentRead = f.deps.read!;
+      f.deps.read = vi.fn(
+        async (
+          ...args: Parameters<
+            NonNullable<OpportunityResumeFitReviewJobDependencies['read']>
+          >
+        ) => {
+          const current = await currentRead(...args);
+          return current
+            ? { ...current, model: 'openai/gpt-6.1-sol' as const }
+            : undefined;
+        },
+      );
+    }
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).rejects.toThrow('PRIVATE');
+    if (stage === 'cached') expect(f.transport).not.toHaveBeenCalled();
+    if (stage !== 'published') expect(f.deps.store).not.toHaveBeenCalled();
+  });
   it.each([
     'queue',
     'owner',
@@ -384,6 +475,7 @@ describe('native dedicated resume review', () => {
     'source',
     'catalog',
     'intent',
+    'model',
     'screen',
     'human',
     'mixed',
@@ -399,6 +491,7 @@ describe('native dedicated resume review', () => {
     if (cause === 'intent')
       (f.args.resumeFitReview as Record<string, unknown>).fingerprint =
         'forged';
+    if (cause === 'model') f.prepared.model = 'openai/gpt-6-luna';
     if (cause === 'screen') f.screen.outcome = 'clear_mismatch';
     if (cause === 'human')
       f.deps.readReviews = vi.fn(
