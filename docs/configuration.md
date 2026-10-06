@@ -229,9 +229,10 @@ IOLAUS_AI_WRITING_OUTPUT_COST_MICROS_PER_MILLION=
   is set explicitly. The indicator in the admin header ("$X AI budget left")
   appears only when a cap applies.
 - **Pricing.** Governed assessment calls use the existing pinned model prices.
-  Cover-letter writing has no pinned price: once any cap is active, set the two
-  `IOLAUS_AI_WRITING_*` prices or cover-letter generation is refused rather
-  than spending unmetered. The assistant keeps its own per-session and per-turn
+  Cover-letter writing and application planning have no pinned price:
+  once a deployment-wide cap is set, set the two `IOLAUS_AI_WRITING_*` prices
+  or those calls are refused rather than spending unmetered. With no cap set
+  they run unmetered, and a per-user override only applies to priced calls. The assistant keeps its own per-session and per-turn
   limits in addition to the per-user cap.
 
 Inspect or adjust a user from the operator shell (user is `--tenant-id` plus

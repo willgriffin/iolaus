@@ -387,6 +387,13 @@ describe.each([
         expect(invoke).toHaveBeenCalledTimes(1);
       });
 
+      it('keeps working in shared mode with no cap and no writing prices', async () => {
+        const invoke = vi.fn(async () => ({ result: 'ok' }));
+        await expect(call(shared, invoke)).resolves.toBe('ok');
+        await expect(call(shared, invoke, null)).resolves.toBe('ok');
+        expect(invoke).toHaveBeenCalledTimes(2);
+      });
+
       it('refuses unattributed or unpriced calls instead of spending unmetered', async () => {
         const invoke = vi.fn(async () => ({ result: 'ok' }));
         await expect(call(priced, invoke, null)).rejects.toMatchObject({

@@ -694,7 +694,18 @@ export async function meterAiWritingCall<T>(options: {
 }): Promise<T> {
   const environment = options.environment ?? process.env;
   assertAiEnabled(environment);
-  if (!resolveAiUsagePolicy(environment).accounting) {
+  const policy = resolveAiUsagePolicy(environment);
+  const pricing = resolveAiWritingPricing(environment);
+  // Without accounting, or without a deployment-wide cap and writing prices,
+  // there is nothing to meter against, so a shared deployment that has not
+  // priced the writing model keeps working. (Per-user operator overrides only
+  // bite on priced, metered calls.)
+  if (
+    !policy.accounting ||
+    (!pricing &&
+      policy.defaultLifetimeCapMicros === 0 &&
+      policy.defaultMonthlyCapMicros === 0)
+  ) {
     return (await options.invoke()).result;
   }
   if (!options.subject) {
@@ -703,7 +714,6 @@ export async function meterAiWritingCall<T>(options: {
       'AI usage could not be attributed to your account, so no AI request was made.',
     );
   }
-  const pricing = resolveAiWritingPricing(environment);
   if (!pricing) {
     throw new AiUsageRefusedError(
       'user_budget_pricing_missing',
