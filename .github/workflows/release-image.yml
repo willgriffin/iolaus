@@ -1,10 +1,10 @@
 ---
 name: Release image
 'on':
+  # Publishing a release is the single automatic trigger; a tag push would
+  # race it and publish a second, different digest for the same tag.
   release:
     types: [published]
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -14,8 +14,7 @@ name: Release image
 permissions: {}
 concurrency:
   group: >-
-    release-image-${{ github.event.release.tag_name || inputs.tag ||
-    github.ref_name }}
+    release-image-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 env:
   IMAGE: ghcr.io/willgriffin/iolaus/site
@@ -30,8 +29,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      RELEASE_TAG: >-
-        ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

@@ -134,7 +134,7 @@ It must replace all of the following before an apply:
    `ghcr.io/willgriffin/iolaus/site@sha256:<digest>` image. Do not use a tag,
    local framework checkout, or a locally built unpinned image. The
    `Release image` workflow (`.github/workflows/release-image.yml`) builds
-   `apps/site/Dockerfile` for each published release or `v*` tag, pushes it to
+   `apps/site/Dockerfile` for each published GitHub release (or a manual dispatch for an existing tag), pushes it to
    GHCR with provenance and SBOM attestations, and records the immutable
    digest in the run's job summary and in a `Container image` section of the
    GitHub release notes. Copy the digest from there, or resolve it with
