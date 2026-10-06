@@ -89,7 +89,28 @@ creates the table). Invites are stored, not deleted: `revoke` stamps the row and
 pnpm --filter @willgriffin/iolaus-site invite:add -- friend@example.com
 pnpm --filter @willgriffin/iolaus-site invite:revoke -- friend@example.com
 pnpm --filter @willgriffin/iolaus-site invite:list
+pnpm --filter @willgriffin/iolaus-site invite:resend -- friend@example.com
 ```
+
+`invite:add` (for a new or reinstated invite) also emails the invitee: a plain
+text and simple HTML message (no tracking) saying they were invited to
+`IOLAUS_APP_NAME`, linking `IOLAUS_PUBLIC_URL` + `/login`, telling them to sign
+in with the account for that email address, and naming the support contact when
+`IOLAUS_SUPPORT_URL` is an email address or `mailto:` link. Pass `--no-email` to
+skip it; `invite:resend` sends it again for an active invite. The attempt time is
+stored on the invite row (`email_attempted_at`).
+
+```sh
+# SMTP over STARTTLS (port 587 by default). All but SMTP_PORT are required.
+SMTP_HOST=email-smtp.us-east-1.amazonaws.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM="JobGenius <noreply@example.com>"
+```
+
+If SMTP is not fully configured the invite is still recorded and the command
+reports that no email was sent. Credentials and message bodies are never logged.
 
 An uninvited or revoked account is sent to `/not-invited` ("You're not invited
 yet"), a uniform page that does not disclose whether the address was ever

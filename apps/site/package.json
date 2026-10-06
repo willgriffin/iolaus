@@ -32,6 +32,7 @@
     "db:status": "tsx scripts/db-status.ts",
     "db:backfill-smrt-native": "tsx scripts/backfill-smrt-native.ts",
     "invite:add": "tsx scripts/invite.ts add",
+    "invite:resend": "tsx scripts/invite.ts resend",
     "invite:revoke": "tsx scripts/invite.ts revoke",
     "invite:list": "tsx scripts/invite.ts list",
     "account:delete": "tsx scripts/account.ts delete",
@@ -76,7 +77,8 @@
     "@happyvertical/sql": "0.96.1",
     "@lucide/svelte": "^1.16.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@willgriffin/iolaus-resume": "workspace:*"
+    "@willgriffin/iolaus-resume": "workspace:*",
+    "nodemailer": "^10.0.14"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
@@ -84,6 +86,7 @@
     "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@types/node": "catalog:",
+    "@types/nodemailer": "^8.0.2",
     "playwright-core": "1.61.1",
     "svelte": "catalog:",
     "svelte-check": "catalog:",

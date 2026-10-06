@@ -1,4 +1,9 @@
 import type { HostedInvite } from '../objects/HostedInvite.js';
+import {
+  type InviteEmailOptions,
+  type InviteEmailOutcome,
+  sendInviteEmail,
+} from './hosted-invite-email.js';
 import { getCollection } from './smrt.js';
 
 /** Test seam: a database handle or config, defaulting to the application's. */
@@ -104,4 +109,74 @@ export async function listInvites(
       status: (invite.revokedAt ? 'revoked' : 'invited') as HostedInviteStatus,
     }))
     .sort((left, right) => left.email.localeCompare(right.email));
+}
+
+/** Stamp the invite row with the time of an email delivery attempt. */
+async function recordEmailAttempt(
+  email: string,
+  options: HostedInviteStoreOptions,
+): Promise<void> {
+  const invite = await findInvite(email, options);
+  if (!invite) return;
+  invite.emailAttemptedAt = new Date();
+  await invite.save();
+}
+
+/**
+ * Send (or re-send) the invitation email for an active invite and record the
+ * attempt. An absent or revoked invite is reported, not emailed; an
+ * unconfigured SMTP is `skipped` and records nothing.
+ */
+export async function sendInviteNotification(
+  email: string,
+  options: HostedInviteStoreOptions & InviteEmailOptions = {},
+): Promise<InviteEmailOutcome | { status: 'not-invited' }> {
+  const normalized = requireInviteEmail(email);
+  if (!(await isEmailInvited(normalized, options))) {
+    return { status: 'not-invited' };
+  }
+  const outcome = await sendInviteEmail(normalized, options);
+  if (outcome.status !== 'skipped') {
+    await recordEmailAttempt(normalized, options);
+  }
+  return outcome;
+}
+
+/**
+ * Invite an address and email it. A new or reinstated invite is emailed
+ * unless `sendEmail` is false; an unchanged one is not (use a resend).
+ */
+export async function inviteAndNotify(
+  email: string,
+  options: HostedInviteStoreOptions &
+    InviteEmailOptions & { sendEmail?: boolean } = {},
+): Promise<{
+  email: string;
+  result: 'created' | 'reinstated' | 'unchanged';
+  emailOutcome: InviteEmailOutcome | { status: 'not-sent'; reason: string };
+}> {
+  const added = await addInvite(email, options);
+  if (options.sendEmail === false) {
+    return {
+      ...added,
+      emailOutcome: { status: 'not-sent', reason: '--no-email' },
+    };
+  }
+  if (added.result === 'unchanged') {
+    return {
+      ...added,
+      emailOutcome: {
+        status: 'not-sent',
+        reason: 'already invited; use invite:resend to send again',
+      },
+    };
+  }
+  const outcome = await sendInviteNotification(added.email, options);
+  return {
+    ...added,
+    emailOutcome:
+      outcome.status === 'not-invited'
+        ? { status: 'not-sent', reason: 'invite is not active' }
+        : outcome,
+  };
 }
