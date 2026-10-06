@@ -1,4 +1,5 @@
 import { getAI } from '@happyvertical/ai';
+import { assertAiEnabled } from '../src/lib/server/ai-usage-guard.js';
 import {
   prepareSkillMatching,
   resolveSkillMatching,
@@ -92,6 +93,8 @@ const cases = [
   },
 ];
 
+// Operator canary: honour the global AI kill switch like every other model call.
+assertAiEnabled();
 if (!process.env.TYPESAFE_API_KEY) {
   console.error(
     'TYPESAFE_API_KEY is required; supply it through the environment.',

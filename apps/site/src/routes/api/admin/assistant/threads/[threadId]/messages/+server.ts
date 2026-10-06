@@ -11,6 +11,7 @@ import {
   AdminAssistantRequestConflictError,
   AdminAssistantTurnTerminalError,
 } from '$lib/server/admin-assistant-turn-adapter.js';
+import { AiUsageRefusedError } from '$lib/server/ai-usage-guard.js';
 import {
   requireCandidateWorkspaceSubject,
   WorkspaceSubjectError,
@@ -122,6 +123,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       ),
     );
   } catch (cause) {
+    if (cause instanceof AiUsageRefusedError) {
+      return json(
+        { code: cause.code, message: cause.message },
+        { status: cause.status },
+      );
+    }
     if (cause instanceof AdminAssistantUnavailableError) {
       return json({ message: cause.message }, { status: 503 });
     }

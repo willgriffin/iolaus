@@ -22,6 +22,11 @@ import {
   type AdminAssistantTurnIdentity,
   createAdminAssistantTurnStore,
 } from './admin-assistant-turn-store.js';
+import {
+  AiUsageRefusedError,
+  assertAiEnabled,
+  reserveAiUserSpend,
+} from './ai-usage-guard.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import {
   requireCandidateWorkspaceSubject,
@@ -179,6 +184,7 @@ async function replayResult(
 export async function runConfiguredAdminAssistantTurn(
   input: AdminAssistantGovernedTurnInput,
 ): Promise<AdminAssistantSendResult> {
+  assertAiEnabled();
   const threadId = requirePersistedId(input.thread, 'thread');
   const agentSessionId = requirePersistedId(input.session, 'session');
   const roomId = input.session.chatRoomId?.trim();
@@ -239,6 +245,34 @@ export async function runConfiguredAdminAssistantTurn(
   if (reservation.kind === 'in_progress') return { inProgress: true };
   if (reservation.kind === 'blocked' || reservation.kind === 'failed') {
     throw new AdminAssistantTurnTerminalError(reservation.kind);
+  }
+
+  // The per-session limit above still applies; the per-user cap is the
+  // account-wide budget shared with every other hosted AI feature.
+  let userSpend: Awaited<ReturnType<typeof reserveAiUserSpend>>;
+  try {
+    userSpend = await reserveAiUserSpend({
+      feature: 'admin-assistant',
+      micros: reservedSpendMicros,
+      requestId,
+      subject: {
+        tenantId: input.subject.tenantId,
+        userId: input.subject.userId,
+      },
+    });
+  } catch (refusal) {
+    await store.fail(
+      identity,
+      reservation.turn.id,
+      refusal instanceof AiUsageRefusedError ? refusal.code : 'ai_refused',
+      {
+        accountingBasis: 'actual',
+        actualInputTokens: 0,
+        actualOutputTokens: 0,
+        actualSpendMicros: 0,
+      },
+    );
+    throw refusal;
   }
 
   let providerInvoked = false;
@@ -317,6 +351,7 @@ export async function runConfiguredAdminAssistantTurn(
       response.usage,
       reservation.turn.reservedSpendMicros,
     );
+    await userSpend?.settle(accounting.spendMicros, accounting.basis);
     await store.complete(identity, reservation.turn.id, {
       accountingBasis: accounting.basis,
       actualInputTokens: usage.promptTokens,
@@ -348,6 +383,9 @@ export async function runConfiguredAdminAssistantTurn(
         )
       : { basis: 'actual' as const, spendMicros: 0 };
     const usage = usageParts(providerUsage);
+    if (providerInvoked)
+      await userSpend?.settle(accounting.spendMicros, accounting.basis);
+    else await userSpend?.release();
     await store.fail(identity, reservation.turn.id, providerErrorCode(cause), {
       accountingBasis: accounting.basis,
       actualInputTokens: usage.promptTokens,

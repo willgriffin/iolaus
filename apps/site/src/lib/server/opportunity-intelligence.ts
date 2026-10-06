@@ -12,6 +12,11 @@ import {
   resolveOpportunityIntelligenceScoringAiProfileClient,
 } from './ai-config.js';
 import {
+  type AiSpendScope,
+  assertAiEnabled,
+  meterAiWritingCall,
+} from './ai-usage-guard.js';
+import {
   applicationUpdatesFromPayload,
   commitApplicationIfCurrent,
 } from './application-concurrency.js';
@@ -194,6 +199,11 @@ export interface OpportunityIntelligenceOptions {
   sourceId?: string;
   timeout?: number;
   user?: Pick<User, 'id'> | null;
+  /**
+   * User billed for this run's ungoverned or governed model calls. Set by
+   * candidate-owned callers; absent for platform (catalog/crawl) work.
+   */
+  billTo?: { tenantId: string; userId: string };
   /** Set only by a freshly resolved candidate-owned job wrapper. */
   workspaceSubject?: WorkspaceSubject;
 }
@@ -581,6 +591,10 @@ async function requestJson(
     maxTokens: number;
     inputTokenCeiling?: number;
     signal?: AbortSignal;
+    /** Bill this call to a user's AI budget (ungoverned writing path). */
+    billing?: { feature: string; subject: AiSpendScope | null | undefined };
+    /** User billed by the governed request. */
+    billedUser?: { tenantId: string; userId: string };
   },
 ): Promise<Record<string, unknown>> {
   const inputTokenCeiling =
@@ -636,9 +650,28 @@ async function requestJson(
       usage: response.usage,
     };
   };
-  if (!options.governance) return (await invoke()).output;
+  if (!options.governance) {
+    if (!options.billing) {
+      assertAiEnabled();
+      return (await invoke()).output;
+    }
+    return await meterAiWritingCall({
+      feature: options.billing.feature,
+      inputChars: messages.reduce(
+        (total, message) => total + String(message.content).length,
+        0,
+      ),
+      invoke: async () => {
+        const invoked = await invoke();
+        return { result: invoked.output, usage: invoked.usage };
+      },
+      maxOutputTokens: options.maxTokens,
+      subject: options.billing.subject,
+    });
+  }
   return (
     await executeGovernedOpportunityIntelligenceRequest({
+      billedUser: options.billedUser,
       estimatedInputTokens,
       identity: options.governance.identity,
       inputTokenCeiling,
@@ -1892,6 +1925,7 @@ async function runScore(
           inputTokenCeiling: request.inputTokenCeiling,
           maxTokens: 2_048,
           signal: options.signal,
+          billedUser: options.billTo ?? options.workspaceSubject,
         },
       );
       score = normalizeOpportunityScoreOutput(output);
@@ -2845,7 +2879,11 @@ async function runPlan(
       settings,
       buildPlanMessages({ application, evaluationScore, opportunity, reason }),
       'LLM application planning',
-      { maxTokens: 4_096, signal: options.signal },
+      {
+        billing: { feature: 'application-plan', subject: options.billTo },
+        maxTokens: 4_096,
+        signal: options.signal,
+      },
     );
     const plan = normalizeApplicationPlan(output);
     const replaceDefaultPlanningValues = !stringValue(

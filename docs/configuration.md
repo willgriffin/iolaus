@@ -222,3 +222,67 @@ upgrading so a generic Iolaus installation cannot inherit an old local token.
 Legacy database backups remain restorable when explicitly selected, but new
 backups live under the generic application identifier; set `IOLAUS_BACKUP_DIR`
 to the former backup directory when recovering an earlier snapshot.
+
+## Hosted AI usage: per-user caps and kill switch
+
+A hosted `shared` deployment can pay for AI while capping each user. These
+controls sit in front of every model call; shared-catalog crawl and source
+intelligence stay platform costs under their existing
+`OPPORTUNITY_INTELLIGENCE_*_LIMIT` ceilings and are never billed to a user.
+
+```sh
+# Refuse every model call (any workspace mode). Anything except an explicit
+# false/0/no/off engages it, so a typo fails closed.
+IOLAUS_AI_DISABLED=false
+# Per-user caps in micro-dollars (1000000 = $1). 0 (default) means no cap.
+IOLAUS_AI_USER_LIFETIME_CAP_MICROS=0
+IOLAUS_AI_USER_MONTHLY_CAP_MICROS=0
+# Explicit prices for the cover-letter writing model (see below).
+IOLAUS_AI_WRITING_INPUT_COST_MICROS_PER_MILLION=
+IOLAUS_AI_WRITING_OUTPUT_COST_MICROS_PER_MILLION=
+```
+
+- **Who is billed.** Spend is attributed to the verified tenant and owner user.
+  Candidate-owned calls are billed: the admin assistant, screening and
+  job-evaluation assessments, resume-fit review, strength verification,
+  question screening, skill discovery and cover-letter generation. Calls with
+  no workspace subject (crawl, source extraction, source coverage) are not.
+- **Enforcement.** Before each provider call the worst-case cost is reserved
+  atomically against the user's ledger (`ai_user_spend_entries`) under a
+  per-user lock (a PostgreSQL advisory lock, or the keyed file lock on
+  SQLite), then settled to the actual cost, or released when no provider call
+  was made (cached result, block or refusal). Concurrent requests cannot jointly
+  exceed a cap. A call that fails after reaching the provider keeps its full
+  reservation. If the ledger cannot be reached the call is refused.
+- **Refusal.** A spent budget returns a clear message (HTTP 429 for requests)
+  and no provider call is made. The kill switch returns HTTP 503. Background
+  jobs fail with the same message. Raising the cap or the next calendar month
+  (UTC) restores service; the kill switch needs no operator reset.
+- **Modes.** `shared` mode always records usage so a cap set later sees
+  history. `private` installs record and enforce nothing unless a cap variable
+  is set explicitly. The indicator in the admin header ("$X AI budget left")
+  appears only when a cap applies.
+- **Pricing.** Governed assessment calls use the existing pinned model prices.
+  Cover-letter writing and application planning have no pinned price:
+  once a deployment-wide cap is set, set the two `IOLAUS_AI_WRITING_*` prices
+  or those calls are refused rather than spending unmetered. With no cap set
+  they run unmetered, and a per-user override only applies to priced calls. The assistant keeps its own per-session and per-turn
+  limits in addition to the per-user cap.
+
+Inspect or adjust a user from the operator shell (user is `--tenant-id` plus
+`--user-id`, or `--email`):
+
+```sh
+pnpm --filter @willgriffin/iolaus-site ai:budget status
+pnpm --filter @willgriffin/iolaus-site ai:budget status --email user@example.com
+pnpm --filter @willgriffin/iolaus-site ai:budget set --email user@example.com --lifetime 5000000 --monthly 2000000
+pnpm --filter @willgriffin/iolaus-site ai:budget set --email user@example.com --monthly default   # inherit the env default
+pnpm --filter @willgriffin/iolaus-site ai:budget adjust --email user@example.com --micros -1000000 --note "goodwill credit"
+pnpm --filter @willgriffin/iolaus-site ai:budget release-stale --email user@example.com --minutes 30
+```
+
+`set` overrides a user's caps (`none` removes a cap for that user, `default`
+inherits the environment). `adjust` credits or debits recorded usage.
+`release-stale` returns reservations stranded by a crashed process. Run
+`pnpm --filter @willgriffin/iolaus-site db:migrate` after upgrading to create
+the `ai_user_spend_entries` and `ai_user_budgets` tables.

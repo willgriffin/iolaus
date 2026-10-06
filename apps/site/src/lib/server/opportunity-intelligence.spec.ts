@@ -1768,6 +1768,73 @@ describe('processOpportunityIntelligence', () => {
     );
   });
 
+  it.each([
+    ['the global AI kill switch is on', { IOLAUS_AI_DISABLED: 'true' }, true],
+    [
+      'a metered deployment cannot attribute the call to a user',
+      {
+        IOLAUS_AI_USER_LIFETIME_CAP_MICROS: '1000000',
+        IOLAUS_AI_WRITING_INPUT_COST_MICROS_PER_MILLION: '1000',
+        IOLAUS_AI_WRITING_OUTPUT_COST_MICROS_PER_MILLION: '2000',
+      },
+      false,
+    ],
+    [
+      'a metered deployment has no writing prices',
+      { IOLAUS_AI_USER_LIFETIME_CAP_MICROS: '1000000' },
+      true,
+    ],
+  ])('makes no planning provider call when %s', async (_name, env, billed) => {
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    try {
+      mocks.collections.set(
+        'Opportunity',
+        collection([
+          record({ id: 'opp-1', status: 'apply', title: 'AI Engineer' }),
+        ]),
+      );
+      mocks.collections.set(
+        'Application',
+        collection([
+          record({
+            accountStatus: 'unknown',
+            applyMethod: 'company_site',
+            coverLetterMode: 'none',
+            evaluationScoreId: '',
+            id: 'app-1',
+            opportunityId: 'opp-1',
+            resumeMode: 'default',
+            status: 'draft',
+          }),
+        ]),
+      );
+      mocks.collections.set('EvaluationScore', collection([]));
+      const aiClient = { chat: vi.fn(async () => ({ content: '{}' })) };
+      const run = async () =>
+        await processOpportunityIntelligence({
+          aiClient,
+          applicationId: 'app-1',
+          ...(billed
+            ? { billTo: { tenantId: 'tenant-1', userId: 'user-1' } }
+            : {}),
+          modes: ['plan'],
+          opportunityId: 'opp-1',
+          profile: 'opportunity-intelligence-zai',
+          runLifecycleMutation: vi.fn(
+            async (action) => await action({ update: mocks.databaseUpdate }),
+          ),
+        });
+      // The refusal is raised before the provider client is reached: the kill
+      // switch rejects outright; a metering refusal is reported as a step error.
+      if ((env as Record<string, string>).IOLAUS_AI_DISABLED)
+        await expect(run()).rejects.toMatchObject({ code: 'ai_disabled' });
+      else await expect(run()).resolves.toMatchObject({ status: 'error' });
+      expect(aiClient.chat).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('keeps a SmrtObject accessor id in the planning concurrency fence', async () => {
     const opportunity = record({
       id: 'opp-accessor-id',

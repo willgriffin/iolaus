@@ -7,6 +7,7 @@ import {
   getPackageConfig,
   loadConfig,
 } from '@happyvertical/smrt-config';
+import { assertAiEnabled } from './ai-usage-guard.js';
 import { getAppConfig } from './app-config.js';
 
 export type AiProfileName = 'cheap' | 'good' | (string & {});
@@ -278,6 +279,8 @@ export async function resolveAiProfileClient(
   profileName: AiProfileName,
   options: AiProfileClientOptions = {},
 ): Promise<AiProfileClient | null> {
+  // Global kill switch: no provider client is ever constructed while engaged.
+  assertAiEnabled();
   await ensureSmrtConfigLoaded();
   const packageConfig = getPackageConfig<AiPackageConfig>(
     'ai',

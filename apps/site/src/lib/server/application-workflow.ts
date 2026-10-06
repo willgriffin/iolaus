@@ -1721,6 +1721,7 @@ export async function runWithFreshPostingPreflight<T>(options: {
 async function planAcceptedOpportunity(options: {
   applicationId: string;
   opportunityId: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }): Promise<void> {
   if (!options.applicationId) return;
@@ -1730,6 +1731,10 @@ async function planAcceptedOpportunity(options: {
     );
     await processOpportunityIntelligence({
       applicationId: options.applicationId,
+      billTo: {
+        tenantId: options.subject.tenantId,
+        userId: options.subject.userId,
+      },
       modes: ['plan'],
       opportunityId: options.opportunityId,
       user: options.user,
@@ -1819,6 +1824,7 @@ export async function recordExplicitOpportunityDecision(
     await planAcceptedOpportunity({
       applicationId: stringValue(result.applicationId),
       opportunityId,
+      subject,
       user: options.user,
     });
   }
@@ -1999,6 +2005,7 @@ export async function acceptOpportunityForApplication(
         ? stringValue(result.applicationId)
         : stringValue(result.task.applicationId),
     opportunityId,
+    subject,
     user: options.user,
   });
   return result;
@@ -2124,6 +2131,7 @@ export async function processRecommendationTask(
     await planAcceptedOpportunity({
       applicationId: stringValue(result.task.applicationId),
       opportunityId,
+      subject,
       user: options.user,
     });
   }
