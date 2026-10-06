@@ -128,3 +128,74 @@ Run the integration suites with `pnpm --filter @willgriffin/iolaus-site exec
 vitest run src/lib/server/account-deletion.integration.spec.ts` (SQLite) and set
 `ACCOUNT_DELETION_POSTGRES_TEST_DATABASE_URL` to a disposable PostgreSQL server
 to add the PostgreSQL run.
+
+## Moving a private workspace into a hosted account
+
+`workspace:export` and `workspace:import` carry one private (daily-use)
+workspace into a shared hosted deployment. `app:export`, `db:export` and the
+account export cannot do this: they are installation-bound, replace a whole
+database, or omit the catalog, ranks and asset bytes.
+
+```bash
+# Source side (read-only; REPEATABLE READ READ ONLY on PostgreSQL).
+WORKSPACE_EXPORT_DATABASE_URL=postgresql://... \
+RESUME_FILES_CONFIG_JSON='{...source asset store...}' \
+pnpm --filter @willgriffin/iolaus-site workspace:export -- --out DIR
+
+# Hosted side, as a one-off job with the migration role and the hosted asset store.
+pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --dry-run
+pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS \
+  --apply --expected-plan-sha256 DIGEST --receipt RECEIPT.json
+pnpm --filter @willgriffin/iolaus-site workspace:import -- --rollback RECEIPT.json
+```
+
+The bundle (manifest, one JSONL file per table, asset bytes) holds private
+data and is checksummed end to end; keep it outside git in a `0700` directory
+and delete it after the import. Output of both commands is counts only.
+
+What travels:
+
+- Shared catalog (insert-if-absent, deduped against the target by natural key:
+  tags by slug/context/type, companies by company key or slug, sources by
+  slug/context, opportunities by canonical URL; references are remapped on a
+  hit): `tags`, `companies`, `sources`, `opportunities`, `source_tags`,
+  `company_tags`, `opportunity_tags`. Source account fields (`login_identity`,
+  `account_notes`, `warden_reference`, `owner`, `owner_profile_id`) and
+  opportunity review/organization fields are blanked in the bundle. Sources keep
+  their active state unless `--deactivate-sources` is passed.
+- Owned rows (everything in the ownership manifest plus
+  `opportunity_recommendation_ranks`) carrying the owner tuple, and only the
+  `agent_runs` that a carried row references. Actor columns naming an unknown
+  identity are blanked.
+- Asset bytes under `generated-resumes/` and `application-packages/` that the
+  owned rows reference, uploaded to the configured asset store with a sha256
+  read-back before the database commits.
+
+What never travels: `company_research`, identity/session/credential tables,
+provider keys, the job queue, change feed and crawl internals, the AI spend
+ledger and budgets, and any row outside the owner tuple. An owner-scoped table
+that is not classified fails the export rather than being dropped silently.
+
+Ids are **preserved** (tenant, user, Profile, candidate profile and every row
+id). The screening fingerprints on assessments, ranks and AI proof receipts hash
+the subject and evidence ids, so re-keying would make them stale and they cannot
+be recomputed without the model. The import therefore creates the account
+exactly as a first magic-link sign-in would (Person profile, User, private
+tenant, member role) but with the source ids; the first real sign-in reuses it.
+If the address already has an account with different ids the import refuses:
+remove the empty account with `account:delete` first. Keep the address
+un-invited while importing and run `invite:add` afterwards.
+
+Plan and apply share one code path. `--dry-run` runs the whole import in a
+transaction and rolls it back; `--apply` repeats it and commits only if the plan
+digest equals `--expected-plan-sha256`, so the reviewed plan is exactly what is
+applied. Problems (slug collisions, an id held by another owner, rows outside the
+tuple, asset conflicts) are reported by table with counts, make the plan
+ineligible and block apply. The rank skill-snapshot columns are backfilled from
+the imported opportunity when the source predates them. Re-running is a no-op:
+rows are inserted only when their id is absent. The receipt (ids only, mode
+`0600`, written before the commit) lets `--rollback` delete exactly what the
+import inserted, never pre-existing catalog rows, and refuses when the account
+gained other data or another tenant references an imported catalog row. Bundle
+and target must use the same engine (PostgreSQL to PostgreSQL, SQLite to
+SQLite).

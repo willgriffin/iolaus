@@ -5,7 +5,8 @@
     "DATABASE_URL",
     "GITHUB_TOKEN",
     "NODE_ENV",
-    "NODE_OPTIONS"
+    "NODE_OPTIONS",
+    "WORKSPACE_TRANSFER_POSTGRES_TEST_DATABASE_URL"
   ],
   "tasks": {
     "build": {

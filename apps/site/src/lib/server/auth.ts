@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { getAuth, type TokenClaims } from '@happyvertical/auth';
-import { resolveDatabase } from '@happyvertical/smrt-core';
+import {
+  resolveDatabase,
+  type SmrtClassOptions,
+} from '@happyvertical/smrt-core';
 import {
   DEFAULT_ROLE_SLUGS,
   MembershipCollection,
@@ -431,11 +434,18 @@ export function hostedWorkspaceTenantSlug(userId: string): string {
   return `${appConfig.tenantSlug}-user-${digest}`;
 }
 
-async function ensureHostedWorkspaceAccess(user: User) {
+export async function ensureHostedWorkspaceAccess(
+  user: User,
+  overrides: {
+    /** Workspace import: create the tenant with a preserved id. */
+    options?: SmrtClassOptions;
+    tenantId?: string;
+  } = {},
+) {
   const userId = user.id?.trim();
   if (!userId) throw new Error('Unable to resolve hosted workspace user.');
 
-  const options = getSmrtOptions();
+  const options = overrides.options ?? getSmrtOptions();
   const roles = await RoleCollection.create(options);
   const tenants = await TenantCollection.create(options);
   const memberships = await MembershipCollection.create(options);
@@ -446,6 +456,7 @@ async function ensureHostedWorkspaceAccess(user: User) {
   if (!tenant) {
     try {
       tenant = await tenants.create({
+        ...(overrides.tenantId ? { id: overrides.tenantId } : {}),
         description: 'Private workspace for one verified Iolaus user.',
         name: `${appConfig.appName} workspace`,
         slug,

@@ -1,0 +1,757 @@
+import { randomUUID } from 'node:crypto';
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getFilesystem } from '@happyvertical/files';
+import { getTestDatabase } from '@happyvertical/smrt-core';
+import {
+  backfillProfileEmailKeys,
+  ProfileCollection,
+} from '@happyvertical/smrt-profiles';
+import {
+  backfillUserEmailKeys,
+  UserCollection,
+} from '@happyvertical/smrt-users';
+import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { insert } from './fixtures/account-seed.js';
+import './smrt.js';
+import { exportWorkspace } from './workspace-export.js';
+import {
+  importWorkspace,
+  rollbackWorkspaceImport,
+} from './workspace-import.js';
+import { workspaceOwnershipClasses } from './workspace-ownership-backfill.js';
+import {
+  canonicalJson,
+  computeBundleSha256,
+  ownedTables,
+  sha256Hex,
+  type TransferDatabase,
+  type TransferDialect,
+  WorkspaceTransferError,
+} from './workspace-transfer.js';
+
+// Two schemas of ~70 tables are created per test.
+vi.setConfig({ hookTimeout: 300_000, testTimeout: 300_000 });
+
+type TestDatabase = Awaited<ReturnType<typeof getTestDatabase>>;
+
+const shared = {
+  IOLAUS_WORKSPACE_MODE: 'shared',
+  SMRT_APP_ID: 'beta-app',
+  SMRT_RUNTIME_PROFILE: 'self-hosted',
+};
+
+const classes = [
+  ...workspaceOwnershipClasses,
+  'OpportunityRecommendationRank',
+  'Tag',
+  'Company',
+  'CompanyResearch',
+  'Source',
+  'Opportunity',
+  'SourceTag',
+  'CompanyTag',
+  'OpportunityTag',
+  'HostedInvite',
+  'User',
+  'Tenant',
+  'Membership',
+  'Role',
+  'Permission',
+  'RolePermission',
+  'Session',
+  'Profile',
+  'ProfileType',
+  'OidcIdentity',
+  'OidcProfileEmailReservation',
+];
+
+interface Principal {
+  candidateProfileId: string;
+  email: string;
+  smrtProfileId: string;
+  tenantId: string;
+  userId: string;
+}
+
+function principal(label: string): Principal {
+  return {
+    candidateProfileId: randomUUID(),
+    email: `${label}@example.invalid`,
+    smrtProfileId: randomUUID(),
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+  };
+}
+
+const SECRET = 'PRIVATE-NOTE-SHOULD-NOT-TRAVEL';
+
+interface Seeded {
+  agentRunKept: string;
+  agentRunDropped: string;
+  assetKey: string;
+  opportunityIds: string[];
+}
+
+async function count(
+  db: TransferDatabase,
+  table: string,
+  where = '1 = 1',
+  values: unknown[] = [],
+): Promise<number> {
+  const result = (await db.query(
+    `SELECT COUNT(*) AS n FROM "${table}" WHERE ${where}`,
+    values,
+  )) as { rows: Array<{ n: unknown }> };
+  return Number(result.rows[0].n);
+}
+
+async function seedSource(
+  db: TestDatabase,
+  who: Principal,
+  dialect: TransferDialect,
+): Promise<Seeded> {
+  const bool = (value: boolean) =>
+    dialect === 'sqlite' ? (value ? 1 : 0) : value;
+  await insert(db, 'users', {
+    email: `source-${who.email}`,
+    email_key: `source-${who.email}`,
+    id: who.userId,
+    profile_id: who.smrtProfileId,
+    status: 'active',
+  });
+  const tag = randomUUID();
+  await insert(db, 'tags', {
+    _meta_type: 'tag',
+    id: tag,
+    name: 'remote',
+    slug: 'remote-x',
+  });
+  const company = randomUUID();
+  await insert(db, 'companies', {
+    company_key: 'acme',
+    id: company,
+    name: 'Acme',
+    slug: 'acme',
+  });
+  const source = randomUUID();
+  await insert(db, 'sources', {
+    account_notes: SECRET,
+    id: source,
+    is_active: bool(true),
+    login_identity: SECRET,
+    owner: SECRET,
+    slug: 'board-x',
+    warden_reference: SECRET,
+  });
+  const opportunityIds = [randomUUID(), randomUUID(), randomUUID()];
+  for (const [index, id] of opportunityIds.entries()) {
+    await insert(db, 'opportunities', {
+      canonical_url: `https://jobs.example.invalid/${index}`,
+      company_id: company,
+      id,
+      preferred_skills: 'sql',
+      required_skills: 'typescript,go',
+      reviewed_by_user_id: randomUUID(),
+      slug: `opp-${index}`,
+      source_id: source,
+    });
+  }
+  await insert(db, 'source_tags', { source_id: source, tag_id: tag });
+  await insert(db, 'company_research', { why_interesting: SECRET });
+
+  const agentRunKept = randomUUID();
+  const agentRunDropped = randomUUID();
+  const tuple = {
+    owner_user_id: who.userId,
+    tenant_id: who.tenantId,
+  };
+  for (const table of ownedTables) {
+    const own =
+      table === 'candidate_profiles'
+        ? { ...tuple, id: who.candidateProfileId }
+        : { ...tuple, candidate_profile_id: who.candidateProfileId };
+    const extra: Record<string, unknown> = {};
+    if (table === 'agent_runs') {
+      await insert(db, table, { ...own, id: agentRunKept });
+      await insert(db, table, { ...own, id: agentRunDropped });
+      continue;
+    }
+    if (
+      table === 'opportunity_assessments' ||
+      table === 'opportunity_recommendation_ranks'
+    ) {
+      extra.agent_run_id = agentRunKept;
+      extra.opportunity_id = opportunityIds[0];
+    }
+    if (table === 'decisions') extra.decider_user_id = randomUUID();
+    await insert(db, table, { ...own, ...extra });
+  }
+  return { agentRunDropped, agentRunKept, assetKey: '', opportunityIds };
+}
+
+async function seedBystander(
+  db: TestDatabase,
+  other: Principal,
+): Promise<void> {
+  for (const table of ownedTables) {
+    await insert(db, table, {
+      ...(table === 'candidate_profiles'
+        ? { id: other.candidateProfileId }
+        : { candidate_profile_id: other.candidateProfileId }),
+      owner_user_id: other.userId,
+      tenant_id: other.tenantId,
+    });
+  }
+}
+
+function transfer(contract: {
+  open: () => Promise<TestDatabase>;
+  dialect: TransferDialect;
+}) {
+  const { dialect, open } = contract;
+  const dirs: string[] = [];
+  let sourceDb: TestDatabase | undefined;
+  let targetDb: TestDatabase | undefined;
+  const bundles = new Map<string, ReturnType<typeof buildBundle>>();
+
+  afterAll(async () => {
+    await sourceDb?.close?.();
+    await targetDb?.close?.();
+    for (const dir of dirs.splice(0))
+      rmSync(dir, { force: true, recursive: true });
+  });
+  const tempDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'iolaus-transfer-'));
+    dirs.push(dir);
+    return dir;
+  };
+
+  /** One source workspace (owner + bystander + assets); bundles are read-only. */
+  async function buildBundle() {
+    sourceDb ??= await open();
+    const source = sourceDb;
+    const who = principal('owner');
+    const seeded = await seedSource(source, who, dialect);
+    await seedBystander(source, principal('bystander'));
+    const sourceFs = await getFilesystem({
+      basePath: tempDir(),
+      type: 'local',
+    });
+    const owned = (
+      (await source.query('SELECT id FROM resume_assets WHERE tenant_id = ?', [
+        who.tenantId,
+      ])) as unknown as { rows: Array<{ id: string }> }
+    ).rows[0].id;
+    seeded.assetKey = `generated-resumes/${owned}/resume.pdf`;
+    await sourceFs.write(seeded.assetKey, Buffer.from('%PDF-owner-bytes'));
+    await sourceFs.write(
+      'generated-resumes/not-owned/x.pdf',
+      Buffer.from('nope'),
+    );
+    const out = join(tempDir(), 'bundle');
+    const result = await exportWorkspace({
+      database: source as unknown as TransferDatabase,
+      dialect,
+      filesystem: sourceFs,
+      outDir: out,
+      tenantId: who.tenantId,
+      userId: who.userId,
+    });
+    // The source is only needed to build the bundle; release it so an
+    // in-memory SQLite target is a different database.
+    await source.close?.();
+    sourceDb = undefined;
+    return { out, result, seeded, who };
+  }
+  async function exported(options: { stripRankSnapshots?: boolean } = {}) {
+    if (!bundles.has('plain')) bundles.set('plain', buildBundle());
+    const plain = await (bundles.get('plain') as ReturnType<
+      typeof buildBundle
+    >);
+    if (!options.stripRankSnapshots) return plain;
+    if (!bundles.has('strip')) {
+      const out = join(tempDir(), 'bundle');
+      cpSync(plain.out, out, { recursive: true });
+      stripRankSnapshots(out);
+      bundles.set('strip', Promise.resolve({ ...plain, out }));
+    }
+    return await (bundles.get('strip') as ReturnType<typeof buildBundle>);
+  }
+
+  /** The hosted target, emptied so each test starts from a migrated empty database. */
+  const hostedTarget = async () => {
+    if (dialect === 'sqlite') {
+      // An in-memory database is cheap to replace; wiping one in place is not
+      // reliable across the adapter's transaction handling.
+      await targetDb?.close?.();
+      targetDb = await open();
+    } else {
+      targetDb ??= await open();
+    }
+    const db = targetDb;
+    if (dialect === 'postgres') {
+      const names = (
+        (await db.query(
+          `SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()`,
+        )) as unknown as { rows: Array<{ name: string }> }
+      ).rows
+        .map((row) => row.name)
+        .filter((name) => !name.startsWith('_smrt'));
+      await db.query(
+        `TRUNCATE ${names.map((name) => `"${name}"`).join(', ')} RESTART IDENTITY CASCADE`,
+      );
+    }
+    await backfillProfileEmailKeys(db);
+    await backfillUserEmailKeys(db);
+    const fs = await getFilesystem({ basePath: tempDir(), type: 'local' });
+    return { db, fs, receipt: join(tempDir(), 'receipt.json') };
+  };
+
+  const run = (
+    db: TestDatabase,
+    fs: Awaited<ReturnType<typeof getFilesystem>>,
+    out: string,
+    extra: Partial<Parameters<typeof importWorkspace>[0]> = {},
+  ) =>
+    importWorkspace({
+      bundleDir: out,
+      database: db as unknown as TransferDatabase,
+      dialect,
+      email: 'Owner@Example.invalid',
+      environment: shared,
+      filesystem: fs,
+      mode: 'dry-run',
+      ...extra,
+    });
+
+  it('exports only the owner workspace plus catalog and never the private fields', async () => {
+    const { out, result, seeded, who } = await exported();
+    for (const table of ownedTables) {
+      if (table === 'agent_runs') continue;
+      expect(result.tables[table], table).toBe(1);
+    }
+    // only the referenced agent run travels
+    expect(result.tables.agent_runs).toBe(1);
+    expect(result.tables.opportunities).toBe(3);
+    expect(result.tables.company_research).toBeUndefined();
+    expect(result.assets).toBe(1);
+    const everything = readdirDeep(out)
+      .filter((file) => file.endsWith('.jsonl'))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n');
+    expect(everything).not.toContain(SECRET);
+    expect(everything).not.toContain(seeded.agentRunDropped);
+    expect(everything).toContain(who.tenantId);
+    const manifest = JSON.parse(
+      readFileSync(join(out, 'manifest.json'), 'utf8'),
+    );
+    expect(manifest.identity).toEqual({
+      candidateProfileId: who.candidateProfileId,
+      smrtProfileId: who.smrtProfileId,
+      tenantId: who.tenantId,
+      userId: who.userId,
+    });
+  });
+
+  it('dry-runs without writing, refuses a wrong digest, then applies the reviewed plan', async () => {
+    const { out, seeded, who } = await exported({ stripRankSnapshots: true });
+    const { db, fs, receipt } = await hostedTarget();
+
+    const plan = await run(db, fs, out);
+    expect(plan.mode).toBe('dry-run');
+    expect(plan.plan.eligible).toBe(true);
+    expect(plan.plan.identity.create).toBe(true);
+    expect(plan.plan.tables.opportunities.inserted).toBe(3);
+    expect(plan.plan.assets.toUpload).toBe(1);
+    expect(await count(db, 'users')).toBe(0);
+    expect(await count(db, 'opportunities')).toBe(0);
+    expect(await fs.exists(seeded.assetKey)).toBe(false);
+    // counts only: no identifiers or content in the plan output
+    const printed = JSON.stringify(plan);
+    expect(printed).not.toContain(who.userId);
+    expect(printed).not.toContain('owner@example.invalid');
+
+    await expect(
+      run(db, fs, out, {
+        expectedPlanSha256: sha256Hex('nope'),
+        mode: 'apply',
+        receiptPath: receipt,
+      }),
+    ).rejects.toMatchObject({ code: 'plan-mismatch' });
+    expect(await count(db, 'users')).toBe(0);
+    expect(await fs.exists(seeded.assetKey)).toBe(false);
+    await expect(
+      run(db, fs, out, { mode: 'apply', receiptPath: receipt }),
+    ).rejects.toMatchObject({ code: 'plan-mismatch' });
+
+    const applied = await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    expect(applied.mode).toBe('applied');
+    expect(applied.planSha256).toBe(plan.planSha256);
+    expect(existsSync(receipt)).toBe(true);
+
+    // identity preserved, target email used
+    const user = (
+      (await db.query('SELECT id, email, profile_id FROM users')) as {
+        rows: Array<Record<string, string>>;
+      }
+    ).rows;
+    expect(user).toHaveLength(1);
+    expect(user[0].id).toBe(who.userId);
+    expect(user[0].email).toBe('owner@example.invalid');
+    expect(user[0].profile_id).toBe(who.smrtProfileId);
+    expect(await count(db, 'tenants', 'id = ?', [who.tenantId])).toBe(1);
+    expect(await count(db, 'memberships')).toBe(1);
+
+    // every private row carries exactly the owner tuple
+    for (const table of ownedTables) {
+      expect(await count(db, table), table).toBe(1);
+      expect(
+        await count(
+          db,
+          table,
+          'NOT (CAST(tenant_id AS TEXT) = ? AND CAST(owner_user_id AS TEXT) = ?)',
+          [who.tenantId, who.userId],
+        ),
+        table,
+      ).toBe(0);
+    }
+    // catalog: private fields blanked, state preserved, nothing skipped leaked
+    expect(await count(db, 'company_research')).toBe(0);
+    const source = (
+      (await db.query('SELECT * FROM sources')) as {
+        rows: Array<Record<string, unknown>>;
+      }
+    ).rows[0];
+    expect(source.account_notes).toBe('');
+    expect(source.login_identity).toBe('');
+    expect(source.warden_reference).toBe('');
+    expect(source.owner).toBe('');
+    expect(
+      Boolean(Number(source.is_active === true ? 1 : source.is_active)),
+    ).toBe(true);
+    // rank snapshot columns backfilled from the imported opportunity
+    const rank = (
+      (await db.query(
+        'SELECT required_skills_snapshot AS r, preferred_skills_snapshot AS p FROM opportunity_recommendation_ranks',
+      )) as { rows: Array<Record<string, string>> }
+    ).rows[0];
+    expect(rank).toEqual({ p: 'sql', r: 'typescript,go' });
+    expect(
+      await count(db, 'opportunities', 'reviewed_by_user_id <> ?', ['']),
+    ).toBe(0);
+    // assets uploaded byte for byte
+    expect((await fs.read(seeded.assetKey, { raw: true })).toString()).toBe(
+      '%PDF-owner-bytes',
+    );
+    expect(await fs.exists('generated-resumes/not-owned/x.pdf')).toBe(false);
+
+    // idempotent: re-running changes nothing
+    const again = await run(db, fs, out);
+    expect(again.plan.identity.create).toBe(false);
+    for (const [table, stats] of Object.entries(again.plan.tables)) {
+      expect(stats.inserted, table).toBe(0);
+    }
+    const rerun = await run(db, fs, out, {
+      expectedPlanSha256: again.planSha256,
+      mode: 'apply',
+      receiptPath: join(tempDir(), 'receipt-2.json'),
+    });
+    expect(rerun.plan.assets.toUpload).toBe(0);
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'opportunities')).toBe(3);
+    expect(await count(db, 'opportunity_recommendation_ranks')).toBe(1);
+
+    // the first magic-link sign-in reuses the imported identity
+    const { provisionHostedMagicLinkUser } = await import(
+      './hosted-oidc-provisioning.js'
+    );
+    const { ensureHostedWorkspaceAccess } = await import('./auth.js');
+    const users = await UserCollection.create({ db });
+    const signedIn = await provisionHostedMagicLinkUser(
+      'owner@example.invalid',
+      users,
+    );
+    expect(signedIn.id).toBe(who.userId);
+    const access = await ensureHostedWorkspaceAccess(signedIn, {
+      options: { db },
+    });
+    expect(access.tenant.id).toBe(who.tenantId);
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'tenants')).toBe(1);
+    expect(await ProfileCollection.create({ db })).toBeDefined();
+  });
+
+  it('keeps a second user from seeing anything private', async () => {
+    const { out, who } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const other = principal('other');
+    await seedBystander(db, other);
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    for (const table of ownedTables) {
+      expect(
+        await count(db, table, 'CAST(tenant_id AS TEXT) = ?', [other.tenantId]),
+        table,
+      ).toBe(1);
+      expect(
+        await count(db, table, 'CAST(owner_user_id AS TEXT) = ?', [
+          other.userId,
+        ]),
+        table,
+      ).toBe(1);
+      expect(
+        await count(
+          db,
+          table,
+          'CAST(tenant_id AS TEXT) = ? AND CAST(owner_user_id AS TEXT) <> ?',
+          [who.tenantId, who.userId],
+        ),
+        table,
+      ).toBe(0);
+    }
+    expect(
+      await count(
+        db,
+        'opportunity_assessments',
+        'CAST(owner_user_id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?',
+        [other.userId, who.tenantId],
+      ),
+    ).toBe(0);
+  });
+
+  it('dedupes catalog rows against the target and remaps references', async () => {
+    const { out, seeded } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const existing = randomUUID();
+    await insert(db, 'opportunities', {
+      canonical_url: 'https://jobs.example.invalid/0',
+      id: existing,
+      slug: 'already-there',
+    });
+    const plan = await run(db, fs, out);
+    expect(plan.plan.tables.opportunities.deduped).toBe(1);
+    expect(plan.plan.tables.opportunities.inserted).toBe(2);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    expect(await count(db, 'opportunities')).toBe(3);
+    const rank = (
+      (await db.query(
+        'SELECT opportunity_id FROM opportunity_recommendation_ranks',
+      )) as {
+        rows: Array<Record<string, string>>;
+      }
+    ).rows[0];
+    expect(rank.opportunity_id).toBe(existing);
+    expect(rank.opportunity_id).not.toBe(seeded.opportunityIds[0]);
+  });
+
+  it('blocks on slug collisions and on an account with different ids, writing nothing', async () => {
+    const { out, who } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const exportedSlug = JSON.parse(
+      readFileSync(join(out, 'data', 'candidate_profiles.jsonl'), 'utf8').split(
+        '\n',
+      )[0],
+    ).slug as string;
+    await insert(db, 'candidate_profiles', {
+      owner_user_id: randomUUID(),
+      slug: exportedSlug,
+      tenant_id: randomUUID(),
+    });
+    const blocked = await run(db, fs, out);
+    expect(blocked.plan.eligible).toBe(false);
+    expect(
+      blocked.plan.issues['candidate_profiles: slug/context already taken'],
+    ).toBe(1);
+    await expect(
+      run(db, fs, out, {
+        expectedPlanSha256: blocked.planSha256,
+        mode: 'apply',
+        receiptPath: receipt,
+      }),
+    ).rejects.toMatchObject({ code: 'collision' });
+    expect(await count(db, 'users')).toBe(0);
+
+    // a fresh target that already has this address under different ids
+    const second = await hostedTarget();
+    await insert(second.db, 'users', {
+      email: 'owner@example.invalid',
+      email_key: 'owner@example.invalid',
+      profile_id: randomUUID(),
+      status: 'active',
+    });
+    await expect(run(second.db, second.fs, out)).rejects.toMatchObject({
+      code: 'identity',
+    });
+    expect(who.userId).toBeDefined();
+  });
+
+  it('refuses a tampered bundle and a wrong deployment mode', async () => {
+    const { out: shared_ } = await exported();
+    const out = join(tempDir(), 'copy');
+    cpSync(shared_, out, { recursive: true });
+    const { db, fs } = await hostedTarget();
+    await expect(
+      run(db, fs, out, { environment: { SMRT_RUNTIME_PROFILE: 'local' } }),
+    ).rejects.toMatchObject({ code: 'mode' });
+    const file = join(out, 'data', 'tags.jsonl');
+    writeFileSync(file, `${readFileSync(file, 'utf8')} \n`);
+    await expect(run(db, fs, out)).rejects.toBeInstanceOf(
+      WorkspaceTransferError,
+    );
+    await expect(run(db, fs, out)).rejects.toMatchObject({ code: 'bundle' });
+  });
+
+  it('rolls an applied import back from its receipt without touching pre-existing rows', async () => {
+    const { out, seeded } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    await insert(db, 'opportunities', {
+      canonical_url: 'https://jobs.example.invalid/0',
+      slug: 'already-there',
+    });
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    const result = await rollbackWorkspaceImport({
+      database: db as unknown as TransferDatabase,
+      dialect,
+      filesystem: fs,
+      receiptPath: receipt,
+    });
+    expect(result.assetsRemoved).toBe(1);
+    expect(await fs.exists(seeded.assetKey)).toBe(false);
+    for (const table of [
+      'users',
+      'tenants',
+      'memberships',
+      'profiles',
+      ...ownedTables,
+    ]) {
+      expect(await count(db, table), table).toBe(0);
+    }
+    expect(await count(db, 'opportunities')).toBe(1);
+    expect(await count(db, 'sources')).toBe(0);
+    // and the import can be run again after a rollback
+    const retry = await run(db, fs, out);
+    expect(retry.plan.eligible).toBe(true);
+    expect(retry.plan.tables.opportunities.deduped).toBe(1);
+  });
+}
+
+function readdirDeep(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? readdirDeep(path) : [path];
+  });
+}
+
+/** Simulate an older source that predates the rank skill snapshot columns. */
+function stripRankSnapshots(out: string): void {
+  const table = 'opportunity_recommendation_ranks';
+  const file = join(out, 'data', `${table}.jsonl`);
+  const rows = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const row = JSON.parse(line);
+      row.required_skills_snapshot = undefined;
+      row.preferred_skills_snapshot = undefined;
+      return JSON.stringify(row);
+    });
+  const body = `${rows.join('\n')}\n`;
+  writeFileSync(file, body);
+  const manifestPath = join(out, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.tables[table].columns = manifest.tables[table].columns.filter(
+    (column: string) => !column.endsWith('_skills_snapshot'),
+  );
+  manifest.tables[table].sha256 = sha256Hex(body);
+  const { bundleSha256: _old, ...rest } = manifest;
+  manifest.bundleSha256 = computeBundleSha256(rest);
+  writeFileSync(manifestPath, `${canonicalJson(manifest)}\n`);
+}
+
+describe('workspace transfer on SQLite', () => {
+  transfer({
+    dialect: 'sqlite',
+    // Uncached, so source and target are two distinct in-memory databases.
+    open: async () =>
+      await getTestDatabase({
+        classes,
+        db: await getDatabase({
+          cache: false,
+          type: 'sqlite',
+          url: ':memory:',
+        }),
+      }),
+  });
+});
+
+const postgresUrl =
+  process.env.WORKSPACE_TRANSFER_POSTGRES_TEST_DATABASE_URL?.trim();
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+describe.runIf(postgresUrl)('workspace transfer on PostgreSQL', () => {
+  const databases: string[] = [];
+  let control: DatabaseInterface | undefined;
+  afterAll(async () => {
+    for (const name of databases.splice(0)) {
+      await control?.query(
+        `DROP DATABASE IF EXISTS ${quoteIdentifier(name)} WITH (FORCE)`,
+      );
+    }
+    await control?.close?.();
+    control = undefined;
+  });
+  transfer({
+    dialect: 'postgres',
+    open: async () => {
+      if (!postgresUrl) throw new Error('Expected a PostgreSQL test URL.');
+      control ??= await getDatabase({
+        cache: false,
+        type: 'postgres',
+        url: postgresUrl,
+      });
+      const name = `iolaus_transfer_${randomUUID().replaceAll('-', '')}`;
+      databases.push(name);
+      await control.query(`CREATE DATABASE ${quoteIdentifier(name)}`);
+      const url = new URL(postgresUrl);
+      url.pathname = `/${name}`;
+      const db = await getDatabase({
+        cache: false,
+        type: 'postgres',
+        url: url.toString(),
+      });
+      return await getTestDatabase({ db, classes });
+    },
+  });
+});
