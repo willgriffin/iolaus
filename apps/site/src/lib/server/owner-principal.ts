@@ -10,7 +10,6 @@ import { getCurrentTenant } from '@happyvertical/smrt-tenancy';
 import { OperationPermissionError } from '@happyvertical/smrt-users';
 import { getAppConfig } from './app-config.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
-import { listOwnerToolNames } from './tool-catalog.js';
 import {
   revalidateWorkspaceIdentity,
   WorkspaceSubjectError,
@@ -22,6 +21,15 @@ import {
 /**
  * Stable agent-class identifier recorded on every owner-principal audit entry.
  */
+/**
+ * Loaded lazily: the tool catalog depends on Vite-only virtual modules, so a
+ * static import would break script entry points (db:migrate) that reach this
+ * file through the opportunity-assessment store.
+ */
+async function loadOwnerToolNames(): Promise<string[]> {
+  return (await import('./tool-catalog.js')).listOwnerToolNames();
+}
+
 export const OWNER_AGENT_CLASS = getAppConfig().agentClass;
 
 /**
@@ -86,7 +94,7 @@ export async function resolveOwnerPrincipalBinding(
   locals: OwnerPrincipalLocals,
 ): Promise<PrincipalBinding> {
   requireOwnerUserId(locals);
-  return ownerPrincipalBinding(locals, await listOwnerToolNames());
+  return ownerPrincipalBinding(locals, await loadOwnerToolNames());
 }
 
 /**
@@ -124,7 +132,7 @@ export async function ownerPrincipalOptions(
 ): Promise<ExecuteAsPrincipalOptions> {
   const locals = localsFrom(source);
   const userId = requireOwnerUserId(locals);
-  const allowedTools = options.allowedTools ?? (await listOwnerToolNames());
+  const allowedTools = options.allowedTools ?? (await loadOwnerToolNames());
   const principal = ownerPrincipalBinding(locals, allowedTools);
   if (principal.tenantId) {
     await revalidateWorkspaceIdentity({ tenantId: principal.tenantId, userId });
