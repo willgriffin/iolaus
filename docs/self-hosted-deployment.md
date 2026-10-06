@@ -137,7 +137,15 @@ It must replace all of the following before an apply:
 
 1. `REPLACE_WITH_RELEASED_IMAGE_DIGEST` with one published
    `ghcr.io/willgriffin/iolaus/site@sha256:<digest>` image. Do not use a tag,
-   local framework checkout, or a locally built unpinned image.
+   local framework checkout, or a locally built unpinned image. The
+   `Release image` workflow (`.github/workflows/release-image.yml`) builds
+   `apps/site/Dockerfile` for each published GitHub release (or a manual dispatch for an existing tag), pushes it to
+   GHCR with provenance and SBOM attestations, and records the immutable
+   digest in the run's job summary and in a `Container image` section of the
+   GitHub release notes. Copy the digest from there, or resolve it with
+   `docker buildx imagetools inspect ghcr.io/willgriffin/iolaus/site:<tag>`
+   and verify it with
+   `gh attestation verify oci://ghcr.io/willgriffin/iolaus/site@sha256:<digest> --repo willgriffin/iolaus`.
 2. `iolaus.example.invalid` and `iolaus-self-hosted-cluster-issuer` with the
    isolated environment's host and existing issuer. This is the only path that
    adds a real hostname; it must be reviewed outside this repository.
