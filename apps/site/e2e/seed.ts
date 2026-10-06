@@ -360,21 +360,24 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         humanReviewStatus: 'reject',
       },
     ];
-    for (const variant of variants.reverse()) {
-      const { humanReviewStatus, ...publicVariant } = variant;
-      const record = await opportunities.create({
-        ...publicVariant,
-        title: `Sequence ${project} ${variant.name}`,
-        descriptionRaw:
-          'Synthetic queue inheritance test. No employer or external action.',
-        currency: 'CAD',
-        requiredSkills: 'TypeScript',
-        postedAt: new Date('2026-01-01'),
-        postingUrl: 'https://example.invalid/iolaus-fictional-qa',
-      });
-      await record.save();
-      if (humanReviewStatus) await recordReview(record.id, humanReviewStatus);
-    }
+    // `Readiness` rows belong to applying-readiness.spec.ts, whose decisions
+    // must not consume the `Sequence` rows the mobile triage spec orders.
+    for (const family of ['Sequence', 'Readiness'])
+      for (const variant of [...variants].reverse()) {
+        const { humanReviewStatus, ...publicVariant } = variant;
+        const record = await opportunities.create({
+          ...publicVariant,
+          title: `${family} ${project} ${variant.name}`,
+          descriptionRaw:
+            'Synthetic queue inheritance test. No employer or external action.',
+          currency: 'CAD',
+          requiredSkills: 'TypeScript',
+          postedAt: new Date('2026-01-01'),
+          postingUrl: 'https://example.invalid/iolaus-fictional-qa',
+        });
+        await record.save();
+        if (humanReviewStatus) await recordReview(record.id, humanReviewStatus);
+      }
   }
 
   // Current-source eligibility fixture rows exercise the list's shared query

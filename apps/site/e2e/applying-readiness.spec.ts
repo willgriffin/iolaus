@@ -452,7 +452,7 @@ test('row review closes only after a successful decision and preserves sequentia
   context,
 }, testInfo) => {
   test.setTimeout(90_000);
-  const prefix = `Sequence ${testInfo.project.name} Role`;
+  const prefix = `Readiness ${testInfo.project.name} Role`;
   const title = `${prefix} 1`;
   const listPath = `/admin/opportunities?${new URLSearchParams({
     q: prefix,
