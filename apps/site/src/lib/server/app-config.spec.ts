@@ -5,6 +5,7 @@ import {
   getConfiguredMcpServerName,
   getConfiguredPublicOrigin,
   getConfiguredUserAgent,
+  getInviteRequestContact,
   isLoopbackAddress,
   isLoopbackHostname,
   isSharedHosted,
@@ -311,5 +312,24 @@ describe('Iolaus application configuration', () => {
 
     expect(userAgent).toBe('Career source crawler');
     expect(() => new Headers({ 'user-agent': userAgent })).not.toThrow();
+  });
+
+  it('accepts only an email or https URL as the invite request contact', () => {
+    const contact = (value?: string) =>
+      getInviteRequestContact({ IOLAUS_INVITE_REQUEST_CONTACT: value });
+
+    expect(contact()).toBeNull();
+    expect(contact('invites@example.invalid')).toEqual({
+      href: 'mailto:invites@example.invalid',
+      label: 'invites@example.invalid',
+    });
+    expect(contact('https://example.invalid/waitlist')).toEqual({
+      href: 'https://example.invalid/waitlist',
+      label: 'example.invalid',
+    });
+    expect(contact('http://example.invalid/waitlist')).toBeNull();
+    expect(contact('javascript:alert(1)')).toBeNull();
+    expect(contact('https://user:pw@example.invalid/')).toBeNull();
+    expect(contact('two words@example.invalid')).toBeNull();
   });
 });

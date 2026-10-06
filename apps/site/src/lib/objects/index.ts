@@ -33,6 +33,7 @@ export { ExperienceRole } from './ExperienceRole.js';
 export { ExperienceTag } from './ExperienceTag.js';
 export { FactCandidate } from './FactCandidate.js';
 export { FactIntake } from './FactIntake.js';
+export { HostedInvite } from './HostedInvite.js';
 export { Opportunity } from './Opportunity.js';
 export { OpportunityAssessment } from './OpportunityAssessment.js';
 export { OpportunityCompany } from './OpportunityCompany.js';

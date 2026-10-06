@@ -226,6 +226,8 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     // Per-user hosted AI spend ledger and operator cap overrides.
     'AiUserBudget',
     'AiUserSpendEntry',
+    // Operator-managed invite allowlist for shared hosted workspaces.
+    'HostedInvite',
   ]) {
     await getCollection(className);
     initialized.push(className);

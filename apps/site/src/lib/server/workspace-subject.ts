@@ -11,6 +11,7 @@ import {
 import { isConfiguredOidcAdminEmail } from './administrative-auth.js';
 import { getAppConfig } from './app-config.js';
 import { getSmrtOptions } from './db.js';
+import { isEmailInvited } from './hosted-invite.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
 /**
@@ -33,6 +34,7 @@ export interface CandidateWorkspaceSubject extends WorkspaceSubject {
 }
 
 export interface WorkspaceSubjectLocals {
+  invitationRequired?: boolean;
   membership?: {
     roleId?: string | null;
     status?: string | null;
@@ -52,6 +54,14 @@ export class WorkspaceSubjectError extends Error {
     super(message);
     this.name = 'WorkspaceSubjectError';
     this.status = status;
+  }
+}
+
+/** A shared-mode identity whose operator invitation is missing or revoked. */
+export class WorkspaceNotInvitedError extends WorkspaceSubjectError {
+  constructor() {
+    super(403, 'Workspace invitation is not active.');
+    this.name = 'WorkspaceNotInvitedError';
   }
 }
 
@@ -142,6 +152,16 @@ export async function revalidateWorkspaceIdentity(
       'Workspace owner is no longer authorized.',
     );
   }
+  // A shared installation is invite-only. Re-read the operator's invite list on
+  // every revalidation (browser, CLI, MCP, jobs) so a revocation ends existing
+  // sessions at their next use, exactly as private-mode admin emails do.
+  if (
+    getAppConfig().runtimeProfile !== 'local' &&
+    getAppConfig().workspaceMode === 'shared' &&
+    !(await isEmailInvited(user.email))
+  ) {
+    throw new WorkspaceNotInvitedError();
+  }
   return { membership, user };
 }
 
@@ -162,6 +182,11 @@ export async function verifyWorkspaceSubject(
     identity = await revalidateWorkspaceIdentity({ tenantId, userId });
   } catch (cause) {
     if (!(cause instanceof WorkspaceSubjectError)) throw cause;
+    // Lets the request guard send a browser to the invite page instead of a
+    // bare 403. Never set for any other failure.
+    if (cause instanceof WorkspaceNotInvitedError) {
+      locals.invitationRequired = true;
+    }
     locals.membership = null;
     locals.permissions = [];
     return null;

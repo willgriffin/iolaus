@@ -18,6 +18,7 @@ import {
 } from '@happyvertical/smrt-users';
 import { getAppConfig, getAuthConfiguration } from './app-config.js';
 import { getSmrtOptions } from './db.js';
+import { isEmailInvited } from './hosted-invite.js';
 import {
   getPrivateRecord,
   requireWorkspaceSubject,
@@ -310,6 +311,17 @@ async function validateLiveUserAndMembership(
         'Queued job owner is no longer authorized in this private workspace.',
       );
     }
+  }
+  // A shared installation is invite-only: queued and scheduled work stops for
+  // an owner whose invitation was revoked, like their interactive sessions.
+  if (
+    app.runtimeProfile !== 'local' &&
+    app.workspaceMode === 'shared' &&
+    !(await isEmailInvited(typeof user.email === 'string' ? user.email : ''))
+  ) {
+    throw new JobWorkspaceSubjectError(
+      'Queued job owner is no longer invited to this shared workspace.',
+    );
   }
   return user;
 }

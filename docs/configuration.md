@@ -58,8 +58,41 @@ IOLAUS_OIDC_CLIENT_ID=career-hub
 # separate tenant and private workspace.
 IOLAUS_WORKSPACE_MODE=private
 IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
+# Shared mode only: where an uninvited user is told to request an invite. An
+# email address or an https URL; omit for generic "contact the operator" copy.
+IOLAUS_INVITE_REQUEST_CONTACT=invites@example.com
 DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
+
+### Shared-workspace invitations
+
+A `shared` installation is invite-only. A verified OIDC identity is admitted
+only while its normalized (trimmed, case-insensitive) email holds an active
+invitation in the operator-managed `hosted_invites` table. The check runs at
+login, before any user, tenant, or session is created, and again on every
+protected request (browser, CLI bearer, MCP OAuth, and job-owner revalidation),
+so revoking an invitation ends existing sessions at their next use. This is the
+shared-mode counterpart of `IOLAUS_OIDC_ADMIN_EMAILS`, which still governs
+`private` mode unchanged; `shared` mode no longer admits every verified email.
+
+Manage invitations with the site package scripts (run after `db:migrate`, which
+creates the table). Invites are stored, not deleted: `revoke` stamps the row and
+`add` reinstates a revoked address.
+
+```bash
+pnpm --filter @willgriffin/iolaus-site invite:add -- friend@example.com
+pnpm --filter @willgriffin/iolaus-site invite:revoke -- friend@example.com
+pnpm --filter @willgriffin/iolaus-site invite:list
+```
+
+An uninvited or revoked account is sent to `/not-invited` ("You're not invited
+yet"), a uniform page that does not disclose whether the address was ever
+invited. It shows `IOLAUS_INVITE_REQUEST_CONTACT` (an email address, rendered as
+a `mailto:` link, or an `https:` URL) as the place to request an invite. No
+contact is built into the application. A fresh shared deployment starts with no
+invitations, so invite the operator's own address before the first login. Existing
+sessions for users who were never invited are rejected on their next request
+once this version is deployed.
 
 Use a dedicated PostgreSQL user and database name for every public deployment.
 The legacy/default `iolaus` and `iolaus_dev` database names are refused so a
@@ -165,7 +198,8 @@ membership, role, and resolved permissions. `IOLAUS_WORKSPACE_MODE=private`
 also requires the user's email to still match `IOLAUS_OIDC_ADMIN_EMAILS`, so
 removing an address from that allowlist revokes existing browser and CLI
 sessions at their next protected request. `shared` accepts verified OIDC
-identities and creates a separate tenant per user; it must not be enabled for
+identities holding an active operator invitation (see Shared-workspace
+invitations) and creates a separate tenant per user; it must not be enabled for
 an operator's existing single-workspace installation.
 
 Before a production cutover, the identity-provider operator must complete one
