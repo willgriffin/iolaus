@@ -199,7 +199,10 @@ async function persistScoreRefreshCursor(
 export async function ensureOpportunityScoreRefreshSchedule(
   db?: Database,
 ): Promise<void> {
-  await requirePrivateScoreRefresh();
+  // Shared hosting never runs the global refresh on a schedule, so there is
+  // nothing to register; migrations must still complete on a shared install.
+  const { isSharedHosted } = await import('./app-config.js');
+  if (isSharedHosted()) return;
   const database = db ?? (await resolveDatabase(getDbConfig()));
   await ensureOpportunityIntelligenceControl();
   const controls = (await getCollection(

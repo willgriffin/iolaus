@@ -81,6 +81,18 @@ describe('saved opportunity score refresh', () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
+  it('skips schedule registration on shared installs without failing migrations', async () => {
+    mocks.shared = true;
+    const { ensureOpportunityScoreRefreshSchedule } = await import(
+      './opportunity-score-refresh'
+    );
+
+    await expect(
+      ensureOpportunityScoreRefreshSchedule({} as never),
+    ).resolves.toBeUndefined();
+    expect(mocks.query).not.toHaveBeenCalled();
+  });
+
   it('pages, persists the target, and queues one fenced score refresh', async () => {
     mocks.opportunity.set('opp-1', {
       id: 'opp-1',
