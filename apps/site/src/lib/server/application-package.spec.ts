@@ -1,11 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  bulkUpdateOpportunityReviews,
-  createDraftApplicationForOpportunity,
-  generateApplicationPackage,
+  createDraftApplicationForOpportunity as createDraft,
+  generateApplicationPackage as generatePackage,
   normalizeOpportunityRating,
-  updateOpportunityReview,
+  updateOpportunityReview as updateReview,
+  bulkUpdateOpportunityReviews as updateReviews,
 } from './application-package';
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
+
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
+type GeneratePackageOptions = Omit<
+  Parameters<typeof generatePackage>[1],
+  'subject'
+>;
+type CreateDraftOptions = Omit<Parameters<typeof createDraft>[0], 'subject'>;
+type UpdateReviewOptions = Omit<Parameters<typeof updateReview>[0], 'subject'>;
+type BulkUpdateReviewOptions = Omit<
+  Parameters<typeof updateReviews>[0],
+  'subject'
+>;
+
+const generateApplicationPackage = (
+  applicationId: string,
+  options: GeneratePackageOptions = {},
+) => generatePackage(applicationId, { ...options, subject });
+
+const createDraftApplicationForOpportunity = (options: CreateDraftOptions) =>
+  createDraft({ ...options, subject });
+
+const updateOpportunityReview = (options: UpdateReviewOptions) =>
+  updateReview({ ...options, subject });
+
+const bulkUpdateOpportunityReviews = (options: BulkUpdateReviewOptions) =>
+  updateReviews({ ...options, subject });
 
 type MockRecord = Record<string, unknown> & {
   id: string;
@@ -16,6 +48,9 @@ function record(data: Record<string, unknown>): MockRecord {
   return {
     id: String(data.id ?? 'record-1'),
     save: vi.fn(async () => {}),
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     ...data,
   } as MockRecord;
 }
@@ -42,7 +77,11 @@ function collection(records: MockRecord[] = []) {
     list: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => {
       if (!where) return records;
       return records.filter((item) =>
-        Object.entries(where).every(([key, value]) => item[key] === value),
+        Object.entries(where).every(([key, value]) =>
+          Array.isArray(value)
+            ? value.includes(item[key])
+            : item[key] === value,
+        ),
       );
     }),
     records,
@@ -77,17 +116,23 @@ const mocks = vi.hoisted(() => ({
     }
   }),
   collections: new Map<string, ReturnType<typeof collection>>(),
-  generateResumeAsset: vi.fn(async () => ({
-    generatedAt: new Date('2026-06-05T12:00:00.000Z'),
-    generatedPath: 'generated-resumes/resume-generated',
-    htmlPath: 'generated-resumes/resume-generated/resume.html',
-    id: 'resume-generated',
-    markdownPath: 'generated-resumes/resume-generated/resume.md',
-    outputSlug: 'variant-slug',
-    pdfPath: 'generated-resumes/resume-generated/resume.pdf',
-    tailoringId: 'tailoring-1',
-    textPath: 'generated-resumes/resume-generated/resume.txt',
-  })),
+  generateResumeAsset: vi.fn(
+    async (
+      _options?: Parameters<
+        typeof import('./resume-admin').generateResumeAsset
+      >[0],
+    ) => ({
+      generatedAt: new Date('2026-06-05T12:00:00.000Z'),
+      generatedPath: 'generated-resumes/resume-generated',
+      htmlPath: 'generated-resumes/resume-generated/resume.html',
+      id: 'resume-generated',
+      markdownPath: 'generated-resumes/resume-generated/resume.md',
+      outputSlug: 'variant-slug',
+      pdfPath: 'generated-resumes/resume-generated/resume.pdf',
+      tailoringId: 'tailoring-1',
+      textPath: 'generated-resumes/resume-generated/resume.txt',
+    }),
+  ),
   publishedResume: { id: 'resume-default' },
   requireFreshPostingPreflight: vi.fn(
     async (_options?: { onClosed?: () => Promise<void> }) => ({
@@ -255,6 +300,7 @@ function enableCoverLetterGeneration() {
   resumeAssets?.records.push(
     record({
       id: 'resume-default',
+      isPublished: true,
       markdownPath: 'published/resume.md',
       title: 'Published resume',
     }),
@@ -297,6 +343,8 @@ describe('opportunity review and draft applications', () => {
       collection([record({ id: 'opp-1', title: 'AI Engineer' })]),
     );
     mocks.collections.set('Application', collection());
+    mocks.collections.set('Decision', collection());
+    mocks.collections.set('ResumeAsset', collection());
     mocks.commitApplicationIfCurrent.mockReset();
     mocks.commitApplicationIfCurrent.mockImplementation(
       async (application, updates) => {
@@ -355,7 +403,7 @@ describe('opportunity review and draft applications', () => {
     expect(result).toMatchObject({
       humanRating: 7,
       humanReviewNotes: 'Needs another pass',
-      humanReviewStatus: '',
+      humanReviewStatus: 'needs_input',
     });
   });
 
@@ -376,6 +424,25 @@ describe('opportunity review and draft applications', () => {
       }),
     ]);
     mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set(
+      'Decision',
+      collection([
+        record({
+          decision: 'defer',
+          humanRating: 8,
+          id: 'review-1',
+          opportunityId: 'opp-1',
+          reason: 'Keep this note',
+        }),
+        record({
+          decision: 'defer',
+          humanRating: 5,
+          id: 'review-2',
+          opportunityId: 'opp-2',
+          reason: 'Keep this too',
+        }),
+      ]),
+    );
 
     const result = await bulkUpdateOpportunityReviews({
       humanReviewStatus: 'apply',
@@ -386,24 +453,41 @@ describe('opportunity review and draft applications', () => {
     expect(result).toMatchObject({
       count: 2,
       status: 'updated',
+      records: expect.arrayContaining([
+        expect.objectContaining({
+          humanRating: 8,
+          humanReviewNotes: 'Keep this note',
+          humanReviewStatus: 'apply',
+          opportunityId: 'opp-1',
+        }),
+        expect.objectContaining({
+          humanRating: 5,
+          humanReviewNotes: 'Keep this too',
+          humanReviewStatus: 'apply',
+          opportunityId: 'opp-2',
+        }),
+      ]),
     });
-    expect(opportunities.records[0]).toMatchObject({
-      humanRating: 8,
-      humanReviewNotes: 'Keep this note',
-      humanReviewStatus: 'apply',
-      reviewedByProfileId: 'profile-1',
-      reviewedByUserId: 'user-1',
-    });
-    expect(opportunities.records[1]).toMatchObject({
-      humanRating: 5,
-      humanReviewNotes: 'Keep this too',
-      humanReviewStatus: 'apply',
-      reviewedByUserId: 'user-1',
-    });
+    expect(opportunities.records).toEqual([
+      expect.objectContaining({
+        humanRating: 8,
+        humanReviewNotes: 'Keep this note',
+        id: 'opp-1',
+      }),
+      expect.objectContaining({
+        humanRating: 5,
+        humanReviewNotes: 'Keep this too',
+        id: 'opp-2',
+      }),
+    ]);
   });
 
   it('creates a draft application with default resume and no generated cover letter', async () => {
     const opportunity = mocks.collections.get('Opportunity')?.records[0];
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([record({ id: 'resume-default', isPublished: true })]),
+    );
 
     const result = await createDraftApplicationForOpportunity({
       coverLetterMode: 'none',
@@ -428,6 +512,7 @@ describe('opportunity review and draft applications', () => {
     expect(opportunity?.save).toHaveBeenCalled();
     expect(mocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
       expect.objectContaining({ opportunityId: 'opp-1' }),
+      subject,
     );
   });
 
@@ -469,6 +554,7 @@ describe('opportunity review and draft applications', () => {
 
     expect(mocks.archiveApplicationsForClosedPosting).toHaveBeenCalledWith(
       'opp-1',
+      subject,
     );
     expect(application).toMatchObject({ status: 'archived' });
     expect(secondApplication).toMatchObject({ status: 'archived' });
@@ -637,12 +723,120 @@ describe('generateApplicationPackage', () => {
     mocks.assertOpportunityLifecycleLockIsActive.mockImplementation(() => {});
   });
 
+  it.each([
+    {
+      name: 'default false fields without captured source',
+      source: '',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'legacy true fields without captured source',
+      source: '',
+      validFingerprint: true,
+      visaBoolean: true,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'business sponsor without immigration evidence',
+      source: 'Your Executive Sponsor provides strategic support.',
+      validFingerprint: true,
+      visaBoolean: true,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'explicit visa denial leaves EOR unknown',
+      source: 'We do not offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: no (explicit posting evidence); EOR: Unknown',
+    },
+    {
+      name: 'explicit visa offer overrides legacy false',
+      source: 'We offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: yes (explicit posting evidence); EOR: Unknown',
+    },
+    {
+      name: 'tampered fingerprint cannot establish denial',
+      source: 'We do not offer visa sponsorship.',
+      validFingerprint: false,
+      visaBoolean: false,
+      expectedVisa: 'Unknown',
+    },
+    {
+      name: 'contradictory immigration clauses stay uncertain',
+      source: 'We offer visa sponsorship. We do not offer visa sponsorship.',
+      validFingerprint: true,
+      visaBoolean: false,
+      expectedVisa:
+        'Visa sponsorship: Unknown (conflicting posting evidence); EOR: Unknown',
+    },
+  ])('keeps packet employer support source-grounded: $name', async ({
+    source,
+    validFingerprint,
+    visaBoolean,
+    expectedVisa,
+  }) => {
+    const sourceContent = { descriptionRaw: source };
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          title: 'AI Engineer',
+          visaOrEorPossible: visaBoolean,
+          relocationSupported: visaBoolean,
+          ...(source
+            ? {
+                sourceContentJson: JSON.stringify(sourceContent),
+                sourceContentFingerprint: validFingerprint
+                  ? fingerprintOpportunitySourceContent(sourceContent)
+                  : 'tampered',
+                sourceContentVersion: 1,
+              }
+            : {}),
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-eligibility-packet',
+          opportunityId: 'opp-1',
+          resumeMode: 'none',
+          coverLetterMode: 'none',
+        }),
+      ]),
+    );
+    await generateApplicationPackage('app-eligibility-packet');
+    const markdown = mocks.fsWrite.mock.calls.find(
+      ([path]) =>
+        typeof path === 'string' &&
+        path.includes('/packet-') &&
+        path.endsWith('.md'),
+    )?.[1];
+    expect(markdown).toContain(`- Visa/EOR possible: ${expectedVisa}`);
+    expect(markdown).toContain('- Relocation supported: Unknown');
+    expect(markdown).not.toContain('- Visa/EOR possible: no');
+    expect(markdown).not.toContain('- Relocation supported: no');
+  });
+
   it('auto-fills the published resume for a default-resume application', async () => {
     const candidateProfiles = collection([
       record({ id: 'profile-recent', isDefault: false }),
       record({ id: 'profile-default', isDefault: true }),
     ]);
     mocks.collections.set('CandidateProfile', candidateProfiles);
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([record({ id: 'resume-default', isPublished: true })]),
+    );
     mocks.collections.set(
       'Application',
       collection([
@@ -657,7 +851,9 @@ describe('generateApplicationPackage', () => {
 
     const result = await generateApplicationPackage('app-1');
 
-    const packet = mocks.collections.get('ResumeAsset')?.records[0];
+    const packet = mocks.collections
+      .get('ResumeAsset')
+      ?.records.find((asset) => asset.assetType === 'application_packet');
     expect(packet).toMatchObject({
       assetType: 'application_packet',
       status: 'generated',
@@ -703,10 +899,7 @@ describe('generateApplicationPackage', () => {
         status: 'succeeded',
       }),
     );
-    expect(candidateProfiles.list).toHaveBeenCalledWith({
-      limit: 50,
-      orderBy: 'updated_at DESC',
-    });
+    expect(candidateProfiles.list).not.toHaveBeenCalled();
   });
 
   it('keeps a SmrtObject accessor id in the packet concurrency fence', async () => {
@@ -886,7 +1079,7 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) =>
-        entityType === 'CandidateProfile' && entityId === 'candidate-1'
+        entityType === 'CandidateProfile' && entityId === subject.profileId
           ? [{ factId: 'candidate-active' }]
           : [],
     );
@@ -1002,6 +1195,8 @@ describe('generateApplicationPackage', () => {
           companyId: 'company-1',
           id: 'opp-1',
           title: 'AI Engineer',
+          requiredSkills: 'TypeScript, Node.js\nCloud infrastructure',
+          preferredSkills: 'PostgreSQL',
         }),
       ]),
     );
@@ -1039,9 +1234,70 @@ describe('generateApplicationPackage', () => {
     expect(mocks.generateResumeAsset).toHaveBeenCalledWith(
       expect.objectContaining({
         targetOpportunityId: 'opp-1',
+        targetSkillTerms: [
+          'TypeScript',
+          ' Node.js',
+          'Cloud infrastructure',
+          'PostgreSQL',
+        ],
         tailoringName: 'AI Engineer resume variant',
       }),
     );
+  });
+
+  it('keeps an existing auto-created empty variant eligible for target selection', async () => {
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          title: 'Platform Engineer',
+          requiredSkills: 'Node.js',
+          preferredSkills: '',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeVariant',
+      collection([
+        record({
+          id: 'auto-variant',
+          applicationId: 'app-auto-variant',
+          opportunityId: 'opp-1',
+          name: 'Platform Engineer resume variant',
+          outputSlug: 'platform-engineer',
+          emphasizeTags: '',
+          excludeTags: '',
+          titleOverride: '',
+          summaryOverride: '',
+          tailoringConfigId: '',
+          status: 'generated',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-auto-variant',
+          opportunityId: 'opp-1',
+          resumeMode: 'generate_tailored',
+          resumeVariantId: 'auto-variant',
+          coverLetterMode: 'none',
+        }),
+      ]),
+    );
+    await generateApplicationPackage('app-auto-variant');
+    const options = mocks.generateResumeAsset.mock.calls.at(-1)?.[0];
+    expect(options).toMatchObject({
+      targetOpportunityId: 'opp-1',
+      targetSkillTerms: ['Node.js'],
+      tailoring: {
+        name: 'Platform Engineer resume variant',
+        outputSlug: 'platform-engineer',
+      },
+    });
+    expect(options?.tailoring).not.toHaveProperty('emphasizeTags');
   });
 
   it('passes existing resume variant overrides into tailored generation', async () => {
@@ -1348,7 +1604,7 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) =>
-        entityType === 'CandidateProfile' && entityId === 'candidate-1'
+        entityType === 'CandidateProfile' && entityId === subject.profileId
           ? [{ factId: 'candidate-active' }]
           : [],
     );
@@ -1432,7 +1688,10 @@ describe('generateApplicationPackage', () => {
     );
     mocks.factSubjectGetForEntity.mockImplementation(
       async (entityType: string, entityId: string) => {
-        if (entityType === 'CandidateProfile' && entityId === 'candidate-1') {
+        if (
+          entityType === 'CandidateProfile' &&
+          entityId === subject.profileId
+        ) {
           return [
             { factId: 'candidate-active' },
             { factId: 'candidate-pending' },
@@ -1698,5 +1957,24 @@ describe('generateApplicationPackage', () => {
       status = (thrown as { status?: number }).status;
     }
     expect(status).toBe(404);
+  });
+
+  it('does not generate a package for an application in another profile', async () => {
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          candidateProfileId: 'profile-other',
+          id: 'app-other-profile',
+          opportunityId: 'opp-1',
+          resumeMode: 'default',
+        }),
+      ]),
+    );
+
+    await expect(
+      generateApplicationPackage('app-other-profile'),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.fsWrite).not.toHaveBeenCalled();
   });
 });

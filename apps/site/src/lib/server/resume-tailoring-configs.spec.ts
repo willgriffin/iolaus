@@ -255,3 +255,61 @@ describe('resetCanonicalResumeTailoringConfig', () => {
     });
   });
 });
+
+describe('private canonical tailoring ownership', () => {
+  const subject = {
+    profileId: 'profile-owner',
+    tenantId: 'tenant-owner',
+    userId: 'user-owner',
+  };
+  const ownership = {
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  };
+
+  it('ignores another owner canonical row and stamps the first owned config', async () => {
+    const foreign = record({
+      ...ownership,
+      ownerUserId: 'foreign-user',
+      id: 'foreign',
+      configSlug: 'canonical',
+      configJson: JSON.stringify(LEGACY_CANONICAL_TAILORING_DEFAULT),
+    });
+    const configs = collection([foreign]);
+    mocks.collections.set('ResumeTailoringConfig', configs);
+    const result = await ensureCanonicalResumeTailoringConfig(subject);
+    expect(configs.list).toHaveBeenCalledWith({
+      limit: 1000,
+      where: ownership,
+    });
+    expect(configs.create).toHaveBeenCalledWith(
+      expect.objectContaining(ownership),
+    );
+    expect(foreign.save).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ...ownership, id: 'created-2' });
+  });
+
+  it('returns the owned config without touching an identical-slug foreign row', async () => {
+    const foreign = record({
+      ...ownership,
+      candidateProfileId: 'foreign-profile',
+      id: 'foreign',
+      configSlug: 'canonical',
+      configJson: '{}',
+    });
+    const owned = record({
+      ...ownership,
+      id: 'owned',
+      configSlug: 'canonical',
+      configJson: JSON.stringify(canonicalResumeTailoringConfig),
+    });
+    const configs = collection([foreign, owned]);
+    mocks.collections.set('ResumeTailoringConfig', configs);
+    expect(await ensureCanonicalResumeTailoringConfig(subject)).toMatchObject({
+      id: 'owned',
+    });
+    expect(configs.create).not.toHaveBeenCalled();
+    expect(foreign.save).not.toHaveBeenCalled();
+  });
+});

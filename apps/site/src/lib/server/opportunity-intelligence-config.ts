@@ -36,6 +36,140 @@ export const OPPORTUNITY_INTELLIGENCE_SCORING_MAX_INPUT_TOKENS_ENV =
 export const OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_DEFAULT = 3_000;
 export const OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX = 4_000;
 
+/** Separate native provider volume quotas; run/spend limits are unchanged. */
+export const OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS = {
+  typesafe: { requests: 1_000, inputTokens: 10_000_000 },
+  openai: { requests: 100, inputTokens: 1_000_000 },
+} as const;
+
+/** Server-authored contracts from the adapters that instantiate Typesafe. */
+export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
+  {
+    feature: 'candidate-skill-discovery',
+    profile: 'typesafe-candidate-skill-discovery',
+    versions: ['candidate-skill-discovery/v1-named-capability'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-source-requirement-coverage',
+    profile: 'typesafe-opportunity-source-coverage',
+    versions: ['requirement-coverage-audit/v6-direct-literal'],
+    historicalVersions: ['requirement-coverage-audit/v4-keyed-binding'],
+  },
+  {
+    feature: 'opportunity-source-requirement-evidence',
+    profile: 'typesafe-opportunity-source-evidence',
+    versions: [
+      'requirement-evidence-audit/v1-decomposed',
+      'requirement-evidence-audit/v2-row-relevance',
+      'requirement-evidence-audit/v3-source-eligibility',
+      'requirement-evidence-audit/v4-captured-source-recovery',
+      'requirement-evidence-audit/v5-quarantined-source-recovery',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-screening',
+    profile: 'typesafe-opportunity-screening',
+    versions: [
+      'opportunity-screening/v1-jev-first',
+      'opportunity-screening/v2-lossless-groups',
+      'opportunity-screening/v3-self-contained-evidence',
+      'opportunity-screening/v4-independent-source-entailment',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-assessment',
+    profile: 'typesafe-opportunity-assessment',
+    versions: ['opportunity-assessment/v6'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-assessment-partial',
+    profile: 'typesafe-opportunity-assessment-partial',
+    versions: ['opportunity-assessment-partial/v1'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-review-strength-verification',
+    profile: 'typesafe-opportunity-review-strength-verification',
+    versions: [
+      'opportunity-review-strength-verification/v1-independent-jev',
+      'opportunity-review-strength-verification/v2-partial-relevance',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-question-screening',
+    profile: 'typesafe-opportunity-question-screening',
+    versions: [
+      'opportunity-question-screening/v1-user-questions',
+      'opportunity-question-screening/v2-multi-source-witnesses',
+      'opportunity-question-screening/v3-source-classification',
+      'opportunity-question-screening/v4-role-prescreen-sizing',
+      'opportunity-question-screening/v5-semantic-candidate-witnesses',
+      'opportunity-question-screening/v6-individual-skill-witnesses',
+      'opportunity-question-screening/v7-bounded-evidence-bundles',
+      'opportunity-question-screening/v8-named-capability-evidence',
+      'opportunity-question-screening/v9-lossless-overflow',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-jev-assessment-experiment',
+    profile: 'typesafe-opportunity-jev-assessment-experiment',
+    versions: ['opportunity-jev-assessment-experiment/v1-ordinal-evidence'],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-skill-match',
+    profile: 'typesafe-skills',
+    versions: ['skill-match/v3'],
+    historicalVersions: [],
+  },
+] as const;
+
+type ProviderVolumeIdentity = {
+  feature: string;
+  profile: string;
+  model: string;
+  promptVersion: string;
+  outputSchemaVersion: string;
+  preparedPayloadVersion: string;
+};
+
+/** Model labels/flags alone never select the larger JEV allowance. */
+export function opportunityIntelligenceProviderVolume(
+  identity: ProviderVolumeIdentity,
+): 'typesafe' | 'openai' {
+  const contract = OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS.find(
+    (row) =>
+      row.feature === identity.feature && row.profile === identity.profile,
+  );
+  const model =
+    identity.profile === 'typesafe-opportunity-review-strength-verification' ||
+    identity.profile === 'typesafe-opportunity-jev-assessment-experiment' ||
+    identity.profile === 'typesafe-opportunity-question-screening' ||
+    identity.profile === 'typesafe-candidate-skill-discovery'
+      ? 'jev-1.13.0'
+      : identity.profile === 'typesafe-skills'
+        ? process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() || 'jev-latest'
+        : process.env.OPPORTUNITY_ASSESSMENT_DECISION_MODEL?.trim() ||
+          process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() ||
+          'jev-latest';
+  return contract &&
+    contract.versions.some(
+      (version) =>
+        identity.outputSchemaVersion === version &&
+        identity.promptVersion === version &&
+        identity.preparedPayloadVersion === version,
+    ) &&
+    identity.model === model
+    ? 'typesafe'
+    : 'openai';
+}
+
 export interface OpportunityIntelligenceBudgetConfig {
   circuit: { inputTokenThreshold: number; requestThreshold: number };
   crawl: { calls: number; inputTokens: number; spendMicros: number };

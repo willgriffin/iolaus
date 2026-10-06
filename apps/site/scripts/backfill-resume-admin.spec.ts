@@ -13,11 +13,16 @@ const mocks = vi.hoisted(() => ({
   },
   getCollection: vi.fn(),
   getResumeFilesystem: vi.fn(),
+  isSharedHosted: vi.fn(),
   records: [] as Array<Record<string, unknown> & { save?: () => Promise<void> }>,
 }));
 
 vi.mock('../src/lib/server/smrt.js', () => ({
   getCollection: mocks.getCollection,
+}));
+
+vi.mock('../src/lib/server/app-config.js', () => ({
+  isSharedHosted: mocks.isSharedHosted,
 }));
 
 vi.mock('../src/lib/server/resume-files.js', () => ({
@@ -39,59 +44,27 @@ describe('ensurePublishedCurrentResumeAssetFiles', () => {
     mocks.getCollection.mockResolvedValue(mocks.collection);
     mocks.getResumeFilesystem.mockReset();
     mocks.getResumeFilesystem.mockResolvedValue(mocks.filesystem);
+    mocks.isSharedHosted.mockReset();
+    mocks.isSharedHosted.mockReturnValue(false);
   });
 
-  it('restores missing current-resume files for the published legacy asset', async () => {
-    const save = vi.fn(async () => {});
-    const current = {
-      generatedPath: 'generated-resumes/legacy-current',
-      id: 'legacy-current',
-      isPublished: true,
-      pdfPath: 'generated-resumes/legacy-current/resume.pdf',
-      save,
-      sourcePath: 'var/profile-assets/current-resume',
-    };
-    mocks.records = [current];
-    mocks.filesystem.exists.mockResolvedValue(false);
-
-    await expect(ensurePublishedCurrentResumeAssetFiles()).resolves.toBe(1);
-
-    expect(mocks.filesystem.write).toHaveBeenCalledWith(
-      'generated-resumes/legacy-current/resume.pdf',
-      expect.any(Buffer),
-      { createParents: true },
+  async function expectFailClosed(): Promise<void> {
+    await expect(ensurePublishedCurrentResumeAssetFiles()).rejects.toThrow(
+      'lack a verified candidate workspace subject',
     );
-    expect(mocks.filesystem.write).toHaveBeenCalledWith(
-      'published/resume.pdf',
-      expect.any(Buffer),
-      { createParents: true },
-    );
-    expect(current).toMatchObject({
-      htmlPath: 'generated-resumes/legacy-current/resume.html',
-      markdownPath: 'generated-resumes/legacy-current/resume.md',
-      pdfBasename: 'resume.pdf',
-      pdfPath: 'generated-resumes/legacy-current/resume.pdf',
-      textPath: 'generated-resumes/legacy-current/resume.txt',
-    });
-    expect(save).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves existing published resume files untouched', async () => {
-    const save = vi.fn(async () => {});
-    mocks.records = [
-      {
-        generatedPath: 'generated-resumes/legacy-current',
-        id: 'legacy-current',
-        isPublished: true,
-        pdfPath: 'generated-resumes/legacy-current/resume.pdf',
-        save,
-      },
-    ];
-    mocks.filesystem.exists.mockResolvedValue(true);
-
-    await expect(ensurePublishedCurrentResumeAssetFiles()).resolves.toBe(0);
-
+    expect(mocks.getCollection).not.toHaveBeenCalled();
+    expect(mocks.getResumeFilesystem).not.toHaveBeenCalled();
+    expect(mocks.filesystem.exists).not.toHaveBeenCalled();
     expect(mocks.filesystem.write).not.toHaveBeenCalled();
-    expect(save).not.toHaveBeenCalled();
+  }
+
+  it('does not inspect or restore a personal asset in private mode', async () => {
+    await expectFailClosed();
+  });
+
+  it('does not inspect or restore a personal asset in shared hosted mode', async () => {
+    mocks.isSharedHosted.mockReturnValue(true);
+
+    await expectFailClosed();
   });
 });

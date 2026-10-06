@@ -2,6 +2,9 @@ import { APP_STATE_KEY, createInitialState } from '@happyvertical/smrt-svelte';
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import { getAdminResource } from '$lib/admin/resources';
+import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
+import { completeReviewFixture } from '$lib/opportunity-resume-fit-review-projection.test-support';
+import { questionScreeningFixture } from '$lib/question-screening-projection.test-support';
 import AdminRecordViewPage from './AdminRecordViewPage.svelte';
 
 // smrt-svelte form primitives read the app state from context; SSR specs only
@@ -23,7 +26,10 @@ function formMarkup(body: string, action: string): string {
   return body.slice(open, body.indexOf('</form>', formAt));
 }
 
-function renderOpportunity(record: Record<string, unknown>) {
+function renderOpportunity(
+  record: Record<string, unknown>,
+  postingSupport?: OpportunityPostingSupport,
+) {
   const tags = requireResource('opportunity-tags');
   const roles = requireResource('opportunity-roles');
   const places = requireResource('opportunity-places');
@@ -66,6 +72,7 @@ function renderOpportunity(record: Record<string, unknown>) {
         ],
         referenceOptions: {},
         record,
+        postingSupport,
         resource: requireResource('opportunities'),
       },
     },
@@ -74,6 +81,298 @@ function renderOpportunity(record: Record<string, unknown>) {
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
+    const { body } = renderOpportunity({
+      id: 'question-result',
+      title: 'API engineer',
+      questionScreeningEnabled: true,
+      questionScreeningStatus: 'current',
+      questionScreeningProjection: await questionScreeningFixture(),
+      latestScore: 99,
+    });
+    expect(body).toContain('Recommendation 40.0%');
+    expect(body).toContain('Run screening');
+    expect(body).toContain('Partial');
+    expect(body).not.toContain('99/100');
+  });
+  it('keeps a failed owned complete review unknown instead of reviving a legacy score', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      completeReviewStatus: 'unknown',
+      latestScore: 99,
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 99 },
+        reason: 'Legacy current.',
+      },
+    });
+    expect(body).toContain('Complete review needs refresh');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('Current complete review');
+  });
+
+  it('uses current complete evidence as the primary assessment while legal eligibility remains unknown', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      latestScoreSummary: 'Legacy score summary',
+      resumeFitReviewProjection: completeReviewFixture(),
+    });
+    expect(body).toContain('Current complete review');
+    expect(body).toContain('All reviewed criteria supported');
+    expect(body).toContain('1 supported of 1 considered criteria');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).not.toContain('Legacy score summary');
+    expect(body).not.toContain('No current cited support');
+    expect(body).not.toContain('Run Assess to assess');
+  });
+
+  it('shows coarse cited screening independently of fit and hides stale screening', () => {
+    const quote = 'We are hiring software engineers.';
+    const record = {
+      id: 'opp-1',
+      latestScore: 99,
+      humanReviewStatus: 'apply',
+      reviewOverlay: {
+        humanReviewStatus: 'apply',
+        humanReviewNotes: 'Owner decision',
+      },
+      sourceContentFingerprint: 'source',
+      sourceContentVersion: 1,
+      sourceContentJson: JSON.stringify({ descriptionRaw: quote }),
+      screeningProjection: {
+        version: 'opportunity-screening-projection/v1',
+        mode: 'coarse_screen',
+        sourceStatus: 'current',
+        status: 'potentially_relevant',
+        excludeFromDefaultTriage: false,
+        requestId: 'owned',
+        sourceContentFingerprint: 'source',
+        sourceContentVersion: 1,
+        sourceFingerprint: 'a'.repeat(64),
+        profileFingerprint: 'b'.repeat(64),
+        inputFingerprint: 'c'.repeat(64),
+        evidence: [
+          {
+            dimension: 'role_relevant',
+            probability: 0.95,
+            confidence: 0.95,
+            witness: {
+              id: 's0',
+              path: 'sourceContentJson.descriptionRaw',
+              text: quote,
+            },
+          },
+        ],
+        conditionalPaths: [],
+        uncertainties: [],
+        holdReasons: [],
+      },
+    };
+    const { body } = renderOpportunity(record);
+    expect(body).toContain('Potentially relevant');
+    expect(body).toContain('does not establish overall fit');
+    expect(body).toContain(quote);
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).toContain('No current assessment is available.');
+    expect(body).toContain('Earlier intelligence recommendation');
+    const screening = body.match(
+      /<section[^>]*aria-label="Coarse opportunity screening"[\s\S]*?<\/section>/,
+    )?.[0];
+    expect(screening).toBeDefined();
+    expect(screening).not.toContain('99/100');
+    const established = renderOpportunity({
+      ...record,
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 72 },
+        reason: 'Current established assessment.',
+      },
+    });
+    expect(established.body).toContain('Match score: 72/100');
+    expect(established.body).toContain('Potentially relevant');
+    expect(record.humanReviewStatus).toBe('apply');
+    expect(record.reviewOverlay).toEqual({
+      humanReviewStatus: 'apply',
+      humanReviewNotes: 'Owner decision',
+    });
+    expect(
+      renderOpportunity({ ...record, sourceContentVersion: 2 }).body,
+    ).not.toContain('Coarse screening:');
+  });
+  it.each([
+    false,
+    true,
+    undefined,
+  ])('shows Unknown instead of unproven default support booleans (%s)', (defaultValue) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      relocationSupported: defaultValue,
+      visaOrEorPossible: defaultValue,
+    });
+    const markup = body.replace(/<!--[\s\S]*?-->/g, '');
+    for (const label of ['Relocation supported', 'Visa or EOR possible']) {
+      const value = new RegExp(
+        `<dt\\b[^>]*>\\s*${label}\\s*</dt>\\s*<dd\\b[^>]*>([\\s\\S]*?)</dd>`,
+      ).exec(markup)?.[1];
+      expect(value).toBeDefined();
+      expect(value).toContain('Unknown');
+      expect(value).not.toMatch(/>\s*(?:true|false)\s*<\/span>/);
+    }
+  });
+
+  it('renders the server-verified affirmative and negative support labels without changing stored booleans', () => {
+    const record = {
+      id: 'opp-1',
+      relocationSupported: false,
+      visaOrEorPossible: false,
+    };
+    const { body } = renderOpportunity(record, {
+      relocationSupported: 'Unknown',
+      visaOrEorPossible:
+        'Visa sponsorship: yes (explicit posting evidence); EOR: no (explicit posting evidence)',
+    });
+    expect(body).toContain(
+      'Visa sponsorship: yes (explicit posting evidence); EOR: no (explicit posting evidence)',
+    );
+    expect(record).toEqual({
+      id: 'opp-1',
+      relocationSupported: false,
+      visaOrEorPossible: false,
+    });
+  });
+
+  it('shows the current safe candidate assessment separately from earlier intelligence', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection: {
+        eligibilityBucket: 'sponsorship_possible',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 1, fitScore: 72 },
+        reason: 'Sponsorship possible; relevant technical experience.',
+        sourceStatus: 'current',
+      },
+      assessmentJson: 'RAW_ASSESSMENT_SECRET',
+      candidatePassages: 'PRIVATE_CANDIDATE_SECRET',
+    });
+
+    expect(body).toContain('aria-label="Your opportunity assessment"');
+    expect(body).toContain('>Current</strong>');
+    expect(body).toContain('Eligibility: Sponsorship possible');
+    expect(body).toContain('Match score: 72/100');
+    expect(body).toContain(
+      'Sponsorship possible; relevant technical experience.',
+    );
+    expect(body).toContain(
+      'Current for this posting and your selected candidate profile.',
+    );
+    expect(body).toContain('Earlier intelligence recommendation');
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).not.toContain('RAW_ASSESSMENT_SECRET');
+    expect(body).not.toContain('PRIVATE_CANDIDATE_SECRET');
+    const form = formMarkup(body, 'processOpportunity');
+    expect(form).toContain('name="opportunityId"');
+    expect(form).toContain('value="opp-1"');
+    expect(form).not.toContain('name="profileId"');
+  });
+
+  it.each([
+    {
+      matchReadiness: 'needs_extraction',
+      requirementCount: 0,
+      candidateTruncated: true,
+      postingTruncated: true,
+      requirementsTruncated: false,
+      messages: [
+        'No structured role requirements were extracted.',
+        'Candidate evidence was truncated.',
+        'Posting material was truncated.',
+      ],
+    },
+    {
+      matchReadiness: 'needs_evidence',
+      requirementCount: 4,
+      candidateTruncated: false,
+      postingTruncated: false,
+      requirementsTruncated: true,
+      messages: ['Role requirements may be incomplete.'],
+    },
+  ])('keeps eligibility visible and withholds match scores for incomplete coverage ($matchReadiness)', ({
+    matchReadiness,
+    messages,
+    ...coverage
+  }) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection: {
+        eligibilityBucket: 'unknown',
+        matchReadiness,
+        coverage,
+        ranking: { eligibilityPriority: 2, fitScore: 15 },
+        reason: 'Eligibility needs clarification',
+        sourceStatus: 'current',
+      },
+    });
+    expect(body).toContain('>Current</strong>');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).toContain('Eligibility needs clarification');
+    expect(body).toContain(
+      matchReadiness === 'needs_extraction'
+        ? 'Needs extraction'
+        : 'Needs evidence',
+    );
+    for (const message of messages) expect(body).toContain(message);
+    expect(body).not.toContain('Match score:');
+    expect(body).not.toContain('99/100');
+  });
+
+  it.each([
+    undefined,
+    { sourceStatus: 'stale', eligibilityBucket: 'eligible' },
+    { sourceStatus: 'current', eligibilityBucket: 'provider_new_value' },
+    {
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      ranking: { fitScore: '72' },
+    },
+  ])('shows unknown rather than a legacy score without a valid current assessment (%j)', (assessmentProjection) => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      assessmentProjection,
+    });
+    expect(body).toContain('>Unknown</strong>');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).toContain('No current assessment is available.');
+    expect(body).not.toContain('Match score:');
+  });
+
   it('renders uncertain evidence separately from confirmed gaps', () => {
     const { body } = renderOpportunity({
       id: 'opp-1',
@@ -235,4 +534,157 @@ describe('AdminRecordViewPage recommendation decision', () => {
     expect(body).not.toContain('processRecommendationTask');
     expect(body).not.toContain('preflightOverrideReason');
   });
+});
+
+const partialEvidence = {
+  version: 'opportunity-assessment-partial-projection/v1',
+  mode: 'partial',
+  sourceStatus: 'current',
+  criterionCount: 1,
+  supportedCriterionCount: 1,
+  unresolvedSourceClauseCount: 2,
+  requirements: [
+    {
+      id: 'criterion',
+      text: 'Maintain tested API integrations.',
+      support: 'supported',
+      postingCitations: [
+        {
+          excerpt: 'You must maintain tested API integrations.',
+          clauseId: 'clause-1',
+          start: 10,
+          end: 51,
+        },
+      ],
+      candidateCitations: [
+        {
+          sourceId: 'employment:1',
+          title: 'Platform engineer',
+          excerpt: 'Maintained tested API integrations.',
+          recordId: 'job-1',
+        },
+      ],
+    },
+  ],
+};
+
+it('shows current partial evidence alongside an unavailable full match without promoting a legacy score', () => {
+  const { body } = renderOpportunity({
+    id: 'opp-1',
+    title: 'Engineer',
+    latestScore: 99,
+    partialAssessmentProjection: partialEvidence,
+  });
+  expect(body).toContain('Partial assessment');
+  expect(body).toContain('Overall fit not yet established');
+  expect(body).not.toContain('Match assessment unavailable');
+  expect(body).not.toContain('No current assessment is available.');
+  expect(body).not.toContain('Run Assess to assess this posting');
+  expect(body).toContain('1 supported criterion of 1 assessed');
+  expect(body).toContain('2 unresolved source clauses');
+  expect(body).toContain('No overall fit conclusion.');
+  expect(body).toContain('You must maintain tested API integrations.');
+  expect(body).toContain('Maintained tested API integrations.');
+  const currentAssessment = body.match(
+    /<section[^>]*aria-label="Your opportunity assessment"[\s\S]*?<\/section>/,
+  )?.[0];
+  expect(currentAssessment).toContain('No overall fit conclusion.');
+  expect(currentAssessment).not.toContain('99/100');
+  expect(currentAssessment).not.toContain('Strong match');
+  expect(body).toContain('Earlier intelligence recommendation');
+});
+
+it.each([
+  { ...partialEvidence, sourceStatus: 'stale' },
+  { ...partialEvidence, criterionCount: 0 },
+])('preserves unavailable assessment messaging for invalid partial proof (%j)', (partialAssessmentProjection) => {
+  const { body } = renderOpportunity({
+    id: 'partial-stale',
+    title: 'Engineer',
+    partialAssessmentProjection,
+  });
+  expect(body).toContain('Match assessment unavailable');
+  expect(body).not.toContain('Partial assessment');
+  expect(body).not.toContain('Overall fit not yet established');
+});
+
+it('retains current full-assessment messaging when partial evidence is also present', () => {
+  const { body } = renderOpportunity({
+    id: 'full-current',
+    title: 'Engineer',
+    partialAssessmentProjection: partialEvidence,
+    assessmentProjection: {
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      matchReadiness: 'assessable',
+      ranking: { fitScore: 72, eligibilityPriority: 0 },
+      coverage: {
+        candidateTruncated: false,
+        postingTruncated: false,
+        requirementsTruncated: false,
+        requirementCount: 1,
+      },
+      reason: 'Current full assessment',
+    },
+  });
+  expect(body).toContain('72/100');
+  expect(body).not.toContain('Overall fit not yet established');
+  expect(body).not.toContain('Partial assessment');
+});
+
+const sourceConditionalEligibility = {
+  sourceStatus: 'current',
+  sourceContentFingerprint: 'conditional-source',
+  sourceContentVersion: 3,
+  eligibilityBucket: 'location_restriction',
+  reason: 'This role requires working in the United States.',
+  conditionalPaths: [
+    {
+      kind: 'sponsorship',
+      status: 'offered',
+      facts: [
+        {
+          key: 'sponsorship_offered',
+          citations: [
+            {
+              quote: 'We offer visa sponsorship.',
+              start: 20,
+              end: 46,
+              hash: 'attested-hash',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  unresolvedConstraintFactKeys: [],
+};
+
+it('shows the current posting restriction and sponsorship statement separately without granting authorization', () => {
+  const { body } = renderOpportunity({
+    id: 'conditional',
+    title: 'US role',
+    sourceContentFingerprint: 'conditional-source',
+    sourceContentVersion: 3,
+    sourceEligibilityProjection: sourceConditionalEligibility,
+  });
+  expect(body).toContain('Posting work-location eligibility:');
+  expect(body).toContain('Location or authorization restriction');
+  expect(body).toContain('Sponsorship stated for this role');
+  expect(body).toContain('We offer visa sponsorship.');
+  expect(body).not.toContain('Eligible for your work location');
+  expect(body).not.toContain('Canada eligible');
+});
+
+it('hides cached conditional paths when the captured posting has changed on reload', () => {
+  const { body } = renderOpportunity({
+    id: 'conditional-stale',
+    title: 'US role',
+    sourceContentFingerprint: 'refreshed-source',
+    sourceContentVersion: 4,
+    sourceEligibilityProjection: sourceConditionalEligibility,
+  });
+  expect(body).not.toContain('Posting work-location eligibility:');
+  expect(body).not.toContain('Sponsorship stated for this role');
+  expect(body).not.toContain('We offer visa sponsorship.');
 });

@@ -4,6 +4,13 @@ import {
   CANONICAL_TAILORING_SLUG,
   canonicalResumeTailoringConfig,
 } from '@willgriffin/iolaus-resume';
+import { isSharedHosted } from './app-config.js';
+import {
+  privateRecordWhere,
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import {
   parseTailoringConfigRecord,
   type ResumeRecord,
@@ -66,8 +73,9 @@ async function migrateLegacyCanonicalDefault(
   return true;
 }
 
-function canonicalTailoringPayload() {
+function canonicalTailoringPayload(subject?: WorkspaceSubject) {
   return {
+    ...(subject ? privateRecordWhere(subject) : {}),
     active: true,
     company: '',
     configJson: JSON.stringify(canonicalResumeTailoringConfig),
@@ -76,16 +84,21 @@ function canonicalTailoringPayload() {
   };
 }
 
-async function findCanonicalRecord(): Promise<{
+async function findCanonicalRecord(subject?: WorkspaceSubject): Promise<{
   collection: Awaited<ReturnType<typeof getCollection>>;
   existing: MutableRecord | undefined;
 }> {
+  if (subject || isSharedHosted())
+    requireWorkspaceSubject(subject as WorkspaceSubject);
   const collection = await getCollection('ResumeTailoringConfig');
   const records = (await collection.list({
     limit: 1000,
+    ...(subject ? { where: privateRecordWhere(subject) } : {}),
   })) as unknown as MutableRecord[];
   const existing = records.find(
-    (record) => stringValue(record.configSlug) === CANONICAL_TAILORING_SLUG,
+    (record) =>
+      stringValue(record.configSlug) === CANONICAL_TAILORING_SLUG &&
+      (!subject || recordOwnedBySubject(record, subject)),
   );
   return { collection, existing };
 }
@@ -107,15 +120,17 @@ function toTailoringRecord(record: MutableRecord): ResumeTailoringRecord {
  * (see {@link LEGACY_CANONICAL_TAILORING_DEFAULT}). Use
  * {@link resetCanonicalResumeTailoringConfig} to re-assert the defaults.
  */
-export async function ensureCanonicalResumeTailoringConfig(): Promise<ResumeTailoringRecord> {
-  const { collection, existing } = await findCanonicalRecord();
+export async function ensureCanonicalResumeTailoringConfig(
+  subject?: WorkspaceSubject,
+): Promise<ResumeTailoringRecord> {
+  const { collection, existing } = await findCanonicalRecord(subject);
   if (existing) {
     await migrateLegacyCanonicalDefault(existing);
     return toTailoringRecord(existing);
   }
 
   const created = (await collection.create(
-    canonicalTailoringPayload(),
+    canonicalTailoringPayload(subject),
   )) as unknown as MutableRecord;
   return toTailoringRecord(created);
 }
@@ -126,9 +141,11 @@ export async function ensureCanonicalResumeTailoringConfig(): Promise<ResumeTail
  * for an explicit "reset to defaults" action, never as a side effect of
  * generating a resume.
  */
-export async function resetCanonicalResumeTailoringConfig(): Promise<ResumeTailoringRecord> {
-  const { collection, existing } = await findCanonicalRecord();
-  const payload = canonicalTailoringPayload();
+export async function resetCanonicalResumeTailoringConfig(
+  subject?: WorkspaceSubject,
+): Promise<ResumeTailoringRecord> {
+  const { collection, existing } = await findCanonicalRecord(subject);
+  const payload = canonicalTailoringPayload(subject);
   const record =
     existing ??
     ((await collection.create(payload)) as unknown as MutableRecord);

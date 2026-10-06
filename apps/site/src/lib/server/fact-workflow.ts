@@ -6,9 +6,14 @@ import {
   FactSubjectCollection,
   type FactType,
 } from '@happyvertical/smrt-facts';
-import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
-import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
+import {
+  createPrivateRecord,
+  getPrivateRecord,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import { getRequestScopedSmrtOptions } from './smrt.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -28,6 +33,14 @@ const factTypes = new Set([
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function requiredId(value: unknown, label: string): string {
+  const normalized = stringValue(value);
+  if (!normalized || normalized.length > 160) {
+    error(400, `Fact workflow ${label} is required.`);
+  }
+  return normalized;
 }
 
 function numberValue(value: unknown): number | undefined {
@@ -62,14 +75,14 @@ function errorMessage(value: unknown): string {
 }
 
 export async function createFactIntakeFromText(options: {
+  subject: WorkspaceSubject;
   intakeContext?: string;
-  createdByProfileId?: string;
   rawText: string;
   sourceKind?: string;
   targetEntityId?: string;
   targetEntityType?: string;
-  user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
   const rawText = stringValue(options.rawText);
   if (!rawText) {
     error(400, 'Fact intake requires raw text.');
@@ -78,20 +91,25 @@ export async function createFactIntakeFromText(options: {
   const sourceKind = stringValue(options.sourceKind) || 'story';
   const targetEntityType = stringValue(options.targetEntityType);
   const targetEntityId = stringValue(options.targetEntityId);
-  const intakeCollection = await getCollection('FactIntake');
-  const candidateCollection = await getCollection('FactCandidate');
+  if (
+    targetEntityType === 'CandidateProfile' &&
+    targetEntityId &&
+    targetEntityId !== subject.profileId
+  ) {
+    error(403, 'Fact intake cannot target another candidate profile.');
+  }
   const facts = await FactCollection.create(getRequestScopedSmrtOptions());
   const now = new Date();
-  const intake = (await intakeCollection.create({
+  const intake = (await createPrivateRecord('FactIntake', subject, {
+    createdByProfileId: subject.profileId,
+    createdByUserId: subject.userId,
     intakeContext: stringValue(options.intakeContext),
-    createdByProfileId: stringValue(options.createdByProfileId),
-    createdByUserId: stringValue(options.user?.id),
     rawText,
     sourceKind,
     status: 'draft',
     targetEntityId,
     targetEntityType,
-  })) as unknown as MutableRecord;
+  })) as MutableRecord;
   await intake.save();
 
   let candidates: FactExtractionCandidate[] = [];
@@ -103,14 +121,14 @@ export async function createFactIntakeFromText(options: {
       maxFacts: 12,
       sourceType: sourceKind,
     });
-  } catch (error) {
-    extractionError = errorMessage(error);
+  } catch (cause) {
+    extractionError = errorMessage(cause);
     candidates = fallbackCandidates(rawText);
   }
 
   const savedCandidates = [];
   for (const candidate of candidates) {
-    const record = (await candidateCollection.create({
+    const record = (await createPrivateRecord('FactCandidate', subject, {
       confidence: candidate.confidence ?? null,
       factIntakeId: stringValue(intake.id),
       factType: normalizeFactType(candidate.type),
@@ -119,7 +137,7 @@ export async function createFactIntakeFromText(options: {
       statement: candidate.statement,
       targetEntityId,
       targetEntityType,
-    })) as unknown as MutableRecord;
+    })) as MutableRecord;
     await record.save();
     savedCandidates.push(JSON.parse(JSON.stringify(record)));
   }
@@ -145,14 +163,14 @@ export async function createFactIntakeFromText(options: {
 
 export async function acceptFactCandidate(options: {
   candidateId: string;
-  reviewedByProfileId?: string;
-  user?: Pick<User, 'id'> | null;
+  subject: WorkspaceSubject;
 }) {
-  const candidateCollection = await getCollection('FactCandidate');
-  const intakeCollection = await getCollection('FactIntake');
-  const candidate = (await candidateCollection.get(
-    options.candidateId,
-  )) as unknown as MutableRecord | null;
+  const subject = requireWorkspaceSubject(options.subject);
+  const candidate = (await getPrivateRecord(
+    'FactCandidate',
+    requiredId(options.candidateId, 'candidate ID'),
+    subject,
+  )) as MutableRecord | null;
   if (!candidate) {
     error(404, 'Fact candidate not found.');
   }
@@ -164,9 +182,11 @@ export async function acceptFactCandidate(options: {
   }
 
   const intake = stringValue(candidate.factIntakeId)
-    ? ((await intakeCollection.get(
+    ? ((await getPrivateRecord(
+        'FactIntake',
         stringValue(candidate.factIntakeId),
-      )) as unknown as MutableRecord | null)
+        subject,
+      )) as MutableRecord | null)
     : null;
   const smrtOptions = getRequestScopedSmrtOptions();
   const facts = await FactCollection.create(smrtOptions);
@@ -223,9 +243,16 @@ export async function acceptFactCandidate(options: {
 
   const targetEntityType = stringValue(candidate.targetEntityType);
   const targetEntityId = stringValue(candidate.targetEntityId);
+  if (
+    targetEntityType === 'CandidateProfile' &&
+    targetEntityId &&
+    targetEntityId !== subject.profileId
+  ) {
+    error(403, 'Fact candidate targets another candidate profile.');
+  }
   if (targetEntityType && targetEntityId) {
     const subjects = await FactSubjectCollection.create(smrtOptions);
-    const subject = await subjects.create({
+    const factSubject = await subjects.create({
       entityId: targetEntityId,
       entityType: targetEntityType,
       factId,
@@ -235,14 +262,14 @@ export async function acceptFactCandidate(options: {
       }),
       role: 'subject',
     });
-    await subject.save();
+    await factSubject.save();
   }
 
   Object.assign(candidate, {
     createdFactId: factId,
     reviewedAt: new Date(),
-    reviewedByProfileId: stringValue(options.reviewedByProfileId),
-    reviewedByUserId: stringValue(options.user?.id),
+    reviewedByProfileId: subject.profileId,
+    reviewedByUserId: subject.userId,
     reviewStatus: 'accepted',
   });
   await candidate.save();

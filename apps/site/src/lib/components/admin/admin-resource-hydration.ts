@@ -1,7 +1,4 @@
-import {
-  manifestHash,
-  type SmrtWebCollectionDefinitions,
-} from '@happyvertical/smrt-virt-web';
+import { manifestHash } from '@happyvertical/smrt-virt-web';
 import {
   createSmrtWebClient,
   createSmrtWebEventSubscriber,
@@ -23,11 +20,12 @@ import {
   EMPTY_OPPORTUNITY_FILTER_OPTIONS,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
+import type { HydratedAdminResourceSlug } from './admin-resource-definitions';
 
-export type HydratedAdminResourceSlug = Extract<
-  keyof SmrtWebCollectionDefinitions,
-  'applications' | 'opportunities' | 'tasks'
->;
+export {
+  type HydratedAdminResourceSlug,
+  isHydratedAdminResourceSlug,
+} from './admin-resource-definitions';
 
 const HYDRATED_ADMIN_RESOURCES = {
   applications: { tableName: 'applications' },
@@ -74,12 +72,6 @@ export function getAdminSmrtWebClient(): SmrtWebClient | null {
   if (!browser) return null;
   adminSmrtWebClient ??= createSmrtWebClient();
   return adminSmrtWebClient;
-}
-
-export function isHydratedAdminResourceSlug(
-  slug: string,
-): slug is HydratedAdminResourceSlug {
-  return Object.hasOwn(HYDRATED_ADMIN_RESOURCES, slug);
 }
 
 export function adminRowsFromRecords(
@@ -135,9 +127,6 @@ export function createAdminResourceFetchers(
 ): SmrtCrudFetchers {
   const headers = { 'Content-Type': 'application/json' };
   const adminListPath = `/api/admin-resources/${resourceSlug}${search}`;
-  const collectionPath = `/api/${resourceSlug}`;
-  const recordPath = (id: string) =>
-    `${collectionPath}/${encodeURIComponent(id)}`;
 
   return {
     list: async () => {
@@ -148,30 +137,11 @@ export function createAdminResourceFetchers(
       onListPayload?.(payload);
       return payload.records;
     },
-    get: async (id) => readJson(await fetch(recordPath(id), { headers })),
-    create: async (record) =>
-      readJson(
-        await fetch(collectionPath, {
-          body: JSON.stringify(record),
-          headers,
-          method: 'POST',
-        }),
-      ),
-    update: async (id, record) =>
-      readJson(
-        await fetch(recordPath(id), {
-          body: JSON.stringify(record),
-          headers,
-          method: 'PUT',
-        }),
-      ),
-    delete: async (id) =>
-      readJson(
-        await fetch(recordPath(id), {
-          headers,
-          method: 'DELETE',
-        }),
-      ),
+    // SmrtCrudFetchers requires create even for read-only collections. Fail
+    // locally rather than falling back to a generated private CRUD endpoint.
+    create: async () => {
+      throw new Error('Admin list hydration does not support generic CRUD');
+    },
   };
 }
 

@@ -24,8 +24,8 @@ vi.mock('./db.js', () => ({ getDbConfig: vi.fn(() => ({})) }));
 
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async () => ({
-    get: vi.fn(async (id: string) => ({
-      id,
+    get: vi.fn(async (selector: string | { id: string }) => ({
+      id: typeof selector === 'string' ? selector : selector.id,
       sourceContentFingerprint: 'fingerprint',
       sourceContentVersion: 3,
       scoringMaterialFingerprint: '',

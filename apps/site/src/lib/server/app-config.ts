@@ -8,6 +8,7 @@
  */
 
 export type RuntimeProfile = 'cloud' | 'local' | 'self-hosted';
+export type WorkspaceMode = 'private' | 'shared';
 
 export type AppConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -23,6 +24,11 @@ export interface IolausAppConfig {
   oidcStateCookieName: string;
   oidcVerifierCookieName: string;
   runtimeProfile: RuntimeProfile;
+  /**
+   * Private installations have one operator-owned workspace. Shared hosted
+   * installations provision an isolated workspace for every verified user.
+   */
+  workspaceMode: WorkspaceMode;
   sessionCookieName: string;
   tenantName: string;
   tenantSlug: string;
@@ -108,6 +114,20 @@ function runtimeProfileFrom(environment: AppConfigEnvironment): RuntimeProfile {
   throw new Error('SMRT_RUNTIME_PROFILE must be local, self-hosted, or cloud.');
 }
 
+function workspaceModeFrom(
+  environment: AppConfigEnvironment,
+  runtimeProfile: RuntimeProfile,
+): WorkspaceMode {
+  if (runtimeProfile === 'local') return 'private';
+
+  const configured = stringValue(environment.IOLAUS_WORKSPACE_MODE);
+  if (!configured) return 'private';
+  if (configured === 'private' || configured === 'shared') return configured;
+  throw new Error(
+    'IOLAUS_WORKSPACE_MODE must be private or shared for public deployments.',
+  );
+}
+
 function cookieSegment(appId: string): string {
   return appId.replaceAll('-', '_');
 }
@@ -119,6 +139,7 @@ export function getAppConfig(
   const appId = appIdFrom(environment);
   const appName = appNameFrom(environment);
   const runtimeProfile = runtimeProfileFrom(environment);
+  const workspaceMode = workspaceModeFrom(environment, runtimeProfile);
   if (runtimeProfile !== 'local' && appId === DEFAULT_APP_ID) {
     throw new Error(
       'Public deployments must set SMRT_APP_ID to a unique non-default identifier.',
@@ -138,10 +159,22 @@ export function getAppConfig(
     oidcStateCookieName: `${cookiePrefix}_oidc_state`,
     oidcVerifierCookieName: `${cookiePrefix}_oidc_code_verifier`,
     runtimeProfile,
+    workspaceMode,
     sessionCookieName: `${cookiePrefix}_session`,
     tenantName: appName,
     tenantSlug: appId,
   };
+}
+
+/** Whether this deployed application provisions one workspace per user. */
+export function isSharedHosted(
+  environment: AppConfigEnvironment = process.env,
+): boolean {
+  const configuration = getAppConfig(environment);
+  return (
+    configuration.runtimeProfile !== 'local' &&
+    configuration.workspaceMode === 'shared'
+  );
 }
 
 function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
@@ -347,12 +380,12 @@ export function getAuthConfiguration(
     !publicUrl ||
     !oidc ||
     !clientId ||
-    adminEmails.length === 0 ||
+    (app.workspaceMode === 'private' && adminEmails.length === 0) ||
     !importedOwnerBindings
   ) {
     return {
       kind: 'invalid',
-      message: `${app.appName} public authentication is incomplete. Configure the public URL, OIDC issuer, realm, client ID, and authorized administrator email addresses.`,
+      message: `${app.appName} public authentication is incomplete. Configure the public URL, workspace mode, OIDC issuer, realm, client ID, and authorized administrator email addresses for private mode.`,
     };
   }
 

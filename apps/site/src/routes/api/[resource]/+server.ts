@@ -16,16 +16,19 @@ import {
 import { type ApiAction, resolveApiResource } from '$lib/server/api-exposure';
 import {
   normalizeAccountStatus,
-  syncApplicationWorkflowTasks,
-  syncRecommendedOpportunityDecisionTasks,
   syncSourceAccountTasks,
   validateSubmittedApplicationPayload,
 } from '$lib/server/application-workflow';
 import { syncResumeVariantApplicationApprovals } from '$lib/server/resume-variant-workflow';
 import { getCollection } from '$lib/server/smrt';
 import { syncSourceSchedule } from '$lib/server/source-schedules';
+import {
+  assertGenericResourceAccess,
+  requireCandidateWorkspaceSubject,
+} from '$lib/server/workspace-resource-policy';
 
 function requireResourceClass(resource: string): string {
+  assertGenericResourceAccess();
   const resolved = resolveApiResource(resource);
   if (!resolved) throw error(404, 'Resource not found');
   return resolved.className;
@@ -229,16 +232,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
   const item = await collection.create(payload);
   await item.save();
-  if (className === 'Application') {
-    await syncApplicationWorkflowTasks(
-      item as unknown as Record<string, unknown>,
-    );
-  }
-  if (className === 'Opportunity') {
-    await syncRecommendedOpportunityDecisionTasks();
-  }
   if (className === 'ResumeVariant') {
-    await syncResumeVariantApplicationApprovals(String(item.id ?? ''));
+    await syncResumeVariantApplicationApprovals(
+      String(item.id ?? ''),
+      requireCandidateWorkspaceSubject(),
+    );
   }
   if (className === 'Source') {
     await syncSourceSchedule(

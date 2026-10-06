@@ -1,8 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const environmentNames = [
+  'DATABASE_URL',
+  'IOLAUS_OIDC_ADMIN_EMAILS',
+  'IOLAUS_OIDC_CLIENT_ID',
+  'IOLAUS_OIDC_REALM',
+  'IOLAUS_OIDC_SERVER_URL',
+  'IOLAUS_PUBLIC_URL',
+  'IOLAUS_WORKSPACE_MODE',
+  'SMRT_APP_ID',
+  'SMRT_RUNTIME_PROFILE',
+] as const;
+const originalEnvironment = Object.fromEntries(
+  environmentNames.map((name) => [name, process.env[name]]),
+);
 
 const mocks = vi.hoisted(() => ({
   contextActive: false,
   ensureApplicationRuntimeReady: vi.fn(),
+  verifyWorkspaceSubject: vi.fn(),
   withBearerSessionContext: vi.fn(),
 }));
 
@@ -60,6 +76,10 @@ vi.mock('$lib/server/terminal-auth', () => ({
   withBearerSessionContext: mocks.withBearerSessionContext,
 }));
 
+vi.mock('$lib/server/workspace-subject', () => ({
+  verifyWorkspaceSubject: mocks.verifyWorkspaceSubject,
+}));
+
 function event(
   token: string | null = 'terminal-token',
   pathname = '/api/job-search/browse',
@@ -76,7 +96,7 @@ function event(
     permissions: string[];
     sessionId: string | null;
     tenantId: string | null;
-    user: { id: string; status?: string } | null;
+    user: { email?: string; id: string; status?: string } | null;
   };
   request: Request;
   url: URL;
@@ -99,9 +119,29 @@ function event(
 
 describe('server bearer-session handling', () => {
   beforeEach(() => {
+    Object.assign(process.env, {
+      DATABASE_URL: 'postgresql://localhost/iolaus_tests_hooks_test',
+      IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.invalid',
+      IOLAUS_OIDC_CLIENT_ID: 'iolaus-tests',
+      IOLAUS_OIDC_REALM: 'iolaus',
+      IOLAUS_OIDC_SERVER_URL: 'https://identity.example.invalid',
+      IOLAUS_PUBLIC_URL: 'https://iolaus.example.invalid',
+      IOLAUS_WORKSPACE_MODE: 'private',
+      SMRT_APP_ID: 'iolaus-tests',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+    });
     vi.clearAllMocks();
     mocks.contextActive = false;
     mocks.ensureApplicationRuntimeReady.mockResolvedValue(undefined);
+    mocks.verifyWorkspaceSubject.mockResolvedValue(null);
+  });
+
+  afterAll(() => {
+    for (const name of environmentNames) {
+      const original = originalEnvironment[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
   });
 
   it('does not block process startup on a pending provider readiness check', async () => {
@@ -133,7 +173,11 @@ describe('server bearer-session handling', () => {
       tenantId: 'tenant-1',
       userId: 'user-1',
     };
-    const user = { id: 'user-1', status: 'active' };
+    const user = {
+      email: 'owner@example.invalid',
+      id: 'user-1',
+      status: 'active',
+    };
     mocks.withBearerSessionContext.mockImplementation(
       async (
         _token: string,
@@ -175,6 +219,24 @@ describe('server bearer-session handling', () => {
       tenantId: 'tenant-1',
       user,
     });
+    expect(mocks.verifyWorkspaceSubject).toHaveBeenCalledWith(
+      requestEvent.locals,
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a JWT-shaped MCP bearer for canonical resource authentication', async () => {
+    const requestEvent = event('header.payload.signature', '/api/mcp');
+    const resolve = vi.fn(async () => new Response('oauth-route'));
+    const { handle } = await import('./hooks.server');
+
+    const response = await handle({ event: requestEvent, resolve } as never);
+
+    expect(response.status).toBe(200);
+    expect(mocks.withBearerSessionContext).not.toHaveBeenCalled();
+    expect(mocks.verifyWorkspaceSubject).toHaveBeenCalledWith(
+      requestEvent.locals,
+    );
     expect(resolve).toHaveBeenCalledOnce();
   });
 
@@ -207,7 +269,11 @@ describe('server bearer-session handling', () => {
 
   it('preserves an established cookie session instead of replacing it', async () => {
     const requestEvent = event('different-bearer');
-    const cookieUser = { id: 'cookie-user', status: 'active' };
+    const cookieUser = {
+      email: 'owner@example.invalid',
+      id: 'cookie-user',
+      status: 'active',
+    };
     requestEvent.locals.user = cookieUser;
     requestEvent.locals.tenantId = 'cookie-tenant';
     requestEvent.locals.membership = {
@@ -250,6 +316,39 @@ describe('server bearer-session handling', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it('rejects a stale cookie permission snapshot after workspace verification revokes membership', async () => {
+    const requestEvent = event(null);
+    requestEvent.locals.user = {
+      email: 'owner@example.invalid',
+      id: 'user-1',
+      status: 'active',
+    };
+    requestEvent.locals.tenantId = 'tenant-1';
+    requestEvent.locals.membership = {
+      id: 'membership-1',
+      roleId: 'admin-role',
+      status: 'active',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    requestEvent.locals.permissions = ['opportunities.read'];
+    mocks.verifyWorkspaceSubject.mockImplementation(async (locals) => {
+      locals.membership = null;
+      locals.permissions = [];
+      return null;
+    });
+    const resolve = vi.fn(async () => new Response('unexpected'));
+    const { handle } = await import('./hooks.server');
+
+    const response = await handle({ event: requestEvent, resolve } as never);
+
+    expect(response.status).toBe(403);
+    expect(mocks.verifyWorkspaceSubject).toHaveBeenCalledWith(
+      requestEvent.locals,
+    );
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['/admin/opportunities'],
     ['/admin/resume-assets/resume-1/pdf'],
@@ -261,7 +360,7 @@ describe('server bearer-session handling', () => {
     requestEvent.locals.membership = {
       id: 'membership-1',
       roleId: 'viewer-role',
-      status: 'pending',
+      status: 'active',
       tenantId: 'tenant-1',
       userId: 'member-1',
     };

@@ -1,5 +1,8 @@
 .smrt
 
+# Generated from the tracked MCP App Svelte entry before dev, check, test, and build.
+src/lib/components/mcp-apps/generated/
+
 # SMRT auto-generated routes (from Vite plugin)
 src/routes/api/**/+server.ts
 !src/routes/api/[[]resource[]]/**/+server.ts

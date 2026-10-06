@@ -10,6 +10,23 @@ vi.mock('./application-workflow.js', () => ({
   recordAgentAudit: vi.fn(async () => ({ id: 'run-1' })),
 }));
 
+const subjectMocks = vi.hoisted(() => ({
+  requireCurrentWorkspaceSubject: vi.fn(),
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  requireCurrentWorkspaceSubject: subjectMocks.requireCurrentWorkspaceSubject,
+}));
+
+beforeEach(() => {
+  subjectMocks.requireCurrentWorkspaceSubject.mockReset();
+  subjectMocks.requireCurrentWorkspaceSubject.mockReturnValue({
+    profileId: 'profile-owner',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  });
+});
+
 const GREENHOUSE_JOB = 'https://job-boards.greenhouse.io/temporal/jobs/123';
 const ASHBY_JOB = 'https://jobs.ashbyhq.com/acme/job-1';
 const LEVER_JOB = 'https://jobs.lever.co/acme/job-1';
@@ -652,6 +669,23 @@ describe('recordPostingPreflight', () => {
         }),
       }),
     );
+  });
+
+  it('rejects a forged user before it fetches or writes audit evidence', async () => {
+    const fetchImpl = vi.fn(async () => response());
+    vi.mocked(recordAgentAudit).mockClear();
+
+    await expect(
+      recordPostingPreflight({
+        fetchImpl,
+        opportunity: { id: 'opp-1' },
+        postingUrl: GREENHOUSE_JOB,
+        user: { id: 'user-forged' },
+      }),
+    ).rejects.toThrow('must match');
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordAgentAudit).not.toHaveBeenCalled();
   });
 
   it('rejects credentials without persisting them in preflight evidence', async () => {

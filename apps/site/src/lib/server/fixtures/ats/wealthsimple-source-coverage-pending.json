@@ -1,0 +1,712 @@
+{
+  "provenance": {
+    "source": "Wealthsimple public Staff Software Developer Production Engineering posting",
+    "captureContract": "requirement-coverage-source/v4-coverage-only4096",
+    "observed": "50 actual requirements; 42 dispositions; 16 verbose exclusion aliases, 4 heading type aliases, 1 unmapped context"
+  },
+  "providerProposal": {
+    "requirementCoverage": {
+      "requirements": [
+        {
+          "id": "r1",
+          "text": "The Production Engineering team sits within Platform Experience, on the boundary between Platform and Product.",
+          "clauseIds": [
+            "c5"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r2",
+          "text": "Raise reliability across Wealthsimple’s most critical flows by reducing incidents, helping service teams ship safely, and turning individual fixes into platform-wide improvements.",
+          "clauseIds": [
+            "c5"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r3",
+          "text": "Target 99.9% uptime on critical flows.",
+          "clauseIds": [
+            "c5"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r4",
+          "text": "Target fewer than 1% of weekly active users experiencing errors in the app.",
+          "clauseIds": [
+            "c5"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r5",
+          "text": "Bring senior technical leadership to the work of making Wealthsimple more reliable at scale.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r6",
+          "text": "Work across platform and product teams.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r7",
+          "text": "Identify the highest-leverage reliability problems.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r8",
+          "text": "Build solutions that fix the immediate issue and raise the floor for everyone.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r9",
+          "text": "Shape how engineering gets done across the company.",
+          "clauseIds": [
+            "c7"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r10",
+          "text": "Improve the platform to prevent incidents by designing guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+          "clauseIds": [
+            "c9"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r11",
+          "text": "Drive adoption of guardrails, sensible defaults, and engineering standards that reduce the likelihood of failures across services.",
+          "clauseIds": [
+            "c9"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r12",
+          "text": "Build tooling that reduces time to mitigation when incidents occur.",
+          "clauseIds": [
+            "c10"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r13",
+          "text": "Contribute to the in-house product on AI-assisted incident response.",
+          "clauseIds": [
+            "c10"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r14",
+          "text": "Own the investigation and follow-through on load test findings.",
+          "clauseIds": [
+            "c11"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r15",
+          "text": "Translate load test results into concrete reliability improvements across critical flows.",
+          "clauseIds": [
+            "c11"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r16",
+          "text": "Work across platform and product engineering teams as a technical influencer.",
+          "clauseIds": [
+            "c12"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r17",
+          "text": "Participate in architecture and readiness reviews.",
+          "clauseIds": [
+            "c12"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r18",
+          "text": "Coach service owners.",
+          "clauseIds": [
+            "c12"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r19",
+          "text": "Drive adoption of scalable reliability practices.",
+          "clauseIds": [
+            "c12"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r20",
+          "text": "Identify recurring failure patterns.",
+          "clauseIds": [
+            "c13"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r21",
+          "text": "Design platform-level fixes that prevent recurring failure patterns from showing up again in a different service.",
+          "clauseIds": [
+            "c13"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r22",
+          "text": "Contribute to the team’s reliability syncs with product engineering.",
+          "clauseIds": [
+            "c14"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r23",
+          "text": "Help align on incident themes, critical-flow risks, and the next highest-leverage initiatives.",
+          "clauseIds": [
+            "c14"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r24",
+          "text": "Have 8+ years of software engineering experience.",
+          "clauseIds": [
+            "c16"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r25",
+          "text": "Have significant time in platform, infrastructure, or SRE work.",
+          "clauseIds": [
+            "c16"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r26",
+          "text": "Have a demonstrated track record of improving reliability at scale through reducing incidents, building guardrails, or driving operational standards across multiple teams.",
+          "clauseIds": [
+            "c17"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r27",
+          "text": "Have strong proficiency in backend systems.",
+          "clauseIds": [
+            "c18"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r28",
+          "text": "Have strong proficiency in distributed architecture.",
+          "clauseIds": [
+            "c18"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r29",
+          "text": "Be able to diagnose complex failure modes across a service mesh.",
+          "clauseIds": [
+            "c18"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r30",
+          "text": "Have experience with load testing and capacity planning.",
+          "clauseIds": [
+            "c19"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r31",
+          "text": "Be able to translate load testing and capacity planning findings into concrete engineering improvements.",
+          "clauseIds": [
+            "c19"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r32",
+          "text": "Have a proven ability to work across engineering teams as a technical influencer, driving adoption of standards and practices without direct authority.",
+          "clauseIds": [
+            "c20"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r33",
+          "text": "Have familiarity with Kubernetes.",
+          "clauseIds": [
+            "c21"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r34",
+          "text": "Have familiarity with Helm.",
+          "clauseIds": [
+            "c21"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r35",
+          "text": "Have familiarity with Argo.",
+          "clauseIds": [
+            "c21"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r36",
+          "text": "Have familiarity with modern deployment tooling.",
+          "clauseIds": [
+            "c21"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r37",
+          "text": "Have strong written communication skills.",
+          "clauseIds": [
+            "c22"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r38",
+          "text": "Have strong verbal communication skills.",
+          "clauseIds": [
+            "c22"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r39",
+          "text": "Be comfortable presenting findings and recommendations to both engineering teams and senior leadership.",
+          "clauseIds": [
+            "c22"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r40",
+          "text": "Think in systems: look for what caused a problem and how to make sure it does not happen elsewhere, rather than looking only for the fix.",
+          "clauseIds": [
+            "c24"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r41",
+          "text": "Be comfortable working without direct authority.",
+          "clauseIds": [
+            "c25"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r42",
+          "text": "Build credibility through the quality of your thinking and the clarity of your recommendations.",
+          "clauseIds": [
+            "c25"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r43",
+          "text": "Hold a high bar for operational excellence without making it someone else’s problem to catch up to.",
+          "clauseIds": [
+            "c26"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r44",
+          "text": "Bring people along.",
+          "clauseIds": [
+            "c26"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r45",
+          "text": "Be energised by ambiguity, not slowed down by it.",
+          "clauseIds": [
+            "c27"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r46",
+          "text": "Know how to prioritise when everything feels urgent.",
+          "clauseIds": [
+            "c27"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r47",
+          "text": "Be curious about where AI-assisted tooling is headed in reliability engineering.",
+          "clauseIds": [
+            "c28"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r48",
+          "text": "Want to help shape how AI-assisted tooling is used in reliability engineering, not just observe it from a distance.",
+          "clauseIds": [
+            "c28"
+          ],
+          "importance": "required"
+        },
+        {
+          "id": "r49",
+          "text": "We are a hybrid team with over 1,500 employees across North America.",
+          "clauseIds": [
+            "c35"
+          ],
+          "importance": "unknown"
+        },
+        {
+          "id": "r50",
+          "text": "Collaborate with talented, curious, and driven teammates who are deeply committed to doing great work.",
+          "clauseIds": [
+            "c35"
+          ],
+          "importance": "unknown"
+        }
+      ],
+      "dispositions": [
+        {
+          "clauseId": "c0",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c1",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c2",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c3",
+          "type": "section_heading",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c4",
+          "type": "role_context",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c5",
+          "type": "role_context",
+          "requirementIds": [
+            "r1",
+            "r2",
+            "r3",
+            "r4"
+          ]
+        },
+        {
+          "clauseId": "c6",
+          "type": "section_heading",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c7",
+          "type": "role_context",
+          "requirementIds": [
+            "r5",
+            "r6",
+            "r7",
+            "r8",
+            "r9"
+          ]
+        },
+        {
+          "clauseId": "c8",
+          "type": "section_heading",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c9",
+          "type": "role_duty",
+          "requirementIds": [
+            "r10",
+            "r11"
+          ]
+        },
+        {
+          "clauseId": "c10",
+          "type": "role_duty",
+          "requirementIds": [
+            "r12",
+            "r13"
+          ]
+        },
+        {
+          "clauseId": "c11",
+          "type": "role_duty",
+          "requirementIds": [
+            "r14",
+            "r15"
+          ]
+        },
+        {
+          "clauseId": "c12",
+          "type": "role_duty",
+          "requirementIds": [
+            "r16",
+            "r17",
+            "r18",
+            "r19"
+          ]
+        },
+        {
+          "clauseId": "c13",
+          "type": "role_duty",
+          "requirementIds": [
+            "r20",
+            "r21"
+          ]
+        },
+        {
+          "clauseId": "c14",
+          "type": "role_duty",
+          "requirementIds": [
+            "r22",
+            "r23"
+          ]
+        },
+        {
+          "clauseId": "c15",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c16",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r24",
+            "r25"
+          ]
+        },
+        {
+          "clauseId": "c17",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r26"
+          ]
+        },
+        {
+          "clauseId": "c18",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r27",
+            "r28",
+            "r29"
+          ]
+        },
+        {
+          "clauseId": "c19",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r30",
+            "r31"
+          ]
+        },
+        {
+          "clauseId": "c20",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r32"
+          ]
+        },
+        {
+          "clauseId": "c21",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r33",
+            "r34",
+            "r35",
+            "r36"
+          ]
+        },
+        {
+          "clauseId": "c22",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r37",
+            "r38",
+            "r39"
+          ]
+        },
+        {
+          "clauseId": "c23",
+          "type": "section_heading",
+          "requirementIds": []
+        },
+        {
+          "clauseId": "c24",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r40"
+          ]
+        },
+        {
+          "clauseId": "c25",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r41",
+            "r42"
+          ]
+        },
+        {
+          "clauseId": "c26",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r43",
+            "r44"
+          ]
+        },
+        {
+          "clauseId": "c27",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r45",
+            "r46"
+          ]
+        },
+        {
+          "clauseId": "c28",
+          "type": "material_requirement",
+          "requirementIds": [
+            "r47",
+            "r48"
+          ]
+        },
+        {
+          "clauseId": "c29",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c30",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c31",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c32",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c33",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c34",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c35",
+          "type": "role_context",
+          "requirementIds": [
+            "r49",
+            "r50"
+          ]
+        },
+        {
+          "clauseId": "c36",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c37",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c38",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c39",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c40",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        },
+        {
+          "clauseId": "c41",
+          "type": "nonrequirement",
+          "requirementIds": [],
+          "exclusionRule": "literal_nonmaterial_audit pending independent verification"
+        }
+      ]
+    }
+  }
+}

@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_ENV,
   OPPORTUNITY_INTELLIGENCE_ENQUEUE_CAP_HARD_MAX,
+  OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS,
   OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
+  OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS,
   opportunityIntelligenceEnabled,
+  opportunityIntelligenceProviderVolume,
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
@@ -163,5 +166,351 @@ describe('opportunity intelligence enqueue config', () => {
       inputTokenCeiling: OPPORTUNITY_INTELLIGENCE_SCORING_INPUT_TOKEN_HARD_MAX,
       modelEnabled: true,
     });
+  });
+});
+
+describe('native provider volume contract classification', () => {
+  it('pins JEV 10x while retaining OpenAI bounds independently', () => {
+    expect(OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS).toEqual({
+      typesafe: { requests: 1000, inputTokens: 10000000 },
+      openai: { requests: 100, inputTokens: 1000000 },
+    });
+  });
+  it.each(
+    OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS.flatMap((row) =>
+      row.versions.map((version) => ({ ...row, version })),
+    ),
+  )('grants JEV only to exact configured native adapter $feature/$version', (contract) => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-assessment',
+    );
+    vi.stubEnv('OPPORTUNITY_SKILL_DECISION_MODEL', 'configured-skills');
+    const identity = {
+      feature: contract.feature,
+      profile: contract.profile,
+      model:
+        contract.profile ===
+          'typesafe-opportunity-review-strength-verification' ||
+        contract.profile === 'typesafe-opportunity-jev-assessment-experiment' ||
+        contract.profile === 'typesafe-opportunity-question-screening' ||
+        contract.profile === 'typesafe-candidate-skill-discovery'
+          ? 'jev-1.13.0'
+          : contract.profile === 'typesafe-skills'
+            ? 'configured-skills'
+            : 'configured-assessment',
+      promptVersion: contract.version,
+      outputSchemaVersion: contract.version,
+      preparedPayloadVersion: contract.version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    for (const key of [
+      'feature',
+      'profile',
+      'model',
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [key]: 'untrusted',
+        }),
+      ).toBe('openai');
+  });
+  it.each([
+    'opportunity-question-screening/v1-user-questions',
+    'opportunity-question-screening/v2-multi-source-witnesses',
+    'opportunity-question-screening/v3-source-classification',
+    'opportunity-question-screening/v4-role-prescreen-sizing',
+    'opportunity-question-screening/v5-semantic-candidate-witnesses',
+    'opportunity-question-screening/v6-individual-skill-witnesses',
+    'opportunity-question-screening/v7-bounded-evidence-bundles',
+    'opportunity-question-screening/v8-named-capability-evidence',
+    'opportunity-question-screening/v9-lossless-overflow',
+  ])('keeps %s user-authored question screening in its exact fixed-model JEV bucket only', (version) => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-assessment',
+    );
+    const identity = {
+      feature: 'opportunity-question-screening',
+      profile: 'typesafe-opportunity-question-screening',
+      model: 'jev-1.13.0',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    for (const changed of [
+      { feature: 'unknown-question-feature' },
+      { profile: 'typesafe-opportunity-screening' },
+      { model: 'jev-latest' },
+      {
+        promptVersion: 'opportunity-screening/v4-independent-source-entailment',
+      },
+      {
+        outputSchemaVersion:
+          version === 'opportunity-question-screening/v1-user-questions'
+            ? 'opportunity-question-screening/v2-multi-source-witnesses'
+            : 'opportunity-question-screening/v1-user-questions',
+      },
+    ])
+      expect(
+        opportunityIntelligenceProviderVolume({ ...identity, ...changed }),
+      ).toBe('openai');
+  });
+  it('classifies only the exact fixed-model ordinal experiment tuple as JEV without altering other contracts or limits', () => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-assessment',
+    );
+    const version = 'opportunity-jev-assessment-experiment/v1-ordinal-evidence';
+    const identity = {
+      feature: 'opportunity-jev-assessment-experiment',
+      profile: 'typesafe-opportunity-jev-assessment-experiment',
+      model: 'jev-1.13.0',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    for (const changed of [
+      { model: 'configured-assessment' },
+      { model: 'jev-latest' },
+      { feature: 'unknown-experiment' },
+      { profile: 'typesafe-unknown-experiment' },
+      {
+        promptVersion:
+          'opportunity-review-strength-verification/v2-partial-relevance',
+      },
+      {
+        outputSchemaVersion:
+          'opportunity-jev-assessment-experiment/v2-unregistered',
+      },
+      {
+        preparedPayloadVersion:
+          'opportunity-review-strength-verification/v1-independent-jev',
+      },
+    ])
+      expect(
+        opportunityIntelligenceProviderVolume({ ...identity, ...changed }),
+      ).toBe('openai');
+    expect(OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS).toEqual({
+      typesafe: { requests: 1000, inputTokens: 10000000 },
+      openai: { requests: 100, inputTokens: 1000000 },
+    });
+  });
+  it.each([
+    'opportunity-review-strength-verification/v1-independent-jev',
+    'opportunity-review-strength-verification/v2-partial-relevance',
+  ])('pins saved-review verifier %s to its exact fixed JEV contract', (version) => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'different-assessment');
+    const identity = {
+      feature: 'opportunity-review-strength-verification',
+      profile: 'typesafe-opportunity-review-strength-verification',
+      model: 'jev-1.13.0',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        outputSchemaVersion:
+          version ===
+          'opportunity-review-strength-verification/v1-independent-jev'
+            ? 'opportunity-review-strength-verification/v2-partial-relevance'
+            : 'opportunity-review-strength-verification/v1-independent-jev',
+      }),
+    ).toBe('openai');
+
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'different-assessment',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        outputSchemaVersion:
+          'opportunity-resume-fit-review/v4-complete-material',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        feature: 'unregistered-review',
+      }),
+    ).toBe('openai');
+  });
+  it.each([
+    'opportunity-screening/v1-jev-first',
+    'opportunity-screening/v2-lossless-groups',
+    'opportunity-screening/v3-self-contained-evidence',
+    'opportunity-screening/v4-independent-source-entailment',
+  ] as const)('classifies only the exact private screening adapter %s under its configured model', (version) => {
+    vi.stubEnv(
+      'OPPORTUNITY_ASSESSMENT_DECISION_MODEL',
+      'configured-screen-model',
+    );
+    const identity = {
+      feature: 'opportunity-screening',
+      profile: 'typesafe-opportunity-screening',
+      model: 'configured-screen-model',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    const otherVersion =
+      version === 'opportunity-screening/v2-lossless-groups'
+        ? 'opportunity-screening/v3-self-contained-evidence'
+        : 'opportunity-screening/v2-lossless-groups';
+    for (const field of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [field]: otherVersion,
+        }),
+      ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        profile: 'typesafe-opportunity-source-evidence',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-untrusted-prefix',
+      }),
+    ).toBe('openai');
+  });
+  it('classifies the exact captured-source V4 adapter and denies the superseded reciprocal-only tuple', () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-latest');
+    const version = 'requirement-evidence-audit/v4-captured-source-recovery';
+    const identity = {
+      feature: 'opportunity-source-requirement-evidence',
+      profile: 'typesafe-opportunity-source-evidence',
+      model: 'jev-latest',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    const superseded = 'requirement-evidence-audit/v4-reciprocal-uncertainty';
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: superseded,
+        outputSchemaVersion: superseded,
+        preparedPayloadVersion: superseded,
+      }),
+    ).toBe('openai');
+  });
+  it('never grants JEV from a model name or supplied extra provider flag', () => {
+    const identity = {
+      feature: 'opportunity-extraction-chunk-1',
+      profile: 'opportunity-intelligence-extraction',
+      model: 'jev-latest',
+      promptVersion: 'unknown',
+      outputSchemaVersion: 'unknown',
+      preparedPayloadVersion: 'unknown',
+      provider: 'typesafe',
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('openai');
+  });
+  it('keeps historical and catalog-alias Sol review contracts on unchanged OpenAI quotas and pricing', () => {
+    const historical = 'opportunity-resume-fit-review/v1-advisory';
+    const current = 'opportunity-resume-fit-review/v2-catalog-aliases';
+    const identity = {
+      feature: 'opportunity-resume-fit-review',
+      profile: 'opportunity-intelligence-scoring',
+      model: 'openai/gpt-6.1-sol',
+      promptVersion: current,
+      outputSchemaVersion: current,
+      preparedPayloadVersion: current,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: historical,
+        outputSchemaVersion: historical,
+        preparedPayloadVersion: historical,
+      }),
+    ).toBe('openai');
+    for (const key of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({
+          ...identity,
+          [key]: historical,
+        }),
+      ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-latest',
+      }),
+    ).toBe('openai');
+    expect(pricingForOpportunityIntelligenceModel(identity.model)).toEqual({
+      configured: true,
+      inputMicrosPerMillion: 2_000_000,
+      outputMicrosPerMillion: 10_000_000,
+    });
+  });
+  it('classifies only the exact V5 quarantine tuple and preserves paid V4 classification', () => {
+    vi.stubEnv('OPPORTUNITY_ASSESSMENT_DECISION_MODEL', 'jev-latest');
+    const version = 'requirement-evidence-audit/v5-quarantined-source-recovery';
+    const legacy = 'requirement-evidence-audit/v4-captured-source-recovery';
+    const identity = {
+      feature: 'opportunity-source-requirement-evidence',
+      profile: 'typesafe-opportunity-source-evidence',
+      model: 'jev-latest',
+      promptVersion: version,
+      outputSchemaVersion: version,
+      preparedPayloadVersion: version,
+    };
+    expect(opportunityIntelligenceProviderVolume(identity)).toBe('typesafe');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        promptVersion: legacy,
+        outputSchemaVersion: legacy,
+        preparedPayloadVersion: legacy,
+      }),
+    ).toBe('typesafe');
+    for (const key of [
+      'promptVersion',
+      'outputSchemaVersion',
+      'preparedPayloadVersion',
+    ] as const)
+      expect(
+        opportunityIntelligenceProviderVolume({ ...identity, [key]: legacy }),
+      ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        model: 'jev-unregistered',
+      }),
+    ).toBe('openai');
+    expect(
+      opportunityIntelligenceProviderVolume({
+        ...identity,
+        profile: 'typesafe-unregistered',
+      }),
+    ).toBe('openai');
   });
 });

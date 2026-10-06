@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     sourceContentFingerprint: opportunity.sourceContentFingerprint,
     sourceContentVersion: 1,
   })),
+  shared: false,
 }));
 
 vi.mock('@happyvertical/smrt-core', () => ({
@@ -30,6 +31,7 @@ vi.mock('./db.js', () => ({
   getDbConfig: vi.fn(() => ({})),
   getSmrtOptions: vi.fn(() => ({})),
 }));
+vi.mock('./app-config.js', () => ({ isSharedHosted: () => mocks.shared }));
 vi.mock('./opportunity-intelligence-governance.js', () => ({
   ensureOpportunityIntelligenceControl: vi.fn(async () => {}),
   OPPORTUNITY_INTELLIGENCE_CONTROL_KEY: 'opportunity-intelligence',
@@ -54,6 +56,7 @@ vi.mock('./smrt.js', () => ({
 
 describe('saved opportunity score refresh', () => {
   beforeEach(() => {
+    mocks.shared = false;
     mocks.control.scoreRefreshCursor = '';
     mocks.control.save.mockClear();
     mocks.enqueue.mockClear();
@@ -63,6 +66,31 @@ describe('saved opportunity score refresh', () => {
     mocks.query.mockReset();
     mocks.collectionOptions.mockClear();
     mocks.scoreMaterial.mockClear();
+  });
+
+  it('rejects the shared global refresh before any database query', async () => {
+    mocks.shared = true;
+    const { reconcileSavedOpportunityScores } = await import(
+      './opportunity-score-refresh'
+    );
+
+    await expect(
+      reconcileSavedOpportunityScores(mocks.control as never),
+    ).rejects.toThrow('explicit operator dispatch');
+    expect(mocks.query).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('skips schedule registration on shared installs without failing migrations', async () => {
+    mocks.shared = true;
+    const { ensureOpportunityScoreRefreshSchedule } = await import(
+      './opportunity-score-refresh'
+    );
+
+    await expect(
+      ensureOpportunityScoreRefreshSchedule({} as never),
+    ).resolves.toBeUndefined();
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 
   it('pages, persists the target, and queues one fenced score refresh', async () => {

@@ -13,6 +13,7 @@ import {
   researchCompanyAction,
   reviewOpportunityAction,
 } from '$lib/server/admin-resource-route';
+import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject';
 import type { Actions, PageServerLoad } from './$types';
 
 function requireOpportunityResource(resource: string): void {
@@ -25,9 +26,10 @@ function recordHref(resource: string, id: string): string {
   return `/admin/${resource}/${encodeURIComponent(id)}`;
 }
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ locals, params }) => {
   return await loadAdminRecordPageData(params.resource, params.id, {
     includeOpportunityRelations: params.resource === 'opportunities',
+    workspaceSubject: workspaceSubjectFromLocals(locals),
   });
 };
 
@@ -42,13 +44,13 @@ export const actions: Actions = {
     return await acceptOpportunityAction(request, locals);
   },
   processOpportunityWithLlm: async ({ locals, request }) => {
-    return await processOpportunityWithLlmAction(request, locals.user);
+    return await processOpportunityWithLlmAction(request, locals);
   },
   processOpportunity: async ({ locals, request }) => {
-    return await processOpportunityAction(request, locals.user);
+    return await processOpportunityAction(request, locals);
   },
-  researchCompany: async ({ request }) => {
-    return await researchCompanyAction(request);
+  researchCompany: async ({ locals, request }) => {
+    return await researchCompanyAction(request, locals);
   },
   createDraftApplication: async ({ locals, request }) => {
     return await createDraftApplicationAction(request, locals);

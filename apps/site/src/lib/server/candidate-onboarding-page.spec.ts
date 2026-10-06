@@ -4,6 +4,7 @@ import {
   projectCandidateOnboardingAnswer,
   projectCandidateOnboardingProfile,
 } from './candidate-onboarding-profile.js';
+import { onboardingCountryOptions } from './country-reference.js';
 
 describe('projectCandidateOnboardingProfile', () => {
   it('round-trips a saved display name, demographics, and consent into the owner form', () => {
@@ -67,5 +68,50 @@ describe('mergeCandidateOnboardingResumeAssets', () => {
         selectable,
       ).map((asset) => asset.id),
     ).toEqual(['selected', 'recent']);
+  });
+});
+
+describe('basic owner form projection', () => {
+  it('prefills Yes only from explicit unrestricted rights and round-trips saved Unknown', () => {
+    const profile = {
+      citizenshipsJson: JSON.stringify([{ code: 'CA', label: 'Canada' }]),
+      authorizedWorkCountriesJson: JSON.stringify([
+        { country: { code: 'CA', label: 'Canada' }, scope: 'country' },
+      ]),
+    };
+    expect(
+      projectCandidateOnboardingProfile(profile)?.basicWorkEligibility,
+    ).toMatchObject({
+      citizenshipWorkAuthorization: 'yes',
+      canWorkElsewhere: 'unknown',
+    });
+    expect(
+      projectCandidateOnboardingProfile({
+        ...profile,
+        preferencesJson: JSON.stringify({
+          citizenshipWorkAuthorization: 'unknown',
+          canWorkElsewhere: 'no',
+          workModeChoice: 'any',
+        }),
+      })?.basicWorkEligibility,
+    ).toMatchObject({
+      citizenshipWorkAuthorization: 'unknown',
+      canWorkElsewhere: 'no',
+      workModeChoice: 'any',
+    });
+  });
+  it('provides a complete deterministic catalog and preserves saved codes', () => {
+    const options = onboardingCountryOptions(['XK']);
+    expect(options).toEqual(
+      expect.arrayContaining([
+        { value: 'CA', label: 'Canada' },
+        { value: 'DE', label: 'Germany' },
+        { value: 'XK', label: expect.any(String) },
+      ]),
+    );
+    expect(new Set(options.map(({ value }) => value)).size).toBe(
+      options.length,
+    );
+    expect(options.length).toBe(250);
   });
 });

@@ -1,11 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  releaseResumeVariantApplicationWrite,
-  reserveResumeVariantApplicationWrite,
-  resumeVariantDeleteViolation,
-  resumeVariantWriteViolation,
-  syncResumeVariantApplicationApprovals,
+  resumeVariantDeleteViolation as deleteViolation,
+  releaseResumeVariantApplicationWrite as releaseWrite,
+  reserveResumeVariantApplicationWrite as reserveWrite,
+  syncResumeVariantApplicationApprovals as syncApprovals,
+  resumeVariantWriteViolation as writeViolation,
 } from './resume-variant-workflow';
+
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
+const releaseResumeVariantApplicationWrite = (
+  reservation: Parameters<typeof releaseWrite>[0],
+) => releaseWrite(reservation, subject);
+const reserveResumeVariantApplicationWrite = (resumeVariantId: string) =>
+  reserveWrite(resumeVariantId, subject);
+const resumeVariantDeleteViolation = (resumeVariantId: string) =>
+  deleteViolation(resumeVariantId, subject);
+const resumeVariantWriteViolation = (resumeVariantId: string) =>
+  writeViolation(resumeVariantId, subject);
+const syncResumeVariantApplicationApprovals = (resumeVariantId: string) =>
+  syncApprovals(resumeVariantId, subject);
 
 const workflowMocks = vi.hoisted(() => ({
   applications: [] as Array<
@@ -69,6 +87,9 @@ function application(
 ): Record<string, unknown> & { save: ReturnType<typeof vi.fn> } {
   return {
     save: vi.fn(async () => undefined),
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
     ...payload,
   };
 }
@@ -245,5 +266,24 @@ describe('resume variant workflow guards', () => {
     await expect(resumeVariantDeleteViolation('variant-missing')).resolves.toBe(
       '',
     );
+  });
+
+  it("does not reserve another profile's application selected by the same variant ID", async () => {
+    const otherProfileApplication = application({
+      candidateProfileId: 'profile-other',
+      id: 'app-other-profile',
+      ownerUserId: subject.userId,
+      resumeVariantId: 'variant-1',
+      status: 'approved',
+      tenantId: subject.tenantId,
+    });
+    workflowMocks.applications.push(otherProfileApplication);
+
+    await expect(resumeVariantWriteViolation('variant-1')).resolves.toBe('');
+    const { reservation } =
+      await reserveResumeVariantApplicationWrite('variant-1');
+
+    expect(reservation?.applications).toEqual([]);
+    expect(otherProfileApplication.materialWriteLock).toBeUndefined();
   });
 });

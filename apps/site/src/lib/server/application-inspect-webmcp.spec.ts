@@ -1,13 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  listPrivateRecords: vi.fn(async () => [] as Record<string, unknown>[]),
   opportunities: new Map<string, Record<string, unknown>>(),
+  privateTasks: [] as Record<string, unknown>[],
   snapshot: vi.fn(async (_id: string) => null as unknown),
-  tasks: [] as Record<string, unknown>[],
+  subject: {
+    profileId: 'profile-a',
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+  },
 }));
 
 vi.mock('./application-review.js', () => ({
   loadApplicationReviewSnapshot: mocks.snapshot,
+}));
+
+vi.mock('./agent-audit-subject.js', () => ({
+  requireCurrentPrivateWorkspaceSubject: vi.fn(() => mocks.subject),
+}));
+
+vi.mock('./private-workspace.js', () => ({
+  listPrivateRecords: mocks.listPrivateRecords,
 }));
 
 vi.mock('./smrt.js', () => ({
@@ -16,12 +30,6 @@ vi.mock('./smrt.js', () => ({
       return {
         get: vi.fn(async (id: string) => mocks.opportunities.get(id) ?? null),
         list: vi.fn(async () => []),
-      };
-    }
-    if (className === 'Task') {
-      return {
-        get: vi.fn(async () => null),
-        list: vi.fn(async () => mocks.tasks),
       };
     }
     throw new Error(`Unexpected collection ${className}`);
@@ -123,8 +131,10 @@ function application(overrides: Record<string, unknown> = {}) {
 describe('inspectJobApplication', () => {
   beforeEach(() => {
     mocks.snapshot.mockReset();
+    mocks.listPrivateRecords.mockReset();
+    mocks.listPrivateRecords.mockImplementation(async () => mocks.privateTasks);
     mocks.opportunities.clear();
-    mocks.tasks = [];
+    mocks.privateTasks = [];
     mocks.opportunities.set('opp-1', {
       id: 'opp-1',
       status: 'apply',
@@ -193,7 +203,7 @@ describe('inspectJobApplication', () => {
         } as never),
       ],
     });
-    mocks.tasks = [
+    mocks.privateTasks = [
       {
         id: 'task-1',
         applicationId: 'app-1',
@@ -268,6 +278,12 @@ describe('inspectJobApplication', () => {
       },
     ]);
     expect(result.tasks).toHaveLength(1);
+    expect(mocks.snapshot).toHaveBeenCalledWith('app-1', mocks.subject);
+    expect(mocks.listPrivateRecords).toHaveBeenCalledWith(
+      'Task',
+      mocks.subject,
+      expect.objectContaining({ where: { applicationId: 'app-1' } }),
+    );
     expect(result.comments.unresolved).toEqual([
       {
         id: 'comment-1',
@@ -399,7 +415,7 @@ describe('inspectJobApplication', () => {
       finalApprovalMaterialsCurrent: false,
       materials: [material()],
     });
-    mocks.tasks = Array.from({ length: 30 }, (_, index) => ({
+    mocks.privateTasks = Array.from({ length: 30 }, (_, index) => ({
       id: `task-${index}`,
       status: 'open',
       taskType: 'follow_up',

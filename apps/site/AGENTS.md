@@ -10,21 +10,16 @@ application-owned query or pooling substitutes.
 Agent-driven mutations (WebMCP `/api/job-search/*`, server-MCP `tools/call`,
 the DataSurface bulk actions at
 `/api/admin/opportunities/bulk-actions/{preview,apply}`, and the
-agent-drivable admin form actions: `reviewOpportunity`,
-`bulkReviewOpportunities`, `createOpportunityRelation`,
-`deleteOpportunityRelation`, `createDraftApplication`, `createFactIntake`,
-`processRecommendationTask`) run as the single owner principal in
-`src/lib/server/owner-principal.ts` (`runAsOwner` → `executeAsPrincipal` from
-`@happyvertical/smrt-agents`; the DataSurface adapter takes the binding as a
-value from `ownerPrincipalOptions` so it can re-enter the principal around
-each of preview and apply). Assert every generated `(collection, action)`
-permission the workflow performs with `run.assertOperation()` inside the run
-instead of adding new `hasOperationPermission` checks; `allowedTools` is
-derived from `src/lib/server/tool-catalog.ts`, never hand-listed. `AgentRun`
-has no generated create permission, so any operation set whose run can write
-an audit run (`recordAgentAudit`, `recordPostingPreflight`) must include
-`agentRunAuditOperations` (`(agentruns, read)`) from
-`src/lib/server/workflow-operations.ts`.
+agent-drivable admin form actions) run only with a verified workspace subject
+from `src/lib/server/workspace-subject.ts`. Re-enter the native
+`executeAsPrincipal` context at an external-write fence so its fresh role and
+permission resolution sees revocation. Assert curated workflow capabilities
+through `workspaceWorkflowOperation()` from
+`src/lib/server/workspace-workflow-capabilities.ts`, then enforce every target
+record's `{ tenantId, userId, profileId }` ownership tuple. Do not recreate
+generic private CRUD grants, infer authority from form profile IDs, or use the
+former single-owner `AgentRun` read surrogate. `allowedTools` is derived from
+`src/lib/server/tool-catalog.ts`, never hand-listed.
 
 Bulk workflows over a list belong on the DataSurface action adapter, not on a
 new form action: a bulk mutation must preview before it applies, re-resolve

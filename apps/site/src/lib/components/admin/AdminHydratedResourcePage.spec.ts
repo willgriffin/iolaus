@@ -22,7 +22,10 @@ vi.mock('@happyvertical/smrt-svelte/web', () => ({
   liveCollection: mocks.liveCollection,
 }));
 vi.mock('@happyvertical/smrt-virt-web', () => ({
-  getCollectionDefinition: vi.fn(() => ({})),
+  // Private collections are deliberately absent from the public web registry.
+  getCollectionDefinition: vi.fn((slug: string) => {
+    throw new Error(`[smrt] Unknown web collection definition: ${slug}`);
+  }),
   manifestHash: 'test-manifest',
 }));
 vi.mock('@happyvertical/smrt-web', () => ({
@@ -64,6 +67,9 @@ describe('AdminHydratedResourcePage SSR', () => {
         }),
       ).not.toThrow();
       expect(mocks.liveCollection).not.toHaveBeenCalled();
+      // Svelte can omit the browser-only collection construction during SSR.
+      // The exact curated metadata is covered by admin-resource-definitions.
+      expect(mocks.createSmrtWebClient).not.toHaveBeenCalled();
     });
   }
 });

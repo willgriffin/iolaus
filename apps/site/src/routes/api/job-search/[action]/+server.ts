@@ -17,10 +17,7 @@ import {
   type PrincipalRun,
   runAsOwner,
 } from '$lib/server/owner-principal';
-import {
-  LEGACY_RESUME_READ_PLAN,
-  NORMALIZED_RESUME_READ_PLAN,
-} from '$lib/server/resume-read-plans';
+import type { WorkspaceSubject } from '$lib/server/private-workspace';
 import { readJobSearchResume } from '$lib/server/resume-webmcp';
 import {
   createRootSourceFromWebMcp,
@@ -33,12 +30,11 @@ import {
   type ToolArgumentSource,
   validateToolArguments,
 } from '$lib/server/tool-arguments';
+import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject';
 import {
-  agentRunAuditOperations,
-  opportunityDigDeeperOperations,
-  opportunitySweepOperations,
-  postingPreflightOperations,
-} from '$lib/server/workflow-operations';
+  type WorkspaceWorkflowCapability,
+  workspaceWorkflowOperation,
+} from '$lib/server/workspace-workflow-capabilities';
 
 function unauthorized(): Response {
   return json({ error: 'Unauthorized' }, { status: 401 });
@@ -48,130 +44,25 @@ function forbidden(): Response {
   return json({ error: 'Forbidden' }, { status: 403 });
 }
 
-type Collection =
-  | 'agentruns'
-  | 'applicationmaterialcomments'
-  | 'applications'
-  | 'companies'
-  | 'decisions'
-  | 'evaluationscores'
-  | 'opportunities'
-  | 'resumeassets'
-  | 'resumetailoringconfigs'
-  | 'sourcecrawls'
-  | 'sourcecrawlitems'
-  | 'sources'
-  | 'tasks'
-  | ResumeReadCollection;
-
-/**
- * Generated collection slug for a resume read-plan class. Every class in the
- * plans is app-owned except `Tag` (`@happyvertical/smrt-tags`), and every slug
- * is the lower-cased plural the manifest publishes.
- */
-const resumeReadCollections = [
-  'achievements',
-  'achievementattachments',
-  'achievementtags',
-  'attachments',
-  'candidateprofilelinks',
-  'candidateprofiles',
-  'companies',
-  'companyattachments',
-  'duties',
-  'dutytags',
-  'educations',
-  'educationtags',
-  'employmentroles',
-  'employmentroletags',
-  'experiencecompanies',
-  'experienceroles',
-  'experiences',
-  'experiencetags',
-  'projectattachments',
-  'projects',
-  'projecttags',
-  'resumeachievements',
-  'resumeeducations',
-  'resumelinks',
-  'resumeotherroles',
-  'resumepositions',
-  'resumeprofiles',
-  'resumeskillcategories',
-  'resumeskillgroups',
-  'resumeskills',
-  'skillcategories',
-  'skillcategorymembers',
-  'skillgroupmembers',
-  'skillgroups',
-  'tags',
-] as const;
-type ResumeReadCollection = (typeof resumeReadCollections)[number];
-
-/** Read-plan class → collection slug, so a plan change fails the route spec. */
-const resumeReadPlanCollections = new Map<string, ResumeReadCollection>([
-  ['Achievement', 'achievements'],
-  ['AchievementAttachment', 'achievementattachments'],
-  ['AchievementTag', 'achievementtags'],
-  ['Attachment', 'attachments'],
-  ['CandidateProfile', 'candidateprofiles'],
-  ['CandidateProfileLink', 'candidateprofilelinks'],
-  ['Company', 'companies'],
-  ['CompanyAttachment', 'companyattachments'],
-  ['Duty', 'duties'],
-  ['DutyTag', 'dutytags'],
-  ['Education', 'educations'],
-  ['EducationTag', 'educationtags'],
-  ['EmploymentRole', 'employmentroles'],
-  ['EmploymentRoleTag', 'employmentroletags'],
-  ['Experience', 'experiences'],
-  ['ExperienceCompany', 'experiencecompanies'],
-  ['ExperienceRole', 'experienceroles'],
-  ['ExperienceTag', 'experiencetags'],
-  ['Project', 'projects'],
-  ['ProjectAttachment', 'projectattachments'],
-  ['ProjectTag', 'projecttags'],
-  ['ResumeAchievement', 'resumeachievements'],
-  ['ResumeEducation', 'resumeeducations'],
-  ['ResumeLink', 'resumelinks'],
-  ['ResumeOtherRole', 'resumeotherroles'],
-  ['ResumePosition', 'resumepositions'],
-  ['ResumeProfile', 'resumeprofiles'],
-  ['ResumeSkill', 'resumeskills'],
-  ['ResumeSkillCategory', 'resumeskillcategories'],
-  ['ResumeSkillGroup', 'resumeskillgroups'],
-  ['SkillCategory', 'skillcategories'],
-  ['SkillCategoryMember', 'skillcategorymembers'],
-  ['SkillGroup', 'skillgroups'],
-  ['SkillGroupMember', 'skillgroupmembers'],
-  ['Tag', 'tags'],
-]);
-
-const privateResumeReadPlanClasses = new Set([
-  'CandidateProfile',
-  'CandidateProfileLink',
-]);
-
-function resumeReadPlanClassNames(): string[] {
-  const names = new Set<string>();
-  for (const plan of [NORMALIZED_RESUME_READ_PLAN, LEGACY_RESUME_READ_PLAN]) {
-    for (const [className] of Object.values(plan)) {
-      if (!privateResumeReadPlanClasses.has(className)) names.add(className);
-    }
-  }
-  return [...names].sort();
-}
-
 interface RequiredOperation {
-  action: 'create' | 'delete' | 'read' | 'update';
-  collection: Collection;
+  action: 'create' | 'delete' | 'read' | 'update' | WorkspaceWorkflowCapability;
+  collection:
+    | 'companies'
+    | 'opportunities'
+    | 'sourcecrawls'
+    | 'sourcecrawlitems'
+    | 'sources'
+    | 'workflow';
 }
 
+/** Shared posting metadata remains catalog-backed; personal projections do not. */
 const contextReadOperations = [
-  { action: 'read', collection: 'applications' },
   { action: 'read', collection: 'companies' },
-  { action: 'read', collection: 'evaluationscores' },
   { action: 'read', collection: 'opportunities' },
+] satisfies RequiredOperation[];
+
+const workspaceInspectionOperations = [
+  workspaceWorkflowOperation('application.inspect'),
 ] satisfies RequiredOperation[];
 
 const sourceReadOperations = [
@@ -179,73 +70,40 @@ const sourceReadOperations = [
   { action: 'read', collection: 'sourcecrawls' },
 ] satisfies RequiredOperation[];
 
-/** Inspect adds the recorded posting-preflight verdict from the audit log. */
 const inspectReadOperations = [
   ...contextReadOperations,
-  ...agentRunAuditOperations,
+  ...workspaceInspectionOperations,
 ] satisfies RequiredOperation[];
 
-/**
- * `AgentRun` is system-authored (no generated create permission exists), so
- * every mutation below that records an audit run — the posting verification,
- * the source activation and crawl-enqueue audits, the import audit, and the
- * posting preflight the Apply paths run — asserts `agentRunAuditOperations`
- * (`workflow-operations.ts`): the owner's right to read the audit log.
- */
+/** Audit writes are private workflow facts, not public AgentRun CRUD. */
 const verifyPostingOperations = [
-  ...postingPreflightOperations,
+  { action: 'read', collection: 'opportunities' },
+  workspaceWorkflowOperation('audit.record'),
 ] satisfies RequiredOperation[];
 
-/**
- * Dig deeper records the `maybe` review, then queues the intelligence job, one
- * posting preflight, and the company's research task. The whole set is asserted
- * before the verdict is written, so a principal that may review but not queue
- * the follow-up is refused rather than left with half a deep dive.
- */
 const digDeeperOperations = [
-  ...opportunityDigDeeperOperations,
+  ...contextReadOperations,
+  workspaceWorkflowOperation('application.review'),
 ] satisfies RequiredOperation[];
 
-/**
- * The inactive-source sweep reads its matched set — including the applications
- * and owner decisions that exclude an already-decided posting — and, on apply,
- * batch-updates those rows and records one audit run. The write authority is
- * asserted for the dry run too, so a principal that cannot archive never
- * receives a count.
- */
 const sweepOpportunitiesOperations = [
-  ...opportunitySweepOperations,
+  { action: 'read', collection: 'opportunities' },
+  { action: 'update', collection: 'opportunities' },
+  { action: 'read', collection: 'sources' },
+  workspaceWorkflowOperation('audit.record'),
 ] satisfies RequiredOperation[];
 
 const inspectApplicationOperations = [
-  { action: 'read', collection: 'applications' },
-  { action: 'read', collection: 'applicationmaterialcomments' },
-  ...agentRunAuditOperations,
-  { action: 'read', collection: 'opportunities' },
-  { action: 'read', collection: 'resumeassets' },
-  { action: 'read', collection: 'tasks' },
+  workspaceWorkflowOperation('application.inspect'),
 ] satisfies RequiredOperation[];
 
-/**
- * The published resume is assembled from every read-plan collection (the
- * normalized plan plus the legacy fallback), and the tailoring selection reads
- * stored configs. Candidate profile records are read privately by the bounded
- * resume service, never through a generated model permission or response.
- */
+/** Resume material is private profile data, never generic collection CRUD. */
 const readResumeOperations = [
-  ...resumeReadPlanClassNames().map((className) => {
-    const collection = resumeReadPlanCollections.get(className);
-    if (!collection) {
-      throw new Error(`Unmapped resume read-plan class: ${className}`);
-    }
-    return { action: 'read', collection } satisfies RequiredOperation;
-  }),
-  { action: 'read', collection: 'resumetailoringconfigs' },
+  workspaceWorkflowOperation('profile.manage'),
 ] satisfies RequiredOperation[];
 
-/** Records a `webmcp_source_crawl_enqueue` audit run inside the transaction. */
+/** Provider crawl is an operator workflow; it never receives private CRUD. */
 const crawlSourceOperations = [
-  ...agentRunAuditOperations,
   { action: 'read', collection: 'sources' },
   { action: 'create', collection: 'sources' },
   { action: 'update', collection: 'sources' },
@@ -257,12 +115,7 @@ const crawlSourceOperations = [
   { action: 'read', collection: 'companies' },
   { action: 'create', collection: 'companies' },
   { action: 'update', collection: 'companies' },
-  { action: 'read', collection: 'tasks' },
-  { action: 'create', collection: 'tasks' },
-  { action: 'update', collection: 'tasks' },
-  { action: 'read', collection: 'evaluationscores' },
-  { action: 'create', collection: 'evaluationscores' },
-  { action: 'update', collection: 'evaluationscores' },
+  workspaceWorkflowOperation('audit.record'),
 ] satisfies RequiredOperation[];
 
 /** Route action → the WebMCP tool name it executes. */
@@ -375,14 +228,10 @@ async function jsonObject(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-function decisionForAuthorization(
-  value: unknown,
-): 'apply' | 'maybe' | 'reject' {
-  const decision = typeof value === 'string' ? value.trim() : '';
-  if (decision !== 'apply' && decision !== 'maybe' && decision !== 'reject') {
-    error(400, 'Invalid decision.');
-  }
-  return decision;
+function privateWorkspaceSubject(locals: App.Locals): WorkspaceSubject {
+  const subject = workspaceSubjectFromLocals(locals);
+  if (!subject.profileId) error(403, 'A candidate profile is required.');
+  return { ...subject, profileId: subject.profileId };
 }
 
 export const GET: RequestHandler = async ({ locals, params, url }) => {
@@ -395,18 +244,18 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
   const rejection = rejectInvalidArguments(action, input, 'query');
   if (rejection) return rejection;
   if (action === 'browse') {
-    return await executeAsOwnerTool(locals, action, contextReadOperations, () =>
-      browseJobOpportunities(input),
+    return await executeAsOwnerTool(locals, action, inspectReadOperations, () =>
+      browseJobOpportunities(input, privateWorkspaceSubject(locals)),
     );
   }
   if (action === 'next-triage-candidate') {
-    return await executeAsOwnerTool(locals, action, contextReadOperations, () =>
-      nextJobTriageCandidate(input),
+    return await executeAsOwnerTool(locals, action, inspectReadOperations, () =>
+      nextJobTriageCandidate(input, privateWorkspaceSubject(locals)),
     );
   }
   if (action === 'inspect') {
     return await executeAsOwnerTool(locals, action, inspectReadOperations, () =>
-      inspectJobOpportunity(input),
+      inspectJobOpportunity(input, privateWorkspaceSubject(locals)),
     );
   }
   if (action === 'inspect-application') {
@@ -449,9 +298,10 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     return await executeAsOwnerTool(
       locals,
       action,
-      // Records a `webmcp_source_create` audit run after one validated root
-      // source is saved. It never schedules or contacts the provider.
-      [...agentRunAuditOperations, { action: 'create', collection: 'sources' }],
+      [
+        workspaceWorkflowOperation('audit.record'),
+        { action: 'create', collection: 'sources' },
+      ],
       () => createRootSourceFromWebMcp(input, user),
     );
   }
@@ -459,9 +309,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     return await executeAsOwnerTool(
       locals,
       action,
-      // Records a `webmcp_source_activation` audit run inside the transaction.
       [
-        ...agentRunAuditOperations,
+        workspaceWorkflowOperation('audit.record'),
         { action: 'read', collection: 'sources' },
         { action: 'update', collection: 'sources' },
       ],
@@ -493,10 +342,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     return await executeAsOwnerTool(
       locals,
       action,
-      // Records a `webmcp_import_opportunity` audit run on success and failure.
       [
         ...contextReadOperations,
-        ...agentRunAuditOperations,
+        workspaceWorkflowOperation('audit.record'),
         { action: 'create', collection: 'opportunities' },
         { action: 'delete', collection: 'opportunities' },
         { action: 'update', collection: 'opportunities' },
@@ -506,60 +354,34 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   }
   if (action === 'dig-deeper') {
     return await executeAsOwnerTool(locals, action, digDeeperOperations, () =>
-      digDeeperOnJobOpportunity(input, user),
+      digDeeperOnJobOpportunity(input, user, privateWorkspaceSubject(locals)),
     );
   }
   if (action === 'record-decision') {
-    const decision = decisionForAuthorization(input.decision);
     return await executeAsOwnerTool(
       locals,
       action,
       [
         ...contextReadOperations,
-        { action: 'create', collection: 'decisions' },
-        { action: 'read', collection: 'decisions' },
-        { action: 'create', collection: 'tasks' },
-        { action: 'read', collection: 'tasks' },
-        { action: 'update', collection: 'opportunities' },
-        { action: 'update', collection: 'tasks' },
-        // Apply runs the posting preflight, which records its verdict (and
-        // any owner override) as an `AgentRun` before the application opens.
-        ...(decision === 'apply'
-          ? ([
-              ...agentRunAuditOperations,
-              { action: 'create', collection: 'applications' },
-              { action: 'update', collection: 'applications' },
-              { action: 'update', collection: 'companies' },
-              { action: 'create', collection: 'sources' },
-              { action: 'read', collection: 'sources' },
-            ] satisfies RequiredOperation[])
-          : []),
+        workspaceWorkflowOperation('application.review'),
       ],
-      () => recordJobOpportunityDecision(input, user),
+      () =>
+        recordJobOpportunityDecision(
+          input,
+          user,
+          privateWorkspaceSubject(locals),
+        ),
     );
   }
   if (action === 'open-application') {
     return await executeAsOwnerTool(
       locals,
       action,
-      // Opening records an Apply decision, so the posting preflight and its
-      // `AgentRun` verdict run whenever no application exists yet.
       [
         ...contextReadOperations,
-        ...agentRunAuditOperations,
-        { action: 'create', collection: 'applications' },
-        { action: 'create', collection: 'decisions' },
-        { action: 'read', collection: 'decisions' },
-        { action: 'create', collection: 'tasks' },
-        { action: 'read', collection: 'tasks' },
-        { action: 'update', collection: 'applications' },
-        { action: 'update', collection: 'companies' },
-        { action: 'update', collection: 'opportunities' },
-        { action: 'create', collection: 'sources' },
-        { action: 'read', collection: 'sources' },
-        { action: 'update', collection: 'tasks' },
+        workspaceWorkflowOperation('application.prepare'),
       ],
-      () => openJobApplication(input, user),
+      () => openJobApplication(input, user, privateWorkspaceSubject(locals)),
     );
   }
   return unsupported(action, 'POST');

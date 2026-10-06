@@ -9,6 +9,7 @@ import {
   recordSmrtNativeBackfillApplied,
   withSmrtDatabaseMigrationLock,
 } from './db-common.js';
+import { parseDbMigrateOptions } from './db-migrate-options.js';
 import { backfillProfileEmailKeys } from '@happyvertical/smrt-profiles';
 import {
   backfillLegacyUserProfiles,
@@ -24,6 +25,7 @@ import {
   backfillResumeSource,
   formatResumeSourceBackfillSummary,
 } from './backfill-resume-source.js';
+import { legacyPersonalResumeBackfillsEnabled } from './legacy-personal-resume-backfill.js';
 import {
   formatLifecycleRemapSummary,
   remapLifecycleValues,
@@ -63,6 +65,8 @@ import {
   backfillOpportunitySourceFingerprints,
   formatOpportunitySourceFingerprintBackfillSummary,
 } from '../src/lib/server/opportunity-source-fingerprint-backfill.js';
+
+const { maintenanceWindow } = parseDbMigrateOptions(process.argv.slice(2));
 
 /**
  * Rebuild the integrity guards the text-bridge release drops.
@@ -116,6 +120,7 @@ const {
   oidcIdentityEmailKeys,
   legacyUserProfiles,
   tagIntegrityGuards,
+  legacyPersonalResumeBackfillsSkipped,
 } = await withSmrtDatabaseMigrationLock(async (database) => {
   await repairExistingCandidateAnswerNaturalKeyIndex(database);
   await prepareSourceCrawlOpportunityReference(database);
@@ -133,7 +138,7 @@ const {
   // the reported status stay exactly as they were.
   let migration: Awaited<ReturnType<typeof migrateSmrtDatabase>>;
   try {
-    migration = await migrateSmrtDatabase(database);
+    migration = await migrateSmrtDatabase(database, { maintenanceWindow });
   } catch (cause) {
     // Best-effort here: the migration error is the one worth raising, so a
     // guard that also refuses to rebuild is reported and not allowed to
@@ -169,18 +174,27 @@ const {
   // value, so remapping `will`->`owner` first would mis-name profiles on a
   // first-time backfill.
   const lifecycleRemap = await remapLifecycleValues(migration.db);
-  const resumeBackfillAlreadyApplied = await isResumeAdminBackfillApplied(migration.db);
-  const resumeBackfill = resumeBackfillAlreadyApplied ? null : await backfillResumeAdmin();
+  const legacyPersonalResumeBackfillsSkipped =
+    !legacyPersonalResumeBackfillsEnabled();
+  const resumeBackfillAlreadyApplied = legacyPersonalResumeBackfillsSkipped
+    ? false
+    : await isResumeAdminBackfillApplied(migration.db);
+  const resumeBackfill =
+    legacyPersonalResumeBackfillsSkipped || resumeBackfillAlreadyApplied
+      ? null
+      : await backfillResumeAdmin();
   if (resumeBackfill) await recordResumeAdminBackfillApplied(migration.db);
-  const restoredResumeAssetFiles = resumeBackfillAlreadyApplied
-    ? await ensurePublishedCurrentResumeAssetFiles()
-    : 0;
-  const resumeSourceBackfillAlreadyApplied = await isResumeSourceBackfillApplied(
-    migration.db,
-  );
-  const resumeSourceBackfill = resumeSourceBackfillAlreadyApplied
-    ? null
-    : await backfillResumeSource();
+  const restoredResumeAssetFiles =
+    !legacyPersonalResumeBackfillsSkipped && resumeBackfillAlreadyApplied
+      ? await ensurePublishedCurrentResumeAssetFiles()
+      : 0;
+  const resumeSourceBackfillAlreadyApplied = legacyPersonalResumeBackfillsSkipped
+    ? false
+    : await isResumeSourceBackfillApplied(migration.db);
+  const resumeSourceBackfill =
+    legacyPersonalResumeBackfillsSkipped || resumeSourceBackfillAlreadyApplied
+      ? null
+      : await backfillResumeSource();
   if (resumeSourceBackfill) await recordResumeSourceBackfillApplied(migration.db);
   const achievementPlacementBackfill = await backfillAchievementPlacement(migration.db);
   const sourceProvenance = await ensureSourceProvenanceSchema(migration.db);
@@ -243,6 +257,7 @@ const {
     restoredResumeAssetFiles,
     resumeBackfill,
     resumeSourceBackfill,
+    legacyPersonalResumeBackfillsSkipped,
     sourceSchedules,
     sourceProvenance,
     sourceProviders,
@@ -257,6 +272,9 @@ const {
 console.log(formatIntegrityTextBridgeReleases(migration.bridgeReleases));
 if (migration.applied) {
   console.log(`Applied ${migration.statements.length} schema statements.`);
+  if (maintenanceWindow) {
+    console.log('Applied in the explicit atomic maintenance window.');
+  }
 } else {
   console.log('Database schema is already up to date.');
 }
@@ -274,7 +292,11 @@ if (backfill) {
 } else {
   console.log('SMRT-native employment backfill was already applied.');
 }
-if (resumeBackfill) {
+if (legacyPersonalResumeBackfillsSkipped) {
+  console.log(
+    'Skipped legacy personal resume backfills because they lack a verified candidate workspace subject; use the subject-bound onboarding or import workflow.',
+  );
+} else if (resumeBackfill) {
   console.log(formatResumeAdminBackfillSummary(resumeBackfill));
 } else {
   console.log('Resume admin backfill was already applied.');
@@ -282,10 +304,12 @@ if (resumeBackfill) {
 if (restoredResumeAssetFiles > 0) {
   console.log(`Restored ${restoredResumeAssetFiles} published resume asset file set.`);
 }
-if (resumeSourceBackfill) {
-  console.log(formatResumeSourceBackfillSummary(resumeSourceBackfill));
-} else {
-  console.log('Resume source backfill was already applied.');
+if (!legacyPersonalResumeBackfillsSkipped) {
+  if (resumeSourceBackfill) {
+    console.log(formatResumeSourceBackfillSummary(resumeSourceBackfill));
+  } else {
+    console.log('Resume source backfill was already applied.');
+  }
 }
 console.log(
   formatAchievementPlacementBackfillSummary(achievementPlacementBackfill),

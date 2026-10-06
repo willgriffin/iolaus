@@ -15,6 +15,8 @@ export type OpportunityIntelligenceProfileSelection = 'openai' | 'zai';
 
 export const OPPORTUNITY_INTELLIGENCE_PROFILE_ENV =
   'OPPORTUNITY_INTELLIGENCE_PROFILE';
+/** Existing configured Bifrost chat ceiling; planners must reserve this limit. */
+export const AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS = 4_096;
 export const OPPORTUNITY_INTELLIGENCE_PROFILES = {
   openai: {
     apiKeyEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
@@ -360,7 +362,7 @@ export async function resolveAiProfileClient(
       baseUrl,
       generationLimits: {
         maxImagesPerRequest: 1,
-        maxOutputTokens: 4_096,
+        maxOutputTokens: AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
         maxReasoningTokens: 1_024,
         onExceeded: 'error',
       },
@@ -519,6 +521,64 @@ export async function resolveOpportunityIntelligenceScoringAiProfileClient(
     OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring,
     options,
   );
+}
+
+export const OPPORTUNITY_RESUME_FIT_REVIEW_MODELS = [
+  'openai/gpt-6-luna',
+  'openai/gpt-6.1-sol',
+] as const;
+export type OpportunityResumeFitReviewModel =
+  (typeof OPPORTUNITY_RESUME_FIT_REVIEW_MODELS)[number];
+export function resolveOpportunityResumeFitReviewModel(
+  model?: string,
+): OpportunityResumeFitReviewModel {
+  const selected =
+    model ??
+    (envValue('BIFROST_OPPORTUNITY_RESUME_FIT_REVIEW_MODEL') ||
+      envValue('BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_MODEL') ||
+      OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.model);
+  if (
+    !OPPORTUNITY_RESUME_FIT_REVIEW_MODELS.some(
+      (allowed) => allowed === selected,
+    )
+  )
+    throw new Error(
+      'Owned resume review requires an exact registered Luna or Sol model.',
+    );
+  return selected as OpportunityResumeFitReviewModel;
+}
+/** Owned advisory review only. Legacy scoring remains pinned to Sol. */
+export async function resolveOpportunityResumeFitReviewAiProfileClient(
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  if (options.aiClient && envValue('NODE_ENV') !== 'test')
+    throw new Error(
+      'Injected opportunity-intelligence clients are test-only; production must use the dedicated Bifrost profile.',
+    );
+  const model = resolveOpportunityResumeFitReviewModel(options.model);
+  const {
+    apiKey: _apiKey,
+    baseUrl: _baseUrl,
+    timeout: _timeout,
+    model: _model,
+    ...profileOptions
+  } = options;
+  const resolved = await resolveAiProfileClient(
+    OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.profile,
+    {
+      ...profileOptions,
+      model,
+      apiKey: envValue(
+        OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.apiKeyEnv,
+      ),
+      requireProfileApiKey: true,
+    },
+  );
+  if (resolved && resolved.model !== model)
+    throw new Error(
+      'Owned resume review client does not match its selected model.',
+    );
+  return resolved;
 }
 
 export async function resolveOpenAiOpportunityIntelligenceCanaryClient(

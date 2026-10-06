@@ -291,6 +291,8 @@ export function createPublicHttpsFetch(
     deadlineAt?: number;
     lookup?: Lookup;
     transport?: PublicHttpsTransport;
+    /** Optional admission gate for each validated network hop, including redirects. */
+    beforeTransport?: (url: URL) => void;
   } = {},
 ): typeof fetch {
   const lookup = options.lookup ?? (dnsLookup as Lookup);
@@ -314,6 +316,7 @@ export function createPublicHttpsFetch(
         validatePublicHttpsUrl(target, lookup),
         deadlineAt,
       );
+      options.beforeTransport?.(resolved.url);
       const response = await beforeDeadline(
         transport(
           resolved.url,
@@ -322,6 +325,12 @@ export function createPublicHttpsFetch(
         ),
         deadlineAt,
       );
+      // The pinned transport constructs a Response whose URL is otherwise empty.
+      // Keep the same body/status/headers while exposing the validated final location.
+      Object.defineProperty(response, 'url', {
+        value: resolved.url.toString(),
+        configurable: true,
+      });
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers.get('location');
       if (!location) return response;

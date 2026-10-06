@@ -1,0 +1,94 @@
+--- a/dist/shared/types.d.ts
++++ b/dist/shared/types.d.ts
+@@ -153,6 +153,18 @@
+         };
+     }>;
+ }
++/** OpenAI-compatible response formats; support depends on the selected provider. */
++export type AIResponseFormat = {
++    type: 'text' | 'json_object';
++} | {
++    type: 'json_schema';
++    json_schema: {
++        name: string;
++        description?: string;
++        schema: Record<string, unknown>;
++        strict?: boolean;
++    };
++};
+ /**
+  * Options for chat completion requests
+  */
+@@ -213,9 +225,7 @@
+     /**
+      * Response format specification
+      */
+-    responseFormat?: {
+-        type: 'text' | 'json_object';
+-    };
++    responseFormat?: AIResponseFormat;
+     /**
+      * Random seed for deterministic results
+      */
+@@ -477,9 +487,7 @@
+     /**
+      * Response format specification
+      */
+-    responseFormat?: {
+-        type: 'text' | 'json_object';
+-    };
++    responseFormat?: AIResponseFormat;
+     /**
+      * Random seed for deterministic results
+      */
+--- a/dist/shared/client.d.ts
++++ b/dist/shared/client.d.ts
+@@ -1,6 +1,6 @@
+ import { default as OpenAI } from 'openai';
+ import { AIMessageOptions } from './message';
+-import { AIProviderType, AIRateLimitOptions } from './types';
++import { AIProviderType, AIRateLimitOptions, AIResponseFormat } from './types';
+ /**
+  * Common options for AI client configuration
+  */
+@@ -134,9 +134,7 @@
+     /**
+      * Format for the response
+      */
+-    responseFormat?: {
+-        type: 'text' | 'json_object';
+-    };
++    responseFormat?: AIResponseFormat;
+     /**
+      * Random seed for deterministic results
+      */
+@@ -286,9 +284,7 @@
+     /**
+      * Format for the response
+      */
+-    responseFormat?: {
+-        type: 'text' | 'json_object';
+-    };
++    responseFormat?: AIResponseFormat;
+     /**
+      * Random seed for deterministic results
+      */
+--- a/dist/shared/message.d.ts
++++ b/dist/shared/message.d.ts
+@@ -1,4 +1,5 @@
+ import { AIThread } from './thread';
++import type { AIResponseFormat } from './types';
+ /**
+  * Options for creating AI messages
+  */
+@@ -10,9 +11,7 @@
+     /**
+      * Format for the AI response
+      */
+-    responseFormat?: {
+-        type: 'text' | 'json_object';
+-    };
++    responseFormat?: AIResponseFormat;
+ }
+ /**
+  * Represents a message in an AI conversation

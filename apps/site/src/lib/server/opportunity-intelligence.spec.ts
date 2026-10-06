@@ -10,6 +10,10 @@ import {
   statusForOpportunityRecommendation,
 } from './opportunity-intelligence';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
+import {
+  OPPORTUNITY_SCORING_INPUT_VERSION,
+  OPPORTUNITY_SCORING_PROMPT_VERSION,
+} from './opportunity-scoring.js';
 import { resolveSkillMatching } from './skill-matching.js';
 
 type MockRecord = Record<string, unknown> & {
@@ -68,7 +72,10 @@ function collection(records: MockRecord[] = []) {
       return created;
     }),
     get: vi.fn(
-      async (id: string) => records.find((item) => item.id === id) ?? null,
+      async (filter: string | { id: string }, _options?: { cache?: false }) => {
+        const id = typeof filter === 'string' ? filter : filter.id;
+        return records.find((item) => item.id === id) ?? null;
+      },
     ),
     list: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => {
       if (!where) return records;
@@ -611,7 +618,7 @@ describe('processOpportunityIntelligence', () => {
     expect(reason.missingInfo.join(' ')).toContain('PostgreSQL');
   });
 
-  it('scores, stores reasonJson evidence, and syncs recommendation tasks', async () => {
+  it('scores and stores reasonJson evidence without creating an ownerless recommendation task', async () => {
     const opportunities = collection([
       record({
         descriptionRaw: 'Build agent workflow products. Requires TypeScript.',
@@ -667,12 +674,12 @@ describe('processOpportunityIntelligence', () => {
       scoring: {
         input: {
           evidenceCount: expect.any(Number),
-          version: 'opportunity-scoring-input/v4',
+          version: OPPORTUNITY_SCORING_INPUT_VERSION,
         },
         model: 'openai/gpt-6.1-sol',
         modelInvoked: true,
         outputSchemaVersion: 'opportunity-score-output/v2',
-        promptVersion: 'opportunity-score/v6',
+        promptVersion: OPPORTUNITY_SCORING_PROMPT_VERSION,
       },
     });
     expect(storedReason.scoring?.inputTokenCount).toBeLessThanOrEqual(
@@ -687,7 +694,9 @@ describe('processOpportunityIntelligence', () => {
       timeout: 105_000,
     });
     expect(opportunities.records[0].status).toBe('recommended');
-    expect(mocks.syncRecommendedOpportunityDecisionTasks).toHaveBeenCalled();
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
   });
 
   it('stores score provenance for the exact queued source version', async () => {
@@ -918,6 +927,10 @@ describe('processOpportunityIntelligence', () => {
       title: 'AI Platform Engineer',
     });
     const opportunities = collection([opportunity]);
+    let nativeCurrent = opportunity;
+    opportunities.get.mockImplementation(async (_filter, options) =>
+      options?.cache === false ? nativeCurrent : opportunity,
+    );
     const scores = collection();
     mocks.collections.set('Opportunity', opportunities);
     mocks.collections.set('EvaluationScore', scores);
@@ -929,7 +942,10 @@ describe('processOpportunityIntelligence', () => {
     const result = await processOpportunityIntelligence({
       aiClient: {
         chat: vi.fn(async () => {
-          opportunity.sourceContentFingerprint = 'fingerprint-v2';
+          nativeCurrent = record({
+            ...opportunity,
+            sourceContentFingerprint: 'fingerprint-v2',
+          });
           return {
             content: JSON.stringify({
               confidence: 0.9,
@@ -951,6 +967,14 @@ describe('processOpportunityIntelligence', () => {
       status: 'skipped',
     });
     expect(scores.records).toHaveLength(0);
+    expect(
+      opportunities.get.mock.calls.every(
+        ([filter, options]) =>
+          typeof filter === 'object' &&
+          filter.id === 'opp-1' &&
+          options?.cache === false,
+      ),
+    ).toBe(true);
     expect(mocks.recordAgentAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         output: expect.objectContaining({ discardedAsStale: true }),
@@ -1709,6 +1733,11 @@ describe('processOpportunityIntelligence', () => {
       opportunityId: 'opp-1',
       profile: 'opportunity-intelligence-zai',
       runLifecycleMutation,
+      workspaceSubject: {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
     });
 
     expect(result).toMatchObject({ status: 'processed' });
@@ -1731,6 +1760,11 @@ describe('processOpportunityIntelligence', () => {
     });
     expect(mocks.syncApplicationWorkflowTasks).toHaveBeenCalledWith(
       applications.records[0],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
     );
   });
 
@@ -1853,6 +1887,11 @@ describe('processOpportunityIntelligence', () => {
         modes: ['plan'],
         opportunityId: 'opp-1',
         runLifecycleMutation,
+        workspaceSubject: {
+          profileId: 'profile-1',
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+        },
       }),
     ).rejects.toThrow('lifecycle lock lost');
 
@@ -2012,5 +2051,39 @@ describe('processOpportunityIntelligence', () => {
       message: 'Processed 1 opportunities; 1 had failures.',
       status: 'processed',
     });
+  });
+  it('keeps opt-in partial evidence without a native audit out of private scoring and recommendation side effects', async () => {
+    const opportunities = collection([
+      record({
+        id: 'partial-role',
+        title: 'Platform engineer',
+        descriptionRaw: 'Requirements\nKubernetes familiarity.',
+      }),
+    ]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    const aiClient = { chat: vi.fn() };
+    const result = await processOpportunityIntelligence({
+      opportunityId: 'partial-role',
+      modes: ['assessment'],
+      partialAssessmentEvidence: true,
+      aiClient,
+      workspaceSubject: {
+        tenantId: 'partial-tenant',
+        userId: 'partial-owner',
+        profileId: 'partial-profile',
+      },
+    });
+    expect(result.status).toBe('skipped');
+    expect(result.results[0]?.message).toContain(
+      'No current recorded applicant excerpts',
+    );
+    expect(scores.create).not.toHaveBeenCalled();
+    expect(aiClient.chat).not.toHaveBeenCalled();
+    expect(
+      mocks.syncRecommendedOpportunityDecisionTasks,
+    ).not.toHaveBeenCalled();
+    expect(opportunities.records[0]?.status).not.toBe('apply');
   });
 });

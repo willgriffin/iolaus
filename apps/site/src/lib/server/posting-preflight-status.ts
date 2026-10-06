@@ -1,3 +1,8 @@
+import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
+import {
+  privateRecordWhere,
+  recordOwnedBySubject,
+} from './private-workspace.js';
 import { getCollection } from './smrt.js';
 
 /**
@@ -127,13 +132,28 @@ export function postingPreflightStatusFromAgentRun(
 export async function latestPostingPreflightStatus(
   opportunityId: string,
 ): Promise<PostingPreflightStatus> {
+  const subject = requireCurrentPrivateWorkspaceSubject();
   const id = stringValue(opportunityId);
   if (!id) return neverPreflighted();
   const agentRuns = (await getCollection('AgentRun')) as unknown as Collection;
-  const [latest] = await agentRuns.list({
-    limit: 1,
+  const runs = await agentRuns.list({
+    // The database applies the full ownership predicate.  Keep a small
+    // defensive window as collection adapters and test doubles may ignore it.
+    limit: 25,
     orderBy: 'started_at DESC',
-    where: { opportunityId: id, runType: POSTING_PREFLIGHT_RUN_TYPE },
+    where: {
+      ...privateRecordWhere(subject),
+      opportunityId: id,
+      runType: POSTING_PREFLIGHT_RUN_TYPE,
+    },
+  });
+  const latest = runs.find((run) => {
+    const record = run as Record<string, unknown> | null | undefined;
+    return (
+      recordOwnedBySubject(record, subject) &&
+      stringValue(record?.opportunityId) === id &&
+      stringValue(record?.runType) === POSTING_PREFLIGHT_RUN_TYPE
+    );
   });
   return postingPreflightStatusFromAgentRun(
     latest

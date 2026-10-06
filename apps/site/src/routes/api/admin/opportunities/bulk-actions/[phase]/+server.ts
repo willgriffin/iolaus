@@ -17,6 +17,10 @@ import {
   logOwnerPrincipalAudit,
   ownerPrincipalOptions,
 } from '$lib/server/owner-principal';
+import {
+  requireCandidateWorkspaceSubject,
+  workspaceSubjectFromLocals,
+} from '$lib/server/workspace-subject.js';
 
 const PHASES = new Set(['preview', 'apply']);
 
@@ -206,12 +210,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   } as unknown as DataSurfaceServerActionRequest;
 
   try {
+    const workspaceSubject = requireCandidateWorkspaceSubject(
+      workspaceSubjectFromLocals(locals),
+    );
     // Inside the audited boundary: the state store opens a database
     // connection, and a failure there is as much a failed bulk attempt as one
     // the adapter raises.
     const adapter = createOpportunityDataSurfaceAdapter({
       state: await SmrtDataSurfaceActionStateStore.create(),
       resolveQueryTarget: () => queryTargetFrom(body),
+      workspaceSubject,
     });
     const result =
       phase === 'preview'

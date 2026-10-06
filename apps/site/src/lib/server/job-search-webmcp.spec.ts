@@ -7,8 +7,11 @@ type MockRecord = Record<string, unknown> & {
 
 function record(data: Record<string, unknown>): MockRecord {
   return {
+    candidateProfileId: 'profile-a',
     id: String(data.id ?? 'record-1'),
+    ownerUserId: 'user-a',
     save: vi.fn(async () => {}),
+    tenantId: 'tenant-a',
     ...data,
   } as MockRecord;
 }
@@ -62,6 +65,11 @@ function collection(records: MockRecord[] = []) {
 }
 
 const mocks = vi.hoisted(() => ({
+  assessmentProjections: vi.fn(async () => new Map<string, unknown>()),
+  assessmentQueryContext: vi.fn(async () => ({
+    assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+    assessmentPreferencesFingerprint: 'preferences-a',
+  })),
   audit: vi.fn(async (_options: Record<string, unknown>) => ({})),
   collections: new Map<string, ReturnType<typeof collection>>(),
   count: vi.fn(async () => 0),
@@ -102,17 +110,28 @@ const mocks = vi.hoisted(() => ({
     outcome: 'live',
     reason: 'verified_live',
   })),
+  privateRecords: vi.fn(),
   requestDatabase: vi.fn(),
   relatedContext: vi.fn(async () => [] as Record<string, unknown>[]),
+  subject: {
+    profileId: 'profile-a',
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+  },
   transaction: vi.fn(),
   validateUrl: vi.fn(),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
-  resolveDatabase: vi.fn(async () => ({
-    transaction: mocks.transaction,
-  })),
-}));
+const subject = mocks.subject;
+
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-core')>();
+  return {
+    ...actual,
+    resolveDatabase: vi.fn(async () => ({ transaction: mocks.transaction })),
+  };
+});
 
 vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: mocks.requestDatabase,
@@ -140,7 +159,58 @@ vi.mock('./admin-opportunity-query.js', () => ({
   countOpportunityRecords: mocks.count,
   listLatestOpportunityRelatedContext: mocks.relatedContext,
   listOpportunityPageIds: mocks.ids,
+  loadOpportunityScreeningProjectionPages: vi.fn(async () => new Map()),
 }));
+
+vi.mock('./opportunity-assessment-store.js', () => ({
+  loadCurrentOpportunityAssessmentProjections: mocks.assessmentProjections,
+  loadOpportunityAssessmentQueryContext: mocks.assessmentQueryContext,
+}));
+
+vi.mock('./private-workspace.js', () => ({
+  listPrivateRecords: mocks.privateRecords,
+  privateRecordWhere: (workspace: typeof subject) => ({
+    candidateProfileId: workspace.profileId,
+    ownerUserId: workspace.userId,
+    tenantId: workspace.tenantId,
+  }),
+  recordOwnedBySubject: (
+    row: Record<string, unknown> | null | undefined,
+    workspace: typeof subject,
+  ) =>
+    Boolean(
+      row &&
+        row.tenantId === workspace.tenantId &&
+        row.ownerUserId === workspace.userId &&
+        row.candidateProfileId === workspace.profileId,
+    ),
+  requireWorkspaceSubject: vi.fn((workspace: typeof subject) => workspace),
+}));
+
+vi.mock('./agent-audit-subject.js', () => ({
+  requireCurrentPrivateWorkspaceSubject: vi.fn(() => mocks.subject),
+}));
+
+function mockPrivateRecords() {
+  mocks.privateRecords.mockImplementation(
+    async (
+      className: string,
+      workspace: typeof subject,
+      options: { where?: MockWhere } = {},
+    ) => {
+      const rows = mocks.collections.get(className)?.records ?? [];
+      const scoped = rows.filter(
+        (row) =>
+          row.tenantId === workspace.tenantId &&
+          row.ownerUserId === workspace.userId &&
+          row.candidateProfileId === workspace.profileId,
+      );
+      return options.where
+        ? scoped.filter((row) => matches(row, options.where!))
+        : scoped;
+    },
+  );
+}
 
 vi.mock('./application-workflow.js', () => ({
   recordAgentAudit: mocks.audit,
@@ -264,6 +334,15 @@ describe('job-search WebMCP service', () => {
     mocks.collections.set('Company', collection());
     mocks.collections.set('SourceCrawlItem', collection());
     mocks.preflight.mockClear();
+    mocks.assessmentProjections.mockReset();
+    mocks.assessmentProjections.mockResolvedValue(new Map());
+    mocks.assessmentQueryContext.mockReset();
+    mocks.assessmentQueryContext.mockResolvedValue({
+      assessmentCandidateMaterialFingerprint: 'candidate-material-a',
+      assessmentPreferencesFingerprint: 'preferences-a',
+    });
+    mocks.privateRecords.mockReset();
+    mockPrivateRecords();
   });
 
   it('reports the recorded posting preflight verdict on inspect', async () => {
@@ -273,7 +352,10 @@ describe('job-search WebMCP service', () => {
     );
     const { inspectJobOpportunity } = await import('./job-search-webmcp');
 
-    const never = await inspectJobOpportunity({ opportunityId: 'opp-1' });
+    const never = await inspectJobOpportunity(
+      { opportunityId: 'opp-1' },
+      subject,
+    );
     expect(never.preflight).toEqual({
       state: 'never_preflighted',
       checkedAt: null,
@@ -315,7 +397,10 @@ describe('job-search WebMCP service', () => {
         }),
       ]),
     );
-    const closed = await inspectJobOpportunity({ opportunityId: 'opp-1' });
+    const closed = await inspectJobOpportunity(
+      { opportunityId: 'opp-1' },
+      subject,
+    );
     expect(closed.preflight).toMatchObject({
       state: 'closed',
       checkedAt: '2026-08-30T10:00:00.000Z',
@@ -389,16 +474,24 @@ describe('job-search WebMCP service', () => {
         }),
       ]),
     );
-    mocks.relatedContext.mockResolvedValue([
-      {
-        applicationId: 'app-1',
-        applicationStatus: 'draft',
-        opportunityId: 'opp-1',
-        recommendation: 'recommend',
-        score: 88,
-        scoreId: 'score-1',
-      },
-    ]);
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({ id: 'app-1', opportunityId: 'opp-1', status: 'draft' }),
+      ]),
+    );
+    mocks.collections.set(
+      'EvaluationScore',
+      collection([
+        record({
+          id: 'score-1',
+          opportunityId: 'opp-1',
+          recommendation: 'recommend',
+          score: 88,
+          sourceContentFingerprint: 'fingerprint-1',
+        }),
+      ]),
+    );
     mocks.collections.set(
       'Company',
       collection([record({ id: 'company-1', name: 'Example Co' })]),
@@ -407,12 +500,15 @@ describe('job-search WebMCP service', () => {
     mocks.ids.mockResolvedValue(['opp-1']);
     const { browseJobOpportunities } = await import('./job-search-webmcp');
 
-    const result = await browseJobOpportunities({
-      decision: 'unsorted',
-      limit: '5',
-      query: 'platform',
-      workMode: 'remote',
-    });
+    const result = await browseJobOpportunities(
+      {
+        decision: 'unsorted',
+        limit: '5',
+        query: 'platform',
+        workMode: 'remote',
+      },
+      subject,
+    );
 
     expect(mocks.ids).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -436,8 +532,16 @@ describe('job-search WebMCP service', () => {
       total: 1,
     });
     expect(JSON.stringify(result)).not.toContain('sourceContentFingerprint');
-    expect(mocks.relatedContext).toHaveBeenCalledOnce();
-    expect(mocks.relatedContext).toHaveBeenCalledWith(['opp-1']);
+    expect(mocks.privateRecords).toHaveBeenCalledWith(
+      'Application',
+      subject,
+      expect.objectContaining({ where: { 'opportunityId in': ['opp-1'] } }),
+    );
+    expect(mocks.privateRecords).toHaveBeenCalledWith(
+      'EvaluationScore',
+      subject,
+      expect.objectContaining({ where: { 'opportunityId in': ['opp-1'] } }),
+    );
   });
 
   it('browses a bounded local SQLite data set without PostgreSQL query helpers', async () => {
@@ -486,7 +590,7 @@ describe('job-search WebMCP service', () => {
           createdByProfileId: 'profile-human',
           id: 'score-human',
           opportunityId: 'opp-1',
-          score: 70,
+          score: 91,
           sourceContentFingerprint: 'fixture-v1',
         }),
         record({
@@ -504,10 +608,10 @@ describe('job-search WebMCP service', () => {
     );
     const { browseJobOpportunities } = await import('./job-search-webmcp');
 
-    const result = await browseJobOpportunities({
-      limit: 5,
-      query: 'fictional principal',
-    });
+    const result = await browseJobOpportunities(
+      { limit: 5, query: 'fictional principal' },
+      subject,
+    );
 
     expect(result).toMatchObject({
       items: [
@@ -515,7 +619,7 @@ describe('job-search WebMCP service', () => {
           application: { id: 'app-1', status: 'awaiting_user' },
           company: 'Fictional Systems',
           id: 'opp-1',
-          score: 70,
+          score: 91,
         },
       ],
       total: 1,
@@ -523,6 +627,109 @@ describe('job-search WebMCP service', () => {
     expect(mocks.count).not.toHaveBeenCalled();
     expect(mocks.ids).not.toHaveBeenCalled();
     expect(mocks.relatedContext).not.toHaveBeenCalled();
+  });
+
+  it('returns only the verified workspace application and current score', async () => {
+    mocks.collections.set(
+      'Opportunity',
+      collection([
+        record({
+          id: 'opp-1',
+          sourceContentFingerprint: 'posting-v1',
+          sourceContentVersion: 1,
+          title: 'Scoped role',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({ id: 'app-owned', opportunityId: 'opp-1', status: 'draft' }),
+        record({
+          candidateProfileId: 'profile-foreign',
+          id: 'app-foreign',
+          opportunityId: 'opp-1',
+          ownerUserId: 'user-foreign',
+          status: 'submitted',
+          tenantId: 'tenant-foreign',
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'EvaluationScore',
+      collection([
+        record({
+          id: 'score-stale',
+          opportunityId: 'opp-1',
+          recommendation: 'reject',
+          score: 99,
+          sourceContentFingerprint: 'posting-v0',
+          sourceContentVersion: 0,
+          summary: 'Stale score must not replace current material.',
+        }),
+        record({
+          id: 'score-owned',
+          opportunityId: 'opp-1',
+          recommendation: 'recommend',
+          score: 87,
+          sourceContentFingerprint: 'posting-v1',
+          sourceContentVersion: 1,
+          summary: 'Owned score',
+        }),
+        record({
+          candidateProfileId: 'profile-foreign',
+          id: 'score-foreign',
+          opportunityId: 'opp-1',
+          ownerUserId: 'user-foreign',
+          recommendation: 'reject',
+          score: 4,
+          sourceContentFingerprint: 'posting-v1',
+          sourceContentVersion: 1,
+          summary: 'Foreign score must not leak',
+          tenantId: 'tenant-foreign',
+        }),
+      ]),
+    );
+    mocks.count.mockResolvedValue(1);
+    mocks.ids.mockResolvedValue(['opp-1']);
+    mocks.assessmentProjections.mockResolvedValue(
+      new Map([
+        [
+          'opp-1',
+          {
+            personalEligibility: 'eligible_without_sponsorship',
+            reason: 'Candidate is authorized.',
+            sourceStatus: 'current',
+          },
+        ],
+      ]),
+    );
+    const { browseJobOpportunities, inspectJobOpportunity } = await import(
+      './job-search-webmcp'
+    );
+
+    const browsed = await browseJobOpportunities({ limit: 5 }, subject);
+    const inspected = await inspectJobOpportunity(
+      { opportunityId: 'opp-1' },
+      subject,
+    );
+
+    expect(browsed.items[0]).toMatchObject({
+      application: { id: 'app-owned', status: 'draft' },
+      assessment: { personalEligibility: 'eligible_without_sponsorship' },
+      score: 87,
+    });
+    expect(inspected.evaluation).toEqual({
+      id: 'score-owned',
+      recommendation: 'recommend',
+      score: 87,
+      summary: 'Owned score',
+    });
+    expect(JSON.stringify({ browsed, inspected })).not.toContain('foreign');
+    expect(mocks.assessmentProjections).toHaveBeenCalledWith({
+      opportunities: [expect.objectContaining({ id: 'opp-1' })],
+      subject,
+    });
   });
 
   it('never returns private candidate contact or reusable-answer data', async () => {
@@ -576,8 +783,11 @@ describe('job-search WebMCP service', () => {
       './job-search-webmcp'
     );
 
-    const browsed = await browseJobOpportunities({ limit: '5' });
-    const inspected = await inspectJobOpportunity({ opportunityId: 'opp-1' });
+    const browsed = await browseJobOpportunities({ limit: '5' }, subject);
+    const inspected = await inspectJobOpportunity(
+      { opportunityId: 'opp-1' },
+      subject,
+    );
 
     for (const result of [browsed, inspected]) {
       const serialized = JSON.stringify(result);
@@ -616,7 +826,10 @@ describe('job-search WebMCP service', () => {
     );
     const { inspectJobOpportunity } = await import('./job-search-webmcp');
 
-    const result = await inspectJobOpportunity({ opportunityId: 'opp-1' });
+    const result = await inspectJobOpportunity(
+      { opportunityId: 'opp-1' },
+      subject,
+    );
     for (const values of [
       result.locations,
       result.preferredSkills,
@@ -785,13 +998,14 @@ describe('job-search WebMCP service', () => {
         reason: 'Need compensation details',
       },
       { id: 'user-1' },
+      subject,
     );
 
     expect(mocks.decision).toHaveBeenCalledWith({
-      deciderProfileId: '',
       decision: 'maybe',
       opportunityId: 'opp-1',
       reason: 'Need compensation details',
+      subject,
       user: { id: 'user-1' },
     });
     expect(result.next).toContain('Return to this opportunity');
@@ -806,6 +1020,7 @@ describe('job-search WebMCP service', () => {
       recordJobOpportunityDecision(
         { opportunityId: 'opp-1' },
         { id: 'user-1' },
+        subject,
       ),
     ).rejects.toMatchObject({
       body: { message: 'Decision is required.' },
@@ -1159,6 +1374,7 @@ describe('job-search WebMCP service', () => {
     const result = await openJobApplication(
       { opportunityId: 'opp-1' },
       { id: 'user-1' },
+      subject,
     );
 
     expect(mocks.decision).not.toHaveBeenCalled();
@@ -1181,15 +1397,16 @@ describe('job-search WebMCP service', () => {
           preflightOverrideReason: 'The agent says the posting is open.',
         },
         { id: 'user-1' },
+        subject,
       ),
     ).rejects.toMatchObject({ status: 409 });
 
     expect(mocks.decision).toHaveBeenCalledWith({
-      deciderProfileId: '',
       decision: 'apply',
       opportunityId: 'opp-1',
       reason: 'Opened through the WebMCP job-search workflow.',
       reuseExistingApplication: true,
+      subject,
       user: { id: 'user-1' },
     });
   });

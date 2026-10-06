@@ -1,5 +1,9 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
-import type { JobExecutionContext } from '@happyvertical/smrt-jobs';
+import {
+  backgroundEligible,
+  type JobExecutionContext,
+} from '@happyvertical/smrt-jobs';
+import type { OpportunityAssessmentDependencyJobArgs } from '../server/opportunity-assessment-dependency-job.js';
 import type { OpportunityIntelligenceJobArgs } from '../server/opportunity-intelligence-job.js';
 
 @smrt({
@@ -43,6 +47,14 @@ export class Opportunity extends SmrtObject {
   relocationSupported = false;
   @field({ type: 'boolean' })
   visaOrEorPossible = false;
+  @field({ type: 'text' })
+  postingEligibilityJson = '{}';
+  @field({ type: 'integer' })
+  eligibilityFlags = 32;
+  @field({ type: 'text' })
+  eligibilitySourceFingerprint = '';
+  @field({ type: 'integer' })
+  eligibilitySourceVersion = 0;
   @field({ type: 'decimal', nullable: true })
   salaryMin: number | null = null;
   @field({ type: 'decimal', nullable: true })
@@ -148,13 +160,187 @@ export class Opportunity extends SmrtObject {
     return await super.loadFromId();
   }
 
+  /** Derived eligibility is rebuilt from independently verified source on every write. */
+  async save(options?: Parameters<SmrtObject['save']>[0]): Promise<this> {
+    const { verifiedOpportunityEligibilityProjection } = await import(
+      '../server/opportunity-eligibility-refresh.js'
+    );
+    Object.assign(
+      this,
+      verifiedOpportunityEligibilityProjection(this.toJSON()),
+    );
+    return super.save(options);
+  }
+
+  @backgroundEligible()
   async processIntelligence(
     args: OpportunityIntelligenceJobArgs = {},
     context?: JobExecutionContext,
   ) {
-    const { runOpportunityIntelligenceJob } = await import(
-      '../server/opportunity-intelligence-job.js'
+    const {
+      runOpportunityIntelligenceJob,
+      assertOpportunityAssessmentPilotJobRouting,
+    } = await import('../server/opportunity-intelligence-job.js');
+    const { requireActiveRunnerExecutionContext } = await import(
+      '../server/job-workspace-subject.js'
     );
-    return await runOpportunityIntelligenceJob(this, args, context);
+    const runnerContext = requireActiveRunnerExecutionContext(context);
+    if (!('runtimeWorkspaceSubject' in args)) {
+      const { getAppConfig } = await import('../server/app-config.js');
+      if (getAppConfig().workspaceMode === 'shared') {
+        throw new Error(
+          'Shared workspace intelligence jobs require a bound workspace subject.',
+        );
+      }
+      return await runOpportunityIntelligenceJob(this, args, runnerContext);
+    }
+    const {
+      assertJobTenantMatchesRuntimeWorkspaceSubject,
+      runAsResolvedJobWorkspaceSubject,
+    } = await import('../server/job-workspace-subject.js');
+    return await runAsResolvedJobWorkspaceSubject(
+      args,
+      async (subject, run) => {
+        assertJobTenantMatchesRuntimeWorkspaceSubject(
+          runnerContext.job,
+          subject,
+        );
+        const { getAppConfig } = await import('../server/app-config.js');
+        const modes = Array.isArray(args.modes) ? args.modes : [args.modes];
+        if (
+          getAppConfig().workspaceMode === 'shared' &&
+          (modes.length !== 1 || modes[0] !== 'assessment')
+        ) {
+          throw new Error(
+            'Candidate-owned intelligence jobs only permit assessment mode.',
+          );
+        }
+        await run.assertOperation('opportunities', 'read');
+        const { workspaceWorkflowOperation } = await import(
+          '../server/workspace-workflow-capabilities.js'
+        );
+        const operation = workspaceWorkflowOperation('assessment.execute');
+        await run.assertOperation(operation.collection, operation.action);
+        if (
+          args.assessmentPilot !== undefined ||
+          runnerContext.job.queue === 'opportunity-assessment-pilot'
+        )
+          await assertOpportunityAssessmentPilotJobRouting(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        return await runOpportunityIntelligenceJob(this, args, runnerContext, {
+          workspaceSubject: subject,
+        });
+      },
+    );
+  }
+
+  /**
+   * Prepare only the source-backed requirement coverage needed by one
+   * candidate-owned assessment. The job module keeps all provider work free of
+   * candidate evidence, then re-enters a fresh principal context before it
+   * queues the private assessment continuation.
+   */
+  @backgroundEligible()
+  async prepareAssessmentCoverage(
+    args: OpportunityAssessmentDependencyJobArgs = {},
+    context?: JobExecutionContext,
+  ) {
+    const {
+      assertJobTenantMatchesRuntimeWorkspaceSubject,
+      requireActiveRunnerExecutionContext,
+      runAsResolvedJobWorkspaceSubject,
+    } = await import('../server/job-workspace-subject.js');
+    const runnerContext = requireActiveRunnerExecutionContext(context);
+    return await runAsResolvedJobWorkspaceSubject(
+      args,
+      async (subject, run) => {
+        assertJobTenantMatchesRuntimeWorkspaceSubject(
+          runnerContext.job,
+          subject,
+        );
+        await run.assertOperation('opportunities', 'read');
+        if (args.reviewStrengthVerification !== undefined) {
+          const { runOpportunityReviewStrengthVerificationJob } = await import(
+            '../server/opportunity-review-strength-verification-job.js'
+          );
+          return await runOpportunityReviewStrengthVerificationJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
+        if (args.resumeFitReview !== undefined) {
+          const { runOpportunityResumeFitReviewJob } = await import(
+            '../server/opportunity-resume-fit-review-job.js'
+          );
+          return await runOpportunityResumeFitReviewJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
+        if (args.screeningOnly !== undefined) {
+          const { runOpportunityScreeningOnlyJob } = await import(
+            '../server/opportunity-screening-job.js'
+          );
+          return await runOpportunityScreeningOnlyJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
+        if (args.sourceCoverageStage !== undefined) {
+          const { runOpportunityRequirementCoverageSourceStageJob } =
+            await import(
+              '../server/opportunity-requirement-coverage-source-stage-job.js'
+            );
+          return await runOpportunityRequirementCoverageSourceStageJob(
+            this.id ?? '',
+            runnerContext,
+            subject,
+          );
+        }
+        if (args.sourceCoverageRepair !== undefined) {
+          const { runOpportunityRequirementCoverageRepairJob } = await import(
+            '../server/opportunity-requirement-coverage-repair-job.js'
+          );
+          const {
+            processOpportunityRequirementCoverageRepair,
+            processOpportunityRequirementCoverageAuditReplay,
+          } = await import('../server/opportunity-details.js');
+          return await runOpportunityRequirementCoverageRepairJob(
+            this.id ?? '',
+            runnerContext,
+            subject,
+            {
+              processRepair: processOpportunityRequirementCoverageRepair,
+              processAuditReplay:
+                processOpportunityRequirementCoverageAuditReplay,
+            },
+          );
+        }
+        const { workspaceWorkflowOperation } = await import(
+          '../server/workspace-workflow-capabilities.js'
+        );
+        const operation = workspaceWorkflowOperation('assessment.execute');
+        await run.assertOperation(operation.collection, operation.action);
+        const { runOpportunityAssessmentDependencyJob } = await import(
+          '../server/opportunity-assessment-dependency-job.js'
+        );
+        return await runOpportunityAssessmentDependencyJob(
+          this as unknown as Record<string, unknown>,
+          args,
+          runnerContext,
+          subject,
+        );
+      },
+    );
   }
 }

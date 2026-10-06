@@ -45,6 +45,12 @@ vi.mock('@happyvertical/smrt-core', () => ({
 vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: vi.fn(() => undefined),
 }));
+// This suite exercises archive SQL and transactions; preflight's private
+// audit subject resolver is outside that path and must not bootstrap SMRT.
+vi.mock('./agent-audit-subject.js', () => ({
+  resolveAgentAuditSubject: vi.fn(),
+}));
+vi.mock('./app-config.js', () => ({ isSharedHosted: () => false }));
 vi.mock('./db.js', () => ({ getDbConfig: vi.fn(() => ({ type: 'sqlite' })) }));
 vi.mock('./change-feed.js', () => ({
   bumpOpportunityChangeFeed: vi.fn(async () => 0),

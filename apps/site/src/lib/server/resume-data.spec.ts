@@ -43,12 +43,18 @@ import type {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  candidateProfileWhere: vi.fn(),
   executeCollectionReadPlan: vi.fn(),
   getCurrentSessionPermissionContext: vi.fn(),
   getCurrentTenant: vi.fn(),
   getRequestScopedSmrtOptions: vi.fn(),
   getRequestScopedDatabase: vi.fn(),
+  getPrivateRecord: vi.fn(),
+  getCollection: vi.fn(),
+  isSharedHosted: vi.fn(),
   loadPublishedResumeStamp: vi.fn(),
+  privateRecordWhere: vi.fn(),
+  requireWorkspaceSubject: vi.fn(),
 }));
 
 vi.mock('@happyvertical/smrt-core', () => ({
@@ -68,10 +74,19 @@ vi.mock('./resume-stamp', () => ({
   loadPublishedResumeStamp: mocks.loadPublishedResumeStamp,
 }));
 
+vi.mock('./app-config.js', () => ({
+  isSharedHosted: mocks.isSharedHosted,
+}));
+
+vi.mock('./private-workspace.js', () => ({
+  candidateProfileWhere: mocks.candidateProfileWhere,
+  getPrivateRecord: mocks.getPrivateRecord,
+  privateRecordWhere: mocks.privateRecordWhere,
+  requireWorkspaceSubject: mocks.requireWorkspaceSubject,
+}));
+
 vi.mock('./smrt', () => ({
-  getCollection: vi.fn(() => {
-    throw new Error('database unavailable');
-  }),
+  getCollection: mocks.getCollection,
   getRequestScopedSmrtOptions: mocks.getRequestScopedSmrtOptions,
 }));
 
@@ -80,12 +95,15 @@ import {
   assembleResumeSourceFromRecords,
   getCachedPublishedResume,
   getCachedPublishedResumeSource,
+  getPublishedResumeAsset,
   invalidatePublishedResumeCache,
   type LegacyResumeSourceRecords,
+  listResumeAssets,
   loadLegacyAdminResumeSource,
   loadLegacyResumeSource,
   loadNormalizedResumeSource,
   loadPublishedResumeSource,
+  loadWorkspaceCandidateEvidence,
   parseTailoringConfigRecord,
   type ResumeSourceRecords,
   resumeProfileSummaries,
@@ -97,6 +115,10 @@ function emptyReadPlanResult(plan: Record<string, unknown>) {
 
 beforeEach(() => {
   invalidatePublishedResumeCache();
+  mocks.getCollection.mockReset();
+  mocks.getCollection.mockImplementation(() => {
+    throw new Error('database unavailable');
+  });
   mocks.executeCollectionReadPlan.mockReset();
   mocks.executeCollectionReadPlan.mockRejectedValue(
     new Error('database unavailable'),
@@ -106,8 +128,24 @@ beforeEach(() => {
   mocks.getCurrentSessionPermissionContext.mockReset();
   mocks.getRequestScopedDatabase.mockReset();
   mocks.getCurrentTenant.mockReset();
+  mocks.getPrivateRecord.mockReset();
+  mocks.isSharedHosted.mockReset();
+  mocks.isSharedHosted.mockReturnValue(false);
   mocks.loadPublishedResumeStamp.mockReset();
   mocks.loadPublishedResumeStamp.mockResolvedValue('stamp-1');
+  mocks.candidateProfileWhere.mockReset();
+  mocks.candidateProfileWhere.mockImplementation((subject) => ({
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  }));
+  mocks.privateRecordWhere.mockReset();
+  mocks.privateRecordWhere.mockImplementation((subject) => ({
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  }));
+  mocks.requireWorkspaceSubject.mockReset();
+  mocks.requireWorkspaceSubject.mockImplementation((subject) => subject);
   vi.useRealTimers();
 });
 
@@ -647,6 +685,82 @@ describe('assembleResumeSourceFromRecords', () => {
 });
 
 describe('assembleResumeSourceFromLegacyRecords', () => {
+  it('keeps normalized and legacy canonical bytes unchanged while excluding incomplete education and other roles', () => {
+    const expected: ResumeSource = {
+      profile: {
+        name: 'Fictional Candidate',
+        title: '',
+        email: '',
+        summary: '',
+        links: [],
+      },
+      skills: { skillGroups: [], groups: [] },
+      experience: {
+        positions: [],
+        other: [
+          {
+            role: 'Engineer',
+            company: 'Example',
+            period: '2020',
+            body: 'Original body',
+            tags: [],
+          },
+        ],
+        education: [
+          {
+            title: 'Degree',
+            institution: 'Example',
+            detail: 'Original detail',
+          },
+        ],
+      },
+    };
+    const normalized = normalizedRecordsFromSource(expected);
+    const legacy = legacyRecordsFromSource(expected);
+    // The existing assembler normalizes strings before its membership filter.
+    for (const records of [normalized, legacy]) {
+      records.education[0].title = '  Degree  ';
+      records.otherRoles[0].role = '  Engineer  ';
+    }
+    const baseline = [
+      assembleResumeSourceFromRecords(normalized),
+      assembleResumeSourceFromLegacyRecords(legacy),
+    ];
+    for (const records of [normalized, legacy]) {
+      records.education.push({
+        id: 'whitespace-education',
+        title: ' ',
+        institution: '',
+        detail: ' ',
+      });
+      records.otherRoles.push({
+        id: 'whitespace-other',
+        role: ' ',
+        company: ' ',
+        period: ' ',
+        body: '',
+        tags: [],
+      });
+      records.education.push({
+        id: 'incomplete-education',
+        title: 'Hidden degree',
+        detail: '',
+      });
+      records.otherRoles.push({
+        id: 'incomplete-other',
+        role: 'Hidden role',
+        company: '',
+        period: '2022',
+      });
+    }
+    for (const [index, assembled] of [
+      assembleResumeSourceFromRecords(normalized),
+      assembleResumeSourceFromLegacyRecords(legacy),
+    ].entries()) {
+      expect(assembled).toEqual(expected);
+      expect(JSON.stringify(assembled)).toBe(JSON.stringify(baseline[index]));
+    }
+  });
   it('reconstructs the legacy JSON resume shape from old resume admin records', () => {
     const legacy = loadLegacyResumeSource();
 
@@ -849,6 +963,17 @@ describe('SMRT resume collection read plans', () => {
 });
 
 describe('loadPublishedResumeSource', () => {
+  it('returns a neutral payload for a shared hosted landing request', async () => {
+    mocks.isSharedHosted.mockReturnValue(true);
+
+    await expect(loadPublishedResumeSource()).resolves.toEqual({
+      experience: { education: [], other: [], positions: [] },
+      profile: { email: '', links: [], name: '', summary: '', title: '' },
+      skills: { groups: [], skillGroups: [] },
+    });
+    expect(mocks.executeCollectionReadPlan).not.toHaveBeenCalled();
+  });
+
   it('does not hide current resume source load failures behind bundled legacy data', async () => {
     await expect(loadPublishedResumeSource()).rejects.toThrow(
       'database unavailable',
@@ -1109,6 +1234,356 @@ describe('loadPublishedResumeSource', () => {
   });
 });
 
+describe('workspace candidate evidence', () => {
+  const subject = {
+    profileId: 'profile-a',
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+  };
+
+  it('adds the full verified owner predicate to every private resume read', async () => {
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+
+    await loadNormalizedResumeSource(undefined, subject);
+
+    const plan = mocks.executeCollectionReadPlan.mock.calls[0]?.[0] as Record<
+      string,
+      { options: Record<string, unknown> }
+    >;
+    expect(plan.experiences.options.where).toEqual({
+      candidateProfileId: 'profile-a',
+      ownerUserId: 'user-a',
+      tenantId: 'tenant-a',
+    });
+    expect(plan.profiles.options.where).toEqual({
+      id: 'profile-a',
+      ownerUserId: 'user-a',
+      tenantId: 'tenant-a',
+    });
+    expect(plan.skillGroups.options.where).toEqual(
+      plan.experiences.options.where,
+    );
+    expect(plan.companies.options.where).toBeUndefined();
+    expect(plan.tags.options.where).toBeUndefined();
+  });
+
+  it('keeps concurrent profile roots separate from their private child rows', async () => {
+    const otherSubject = {
+      profileId: 'profile-b',
+      tenantId: 'tenant-b',
+      userId: 'user-b',
+    };
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+
+    await Promise.all([
+      loadNormalizedResumeSource(undefined, subject),
+      loadNormalizedResumeSource(undefined, otherSubject),
+    ]);
+
+    const plans = mocks.executeCollectionReadPlan.mock.calls.map(
+      ([plan]) => plan as Record<string, { options: Record<string, unknown> }>,
+    );
+    expect(plans).toHaveLength(2);
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          experiences: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                candidateProfileId: 'profile-a',
+                ownerUserId: 'user-a',
+                tenantId: 'tenant-a',
+              },
+            }),
+          }),
+          profiles: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                id: 'profile-a',
+                ownerUserId: 'user-a',
+                tenantId: 'tenant-a',
+              },
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          experiences: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                candidateProfileId: 'profile-b',
+                ownerUserId: 'user-b',
+                tenantId: 'tenant-b',
+              },
+            }),
+          }),
+          profiles: expect.objectContaining({
+            options: expect.objectContaining({
+              where: {
+                id: 'profile-b',
+                ownerUserId: 'user-b',
+                tenantId: 'tenant-b',
+              },
+            }),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('rejects unbound private reads in shared hosted mode', async () => {
+    mocks.isSharedHosted.mockReturnValue(true);
+
+    await expect(loadNormalizedResumeSource()).rejects.toThrow(
+      'A verified candidate workspace subject is required.',
+    );
+    expect(mocks.executeCollectionReadPlan).not.toHaveBeenCalled();
+  });
+
+  it('returns only the selected candidate material and a stable scoped fingerprint', async () => {
+    const resume = structuredClone(loadLegacyResumeSource());
+    resume.experience.positions[0] = {
+      ...resume.experience.positions[0]!,
+      blurb: 'Complete private role narrative',
+      duties: [
+        {
+          id: 'daily-pack-duty',
+          title: 'Private duty',
+          body: 'Designed reliable distributed platforms and coached staff engineers.',
+        },
+      ],
+    };
+    resume.experience.other = [
+      {
+        role: 'Advisor',
+        company: 'Private Example',
+        period: '2020–2022',
+        body: 'Private advisory narrative',
+      },
+    ];
+    const records = normalizedRecordsFromSource(resume);
+    records.duties = [
+      {
+        id: 'daily-pack-duty',
+        experienceId: `experience-${resume.experience.positions[0]!.id}`,
+        title: 'Private duty',
+        body: 'Designed reliable distributed platforms and coached staff engineers.',
+      },
+    ];
+    records.education.push(
+      {
+        id: 'education-private-a',
+        title: 'Certificate',
+        institution: 'Example',
+        detail: 'Distributed systems',
+      },
+      {
+        id: 'education-private-b',
+        title: 'Certificate',
+        institution: 'Example',
+        detail: 'Distributed systems',
+      },
+    );
+    records.profiles[0] = {
+      ...records.profiles[0],
+      candidateProfileId: subject.profileId,
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    };
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      Object.fromEntries(
+        Object.keys(plan).map((key) => [
+          key,
+          records[key as keyof ResumeSourceRecords] ?? [],
+        ]),
+      ),
+    );
+    mocks.getPrivateRecord.mockResolvedValue({
+      authorizedWorkCountriesJson: '["CA"]',
+      citizenshipsJson: '["CA"]',
+      factsJson: '{"citizenships":["CA"]}',
+      id: subject.profileId,
+      location: 'Edmonton, CA',
+      name: 'Candidate A',
+      ownerUserId: subject.userId,
+      preferencesJson: '{"locations":["CA"]}',
+      residenceCountryJson: '["CA"]',
+      sponsorshipRequired: false,
+      summary: 'Platform engineer',
+      targetWorkCountryJson: '["CA"]',
+      tenantId: subject.tenantId,
+      title: 'Engineer',
+      workAuthorization: 'Canada citizen',
+    });
+
+    const first = await loadWorkspaceCandidateEvidence(subject);
+    const second = await loadWorkspaceCandidateEvidence(subject);
+
+    expect(first.subject).toEqual(subject);
+    expect(first.candidate).toEqual({
+      authorizedWorkCountriesJson: '["CA"]',
+      citizenshipsJson: '["CA"]',
+      factsJson: '{"citizenships":["CA"]}',
+      location: 'Edmonton, CA',
+      preferencesJson: '{"locations":["CA"]}',
+      residenceCountryJson: '["CA"]',
+      sponsorshipRequired: false,
+      summary: 'Platform engineer',
+      targetWorkCountryJson: '["CA"]',
+      title: 'Engineer',
+      workAuthorization: 'Canada citizen',
+    });
+    expect(first.evidence.some((item) => item.kind === 'achievement')).toBe(
+      true,
+    );
+    expect(first.evidence.some((item) => item.kind === 'skill')).toBe(true);
+    expect(
+      first.evidence
+        .filter((item) => item.kind === 'skill')
+        .every((item) => item.id.startsWith('skill:') && item.recordId),
+    ).toBe(true);
+    expect(
+      first.evidence
+        .filter((item) => item.kind === 'project')
+        .every(
+          (item) =>
+            item.id.startsWith('project:') && item.recordId && item.sectionId,
+        ),
+    ).toBe(true);
+    expect(first.evidence.some((item) => item.kind === 'employment')).toBe(
+      true,
+    );
+    expect(
+      first.evidence.some(
+        (item) =>
+          item.kind === 'duty' && item.text.includes('coached staff engineers'),
+      ),
+    ).toBe(true);
+    expect(
+      first.evidence.some(
+        (item) =>
+          item.kind === 'employment' &&
+          item.text.includes('Complete private role narrative'),
+      ),
+    ).toBe(true);
+    expect(
+      first.evidence.some(
+        (item) =>
+          item.kind === 'employment' &&
+          item.text.includes('Private advisory narrative'),
+      ),
+    ).toBe(true);
+    const duplicateEducation = first.evidence.filter(
+      (item) => item.kind === 'education' && item.title === 'Certificate',
+    );
+    expect(duplicateEducation.map((item) => item.id)).toEqual([
+      'education:education-private-a',
+      'education:education-private-b',
+    ]);
+    expect(
+      duplicateEducation.every(
+        (item) => item.sectionId === `profile:${subject.profileId}`,
+      ),
+    ).toBe(true);
+    expect(second.fingerprint).toBe(first.fingerprint);
+    const profile = await mocks.getPrivateRecord.mock.results[0]?.value;
+    mocks.getPrivateRecord.mockResolvedValue({
+      ...profile,
+      preferencesJson: '{"weight":99}',
+    });
+    expect((await loadWorkspaceCandidateEvidence(subject)).fingerprint).toBe(
+      first.fingerprint,
+    );
+    expect(mocks.getPrivateRecord).toHaveBeenCalledWith(
+      'CandidateProfile',
+      subject.profileId,
+      subject,
+    );
+  });
+
+  it('includes confirmed private skills with exact introductory limits and citations', async () => {
+    const records = normalizedRecordsFromSource(
+      structuredClone(loadLegacyResumeSource()),
+    );
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      Object.fromEntries(
+        Object.keys(plan).map((key) => [
+          key,
+          records[key as keyof ResumeSourceRecords] ?? [],
+        ]),
+      ),
+    );
+    mocks.getPrivateRecord.mockResolvedValue({
+      id: subject.profileId,
+      tenantId: subject.tenantId,
+      ownerUserId: subject.userId,
+      factsJson: JSON.stringify({
+        version: 1,
+        facts: {
+          confirmedSkills: [
+            {
+              id: 'confirmation-1',
+              label: 'Python',
+              classification: 'introductory',
+              provenance: 'user_verified',
+              discoveryRequestId: 'request-1',
+              evidence: [
+                {
+                  id: 'project-1',
+                  title: 'Prototype',
+                  text: 'Dabbled in Python.',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    const result = await loadWorkspaceCandidateEvidence(subject);
+    expect(
+      result.evidence.find(
+        (row) => row.id === 'confirmed-skill:confirmation-1',
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'skill_context',
+        title: 'Confirmed skill: Python',
+        text: 'User-confirmed skill: Python. Experience: introductory exposure only; not established proficiency.\nSupporting career record [project-1] Prototype:\nDabbled in Python.',
+      }),
+    );
+  });
+
+  it('rejects a forged candidate profile before loading candidate material', async () => {
+    mocks.getPrivateRecord.mockResolvedValue(null);
+
+    await expect(loadWorkspaceCandidateEvidence(subject)).rejects.toThrow(
+      'Candidate profile is outside this workspace.',
+    );
+    expect(mocks.executeCollectionReadPlan).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing sponsorship information unknown', async () => {
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+    mocks.getPrivateRecord.mockResolvedValue({
+      id: subject.profileId,
+      name: 'Candidate A',
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    });
+
+    await expect(
+      loadWorkspaceCandidateEvidence(subject),
+    ).resolves.toMatchObject({
+      candidate: { sponsorshipRequired: 'unknown' },
+    });
+  });
+});
+
 describe('parseTailoringConfigRecord', () => {
   it('parses valid JSON tailoring configs and tolerates invalid config text', () => {
     expect(
@@ -1122,5 +1597,46 @@ describe('parseTailoringConfigRecord', () => {
     });
 
     expect(parseTailoringConfigRecord({ configJson: '{' }).config).toEqual({});
+  });
+});
+
+describe('private resume asset history', () => {
+  it('queries and returns only the verified owner profile, even if an adapter ignores where', async () => {
+    const subject = {
+      profileId: 'profile-owner',
+      tenantId: 'tenant-owner',
+      userId: 'user-owner',
+    };
+    const ownership = {
+      candidateProfileId: subject.profileId,
+      tenantId: subject.tenantId,
+      ownerUserId: subject.userId,
+    };
+    const owned = {
+      id: 'owned-resume',
+      ...ownership,
+      isPublished: true,
+      applicationId: '',
+    };
+    const list = vi.fn(async () => [
+      owned,
+      { ...owned, id: 'foreign-owner', ownerUserId: 'foreign-user' },
+      {
+        ...owned,
+        id: 'foreign-profile',
+        candidateProfileId: 'foreign-profile',
+      },
+      { ...owned, id: 'foreign-tenant', tenantId: 'foreign-tenant' },
+      { ...owned, id: 'owned-packet', applicationId: 'owned-application' },
+    ]);
+    mocks.getCollection.mockResolvedValue({ list });
+    mocks.isSharedHosted.mockReturnValue(true);
+    expect(await listResumeAssets(subject)).toEqual([owned]);
+    expect(list).toHaveBeenCalledWith({
+      limit: 1000,
+      orderBy: 'updated_at DESC',
+      where: ownership,
+    });
+    expect(await getPublishedResumeAsset(subject)).toEqual(owned);
   });
 });

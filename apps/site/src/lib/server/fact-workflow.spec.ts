@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { acceptFactCandidate, createFactIntakeFromText } from './fact-workflow';
 
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+
 type MockRecord = Record<string, unknown> & {
   id: string;
   save: () => Promise<void>;
@@ -92,18 +98,20 @@ describe('fact intake workflow', () => {
     const result = await createFactIntakeFromText({
       rawText:
         'Built a multi-agent job search system. Integrated Kubernetes GitOps.',
+      subject,
       targetEntityId: 'opp-1',
       targetEntityType: 'Opportunity',
-      user: { id: 'user-1' },
     });
 
     expect(result.intake).toMatchObject({
+      candidateProfileId: 'profile-1',
       createdByUserId: 'user-1',
       notes: JSON.stringify({
         extractionError: 'no ai',
         extractionMode: 'fallback',
       }),
       status: 'extracted',
+      tenantId: 'tenant-1',
       targetEntityId: 'opp-1',
     });
     expect(result.candidates).toHaveLength(2);
@@ -116,27 +124,38 @@ describe('fact intake workflow', () => {
   it('accepts a reviewed candidate into smrt-facts with evidence and subject links', async () => {
     mocks.collections.set(
       'FactIntake',
-      collection([record({ id: 'intake-1', sourceKind: 'story' })]),
+      collection([
+        record({
+          ...subject,
+          candidateProfileId: subject.profileId,
+          id: 'intake-1',
+          ownerUserId: subject.userId,
+          sourceKind: 'story',
+        }),
+      ]),
     );
     mocks.collections.set(
       'FactCandidate',
       collection([
         record({
+          candidateProfileId: subject.profileId,
           confidence: 0.8,
           factIntakeId: 'intake-1',
           id: 'candidate-1',
+          ownerUserId: subject.userId,
           reviewStatus: 'pending',
           sourceExcerpt: 'Built a multi-agent job search system.',
           statement: 'Will built a multi-agent job search system.',
           targetEntityId: 'opp-1',
           targetEntityType: 'Opportunity',
+          tenantId: subject.tenantId,
         }),
       ]),
     );
 
     const result = await acceptFactCandidate({
       candidateId: 'candidate-1',
-      user: { id: 'user-1' },
+      subject,
     });
 
     expect(result.candidate).toMatchObject({
@@ -164,20 +183,23 @@ describe('fact intake workflow', () => {
       'FactCandidate',
       collection([
         record({
+          candidateProfileId: subject.profileId,
           confidence: 0.8,
           id: 'candidate-2',
+          ownerUserId: subject.userId,
           reviewStatus: 'pending',
           sourceExcerpt: 'Shipped a reusable CLI package.',
           statement: 'Will shipped a reusable CLI package.',
           targetEntityId: 'opp-2',
           targetEntityType: 'Opportunity',
+          tenantId: subject.tenantId,
         }),
       ]),
     );
 
     await acceptFactCandidate({
       candidateId: 'candidate-2',
-      user: { id: 'user-1' },
+      subject,
     });
 
     expect(mocks.evidenceCreated[0]).toMatchObject({
@@ -185,5 +207,28 @@ describe('fact intake workflow', () => {
       sourceId: 'candidate-2',
       sourceKind: 'fact_candidate',
     });
+  });
+
+  it('refuses another subject before reconciling a candidate fact', async () => {
+    mocks.collections.set(
+      'FactCandidate',
+      collection([
+        record({
+          candidateProfileId: subject.profileId,
+          id: 'candidate-private',
+          ownerUserId: subject.userId,
+          statement: 'Private candidate evidence.',
+          tenantId: subject.tenantId,
+        }),
+      ]),
+    );
+
+    await expect(
+      acceptFactCandidate({
+        candidateId: 'candidate-private',
+        subject: { ...subject, userId: 'another-user' },
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.evidenceCreated).toHaveLength(0);
   });
 });

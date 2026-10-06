@@ -11,6 +11,7 @@ import {
 import { manifestHash } from '@happyvertical/smrt-virt-web';
 import { error, type RequestHandler } from '@sveltejs/kit';
 import { getCollection } from '$lib/server/smrt';
+import { assertWorkspaceEventContext } from '$lib/server/workspace-resource-policy';
 
 function requireAuthenticatedPrincipal(locals: unknown): void {
   if (!locals || typeof locals !== 'object')
@@ -62,6 +63,7 @@ function parseCursor(request: Request, url: URL): number | null {
  * `_events` route rather than falling back to an unconditional polling loop.
  */
 export const GET: RequestHandler = async ({ locals, request, url }) => {
+  assertWorkspaceEventContext();
   requireAuthenticatedPrincipal(locals);
   establishTenantContext(locals);
 

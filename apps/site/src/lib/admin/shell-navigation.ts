@@ -3,14 +3,13 @@ export const ADMIN_NAVIGATION_MEDIA_QUERY = '(min-width: 80rem)';
 export type NavigationPanelState = 'collapsed' | 'expanded';
 
 /**
- * Choose the navigation default for the Tailwind `xl` breakpoint. This is a
- * default only; a persisted panel setting always wins after the user toggles
- * the sidebar.
+ * Start with compact navigation at every size. A persisted explicit panel
+ * preference still wins after the user opens or closes the menu.
  */
 export function navigationStateForViewport(
-  isXlOrWider: boolean,
+  _isXlOrWider: boolean,
 ): NavigationPanelState {
-  return isXlOrWider ? 'expanded' : 'collapsed';
+  return 'collapsed';
 }
 
 /**

@@ -188,6 +188,59 @@ describe('public HTTPS guard', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves the validated final response URL without replacing body, status or headers', async () => {
+    const final = new Response('<a href="roles/engineer">Engineer</a>', {
+      status: 202,
+      headers: { 'x-source': 'public' },
+    });
+    expect(final.url).toBe('');
+    const transport = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.redirect('https://jobs.example.com/careers/', 302),
+      )
+      .mockResolvedValueOnce(final);
+    const response = await createPublicHttpsFetch({
+      lookup: async () => [publicAddress],
+      transport,
+    })('https://jobs.example.com/start');
+    expect(response).toBe(final);
+    expect(response.url).toBe('https://jobs.example.com/careers/');
+    expect(response.status).toBe(202);
+    expect(response.headers.get('x-source')).toBe('public');
+    expect(await response.text()).toContain('roles/engineer');
+  });
+
+  it('applies an optional admission gate after validation and before each transport hop', async () => {
+    const events: string[] = [];
+    const lookup = vi.fn(async () => {
+      events.push('validated');
+      return [publicAddress];
+    });
+    const beforeTransport = vi.fn((url: URL) => {
+      events.push(`admit:${url.pathname}`);
+      if (beforeTransport.mock.calls.length > 1)
+        throw new Error('budget exhausted');
+    });
+    const transport = vi.fn(async () => {
+      events.push('transport');
+      return Response.redirect('https://jobs.example.com/final', 302);
+    });
+    await expect(
+      createPublicHttpsFetch({ lookup, beforeTransport, transport })(
+        'https://jobs.example.com/start',
+      ),
+    ).rejects.toThrow('budget exhausted');
+    expect(events).toEqual([
+      'validated',
+      'admit:/start',
+      'transport',
+      'validated',
+      'admit:/final',
+    ]);
+    expect(transport).toHaveBeenCalledOnce();
+  });
+
   it('enforces one wall-clock deadline while DNS resolution is stalled', async () => {
     vi.useFakeTimers();
     try {

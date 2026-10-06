@@ -1,8 +1,10 @@
 import type { SmrtJob, SmrtJobData } from '@happyvertical/smrt-jobs';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   enqueueOpportunityIntelligence,
   enqueueOpportunityIntelligenceWithStatus,
+  enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus,
+  enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
   findActiveOpportunityIntelligenceJob,
   OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
   OPPORTUNITY_INTELLIGENCE_METHOD,
@@ -17,7 +19,103 @@ import {
   isOpportunityIntelligenceActiveJobConflict,
 } from './opportunity-intelligence-job-schema';
 
-function jobRecord(data: Record<string, unknown>) {
+const workspace = vi.hoisted(() => ({
+  coverageReady: true,
+  partial: undefined as unknown,
+  subject: null as {
+    profileId: string;
+    tenantId: string;
+    userId: string;
+  } | null,
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  getCurrentWorkspaceSubject: () => workspace.subject,
+  requireCurrentWorkspaceSubject: () => workspace.subject,
+}));
+vi.mock('./resume-data.js', () => ({
+  loadWorkspaceCandidateEvidence: vi.fn(async () => ({
+    fingerprint: 'candidate-fingerprint',
+  })),
+}));
+vi.mock('./opportunity-assessment-input.js', () => ({
+  verifiedOpportunityRequirementCoverage: vi.fn(() =>
+    workspace.coverageReady
+      ? { fingerprint: 'coverage-fingerprint', ledger: {} }
+      : undefined,
+  ),
+  opportunityAssessmentSubjectMaterialFingerprint: vi.fn(
+    ({
+      subject,
+      candidateMaterialFingerprint,
+      sourceContentFingerprint,
+      sourceContentVersion,
+    }) =>
+      `${subject.tenantId}:${subject.userId}:${subject.profileId}:${candidateMaterialFingerprint}:${sourceContentFingerprint}:${sourceContentVersion}`,
+  ),
+}));
+vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
+  readPartialOpportunityRequirementEvidence: vi.fn(
+    async () => workspace.partial,
+  ),
+  hasRecordedRequirementCoverageAudit: vi.fn(async () => true),
+  requirementCoverageSourceDependencyFingerprint: vi.fn(
+    () => 'source-coverage-contract-seed',
+  ),
+}));
+vi.mock('./application-workflow.js', () => ({
+  withOpportunityLifecycleLock: async <T>(
+    _id: string,
+    work: () => Promise<T>,
+  ) => await work(),
+}));
+vi.mock('./job-workspace-subject.js', async (original) => ({
+  ...(await original<typeof import('./job-workspace-subject.js')>()),
+  runAsRevalidatedJobWorkspaceSubject: async <T>(
+    subject: unknown,
+    _capability: unknown,
+    work: (current: unknown, run: unknown) => Promise<T>,
+  ) => await work(subject, { assertOperation: async () => undefined }),
+}));
+vi.mock('./opportunity-assessment-dependency-job.js', () => ({
+  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE: 'opportunity-assessment-pilot',
+  opportunityAssessmentPilotIntent: (screen: {
+    requestId: string;
+    inputFingerprint: string;
+  }) => ({
+    contract: 'opportunity-assessment-pilot/v1',
+    screeningRequestId: screen.requestId,
+    screeningInputFingerprint: screen.inputFingerprint,
+  }),
+  opportunityAssessmentJobQueue: (args: Record<string, unknown>) =>
+    args.assessmentPilot
+      ? 'opportunity-assessment-pilot'
+      : 'opportunity-intelligence',
+  requireCurrentOpportunityAssessmentPilotScreen: vi.fn(async () => ({
+    requestId: 'current-v4-screen',
+    inputFingerprint: 'screen-fp',
+  })),
+  assertOpportunityAssessmentPilotJobRouting: vi.fn(),
+  enqueueOpportunityAssessmentCoverageFreshPilot: vi.fn(async () => ({
+    enqueued: true,
+    job: { id: 'fresh-source-job' },
+    stage: 'source_preparation',
+  })),
+  enqueueOpportunityAssessmentCoveragePilot: vi.fn(async () => ({
+    enqueued: true,
+    job: { id: 'pilot-source-job' },
+    stage: 'source_preparation',
+  })),
+  OpportunityAssessmentDependencyEnqueueError: class extends Error {},
+  enqueueOpportunityAssessmentCoverage: vi.fn(async () => ({
+    enqueued: true,
+    job: { id: 'source-preparation-job' },
+    stage: 'source_preparation',
+    sourceDependency: { kind: 'requirement_coverage' },
+  })),
+}));
+
+function jobRecord<T extends Record<string, unknown>>(data: T) {
   return {
     id: String(data.id ?? ''),
     save: vi.fn(async () => {}),
@@ -26,6 +124,501 @@ function jobRecord(data: Record<string, unknown>) {
 }
 
 describe('opportunity intelligence jobs', () => {
+  beforeEach(() => {
+    workspace.subject = null;
+    workspace.coverageReady = true;
+    workspace.partial = undefined;
+    vi.clearAllMocks();
+  });
+
+  it('fresh API uses only the trusted fresh dependency and consumes permission on private paid-proof reuse', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const dependency = await import(
+      './opportunity-assessment-dependency-job.js'
+    );
+    const options = {
+      opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+    };
+    await enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus(
+      'opp-1',
+      options,
+    );
+    expect(
+      dependency.enqueueOpportunityAssessmentCoverageFreshPilot,
+    ).toHaveBeenCalledOnce();
+    expect(
+      dependency.enqueueOpportunityAssessmentCoveragePilot,
+    ).not.toHaveBeenCalled();
+    expect(
+      dependency.enqueueOpportunityAssessmentCoverage,
+    ).not.toHaveBeenCalled();
+    workspace.coverageReady = true;
+    const collection = {
+      list: vi.fn(async () => []),
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'private', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    const result =
+      await enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus('opp-1', {
+        ...options,
+        collection,
+      });
+    expect(result.job.args.assessmentPilot).toMatchObject({
+      contract: 'opportunity-assessment-pilot/v1',
+    });
+    expect(result.job.queue).toBe('opportunity-assessment-pilot');
+  });
+  it('keeps the existing ordinary pending job untouched and enqueues the fixed private pilot route', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const ordinary = jobRecord({
+      id: '6d5-ordinary',
+      queue: OPPORTUNITY_INTELLIGENCE_QUEUE,
+      status: 'pending',
+    });
+    const list = vi.fn(
+      async (options: { where?: Record<string, unknown> } = {}) =>
+        options.where?.queue === ordinary.queue
+          ? [ordinary as unknown as SmrtJob]
+          : [],
+    );
+    const collection = {
+      list,
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'pilot', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    const result = await enqueueWorkspaceOpportunityAssessmentPilotWithStatus(
+      'opp-1',
+      {
+        collection,
+        opportunityCollection: {
+          get: vi.fn(async () => ({
+            id: 'opp-1',
+            sourceContentFingerprint: 'fp',
+            sourceContentVersion: 1,
+          })),
+        },
+      },
+    );
+    expect(result.job.id).toBe('pilot');
+    expect(collection.enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: 'opportunity-assessment-pilot',
+        maxAttempts: 1,
+        args: expect.objectContaining({
+          modes: 'assessment',
+          assessmentPilot: {
+            contract: 'opportunity-assessment-pilot/v1',
+            screeningRequestId: 'current-v4-screen',
+            screeningInputFingerprint: 'screen-fp',
+          },
+        }),
+      }),
+    );
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          queue: 'opportunity-assessment-pilot',
+        }),
+      }),
+    );
+    expect(ordinary.status).toBe('pending');
+    expect(ordinary.save).not.toHaveBeenCalled();
+  });
+  it('routes a missing source prerequisite to the fixed pilot API instead of ordinary enqueue', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const {
+      enqueueOpportunityAssessmentCoveragePilot,
+      enqueueOpportunityAssessmentCoverage,
+    } = await import('./opportunity-assessment-dependency-job.js');
+    await enqueueWorkspaceOpportunityAssessmentPilotWithStatus('opp-1', {
+      opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+    });
+    expect(enqueueOpportunityAssessmentCoveragePilot).toHaveBeenCalledOnce();
+    expect(enqueueOpportunityAssessmentCoverage).not.toHaveBeenCalled();
+  });
+  it('ordinary caller cannot switch queues with forged pilot or queue flags', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const collection = {
+      list: vi.fn(async () => []),
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'ordinary', ...data }) as unknown as SmrtJob,
+      ),
+    };
+    await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      {
+        assessmentPilot: { contract: 'opportunity-assessment-pilot/v1' },
+        queue: 'opportunity-resume-fit-review',
+        modes: 'assessment',
+      },
+      {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+      },
+    );
+    const data = collection.enqueueJob.mock.calls[0]?.[0];
+    expect(data?.queue).toBe(OPPORTUNITY_INTELLIGENCE_QUEUE);
+    expect(data?.args?.assessmentPilot).toBeUndefined();
+    expect(data?.args?.queue).toBeUndefined();
+  });
+  it('queues source preparation before loading private evidence when coverage is missing', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const { loadWorkspaceCandidateEvidence } = await import('./resume-data');
+    const { enqueueOpportunityAssessmentCoverage } = await import(
+      './opportunity-assessment-dependency-job'
+    );
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(),
+      list: vi.fn(async () => []),
+    };
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      {
+        partialAssessmentEvidence: true,
+        skipScreening: true,
+        screeningOutcome: 'potentially_relevant',
+        screeningEvidence: { forged: true },
+        screeningInputFingerprint: 'forged',
+        candidatePreferences: { targetRoles: ['forged'] },
+      },
+      {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+      },
+    );
+    expect(result.stage).toBe('source_preparation');
+    expect(result.job.id).toBe('source-preparation-job');
+    expect(enqueueOpportunityAssessmentCoverage).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(enqueueOpportunityAssessmentCoverage).mock.calls[0]?.[1],
+    ).toEqual({});
+    expect(loadWorkspaceCandidateEvidence).not.toHaveBeenCalled();
+    expect(collection.create).not.toHaveBeenCalled();
+    expect(collection.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('derives private partial mode only from current native GLOBAL evidence and binds its fingerprint', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-source-row' }],
+      fingerprint: 'native-partial-proof',
+      context: { sourceFingerprint: 'fp', sourceVersion: 1 },
+    };
+    const { enqueueOpportunityAssessmentCoverage } = await import(
+      './opportunity-assessment-dependency-job'
+    );
+    const { opportunityAssessmentSubjectMaterialFingerprint } = await import(
+      './opportunity-assessment-input'
+    );
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({
+            id: 'private-partial-job',
+            ...data,
+          }) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => []),
+    };
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      { partialAssessmentEvidence: false },
+      {
+        collection,
+        opportunityCollection: {
+          get: async () => ({
+            id: 'opp-1',
+            sourceContentFingerprint: 'fp',
+            sourceContentVersion: 1,
+          }),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      stage: 'private_assessment',
+      sourceStatus: 'partial',
+    });
+    expect(result.job.args.partialAssessmentEvidence).toBe(true);
+    expect(
+      opportunityAssessmentSubjectMaterialFingerprint,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requirementCoverageFingerprint: 'native-partial-proof',
+        subject: workspace.subject,
+      }),
+    );
+    expect(enqueueOpportunityAssessmentCoverage).not.toHaveBeenCalled();
+  });
+
+  it('rechecks native partial proof before creating a private run and rejects a bare persisted opt-in', async () => {
+    const subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const target = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'fp',
+      sourceContentVersion: 1,
+    };
+    const processor = vi.fn(async () => ({
+      status: 'processed',
+      message: 'partial',
+    }));
+    const startRun = vi.fn(async () => 'private-run');
+    const finishRun = vi.fn(async () => {});
+    const args = {
+      modes: 'assessment' as const,
+      partialAssessmentEvidence: true,
+      contentFingerprint: 'fp',
+      contentVersion: 1,
+    };
+    const deps = {
+      workspaceSubject: subject,
+      processor,
+      startRun,
+      finishRun,
+      readCurrentOpportunity: vi.fn(async () => target),
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'skipped' });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(processor).not.toHaveBeenCalled();
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-row' }],
+      context: { sourceFingerprint: 'fp', sourceVersion: 1 },
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'processed' });
+    expect(startRun).toHaveBeenCalledOnce();
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        partialAssessmentEvidence: true,
+        workspaceSubject: subject,
+      }),
+    );
+    expect(deps.readCurrentOpportunity).toHaveBeenCalledWith('opp-1');
+    processor.mockClear();
+    startRun.mockClear();
+    deps.readCurrentOpportunity.mockResolvedValueOnce({
+      ...target,
+      sourceContentVersion: 2,
+    });
+    workspace.partial = {
+      acceptedRequirements: [{ id: 'verified-row' }],
+      context: { sourceFingerprint: 'fp', sourceVersion: 2 },
+    };
+    await expect(
+      runOpportunityIntelligenceJob(target, args, undefined, deps),
+    ).resolves.toMatchObject({ status: 'skipped' });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(processor).not.toHaveBeenCalled();
+  });
+
+  it('keeps explicit source-only extraction separate from the private continuation', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    workspace.coverageReady = false;
+    const { loadWorkspaceCandidateEvidence } = await import('./resume-data');
+    const { enqueueOpportunityAssessmentCoverage } = await import(
+      './opportunity-assessment-dependency-job'
+    );
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'extract-job', ...data }) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => []),
+    };
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      { modes: ['extract'] },
+      {
+        collection,
+        opportunityCollection: {
+          get: vi.fn(async () => ({
+            id: 'opp-1',
+            sourceContentFingerprint: 'fp',
+            sourceContentVersion: 1,
+          })),
+        },
+      },
+    );
+    expect(result.job.args.modes).toEqual(['extract']);
+    expect(result.job.args.scoringMaterialFingerprint).toBe(
+      'source-coverage-contract-seed',
+    );
+    expect(enqueueOpportunityAssessmentCoverage).not.toHaveBeenCalled();
+    expect(loadWorkspaceCandidateEvidence).not.toHaveBeenCalled();
+    expect(result.stage).toBeUndefined();
+  });
+
+  it('reads native source fields through public serialization without changing the source contract identity', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const nativeSource = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'captured-fp',
+      sourceContentVersion: 4,
+      sourceContentJson: '{"descriptionRaw":"Captured role"}',
+      preparedPostingJson: '{"requirementCoverage":{}}',
+    };
+    const target = {
+      id: nativeSource.id,
+      sourceContentFingerprint: nativeSource.sourceContentFingerprint,
+      sourceContentVersion: nativeSource.sourceContentVersion,
+      toJSON: vi.fn(() => nativeSource),
+    };
+    const { requirementCoverageSourceDependencyFingerprint } = await import(
+      './opportunity-requirement-coverage-provider'
+    );
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(
+        async (data: SmrtJobData) =>
+          jobRecord({ id: 'source-job', ...data }) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => []),
+    };
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      { modes: 'extract' },
+      {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => target) },
+      },
+    );
+    expect(target.toJSON).toHaveBeenCalledOnce();
+    expect(requirementCoverageSourceDependencyFingerprint).toHaveBeenCalledWith(
+      nativeSource,
+    );
+    expect(result.job.args.contentFingerprint).toBe(
+      nativeSource.sourceContentFingerprint,
+    );
+    expect(result.job.args.contentVersion).toBe(
+      nativeSource.sourceContentVersion,
+    );
+    expect(result.job.args.scoringMaterialFingerprint).toBe(
+      'source-coverage-contract-seed',
+    );
+  });
+
+  it('uses native tenant-cap enqueue without a second save', async () => {
+    const job = jobRecord({ id: 'native-job' }) as unknown as SmrtJob;
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(async () => job),
+      list: vi.fn(async () => []),
+    };
+    await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      {},
+      {
+        collection,
+        opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+      },
+    );
+    expect(collection.enqueueJob).toHaveBeenCalledOnce();
+    expect(collection.create).not.toHaveBeenCalled();
+    expect(job.save).not.toHaveBeenCalled();
+  });
+
+  it('does not trust positive source JSON without its independent completed receipt', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const { hasRecordedRequirementCoverageAudit } = await import(
+      './opportunity-requirement-coverage-provider'
+    );
+    vi.mocked(hasRecordedRequirementCoverageAudit).mockResolvedValueOnce(false);
+    const { loadWorkspaceCandidateEvidence } = await import('./resume-data');
+    const result = await enqueueOpportunityIntelligenceWithStatus(
+      'opp-1',
+      {},
+      {
+        collection: {
+          create: vi.fn(),
+          enqueueJob: vi.fn(),
+          list: vi.fn(async () => []),
+        },
+        opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+      },
+    );
+    expect(result.stage).toBe('source_preparation');
+    expect(loadWorkspaceCandidateEvidence).not.toHaveBeenCalled();
+  });
+
+  it('preserves native queue-cap denial without falling back to create', async () => {
+    const capped = new Error('Native tenant in-flight cap reached.');
+    const collection = {
+      create: vi.fn(),
+      enqueueJob: vi.fn(async () => {
+        throw capped;
+      }),
+      list: vi.fn(async () => []),
+    };
+    await expect(
+      enqueueOpportunityIntelligenceWithStatus(
+        'opp-1',
+        {},
+        {
+          collection,
+          opportunityCollection: { get: vi.fn(async () => ({ id: 'opp-1' })) },
+        },
+      ),
+    ).rejects.toBe(capped);
+    expect(collection.create).not.toHaveBeenCalled();
+  });
+
   it('rejects missing opportunity ids with a stable enqueue error code', async () => {
     await expect(enqueueOpportunityIntelligence('   ')).rejects.toMatchObject({
       code: 'opportunity_id_required',
@@ -63,7 +656,6 @@ describe('opportunity intelligence jobs', () => {
         collection,
         now: runAt,
         opportunityCollection,
-        user: { id: 'user-1' },
       },
     );
 
@@ -78,7 +670,6 @@ describe('opportunity intelligence jobs', () => {
           modes: ['extract', 'score'],
           reason: 'manual',
           sourceId: 'source-1',
-          userId: 'user-1',
         }),
         maxAttempts: 1,
         method: OPPORTUNITY_INTELLIGENCE_METHOD,
@@ -89,6 +680,146 @@ describe('opportunity intelligence jobs', () => {
         timeout: OPPORTUNITY_INTELLIGENCE_TIMEOUT_MS,
       }),
     );
+  });
+
+  it('captures a verified workspace subject and creates only the assessment mode', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const created = jobRecord({ id: 'job-workspace-1' });
+    const collection = {
+      create: vi.fn(
+        async (payload: SmrtJobData) =>
+          Object.assign(created, payload) as unknown as SmrtJob,
+      ),
+      list: vi.fn(async () => [] as SmrtJob[]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+        sourceId: 'source-1',
+      })),
+    };
+
+    await enqueueOpportunityIntelligence(
+      'opp-1',
+      {},
+      {
+        collection,
+        opportunityCollection,
+      },
+    );
+
+    expect(collection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          contentFingerprint: 'source-fingerprint',
+          contentVersion: 7,
+          modes: 'assessment',
+          runtimeWorkspaceSubject: workspace.subject,
+          scoringMaterialFingerprint:
+            'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+        }),
+      }),
+    );
+  });
+
+  it('rejects a same-fingerprint active job whose durable workspace tuple is foreign', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const collection = {
+      create: vi.fn(),
+      list: vi.fn(async () => [
+        jobRecord({
+          args: {
+            contentFingerprint: 'source-fingerprint',
+            runtimeWorkspaceSubject: {
+              profileId: 'profile-2',
+              tenantId: 'tenant-2',
+              userId: 'user-2',
+            },
+            scoringMaterialFingerprint:
+              'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+          },
+          id: 'foreign-job',
+          tenantId: 'tenant-2',
+        }) as unknown as SmrtJob,
+      ]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+      })),
+    };
+
+    await expect(
+      enqueueOpportunityIntelligence(
+        'opp-1',
+        {},
+        { collection, opportunityCollection },
+      ),
+    ).rejects.toMatchObject({ code: 'opportunity_not_found' });
+    expect(collection.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a foreign active job recovered after a concurrent save conflict', async () => {
+    workspace.subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    const foreign = jobRecord({
+      args: {
+        contentFingerprint: 'source-fingerprint',
+        runtimeWorkspaceSubject: {
+          profileId: 'profile-2',
+          tenantId: 'tenant-2',
+          userId: 'user-2',
+        },
+        scoringMaterialFingerprint:
+          'tenant-1:user-1:profile-1:candidate-fingerprint:source-fingerprint:7',
+      },
+      id: 'foreign-race-job',
+      tenantId: 'tenant-2',
+    });
+    const collection = {
+      create: vi.fn(async () => {
+        throw Object.assign(
+          new Error(
+            'duplicate key value violates unique constraint "idx_smrt_jobs_opportunity_intelligence_active_fingerprint"',
+          ),
+          { code: '23505' },
+        );
+      }),
+      list: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([foreign as unknown as SmrtJob]),
+    };
+    const opportunityCollection = {
+      get: vi.fn(async () => ({
+        id: 'opp-1',
+        sourceContentFingerprint: 'source-fingerprint',
+        sourceContentVersion: 7,
+      })),
+    };
+
+    await expect(
+      enqueueOpportunityIntelligence(
+        'opp-1',
+        {},
+        { collection, opportunityCollection },
+      ),
+    ).rejects.toMatchObject({ code: 'opportunity_not_found' });
   });
 
   it('reuses an active opportunity intelligence job for the same opportunity', async () => {
@@ -338,7 +1069,7 @@ describe('opportunity intelligence jobs', () => {
     await expect(
       runOpportunityIntelligenceJob(
         { id: 'opp-1' },
-        { modes: 'all', userId: 'user-1' },
+        { modes: 'all' },
         undefined,
         { processor, updateStatus },
       ),
@@ -348,7 +1079,7 @@ describe('opportunity intelligence jobs', () => {
         modes: 'all',
         opportunityId: 'opp-1',
         signal: expect.any(AbortSignal),
-        user: { id: 'user-1' },
+        user: null,
       }),
     );
     expect(updateStatus).toHaveBeenCalledWith('opp-1', '', 'failed');
@@ -389,16 +1120,31 @@ describe('opportunity intelligence jobs', () => {
     const updateStatus = vi.fn(async () => {
       throw new Error('database temporarily unavailable');
     });
+    const workspaceSubject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
 
     await expect(
       runOpportunityIntelligenceJob(
         { id: 'opp-1', sourceContentFingerprint: 'fingerprint-v1' },
         { contentFingerprint: 'fingerprint-v1', contentVersion: 1 },
         { logger } as never,
-        { finishRun, processor, startRun, updateStatus },
+        { finishRun, processor, startRun, updateStatus, workspaceSubject },
       ),
     ).resolves.toMatchObject({ status: 'processed' });
-    expect(finishRun).toHaveBeenCalledWith('run-1', 'succeeded');
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceSubject,
+      }),
+    );
+    expect(finishRun).toHaveBeenCalledWith(
+      'run-1',
+      'succeeded',
+      '',
+      workspaceSubject,
+    );
     expect(updateStatus).toHaveBeenCalledWith(
       'opp-1',
       'fingerprint-v1',

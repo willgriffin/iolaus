@@ -19,10 +19,11 @@ import {
   getConfiguredUserAgent,
   getSafeOutboundHeaderValue,
 } from './app-config.js';
+import { cancelStaleOpportunityIntelligenceTasks } from './application-workflow.js';
 import {
-  cancelStaleOpportunityIntelligenceTasks,
-  syncRecommendedOpportunityDecisionTasks,
-} from './application-workflow.js';
+  ashbyApiCompensation,
+  atsPostingLocations,
+} from './ats-posting-metadata.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
@@ -65,6 +66,7 @@ import {
   type SourceCrawlAccounting,
   type SourceCrawlTerminalOutcome,
 } from './source-crawl-accounting.js';
+import type { SourceCrawlWriteFence } from './source-crawl-operator.js';
 import {
   completeSourceCrawl,
   failSourceCrawl,
@@ -450,6 +452,10 @@ type FencedOpportunityBackfillUpdate = (
 ) => Promise<boolean>;
 
 export interface CrawlOpportunitySourcesOptions {
+  /** Explicit intake may supply a public-only context; ordinary callers retain the native default. */
+  adapterContext?: AdapterContext;
+  /** Fresh native operator scope around catalog/accounting persistence. */
+  writeFence?: SourceCrawlWriteFence;
   dryRun?: boolean;
   enqueueOpportunityIntelligence?: OpportunityIntelligenceEnqueuer;
   fetchImpl?: FetchLike;
@@ -504,16 +510,19 @@ export interface CrawlOpportunitySourcesSummary {
 }
 
 interface GreenhouseJob {
+  company_name?: string;
   absolute_url?: string;
   content?: string;
   first_published?: string;
   id?: number | string;
   location?: { name?: string };
+  offices?: Array<{ name?: string; location?: unknown }>;
   title?: string;
   updated_at?: string;
 }
 
 interface AshbyBoardJob {
+  compensation?: unknown;
   descriptionHtml?: string;
   employmentType?: string;
   id?: string;
@@ -521,6 +530,10 @@ interface AshbyBoardJob {
   jobUrl?: string;
   location?: string;
   locationName?: string;
+  secondaryLocationNames?: string[];
+  secondaryLocations?: unknown[];
+  address?: unknown;
+  locationAddress?: unknown;
   publishedAt?: string;
   publishedDate?: string;
   title?: string;
@@ -540,6 +553,7 @@ interface LeverPostingJob {
   categories?: {
     commitment?: string;
     location?: string;
+    allLocations?: string[];
   };
 }
 
@@ -714,7 +728,7 @@ function displayTitle(value: unknown): string {
   return stringValue(value).replace(/\s+/g, ' ');
 }
 
-function companyKeyFromName(value: unknown): string {
+export function companyKeyFromName(value: unknown): string {
   return normalizeText(value).replace(/\s+/g, '-').slice(0, 96);
 }
 
@@ -1066,6 +1080,7 @@ function greenhouseJobToken(url: URL): string {
 function knownGreenhouseBoardToken(url: URL): string {
   const host = url.hostname.toLowerCase();
   const brandedGreenhouseBoards: Record<string, string> = {
+    'jobs.elastic.co': 'elastic',
     'databricks.com': 'databricks',
     'www.databricks.com': 'databricks',
     'fivetran.com': 'fivetran',
@@ -1134,11 +1149,11 @@ function ashbyBoardSlug(url: URL): string {
 }
 
 function ashbyPostingApiUrl(boardSlug: string): string {
-  return `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(boardSlug)}`;
+  return `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(boardSlug)}?includeCompensation=true`;
 }
 
 function canonicalAshbyLocation(job: AshbyBoardJob): string {
-  return stringValue(job.locationName || job.location);
+  return atsPostingLocations(job).join('; ');
 }
 
 function ashbyPublishedAt(job: AshbyBoardJob): Date | null {
@@ -1334,6 +1349,7 @@ export function candidateMatchesSource(
 
   return [
     'agent',
+    'architect',
     'automation',
     'backend',
     'data',
@@ -1408,17 +1424,21 @@ export function sourceIsCrawlable(
 
 function greenhouseResolvedDetail(
   job: GreenhouseJob,
+  companyName = '',
 ): Extract<OpportunityDetailResult, { status: 'resolved' }> {
   const descriptionRaw = htmlToPlainText(job.content);
-  const location = stringValue(job.location?.name);
+  const locations = atsPostingLocations(job);
+  const location = locations.join('; ');
   // Park raw requirement bullets in qualifications; the LLM extract step refines
   // them into atomic skills + responsibilities + qualifications.
   const qualifications = qualificationsFromDescription(descriptionRaw);
   return {
     canonicalUrl: stringValue(job.absolute_url),
+    companyName: stringValue(job.company_name) || companyName,
     descriptionRaw,
     externalId: stringValue(job.id),
     locationNotes: location,
+    locations,
     message: 'Loaded Greenhouse posting details.',
     postedAt: parseDate(job.first_published),
     provider: 'greenhouse',
@@ -1444,12 +1464,26 @@ export async function discoverGreenhouseCandidates(
     `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}/jobs?content=true`,
   );
   const jobs = data?.jobs ?? [];
+  let companyName = '';
+  try {
+    companyName = stringValue(
+      (
+        await fetchJson<{ name?: string }>(
+          fetchImpl,
+          `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}`,
+        )
+      )?.name,
+    );
+  } catch {
+    // Optional board attribution may fail independently of posting content.
+  }
 
   return jobs
     .map((job) => {
-      const detail = greenhouseResolvedDetail(job);
+      const detail = greenhouseResolvedDetail(job, companyName);
       return {
         canonicalUrl: detail.canonicalUrl,
+        companyName: detail.companyName,
         employmentType: detail.employmentType,
         externalId: detail.externalId,
         locationNotes: detail.locationNotes,
@@ -1500,6 +1534,7 @@ async function getDefaultSpider(): Promise<SpiderAdapter> {
 function ashbyCandidatesFromJobs(
   boardSlug: string,
   jobs: AshbyBoardJob[],
+  companyName = '',
 ): OpportunitySourceCandidate[] {
   return jobs
     .filter((job) => job.id && job.title)
@@ -1509,6 +1544,7 @@ function ashbyCandidatesFromJobs(
         stringValue(job.jobUrl) || canonicalAshbyUrl(boardSlug, jobId);
       const descriptionRaw = htmlToPlainText(stringValue(job.descriptionHtml));
       const locationNotes = canonicalAshbyLocation(job);
+      const locations = atsPostingLocations(job);
       const title = displayTitle(job.title);
       const workMode =
         workModeFromValue(job.workplaceType || locationNotes) ||
@@ -1516,6 +1552,7 @@ function ashbyCandidatesFromJobs(
       const postedAt = ashbyPublishedAt(job);
       return {
         canonicalUrl,
+        companyName,
         employmentType: employmentTypeFromValue(job.employmentType),
         externalId: jobId,
         locationNotes,
@@ -1526,10 +1563,12 @@ function ashbyCandidatesFromJobs(
           ? {
               resolvedDetail: {
                 canonicalUrl,
+                companyName,
                 descriptionRaw,
                 employmentType: employmentTypeFromValue(job.employmentType),
                 externalId: jobId,
                 locationNotes,
+                locations,
                 message: 'Loaded Ashby posting details.',
                 postedAt,
                 provider: 'ashby',
@@ -1537,6 +1576,9 @@ function ashbyCandidatesFromJobs(
                 status: 'resolved',
                 title,
                 workMode,
+                ...(job.compensation
+                  ? ashbyApiCompensation(job.compensation)
+                  : {}),
               } satisfies Extract<
                 OpportunityDetailResult,
                 { status: 'resolved' }
@@ -1559,16 +1601,35 @@ export async function discoverAshbyCandidates(
 
   const boardSlug = ashbyBoardSlug(url);
   if (!boardSlug) return [];
+  let companyName = '';
+  const captureEmployer = (html: string) => {
+    companyName ||= stringValue(
+      extractJsonValue<{ name?: string }>(html, '"organization":', '{')?.name,
+    );
+  };
+  const loadEmployer = async () => {
+    if (companyName) return;
+    try {
+      const response = await fetchImpl(
+        `https://jobs.ashbyhq.com/${encodeURIComponent(boardSlug)}`,
+      );
+      if (response.ok) captureEmployer(await response.text());
+    } catch {
+      // Keep missing explicit attribution unknown; never use the board slug as a company.
+    }
+  };
 
   if (
     url.hostname === 'api.ashbyhq.com' &&
     url.pathname.startsWith('/posting-api/job-board/')
   ) {
+    url.searchParams.set('includeCompensation', 'true');
     const data = await fetchJson<AshbyPostingApiResponse>(
       fetchImpl,
       url.toString(),
     );
-    return ashbyCandidatesFromJobs(boardSlug, data?.jobs ?? []);
+    await loadEmployer();
+    return ashbyCandidatesFromJobs(boardSlug, data?.jobs ?? [], companyName);
   }
 
   let jobs: AshbyBoardJob[] = [];
@@ -1579,6 +1640,7 @@ export async function discoverAshbyCandidates(
       cacheExpiry: 60 * 60 * 1000,
       timeout: 60000,
     });
+    captureEmployer(page.content);
     jobs =
       extractJsonValue<AshbyBoardJob[]>(page.content, '"jobPostings":', '[') ??
       [];
@@ -1602,12 +1664,10 @@ export async function discoverAshbyCandidates(
         },
       });
       if (response.ok) {
+        const html = await response.text();
+        captureEmployer(html);
         jobs =
-          extractJsonValue<AshbyBoardJob[]>(
-            await response.text(),
-            '"jobPostings":',
-            '[',
-          ) ?? [];
+          extractJsonValue<AshbyBoardJob[]>(html, '"jobPostings":', '[') ?? [];
       }
     } catch {
       // Keep the spider miss as a zero-candidate result; callers already record
@@ -1623,7 +1683,8 @@ export async function discoverAshbyCandidates(
     jobs = data?.jobs ?? [];
   }
 
-  return ashbyCandidatesFromJobs(boardSlug, jobs);
+  await loadEmployer();
+  return ashbyCandidatesFromJobs(boardSlug, jobs, companyName);
 }
 
 function automatticJobCategories(job: AutomatticJob): string[] {
@@ -1823,6 +1884,24 @@ export async function discoverLeverCandidates(
     `https://api.lever.co/v0/postings/${encodeURIComponent(boardSlug)}?mode=json`,
   );
   if (!Array.isArray(jobs)) return [];
+  let companyName = '';
+  try {
+    const response = await fetchImpl(
+      `https://jobs.lever.co/${encodeURIComponent(boardSlug)}`,
+    );
+    if (response.ok) {
+      const html = await response.text();
+      const boardTitle = displayTitle(
+        htmlToPlainText(
+          html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '',
+        ),
+      );
+      if (!/^(?:jobs|careers|job board)$/i.test(boardTitle))
+        companyName = boardTitle;
+    }
+  } catch {
+    // Lever's primary board title is optional employer attribution.
+  }
 
   return jobs
     .filter((job) => job.id && job.text)
@@ -1832,9 +1911,10 @@ export async function discoverLeverCandidates(
         canonicalLeverUrl(boardSlug, stringValue(job.id));
       return {
         canonicalUrl,
+        companyName,
         employmentType: employmentTypeFromValue(job.categories?.commitment),
         externalId: stringValue(job.id),
-        locationNotes: stringValue(job.categories?.location),
+        locationNotes: atsPostingLocations(job).join('; '),
         postedAt:
           typeof job.createdAt === 'number' ? new Date(job.createdAt) : null,
         postingUrl: canonicalUrl,
@@ -5392,11 +5472,11 @@ export async function discoverOpportunityCandidates(
   source: SourceLike,
   options: Pick<
     CrawlOpportunitySourcesOptions,
-    'fetchImpl' | 'includeGeneric' | 'spider'
+    'adapterContext' | 'fetchImpl' | 'includeGeneric' | 'spider'
   > = {},
 ): Promise<OpportunitySourceCandidate[]> {
   const registry = getJobAdapterRegistry();
-  const ctx = lazyAdapterContext();
+  const ctx = options.adapterContext ?? lazyAdapterContext();
   const jobSource: JobBoardSource = {
     searchQuery: stringValue(source.searchQuery),
     url: stringValue(source.url),
@@ -6205,6 +6285,7 @@ async function ensureCompanyForCandidate(
   fetchImpl: FetchLike,
   dryRun?: boolean,
   parentSourceId = '',
+  writeFence: SourceCrawlWriteFence = async (work) => await work(),
 ): Promise<string> {
   if (dryRun) return '';
   const companyName = displayTitle(candidate.companyName);
@@ -6232,50 +6313,52 @@ async function ensureCompanyForCandidate(
   const companyKey = companyKeyFromName(companyName);
   if (!companyKey) return '';
 
-  const companies = await getCollection('Company');
-  const existing =
-    (await firstRecordBy(companies, { companyKey })) ||
-    (metadata.linkedinUrl
-      ? await firstRecordBy(companies, { linkedinUrl: metadata.linkedinUrl })
-      : null) ||
-    (await firstRecordBy(companies, { name: companyName }));
+  return await writeFence(async () => {
+    const companies = await getCollection('Company');
+    const existing =
+      (await firstRecordBy(companies, { companyKey })) ||
+      (metadata.linkedinUrl
+        ? await firstRecordBy(companies, { linkedinUrl: metadata.linkedinUrl })
+        : null) ||
+      (await firstRecordBy(companies, { name: companyName }));
 
-  if (existing) {
-    let changed = false;
-    for (const [key, value] of [
-      ['careersUrl', metadata.careersUrl],
-      ['linkedinUrl', metadata.linkedinUrl],
-      ['websiteUrl', metadata.websiteUrl],
-    ] as const) {
-      if (value && !stringValue(existing[key])) {
-        existing[key] = value;
-        changed = true;
+    if (existing) {
+      let changed = false;
+      for (const [key, value] of [
+        ['careersUrl', metadata.careersUrl],
+        ['linkedinUrl', metadata.linkedinUrl],
+        ['websiteUrl', metadata.websiteUrl],
+      ] as const) {
+        if (value && !stringValue(existing[key])) {
+          existing[key] = value;
+          changed = true;
+        }
       }
+      if (changed) await existing.save();
+      await ensureCareersSourceForCompany(
+        {
+          ...metadata,
+          careersUrl: stringValue(existing.careersUrl) || metadata.careersUrl,
+          websiteUrl: stringValue(existing.websiteUrl) || metadata.websiteUrl,
+        },
+        parentSourceId,
+      );
+      return stringValue(existing.id);
     }
-    if (changed) await existing.save();
-    await ensureCareersSourceForCompany(
-      {
-        ...metadata,
-        careersUrl: stringValue(existing.careersUrl) || metadata.careersUrl,
-        websiteUrl: stringValue(existing.websiteUrl) || metadata.websiteUrl,
-      },
-      parentSourceId,
-    );
-    return stringValue(existing.id);
-  }
 
-  const company = (await companies.create({
-    careersUrl: metadata.careersUrl,
-    companyKey,
-    linkedinUrl: metadata.linkedinUrl,
-    name: companyName,
-    researchStatus:
-      metadata.careersUrl || metadata.websiteUrl ? 'partial' : 'needed',
-    websiteUrl: metadata.websiteUrl,
-  })) as unknown as MutableRecord;
-  await company.save();
-  await ensureCareersSourceForCompany(metadata, parentSourceId);
-  return stringValue(company.id);
+    const company = (await companies.create({
+      careersUrl: metadata.careersUrl,
+      companyKey,
+      linkedinUrl: metadata.linkedinUrl,
+      name: companyName,
+      researchStatus:
+        metadata.careersUrl || metadata.websiteUrl ? 'partial' : 'needed',
+      websiteUrl: metadata.websiteUrl,
+    })) as unknown as MutableRecord;
+    await company.save();
+    await ensureCareersSourceForCompany(metadata, parentSourceId);
+    return stringValue(company.id);
+  });
 }
 
 async function findExistingOpportunity(
@@ -6636,7 +6719,7 @@ function isRelistedCandidate(candidate: OpportunitySourceCandidate): boolean {
   );
 }
 
-function sourceContentForCandidate(
+export function sourceContentForCandidate(
   candidate: OpportunitySourceCandidate,
   detail: Extract<OpportunityDetailResult, { status: 'resolved' }>,
   existing: OpportunitySourceContent = {},
@@ -6690,7 +6773,7 @@ function sourceContentForCandidate(
   };
 }
 
-function sourceContentForOpportunity(
+export function sourceContentForOpportunity(
   opportunity: Record<string, unknown>,
 ): OpportunitySourceContent {
   return {
@@ -6726,7 +6809,7 @@ function storedSourceContentForOpportunity(
   );
 }
 
-function applyOpportunitySourceContent(
+export function applyOpportunitySourceContent(
   opportunity: Record<string, unknown>,
   sourceContent: OpportunitySourceContent,
 ): void {
@@ -6814,13 +6897,20 @@ const opportunityDerivedResetUpdateFields = [
   'roleTags',
   'seniority',
   'visaOrEorPossible',
+  // Eligibility is a source-bound interpretation of the posting.  It must
+  // never survive a source-content version change alongside the legacy
+  // derived fields above.
+  'postingEligibilityJson',
+  'eligibilityFlags',
+  'eligibilitySourceFingerprint',
+  'eligibilitySourceVersion',
 ] as const;
 
 function snakeCaseField(value: string): string {
   return value.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
-function opportunitySourceUpdates(
+export function opportunitySourceUpdates(
   opportunity: Record<string, unknown>,
   options: { materiallyChanged: boolean },
 ): Record<string, unknown> {
@@ -6846,7 +6936,7 @@ function opportunitySourceUpdates(
   return updates;
 }
 
-function resetOpportunityDerivedContent(
+export function resetOpportunityDerivedContent(
   opportunity: Record<string, unknown>,
 ): void {
   opportunity.applyInstructions = '';
@@ -6859,6 +6949,10 @@ function resetOpportunityDerivedContent(
   opportunity.roleTags = '';
   opportunity.seniority = 'unknown';
   opportunity.visaOrEorPossible = false;
+  opportunity.postingEligibilityJson = '';
+  opportunity.eligibilityFlags = 0;
+  opportunity.eligibilitySourceFingerprint = '';
+  opportunity.eligibilitySourceVersion = 0;
 }
 
 /**
@@ -7126,7 +7220,8 @@ export async function withOpportunityIdentityKeyLocks<T>(
   }
 }
 
-async function createOrUpdateOpportunity(options: {
+interface CreateOrUpdateOpportunityOptions {
+  writeFence?: SourceCrawlWriteFence;
   candidate: OpportunitySourceCandidate;
   detail: Extract<OpportunityDetailResult, { status: 'resolved' }>;
   dryRun?: boolean;
@@ -7146,13 +7241,29 @@ async function createOrUpdateOpportunity(options: {
     opportunityId: string,
   ) => Promise<void>;
   sourceId: string;
-}) {
+}
+
+async function createOrUpdateOpportunity(
+  options: CreateOrUpdateOpportunityOptions,
+) {
   const companyId = await ensureCompanyForCandidate(
     options.candidate,
     options.fetchImpl,
     options.dryRun,
     options.sourceId,
+    options.writeFence,
   );
+  const persist = async () =>
+    await persistSourceOpportunity(options, companyId);
+  return options.writeFence
+    ? await options.writeFence(persist)
+    : await persist();
+}
+
+async function persistSourceOpportunity(
+  options: CreateOrUpdateOpportunityOptions,
+  companyId: string,
+) {
   let existing = await findExistingOpportunity(
     options.candidate,
     options.sourceId,
@@ -7215,6 +7326,8 @@ async function createOrUpdateOpportunity(options: {
     if (materiallyChanged) {
       applyOpportunitySourceContent(next, sourceContent);
       resetOpportunityDerivedContent(next);
+      if (options.detail.locations)
+        next.locations = options.detail.locations.join('\n');
     } else {
       next.sourceContentJson = safeJson(sourceContent);
     }
@@ -7266,6 +7379,18 @@ async function createOrUpdateOpportunity(options: {
         { companyId: companyBackfill },
       );
       if (updated) existing.companyId = companyBackfill;
+    }
+
+    if (!stringValue(existing.locations) && options.detail.locations?.length) {
+      const locations = options.detail.locations.join('\n');
+      const updated = await options.fencedBackfillUpdate(
+        stringValue(existing.id),
+        contentFingerprint,
+        contentVersion,
+        { locations: existing.locations ?? null },
+        { locations },
+      );
+      if (updated) existing.locations = locations;
     }
 
     const applyUrlBackfill = stringValue(deterministicBackfills.applyUrl);
@@ -8062,13 +8187,18 @@ export async function crawlOpportunitySource(
   const intelligenceEnqueueCap = resolveOpportunityIntelligenceEnqueueCap(
     options.intelligenceEnqueueCap,
   );
-  const crawlOperation = await createSourceCrawl(
-    source,
-    intelligenceEnqueueCap,
-    options.jobId,
-    options.jobAttempt,
-    options.dryRun,
-    options.sourceCrawlId,
+  const writeFence: SourceCrawlWriteFence =
+    options.writeFence ?? (async (work) => await work());
+  const crawlOperation = await writeFence(
+    async () =>
+      await createSourceCrawl(
+        source,
+        intelligenceEnqueueCap,
+        options.jobId,
+        options.jobAttempt,
+        options.dryRun,
+        options.sourceCrawlId,
+      ),
   );
   const crawl = crawlOperation.crawl;
   if (crawl && crawlOperation.skipExecution) {
@@ -8081,8 +8211,23 @@ export async function crawlOpportunitySource(
       options.sourceCrawlAccounting ??
       (await getSourceCrawlAccountingWriter(options.dryRun));
   } catch (error) {
-    await markCrawlFailed(crawl, error, options.dryRun);
+    await writeFence(
+      async () => await markCrawlFailed(crawl, error, options.dryRun),
+    );
     throw error;
+  }
+  // Each accounting method can mutate durable attempt state, including recovery.
+  // Fence the actual invocation rather than keeping an entry-time permission snapshot.
+  if (options.writeFence) {
+    accountingWriter = new Proxy(accountingWriter, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function'
+          ? (...args: unknown[]) =>
+              writeFence(async () => await value.apply(target, args))
+          : value;
+      },
+    });
   }
   const intelligenceEnqueuer =
     options.enqueueOpportunityIntelligence ??
@@ -8090,20 +8235,29 @@ export async function crawlOpportunitySource(
   const activeIntelligenceJobFinder =
     options.findActiveOpportunityIntelligenceJob ??
     findActiveOpportunityIntelligenceJob;
-  const fencedSourceUpdate =
+  const sourceUpdate =
     options.fencedOpportunitySourceUpdate ??
     defaultFencedOpportunitySourceUpdate;
-  const fencedIntelligenceUpdate =
+  const fencedSourceUpdate: FencedOpportunitySourceUpdate = async (...args) =>
+    await writeFence(async () => await sourceUpdate(...args));
+  const intelligenceUpdate =
     options.fencedOpportunityIntelligenceUpdate ??
     defaultFencedOpportunityIntelligenceUpdate;
-  const fencedBackfillUpdate =
+  const fencedIntelligenceUpdate: FencedOpportunityIntelligenceUpdate = async (
+    ...args
+  ) => await writeFence(async () => await intelligenceUpdate(...args));
+  const backfillUpdate =
     options.fencedOpportunityBackfillUpdate ??
     defaultFencedOpportunityBackfillUpdate;
-  const fencedStatusUpdate =
+  const fencedBackfillUpdate: FencedOpportunityBackfillUpdate = async (
+    ...args
+  ) => await writeFence(async () => await backfillUpdate(...args));
+  const statusUpdate =
     options.fencedOpportunityStatusUpdate ??
     defaultFencedOpportunityStatusUpdate;
+  const fencedStatusUpdate: FencedOpportunityStatusUpdate = async (...args) =>
+    await writeFence(async () => await statusUpdate(...args));
   const enqueueBudget = { used: 0 };
-  let recommendationTasksNeedSync = false;
   const seenOpportunityIdentities = new Set<string>();
   const seenOpportunityIds = new Set<string>();
   /**
@@ -8261,6 +8415,7 @@ export async function crawlOpportunitySource(
             fetchImpl,
             options.dryRun,
             sourceId,
+            options.writeFence,
           );
           await finishAttempt({
             outcome: 'skipped',
@@ -8361,6 +8516,7 @@ export async function crawlOpportunitySource(
           options.dryRun,
           async () =>
             await createOrUpdateOpportunity({
+              writeFence: options.writeFence,
               candidate: resolvedCandidate,
               detail,
               dryRun: options.dryRun,
@@ -8445,13 +8601,17 @@ export async function crawlOpportunitySource(
           if (outcome === 'relisted') summary.relisted += 1;
           else summary.reused += 1;
         }
-        recommendationTasksNeedSync ||= result.recommendationInvalidated;
+        // Catalog crawls cannot create private recommendation tasks: they
+        // have no authenticated candidate workspace subject.
         if (result.materiallyChanged && !options.dryRun) {
           try {
-            await cancelStaleOpportunityIntelligenceTasks(
-              result.opportunityId,
-              result.contentFingerprint,
-              result.contentVersion,
+            await writeFence(
+              async () =>
+                await cancelStaleOpportunityIntelligenceTasks(
+                  result.opportunityId,
+                  result.contentFingerprint,
+                  result.contentVersion,
+                ),
             );
           } catch (error) {
             summary.errors.push(
@@ -8460,24 +8620,27 @@ export async function crawlOpportunitySource(
           }
         }
 
-        await enqueueSavedOpportunityIntelligence({
-          candidate: resolvedCandidate,
-          contentFingerprint: result.contentFingerprint,
-          contentVersion: result.contentVersion,
-          crawlItem: crawlItem as unknown as MutableRecord | null,
-          dryRun: options.dryRun,
-          enqueueCap: intelligenceEnqueueCap,
-          enqueueBudget,
-          enqueuer: intelligenceEnqueuer,
-          findActiveJob: activeIntelligenceJobFinder,
-          intelligenceEligible: result.intelligenceEligible,
-          opportunity: result.opportunity as MutableRecord,
-          opportunityIntelligenceUpdate: fencedIntelligenceUpdate,
-          opportunityId: result.opportunityId,
-          sourceCrawlId,
-          sourceId,
-          summary,
-        });
+        await writeFence(
+          async () =>
+            await enqueueSavedOpportunityIntelligence({
+              candidate: resolvedCandidate,
+              contentFingerprint: result.contentFingerprint,
+              contentVersion: result.contentVersion,
+              crawlItem: crawlItem as unknown as MutableRecord | null,
+              dryRun: options.dryRun,
+              enqueueCap: intelligenceEnqueueCap,
+              enqueueBudget,
+              enqueuer: intelligenceEnqueuer,
+              findActiveJob: activeIntelligenceJobFinder,
+              intelligenceEligible: result.intelligenceEligible,
+              opportunity: result.opportunity as MutableRecord,
+              opportunityIntelligenceUpdate: fencedIntelligenceUpdate,
+              opportunityId: result.opportunityId,
+              sourceCrawlId,
+              sourceId,
+              summary,
+            }),
+        );
       } catch (error) {
         const message = boundedCrawlErrorMessage(error);
         const diagnostic = boundedCrawlError(candidate, error);
@@ -8542,10 +8705,6 @@ export async function crawlOpportunitySource(
       }
     }
 
-    if (recommendationTasksNeedSync && !options.dryRun) {
-      await syncRecommendedOpportunityDecisionTasks();
-    }
-
     if (sourceCrawlId && accountingWriter.durable !== false) {
       const accounting = await accountingWriter.reconcile(sourceCrawlId, {
         requireTerminal: true,
@@ -8575,13 +8734,16 @@ export async function crawlOpportunitySource(
       seenOpportunityIds.size > 0;
     if (boardReconciler && (reconcileAbsence || refreshSeen)) {
       try {
-        await boardReconciler({
-          now: new Date(),
-          reconcileAbsence,
-          seenOpportunityIds: [...seenOpportunityIds],
-          sourceCrawlId,
-          sourceId,
-        });
+        await writeFence(
+          async () =>
+            await boardReconciler({
+              now: new Date(),
+              reconcileAbsence,
+              seenOpportunityIds: [...seenOpportunityIds],
+              sourceCrawlId,
+              sourceId,
+            }),
+        );
       } catch (error) {
         summary.errors.push(
           `Board reconciliation failed: ${boundedCrawlErrorMessage(error)}`,
@@ -8589,10 +8751,14 @@ export async function crawlOpportunitySource(
       }
     }
 
-    await markCrawlFinished(crawl, summary, options.dryRun);
+    await writeFence(
+      async () => await markCrawlFinished(crawl, summary, options.dryRun),
+    );
     return summary;
   } catch (error) {
-    await markCrawlFailed(crawl, error, options.dryRun);
+    await writeFence(
+      async () => await markCrawlFailed(crawl, error, options.dryRun),
+    );
     throw error;
   }
 }

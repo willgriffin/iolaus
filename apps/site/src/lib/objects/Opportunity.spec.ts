@@ -13,6 +13,12 @@ const { runOpportunityIntelligenceJob } = vi.hoisted(() => ({
     status: 'processed',
   })),
 }));
+const { runOpportunityAssessmentDependencyJob } = vi.hoisted(() => ({
+  runOpportunityAssessmentDependencyJob: vi.fn(async () => ({
+    message: 'Prepared source coverage.',
+    status: 'prepared',
+  })),
+}));
 
 vi.mock('../server/opportunity-intelligence-job.js', async (importOriginal) => {
   const actual =
@@ -24,6 +30,9 @@ vi.mock('../server/opportunity-intelligence-job.js', async (importOriginal) => {
     runOpportunityIntelligenceJob,
   };
 });
+vi.mock('../server/opportunity-assessment-dependency-job.js', () => ({
+  runOpportunityAssessmentDependencyJob,
+}));
 
 describe('Opportunity TaskRunner loading', () => {
   beforeEach(() => {
@@ -46,7 +55,7 @@ describe('Opportunity TaskRunner loading', () => {
     expect(baseLoad).toHaveBeenCalledOnce();
   });
 
-  it('registers the queued object type and exposes the processIntelligence method', async () => {
+  it('registers the queued object type and rejects a shape-only fake job context', async () => {
     const registeredClass = ObjectRegistry.getClass(
       OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
     );
@@ -54,22 +63,29 @@ describe('Opportunity TaskRunner loading', () => {
 
     const opportunity = new Opportunity();
     opportunity.id = 'opp-1';
-    const args = { modes: 'all', userId: 'user-1' } as const;
-    const context = { logger: { error: vi.fn(), info: vi.fn() } } as never;
+    const args = { modes: 'all' } as const;
+    const context = {
+      job: { tenantId: 'tenant-1' },
+      logger: { error: vi.fn(), info: vi.fn() },
+    } as never;
     expect(typeof opportunity[OPPORTUNITY_INTELLIGENCE_METHOD]).toBe(
       'function',
     );
 
-    const result = await opportunity.processIntelligence(args, context);
+    await expect(
+      opportunity.processIntelligence(args, context),
+    ).rejects.toThrow('active TaskRunner execution context');
+    expect(runOpportunityIntelligenceJob).not.toHaveBeenCalled();
+  });
 
-    expect(result).toEqual({
-      message: 'Processed opportunity intelligence.',
-      status: 'processed',
-    });
-    expect(runOpportunityIntelligenceJob).toHaveBeenCalledWith(
-      opportunity,
-      args,
-      context,
-    );
+  it('keeps assessment coverage preparation behind the same authentic runner seam', async () => {
+    const opportunity = new Opportunity();
+    opportunity.id = 'opp-1';
+    const context = { job: { tenantId: 'tenant-1' } } as never;
+
+    await expect(
+      opportunity.prepareAssessmentCoverage({}, context),
+    ).rejects.toThrow('active TaskRunner execution context');
+    expect(runOpportunityAssessmentDependencyJob).not.toHaveBeenCalled();
   });
 });

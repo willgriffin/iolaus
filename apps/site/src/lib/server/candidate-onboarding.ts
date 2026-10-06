@@ -2,10 +2,19 @@ import {
   resolveDatabase,
   type SmrtClassOptions,
 } from '@happyvertical/smrt-core';
+import { parseConfirmedCandidateSkills } from '../candidate-skill-discovery.js';
 import {
   normalizeAnswerLabel,
   reusableAnswerLabelKey,
 } from './candidate-answers.js';
+import {
+  applyBasicWorkEligibility,
+  type BasicWorkEligibilityAnswers,
+} from './candidate-work-eligibility.js';
+import {
+  countryReferenceFromCode,
+  normalizeCountryReferences,
+} from './country-reference.js';
 import { getDbConfig } from './db.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
@@ -33,6 +42,9 @@ export interface CandidateFactState {
 }
 
 export interface CandidateOnboardingInput {
+  basicWorkEligibility?: BasicWorkEligibilityAnswers;
+  authorizedWorkCountries?: string[];
+  citizenshipCountries?: string[];
   demographics?: Record<string, string>;
   email?: string;
   firstName?: string;
@@ -49,12 +61,26 @@ export interface CandidateOnboardingInput {
     saveForReuse: boolean;
     value: string;
   }>;
+  residenceCountry?: string;
   resumeAssetId?: string;
   resumeSource?: 'existing_asset' | 'not_selected' | 'upload_later';
   saveVoluntaryDemographics?: boolean;
+  sponsorshipRequired?: 'yes' | 'no' | 'unknown';
   summary?: string;
+  targetWorkCountry?: string;
   title?: string;
   workAuthorization?: string;
+}
+
+/**
+ * The only authority accepted by private candidate persistence.  Callers must
+ * resolve this from the authenticated request; profile selection is never
+ * inferred from a global/default row.
+ */
+export interface CandidateOnboardingSubject {
+  tenantId: string;
+  userId: string;
+  profileId?: string;
 }
 
 type MutableRecord = Record<string, unknown> & {
@@ -80,6 +106,58 @@ type TransactionalOnboardingDatabase = OnboardingDatabase & {
   ) => Promise<T>;
 };
 
+const MAX_SUBJECT_ID_LENGTH = 160;
+
+function requiredSubjectId(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`A valid candidate ${label} is required.`);
+  }
+  const id = value.trim();
+  if (
+    !id ||
+    id.length > MAX_SUBJECT_ID_LENGTH ||
+    [...id].some((character) => character.charCodeAt(0) < 32)
+  ) {
+    throw new Error(`A valid candidate ${label} is required.`);
+  }
+  return id;
+}
+
+/** Reject malformed or partial scope before any collection query or mutation. */
+export function requireCandidateOnboardingSubject(
+  subject: CandidateOnboardingSubject,
+): CandidateOnboardingSubject {
+  return {
+    tenantId: requiredSubjectId(subject?.tenantId, 'tenant ID'),
+    userId: requiredSubjectId(subject?.userId, 'user ID'),
+    ...(subject?.profileId === undefined
+      ? {}
+      : { profileId: requiredSubjectId(subject.profileId, 'profile ID') }),
+  };
+}
+
+function requireCandidateProfileSubject(
+  subject: CandidateOnboardingSubject,
+): Required<CandidateOnboardingSubject> {
+  const verified = requireCandidateOnboardingSubject(subject);
+  return {
+    ...verified,
+    profileId: requiredSubjectId(verified.profileId, 'profile ID'),
+  };
+}
+
+function subjectWhere(subject: Required<CandidateOnboardingSubject>) {
+  return {
+    candidateProfileId: subject.profileId,
+    ownerUserId: subject.userId,
+    tenantId: subject.tenantId,
+  };
+}
+
+function profileWhere(subject: CandidateOnboardingSubject) {
+  return { ownerUserId: subject.userId, tenantId: subject.tenantId };
+}
+
 /**
  * Claim an unowned resume in a single conditional write. The predicate is
  * deliberately re-evaluated by the database at write time, rather than
@@ -88,20 +166,26 @@ type TransactionalOnboardingDatabase = OnboardingDatabase & {
 export async function claimResumeAssetAtomically(
   database: Pick<OnboardingDatabase, 'query'>,
   assetId: string,
-  profileId: string,
+  subject: CandidateOnboardingSubject,
 ): Promise<boolean> {
+  const scope = requireCandidateProfileSubject(subject);
+  const id = requiredSubjectId(assetId, 'resume asset ID');
   const result = await database.query(
     `UPDATE resume_assets
        SET candidate_profile_id = ?
      WHERE id = ?
        AND asset_type = 'resume'
+       AND tenant_id = ?
+       AND owner_user_id = ?
        AND (candidate_profile_id IS NULL
          OR candidate_profile_id = ''
          OR candidate_profile_id = ?)
    RETURNING id`,
-    profileId,
-    assetId,
-    profileId,
+    scope.profileId,
+    id,
+    scope.tenantId,
+    scope.userId,
+    scope.profileId,
   );
   return Array.isArray(result.rows) && result.rows.length === 1;
 }
@@ -117,6 +201,42 @@ export interface CandidateOnboardingResult {
   profile: MutableRecord;
   savedForReuse: number;
   selectedResumeAssetId: string;
+}
+
+/** Withdraw reuse consent only inside the verified profile that created it. */
+export async function revokeCandidateOnboardingReusableAnswer(
+  labelKey: string,
+  subject: CandidateOnboardingSubject,
+  suppliedCollection?: Collection,
+): Promise<number> {
+  const scope = requireCandidateProfileSubject(subject);
+  const normalized = stringValue(labelKey, 500);
+  if (!normalized) throw new Error('A reusable answer label key is required.');
+  const collection =
+    suppliedCollection ??
+    ((await getCollection('CandidateAnswer')) as unknown as Collection);
+  const rows = await collection.list({
+    limit: 500,
+    orderBy: 'updated_at DESC',
+    where: subjectWhere(scope),
+  });
+  let revoked = 0;
+  for (const row of rows) {
+    if (
+      reusableAnswerLabelKey(row) !== normalized ||
+      row.active === false ||
+      String(row.tenantId ?? '') !== scope.tenantId ||
+      String(row.ownerUserId ?? '') !== scope.userId ||
+      String(row.candidateProfileId ?? '') !== scope.profileId
+    ) {
+      continue;
+    }
+    row.active = false;
+    row.revokedForReuseAt = new Date();
+    await row.save();
+    revoked += 1;
+  }
+  return revoked;
 }
 
 /**
@@ -155,6 +275,22 @@ function stringValue(value: unknown, maximum = MAX_FACT_LENGTH): string {
     );
   }
   return text;
+}
+
+function countryReference(value: unknown) {
+  return countryReferenceFromCode(stringValue(value, 8));
+}
+
+function countryReferences(values: string[] | undefined) {
+  return normalizeCountryReferences(
+    (values ?? []).map((value) => countryReference(value)),
+  );
+}
+
+function sponsorshipRequirement(
+  value: CandidateOnboardingInput['sponsorshipRequired'],
+): boolean | 'unknown' {
+  return value === 'yes' ? true : value === 'no' ? false : 'unknown';
 }
 
 function profileKey(value: unknown): string {
@@ -216,7 +352,16 @@ export function candidateFactState(
     location: stringValue(input.location),
     name: stringValue(input.name),
     phone: stringValue(input.phone),
+    sponsorshipRequired:
+      input.sponsorshipRequired === 'yes'
+        ? 'yes'
+        : input.sponsorshipRequired === 'no'
+          ? 'no'
+          : '',
     summary: stringValue(input.summary),
+    targetWorkCountryJson: JSON.stringify(
+      countryReference(input.targetWorkCountry) ?? {},
+    ),
     title: stringValue(input.title),
     workAuthorization: stringValue(input.workAuthorization),
   };
@@ -265,19 +410,23 @@ async function defaultCollections(
 
 async function findDefaultProfile(
   collection: Collection,
+  subject: CandidateOnboardingSubject,
 ): Promise<MutableRecord | null> {
+  if (!subject.profileId) return null;
   const rows = await collection.list({
     limit: 100,
     orderBy: 'updated_at DESC',
-    where: { profileKey: PROFILE_KEY },
+    where: profileWhere(subject),
   });
-  return rows.find((row) => row.active !== false) ?? rows[0] ?? null;
+  return (
+    rows.find((row) => stringValue(row.id, 160) === subject.profileId) ?? null
+  );
 }
 
 async function saveExplicitReusableAnswer(options: {
   collection: Collection;
   label: string;
-  profileKey: string;
+  subject: Required<CandidateOnboardingSubject>;
   value: string;
 }): Promise<void> {
   const label = stringValue(options.label, 500);
@@ -288,7 +437,7 @@ async function saveExplicitReusableAnswer(options: {
   const existing = await options.collection.list({
     limit: 500,
     orderBy: 'updated_at DESC',
-    where: { profileKey: options.profileKey },
+    where: subjectWhere(options.subject),
   });
   const matching = existing.filter(
     (row) => reusableAnswerLabelKey(row) === labelKey,
@@ -310,7 +459,8 @@ async function saveExplicitReusableAnswer(options: {
       active: true,
       label,
       labelKey,
-      profileKey: options.profileKey,
+      ...subjectWhere(options.subject),
+      profileKey: PROFILE_KEY,
       provenance: 'explicit_reusable_answer',
       revokedForReuseAt: null,
       savedForReuseAt: now,
@@ -333,10 +483,11 @@ async function selectResumeAsset(options: {
   claimResumeAsset?: AtomicResumeAssetClaim;
   collection: Collection;
   profile: MutableRecord;
+  subject: Required<CandidateOnboardingSubject>;
 }): Promise<string> {
   const id = stringValue(options.assetId, 160);
   if (!id) return '';
-  const profileId = stringValue(options.profile.id, 160);
+  const profileId = options.subject.profileId;
   if (options.claimResumeAsset) {
     if (!profileId || !(await options.claimResumeAsset(id, profileId))) {
       throw new Error(
@@ -352,6 +503,12 @@ async function selectResumeAsset(options: {
     );
   }
   const owner = stringValue(asset.candidateProfileId, 160);
+  if (
+    stringValue(asset.tenantId, 160) !== options.subject.tenantId ||
+    stringValue(asset.ownerUserId, 160) !== options.subject.userId
+  ) {
+    throw new Error('The selected resume asset belongs to another profile.');
+  }
   if (owner && profileId && owner !== profileId) {
     throw new Error('The selected resume asset belongs to another profile.');
   }
@@ -370,7 +527,7 @@ async function selectResumeAsset(options: {
 async function validateResumeAssetSelection(options: {
   assetId: string;
   collection: Collection;
-  profileId?: string;
+  subject: CandidateOnboardingSubject;
 }): Promise<void> {
   const id = stringValue(options.assetId, 160);
   if (!id) return;
@@ -381,7 +538,13 @@ async function validateResumeAssetSelection(options: {
     );
   }
   const owner = stringValue(asset.candidateProfileId, 160);
-  const profileId = stringValue(options.profileId, 160);
+  if (
+    stringValue(asset.tenantId, 160) !== options.subject.tenantId ||
+    stringValue(asset.ownerUserId, 160) !== options.subject.userId
+  ) {
+    throw new Error('The selected resume asset belongs to another profile.');
+  }
+  const profileId = options.subject.profileId;
   if (owner && owner !== profileId) {
     throw new Error('The selected resume asset belongs to another profile.');
   }
@@ -394,10 +557,76 @@ async function validateResumeAssetSelection(options: {
  */
 export async function persistCandidateOnboarding(
   input: CandidateOnboardingInput,
+  subject: CandidateOnboardingSubject,
   collections: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
+  const scope = requireCandidateOnboardingSubject(subject);
   const key = profileKey(input.profileKey);
-  const facts = candidateFactState(input);
+  const profile = await findDefaultProfile(
+    collections.candidateProfiles,
+    scope,
+  );
+  const basic = input.basicWorkEligibility
+    ? applyBasicWorkEligibility(profile ?? {}, input.basicWorkEligibility, {
+        authorizedWorkCountries: input.authorizedWorkCountries,
+      })
+    : undefined;
+  const factInput = {
+    ...input,
+    ...(basic?.workAuthorization && input.workAuthorization === undefined
+      ? { workAuthorization: basic.workAuthorization }
+      : {}),
+  };
+  const facts = candidateFactState(factInput);
+  if (basic) {
+    // Omitted advanced facts keep their original provenance; a basic save does not reconfirm them.
+    let previous: CandidateFactState | undefined;
+    try {
+      previous = JSON.parse(String(profile?.factsJson ?? '{}'));
+    } catch {
+      /* Malformed legacy facts remain unverified. */
+    }
+    for (const [key, submitted] of [
+      ['targetWorkCountryJson', input.targetWorkCountry],
+      ['workAuthorization', factInput.workAuthorization],
+      ['sponsorshipRequired', input.sponsorshipRequired],
+    ] as const) {
+      if (submitted !== undefined) continue;
+      delete facts.facts[key];
+      const old = previous?.version === 1 ? previous.facts?.[key] : undefined;
+      if (
+        old &&
+        typeof old.value === 'string' &&
+        ['user_verified', 'safe_derivation'].includes(old.provenance)
+      )
+        facts.facts[key] = old;
+    }
+    facts.unresolvedQuestions = requiredCandidateFacts
+      .filter(([key]) => !facts.facts[key])
+      .map(([, label]) => label);
+  }
+  // These private career facts have their own explicit review workflows. Profile
+  // form data cannot replace or assert them, including on advanced saves.
+  const privateCareerFacts: Record<string, unknown> = {};
+  const confirmations = parseConfirmedCandidateSkills(profile?.factsJson);
+  if (confirmations.length) privateCareerFacts.confirmedSkills = confirmations;
+  try {
+    const previous = JSON.parse(String(profile?.factsJson ?? '{}'));
+    const note =
+      previous?.version === 1 ? previous.facts?.skillExperience : undefined;
+    if (
+      note?.provenance === 'user_verified' &&
+      typeof note.value === 'string' &&
+      note.value.trim() &&
+      note.value.length <= 4000
+    )
+      privateCareerFacts.skillExperience = {
+        value: note.value,
+        provenance: 'user_verified',
+      };
+  } catch {
+    /* Malformed legacy facts cannot become confirmed career evidence. */
+  }
   const now = new Date();
   const selectedResumeAssetId = stringValue(input.resumeAssetId, 160);
   const resumeSource = selectedResumeAssetId
@@ -406,6 +635,15 @@ export async function persistCandidateOnboarding(
       ? 'upload_later'
       : 'not_selected';
   const profileValues = {
+    authorizedWorkCountriesJson: JSON.stringify(
+      countryReferences(input.authorizedWorkCountries).map((country) => ({
+        country,
+        scope: 'country',
+      })),
+    ),
+    citizenshipsJson: JSON.stringify(
+      countryReferences(input.citizenshipCountries),
+    ),
     demographicsConsentAt: input.saveVoluntaryDemographics ? now : null,
     demographicsJson: JSON.stringify(
       input.saveVoluntaryDemographics
@@ -413,7 +651,10 @@ export async function persistCandidateOnboarding(
         : {},
     ),
     email: stringValue(input.email),
-    factsJson: JSON.stringify(facts),
+    factsJson: JSON.stringify({
+      ...facts,
+      facts: { ...facts.facts, ...privateCareerFacts },
+    }),
     firstName: stringValue(input.firstName),
     githubUrl: stringValue(input.githubUrl),
     isDefault: true,
@@ -425,26 +666,66 @@ export async function persistCandidateOnboarding(
     phone: stringValue(input.phone),
     preferencesJson: JSON.stringify(compactPreferences(input.preferences)),
     profileKey: key,
+    residenceCountryJson: JSON.stringify(
+      countryReference(input.residenceCountry) ?? {},
+    ),
     resumeAssetId: selectedResumeAssetId,
     resumeSource,
+    sponsorshipRequired: sponsorshipRequirement(input.sponsorshipRequired),
     summary: stringValue(input.summary),
+    targetWorkCountryJson: JSON.stringify(
+      countryReference(input.targetWorkCountry) ?? {},
+    ),
     title: stringValue(input.title),
     workAuthorization: stringValue(input.workAuthorization),
   };
 
-  const profile = await findDefaultProfile(collections.candidateProfiles);
+  if (basic) {
+    profileValues.authorizedWorkCountriesJson =
+      basic.authorizedWorkCountriesJson;
+    profileValues.citizenshipsJson = basic.citizenshipsJson;
+    const mergedPreferences = { ...basic.preferences };
+    // An explicitly cleared search preference clears that key; omitted keys survive.
+    for (const preferenceKey of Object.keys(input.preferences ?? {}))
+      delete mergedPreferences[preferenceKey];
+    profileValues.preferencesJson = JSON.stringify({
+      ...mergedPreferences,
+      ...compactPreferences(input.preferences),
+    });
+    if (input.residenceCountry === undefined)
+      profileValues.residenceCountryJson = String(
+        profile?.residenceCountryJson ?? '{}',
+      );
+    if (input.targetWorkCountry === undefined)
+      profileValues.targetWorkCountryJson = String(
+        profile?.targetWorkCountryJson ?? '{}',
+      );
+    if (input.sponsorshipRequired === undefined)
+      profileValues.sponsorshipRequired = sponsorshipRequirement(
+        profile?.sponsorshipRequired === true
+          ? 'yes'
+          : profile?.sponsorshipRequired === false
+            ? 'no'
+            : 'unknown',
+      );
+    profileValues.workAuthorization =
+      input.workAuthorization !== undefined
+        ? stringValue(input.workAuthorization)
+        : (basic.workAuthorization ?? String(profile?.workAuthorization ?? ''));
+  }
   if (!collections.claimResumeAsset) {
     await validateResumeAssetSelection({
       assetId: selectedResumeAssetId,
       collection: collections.resumeAssets,
-      profileId: profile?.id,
+      subject: scope,
     });
   }
   const savedProfile = profile
     ? Object.assign(profile, profileValues)
     : await collections.candidateProfiles.create({
         active: true,
-        id: DEFAULT_CANDIDATE_PROFILE_ID,
+        ownerUserId: scope.userId,
+        tenantId: scope.tenantId,
         ...profileValues,
       });
   const selectedAsset = await selectResumeAsset({
@@ -452,6 +733,10 @@ export async function persistCandidateOnboarding(
     claimResumeAsset: collections.claimResumeAsset,
     collection: collections.resumeAssets,
     profile: savedProfile,
+    subject: requireCandidateProfileSubject({
+      ...scope,
+      profileId: stringValue(savedProfile.id, 160),
+    }),
   });
   await savedProfile.save();
 
@@ -465,7 +750,10 @@ export async function persistCandidateOnboarding(
     await saveExplicitReusableAnswer({
       collection: collections.candidateAnswers,
       label,
-      profileKey: key,
+      subject: requireCandidateProfileSubject({
+        ...scope,
+        profileId: stringValue(savedProfile.id, 160),
+      }),
       value,
     });
     savedForReuse += 1;
@@ -485,10 +773,15 @@ export async function persistCandidateOnboarding(
  */
 export async function saveCandidateOnboarding(
   input: CandidateOnboardingInput,
+  subject: CandidateOnboardingSubject,
   suppliedCollections?: CandidateOnboardingCollections,
 ): Promise<CandidateOnboardingResult> {
   if (suppliedCollections) {
-    return await persistCandidateOnboarding(input, suppliedCollections);
+    return await persistCandidateOnboarding(
+      input,
+      subject,
+      suppliedCollections,
+    );
   }
 
   const options = getRequestScopedSmrtOptions();
@@ -503,8 +796,11 @@ export async function saveCandidateOnboarding(
     const collections = await defaultCollections(
       { db: transaction },
       async (assetId, profileId) =>
-        await claimResumeAssetAtomically(transaction, assetId, profileId),
+        await claimResumeAssetAtomically(transaction, assetId, {
+          ...subject,
+          profileId,
+        }),
     );
-    return await persistCandidateOnboarding(input, collections);
+    return await persistCandidateOnboarding(input, subject, collections);
   });
 }

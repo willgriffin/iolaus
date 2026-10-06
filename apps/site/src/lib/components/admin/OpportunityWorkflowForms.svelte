@@ -24,11 +24,14 @@ let {
   draftApplicationAction = '?/createDraftApplication',
   factIntakeAction = '?/createFactIntake',
   compact = false,
+  flat = false,
 } = $props<{
   record: AdminRecord;
   draftApplicationAction?: string;
   factIntakeAction?: string;
   compact?: boolean;
+  /** Detail pages use section spacing instead of nested form cards. */
+  flat?: boolean;
 }>();
 
 function str(key: string): string {
@@ -60,7 +63,7 @@ const applicationId = $derived(str('applicationId'));
 const factIntakeCount = $derived(Number(record.factIntakeCount ?? 0) || 0);
 </script>
 
-<div class="workflow-forms" class:compact>
+<div class="workflow-forms" class:compact class:flat>
   <section class="workflow-section" aria-label="Application package">
     <div class="section-head">
       <h3><FileText size={13} strokeWidth={2.2} /> Application</h3>
@@ -283,7 +286,55 @@ const factIntakeCount = $derived(Number(record.factIntakeCount ?? 0) || 0);
     padding: 8px;
   }
 
+  .flat {
+    gap: 24px;
+  }
+
+  .flat .workflow-section {
+    gap: 12px;
+  }
+
+  .flat .workflow-section + .workflow-section {
+    padding-top: 20px;
+    border-top: 1px solid var(--smrt-color-outline-variant);
+  }
+
+  .flat .section-head {
+    flex-wrap: wrap;
+  }
+
+  .flat .section-link {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .flat .stack-form {
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .flat .stack-form select,
+  .flat .stack-form input,
+  .flat .stack-form textarea {
+    min-height: 40px;
+    padding: 8px 10px;
+  }
+
   @media (max-width: 720px) {
+    .flat .stack-form select,
+    .flat .stack-form input,
+    .flat .stack-form textarea,
+    .flat .workflow-submit {
+      min-height: 44px;
+    }
+
+    .flat .section-link {
+      margin-left: 0;
+    }
+
     .grid-form {
       grid-template-columns: minmax(0, 1fr);
     }

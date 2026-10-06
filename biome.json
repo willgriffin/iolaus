@@ -1,8 +1,9 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.12/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
   "files": {
     "includes": [
       "apps/*/src/**/*.{js,ts,tsx,jsx,svelte}",
+      "!apps/site/src/lib/components/mcp-apps/generated",
       "apps/site/scripts/db-doctor.ts",
       "apps/site/scripts/skill-matching-live.ts",
       "apps/site/scripts/db-export.ts",
@@ -35,7 +36,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "suspicious": {
         "noExplicitAny": "info",
         "noArrayIndexKey": "warn",

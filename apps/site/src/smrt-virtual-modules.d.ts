@@ -4,10 +4,10 @@ declare module '@happyvertical/smrt-virt-web' {
     WebMcpRegistrationDefinition,
   } from '@happyvertical/smrt-web';
 
+  // The generated public registry excludes private admin models. Their curated
+  // UI collection metadata lives in admin-resource-definitions.ts instead.
   export interface SmrtWebCollectionDefinitions {
-    applications: SmrtWebCollectionDefinition<Record<string, unknown>>;
-    opportunities: SmrtWebCollectionDefinition<Record<string, unknown>>;
-    tasks: SmrtWebCollectionDefinition<Record<string, unknown>>;
+    [name: string]: SmrtWebCollectionDefinition<Record<string, unknown>>;
   }
 
   export const collectionDefinitions: SmrtWebCollectionDefinitions;

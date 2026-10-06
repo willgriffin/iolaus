@@ -1,12 +1,22 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'fact_intakes',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Raw candidate-provided text is private input and must never be exposed by
+  // a generated data surface.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class FactIntake extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text', required: true })
+  ownerUserId = '';
+  @field({ type: 'text', required: true })
+  candidateProfileId = '';
   @field({ type: 'text' })
   sourceKind = 'story';
   @field({ type: 'text' })

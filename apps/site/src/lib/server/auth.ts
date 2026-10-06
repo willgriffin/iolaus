@@ -32,6 +32,7 @@ import {
 } from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 import { provisionHostedOidcUser } from './hosted-oidc-provisioning.js';
+import { seedSystemRolesWithPermissions } from './role-permissions.js';
 
 const appConfig = getAppConfig();
 
@@ -266,6 +267,21 @@ export function isAuthorizedOidcAdmin(
   return allowedEmails.has(email);
 }
 
+/**
+ * A shared installation admits every identity with a verified email and gives
+ * it a tenant of its own. Private installations retain the operator allowlist.
+ */
+export function isAuthorizedHostedOidcUser(
+  claims: Pick<TokenClaims, 'email' | 'email_verified'>,
+): boolean {
+  if (claims.email_verified !== true || !normalizeLoginEmail(claims.email)) {
+    return false;
+  }
+  return (
+    getAppConfig().workspaceMode === 'shared' || isAuthorizedOidcAdmin(claims)
+  );
+}
+
 function slugifyEmail(email: string): string {
   return email
     .replace(/@/gu, '-at-')
@@ -353,7 +369,7 @@ async function ensureSingleTenantAccess(user: User) {
   const tenants = await TenantCollection.create(options);
   const memberships = await MembershipCollection.create(options);
 
-  await roles.seedSystemRoles();
+  await seedSystemRolesWithPermissions(roles);
 
   const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
     appConfig.appId,
@@ -402,6 +418,74 @@ async function ensureSingleTenantAccess(user: User) {
   return { tenant, membership };
 }
 
+/** A deterministic, non-PII tenant slug for a shared user's private workspace. */
+export function hostedWorkspaceTenantSlug(userId: string): string {
+  const digest = createHash('sha256').update(userId).digest('hex').slice(0, 24);
+  return `${appConfig.tenantSlug}-user-${digest}`;
+}
+
+async function ensureHostedWorkspaceAccess(user: User) {
+  const userId = user.id?.trim();
+  if (!userId) throw new Error('Unable to resolve hosted workspace user.');
+
+  const options = getSmrtOptions();
+  const roles = await RoleCollection.create(options);
+  const tenants = await TenantCollection.create(options);
+  const memberships = await MembershipCollection.create(options);
+  await seedSystemRolesWithPermissions(roles);
+
+  const slug = hostedWorkspaceTenantSlug(userId);
+  let tenant = await tenants.findBySlug(slug);
+  if (!tenant) {
+    try {
+      tenant = await tenants.create({
+        description: 'Private workspace for one verified Iolaus user.',
+        name: `${appConfig.appName} workspace`,
+        slug,
+        status: TenantStatus.ACTIVE,
+      });
+      await tenant.save();
+    } catch {
+      // The unique tenant slug makes concurrent first logins converge. Read
+      // the winner back instead of granting a second, guessed workspace.
+      tenant = await tenants.findBySlug(slug);
+      if (!tenant) throw new Error('Unable to provision hosted workspace.');
+    }
+  }
+
+  const memberRole = await roles.findBySlug(DEFAULT_ROLE_SLUGS.MEMBER);
+  if (!memberRole?.id || !tenant.id) {
+    throw new Error(
+      'Unable to resolve hosted workspace membership prerequisites.',
+    );
+  }
+
+  let membership = await memberships.findByUserAndTenant(userId, tenant.id);
+  if (!membership) {
+    membership = await memberships.create({
+      roleId: memberRole.id,
+      status: MembershipStatus.ACTIVE,
+      tenantId: tenant.id,
+      userId,
+    });
+    await membership.save();
+  } else if (
+    membership.status !== MembershipStatus.ACTIVE ||
+    membership.roleId !== memberRole.id
+  ) {
+    membership.status = MembershipStatus.ACTIVE;
+    membership.roleId = memberRole.id;
+    await membership.save();
+  }
+  return { membership, tenant };
+}
+
+async function ensureWorkspaceAccess(user: User) {
+  return appConfig.workspaceMode === 'shared'
+    ? await ensureHostedWorkspaceAccess(user)
+    : await ensureSingleTenantAccess(user);
+}
+
 async function createAdminSession(
   event: RequestEvent,
   user: User,
@@ -438,7 +522,7 @@ export async function completeLocalDevLogin(
     preferred_username: 'local-dev',
     sub: `local-dev:${email}`,
   });
-  const { tenant } = await ensureSingleTenantAccess(user);
+  const { tenant } = await ensureWorkspaceAccess(user);
 
   await createAdminSession(event, user, tenant.id as string, {
     kind: 'local-dev',
@@ -481,15 +565,15 @@ export async function completeOidcLogin(event: RequestEvent): Promise<void> {
     error(401, 'OIDC token validation failed');
   }
 
-  if (!isAuthorizedOidcAdmin(claims)) {
-    error(403, 'This account is not authorized to administer this site.');
+  if (!isAuthorizedHostedOidcUser(claims)) {
+    error(403, 'This account is not authorized to use this site.');
   }
 
   const user = await getOrCreateHostedOidcLoginUser(
     tokenClaimsToOidcClaims(claims),
   );
 
-  const { tenant } = await ensureSingleTenantAccess(user);
+  const { tenant } = await ensureWorkspaceAccess(user);
 
   await createAdminSession(event, user, tenant.id as string);
 }

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "iolaus",
+  "version": "0.1.0",
+  "description": "Iolaus opportunity matching and application-review workspace.",
+  "homepage": "https://github.com/willgriffin/iolaus",
+  "repository": "https://github.com/willgriffin/iolaus",
+  "license": "MIT",
+  "keywords": ["jobs", "opportunities", "mcp", "openai"],
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "interface": {
+        "displayName": "Iolaus",
+        "shortDescription": "Browse opportunities and prepare an application workspace."
+      }
+    }
+  }
+}

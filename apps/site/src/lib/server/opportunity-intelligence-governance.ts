@@ -1,19 +1,47 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { TokenUsage } from '@happyvertical/ai';
-import { resolveDatabase } from '@happyvertical/smrt-core';
+import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
 import { bumpOpportunityTableChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
+  OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS,
+  OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS,
   type OpportunityIntelligenceBudgetConfig,
+  opportunityIntelligenceProviderVolume,
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
 } from './opportunity-intelligence-config.js';
+import {
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getCollection } from './smrt.js';
+import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 
 export const OPPORTUNITY_INTELLIGENCE_CONTROL_KEY = 'opportunity-intelligence';
 
 type SmrtDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
+
+function sqliteGovernanceDatabase(db: SmrtDatabase): boolean {
+  return Boolean(db.url && detectEngine(db.url) === 'sqlite');
+}
+
+function governanceRowLock(db: SmrtDatabase): string {
+  return sqliteGovernanceDatabase(db) ? '' : ' FOR UPDATE';
+}
+
+async function withGovernanceWriteLock<T>(
+  db: SmrtDatabase,
+  work: () => Promise<T>,
+): Promise<T> {
+  // The shared control window and each run/crawl budget belong to one ledger.
+  // SQLite has no row locks: serialize the entire short write transaction,
+  // including rollback/circuit transitions, across handles and processes.
+  return sqliteGovernanceDatabase(db)
+    ? await withSqliteOperationLock('opportunity-intelligence-governance', work)
+    : await work();
+}
 
 export type OpportunityIntelligenceGovernanceErrorCode =
   | 'accounting_required'
@@ -63,6 +91,8 @@ export interface OpportunityIntelligenceReservation
   requestId: string;
   reservedInputTokens: number;
   reservedSpendMicros: number;
+  /** Present only for a verified candidate-owned assessment reservation. */
+  workspaceSubject?: WorkspaceSubject;
 }
 
 export type OpportunityIntelligenceReserveResult<T> =
@@ -241,6 +271,29 @@ export function opportunityIntelligenceIdempotencyKey(
   return createHash('sha256').update(JSON.stringify(values)).digest('hex');
 }
 
+function scopedOpportunityIntelligenceIdempotencyKey(
+  identity: OpportunityIntelligenceRequestIdentity,
+  workspaceSubject?: WorkspaceSubject,
+): string {
+  const base = opportunityIntelligenceIdempotencyKey(identity);
+  if (!workspaceSubject) return base;
+  const subject = requireWorkspaceSubject(workspaceSubject);
+  // Candidate assessment results must not suppress or reuse another
+  // workspace's result even if an upstream caller accidentally reuses an
+  // otherwise complete request identity. Operator ledger identities remain
+  // byte-for-byte unchanged.
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        base,
+        profileId: subject.profileId,
+        tenantId: subject.tenantId,
+        userId: subject.userId,
+      }),
+    )
+    .digest('hex');
+}
+
 function requestCostMicros(
   usage: TokenUsage,
   pricing: OpportunityIntelligenceBudgetConfig['pricing'],
@@ -254,6 +307,34 @@ function requestCostMicros(
 
 function queryRow(result: { rows?: DatabaseRow[] }): DatabaseRow | null {
   return result.rows?.[0] ?? null;
+}
+
+function reservationOwnership(reservation: OpportunityIntelligenceReservation) {
+  return {
+    candidateProfileId: reservation.workspaceSubject?.profileId ?? '',
+    ownerUserId: reservation.workspaceSubject?.userId ?? '',
+    tenantId: reservation.workspaceSubject?.tenantId ?? '',
+  };
+}
+
+function ownershipPredicate(prefix = ''): string {
+  const column = (name: string) => `${prefix}${name}`;
+  return [
+    `COALESCE(${column('tenant_id')}, '') = ?`,
+    `COALESCE(${column('owner_user_id')}, '') = ?`,
+    `COALESCE(${column('candidate_profile_id')}, '') = ?`,
+  ].join(' AND ');
+}
+
+function ownershipValues(
+  reservation: OpportunityIntelligenceReservation,
+): string[] {
+  const ownership = reservationOwnership(reservation);
+  return [
+    ownership.tenantId,
+    ownership.ownerUserId,
+    ownership.candidateProfileId,
+  ];
 }
 
 function budgetBlock(reason: string): OpportunityIntelligenceBlockedResult {
@@ -277,9 +358,13 @@ async function reserveBudgetRow(
   id: string,
   reservation: OpportunityIntelligenceReservation,
 ): Promise<'ok' | 'missing' | 'calls' | 'input_tokens' | 'spend'> {
+  const ownerScoped =
+    table === 'agent_runs' && Boolean(reservation.workspaceSubject);
+  const predicate = ownerScoped ? ` AND ${ownershipPredicate()}` : '';
+  const ownership = ownerScoped ? ownershipValues(reservation) : [];
   const result = await db.query(
-    `SELECT * FROM ${table} WHERE id = ? FOR UPDATE`,
-    [id],
+    `SELECT * FROM ${table} WHERE id = ?${predicate}${governanceRowLock(db)}`,
+    [id, ...ownership],
   );
   const row = queryRow(result);
   if (!row) return 'missing';
@@ -318,9 +403,14 @@ async function reserveBudgetRow(
           intelligence_reserved_input_tokens = intelligence_reserved_input_tokens + ?,
           intelligence_reserved_spend_micros = intelligence_reserved_spend_micros + ?,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      WHERE id = ?${predicate}
     `,
-    [reservation.reservedInputTokens, reservation.reservedSpendMicros, id],
+    [
+      reservation.reservedInputTokens,
+      reservation.reservedSpendMicros,
+      id,
+      ...ownership,
+    ],
   );
   return 'ok';
 }
@@ -334,18 +424,23 @@ async function settleBudgetRow(
   actualSpendMicros: number,
 ): Promise<void> {
   if (!id) return;
+  const ownerScoped =
+    table === 'agent_runs' && Boolean(reservation.workspaceSubject);
+  const predicate = ownerScoped ? ` AND ${ownershipPredicate()}` : '';
+  const ownership = ownerScoped ? ownershipValues(reservation) : [];
+  const floor = sqliteGovernanceDatabase(db) ? 'MAX' : 'GREATEST';
   await db.query(
     `
       UPDATE ${table}
-      SET intelligence_reserved_calls = GREATEST(0, intelligence_reserved_calls - 1),
-          intelligence_reserved_input_tokens = GREATEST(0, intelligence_reserved_input_tokens - ?),
-          intelligence_reserved_spend_micros = GREATEST(0, intelligence_reserved_spend_micros - ?),
+      SET intelligence_reserved_calls = ${floor}(0, intelligence_reserved_calls - 1),
+          intelligence_reserved_input_tokens = ${floor}(0, intelligence_reserved_input_tokens - ?),
+          intelligence_reserved_spend_micros = ${floor}(0, intelligence_reserved_spend_micros - ?),
           intelligence_actual_calls = intelligence_actual_calls + 1,
           intelligence_actual_input_tokens = intelligence_actual_input_tokens + ?,
           intelligence_actual_output_tokens = intelligence_actual_output_tokens + ?,
           intelligence_actual_spend_micros = intelligence_actual_spend_micros + ?,
           updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      WHERE id = ?${predicate}
     `,
     [
       reservation.reservedInputTokens,
@@ -354,8 +449,176 @@ async function settleBudgetRow(
       numberValue(usage.completionTokens),
       actualSpendMicros,
       id,
+      ...ownership,
     ],
   );
+}
+
+function windowTimestamp(value: unknown): number | null {
+  if (value instanceof Date)
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function validVolumeCounter(value: unknown): number {
+  const number = boundedNonNegativeIntegerValue(value, Number.MAX_SAFE_INTEGER);
+  if (number === null)
+    throw new ReservationBlocked(
+      blocked(
+        'budget_missing',
+        'Provider window accounting is missing or malformed.',
+      ),
+      'provider_window_accounting_invalid',
+    );
+  return number;
+}
+
+/** Called inside the main locked transaction; native ledger history is authority. */
+async function providerVolumeReservation(
+  db: SmrtDatabase,
+  control: DatabaseRow,
+  reservation: OpportunityIntelligenceReservation,
+  requestThreshold: number,
+  inputTokenThreshold: number,
+) {
+  const provider = opportunityIntelligenceProviderVolume(reservation);
+  const limits = OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS[provider];
+  const anchor = windowTimestamp(control.window_started_at);
+  if (anchor === null) {
+    if (provider === 'typesafe')
+      throw new ReservationBlocked(
+        blocked(
+          'budget_missing',
+          'An explicitly accounted native window is required for JEV admission.',
+        ),
+        'provider_window_anchor_missing',
+      );
+    // Older controls retain their conservative shared counters until an
+    // operator establishes an anchor. They cannot obtain the JEV allowance.
+    return {
+      provider,
+      id: '',
+      requests: validVolumeCounter(control.window_request_count) + 1,
+      tokens:
+        validVolumeCounter(control.window_input_tokens) +
+        reservation.reservedInputTokens,
+      requestThreshold: Math.min(requestThreshold, limits.requests),
+      inputTokenThreshold: Math.min(inputTokenThreshold, limits.inputTokens),
+    };
+  }
+  const key = `${OPPORTUNITY_INTELLIGENCE_CONTROL_KEY}:volume:${provider}`;
+  const existing = await db.query(
+    `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ?${governanceRowLock(db)}`,
+    [key],
+  );
+  if (existing.rows.length > 1)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider window identity is ambiguous.'),
+      'provider_window_accounting_invalid',
+    );
+  const row = queryRow(existing);
+  const rowAnchor = row ? windowTimestamp(row.window_started_at) : null;
+  if (row && rowAnchor === null)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider window anchor is malformed.'),
+      'provider_window_accounting_invalid',
+    );
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  for (const contract of OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS) {
+    const versions = [...contract.versions, ...contract.historicalVersions];
+    conditions.push(
+      `(q.feature = ? AND q.profile = ? AND r.output_schema_version IN (${versions.map(() => '?').join(', ')}))`,
+    );
+    params.push(contract.feature, contract.profile, ...versions);
+  }
+  const known = `q.provider IN ('bifrost', 'typesafe') AND (${conditions.join(' OR ')}) AND r.prompt_version = r.output_schema_version AND r.prepared_payload_version = r.output_schema_version`;
+  const filter = sqliteGovernanceDatabase(db)
+    ? 'datetime(q.started_at) >= datetime(?)'
+    : 'q.started_at >= ?';
+  const ledger = queryRow(
+    await db.query(
+      `SELECT COALESCE(SUM(CASE WHEN ${known} THEN 1 ELSE 0 END), 0) AS typesafe_requests,
+    COALESCE(SUM(CASE WHEN ${known} THEN q.reserved_input_tokens ELSE 0 END), 0) AS typesafe_tokens,
+    COUNT(*) AS total_requests, COALESCE(SUM(q.reserved_input_tokens), 0) AS total_tokens
+    FROM opportunity_intelligence_requests q LEFT JOIN opportunity_intelligence_results r
+      ON r.owner_request_id = q.request_id AND r.request_id = q.request_id AND r.idempotency_key = q.idempotency_key
+      AND r.opportunity_id = q.opportunity_id AND r.content_fingerprint = q.content_fingerprint AND r.input_fingerprint = q.input_fingerprint
+      AND r.feature = q.feature AND r.profile = q.profile AND r.model = q.model AND q.model <> ''
+      AND r.agent_run_id = q.agent_run_id AND COALESCE(r.source_crawl_id, '') = COALESCE(q.source_crawl_id, '')
+      AND COALESCE(r.source_crawl_item_id, '') = COALESCE(q.source_crawl_item_id, '')
+      AND COALESCE(r.tenant_id, '') = COALESCE(q.tenant_id, '') AND COALESCE(r.owner_user_id, '') = COALESCE(q.owner_user_id, '')
+      AND COALESCE(r.candidate_profile_id, '') = COALESCE(q.candidate_profile_id, '')
+    WHERE ${filter}`,
+      [...params, ...params, control.window_started_at],
+    ),
+  );
+  const typesafeRequests = validVolumeCounter(ledger?.typesafe_requests);
+  const typesafeTokens = validVolumeCounter(ledger?.typesafe_tokens);
+  const totalRequests = validVolumeCounter(ledger?.total_requests);
+  const totalTokens = validVolumeCounter(ledger?.total_tokens);
+  const historicRequests =
+    provider === 'typesafe'
+      ? typesafeRequests
+      : totalRequests - typesafeRequests;
+  const historicTokens =
+    provider === 'typesafe' ? typesafeTokens : totalTokens - typesafeTokens;
+  if (historicRequests < 0 || historicTokens < 0)
+    throw new ReservationBlocked(
+      blocked('budget_missing', 'Provider ledger projection is inconsistent.'),
+      'provider_window_accounting_invalid',
+    );
+  const sameWindow = rowAnchor === anchor;
+  const requests =
+    Math.max(
+      historicRequests,
+      sameWindow ? validVolumeCounter(row?.window_request_count) : 0,
+    ) + 1;
+  const tokens =
+    Math.max(
+      historicTokens,
+      sameWindow ? validVolumeCounter(row?.window_input_tokens) : 0,
+    ) + reservation.reservedInputTokens;
+  let chosenRequests =
+    provider === 'typesafe'
+      ? limits.requests
+      : Math.min(requestThreshold, limits.requests);
+  let chosenTokens =
+    provider === 'typesafe'
+      ? limits.inputTokens
+      : Math.min(inputTokenThreshold, limits.inputTokens);
+  if (sameWindow && row) {
+    chosenRequests = Math.min(
+      chosenRequests,
+      validVolumeCounter(row.request_threshold),
+    );
+    chosenTokens = Math.min(
+      chosenTokens,
+      validVolumeCounter(row.input_token_threshold),
+    );
+  }
+  const id = row ? stringValue(row.id) : randomUUID();
+  if (!row)
+    await db.query(
+      `INSERT INTO opportunity_intelligence_controls
+    (id, slug, context, control_key, enabled, circuit_state, circuit_reason, window_request_count, window_input_tokens,
+     request_threshold, input_token_threshold, window_started_at, created_at, updated_at)
+    VALUES (?, ?, '', ?, TRUE, 'closed', '', 0, 0, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [id, key, key, chosenRequests, chosenTokens, control.window_started_at],
+    );
+  return {
+    provider,
+    id,
+    requests,
+    tokens,
+    requestThreshold: chosenRequests,
+    inputTokenThreshold: chosenTokens,
+  };
 }
 
 export class DatabaseOpportunityIntelligenceGovernanceStore
@@ -369,6 +632,15 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
 
   async openCircuit(reason: string): Promise<void> {
     const db = await this.db();
+    await withGovernanceWriteLock(db, () =>
+      this.openCircuitUnlocked(db, reason),
+    );
+  }
+
+  private async openCircuitUnlocked(
+    db: SmrtDatabase,
+    reason: string,
+  ): Promise<void> {
     await db.query(
       `
         UPDATE opportunity_intelligence_controls
@@ -390,235 +662,272 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
         'Transactional budget reservation is required for paid intelligence work.',
       );
     }
-    try {
-      return await db.transaction(async (transaction) => {
-        const inserted = await transaction.query(
-          `
+    const runTransaction = db.transaction.bind(db);
+    return await withGovernanceWriteLock(db, async () => {
+      try {
+        return await runTransaction(async (transaction) => {
+          const resultId = randomUUID();
+          const inserted = await transaction.query(
+            `
           INSERT INTO opportunity_intelligence_results (
             id, slug, context, idempotency_key, opportunity_id,
+            tenant_id, owner_user_id, candidate_profile_id,
             source_crawl_id, source_crawl_item_id, agent_run_id,
             content_fingerprint, input_fingerprint, prepared_payload_version, prompt_version,
             output_schema_version, feature, profile, model, status,
             owner_request_id, request_id, output_json, error_code,
             started_at, created_at, updated_at
           ) VALUES (
-            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             'started', ?, ?, '{}', '', CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
           ON CONFLICT (idempotency_key) DO NOTHING
           RETURNING id
         `,
-          [
-            randomUUID(),
-            reservation.idempotencyKey,
-            reservation.idempotencyKey,
-            reservation.opportunityId,
-            reservation.sourceCrawlId ?? '',
-            reservation.sourceCrawlItemId ?? '',
-            reservation.agentRunId,
-            reservation.contentFingerprint,
-            reservation.inputFingerprint ?? '',
-            reservation.preparedPayloadVersion,
-            reservation.promptVersion,
-            reservation.outputSchemaVersion,
-            reservation.feature,
-            reservation.profile,
-            reservation.model,
-            reservation.requestId,
-            reservation.requestId,
-          ],
-        );
-        const ownsResult = inserted.rowCount > 0;
-        if (!ownsResult) {
-          const existing = queryRow(
-            await transaction.query(
-              `SELECT * FROM opportunity_intelligence_results WHERE idempotency_key = ? FOR UPDATE`,
-              [reservation.idempotencyKey],
-            ),
+            [
+              resultId,
+              reservation.idempotencyKey,
+              reservation.idempotencyKey,
+              reservation.opportunityId,
+              ...ownershipValues(reservation),
+              reservation.sourceCrawlId ?? '',
+              reservation.sourceCrawlItemId ?? '',
+              reservation.agentRunId,
+              reservation.contentFingerprint,
+              reservation.inputFingerprint ?? '',
+              reservation.preparedPayloadVersion,
+              reservation.promptVersion,
+              reservation.outputSchemaVersion,
+              reservation.feature,
+              reservation.profile,
+              reservation.model,
+              reservation.requestId,
+              reservation.requestId,
+            ],
           );
-          if (stringValue(existing?.status) === 'completed') {
+          // LibSQL can report zero affected rows for INSERT ... RETURNING.
+          // The returned, freshly generated ID proves this transaction owns
+          // the insert; DO NOTHING returns no row for an existing key.
+          const ownsResult = sqliteGovernanceDatabase(transaction)
+            ? inserted.rows.length === 1 &&
+              stringValue(inserted.rows[0]?.id) === resultId
+            : inserted.rowCount > 0;
+          if (!ownsResult) {
+            const existing = queryRow(
+              await transaction.query(
+                `SELECT * FROM opportunity_intelligence_results
+               WHERE idempotency_key = ? AND ${ownershipPredicate()}
+               ${governanceRowLock(transaction)}`,
+                [reservation.idempotencyKey, ...ownershipValues(reservation)],
+              ),
+            );
+            if (stringValue(existing?.status) === 'completed') {
+              return {
+                kind: 'reused',
+                output: parseOutput<T>(existing?.output_json),
+                requestId: stringValue(existing?.request_id),
+              };
+            }
+            const failed = stringValue(existing?.status) === 'failed';
             return {
-              kind: 'reused',
-              output: parseOutput<T>(existing?.output_json),
-              requestId: stringValue(existing?.request_id),
+              code: failed ? 'prior_attempt_failed' : 'duplicate_in_progress',
+              kind: 'blocked',
+              message: failed
+                ? 'This idempotency key has a prior terminal failure and requires operator review.'
+                : 'An identical opportunity intelligence request is already active.',
             };
           }
-          const failed = stringValue(existing?.status) === 'failed';
-          return {
-            code: failed ? 'prior_attempt_failed' : 'duplicate_in_progress',
-            kind: 'blocked',
-            message: failed
-              ? 'This idempotency key has a prior terminal failure and requires operator review.'
-              : 'An identical opportunity intelligence request is already active.',
-          };
-        }
 
-        const control = queryRow(
-          await transaction.query(
-            `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ? FOR UPDATE`,
-            [OPPORTUNITY_INTELLIGENCE_CONTROL_KEY],
-          ),
-        );
-        if (!control || !booleanValue(control.enabled)) {
-          throw new ReservationBlocked(
-            blocked(
-              'disabled',
-              'Opportunity intelligence is disabled in persisted control state.',
+          const control = queryRow(
+            await transaction.query(
+              `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ?${governanceRowLock(transaction)}`,
+              [OPPORTUNITY_INTELLIGENCE_CONTROL_KEY],
             ),
           );
-        }
-        if (stringValue(control.circuit_state) !== 'closed') {
-          throw new ReservationBlocked(
-            blocked(
-              'circuit_open',
-              `Opportunity intelligence circuit is open (${stringValue(control.circuit_reason) || 'unspecified'}).`,
-            ),
-          );
-        }
+          if (!control || !booleanValue(control.enabled)) {
+            throw new ReservationBlocked(
+              blocked(
+                'disabled',
+                'Opportunity intelligence is disabled in persisted control state.',
+              ),
+            );
+          }
+          if (stringValue(control.circuit_state) !== 'closed') {
+            throw new ReservationBlocked(
+              blocked(
+                'circuit_open',
+                `Opportunity intelligence circuit is open (${stringValue(control.circuit_reason) || 'unspecified'}).`,
+              ),
+            );
+          }
 
-        const nextRequests = numberValue(control.window_request_count) + 1;
-        const nextTokens =
-          numberValue(control.window_input_tokens) +
-          reservation.reservedInputTokens;
-        const requestThreshold = boundedNonNegativeIntegerValue(
-          control.request_threshold,
-          100,
-        );
-        if (requestThreshold === null) {
-          throw new ReservationBlocked(
-            blocked(
-              'budget_missing',
-              'Persisted opportunity intelligence request threshold is missing or invalid.',
-            ),
-            'request_volume_threshold_invalid',
+          const nextRequests =
+            validVolumeCounter(control.window_request_count) + 1;
+          const nextTokens =
+            validVolumeCounter(control.window_input_tokens) +
+            reservation.reservedInputTokens;
+          const requestThreshold = boundedNonNegativeIntegerValue(
+            control.request_threshold,
+            100,
           );
-        }
-        if (requestThreshold > 0 && nextRequests > requestThreshold) {
-          throw new ReservationBlocked(
-            budgetBlock('circuit request volume'),
-            'request_volume_threshold',
-          );
-        }
-        const inputTokenThreshold = boundedNonNegativeIntegerValue(
-          control.input_token_threshold,
-          1_000_000,
-        );
-        if (inputTokenThreshold === null) {
-          throw new ReservationBlocked(
-            blocked(
-              'budget_missing',
-              'Persisted opportunity intelligence input-token threshold is missing or invalid.',
-            ),
-            'input_token_threshold_invalid',
-          );
-        }
-        if (inputTokenThreshold > 0 && nextTokens > inputTokenThreshold) {
-          throw new ReservationBlocked(
-            budgetBlock('circuit input tokens'),
-            'input_token_threshold',
-          );
-        }
-
-        const runBudget = await reserveBudgetRow(
-          transaction,
-          'agent_runs',
-          reservation.agentRunId,
-          reservation,
-        );
-        if (runBudget === 'missing') {
-          throw new ReservationBlocked(
-            blocked(
-              'budget_missing',
-              'Required AgentRun budget state is missing.',
-            ),
-            'run_budget_missing',
-          );
-        }
-        if (runBudget !== 'ok') {
-          throw new ReservationBlocked(
-            budgetBlock(`run ${runBudget}`),
-            `run_${runBudget}_budget_exhausted`,
-          );
-        }
-        if (reservation.sourceCrawlId) {
-          const crawlBudget = await reserveBudgetRow(
-            transaction,
-            'source_crawls',
-            reservation.sourceCrawlId,
-            reservation,
-          );
-          if (crawlBudget === 'missing') {
+          if (requestThreshold === null) {
             throw new ReservationBlocked(
               blocked(
                 'budget_missing',
-                'Required source crawl budget state is missing.',
+                'Persisted opportunity intelligence request threshold is missing or invalid.',
               ),
-              'crawl_budget_missing',
+              'request_volume_threshold_invalid',
             );
           }
-          if (crawlBudget !== 'ok') {
+          const inputTokenThreshold = boundedNonNegativeIntegerValue(
+            control.input_token_threshold,
+            1_000_000,
+          );
+          if (inputTokenThreshold === null) {
             throw new ReservationBlocked(
-              budgetBlock(`crawl ${crawlBudget}`),
-              `crawl_${crawlBudget}_budget_exhausted`,
+              blocked(
+                'budget_missing',
+                'Persisted opportunity intelligence input-token threshold is missing or invalid.',
+              ),
+              'input_token_threshold_invalid',
             );
           }
-        }
+          const volume = await providerVolumeReservation(
+            transaction,
+            control,
+            reservation,
+            requestThreshold,
+            inputTokenThreshold,
+          );
+          if (volume.requests > volume.requestThreshold)
+            throw new ReservationBlocked(
+              budgetBlock(`${volume.provider} window requests`),
+            );
+          if (volume.tokens > volume.inputTokenThreshold)
+            throw new ReservationBlocked(
+              budgetBlock(`${volume.provider} window input tokens`),
+            );
 
-        await transaction.query(
-          `
+          const runBudget = await reserveBudgetRow(
+            transaction,
+            'agent_runs',
+            reservation.agentRunId,
+            reservation,
+          );
+          if (runBudget === 'missing') {
+            throw new ReservationBlocked(
+              blocked(
+                'budget_missing',
+                'Required AgentRun budget state is missing.',
+              ),
+              'run_budget_missing',
+            );
+          }
+          if (runBudget !== 'ok') {
+            throw new ReservationBlocked(
+              budgetBlock(`run ${runBudget}`),
+              `run_${runBudget}_budget_exhausted`,
+            );
+          }
+          if (reservation.sourceCrawlId) {
+            const crawlBudget = await reserveBudgetRow(
+              transaction,
+              'source_crawls',
+              reservation.sourceCrawlId,
+              reservation,
+            );
+            if (crawlBudget === 'missing') {
+              throw new ReservationBlocked(
+                blocked(
+                  'budget_missing',
+                  'Required source crawl budget state is missing.',
+                ),
+                'crawl_budget_missing',
+              );
+            }
+            if (crawlBudget !== 'ok') {
+              throw new ReservationBlocked(
+                budgetBlock(`crawl ${crawlBudget}`),
+                `crawl_${crawlBudget}_budget_exhausted`,
+              );
+            }
+          }
+
+          await transaction.query(
+            `
           INSERT INTO opportunity_intelligence_requests (
             id, slug, context, request_id, provider_request_id,
             idempotency_key, feature, source_crawl_id, source_crawl_item_id,
-            opportunity_id, agent_run_id, content_fingerprint, input_fingerprint, profile, model,
+            opportunity_id, tenant_id, owner_user_id, candidate_profile_id,
+            agent_run_id, content_fingerprint, input_fingerprint, profile, model,
             provider, status, attempts, estimated_input_tokens,
             input_token_ceiling, requested_max_output_tokens,
             reserved_input_tokens, reserved_spend_micros,
             started_at, created_at, updated_at
           ) VALUES (
-            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bifrost',
+            ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             'started', 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           )
         `,
-          [
-            randomUUID(),
-            reservation.requestId,
-            reservation.requestId,
-            reservation.requestId,
-            reservation.idempotencyKey,
-            reservation.feature,
-            reservation.sourceCrawlId ?? '',
-            reservation.sourceCrawlItemId ?? '',
-            reservation.opportunityId,
-            reservation.agentRunId,
-            reservation.contentFingerprint,
-            reservation.inputFingerprint ?? '',
-            reservation.profile,
-            reservation.model,
-            reservation.estimatedInputTokens,
-            reservation.inputTokenCeiling,
-            reservation.maxOutputTokens,
-            reservation.reservedInputTokens,
-            reservation.reservedSpendMicros,
-          ],
-        );
-        await transaction.query(
-          `
+            [
+              randomUUID(),
+              reservation.requestId,
+              reservation.requestId,
+              reservation.requestId,
+              reservation.idempotencyKey,
+              reservation.feature,
+              reservation.sourceCrawlId ?? '',
+              reservation.sourceCrawlItemId ?? '',
+              reservation.opportunityId,
+              ...ownershipValues(reservation),
+              reservation.agentRunId,
+              reservation.contentFingerprint,
+              reservation.inputFingerprint ?? '',
+              reservation.profile,
+              reservation.model,
+              volume.provider === 'typesafe' ? 'typesafe' : 'bifrost',
+              reservation.estimatedInputTokens,
+              reservation.inputTokenCeiling,
+              reservation.maxOutputTokens,
+              reservation.reservedInputTokens,
+              reservation.reservedSpendMicros,
+            ],
+          );
+          await transaction.query(
+            `
           UPDATE opportunity_intelligence_controls
           SET window_request_count = ?, window_input_tokens = ?,
               last_request_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `,
-          [nextRequests, nextTokens, stringValue(control.id)],
-        );
-        return { kind: 'owner', reservation };
-      });
-    } catch (error) {
-      if (!(error instanceof ReservationBlocked)) throw error;
-      if (error.circuitReason) await this.openCircuit(error.circuitReason);
-      return error.result;
-    }
+            [nextRequests, nextTokens, stringValue(control.id)],
+          );
+          if (volume.id)
+            await transaction.query(
+              `UPDATE opportunity_intelligence_controls
+            SET window_request_count = ?, window_input_tokens = ?, request_threshold = ?, input_token_threshold = ?,
+                window_started_at = ?, last_request_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?`,
+              [
+                volume.requests,
+                volume.tokens,
+                volume.requestThreshold,
+                volume.inputTokenThreshold,
+                control.window_started_at,
+                volume.id,
+              ],
+            );
+          return { kind: 'owner', reservation };
+        });
+      } catch (error) {
+        if (!(error instanceof ReservationBlocked)) throw error;
+        if (error.circuitReason)
+          await this.openCircuitUnlocked(db, error.circuitReason);
+        return error.result;
+      }
+    });
   }
 
   async complete<T>(
@@ -633,107 +942,112 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
         'Transactional usage accounting is required for paid intelligence work.',
       );
     }
-    await db.transaction(async (transaction) => {
-      const accountingBasis =
-        terminal.accountingBasis ?? (terminal.usage ? 'actual' : 'missing');
-      const usage = terminal.usage ?? {
-        completionTokens: reservation.maxOutputTokens,
-        promptTokens: reservation.reservedInputTokens,
-        totalTokens:
-          reservation.reservedInputTokens + reservation.maxOutputTokens,
-      };
-      const outputJson = JSON.stringify(terminal.output ?? {});
-      await transaction.query(
-        `
+    const runTransaction = db.transaction.bind(db);
+    await withGovernanceWriteLock(db, () =>
+      runTransaction(async (transaction) => {
+        const accountingBasis =
+          terminal.accountingBasis ?? (terminal.usage ? 'actual' : 'missing');
+        const usage = terminal.usage ?? {
+          completionTokens: reservation.maxOutputTokens,
+          promptTokens: reservation.reservedInputTokens,
+          totalTokens:
+            reservation.reservedInputTokens + reservation.maxOutputTokens,
+        };
+        const outputJson = JSON.stringify(terminal.output ?? {});
+        await transaction.query(
+          `
           UPDATE opportunity_intelligence_requests
           SET provider_request_id = ?, status = ?, actual_input_tokens = ?,
               actual_output_tokens = ?, actual_total_tokens = ?,
               actual_spend_micros = ?, accounting_basis = ?, duration_ms = ?, error_code = ?,
               finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-          WHERE request_id = ?
+          WHERE request_id = ? AND ${ownershipPredicate()}
         `,
-        [
-          terminal.providerRequestId ?? reservation.requestId,
-          terminal.status,
-          numberValue(usage.promptTokens),
-          numberValue(usage.completionTokens),
-          numberValue(usage.totalTokens),
-          terminal.actualSpendMicros,
-          accountingBasis,
-          terminal.durationMs,
-          terminal.status === 'succeeded'
-            ? ''
-            : terminal.errorCode || terminal.status,
-          reservation.requestId,
-        ],
-      );
-      await transaction.query(
-        `
+          [
+            terminal.providerRequestId ?? reservation.requestId,
+            terminal.status,
+            numberValue(usage.promptTokens),
+            numberValue(usage.completionTokens),
+            numberValue(usage.totalTokens),
+            terminal.actualSpendMicros,
+            accountingBasis,
+            terminal.durationMs,
+            terminal.status === 'succeeded'
+              ? ''
+              : terminal.errorCode || terminal.status,
+            reservation.requestId,
+            ...ownershipValues(reservation),
+          ],
+        );
+        await transaction.query(
+          `
           UPDATE opportunity_intelligence_results
           SET status = ?, output_json = ?, error_code = ?,
               finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
           WHERE idempotency_key = ? AND owner_request_id = ?
+            AND ${ownershipPredicate()}
         `,
-        [
-          terminal.status === 'succeeded' ? 'completed' : 'failed',
-          outputJson,
-          terminal.status === 'succeeded' ? '' : terminal.status,
-          reservation.idempotencyKey,
-          reservation.requestId,
-        ],
-      );
-      await settleBudgetRow(
-        transaction,
-        'agent_runs',
-        reservation.agentRunId,
-        reservation,
-        usage,
-        terminal.actualSpendMicros,
-      );
-      await settleBudgetRow(
-        transaction,
-        'source_crawls',
-        reservation.sourceCrawlId ?? '',
-        reservation,
-        usage,
-        terminal.actualSpendMicros,
-      );
+          [
+            terminal.status === 'succeeded' ? 'completed' : 'failed',
+            outputJson,
+            terminal.status === 'succeeded' ? '' : terminal.status,
+            reservation.idempotencyKey,
+            reservation.requestId,
+            ...ownershipValues(reservation),
+          ],
+        );
+        await settleBudgetRow(
+          transaction,
+          'agent_runs',
+          reservation.agentRunId,
+          reservation,
+          usage,
+          terminal.actualSpendMicros,
+        );
+        await settleBudgetRow(
+          transaction,
+          'source_crawls',
+          reservation.sourceCrawlId ?? '',
+          reservation,
+          usage,
+          terminal.actualSpendMicros,
+        );
 
-      const control = queryRow(
+        const control = queryRow(
+          await transaction.query(
+            `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ?${governanceRowLock(transaction)}`,
+            [OPPORTUNITY_INTELLIGENCE_CONTROL_KEY],
+          ),
+        );
+        if (!control) return;
+        const isAbort = ['aborted', 'timed_out'].includes(terminal.status);
+        const failures =
+          terminal.status === 'succeeded'
+            ? 0
+            : numberValue(control.consecutive_failures) + 1;
+        const aborts = isAbort
+          ? numberValue(control.consecutive_aborts) + 1
+          : terminal.status === 'succeeded'
+            ? 0
+            : numberValue(control.consecutive_aborts);
+        let circuitReason = '';
+        if (accountingBasis === 'missing') {
+          circuitReason = 'usage_accounting_missing';
+        } else if (
+          terminal.durationMs > numberValue(control.latency_threshold_ms)
+        ) {
+          circuitReason = 'latency_threshold';
+        } else if (aborts >= numberValue(control.abort_threshold)) {
+          circuitReason = 'repeated_aborts';
+        } else if (failures >= numberValue(control.failure_threshold)) {
+          circuitReason = 'repeated_failures';
+        } else if (
+          numberValue(usage.promptTokens) > reservation.inputTokenCeiling
+        ) {
+          circuitReason = 'actual_input_tokens_exceeded_ceiling';
+        }
         await transaction.query(
-          `SELECT * FROM opportunity_intelligence_controls WHERE control_key = ? FOR UPDATE`,
-          [OPPORTUNITY_INTELLIGENCE_CONTROL_KEY],
-        ),
-      );
-      if (!control) return;
-      const isAbort = ['aborted', 'timed_out'].includes(terminal.status);
-      const failures =
-        terminal.status === 'succeeded'
-          ? 0
-          : numberValue(control.consecutive_failures) + 1;
-      const aborts = isAbort
-        ? numberValue(control.consecutive_aborts) + 1
-        : terminal.status === 'succeeded'
-          ? 0
-          : numberValue(control.consecutive_aborts);
-      let circuitReason = '';
-      if (accountingBasis === 'missing') {
-        circuitReason = 'usage_accounting_missing';
-      } else if (
-        terminal.durationMs > numberValue(control.latency_threshold_ms)
-      ) {
-        circuitReason = 'latency_threshold';
-      } else if (aborts >= numberValue(control.abort_threshold)) {
-        circuitReason = 'repeated_aborts';
-      } else if (failures >= numberValue(control.failure_threshold)) {
-        circuitReason = 'repeated_failures';
-      } else if (
-        numberValue(usage.promptTokens) > reservation.inputTokenCeiling
-      ) {
-        circuitReason = 'actual_input_tokens_exceeded_ceiling';
-      }
-      await transaction.query(
-        `
+          `
           UPDATE opportunity_intelligence_controls
           SET consecutive_aborts = ?, consecutive_failures = ?,
               circuit_state = CASE WHEN ? = '' THEN circuit_state ELSE 'open' END,
@@ -742,17 +1056,18 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `,
-        [
-          aborts,
-          failures,
-          circuitReason,
-          circuitReason,
-          circuitReason,
-          circuitReason,
-          stringValue(control.id),
-        ],
-      );
-    });
+          [
+            aborts,
+            failures,
+            circuitReason,
+            circuitReason,
+            circuitReason,
+            circuitReason,
+            stringValue(control.id),
+          ],
+        );
+      }),
+    );
   }
 }
 
@@ -772,6 +1087,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
 >(options: {
   config?: OpportunityIntelligenceBudgetConfig;
   estimatedInputTokens: number;
+  /** Optional larger financial reserve; never lowers the token-based spend reserve. */
+  financialInputTokenCeiling?: number;
   identity: OpportunityIntelligenceRequestIdentity;
   inputTokenCeiling: number;
   invoke: (requestId: string) => Promise<{
@@ -782,6 +1099,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
   maxOutputTokens: number;
   signal?: AbortSignal;
   store?: OpportunityIntelligenceGovernanceStore;
+  /** Server-verified owner tuple for a candidate-private provider result. */
+  workspaceSubject?: WorkspaceSubject;
 }): Promise<{ output: T; requestId: string; reused: boolean }> {
   const store =
     options.store ?? new DatabaseOpportunityIntelligenceGovernanceStore();
@@ -824,20 +1143,34 @@ export async function executeGovernedOpportunityIntelligenceRequest<
       'Opportunity intelligence run limits are required.',
     );
   }
+  if (
+    options.financialInputTokenCeiling !== undefined &&
+    (!Number.isSafeInteger(options.financialInputTokenCeiling) ||
+      options.financialInputTokenCeiling < options.inputTokenCeiling)
+  )
+    throw new Error('Invalid financial input reservation.');
   const requestId = randomUUID();
+  const workspaceSubject = options.workspaceSubject
+    ? requireWorkspaceSubject(options.workspaceSubject)
+    : undefined;
   const reservation: OpportunityIntelligenceReservation = {
     ...options.identity,
     estimatedInputTokens: options.estimatedInputTokens,
-    idempotencyKey: opportunityIntelligenceIdempotencyKey(options.identity),
+    idempotencyKey: scopedOpportunityIntelligenceIdempotencyKey(
+      options.identity,
+      workspaceSubject,
+    ),
     inputTokenCeiling: options.inputTokenCeiling,
     maxOutputTokens: options.maxOutputTokens,
     requestId,
     reservedInputTokens: options.inputTokenCeiling,
     reservedSpendMicros: reservedRequestSpendMicros({
-      inputTokens: options.inputTokenCeiling,
+      inputTokens:
+        options.financialInputTokenCeiling ?? options.inputTokenCeiling,
       maxOutputTokens: options.maxOutputTokens,
       pricing,
     }),
+    workspaceSubject,
   };
   if (reservation.reservedSpendMicros <= 0) {
     await safelyOpenCircuit(store, 'pricing_missing');
@@ -1230,11 +1563,14 @@ export async function startOpportunityIntelligenceAgentRun(options: {
   sourceCrawlId?: string;
   sourceId?: string;
   userId?: string;
+  /** Present only for a verified candidate-owned assessment. */
+  workspaceSubject?: WorkspaceSubject;
 }): Promise<string> {
   const config = resolveOpportunityIntelligenceBudgetConfig();
   const collection = await getCollection('AgentRun');
   const run = await collection.create({
-    initiatedByUserId: options.userId ?? '',
+    candidateProfileId: options.workspaceSubject?.profileId ?? '',
+    initiatedByUserId: options.workspaceSubject?.userId ?? options.userId ?? '',
     inputJson: JSON.stringify({
       sourceCrawlId: options.sourceCrawlId ?? '',
     }),
@@ -1242,10 +1578,12 @@ export async function startOpportunityIntelligenceAgentRun(options: {
     intelligenceInputTokenLimit: config.run.inputTokens,
     intelligenceSpendLimitMicros: config.run.spendMicros,
     opportunityId: options.opportunityId,
+    ownerUserId: options.workspaceSubject?.userId ?? '',
     runType: 'opportunity_intelligence',
     sourceId: options.sourceId ?? '',
     startedAt: new Date(),
     status: 'running',
+    tenantId: options.workspaceSubject?.tenantId ?? '',
   });
   await run.save();
   return stringValue(run.id);
@@ -1255,6 +1593,7 @@ export async function finishOpportunityIntelligenceAgentRun(
   agentRunId: string,
   status: 'failed' | 'succeeded',
   error = '',
+  workspaceSubject?: WorkspaceSubject,
 ): Promise<void> {
   if (!agentRunId) return;
   const collection = await getCollection('AgentRun');
@@ -1262,6 +1601,14 @@ export async function finishOpportunityIntelligenceAgentRun(
     | (Record<string, unknown> & { save: () => Promise<void> })
     | null;
   if (!run) return;
+  if (
+    workspaceSubject &&
+    (run.tenantId !== workspaceSubject.tenantId ||
+      run.ownerUserId !== workspaceSubject.userId ||
+      run.candidateProfileId !== workspaceSubject.profileId)
+  ) {
+    throw new Error('Agent run is outside the verified workspace subject.');
+  }
   run.error = error;
   run.finishedAt = new Date();
   run.status = status;

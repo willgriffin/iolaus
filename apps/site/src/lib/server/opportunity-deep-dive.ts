@@ -1,6 +1,7 @@
 import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import type { PostingPreflightStatus } from './posting-preflight-status.js';
+import type { WorkspaceSubject } from './private-workspace.js';
 import { getCollection } from './smrt.js';
 
 /**
@@ -86,15 +87,14 @@ export interface DeepDiveResult {
 
 export interface DigDeeperOptions {
   /**
-   * Review notes to record. Omit (not `''`) to keep the notes the opportunity
-   * already carries — `updateOpportunityReview()` overwrites the column with
-   * whatever is passed, so an absent field must not erase them.
+   * Review notes to record. Omit (not `''`) to preserve the current private
+   * review overlay; a shared Opportunity row is never a review source.
    */
   humanReviewNotes?: string;
-  /** Rating to record, or omit to keep the recorded one. */
+  /** Rating to record, or omit to keep the current private overlay rating. */
   humanRating?: unknown;
   opportunityId: string;
-  reviewedByProfileId?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }
 
@@ -144,19 +144,26 @@ export async function digDeeperOnOpportunity(
   const title = stringValue(opportunity.title);
 
   // The verdict first, and on its own: everything below is best-effort.
-  const { updateOpportunityReview } = await import('./application-package.js');
+  const [
+    { updateOpportunityReview },
+    { loadCurrentOpportunityReviewOverlays },
+  ] = await Promise.all([
+    import('./application-package.js'),
+    import('./opportunity-review-overlay.js'),
+  ]);
+  const currentReview = (
+    await loadCurrentOpportunityReviewOverlays({
+      opportunityIds: [opportunityId],
+      subject: options.subject,
+    })
+  ).get(opportunityId);
   await updateOpportunityReview({
-    humanRating:
-      options.humanRating === undefined
-        ? opportunity.humanRating
-        : options.humanRating,
+    humanRating: options.humanRating ?? currentReview?.humanRating ?? null,
     humanReviewNotes:
-      options.humanReviewNotes === undefined
-        ? stringValue(opportunity.humanReviewNotes)
-        : options.humanReviewNotes,
+      options.humanReviewNotes ?? currentReview?.humanReviewNotes ?? '',
     humanReviewStatus: 'maybe',
     opportunityId,
-    reviewedByProfileId: options.reviewedByProfileId,
+    subject: options.subject,
     user: options.user,
   });
 
@@ -171,7 +178,7 @@ export async function digDeeperOnOpportunity(
       const result = await enqueueOpportunityIntelligenceWithStatus(
         opportunityId,
         { modes: 'all' },
-        { reason: 'triage_dig_deeper', user: options.user },
+        { reason: 'triage_dig_deeper' },
       );
       return {
         message: result.enqueued
@@ -226,6 +233,7 @@ export async function digDeeperOnOpportunity(
         reason: title
           ? `Triage marked "${title}" worth a deeper look.`
           : 'Triage marked this opportunity worth a deeper look.',
+        subject: options.subject,
       });
       if (!result.researchTaskId) {
         return { message: 'Company not found.', status: 'error' };

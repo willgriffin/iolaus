@@ -20,6 +20,7 @@ import {
   updateAdminResourceAction,
   verifyOpportunityPostingAction,
 } from '$lib/server/admin-resource-route';
+import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject.js';
 import type { Actions } from './$types';
 
 export const actions: Actions = {
@@ -52,8 +53,8 @@ export const actions: Actions = {
   // The triage deck is a modal over this list, so its queue read and its two
   // decision writes are this route's actions — the same owner-principal
   // helpers the list toolbar already posts to, never a second write path.
-  triageQueue: async ({ request }) => {
-    return await triageQueueAction(request);
+  triageQueue: async ({ locals, request }) => {
+    return await triageQueueAction(request, workspaceSubjectFromLocals(locals));
   },
   digDeeper: async ({ locals, request }) => {
     return await digDeeperOpportunityAction(request, locals);
@@ -74,10 +75,10 @@ export const actions: Actions = {
     return await loadOpportunityDetailsAction(request);
   },
   processOpportunityWithLlm: async ({ locals, request }) => {
-    return await processOpportunityWithLlmAction(request, locals.user);
+    return await processOpportunityWithLlmAction(request, locals);
   },
   processOpportunity: async ({ locals, request }) => {
-    return await processOpportunityAction(request, locals.user);
+    return await processOpportunityAction(request, locals);
   },
   createDraftApplication: async ({ locals, request }) => {
     return await createDraftApplicationAction(request, locals);
@@ -85,13 +86,13 @@ export const actions: Actions = {
   createFactIntake: async ({ locals, request }) => {
     return await createFactIntakeAction(request, locals);
   },
-  syncRecommendationTasks: async ({ params }) => {
-    return await syncRecommendationTasksAction(params.resource);
+  syncRecommendationTasks: async ({ locals, params }) => {
+    return await syncRecommendationTasksAction(params.resource, locals);
   },
   processRecommendationTask: async ({ locals, request }) => {
     return await processRecommendationTaskAction(request, locals);
   },
   acceptFactCandidate: async ({ locals, request }) => {
-    return await acceptFactCandidateAction(request, locals.user);
+    return await acceptFactCandidateAction(request, locals);
   },
 };

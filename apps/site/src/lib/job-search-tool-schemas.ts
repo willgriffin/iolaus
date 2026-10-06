@@ -406,7 +406,6 @@ export const jobSearchToolContracts = {
         opportunityId: identifierSchema,
         decision: { type: 'string', enum: ['apply', 'maybe', 'reject'] },
         reason: { type: 'string', maxLength: 2000 },
-        reviewedByProfileId: { type: 'string', format: 'uuid' },
       },
       required: ['opportunityId', 'decision'],
     },
@@ -432,7 +431,6 @@ export const jobSearchToolContracts = {
           description:
             'Owner rating to record. Omit to keep the recorded rating.',
         },
-        reviewedByProfileId: { type: 'string', format: 'uuid' },
       },
       required: ['opportunityId'],
     },
@@ -446,7 +444,6 @@ export const jobSearchToolContracts = {
       properties: {
         opportunityId: identifierSchema,
         reason: { type: 'string', maxLength: 2000 },
-        reviewedByProfileId: { type: 'string', format: 'uuid' },
       },
       required: ['opportunityId'],
     },

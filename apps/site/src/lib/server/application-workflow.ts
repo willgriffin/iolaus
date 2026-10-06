@@ -22,7 +22,8 @@ import {
   submissionMethods,
   submittedByRoles,
 } from '../objects/workflow.js';
-import { getAppConfig } from './app-config.js';
+import { resolveAgentAuditSubject } from './agent-audit-subject.js';
+import { getAppConfig, isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import {
@@ -37,11 +38,27 @@ import {
 } from './candidate-answers.js';
 import { bumpTaskChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
+import {
+  createPrivateDecision,
+  loadCurrentOpportunityReviewOverlays,
+} from './opportunity-review-overlay.js';
+import {
+  createPrivateRecord,
+  getPrivateRecord,
+  listPrivateRecords,
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getCollection } from './smrt.js';
 import {
   KeyedLockTimeoutError,
   withSqliteOperationLock,
 } from './sqlite-operation-lock.js';
+import {
+  isCurrentWorkspaceOperator,
+  requireCurrentWorkspaceSubject,
+} from './workspace-subject.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -232,6 +249,68 @@ async function collection(className: string): Promise<Collection> {
   })) as unknown as Collection;
 }
 
+function decisionSubject(options: {
+  subject: WorkspaceSubject;
+  user?: Pick<User, 'id'> | null;
+}): WorkspaceSubject {
+  const subject = requireWorkspaceSubject(options.subject);
+  const userId = stringValue(options.user?.id);
+  if (userId && userId !== subject.userId) {
+    error(403, 'Decision actor is outside the verified workspace.');
+  }
+  return subject;
+}
+
+function decisionDatabase() {
+  return lifecycleDatabase.getStore() ? lifecycleDatabaseProxy : undefined;
+}
+
+async function privateDecisionTask(
+  taskId: string,
+  subject: WorkspaceSubject,
+): Promise<MutableRecord | null> {
+  return (await getPrivateRecord('Task', taskId, subject, {
+    db: decisionDatabase(),
+  })) as MutableRecord | null;
+}
+
+async function privateRecommendationTasks(
+  opportunityId: string,
+  subject: WorkspaceSubject,
+): Promise<MutableRecord[]> {
+  return (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 25,
+      orderBy: 'updated_at DESC',
+      where: { opportunityId, taskType: 'review_recommendation' },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
+}
+
+function assignLegacyOpportunityReview(
+  opportunity: MutableRecord,
+  values: Record<string, unknown>,
+) {
+  // The shared catalog remains globally discoverable. Personal review is a
+  // Decision overlay in shared hosting and must never overwrite its row.
+  if (!isSharedHosted()) Object.assign(opportunity, values);
+}
+
+function decisionFollowUpTaskId(
+  kind: 'company-research' | 'revise-score',
+  opportunityId: string,
+  subject: WorkspaceSubject,
+): string {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  // Pair the opaque shared-catalog ID with the profile selector. The private
+  // helper also predicates tenant and owner, so a foreign row cannot satisfy
+  // idempotency or be reopened by this decision.
+  return `${kind}:${verifiedSubject.profileId}:${opportunityId}`;
+}
+
 async function findTaskByExternalId(externalTaskId: string, activeOnly = true) {
   const tasks = await collection('Task');
   const records = await tasks.list({
@@ -283,6 +362,81 @@ async function hasActiveApplicationTaskOfType(
 }
 
 /**
+ * Application tasks are private workspace records. Keep this separate from
+ * global recommendation-board helpers: callers must carry the verified
+ * profile identity through every opaque task lookup and idempotent create.
+ */
+async function findPrivateTaskByExternalId(
+  externalTaskId: string,
+  subject: WorkspaceSubject,
+  activeOnly = true,
+): Promise<MutableRecord | null> {
+  const records = (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 25,
+      orderBy: 'updated_at DESC',
+      where: { externalTaskId },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
+  return activeOnly ? activeTask(records) : (records[0] ?? null);
+}
+
+async function createPrivateTaskIfMissing(
+  externalTaskId: string,
+  payload: Record<string, unknown>,
+  subject: WorkspaceSubject,
+): Promise<{ created: boolean; task: MutableRecord }> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const existing = await findPrivateTaskByExternalId(
+    externalTaskId,
+    verifiedSubject,
+  );
+  if (existing) return { created: false, task: existing };
+
+  const task = (await createPrivateRecord(
+    'Task',
+    verifiedSubject,
+    {
+      assigneeRole: 'owner',
+      createdBy: 'automation',
+      externalTaskId,
+      kanbanColumn: 'inbox',
+      status: 'open',
+      taskType: 'other',
+      ...payload,
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord;
+  await task.save();
+  return { created: true, task };
+}
+
+async function hasActivePrivateApplicationTaskOfType(
+  applicationId: string,
+  taskType: string,
+  subject: WorkspaceSubject,
+): Promise<boolean> {
+  const records = (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 200,
+      orderBy: 'updated_at DESC',
+      where: { applicationId },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
+  return records.some(
+    (task) =>
+      stringValue(task.taskType) === taskType &&
+      isActiveTaskStatus(task.status),
+  );
+}
+
+/**
  * Route an application back to the user to collect missing required ATS answers
  * (the answer-collection CTA). Used by the auto-submit flow when a required
  * question has no answer — this is a collection loop, not a dead end, so it does
@@ -292,8 +446,13 @@ async function hasActiveApplicationTaskOfType(
 export async function routeApplicationToAnswerCollection(options: {
   application: Record<string, unknown>;
   questions: { id: string; label: string }[];
+  subject: WorkspaceSubject;
 }): Promise<{ created: boolean }> {
+  const subject = requireWorkspaceSubject(options.subject);
   const application = options.application;
+  if (!recordOwnedBySubject(application, subject)) {
+    error(404, 'Application not found.');
+  }
   const applicationId = stringValue(application.id);
   if (!applicationId) return { created: false };
   const opportunityId = stringValue(application.opportunityId);
@@ -312,7 +471,7 @@ export async function routeApplicationToAnswerCollection(options: {
   const questionLines = options.questions
     .map((question) => `- ${question.label || question.id} (${question.id})`)
     .join('\n');
-  const result = await createTaskIfMissing(
+  const result = await createPrivateTaskIfMissing(
     `collect-application-answers:${applicationId}`,
     {
       applicationId,
@@ -330,9 +489,10 @@ export async function routeApplicationToAnswerCollection(options: {
       taskType: 'collect_application_answers',
       title: `Collect application answers: ${applicationId}`,
     },
+    subject,
   );
 
-  await syncApplicationWorkflowTasks(application);
+  await syncApplicationWorkflowTasks(application, subject);
   return { created: result.created };
 }
 
@@ -355,15 +515,21 @@ export async function routeApplicationToAnswerCollection(options: {
 export async function recordApplicationFormAnswers(
   applicationId: string,
   request: Request,
+  subject: WorkspaceSubject,
 ): Promise<{
   saved: number;
   complete: boolean;
   savedForReuse: number;
   revokedForReuse: number;
 }> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const form = await request.formData();
-  const applications = await collection('Application');
-  const application = await applications.get(applicationId);
+  const application = (await getPrivateRecord(
+    'Application',
+    applicationId,
+    verifiedSubject,
+    { db: decisionDatabase() },
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
@@ -465,23 +631,26 @@ export async function recordApplicationFormAnswers(
     answers,
     questionsById: schemaQuestions,
     reuseQuestionIds,
+    subject: verifiedSubject,
   });
   const revokedForReuse = await revokeReusableCandidateAnswers({
     questionsById: schemaQuestions,
     unreuseQuestionIds: new Set(
       [...unreuseQuestionIds].filter((id) => !reuseQuestionIds.has(id)),
     ),
+    subject: verifiedSubject,
   });
 
   const summary = summarizeApplicationFormAnswers(jsonRecord(application));
   const complete = summary.missingRequiredAnswers.length === 0;
   if (complete) {
-    const task = await findTaskByExternalId(
+    const task = await findPrivateTaskByExternalId(
       `collect-application-answers:${applicationId}`,
+      verifiedSubject,
     );
     if (task) await markTaskDone(task, new Date());
   }
-  await syncApplicationWorkflowTasks(application);
+  await syncApplicationWorkflowTasks(application, verifiedSubject);
   return { complete, saved, savedForReuse, revokedForReuse };
 }
 
@@ -497,15 +666,16 @@ async function saveReusableCandidateAnswers(options: {
   answers: Record<string, string>;
   questionsById: { id: string; label: string }[];
   reuseQuestionIds: Set<string>;
+  subject: WorkspaceSubject;
 }): Promise<number> {
   if (options.reuseQuestionIds.size === 0) return 0;
   const labelById = new Map(
     options.questionsById.map((question) => [question.id, question.label]),
   );
-  const library = await collection('CandidateAnswer');
   // Library rows scope to the same profile whose facts seed applications, so
   // identity facts and reusable answers can never come from two profiles.
-  const profileKey = await resolveLibraryProfileKey();
+  const subject = requireWorkspaceSubject(options.subject);
+  const profileKey = await resolveLibraryProfileKey(subject);
   let savedForReuse = 0;
   for (const questionId of options.reuseQuestionIds) {
     const value = stringValue(options.answers[questionId]);
@@ -513,11 +683,11 @@ async function saveReusableCandidateAnswers(options: {
     const label = stringValue(labelById.get(questionId)) || questionId;
     const labelKey = normalizeAnswerLabel(label);
     if (!labelKey) continue;
-    const existing = await library.list({
+    const existing = (await listPrivateRecords('CandidateAnswer', subject, {
       limit: 500,
       orderBy: 'updated_at DESC',
       where: { profileKey },
-    });
+    })) as MutableRecord[];
     const matching = existing.filter(
       (record) => reusableAnswerLabelKey(record) === labelKey,
     );
@@ -538,7 +708,7 @@ async function saveReusableCandidateAnswers(options: {
         await matching[0].save();
       }
     } else {
-      const record = await library.create({
+      const record = (await createPrivateRecord('CandidateAnswer', subject, {
         active: true,
         label,
         labelKey,
@@ -547,7 +717,7 @@ async function saveReusableCandidateAnswers(options: {
         revokedForReuseAt: null,
         savedForReuseAt: new Date(),
         value,
-      });
+      })) as MutableRecord;
       await record.save();
       matching.unshift(record);
     }
@@ -570,32 +740,33 @@ async function saveReusableCandidateAnswers(options: {
 async function revokeReusableCandidateAnswers(options: {
   questionsById: { id: string; label: string }[];
   unreuseQuestionIds: Set<string>;
+  subject: WorkspaceSubject;
 }): Promise<number> {
   if (options.unreuseQuestionIds.size === 0) return 0;
   const labelById = new Map(
     options.questionsById.map((question) => [question.id, question.label]),
   );
-  const library = await collection('CandidateAnswer');
-  const profileKey = await resolveLibraryProfileKey();
+  const subject = requireWorkspaceSubject(options.subject);
+  const profileKey = await resolveLibraryProfileKey(subject);
   let revoked = 0;
   for (const questionId of options.unreuseQuestionIds) {
     const label = stringValue(labelById.get(questionId)) || questionId;
     const labelKey = normalizeAnswerLabel(label);
     if (!labelKey) continue;
-    revoked += await deactivateReusableRows(library, { profileKey, labelKey });
+    revoked += await deactivateReusableRows(subject, { profileKey, labelKey });
   }
   return revoked;
 }
 
 async function deactivateReusableRows(
-  library: Collection,
+  subject: WorkspaceSubject,
   key: { profileKey: string; labelKey: string },
 ): Promise<number> {
-  const existing = await library.list({
+  const existing = (await listPrivateRecords('CandidateAnswer', subject, {
     limit: 500,
     orderBy: 'updated_at DESC',
     where: { profileKey: key.profileKey },
-  });
+  })) as MutableRecord[];
   let revoked = 0;
   for (const record of existing) {
     if (reusableAnswerLabelKey(record) !== key.labelKey) continue;
@@ -618,12 +789,13 @@ async function deactivateReusableRows(
  */
 export async function revokeReusableAnswerByLabelKey(
   labelKey: string,
+  subject: WorkspaceSubject,
 ): Promise<number> {
   const normalized = stringValue(labelKey);
   if (!normalized) error(400, 'A reusable answer label key is required.');
-  const library = await collection('CandidateAnswer');
-  const profileKey = await resolveLibraryProfileKey();
-  return await deactivateReusableRows(library, {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const profileKey = await resolveLibraryProfileKey(verifiedSubject);
+  return await deactivateReusableRows(verifiedSubject, {
     labelKey: normalized,
     profileKey,
   });
@@ -704,26 +876,63 @@ function recommendationTaskDescription(
   return lines.filter(Boolean).join('\n');
 }
 
-export async function syncRecommendedOpportunityDecisionTasks(limit = 250) {
+export async function syncRecommendedOpportunityDecisionTasks(
+  subject: WorkspaceSubject,
+  limit = 250,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunities = await collection('Opportunity');
-  const recommended = await opportunities.list({
+  const catalogCandidates = await opportunities.list({
     limit,
     orderBy: 'updated_at DESC',
     where: { status: 'recommended' },
   });
+  const evaluationScores = await listPrivateRecords(
+    'EvaluationScore',
+    verifiedSubject,
+    { limit, orderBy: 'updated_at DESC' },
+  );
+  const currentScoreByOpportunity = new Map<string, Record<string, unknown>>();
+  for (const score of evaluationScores) {
+    const opportunityId = stringValue(score.opportunityId);
+    if (opportunityId && !currentScoreByOpportunity.has(opportunityId)) {
+      currentScoreByOpportunity.set(opportunityId, score);
+    }
+  }
+  // A shared catalog recommendation can nominate a posting for inspection,
+  // but this candidate receives a task only when their own current score also
+  // recommends it.
+  const recommended = catalogCandidates.filter((opportunity) => {
+    const score = currentScoreByOpportunity.get(stringValue(opportunity.id));
+    return stringValue(score?.recommendation) === 'recommend';
+  });
 
+  const opportunityIds = recommended
+    .map((opportunity) => stringValue(opportunity.id))
+    .filter(Boolean);
+  const reviews = await loadCurrentOpportunityReviewOverlays({
+    opportunityIds,
+    subject: verifiedSubject,
+  });
   let created = 0;
   let existing = 0;
-  const closed = await closeStaleRecommendationTasks(opportunities);
+  const closed = await closeStaleRecommendationTasks(
+    opportunities,
+    verifiedSubject,
+  );
   for (const opportunity of recommended) {
     const opportunityId = stringValue(opportunity.id);
     if (!opportunityId) continue;
-    const result = await createTaskIfMissing(
-      `review-recommendation:${opportunityId}`,
+    const review = reviews.get(opportunityId);
+    const result = await createPrivateTaskIfMissing(
+      `review-recommendation:${verifiedSubject.profileId}:${opportunityId}`,
       {
         assigneeRole: 'owner',
         createdBy: 'automation',
-        description: recommendationTaskDescription(opportunity),
+        description: recommendationTaskDescription({
+          ...opportunity,
+          ...review,
+        }),
         dueAt: opportunity.expiresAt ?? null,
         kanbanColumn: 'needs_user_decision',
         opportunityId,
@@ -732,6 +941,7 @@ export async function syncRecommendedOpportunityDecisionTasks(limit = 250) {
         taskType: 'review_recommendation',
         title: `Review recommendation: ${titleForOpportunity(opportunity)}`,
       },
+      verifiedSubject,
     );
     if (result.created) created += 1;
     else existing += 1;
@@ -854,13 +1064,13 @@ export async function cancelStaleOpportunityIntelligenceTasks(
 
 async function closeStaleRecommendationTasks(
   opportunities: Collection,
+  subject: WorkspaceSubject,
 ): Promise<number> {
-  const tasks = await collection('Task');
-  const reviewTasks = await tasks.list({
+  const reviewTasks = (await listPrivateRecords('Task', subject, {
     limit: 500,
     orderBy: 'updated_at DESC',
     where: { taskType: 'review_recommendation' },
-  });
+  })) as MutableRecord[];
   let closed = 0;
   const now = new Date();
 
@@ -1018,16 +1228,31 @@ async function getOrCreateApplicationForOpportunity(
   opportunity: MutableRecord,
   decision: MutableRecord,
   now: Date,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const opportunityId = stringValue(opportunity.id);
-  const applications = await collection('Application');
-  const existing = await applications.list({
-    limit: 1,
-    orderBy: 'updated_at DESC',
-    where: { opportunityId },
-  });
+  const existing = (await listPrivateRecords(
+    'Application',
+    verifiedSubject,
+    {
+      limit: 1,
+      orderBy: 'updated_at DESC',
+      where: { opportunityId },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
   const existingApplication = existing[0];
-  const application = existingApplication ?? (await applications.create({}));
+  const application =
+    existingApplication ??
+    ((await createPrivateRecord(
+      'Application',
+      verifiedSubject,
+      {},
+      {
+        db: decisionDatabase(),
+      },
+    )) as MutableRecord);
   const applicationBeforeInitialization = { ...application };
   if (
     existingApplication &&
@@ -1087,7 +1312,7 @@ async function getOrCreateApplicationForOpportunity(
     await application.save();
   }
 
-  await createTaskIfMissing(
+  await createPrivateTaskIfMissing(
     `application-packet:${stringValue(application.id)}`,
     {
       applicationId: stringValue(application.id),
@@ -1105,9 +1330,10 @@ async function getOrCreateApplicationForOpportunity(
       taskType: 'prepare_application_packet',
       title: `Prepare application packet: ${titleForOpportunity(opportunity)}`,
     },
+    verifiedSubject,
   );
 
-  await createTaskIfMissing(
+  await createPrivateTaskIfMissing(
     applicationAccountCheckExternalTaskId(stringValue(application.id)),
     {
       applicationId: stringValue(application.id),
@@ -1122,6 +1348,7 @@ async function getOrCreateApplicationForOpportunity(
       taskType: 'account_setup',
       title: `Check account requirements: ${titleForOpportunity(opportunity)}`,
     },
+    verifiedSubject,
   );
 
   return application;
@@ -1184,12 +1411,14 @@ export async function ensureCompanyResearch(options: {
   sourceId?: string;
   createdBy?: string;
   reason?: string;
+  subject: WorkspaceSubject;
 }): Promise<{
   companyId: string;
   researchTaskId: string;
   careersSourceId: string;
   careersSourceCreated: boolean;
 }> {
+  const subject = requireWorkspaceSubject(options.subject);
   const companyId = stringValue(options.companyId);
   const empty = {
     careersSourceCreated: false,
@@ -1211,7 +1440,7 @@ export async function ensureCompanyResearch(options: {
 
   const companyName = stringValue(company.name) || companyId;
   const reason = stringValue(options.reason);
-  const { task } = await createTaskIfMissing(
+  const { task } = await createPrivateTaskIfMissing(
     `company-research:company:${companyId}`,
     {
       assigneeRole: 'hermes',
@@ -1228,6 +1457,7 @@ export async function ensureCompanyResearch(options: {
       taskType: 'research_company',
       title: `Research company: ${companyName}`,
     },
+    subject,
   );
 
   const careersSource = await ensureCompanyCareersSource(company);
@@ -1245,13 +1475,18 @@ export async function ensureCompanyResearch(options: {
 // directly with the same accept_to_apply semantics.
 async function assertNoApplicationForNonApplyDecision(
   opportunityId: string,
+  subject: WorkspaceSubject,
 ): Promise<void> {
-  const applications = await collection('Application');
-  const [existingApplication] = await applications.list({
-    limit: 1,
-    orderBy: 'updated_at DESC',
-    where: { opportunityId },
-  });
+  const [existingApplication] = await listPrivateRecords(
+    'Application',
+    requireWorkspaceSubject(subject),
+    {
+      limit: 1,
+      orderBy: 'updated_at DESC',
+      where: { opportunityId },
+    },
+    { db: decisionDatabase() },
+  );
   if (
     existingApplication &&
     !terminalApplicationStatuses.has(stringValue(existingApplication.status))
@@ -1318,7 +1553,7 @@ export async function runOpportunityLifecycleTransaction<T>(
   });
 }
 
-async function withOpportunityLifecycleLock<T>(
+export async function withOpportunityLifecycleLock<T>(
   opportunityId: string,
   action: () => Promise<T>,
 ): Promise<T> {
@@ -1506,6 +1741,7 @@ async function planAcceptedOpportunity(options: {
 
 async function kickOffAcceptedOpportunityResearch(
   opportunityId: string,
+  subject: WorkspaceSubject,
 ): Promise<void> {
   try {
     const opportunities = await collection('Opportunity');
@@ -1517,6 +1753,7 @@ async function kickOffAcceptedOpportunityResearch(
       opportunityId,
       organizationProfileId: stringValue(opportunity.organizationProfileId),
       sourceId: stringValue(opportunity.sourceId),
+      subject,
     });
   } catch {
     // Research kickoff is best-effort and runs after the lifecycle transaction
@@ -1525,18 +1762,19 @@ async function kickOffAcceptedOpportunityResearch(
 }
 
 type ExplicitOpportunityDecisionOptions = {
-  deciderProfileId?: string;
   decision: 'apply' | 'maybe' | 'reject';
   opportunityId: string;
   preflightOverrideReason?: string;
   reason?: string;
   reuseExistingApplication?: boolean;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 };
 
 export async function recordExplicitOpportunityDecision(
   options: ExplicitOpportunityDecisionOptions,
 ) {
+  const subject = decisionSubject(options);
   const opportunityId = stringValue(options.opportunityId);
   if (!opportunityId) error(400, 'Opportunity id is required.');
   const result =
@@ -1548,7 +1786,7 @@ export async function recordExplicitOpportunityDecision(
           return await runWithFreshPostingPreflight({
             action: 'accept_opportunity',
             onClosed: async () => {
-              await archiveApplicationsForClosedPosting(opportunityId);
+              await archiveApplicationsForClosedPosting(opportunityId, subject);
             },
             opportunity,
             overrideReason: options.preflightOverrideReason,
@@ -1570,14 +1808,14 @@ export async function recordExplicitOpportunityDecision(
         );
   if (result.syncRecommendationTasks) {
     try {
-      await syncRecommendedOpportunityDecisionTasks();
+      await syncRecommendedOpportunityDecisionTasks(decisionSubject(options));
     } catch {
       // The decision is already committed. Do not report it as failed merely
       // because the global task-board reconciliation needs a later retry.
     }
   }
   if (options.decision === 'apply' && !result.applicationReused) {
-    await kickOffAcceptedOpportunityResearch(opportunityId);
+    await kickOffAcceptedOpportunityResearch(opportunityId, subject);
     await planAcceptedOpportunity({
       applicationId: stringValue(result.applicationId),
       opportunityId,
@@ -1592,6 +1830,7 @@ export async function recordExplicitOpportunityDecision(
 async function recordExplicitOpportunityDecisionUnlocked(
   options: ExplicitOpportunityDecisionOptions,
 ) {
+  const subject = decisionSubject(options);
   const opportunityId = stringValue(options.opportunityId);
   if (!opportunityId) {
     error(400, 'Opportunity id is required.');
@@ -1604,12 +1843,16 @@ async function recordExplicitOpportunityDecisionUnlocked(
   }
 
   if (options.decision === 'apply' && options.reuseExistingApplication) {
-    const applications = await collection('Application');
-    const [existingApplication] = await applications.list({
-      limit: 1,
-      orderBy: 'updated_at DESC',
-      where: { opportunityId },
-    });
+    const [existingApplication] = await listPrivateRecords(
+      'Application',
+      subject,
+      {
+        limit: 1,
+        orderBy: 'updated_at DESC',
+        where: { opportunityId },
+      },
+      { db: decisionDatabase() },
+    );
     if (existingApplication) {
       return {
         applicationId: stringValue(existingApplication.id),
@@ -1623,15 +1866,10 @@ async function recordExplicitOpportunityDecisionUnlocked(
   }
 
   if (options.decision !== 'apply') {
-    await assertNoApplicationForNonApplyDecision(opportunityId);
+    await assertNoApplicationForNonApplyDecision(opportunityId, subject);
   }
 
-  const tasks = await collection('Task');
-  const reviewTasks = await tasks.list({
-    limit: 25,
-    orderBy: 'updated_at DESC',
-    where: { opportunityId, taskType: 'review_recommendation' },
-  });
+  const reviewTasks = await privateRecommendationTasks(opportunityId, subject);
   const activeReviewTask = reviewTasks.find(
     (task) =>
       isActiveTaskStatus(task.status) && stringValue(task.status) !== 'blocked',
@@ -1645,9 +1883,9 @@ async function recordExplicitOpportunityDecisionUnlocked(
           : options.decision === 'maybe'
             ? 'defer'
             : 'reject',
-      deciderProfileId: options.deciderProfileId,
       preflightOverrideReason: options.preflightOverrideReason,
       reason: options.reason,
+      subject,
       taskId: stringValue(activeReviewTask.id),
       user: options.user,
     });
@@ -1662,14 +1900,13 @@ async function recordExplicitOpportunityDecisionUnlocked(
 
   if (options.decision === 'apply') {
     const result = await acceptOpportunityForApplicationUnlocked({
-      deciderProfileId: options.deciderProfileId,
       opportunityId,
       preflightOverrideReason: options.preflightOverrideReason,
       reason: options.reason,
+      subject,
       user: options.user,
     });
-    const decisions = await collection('Decision');
-    const [decision] = await decisions.list({
+    const [decision] = await listPrivateRecords('Decision', subject, {
       limit: 1,
       orderBy: 'updated_at DESC',
       where: { opportunityId },
@@ -1689,20 +1926,18 @@ async function recordExplicitOpportunityDecisionUnlocked(
   // status. Match the queued recommendation/defer path by preserving the
   // current lifecycle status while recording humanReviewStatus = "maybe".
   const nextStatus = options.decision === 'maybe' ? previousStatus : 'rejected';
-  const decisions = await collection('Decision');
-  const decision = await decisions.create({
+  const decision = (await createPrivateDecision({
+    database: decisionDatabase(),
     decision: options.decision === 'maybe' ? 'defer' : 'reject',
-    decisionBy: 'owner',
-    deciderProfileId: stringValue(options.deciderProfileId),
-    deciderUserId: stringValue(options.user?.id),
     newStatus: nextStatus,
     opportunityId,
     previousStatus,
     reason: stringValue(options.reason),
-  });
+    subject,
+  })) as MutableRecord;
   await decision.save();
 
-  Object.assign(opportunity, {
+  assignLegacyOpportunityReview(opportunity, {
     humanReviewStatus: options.decision,
     humanReviewNotes: [
       stringValue(opportunity.humanReviewNotes),
@@ -1711,11 +1946,11 @@ async function recordExplicitOpportunityDecisionUnlocked(
       .filter(Boolean)
       .join('\n'),
     reviewedAt: now,
-    reviewedByProfileId: stringValue(options.deciderProfileId),
-    reviewedByUserId: stringValue(options.user?.id),
+    reviewedByProfileId: subject.profileId,
+    reviewedByUserId: subject.userId,
     status: nextStatus,
   });
-  await opportunity.save();
+  if (!isSharedHosted()) await opportunity.save();
 
   return {
     applicationId: '',
@@ -1728,16 +1963,17 @@ async function recordExplicitOpportunityDecisionUnlocked(
 }
 
 type AcceptOpportunityOptions = {
-  deciderProfileId?: string;
   opportunityId: string;
   preflightOverrideReason?: string;
   reason?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 };
 
 export async function acceptOpportunityForApplication(
   options: AcceptOpportunityOptions,
 ) {
+  const subject = decisionSubject(options);
   const opportunityId = stringValue(options.opportunityId);
   if (!opportunityId) error(400, 'Opportunity id is required.');
   const opportunities = await collection('Opportunity');
@@ -1746,7 +1982,7 @@ export async function acceptOpportunityForApplication(
   const result = await runWithFreshPostingPreflight({
     action: 'accept_opportunity',
     onClosed: async () => {
-      await archiveApplicationsForClosedPosting(opportunityId);
+      await archiveApplicationsForClosedPosting(opportunityId, subject);
     },
     opportunity,
     overrideReason: options.preflightOverrideReason,
@@ -1756,7 +1992,7 @@ export async function acceptOpportunityForApplication(
       ),
     user: options.user,
   });
-  await kickOffAcceptedOpportunityResearch(opportunityId);
+  await kickOffAcceptedOpportunityResearch(opportunityId, subject);
   await planAcceptedOpportunity({
     applicationId:
       'applicationId' in result
@@ -1771,6 +2007,7 @@ export async function acceptOpportunityForApplication(
 async function acceptOpportunityForApplicationUnlocked(
   options: AcceptOpportunityOptions,
 ) {
+  const subject = decisionSubject(options);
   const opportunityId = stringValue(options.opportunityId);
   if (!opportunityId) {
     error(400, 'Opportunity id is required.');
@@ -1783,12 +2020,7 @@ async function acceptOpportunityForApplicationUnlocked(
   }
   assertOpportunityIsOpenForApplicationWork(opportunity);
 
-  const tasks = await collection('Task');
-  const reviewTasks = await tasks.list({
-    limit: 25,
-    orderBy: 'updated_at DESC',
-    where: { opportunityId, taskType: 'review_recommendation' },
-  });
+  const reviewTasks = await privateRecommendationTasks(opportunityId, subject);
   const activeReviewTask = reviewTasks.find(
     (task) =>
       isActiveTaskStatus(task.status) && stringValue(task.status) !== 'blocked',
@@ -1797,9 +2029,9 @@ async function acceptOpportunityForApplicationUnlocked(
   if (activeReviewTask && stringValue(opportunity.status) === 'recommended') {
     return await processRecommendationTaskUnlocked({
       decision: 'accept_to_apply',
-      deciderProfileId: options.deciderProfileId,
       preflightOverrideReason: options.preflightOverrideReason,
       reason: options.reason ?? 'Accepted from opportunities list.',
+      subject,
       taskId: stringValue(activeReviewTask.id),
       user: options.user,
     });
@@ -1807,32 +2039,31 @@ async function acceptOpportunityForApplicationUnlocked(
 
   const now = new Date();
   const previousStatus = stringValue(opportunity.status);
-  const decisions = await collection('Decision');
-  const decision = await decisions.create({
+  const decision = (await createPrivateDecision({
+    database: decisionDatabase(),
     decision: 'accept_to_apply',
-    decisionBy: 'owner',
-    deciderProfileId: stringValue(options.deciderProfileId),
-    deciderUserId: stringValue(options.user?.id),
     newStatus: 'apply',
     opportunityId,
     previousStatus,
     reason: stringValue(options.reason) || 'Accepted from opportunities list.',
-  });
+    subject,
+  })) as MutableRecord;
   await decision.save();
 
-  Object.assign(opportunity, {
+  assignLegacyOpportunityReview(opportunity, {
     humanReviewStatus: 'apply',
     reviewedAt: now,
-    reviewedByProfileId: stringValue(options.deciderProfileId),
-    reviewedByUserId: stringValue(options.user?.id),
+    reviewedByProfileId: subject.profileId,
+    reviewedByUserId: subject.userId,
     status: 'apply',
   });
-  await opportunity.save();
+  if (!isSharedHosted()) await opportunity.save();
 
   const application = await getOrCreateApplicationForOpportunity(
     opportunity,
     decision,
     now,
+    subject,
   );
   decision.applicationId = stringValue(application.id);
   await decision.save();
@@ -1845,9 +2076,9 @@ async function acceptOpportunityForApplicationUnlocked(
 
 type RecommendationTaskOptions = {
   decision: string;
-  deciderProfileId?: string;
   preflightOverrideReason?: string;
   reason?: string;
+  subject: WorkspaceSubject;
   taskId: string;
   user?: Pick<User, 'id'> | null;
 };
@@ -1855,8 +2086,8 @@ type RecommendationTaskOptions = {
 export async function processRecommendationTask(
   options: RecommendationTaskOptions,
 ) {
-  const tasks = await collection('Task');
-  const task = await tasks.get(stringValue(options.taskId));
+  const subject = decisionSubject(options);
+  const task = await privateDecisionTask(stringValue(options.taskId), subject);
   if (!task) error(404, 'Task not found.');
   const opportunityId = stringValue(task.opportunityId);
   if (!opportunityId)
@@ -1870,7 +2101,7 @@ export async function processRecommendationTask(
           return await runWithFreshPostingPreflight({
             action: 'accept_opportunity',
             onClosed: async () => {
-              await archiveApplicationsForClosedPosting(opportunityId);
+              await archiveApplicationsForClosedPosting(opportunityId, subject);
             },
             opportunity,
             overrideReason: options.preflightOverrideReason,
@@ -1889,7 +2120,7 @@ export async function processRecommendationTask(
             ),
         );
   if (options.decision === 'accept_to_apply') {
-    await kickOffAcceptedOpportunityResearch(opportunityId);
+    await kickOffAcceptedOpportunityResearch(opportunityId, subject);
     await planAcceptedOpportunity({
       applicationId: stringValue(result.task.applicationId),
       opportunityId,
@@ -1902,13 +2133,13 @@ export async function processRecommendationTask(
 async function processRecommendationTaskUnlocked(
   options: RecommendationTaskOptions,
 ) {
+  const subject = decisionSubject(options);
   const decisionValue = requireKnownValue(
     stringValue(options.decision),
     recommendationDecisions,
     'Invalid recommendation decision.',
   );
-  const tasks = await collection('Task');
-  const task = await tasks.get(stringValue(options.taskId));
+  const task = await privateDecisionTask(stringValue(options.taskId), subject);
   if (!task) {
     error(404, 'Task not found.');
   }
@@ -1944,7 +2175,7 @@ async function processRecommendationTaskUnlocked(
     error(400, 'Opportunity is no longer recommended for review.');
   }
   if (['reject', 'archive', 'defer'].includes(decisionValue)) {
-    await assertNoApplicationForNonApplyDecision(opportunityId);
+    await assertNoApplicationForNonApplyDecision(opportunityId, subject);
   }
   const now = new Date();
   const previousStatus = stringValue(opportunity.status);
@@ -1957,56 +2188,55 @@ async function processRecommendationTaskUnlocked(
           ? 'archived'
           : previousStatus;
 
-  const decisions = await collection('Decision');
-  const decision = await decisions.create({
+  const decision = (await createPrivateDecision({
+    database: decisionDatabase(),
     decision: decisionValue,
-    decisionBy: 'owner',
-    deciderProfileId: stringValue(options.deciderProfileId),
-    deciderUserId: stringValue(options.user?.id),
     newStatus,
     opportunityId,
     previousStatus,
     reason: stringValue(options.reason),
+    subject,
     taskId: stringValue(task.id),
-  });
+  })) as MutableRecord;
   await decision.save();
 
   task.decisionId = stringValue(decision.id);
 
   if (decisionValue === 'accept_to_apply') {
-    Object.assign(opportunity, {
+    assignLegacyOpportunityReview(opportunity, {
       humanReviewStatus: 'apply',
       reviewedAt: now,
-      reviewedByProfileId: stringValue(options.deciderProfileId),
-      reviewedByUserId: stringValue(options.user?.id),
+      reviewedByProfileId: subject.profileId,
+      reviewedByUserId: subject.userId,
       status: 'apply',
     });
-    await opportunity.save();
+    if (!isSharedHosted()) await opportunity.save();
     const application = await getOrCreateApplicationForOpportunity(
       opportunity,
       decision,
       now,
+      subject,
     );
     decision.applicationId = stringValue(application.id);
     await decision.save();
     task.applicationId = stringValue(application.id);
     await markTaskDone(task, now, { kanbanColumn: 'accepted_apply' });
   } else if (decisionValue === 'reject' || decisionValue === 'archive') {
-    Object.assign(opportunity, {
+    assignLegacyOpportunityReview(opportunity, {
       humanReviewStatus: decisionValue === 'reject' ? 'reject' : 'archived',
       reviewedAt: now,
-      reviewedByProfileId: stringValue(options.deciderProfileId),
-      reviewedByUserId: stringValue(options.user?.id),
+      reviewedByProfileId: subject.profileId,
+      reviewedByUserId: subject.userId,
       status: newStatus,
     });
-    await opportunity.save();
+    if (!isSharedHosted()) await opportunity.save();
     await markTaskDone(task, now, { kanbanColumn: 'rejected_archived' });
   } else if (decisionValue === 'defer') {
-    Object.assign(opportunity, {
+    assignLegacyOpportunityReview(opportunity, {
       humanReviewStatus: 'maybe',
       reviewedAt: now,
-      reviewedByProfileId: stringValue(options.deciderProfileId),
-      reviewedByUserId: stringValue(options.user?.id),
+      reviewedByProfileId: subject.profileId,
+      reviewedByUserId: subject.userId,
     });
     Object.assign(task, {
       assigneeRole: 'owner',
@@ -2016,7 +2246,10 @@ async function processRecommendationTaskUnlocked(
       kanbanColumn: 'follow_up',
       status: 'open',
     });
-    await Promise.all([opportunity.save(), task.save()]);
+    await Promise.all([
+      ...(isSharedHosted() ? [] : [opportunity.save()]),
+      task.save(),
+    ]);
   } else if (decisionValue === 'request_more_research') {
     Object.assign(task, {
       blockerOwnerRole: 'hermes',
@@ -2026,19 +2259,23 @@ async function processRecommendationTaskUnlocked(
       status: 'blocked',
     });
     await task.save();
-    await createTaskIfMissing(`company-research:${opportunityId}`, {
-      assigneeRole: 'hermes',
-      createdBy: 'owner',
-      description:
-        stringValue(options.reason) ||
-        'Research the company, role fit, risks, compensation, location, and application path before the user decides.',
-      kanbanColumn: 'researching',
-      opportunityId,
-      organizationProfileId: stringValue(opportunity.organizationProfileId),
-      sourceId: stringValue(opportunity.sourceId),
-      taskType: 'research_company',
-      title: `Research before decision: ${titleForOpportunity(opportunity)}`,
-    });
+    await createPrivateTaskIfMissing(
+      decisionFollowUpTaskId('company-research', opportunityId, subject),
+      {
+        assigneeRole: 'hermes',
+        createdBy: 'owner',
+        description:
+          stringValue(options.reason) ||
+          'Research the company, role fit, risks, compensation, location, and application path before the user decides.',
+        kanbanColumn: 'researching',
+        opportunityId,
+        organizationProfileId: stringValue(opportunity.organizationProfileId),
+        sourceId: stringValue(opportunity.sourceId),
+        taskType: 'research_company',
+        title: `Research before decision: ${titleForOpportunity(opportunity)}`,
+      },
+      subject,
+    );
   } else if (decisionValue === 'revise_score') {
     Object.assign(task, {
       blockerOwnerRole: 'automation',
@@ -2048,19 +2285,23 @@ async function processRecommendationTaskUnlocked(
       status: 'blocked',
     });
     await task.save();
-    await createTaskIfMissing(`revise-score:${opportunityId}`, {
-      assigneeRole: 'automation',
-      createdBy: 'owner',
-      description:
-        stringValue(options.reason) ||
-        'Re-run or revise scoring signals, then summarize the changed recommendation.',
-      kanbanColumn: 'researching',
-      opportunityId,
-      organizationProfileId: stringValue(opportunity.organizationProfileId),
-      sourceId: stringValue(opportunity.sourceId),
-      taskType: 'score_opportunity',
-      title: `Revise opportunity score: ${titleForOpportunity(opportunity)}`,
-    });
+    await createPrivateTaskIfMissing(
+      decisionFollowUpTaskId('revise-score', opportunityId, subject),
+      {
+        assigneeRole: 'automation',
+        createdBy: 'owner',
+        description:
+          stringValue(options.reason) ||
+          'Re-run or revise scoring signals, then summarize the changed recommendation.',
+        kanbanColumn: 'researching',
+        opportunityId,
+        organizationProfileId: stringValue(opportunity.organizationProfileId),
+        sourceId: stringValue(opportunity.sourceId),
+        taskType: 'score_opportunity',
+        title: `Revise opportunity score: ${titleForOpportunity(opportunity)}`,
+      },
+      subject,
+    );
   }
 
   return {
@@ -2161,19 +2402,77 @@ function accountTaskDescription(
     .join('\n');
 }
 
+function installationOperatorTaskSubject(): WorkspaceSubject {
+  // Sources are global/operator-managed catalog records. A task about their
+  // credentials may only be materialized for the verified installation
+  // operator; never accept a caller-provided candidate/profile selector.
+  if (!isCurrentWorkspaceOperator()) {
+    error(403, 'Source account tasks require an installation operator.');
+  }
+  const current = requireCurrentWorkspaceSubject();
+  if (!current.profileId) {
+    error(403, 'The installation operator requires a candidate profile.');
+  }
+  return requireWorkspaceSubject({ ...current, profileId: current.profileId });
+}
+
+async function closeStalePrivateSourceAccountTasks(
+  sourceId: string,
+  nextStatus: string,
+  subject: WorkspaceSubject,
+): Promise<number> {
+  const prefix = `source-account:${sourceId}:`;
+  const records = (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 100,
+      orderBy: 'updated_at DESC',
+      where: { sourceId, taskType: 'account_setup' },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
+  const currentExternalTaskIds = shouldCreateAccountTask(nextStatus)
+    ? new Set([`${prefix}${nextStatus}`])
+    : new Set<string>();
+  const now = new Date();
+  let closed = 0;
+  for (const task of records) {
+    const externalTaskId = stringValue(task.externalTaskId);
+    if (
+      !isActiveTaskStatus(task.status) ||
+      !externalTaskId.startsWith(prefix) ||
+      currentExternalTaskIds.has(externalTaskId)
+    ) {
+      continue;
+    }
+    await markTaskDone(task, now, {
+      kanbanColumn:
+        stringValue(task.kanbanColumn) || 'needs_account_credentials',
+    });
+    closed += 1;
+  }
+  return closed;
+}
+
 export async function syncSourceAccountTasks(source: Record<string, unknown>) {
+  const subject = installationOperatorTaskSubject();
   const sourceId = stringValue(source.id);
   const status = normalizeAccountStatus(source.accountStatus);
   if (!sourceId) {
     return { closed: 0, created: 0, existing: 0 };
   }
 
-  const closed = await closeStaleAccountTasks({ sourceId }, status);
+  const closed = await closeStalePrivateSourceAccountTasks(
+    sourceId,
+    status,
+    subject,
+  );
   if (!shouldCreateAccountTask(status)) {
     return { closed, created: 0, existing: 0 };
   }
 
-  const result = await createTaskIfMissing(
+  const result = await createPrivateTaskIfMissing(
     `source-account:${sourceId}:${status}`,
     {
       assigneeRole: accountOwnerRole(status),
@@ -2188,6 +2487,7 @@ export async function syncSourceAccountTasks(source: Record<string, unknown>) {
       taskType: 'account_setup',
       title: `Resolve source account: ${stringValue(source.name) || sourceId}`,
     },
+    subject,
   );
   return {
     closed,
@@ -2196,21 +2496,77 @@ export async function syncSourceAccountTasks(source: Record<string, unknown>) {
   };
 }
 
+async function closeStalePrivateApplicationAccountTasks(
+  applicationId: string,
+  nextStatus: string,
+  subject: WorkspaceSubject,
+): Promise<number> {
+  const prefix = `application-account:${applicationId}:`;
+  const records = (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 100,
+      orderBy: 'updated_at DESC',
+      where: { applicationId, taskType: 'account_setup' },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
+  const currentExternalTaskIds = new Set<string>();
+  if (shouldCreateAccountTask(nextStatus)) {
+    currentExternalTaskIds.add(`${prefix}${nextStatus}`);
+  } else if (nextStatus === 'unknown') {
+    currentExternalTaskIds.add(
+      applicationAccountCheckExternalTaskId(applicationId),
+    );
+    currentExternalTaskIds.add(`account-check:${applicationId}`);
+  }
+  let closed = 0;
+  const now = new Date();
+  for (const task of records) {
+    const externalTaskId = stringValue(task.externalTaskId);
+    const isLegacyApplicationCheck =
+      externalTaskId === `account-check:${applicationId}`;
+    if (
+      !isActiveTaskStatus(task.status) ||
+      (!externalTaskId.startsWith(prefix) && !isLegacyApplicationCheck) ||
+      currentExternalTaskIds.has(externalTaskId)
+    ) {
+      continue;
+    }
+    await markTaskDone(task, now, {
+      kanbanColumn:
+        stringValue(task.kanbanColumn) || 'needs_account_credentials',
+    });
+    closed += 1;
+  }
+  return closed;
+}
+
 async function syncApplicationAccountTask(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  if (!recordOwnedBySubject(application, verifiedSubject)) {
+    error(404, 'Application not found.');
+  }
   const applicationId = stringValue(application.id);
   const status = normalizeAccountStatus(application.accountStatus);
   if (!applicationId) {
     return { closed: 0, created: 0, existing: 0 };
   }
 
-  const closed = await closeStaleAccountTasks({ applicationId }, status);
+  const closed = await closeStalePrivateApplicationAccountTasks(
+    applicationId,
+    status,
+    verifiedSubject,
+  );
   if (!shouldCreateAccountTask(status)) {
     return { closed, created: 0, existing: 0 };
   }
 
-  const result = await createTaskIfMissing(
+  const result = await createPrivateTaskIfMissing(
     `application-account:${applicationId}:${status}`,
     {
       applicationId,
@@ -2226,6 +2582,7 @@ async function syncApplicationAccountTask(
       taskType: 'account_setup',
       title: `Resolve application account: ${applicationId}`,
     },
+    verifiedSubject,
   );
   return {
     closed,
@@ -2250,16 +2607,21 @@ function applicationKanbanColumn(status: string): string {
 async function closeStaleApplicationWorkflowTasks(
   application: Record<string, unknown>,
   status: string,
+  subject: WorkspaceSubject,
 ): Promise<number> {
   const applicationId = stringValue(application.id);
   if (!applicationId) return 0;
 
-  const tasks = await collection('Task');
-  const records = await tasks.list({
-    limit: 200,
-    orderBy: 'updated_at DESC',
-    where: { applicationId },
-  });
+  const records = (await listPrivateRecords(
+    'Task',
+    subject,
+    {
+      limit: 200,
+      orderBy: 'updated_at DESC',
+      where: { applicationId },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
   const activeTaskTypes = new Set(
     activeApplicationTaskTypesByStatus[status] ?? [],
   );
@@ -2301,11 +2663,11 @@ async function closeStaleApplicationWorkflowTasks(
 
 async function cancelActiveApplicationTasksForClosedPosting(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<number> {
   const applicationId = stringValue(application.id);
   if (!applicationId) return 0;
 
-  const tasks = await collection('Task');
   const now = new Date();
   let canceled = 0;
 
@@ -2313,11 +2675,16 @@ async function cancelActiveApplicationTasksForClosedPosting(
   // status, so this cannot skip older tasks when a completed-task history
   // fills the first page.
   while (true) {
-    const records = await tasks.list({
-      limit: 200,
-      orderBy: 'updated_at DESC',
-      where: { applicationId, status: activeTaskStatuses },
-    });
+    const records = (await listPrivateRecords(
+      'Task',
+      subject,
+      {
+        limit: 200,
+        orderBy: 'updated_at DESC',
+        where: { applicationId, status: activeTaskStatuses },
+      },
+      { db: decisionDatabase() },
+    )) as MutableRecord[];
     if (records.length === 0) break;
 
     for (const task of records) {
@@ -2363,7 +2730,12 @@ async function runApplicationCleanupTransaction<T>(
  */
 export async function archiveApplicationForCleanup(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<{ canceled: number; status: 'archived' }> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  if (!recordOwnedBySubject(application, verifiedSubject)) {
+    error(404, 'Application not found.');
+  }
   return await runApplicationCleanupTransaction(async (database) => {
     if (normalizeApplicationStatus(application.status) !== 'archived') {
       if (
@@ -2381,7 +2753,10 @@ export async function archiveApplicationForCleanup(
     }
 
     return {
-      canceled: await cancelActiveApplicationTasksForClosedPosting(application),
+      canceled: await cancelActiveApplicationTasksForClosedPosting(
+        application,
+        verifiedSubject,
+      ),
       status: 'archived',
     };
   });
@@ -2389,7 +2764,12 @@ export async function archiveApplicationForCleanup(
 
 export async function syncApplicationWorkflowTasks(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  if (!recordOwnedBySubject(application, verifiedSubject)) {
+    error(404, 'Application not found.');
+  }
   const applicationId = stringValue(application.id);
   if (!applicationId) return { closed: 0, created: 0 };
 
@@ -2397,12 +2777,19 @@ export async function syncApplicationWorkflowTasks(
   const status = normalizeApplicationStatus(application.status);
   const opportunityId = stringValue(application.opportunityId);
 
-  const accountResult = await syncApplicationAccountTask(application);
+  const accountResult = await syncApplicationAccountTask(
+    application,
+    verifiedSubject,
+  );
   created += accountResult.created;
-  const closed = await closeStaleApplicationWorkflowTasks(application, status);
+  const closed = await closeStaleApplicationWorkflowTasks(
+    application,
+    status,
+    verifiedSubject,
+  );
 
   if (status === 'draft' || status === 'application_drafting') {
-    const result = await createTaskIfMissing(
+    const result = await createPrivateTaskIfMissing(
       `application-packet:${applicationId}`,
       {
         applicationId,
@@ -2415,6 +2802,7 @@ export async function syncApplicationWorkflowTasks(
         taskType: 'prepare_application_packet',
         title: `Prepare application packet: ${applicationId}`,
       },
+      verifiedSubject,
     );
     if (result.created) created += 1;
   }
@@ -2427,13 +2815,14 @@ export async function syncApplicationWorkflowTasks(
     status === 'awaiting_user' &&
     summarizeApplicationFormAnswers(application).missingRequiredAnswers.length >
       0 &&
-    (await hasActiveApplicationTaskOfType(
+    (await hasActivePrivateApplicationTaskOfType(
       applicationId,
       'collect_application_answers',
+      verifiedSubject,
     ));
 
   if (status === 'awaiting_user' && !collectingAnswers) {
-    const result = await createTaskIfMissing(
+    const result = await createPrivateTaskIfMissing(
       `approve-application:${applicationId}`,
       {
         applicationId,
@@ -2455,6 +2844,7 @@ export async function syncApplicationWorkflowTasks(
         taskType: 'approve_application',
         title: `Review application packet: ${applicationId}`,
       },
+      verifiedSubject,
     );
     if (result.created) created += 1;
   }
@@ -2464,7 +2854,7 @@ export async function syncApplicationWorkflowTasks(
     status === 'submitting' ||
     status === 'manual_submission'
   ) {
-    const result = await createTaskIfMissing(
+    const result = await createPrivateTaskIfMissing(
       `submit-application:${applicationId}`,
       {
         applicationId,
@@ -2493,17 +2883,18 @@ export async function syncApplicationWorkflowTasks(
         taskType: 'submit_application',
         title: `Submit approved application: ${applicationId}`,
       },
+      verifiedSubject,
     );
     if (result.created) created += 1;
   }
 
   if (status === 'submitted') {
     await syncSubmittedOpportunityStatus(application);
-    created += await syncPostSubmissionTasks(application);
+    created += await syncPostSubmissionTasks(application, verifiedSubject);
   }
 
   if (status === 'interviewing') {
-    const result = await createTaskIfMissing(
+    const result = await createPrivateTaskIfMissing(
       `interview-prep:${applicationId}`,
       {
         applicationId,
@@ -2516,6 +2907,7 @@ export async function syncApplicationWorkflowTasks(
         taskType: 'interview_prep',
         title: `Prepare interview: ${applicationId}`,
       },
+      verifiedSubject,
     );
     if (result.created) created += 1;
   }
@@ -2530,29 +2922,44 @@ export async function syncApplicationWorkflowTasks(
  */
 export async function archiveApplicationForClosedPosting(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<void> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  if (!recordOwnedBySubject(application, verifiedSubject)) {
+    error(404, 'Application not found.');
+  }
   const status = normalizeApplicationStatus(application.status);
   if (!postingClosureArchiveableApplicationStatuses.has(status)) return;
-  await archiveApplicationForCleanup(application);
+  await archiveApplicationForCleanup(application, verifiedSubject);
 }
 
 export async function archiveApplicationsForClosedPosting(
   opportunityId: string,
+  subject: WorkspaceSubject,
 ): Promise<void> {
-  const applications = await collection('Application');
-  const records = await applications.list({
-    limit: 200,
-    orderBy: 'updated_at DESC',
-    where: { opportunityId },
-  });
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const records = (await listPrivateRecords(
+    'Application',
+    verifiedSubject,
+    {
+      limit: 200,
+      orderBy: 'updated_at DESC',
+      where: { opportunityId },
+    },
+    { db: decisionDatabase() },
+  )) as MutableRecord[];
   for (const application of records) {
-    await archiveApplicationForClosedPosting(application);
+    await archiveApplicationForClosedPosting(application, verifiedSubject);
   }
 }
 
 async function syncSubmittedOpportunityStatus(
   application: Record<string, unknown>,
 ) {
+  // Opportunity is shared catalog data in hosted mode. An individual's
+  // submission belongs to their private Application and must not change the
+  // global posting state seen by other workspaces.
+  if (isSharedHosted()) return;
   const opportunityId = stringValue(application.opportunityId);
   if (!opportunityId) return;
 
@@ -2575,27 +2982,32 @@ async function syncSubmittedOpportunityStatus(
 
 async function syncPostSubmissionTasks(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<number> {
   const applicationId = stringValue(application.id);
   const submittedAt = dateValue(application.submittedAt) ?? new Date();
   let created = 0;
 
-  const followUp = await createTaskIfMissing(`follow-up:${applicationId}`, {
-    applicationId,
-    assigneeRole: 'owner',
-    createdBy: 'automation',
-    description:
-      'Follow up on this submitted application. Review any portal, recruiter reply, or company contact before sending external messages.',
-    dueAt: addDays(submittedAt, postSubmissionFollowUpDays),
-    kanbanColumn: 'follow_up',
-    opportunityId: stringValue(application.opportunityId),
-    status: 'open',
-    taskType: 'follow_up',
-    title: `Follow up on submitted application: ${applicationId}`,
-  });
+  const followUp = await createPrivateTaskIfMissing(
+    `follow-up:${applicationId}`,
+    {
+      applicationId,
+      assigneeRole: 'owner',
+      createdBy: 'automation',
+      description:
+        'Follow up on this submitted application. Review any portal, recruiter reply, or company contact before sending external messages.',
+      dueAt: addDays(submittedAt, postSubmissionFollowUpDays),
+      kanbanColumn: 'follow_up',
+      opportunityId: stringValue(application.opportunityId),
+      status: 'open',
+      taskType: 'follow_up',
+      title: `Follow up on submitted application: ${applicationId}`,
+    },
+    subject,
+  );
   if (followUp.created) created += 1;
 
-  const checkStatus = await createTaskIfMissing(
+  const checkStatus = await createPrivateTaskIfMissing(
     `check-status:${applicationId}`,
     {
       applicationId,
@@ -2610,6 +3022,7 @@ async function syncPostSubmissionTasks(
       taskType: 'check_status',
       title: `Check application status: ${applicationId}`,
     },
+    subject,
   );
   if (checkStatus.created) created += 1;
 
@@ -2705,11 +3118,17 @@ export function validateSubmittedApplicationPayload(options: {
   return null;
 }
 
-async function validatedSubmissionTask(taskId: string, applicationId: string) {
+async function validatedSubmissionTask(
+  taskId: string,
+  applicationId: string,
+  subject: WorkspaceSubject,
+) {
   const normalizedTaskId = stringValue(taskId);
   if (!normalizedTaskId) return null;
 
-  const task = await (await collection('Task')).get(normalizedTaskId);
+  const task = (await getPrivateRecord('Task', normalizedTaskId, subject, {
+    db: decisionDatabase(),
+  })) as MutableRecord | null;
   if (!task) {
     error(404, 'Submission task not found.');
   }
@@ -2728,14 +3147,20 @@ async function validatedSubmissionTask(taskId: string, applicationId: string) {
 
 async function getOrCreateSubmissionTask(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
   taskId = '',
 ): Promise<MutableRecord> {
   const applicationId = stringValue(application.id);
-  const explicitTask = await validatedSubmissionTask(taskId, applicationId);
+  const explicitTask = await validatedSubmissionTask(
+    taskId,
+    applicationId,
+    subject,
+  );
   if (explicitTask) return explicitTask;
 
-  const existingTask = await findTaskByExternalId(
+  const existingTask = await findPrivateTaskByExternalId(
     `submit-application:${applicationId}`,
+    subject,
   );
   if (existingTask) return existingTask;
 
@@ -2751,7 +3176,7 @@ async function getOrCreateSubmissionTask(
     );
   }
 
-  const result = await createTaskIfMissing(
+  const result = await createPrivateTaskIfMissing(
     `submit-application:${applicationId}`,
     {
       applicationId,
@@ -2773,6 +3198,7 @@ async function getOrCreateSubmissionTask(
       taskType: 'submit_application',
       title: `Submit approved application: ${applicationId}`,
     },
+    subject,
   );
   return result.task;
 }
@@ -2799,16 +3225,22 @@ async function commitSubmittedApplication(
 export async function recordApplicationSubmission(options: {
   approvalMaterialsCurrent?: (
     application: Record<string, unknown>,
+    subject: WorkspaceSubject,
   ) => Promise<boolean>;
   applicationId: string;
   evidenceUrl?: string;
   notes?: string;
-  profileId?: string;
   submissionMethod: string;
+  subject: WorkspaceSubject;
   submittedByRole: string;
   taskId?: string;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
+  const actingUserId = stringValue(options.user?.id);
+  if (actingUserId && actingUserId !== subject.userId) {
+    error(403, 'Submission actor is outside the verified workspace.');
+  }
   const method = requireKnownValue(
     stringValue(options.submissionMethod),
     submissionMethods,
@@ -2819,10 +3251,12 @@ export async function recordApplicationSubmission(options: {
     submittedByRoles,
     'Invalid submission actor.',
   );
-  const applications = await collection('Application');
-  const application = await applications.get(
+  const application = (await getPrivateRecord(
+    'Application',
     stringValue(options.applicationId),
-  );
+    subject,
+    { db: decisionDatabase() },
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
@@ -2831,6 +3265,7 @@ export async function recordApplicationSubmission(options: {
   const submissionTask = await validatedSubmissionTask(
     stringValue(options.taskId),
     stringValue(application.id),
+    subject,
   );
   const payload: Record<string, unknown> = {
     // The approved destination is part of the final-approval snapshot. The
@@ -2839,7 +3274,7 @@ export async function recordApplicationSubmission(options: {
     applicationUrl: stringValue(application.applicationUrl),
     status: 'submitted',
     submittedAt: now,
-    submittedByProfileId: stringValue(options.profileId),
+    submittedByProfileId: subject.profileId,
     submittedByRole: actor,
     submittedByUserId: actor === 'owner' ? stringValue(options.user?.id) : '',
     submissionEvidenceUrl:
@@ -2912,7 +3347,10 @@ export async function recordApplicationSubmission(options: {
         const { finalApplicationApprovalMaterialsAreCurrent } = await import(
           './application-review.js'
         );
-        return await finalApplicationApprovalMaterialsAreCurrent(applicationId);
+        return await finalApplicationApprovalMaterialsAreCurrent(
+          applicationId,
+          subject,
+        );
       } catch {
         return false;
       }
@@ -2920,13 +3358,16 @@ export async function recordApplicationSubmission(options: {
   // Reload and verify immediately before recording the external evidence and
   // issuing the guarded compare-and-swap below. The original object may have
   // become stale while an approver or material editor was working.
-  const currentApplication = await applications.get(
+  const currentApplication = (await getPrivateRecord(
+    'Application',
     stringValue(application.id),
-  );
+    subject,
+    { db: decisionDatabase() },
+  )) as MutableRecord | null;
   if (!currentApplication) {
     error(404, 'Application not found.');
   }
-  if (!(await approvalMaterialsCurrent(currentApplication))) {
+  if (!(await approvalMaterialsCurrent(currentApplication, subject))) {
     const message =
       'Application materials changed or could not be verified after final approval.';
     await recordAgentAudit({
@@ -2995,7 +3436,7 @@ export async function recordApplicationSubmission(options: {
     await markTaskDone(submissionTask, now, { kanbanColumn: 'submitted' });
   }
 
-  await syncApplicationWorkflowTasks(currentApplication);
+  await syncApplicationWorkflowTasks(currentApplication, subject);
   return jsonRecord(currentApplication);
 }
 
@@ -3005,9 +3446,15 @@ export async function recordApplicationSubmissionBlocker(options: {
   blockerReason: string;
   blockerType?: string;
   notes?: string;
+  subject: WorkspaceSubject;
   taskId?: string;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
+  const actingUserId = stringValue(options.user?.id);
+  if (actingUserId && actingUserId !== subject.userId) {
+    error(403, 'Submission actor is outside the verified workspace.');
+  }
   const applicationId = stringValue(options.applicationId);
   const blockerReason = stringValue(options.blockerReason);
   if (!applicationId) {
@@ -3017,8 +3464,12 @@ export async function recordApplicationSubmissionBlocker(options: {
     error(400, 'Blocked submission tasks require a blocker reason.');
   }
 
-  const applications = await collection('Application');
-  const application = await applications.get(applicationId);
+  const application = (await getPrivateRecord(
+    'Application',
+    applicationId,
+    subject,
+    { db: decisionDatabase() },
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
@@ -3028,7 +3479,7 @@ export async function recordApplicationSubmissionBlocker(options: {
   const requestedTaskId = stringValue(options.taskId);
   const currentStatus = normalizeApplicationStatus(application.status);
   if (requestedTaskId) {
-    await validatedSubmissionTask(requestedTaskId, applicationId);
+    await validatedSubmissionTask(requestedTaskId, applicationId, subject);
   } else if (
     currentStatus !== 'approved' &&
     currentStatus !== 'submitting' &&
@@ -3088,7 +3539,11 @@ export async function recordApplicationSubmissionBlocker(options: {
     );
   }
 
-  const task = await getOrCreateSubmissionTask(application, requestedTaskId);
+  const task = await getOrCreateSubmissionTask(
+    application,
+    subject,
+    requestedTaskId,
+  );
 
   const opportunityTitle = opportunity ? titleForOpportunity(opportunity) : '';
   const title =
@@ -3152,6 +3607,19 @@ export async function recordAgentAudit(options: {
   taskId?: string;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = await resolveAgentAuditSubject({
+    application: options.application,
+    loadTask: async (taskId) => {
+      const tasks = options.database
+        ? ((await getCollection('Task', {
+            db: options.database,
+          })) as unknown as Collection)
+        : await collection('Task');
+      return await tasks.get(taskId);
+    },
+    taskId: options.taskId,
+    user: options.user?.id ? { id: stringValue(options.user.id) } : null,
+  });
   const agentRuns = options.database
     ? ((await getCollection('AgentRun', {
         db: options.database,
@@ -3176,7 +3644,7 @@ export async function recordAgentAudit(options: {
       ? 'submit_application'
       : '',
     finishedAt: new Date(),
-    initiatedByUserId: stringValue(options.user?.id),
+    ...subject,
     inputJson: JSON.stringify(options.input ?? {}),
     organizationProfileId:
       stringValue(application.organizationProfileId) ||

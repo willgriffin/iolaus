@@ -3,13 +3,36 @@ import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import {
   DECISION_REVIEW_STATUSES,
+  OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER,
   type OpportunityFilterOptions,
   type OpportunityFilterState,
+  opportunityScreeningReviewMode,
 } from '$lib/opportunity-filters';
+import { OPPORTUNITY_RECOMMENDATION_RANK_VERSION } from '../objects/OpportunityRecommendationRank.js';
+import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
 import { getDbConfig } from './db.js';
+import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
+import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
+import {
+  OPPORTUNITY_QUESTION_SCREENING_MODEL,
+  OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+  OPPORTUNITY_QUESTION_SCREENING_VERSION,
+} from './opportunity-question-screening.js';
+import type { OpportunityResumeFitReviewProjection } from './opportunity-resume-fit-review-projection.js';
+import type { OpportunityScreeningProjection } from './opportunity-screening-projection.js';
+import type { SourceEligibilityUiProjection } from './opportunity-source-eligibility-projection.js';
+import { loadCurrentScreeningQuestionRecommendationScope } from './screening-question-assessment-service.js';
+import type { WorkspaceSubject } from './workspace-subject.js';
 
 /** Hidden from every default listing; selectable through an explicit filter. */
 const ARCHIVED_OPPORTUNITY_STATUS = 'archived';
+const ELIGIBILITY_FLAG_BY_BUCKET = new Map<string, number>([
+  ['eligible', 1],
+  ['sponsorship_possible', 2],
+  ['location_restriction', 8],
+  ['conflicting', 16],
+  ['unknown', 32],
+]);
 const OPPORTUNITY_INDEX_BUILD_LOCK_TIMEOUT = '15s';
 const OPPORTUNITY_INDEX_BUILD_STATEMENT_TIMEOUT = '15min';
 const OPPORTUNITY_QUERY_INDEXES = [
@@ -56,15 +79,39 @@ export type OpportunityQuery = {
   filters: OpportunityFilterState;
   reviewFilter: string;
   search?: string;
-  /** Triage keeps explicit machine rejects behind every other score-sorted row. */
+  /** Triage keeps currently excluded assessment projections behind other rows. */
   triageRejectDepriority?: boolean;
+  /** Current private evidence and preferences that make ranking materialized scalars usable. */
+  assessmentCandidateMaterialFingerprint?: string;
+  assessmentPreferencesFingerprint?: string;
+  /** One request-scoped screening snapshot, supplied by the route when available. */
+  questionRecommendationScope?: QuestionRecommendationScope;
+  /** Verified request subject for every candidate-owned score, app, and review. */
+  workspaceSubject?: WorkspaceSubject;
+};
+
+export type QuestionRecommendationScope = {
+  questionScreeningEnabled: boolean;
+  candidateMaterialFingerprint?: string;
+  questionSetFingerprint?: string;
+  blockedReason?: string;
+};
+
+export type WorkspaceOpportunityQuery = OpportunityQuery & {
+  workspaceSubject: WorkspaceSubject & { profileId: string };
 };
 
 export type LatestOpportunityRelatedContextRow = {
   applicationId?: string;
   applicationStatus?: string;
+  humanRating?: number | null;
+  humanReviewNotes?: string;
+  humanReviewStatus?: string;
   opportunityId: string;
   recommendation?: string;
+  reviewedAt?: Date | string | null;
+  reviewedByProfileId?: string;
+  reviewedByUserId?: string;
   score?: number | null;
   scoreId?: string;
   scoreSummary?: string;
@@ -79,14 +126,126 @@ function pushParam(values: unknown[], value: unknown): string {
   return `$${values.length}`;
 }
 
+/**
+ * The embedded SQLite driver binds numbered placeholders in the order they
+ * appear in SQL, while PostgreSQL binds by the numeric suffix. Our list SQL
+ * deliberately renders joins before WHERE clauses, so a subject join can
+ * contain `$9` before a filter's `$1`. Reorder the arguments once at this
+ * boundary without renumbering SQL; each distinct placeholder keeps its
+ * intended value on both engines.
+ */
+function sqliteArgumentsInSqlOrder(
+  sql: string,
+  values: readonly unknown[],
+): unknown[] {
+  const indexes = new Set<number>();
+  const ordered: unknown[] = [];
+  for (const match of sql.matchAll(/\$(\d+)/g)) {
+    const index = Number(match[1]);
+    if (!Number.isInteger(index) || index < 1 || indexes.has(index)) continue;
+    indexes.add(index);
+    ordered.push(values[index - 1]);
+  }
+  return ordered;
+}
+
+async function queryOpportunitySql(
+  db: SmrtDatabase,
+  dialect: OpportunityQueryDialect,
+  sql: string,
+  values: readonly unknown[],
+): Promise<QueryResult> {
+  const parameters =
+    dialect === 'sqlite' ? sqliteArgumentsInSqlOrder(sql, values) : values;
+  return (await db.query(sql, ...parameters)) as QueryResult;
+}
+
 function sqlStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  if (Array.isArray(value)) {
+    return value.filter(
+      (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+    );
+  }
+  return typeof value === 'string' && value.length > 0
+    ? value.split('\u001f').filter(Boolean)
+    : [];
+}
+
+function safeHumanRating(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 10
+    ? value
+    : null;
+}
+
+function safeReviewStatus(value: unknown): string | undefined {
+  return value === 'apply' ||
+    value === 'archived' ||
+    value === 'maybe' ||
+    value === 'needs_input' ||
+    value === 'reject'
+    ? value
+    : undefined;
+}
+
+function hasCandidateWorkspaceSubject(
+  subject: WorkspaceSubject | undefined,
+): subject is WorkspaceSubject & { profileId: string } {
+  return Boolean(subject?.tenantId && subject.userId && subject.profileId);
+}
+
+function needsQuestionRecommendationScope(
+  filters: OpportunityFilterState,
+): boolean {
+  return (
+    filters.minScore !== null ||
+    filters.maxScore !== null ||
+    filters.sort === 'best' ||
+    filters.sort === 'recommendation' ||
+    filters.sort === 'score'
   );
 }
 
-function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
+async function withQuestionRecommendationScope<T extends OpportunityQuery>(
+  query: T,
+): Promise<T> {
+  if (
+    query.questionRecommendationScope ||
+    !needsQuestionRecommendationScope(query.filters) ||
+    !hasCandidateWorkspaceSubject(query.workspaceSubject)
+  )
+    return query;
+  return {
+    ...query,
+    questionRecommendationScope:
+      await loadCurrentScreeningQuestionRecommendationScope(
+        query.workspaceSubject,
+      ),
+  };
+}
+
+function privateSubjectWhereSql(
+  alias: string,
+  subject: WorkspaceSubject | undefined,
+  values: unknown[],
+): string {
+  if (!hasCandidateWorkspaceSubject(subject)) return 'FALSE';
+  const tenantId = pushParam(values, subject.tenantId);
+  const ownerUserId = pushParam(values, subject.userId);
+  const candidateProfileId = pushParam(values, subject.profileId);
+  return `${alias}.tenant_id = ${tenantId}
+    AND ${alias}.owner_user_id = ${ownerUserId}
+    AND ${alias}.candidate_profile_id = ${candidateProfileId}`;
+}
+
+function latestScoreJoinSql(
+  dialect: OpportunityQueryDialect,
+  workspaceSubject: WorkspaceSubject | undefined,
+  values: unknown[],
+  alias = 'latest',
+): string {
   const currentScore = `COALESCE(es.source_content_fingerprint, '') =
             COALESCE(o.source_content_fingerprint, '')
           AND (
@@ -103,24 +262,26 @@ function latestScoreJoinSql(dialect: OpportunityQueryDialect): string {
     // SQLite has no LATERAL join. Its correlated subquery in the join
     // condition expresses the same one-current-score relation without
     // multiplying opportunity rows.
-    return `LEFT JOIN evaluation_scores latest
-      ON latest.id = (
+    return `LEFT JOIN evaluation_scores ${alias}
+      ON ${alias}.id = (
         SELECT es.id
         FROM evaluation_scores es
         WHERE es.opportunity_id = CAST(o.id AS TEXT)
+          AND (${privateSubjectWhereSql('es', workspaceSubject, values)})
           AND ${currentScore}
         ORDER BY ${scoreOrder}
         LIMIT 1
       )`;
   }
   return `LEFT JOIN LATERAL (
-    SELECT es.score, es.recommendation
+    SELECT es.id, es.score, es.recommendation, es.summary
     FROM evaluation_scores es
     WHERE es.opportunity_id = CAST(o.id AS TEXT)
+      AND (${privateSubjectWhereSql('es', workspaceSubject, values)})
       AND ${currentScore}
     ORDER BY ${scoreOrder}
     LIMIT 1
-  ) latest ON TRUE`;
+  ) ${alias} ON TRUE`;
 }
 
 /** Match the persisted recommendation vocabulary without making unknown values rejects. */
@@ -128,60 +289,150 @@ export function normalizeOpportunityRecommendation(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-// ECMAScript String.prototype.trim() whitespace plus BOM. Keep this literal
-// shared by the two SQL dialects so their persisted recommendation tier is
-// identical to the local JavaScript queue's normalization.
-const ECMASCRIPT_TRIM_CHARACTERS =
-  '\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
-
-function rejectedRecommendationSql(dialect: OpportunityQueryDialect): string {
-  const trim = dialect === 'sqlite' ? 'trim' : 'btrim';
-  const normalized = `lower(${trim}(COALESCE(latest.recommendation, ''), '${ECMASCRIPT_TRIM_CHARACTERS}'))`;
-  return `CASE WHEN ${normalized} = 'reject' THEN 1 ELSE 0 END`;
-}
-
-function latestApplicationJoinSql(dialect: OpportunityQueryDialect): string {
+function latestApplicationJoinSql(
+  dialect: OpportunityQueryDialect,
+  workspaceSubject: WorkspaceSubject | undefined,
+  values: unknown[],
+): string {
   if (dialect === 'sqlite') {
     return `LEFT JOIN applications latest_application
       ON latest_application.id = (
         SELECT a.id
         FROM applications a
         WHERE a.opportunity_id = CAST(o.id AS TEXT)
+          AND (${privateSubjectWhereSql('a', workspaceSubject, values)})
         ORDER BY a.updated_at DESC
         LIMIT 1
       )`;
   }
   return `LEFT JOIN LATERAL (
-    SELECT a.id, a.resume_mode, a.cover_letter_mode
+    SELECT a.id, a.status, a.resume_mode, a.cover_letter_mode
     FROM applications a
     WHERE a.opportunity_id = CAST(o.id AS TEXT)
+      AND (${privateSubjectWhereSql('a', workspaceSubject, values)})
     ORDER BY a.updated_at DESC
     LIMIT 1
   ) latest_application ON TRUE`;
 }
 
+function latestReviewJoinSql(
+  dialect: OpportunityQueryDialect,
+  workspaceSubject: WorkspaceSubject | undefined,
+  values: unknown[],
+): string {
+  const subjectWhere = privateSubjectWhereSql('d', workspaceSubject, values);
+  if (dialect === 'sqlite') {
+    return `LEFT JOIN decisions latest_review
+      ON latest_review.id = (
+        SELECT d.id
+        FROM decisions d
+        WHERE d.opportunity_id = CAST(o.id AS TEXT)
+          AND (${subjectWhere})
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      )`;
+  }
+  return `LEFT JOIN LATERAL (
+    SELECT
+      d.decision,
+      d.human_rating,
+      d.reason AS human_review_notes,
+      d.created_at AS reviewed_at,
+      d.decider_profile_id AS reviewed_by_profile_id,
+      d.decider_user_id AS reviewed_by_user_id
+    FROM decisions d
+    WHERE d.opportunity_id = CAST(o.id AS TEXT)
+      AND (${subjectWhere})
+    ORDER BY d.created_at DESC NULLS LAST, d.id DESC
+    LIMIT 1
+  ) latest_review ON TRUE`;
+}
+
+/**
+ * Assessment scalars are the only private values allowed to affect paging.
+ * A score row is historical evidence for a rendered page, not an ordering
+ * authority: preference or candidate-evidence changes make it stale.
+ */
+function latestAssessmentJoinSql(
+  dialect: OpportunityQueryDialect,
+  query: OpportunityQuery,
+  values: unknown[],
+): string {
+  const candidateFingerprint = query.assessmentCandidateMaterialFingerprint;
+  const preferencesFingerprint = query.assessmentPreferencesFingerprint;
+  const currentAssessment =
+    candidateFingerprint && preferencesFingerprint
+      ? `${privateSubjectWhereSql('oa', query.workspaceSubject, values)}
+          AND oa.opportunity_id = CAST(o.id AS TEXT)
+          AND oa.status = 'current'
+          AND oa.contract_version = ${pushParam(values, OPPORTUNITY_ASSESSMENT_VERSION)}
+          AND oa.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
+          AND oa.source_content_version = COALESCE(o.source_content_version, 0)
+          AND oa.candidate_material_fingerprint = ${pushParam(values, candidateFingerprint)}
+          AND oa.preferences_fingerprint = ${pushParam(values, preferencesFingerprint)}`
+      : 'FALSE';
+  if (dialect === 'sqlite') {
+    return `LEFT JOIN opportunity_assessments latest_assessment
+      ON latest_assessment.id = (
+        SELECT oa.id
+        FROM opportunity_assessments oa
+        WHERE ${currentAssessment}
+        ORDER BY oa.updated_at DESC, oa.id DESC
+        LIMIT 1
+      )`;
+  }
+  return `LEFT JOIN LATERAL (
+    SELECT
+      oa.eligibility_bucket,
+      oa.eligibility_priority,
+      oa.excluded,
+      oa.fit_score,
+      oa.match_readiness
+    FROM opportunity_assessments oa
+    WHERE ${currentAssessment}
+    ORDER BY oa.updated_at DESC NULLS LAST, oa.id DESC
+    LIMIT 1
+  ) latest_assessment ON TRUE`;
+}
+
 function normalizedReviewStatusSql(dialect: OpportunityQueryDialect): string {
+  const status = `CASE
+    WHEN latest_review.decision IS NULL THEN NULL
+    WHEN latest_review.decision = 'accept_to_apply' THEN 'apply'
+    WHEN latest_review.decision = 'archive' THEN 'archived'
+    WHEN latest_review.decision = 'defer' THEN 'maybe'
+    WHEN latest_review.decision = 'reject' THEN 'reject'
+    ELSE 'needs_input'
+  END`;
   return dialect === 'sqlite'
-    ? 'lower(trim(o.human_review_status))'
-    : 'lower(btrim(o.human_review_status))';
+    ? `lower(trim(${status}))`
+    : `lower(btrim(${status}))`;
 }
 
 function reviewWhereSql(
   reviewFilter: string,
   values: unknown[],
+  workspaceSubject: WorkspaceSubject | undefined,
   dialect: OpportunityQueryDialect,
-): { needsApplication: boolean; where: string[] } {
+): { needsApplication: boolean; needsReview: boolean; where: string[] } {
   // Branch on the same value the fingerprint hashes: it trims, so `' all '`
   // must select no review filter rather than an equality that matches nothing.
   const review = reviewFilter.trim();
-  if (!review || review === 'all') {
-    return { needsApplication: false, where: [] };
+  if (
+    !review ||
+    review === 'all' ||
+    review === OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER
+  ) {
+    return { needsApplication: false, needsReview: false, where: [] };
   }
+  void workspaceSubject;
+  const normalized = normalizedReviewStatusSql(dialect);
   if (review === 'missing_application_planning') {
     return {
       needsApplication: true,
+      needsReview: true,
       where: [
-        `${normalizedReviewStatusSql(dialect)} = ${pushParam(values, 'apply')}`,
+        `${normalized} = ${pushParam(values, 'apply')}`,
         `(latest_application.id IS NULL
           OR COALESCE(latest_application.resume_mode, '') = ''
           OR COALESCE(latest_application.cover_letter_mode, '') = '')`,
@@ -194,19 +445,14 @@ function reviewWhereSql(
     ).join(', ');
     return {
       needsApplication: false,
-      where: [
-        `COALESCE(${normalizedReviewStatusSql(dialect)}, '') NOT IN (${placeholders})`,
-      ],
+      needsReview: true,
+      where: [`COALESCE(${normalized}, '') NOT IN (${placeholders})`],
     };
   }
   return {
     needsApplication: false,
-    where: [
-      `${normalizedReviewStatusSql(dialect)} = ${pushParam(
-        values,
-        review.toLowerCase(),
-      )}`,
-    ],
+    needsReview: true,
+    where: [`${normalized} = ${pushParam(values, review.toLowerCase())}`],
   };
 }
 
@@ -241,17 +487,51 @@ function rangeOverlapSql({
   )`;
 }
 
-function normalizedPhraseSql(value: string): string {
+function normalizedPhraseSql(
+  value: string,
+  dialect: OpportunityQueryDialect,
+): string {
+  if (dialect === 'sqlite') {
+    // Match PostgreSQL's [^a-z0-9]+ replacement exactly: each separator run
+    // becomes one space, including punctuation at either end of a phrase.
+    return `(WITH RECURSIVE phrase_chars(rest, phrase, separator) AS (
+      SELECT lower(trim(${value})), '', 0
+      UNION ALL
+      SELECT substr(rest, 2), phrase || CASE
+          WHEN substr(rest, 1, 1) GLOB '[a-z0-9]' THEN substr(rest, 1, 1)
+          WHEN separator = 0 THEN ' '
+          ELSE ''
+        END,
+        CASE WHEN substr(rest, 1, 1) GLOB '[a-z0-9]' THEN 0 ELSE 1 END
+      FROM phrase_chars WHERE rest <> ''
+    ) SELECT phrase FROM phrase_chars WHERE rest = '')`;
+  }
   return `regexp_replace(lower(btrim(${value})), '[^a-z0-9]+', ' ', 'g')`;
 }
 
-function requiredSkillValuesSql(): string {
+function sqliteSkillValuesSql(value: string, alias: string): string {
+  return `(WITH RECURSIVE skill_parts(value, rest) AS (
+    SELECT '', replace(replace(COALESCE(${value}, ''), char(10), ','), char(13), ',') || ','
+    UNION ALL
+    SELECT substr(rest, 1, instr(rest, ',') - 1), substr(rest, instr(rest, ',') + 1)
+    FROM skill_parts WHERE rest <> ''
+  ) SELECT value FROM skill_parts WHERE value <> '') AS ${alias}`;
+}
+
+function requiredSkillValuesSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite')
+    return sqliteSkillValuesSql('o.required_skills', 'required_skill');
   return `unnest(
     regexp_split_to_array(COALESCE(o.required_skills, ''), E'[,\\n\\r]+')
   ) AS required_skill(value)`;
 }
 
-function allSkillValuesSql(): string {
+function allSkillValuesSql(dialect: OpportunityQueryDialect): string {
+  if (dialect === 'sqlite')
+    return sqliteSkillValuesSql(
+      "COALESCE(o.required_skills, '') || ',' || COALESCE(o.preferred_skills, '')",
+      'opportunity_skill',
+    );
   return `unnest(
     regexp_split_to_array(
       concat_ws(',', COALESCE(o.required_skills, ''), COALESCE(o.preferred_skills, '')),
@@ -275,11 +555,14 @@ export function normalizeQueryTerms(values: readonly string[]): string[] {
   ].sort();
 }
 
-function candidateSkillMatchSql(candidatePlaceholder: string): string {
-  const requiredPhrase = normalizedPhraseSql('required_skill.value');
+function candidateSkillMatchSql(
+  candidateTermsSql: string,
+  dialect: OpportunityQueryDialect,
+): string {
+  const requiredPhrase = normalizedPhraseSql('required_skill.value', dialect);
   return `EXISTS (
     SELECT 1
-    FROM unnest(${candidatePlaceholder}::text[]) AS candidate_term(value)
+    FROM ${candidateTermsSql}
     WHERE ${requiredPhrase} <> ''
       AND (
         (' ' || ${requiredPhrase} || ' ') LIKE ('% ' || candidate_term.value || ' %')
@@ -290,30 +573,50 @@ function candidateSkillMatchSql(candidatePlaceholder: string): string {
 
 function filterWhereSql({
   candidateSkills,
+  dialect,
   filters,
+  questionRecommendationScope,
   search,
   values,
-}: Pick<OpportunityQuery, 'candidateSkills' | 'filters' | 'search'> & {
+  sourceEligibility,
+}: Pick<
+  OpportunityQuery,
+  'candidateSkills' | 'filters' | 'search' | 'questionRecommendationScope'
+> & {
+  dialect: OpportunityQueryDialect;
   values: unknown[];
-}): { needsScore: boolean; where: string[] } {
+  sourceEligibility?: Map<string, CurrentSourceOpportunityEligibility>;
+}): {
+  needsAssessment: boolean;
+  needsRecommendationRank: boolean;
+  needsReview: boolean;
+  where: string[];
+} {
   const where: string[] = [];
-  let needsScore = false;
+  let needsAssessment = false;
+  let needsRecommendationRank = false;
+  let needsReview = false;
 
   const searchTerm = search?.trim().slice(0, 200);
   if (searchTerm) {
-    const pattern = pushParam(values, `%${searchTerm}%`);
+    // Treat browser search as literal text on both engines. An explicit
+    // escape character avoids PostgreSQL/SQLite backslash differences.
+    const pattern = pushParam(
+      values,
+      `%${searchTerm.replace(/[!%_]/g, '!$&')}%`,
+    );
     where.push(`(
-      o.title ILIKE ${pattern}
-      OR o.description_summary ILIKE ${pattern}
-      OR o.required_skills ILIKE ${pattern}
-      OR o.preferred_skills ILIKE ${pattern}
-      OR o.locations ILIKE ${pattern}
-      OR o.posting_url ILIKE ${pattern}
+      lower(o.title) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.description_summary) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.required_skills) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.preferred_skills) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.locations) LIKE lower(${pattern}) ESCAPE '!'
+      OR lower(o.posting_url) LIKE lower(${pattern}) ESCAPE '!'
       OR EXISTS (
         SELECT 1
         FROM companies search_company
         WHERE CAST(search_company.id AS TEXT) = o.company_id
-          AND search_company.name ILIKE ${pattern}
+          AND lower(search_company.name) LIKE lower(${pattern}) ESCAPE '!'
       )
     )`);
   }
@@ -334,23 +637,28 @@ function filterWhereSql({
   // empty list it fingerprints as, rather than adding an unsatisfiable
   // predicate the fingerprint cannot distinguish.
   if (skills.length > 0) {
+    const skillPredicate =
+      dialect === 'sqlite'
+        ? `lower(trim(opportunity_skill.value)) IN (${skills.map((skill) => pushParam(values, skill)).join(', ')})`
+        : `lower(btrim(opportunity_skill.value)) = ANY(${pushParam(values, skills)}::text[])`;
     where.push(`EXISTS (
       SELECT 1
-      FROM ${allSkillValuesSql()}
-      WHERE lower(btrim(opportunity_skill.value)) = ANY(${pushParam(values, skills)}::text[])
+      FROM ${allSkillValuesSql(dialect)}
+      WHERE ${skillPredicate}
     )`);
   }
 
   if (filters.fit !== 'all') {
-    const candidatePlaceholder = pushParam(
-      values,
-      normalizeQueryTerms(candidateSkills),
-    );
-    const candidateMatch = candidateSkillMatchSql(candidatePlaceholder);
+    const candidates = normalizeQueryTerms(candidateSkills);
+    const candidateTermsSql =
+      dialect === 'sqlite'
+        ? `(${candidates.length ? candidates.map((candidate) => `SELECT ${pushParam(values, candidate)} AS value`).join(' UNION ALL ') : 'SELECT NULL AS value WHERE 0'}) AS candidate_term`
+        : `unnest(${pushParam(values, candidates)}::text[]) AS candidate_term(value)`;
+    const candidateMatch = candidateSkillMatchSql(candidateTermsSql, dialect);
     const unmatchedRequiredSkill = `EXISTS (
       SELECT 1
-      FROM ${requiredSkillValuesSql()}
-      WHERE btrim(required_skill.value) <> ''
+      FROM ${requiredSkillValuesSql(dialect)}
+      WHERE ${dialect === 'sqlite' ? 'trim' : 'btrim'}(required_skill.value) <> ''
         AND NOT (${candidateMatch})
     )`;
     where.push(
@@ -380,21 +688,31 @@ function filterWhereSql({
   });
   if (hourlyRange) where.push(hourlyRange);
 
+  // Bind one UTC clock reading for this query. SQLite normalizes stored ISO
+  // timestamps (including offsets) through julianday; PostgreSQL keeps its
+  // native timestamp comparison and parameter typing.
+  const now = Date.now();
+  const timestampSql = (expression: string) =>
+    dialect === 'sqlite' ? `julianday(${expression})` : expression;
   if (filters.postedWithinDays !== null) {
+    const cutoff = pushParam(
+      values,
+      new Date(now - filters.postedWithinDays * 86_400_000).toISOString(),
+    );
     where.push(
-      `COALESCE(o.posted_at, o.first_seen_at) >= NOW() - (${pushParam(
-        values,
-        filters.postedWithinDays,
-      )} * INTERVAL '1 day')`,
+      `${timestampSql('COALESCE(o.posted_at, o.first_seen_at)')} >= ${timestampSql(cutoff)}`,
     );
   }
   if (filters.excludeExpired) {
-    where.push(`(o.expires_at IS NULL OR o.expires_at >= NOW())`);
+    const currentTime = pushParam(values, new Date(now).toISOString());
+    where.push(
+      `(o.expires_at IS NULL OR ${timestampSql('o.expires_at')} >= ${timestampSql(currentTime)})`,
+    );
   }
   if (filters.excludeStale) {
     // A posting the board reconciliation stopped seeing is not worth a
     // decision; it stays out of any listing that opts into this filter.
-    where.push(`COALESCE(lower(btrim(o.freshness)), '') <> 'stale'`);
+    where.push(`COALESCE(lower(trim(o.freshness)), '') <> 'stale'`);
   }
   if (filters.freshness !== 'all') {
     where.push(`o.freshness = ${pushParam(values, filters.freshness)}`);
@@ -402,12 +720,49 @@ function filterWhereSql({
   const employmentTypes = normalizeQueryTerms(filters.employmentTypes);
   if (employmentTypes.length > 0) {
     where.push(
-      `o.employment_type = ANY(${pushParam(values, employmentTypes)}::text[])`,
+      dialect === 'sqlite'
+        ? `o.employment_type IN (${employmentTypes.map((value) => pushParam(values, value)).join(', ')})`
+        : `o.employment_type = ANY(${pushParam(values, employmentTypes)}::text[])`,
     );
   }
   const workModes = normalizeQueryTerms(filters.workModes);
   if (workModes.length > 0) {
-    where.push(`o.work_mode = ANY(${pushParam(values, workModes)}::text[])`);
+    where.push(
+      dialect === 'sqlite'
+        ? `o.work_mode IN (${workModes.map((value) => pushParam(values, value)).join(', ')})`
+        : `o.work_mode = ANY(${pushParam(values, workModes)}::text[])`,
+    );
+  }
+  const eligibilityBuckets = normalizeQueryTerms(
+    filters.eligibilityBuckets,
+  ).filter((bucket) => ELIGIBILITY_FLAG_BY_BUCKET.has(bucket));
+  if (eligibilityBuckets.length > 0) {
+    const assessmentBuckets = eligibilityBuckets.flatMap((bucket) => {
+      switch (bucket) {
+        case 'eligible':
+          return ['eligible'];
+        case 'sponsorship_possible':
+          return ['sponsorship_possible'];
+        case 'location_restriction':
+          return ['location_restriction'];
+        case 'conflicting':
+          return ['conflicting'];
+        case 'unknown':
+          return ['unknown'];
+        default:
+          return [];
+      }
+    });
+    const predicates: string[] = [];
+    if (assessmentBuckets.length > 0) {
+      needsAssessment = true;
+      predicates.push(
+        dialect === 'sqlite'
+          ? `${sourceEligibilityBucketSql(sourceEligibility ?? new Map(), values)} IN (${assessmentBuckets.map((bucket) => pushParam(values, bucket)).join(', ')})`
+          : `${sourceEligibilityBucketSql(sourceEligibility ?? new Map(), values)} = ANY(${pushParam(values, assessmentBuckets)}::text[])`,
+      );
+    }
+    if (predicates.length > 0) where.push(`(${predicates.join(' OR ')})`);
   }
   if (filters.seniority !== 'all') {
     where.push(`o.seniority = ${pushParam(values, filters.seniority)}`);
@@ -416,20 +771,40 @@ function filterWhereSql({
   if (filters.visaOnly) where.push(`o.visa_or_eor_possible IS TRUE`);
   if (filters.founderOnly) where.push(`o.founder_signal IS TRUE`);
   if (filters.greenfieldOnly) where.push(`o.greenfield_signal IS TRUE`);
-  if (filters.freshOnly) where.push(`lower(btrim(o.freshness)) = 'fresh'`);
+  if (filters.freshOnly) where.push(`lower(trim(o.freshness)) = 'fresh'`);
   if (filters.minRating !== null) {
-    where.push(`o.human_rating >= ${pushParam(values, filters.minRating)}`);
+    // Ratings live on the private review overlay, never on the global posting.
+    needsReview = true;
+    where.push(
+      `latest_review.human_rating >= ${pushParam(values, filters.minRating)}`,
+    );
   }
   if (filters.minScore !== null) {
-    needsScore = true;
-    where.push(`latest.score >= ${pushParam(values, filters.minScore)}`);
+    if (questionRecommendationScope?.questionScreeningEnabled) {
+      needsRecommendationRank = true;
+      where.push(
+        `rank.recommendation_percent >= ${pushParam(values, filters.minScore)}`,
+      );
+    } else needsAssessment = true;
+    if (!questionRecommendationScope?.questionScreeningEnabled)
+      where.push(
+        `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score >= ${pushParam(values, filters.minScore)}`,
+      );
   }
   if (filters.maxScore !== null) {
-    needsScore = true;
-    where.push(`latest.score <= ${pushParam(values, filters.maxScore)}`);
+    if (questionRecommendationScope?.questionScreeningEnabled) {
+      needsRecommendationRank = true;
+      where.push(
+        `rank.recommendation_percent <= ${pushParam(values, filters.maxScore)}`,
+      );
+    } else needsAssessment = true;
+    if (!questionRecommendationScope?.questionScreeningEnabled)
+      where.push(
+        `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score <= ${pushParam(values, filters.maxScore)}`,
+      );
   }
 
-  return { needsScore, where };
+  return { needsAssessment, needsRecommendationRank, needsReview, where };
 }
 
 function opportunityStatusRankSql(): string {
@@ -450,53 +825,631 @@ function opportunityStatusRankSql(): string {
   END`;
 }
 
+/**
+ * Current recommendation values are private and materialized. The live
+ * opportunity source remains the final freshness fence, so a changed posting
+ * naturally becomes NULL without reading an assessment receipt.
+ */
+function recommendationRankJoinSql(
+  query: OpportunityQuery,
+  values: unknown[],
+): string | undefined {
+  const scope = query.questionRecommendationScope;
+  if (!scope?.questionScreeningEnabled) return undefined;
+  const subject = query.workspaceSubject;
+  const material = scope.candidateMaterialFingerprint;
+  const questions = scope.questionSetFingerprint;
+  if (!hasCandidateWorkspaceSubject(subject) || !material || !questions)
+    return 'LEFT JOIN opportunity_recommendation_ranks rank ON FALSE';
+  const contracts = [
+    OPPORTUNITY_QUESTION_SCREENING_VERSION,
+    OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+  ].map((version) => pushParam(values, version));
+  return `LEFT JOIN opportunity_recommendation_ranks rank
+    ON rank.tenant_id = ${pushParam(values, subject.tenantId)}
+    AND rank.owner_user_id = ${pushParam(values, subject.userId)}
+    AND rank.candidate_profile_id = ${pushParam(values, subject.profileId)}
+    AND rank.opportunity_id = CAST(o.id AS TEXT)
+    AND rank.candidate_material_fingerprint = ${pushParam(values, material)}
+    AND rank.question_set_fingerprint = ${pushParam(values, questions)}
+    AND rank.contract_version IN (${contracts.join(', ')})
+    AND rank.model = ${pushParam(values, OPPORTUNITY_QUESTION_SCREENING_MODEL)}
+    AND rank.projection_version = ${pushParam(values, OPPORTUNITY_RECOMMENDATION_RANK_VERSION)}
+    AND rank.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
+    AND rank.source_content_version = COALESCE(o.source_content_version, 0)
+    AND rank.required_skills_snapshot = COALESCE(o.required_skills, '')
+    AND rank.preferred_skills_snapshot = COALESCE(o.preferred_skills, '')`;
+}
+
+export type CurrentCitedOpportunitySupport = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection?: OpportunityPartialAssessmentProjection;
+  completeProjection?: OpportunityResumeFitReviewProjection;
+  completeReviewStatus?: 'current' | 'unknown';
+};
+
+/** Replay only owned saved locators against uncached sources, using one projection batch. */
+export async function loadCurrentCitedOpportunitySupport(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentCitedOpportunitySupport>> {
+  if (!hasCandidateWorkspaceSubject(subject)) return new Map();
+  const [
+    { listPrivateRecords },
+    { OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION },
+    { loadCurrentPartialOpportunityAssessmentProjections },
+    { loadCurrentOpportunityResumeFitReviewProjections },
+    { OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION },
+    {
+      OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_V1_VERSION,
+      OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_VERSION,
+    },
+    { getCollection },
+  ] = await Promise.all([
+    import('./private-workspace.js'),
+    import('./opportunity-assessment-partial.js'),
+    import('./opportunity-assessment-partial-projection.js'),
+    import('./opportunity-resume-fit-review-projection.js'),
+    import('./opportunity-resume-fit-review.js'),
+    import('./opportunity-review-strength-verification.js'),
+    import('./smrt.js'),
+  ]);
+  const completeVersions = new Set<string>([
+    OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_V1_VERSION,
+    OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_VERSION,
+  ]);
+  const rows = await listPrivateRecords('OpportunityAssessment', subject, {
+    where: {
+      'status in': ['partial', 'reviewed_with_unknowns', 'strength_verified'],
+      'contractVersion in': [
+        OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+        ...completeVersions,
+      ],
+    },
+  });
+  const ids = [
+    ...new Set(
+      rows
+        .map((row) => row.opportunityId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  // A failed current complete replay must suppress older partial and numeric fit fallbacks.
+  const completeIds = new Set(
+    rows
+      .filter((row) => completeVersions.has(row.contractVersion as string))
+      .map((row) => row.opportunityId),
+  );
+  const result = new Map<string, CurrentCitedOpportunitySupport>();
+  if (!ids.length) return result;
+  const collection = await getCollection('Opportunity');
+  const sources = new Map<string, Record<string, unknown>>();
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const native = await collection.get({ id }, { cache: false });
+        if (!native) continue;
+        const opportunity = native.toJSON() as Record<string, unknown>;
+        if (
+          opportunity.id !== id ||
+          typeof opportunity.sourceContentFingerprint !== 'string' ||
+          !opportunity.sourceContentFingerprint ||
+          !Number.isSafeInteger(opportunity.sourceContentVersion) ||
+          Number(opportunity.sourceContentVersion) < 0
+        )
+          continue;
+        sources.set(id, opportunity);
+      }
+    }),
+  );
+  const completeSources = [...sources.values()].filter((row) =>
+    completeIds.has(row.id as string),
+  );
+  const partialSources = [...sources.values()].filter(
+    (row) => !completeIds.has(row.id as string),
+  );
+  const [complete, partial] = await Promise.all([
+    completeSources.length
+      ? loadCurrentOpportunityResumeFitReviewProjections({
+          opportunities: completeSources,
+          subject,
+        })
+      : undefined,
+    partialSources.length
+      ? loadCurrentPartialOpportunityAssessmentProjections({
+          opportunities: partialSources,
+          subject,
+        })
+      : undefined,
+  ]);
+  for (const [id, source] of sources) {
+    const projection = partial?.get(id);
+    const completeProjection = complete?.get(id);
+    const completeReviewStatus = completeIds.has(id)
+      ? (complete?.completeReviewStatuses.get(id) ?? 'unknown')
+      : undefined;
+    if (projection || completeReviewStatus)
+      result.set(id, {
+        sourceContentFingerprint: source.sourceContentFingerprint as string,
+        sourceContentVersion: Number(source.sourceContentVersion),
+        ...(projection ? { projection } : {}),
+        ...(completeProjection ? { completeProjection } : {}),
+        ...(completeReviewStatus ? { completeReviewStatus } : {}),
+      });
+  }
+  return result;
+}
+
+export type CurrentSourceOpportunityEligibility = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection: SourceEligibilityUiProjection;
+};
+
+export type CurrentScreenedOpportunityExclusion = {
+  sourceContentFingerprint: string;
+  sourceContentVersion: number;
+  projection: OpportunityScreeningProjection;
+};
+
+/** One uncached profile snapshot per operation, with bounded native receipt replay. */
+export async function loadOpportunityScreeningProjectionPages(
+  opportunities: Record<string, unknown>[],
+  subject: WorkspaceSubject,
+): Promise<Map<string, OpportunityScreeningProjection>> {
+  const result = new Map<string, OpportunityScreeningProjection>();
+  if (!hasCandidateWorkspaceSubject(subject) || !opportunities.length)
+    return result;
+  const [
+    {
+      loadCurrentOpportunityScreeningProjections,
+      OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT,
+    },
+    { getCollection },
+  ] = await Promise.all([
+    import('./opportunity-screening-projection.js'),
+    import('./smrt.js'),
+  ]);
+  let profilePromise: Promise<Record<string, unknown> | null> | undefined;
+  const getProfile = async (id: string) => {
+    profilePromise ??= (async () => {
+      const native = await (await getCollection('CandidateProfile')).get(
+        { id },
+        { cache: false },
+      );
+      return (native?.toJSON() as Record<string, unknown> | null) ?? null;
+    })();
+    return await profilePromise;
+  };
+  for (
+    let start = 0;
+    start < opportunities.length;
+    start += OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT
+  ) {
+    const page = opportunities.slice(
+      start,
+      start + OPPORTUNITY_SCREENING_PROJECTION_PAGE_LIMIT,
+    );
+    const requested = new Set(page.map((row) => row.id));
+    const projections = await loadCurrentOpportunityScreeningProjections(
+      { opportunities: page, subject },
+      { getProfile },
+    );
+    for (const [id, projection] of projections)
+      if (requested.has(id)) result.set(id, projection);
+  }
+  return result;
+}
+
+/** Receipt selectors nominate IDs only. Only native current replay may hide a row. */
+export async function loadCurrentScreenedOpportunityExclusions(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentScreenedOpportunityExclusion>> {
+  const result = new Map<string, CurrentScreenedOpportunityExclusion>();
+  if (!hasCandidateWorkspaceSubject(subject)) return result;
+  const {
+    OPPORTUNITY_SCREENING_RECEIPT_FEATURE,
+    OPPORTUNITY_SCREENING_RECEIPT_PROFILE,
+  } = await import('./opportunity-screening-projection.js');
+  const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const values: unknown[] = [
+    OPPORTUNITY_SCREENING_RECEIPT_FEATURE,
+    OPPORTUNITY_SCREENING_RECEIPT_PROFILE,
+  ];
+  const selectors = await queryOpportunitySql(
+    db,
+    dialect,
+    `SELECT DISTINCT r.opportunity_id AS id
+    FROM opportunity_intelligence_results r JOIN opportunity_intelligence_requests q
+      ON q.request_id = r.owner_request_id AND q.idempotency_key = r.idempotency_key
+      AND q.opportunity_id = r.opportunity_id AND q.agent_run_id = r.agent_run_id
+      AND q.content_fingerprint = r.content_fingerprint AND q.input_fingerprint = r.input_fingerprint
+      AND q.feature = r.feature AND q.model = r.model AND q.profile = r.profile
+    JOIN opportunities o ON CAST(o.id AS TEXT) = r.opportunity_id
+      AND o.source_content_fingerprint = r.content_fingerprint
+    WHERE r.feature = $1 AND r.profile = $2
+      AND r.status = 'completed' AND q.status = 'succeeded'
+      AND q.accounting_basis = 'actual' AND q.actual_total_tokens > 0
+      AND (${privateSubjectWhereSql('r', subject, values)})
+      AND (${privateSubjectWhereSql('q', subject, values)})
+    ORDER BY r.opportunity_id ASC`,
+    values,
+  );
+  const ids = [
+    ...new Set(
+      rowsFromResult(selectors).flatMap((row) =>
+        typeof row.id === 'string' && row.id ? [row.id] : [],
+      ),
+    ),
+  ];
+  const projections = await loadOpportunityScreeningProjectionPages(
+    ids.map((id) => ({ id })),
+    subject,
+  );
+  for (const [id, projection] of projections) {
+    if (
+      projection.excludeFromDefaultTriage &&
+      projection.status === 'clear_mismatch' &&
+      projection.holdReasons.length === 0
+    )
+      result.set(id, {
+        sourceContentFingerprint: projection.sourceContentFingerprint,
+        sourceContentVersion: projection.sourceContentVersion,
+        projection,
+      });
+  }
+  return result;
+}
+
+function screeningWhereSql(
+  reviewFilter: string,
+  dialect: OpportunityQueryDialect,
+  exclusions: Map<string, CurrentScreenedOpportunityExclusion>,
+  values: unknown[],
+): string | null {
+  const mode = opportunityScreeningReviewMode(reviewFilter);
+  if (!mode) return null;
+  if (!exclusions.size) return mode === 'only' ? 'FALSE' : null;
+  const tuples = [...exclusions]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, current]) => ({
+      id,
+      fingerprint: current.sourceContentFingerprint,
+      version: current.sourceContentVersion,
+    }));
+  const payload = pushParam(values, JSON.stringify(tuples));
+  const match =
+    dialect === 'sqlite'
+      ? `EXISTS (SELECT 1 FROM json_each(${payload}) screen
+      WHERE CAST(o.id AS TEXT) = json_extract(screen.value, '$.id')
+        AND o.source_content_fingerprint = json_extract(screen.value, '$.fingerprint')
+        AND o.source_content_version = json_extract(screen.value, '$.version'))`
+      : `EXISTS (SELECT 1 FROM jsonb_to_recordset(${payload}::jsonb) AS screen(id text, fingerprint text, version bigint)
+      WHERE CAST(o.id AS TEXT) = screen.id
+        AND o.source_content_fingerprint = screen.fingerprint
+        AND o.source_content_version = screen.version)`;
+  return mode === 'only' ? match : `NOT ${match}`;
+}
+
+/** Public receipt rows nominate IDs only; native replay and the active profile decide eligibility. */
+export async function loadCurrentSourceOpportunityEligibility(
+  subject: WorkspaceSubject,
+): Promise<Map<string, CurrentSourceOpportunityEligibility>> {
+  if (!hasCandidateWorkspaceSubject(subject)) return new Map();
+  const [
+    { REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION },
+    { loadCurrentSourceEligibilityProjections },
+    { getCollection },
+  ] = await Promise.all([
+    import('./opportunity-requirement-coverage-provider.js'),
+    import('./opportunity-source-eligibility-projection.js'),
+    import('./smrt.js'),
+  ]);
+  const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const selectors = await queryOpportunitySql(
+    db,
+    dialect,
+    `SELECT DISTINCT r.opportunity_id AS id
+    FROM opportunity_intelligence_results r JOIN opportunity_intelligence_requests q
+    ON q.request_id = r.owner_request_id AND q.idempotency_key = r.idempotency_key
+      AND q.opportunity_id = r.opportunity_id AND q.agent_run_id = r.agent_run_id
+      AND q.content_fingerprint = r.content_fingerprint AND q.input_fingerprint = r.input_fingerprint
+      AND q.feature = r.feature AND q.model = r.model AND q.profile = r.profile
+    WHERE r.feature = $1 AND r.output_schema_version = $2 AND r.profile = $3
+      AND r.prompt_version = r.output_schema_version AND r.prepared_payload_version = r.output_schema_version
+      AND r.status = 'completed' AND q.status = 'succeeded' AND q.accounting_basis = 'actual'
+      AND q.actual_total_tokens > 0
+      AND COALESCE(r.tenant_id, '') = '' AND COALESCE(r.owner_user_id, '') = '' AND COALESCE(r.candidate_profile_id, '') = ''
+      AND COALESCE(q.tenant_id, '') = '' AND COALESCE(q.owner_user_id, '') = '' AND COALESCE(q.candidate_profile_id, '') = ''
+    ORDER BY r.opportunity_id ASC`,
+    [
+      'opportunity-source-requirement-evidence',
+      REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
+      'typesafe-opportunity-source-evidence',
+    ],
+  );
+  const ids = [
+    ...new Set(
+      rowsFromResult(selectors)
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const result = new Map<string, CurrentSourceOpportunityEligibility>();
+  if (!ids.length) return result;
+  const collection = await getCollection('Opportunity');
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const native = await collection.get({ id }, { cache: false });
+        if (!native) continue;
+        const opportunity = native.toJSON() as Record<string, unknown>;
+        const fingerprint = opportunity.sourceContentFingerprint;
+        const version = opportunity.sourceContentVersion;
+        if (
+          opportunity.id !== id ||
+          typeof fingerprint !== 'string' ||
+          !fingerprint ||
+          !Number.isSafeInteger(version) ||
+          Number(version) < 1
+        )
+          continue;
+        const projections = await loadCurrentSourceEligibilityProjections({
+          opportunities: [opportunity],
+          subject,
+        });
+        const projection = projections.get(id);
+        if (projection)
+          result.set(id, {
+            sourceContentFingerprint: fingerprint,
+            sourceContentVersion: Number(version),
+            projection,
+          });
+      }
+    }),
+  );
+  return result;
+}
+
+function sourceEligibilityBucketSql(
+  source: Map<string, CurrentSourceOpportunityEligibility>,
+  values: unknown[],
+): string {
+  const fallback = "COALESCE(latest_assessment.eligibility_bucket, 'unknown')";
+  if (!source.size) return fallback;
+  const branches = [...source]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
+      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
+      THEN ${pushParam(values, current.projection.eligibilityBucket)}`,
+    );
+  return `CASE ${branches.join('\n')} ELSE ${fallback} END`;
+}
+
+function sourceEligibilityPrioritySql(
+  source: Map<string, CurrentSourceOpportunityEligibility>,
+  values: unknown[],
+): string {
+  const priorities = {
+    eligible: 0,
+    sponsorship_possible: 1,
+    unknown: 2,
+    conflicting: 3,
+    location_restriction: 4,
+  };
+  const branches = [...source]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(
+      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
+      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
+      THEN ${pushParam(values, priorities[current.projection.eligibilityBucket])}`,
+    );
+  return `CASE ${branches.join('\n')} ELSE latest_assessment.eligibility_priority END`;
+}
+
+function needsSourceEligibility(filters: OpportunityFilterState): boolean {
+  return (
+    filters.sort === 'eligibility' || filters.eligibilityBuckets.length > 0
+  );
+}
+
+type CitedSupportTuple = NonNullable<ReturnType<typeof currentCitedSupport>>;
+
+function supportTuple(
+  current: CurrentCitedOpportunitySupport,
+): CitedSupportTuple | null {
+  if (current.completeReviewStatus || current.completeProjection)
+    return currentCitedSupport({
+      resumeFitReviewProjection: current.completeProjection,
+      completeReviewStatus: current.completeReviewStatus,
+    });
+  const count = current.projection?.supportedCriterionCount;
+  return Number.isSafeInteger(count) && Number(count) >= 0
+    ? { supportedCriterionCount: Number(count), supportLowerBound: null }
+    : null;
+}
+
+function currentSupportMetricSql(
+  support: Map<string, CurrentCitedOpportunitySupport>,
+  values: unknown[],
+  metric: (
+    current: CurrentCitedOpportunitySupport,
+  ) => number | null | undefined,
+  bindSource = true,
+): string {
+  const branches = [...support]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .flatMap(([id, current]) => {
+      const value = metric(current);
+      if (value == null || !Number.isFinite(value)) return [];
+      return [
+        `WHEN o.id = ${pushParam(values, id)}
+        ${
+          bindSource
+            ? `AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+        AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}`
+            : ''
+        }
+        THEN CAST(${pushParam(values, value)} AS DOUBLE PRECISION)`,
+      ];
+    });
+  // Typed NULL also remains legal as a standalone PostgreSQL ORDER BY expression.
+  return branches.length
+    ? `CASE ${branches.join('\n')} ELSE CAST(NULL AS DOUBLE PRECISION) END`
+    : 'CAST(NULL AS DOUBLE PRECISION)';
+}
+
+function citedSupportSql(
+  support: Map<string, CurrentCitedOpportunitySupport>,
+  values: unknown[],
+  best = false,
+): string[] {
+  const tuple = (current: CurrentCitedOpportunitySupport) => {
+    const value = supportTuple(current);
+    return best &&
+      (!current.completeReviewStatus || value?.supportLowerBound == null)
+      ? null
+      : value;
+  };
+  return (
+    [
+      'supportedCriterionCount',
+      'supportLowerBound',
+      'advisoryRelevanceMean',
+      'partialSupportedCriterionCount',
+      'partialSupportLowerBound',
+    ] as const
+  ).map((key) =>
+    currentSupportMetricSql(
+      support,
+      values,
+      (current) => tuple(current)?.[key],
+    ),
+  );
+}
+
 function orderBySql(
   sort: OpportunityFilterState['sort'],
   direction: OpportunityFilterState['sortDirection'],
   options: {
     dialect: OpportunityQueryDialect;
     triageRejectDepriority?: boolean;
+    citedSupport?: string[];
+    completeMarker?: string;
+    sourceEligibilityPriority?: string;
+    questionRank?: {
+      enabled: boolean;
+      conflicts: string;
+      recommendation: string;
+      coverage: string;
+    };
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
+  const assessableFit = `CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END`;
+  const supportOrder = (direction: string) =>
+    (options.citedSupport ?? ['CAST(NULL AS DOUBLE PRECISION)'])
+      .map((metric) => `${metric} ${direction} NULLS LAST`)
+      .join(', ');
+  const questionOrder = (order: string, prioritizeConflicts = true) =>
+    `${prioritizeConflicts ? `COALESCE(${options.questionRank?.conflicts ?? 'CAST(NULL AS DOUBLE PRECISION)'}, 0) ASC, ` : ''} ${options.questionRank?.recommendation ?? 'CAST(NULL AS DOUBLE PRECISION)'} ${order} NULLS LAST, ${options.questionRank?.coverage ?? 'CAST(NULL AS DOUBLE PRECISION)'} DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   switch (sort) {
+    case 'recommendation':
+      return questionOrder(sqlDirection, false);
+    case 'cited_support':
+      return `${supportOrder(sqlDirection)}, o.updated_at DESC, o.id ASC`;
+    case 'eligibility':
+      return `${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'newest':
       return `COALESCE(o.posted_at, o.first_seen_at) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'score':
+      if (options.questionRank?.enabled)
+        return questionOrder(sqlDirection, false);
       return `${
         options.triageRejectDepriority
-          ? `${rejectedRecommendationSql(options.dialect)} ASC, `
+          ? 'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END ASC, '
           : ''
-      }latest.score ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      }${assessableFit} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'salary':
       return `COALESCE(o.salary_max, o.salary_min) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'rating':
-      return `o.human_rating ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `latest_review.human_rating ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     default:
-      return `${opportunityStatusRankSql()} ASC, latest.score DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
+      if (options.questionRank?.enabled)
+        return `${opportunityStatusRankSql()} ASC, ${questionOrder('DESC')}`;
+      return `${opportunityStatusRankSql()} ASC, COALESCE(${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'}, 2) ASC, ${supportOrder('DESC')}, CASE WHEN ${options.completeMarker ?? 'CAST(NULL AS DOUBLE PRECISION)'} IS NULL THEN ${assessableFit} ELSE NULL END DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   }
 }
 
 export function createOpportunityWhereSql(
   query: OpportunityQuery,
   dialect: OpportunityQueryDialect = 'postgres',
+  sourceEligibility: Map<
+    string,
+    CurrentSourceOpportunityEligibility
+  > = new Map(),
+  screeningExclusions: Map<
+    string,
+    CurrentScreenedOpportunityExclusion
+  > = new Map(),
 ): {
   joins: string[];
   values: unknown[];
   whereSql: string;
 } {
   const values: unknown[] = [];
-  const review = reviewWhereSql(query.reviewFilter, values, dialect);
+  const review = reviewWhereSql(
+    query.reviewFilter,
+    values,
+    query.workspaceSubject,
+    dialect,
+  );
   const filters = filterWhereSql({
     candidateSkills: query.candidateSkills,
+    dialect,
     filters: query.filters,
+    questionRecommendationScope: query.questionRecommendationScope,
     search: query.search,
     values,
+    sourceEligibility,
   });
   const joins: string[] = [];
-  if (filters.needsScore) joins.push(latestScoreJoinSql(dialect));
-  if (review.needsApplication) joins.push(latestApplicationJoinSql(dialect));
-  const where = [...review.where, ...filters.where];
+  if (filters.needsAssessment) {
+    joins.push(latestAssessmentJoinSql(dialect, query, values));
+  }
+  if (filters.needsRecommendationRank) {
+    const rankJoin = recommendationRankJoinSql(query, values);
+    if (rankJoin) joins.push(rankJoin);
+  }
+  if (review.needsApplication) {
+    joins.push(
+      latestApplicationJoinSql(dialect, query.workspaceSubject, values),
+    );
+  }
+  if (review.needsReview || filters.needsReview) {
+    joins.push(latestReviewJoinSql(dialect, query.workspaceSubject, values));
+  }
+  const screen = screeningWhereSql(
+    query.reviewFilter,
+    dialect,
+    screeningExclusions,
+    values,
+  );
+  const where = [
+    ...review.where,
+    ...filters.where,
+    ...(screen ? [screen] : []),
+  ];
   return {
     joins,
     values,
@@ -576,8 +1529,22 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
   const list = normalizeQueryTerms;
   return JSON.stringify([
     ['candidateSkills', list(query.candidateSkills)],
+    [
+      'assessmentCandidateMaterialFingerprint',
+      query.assessmentCandidateMaterialFingerprint ?? '',
+    ],
+    [
+      'assessmentPreferencesFingerprint',
+      query.assessmentPreferencesFingerprint ?? '',
+    ],
+    [
+      'questionRecommendationScope',
+      query.questionRecommendationScope?.questionScreeningEnabled ?? false,
+      query.questionRecommendationScope?.candidateMaterialFingerprint ?? '',
+      query.questionRecommendationScope?.questionSetFingerprint ?? '',
+    ],
     ['reviewFilter', query.reviewFilter.trim()],
-    ['search', (query.search ?? '').trim().toLowerCase()],
+    ['search', (query.search ?? '').trim().slice(0, 200).toLowerCase()],
     ['status', filters.status],
     ['fit', filters.fit],
     ['skills', list(filters.skills)],
@@ -588,9 +1555,11 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
     ['includeMissingComp', filters.includeMissingComp],
     ['postedWithinDays', filters.postedWithinDays],
     ['excludeExpired', filters.excludeExpired],
+    ['excludeStale', filters.excludeStale],
     ['freshness', filters.freshness],
     ['employmentTypes', list(filters.employmentTypes)],
     ['workModes', list(filters.workModes)],
+    ['eligibilityBuckets', list(filters.eligibilityBuckets)],
     ['seniority', filters.seniority],
     ['relocationOnly', filters.relocationOnly],
     ['visaOnly', filters.visaOnly],
@@ -635,21 +1604,33 @@ export function createOpportunityQueryFingerprint(
  * of silently overwriting the newer value.
  */
 export async function listOpportunityMatchingIds(
-  query: OpportunityQuery,
+  query: WorkspaceOpportunityQuery,
   { limit }: { limit: number },
 ): Promise<OpportunityMatchingRow[]> {
+  if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return [];
+  query = await withQuestionRecommendationScope(query);
   const db = await queryDatabase();
-  const built = createOpportunityWhereSql(query, opportunityQueryDialect());
+  const dialect = opportunityQueryDialect();
+  const sourceEligibility = query.filters.eligibilityBuckets.length
+    ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
+    : new Map();
+  const screeningExclusions = opportunityScreeningReviewMode(query.reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(query.workspaceSubject)
+    : new Map();
+  const built = createOpportunityWhereSql(
+    query,
+    dialect,
+    sourceEligibility,
+    screeningExclusions,
+  );
   const limitPlaceholder = pushParam(built.values, limit);
-  const result = await db.query(
-    `SELECT o.id, o.updated_at AS "updatedAt"
+  const sql = `SELECT o.id, o.updated_at AS "updatedAt"
     FROM opportunities o
     ${built.joins.join('\n')}
     ${built.whereSql}
     ORDER BY o.id ASC
-    LIMIT ${limitPlaceholder}`,
-    ...built.values,
-  );
+    LIMIT ${limitPlaceholder}`;
+  const result = await queryOpportunitySql(db, dialect, sql, built.values);
   return rowsFromResult(result).flatMap((row) => {
     const id = row.id;
     if (typeof id !== 'string' || id.length === 0) return [];
@@ -676,15 +1657,25 @@ export async function listOpportunityMatchingIds(
  */
 export async function listOpportunityRevisionsByIds(
   ids: readonly string[],
+  workspaceSubject: WorkspaceSubject & { profileId: string },
 ): Promise<OpportunityMatchingRow[]> {
+  if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const unique = [...new Set(ids.filter(Boolean))];
   if (unique.length === 0) return [];
   const db = await queryDatabase();
-  const result = await db.query(
+  const dialect = opportunityQueryDialect();
+  const values: unknown[] = [];
+  const idWhere =
+    dialect === 'sqlite'
+      ? `o.id IN (${unique.map((id) => pushParam(values, id)).join(', ')})`
+      : `o.id = ANY(${pushParam(values, unique)})`;
+  const result = await queryOpportunitySql(
+    db,
+    dialect,
     `SELECT o.id, o.updated_at AS "updatedAt"
     FROM opportunities o
-    WHERE o.id = ANY($1)`,
-    unique,
+    WHERE ${idWhere}`,
+    values,
   );
   return rowsFromResult(result).flatMap((row) => {
     const id = row.id;
@@ -703,19 +1694,32 @@ export async function listOpportunityRevisionsByIds(
 }
 
 export async function countOpportunityRecords(
-  query: OpportunityQuery,
+  query: WorkspaceOpportunityQuery,
 ): Promise<number> {
+  if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return 0;
+  query = await withQuestionRecommendationScope(query);
   const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const sourceEligibility = query.filters.eligibilityBuckets.length
+    ? await loadCurrentSourceOpportunityEligibility(query.workspaceSubject)
+    : new Map();
+  const screeningExclusions = opportunityScreeningReviewMode(query.reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(query.workspaceSubject)
+    : new Map();
   const { joins, values, whereSql } = createOpportunityWhereSql(
     query,
-    opportunityQueryDialect(),
+    dialect,
+    sourceEligibility,
+    screeningExclusions,
   );
-  const result = await db.query(
+  const result = await queryOpportunitySql(
+    db,
+    dialect,
     `SELECT COUNT(*) AS count
     FROM opportunities o
     ${joins.join('\n')}
     ${whereSql}`,
-    ...values,
+    values,
   );
   const [row] = rowsFromResult(result);
   return Number(row?.count ?? 0);
@@ -723,49 +1727,169 @@ export async function countOpportunityRecords(
 
 export async function listOpportunityPageIds({
   candidateSkills,
+  assessmentCandidateMaterialFingerprint,
+  assessmentPreferencesFingerprint,
   filters,
   limit,
   offset,
   reviewFilter,
   search,
   triageRejectDepriority,
-}: OpportunityQuery & {
+  questionRecommendationScope: suppliedQuestionRecommendationScope,
+  workspaceSubject,
+}: WorkspaceOpportunityQuery & {
   limit: number;
   offset: number;
 }): Promise<string[]> {
+  if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const db = await queryDatabase();
+  const dialect = opportunityQueryDialect();
+  const questionRecommendationScope =
+    suppliedQuestionRecommendationScope ??
+    (needsQuestionRecommendationScope(filters)
+      ? await loadCurrentScreeningQuestionRecommendationScope(workspaceSubject)
+      : undefined);
+  const sourceEligibility =
+    needsSourceEligibility(filters) ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
+      : new Map();
+  const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
+    : new Map();
   const query = createOpportunityWhereSql(
     {
       candidateSkills,
+      assessmentCandidateMaterialFingerprint,
+      assessmentPreferencesFingerprint,
       filters,
+      questionRecommendationScope,
       reviewFilter,
       search,
+      workspaceSubject,
     },
-    opportunityQueryDialect(),
+    dialect,
+    sourceEligibility,
+    screeningExclusions,
   );
-  const needsScoreForSort = filters.sort === 'best' || filters.sort === 'score';
+  const needsAssessmentForSort =
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled) ||
+    filters.sort === 'eligibility' ||
+    (filters.sort === 'score' &&
+      !questionRecommendationScope?.questionScreeningEnabled);
   if (
-    needsScoreForSort &&
-    !query.joins.some((join) => join.includes('evaluation_scores'))
+    needsAssessmentForSort &&
+    !query.joins.some((join) => join.includes('opportunity_assessments'))
   ) {
-    query.joins.unshift(latestScoreJoinSql(opportunityQueryDialect()));
+    query.joins.unshift(
+      latestAssessmentJoinSql(
+        dialect,
+        {
+          assessmentCandidateMaterialFingerprint,
+          assessmentPreferencesFingerprint,
+          candidateSkills,
+          filters,
+          questionRecommendationScope,
+          reviewFilter,
+          search,
+          triageRejectDepriority,
+          workspaceSubject,
+        },
+        query.values,
+      ),
+    );
   }
+  if (
+    filters.sort === 'rating' &&
+    !query.joins.some((join) => join.includes('latest_review'))
+  ) {
+    query.joins.push(
+      latestReviewJoinSql(dialect, workspaceSubject, query.values),
+    );
+  }
+  const sourceEligibilityPriority =
+    (filters.sort === 'eligibility' || filters.sort === 'best') &&
+    sourceEligibility.size
+      ? sourceEligibilityPrioritySql(sourceEligibility, query.values)
+      : undefined;
+  const support =
+    filters.sort === 'cited_support' ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? await loadCurrentCitedOpportunitySupport(workspaceSubject)
+      : new Map<string, CurrentCitedOpportunitySupport>();
+  const citedSupport =
+    filters.sort === 'cited_support' ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? citedSupportSql(support, query.values, filters.sort === 'best')
+      : undefined;
+  const completeMarker =
+    filters.sort === 'best'
+      ? currentSupportMetricSql(
+          support,
+          query.values,
+          (current) =>
+            current.completeReviewStatus || current.completeProjection
+              ? 1
+              : null,
+          // Owned locator IDs deny legacy fallback even if source changes after replay.
+          false,
+        )
+      : undefined;
+  if (
+    questionRecommendationScope?.questionScreeningEnabled &&
+    !query.joins.some((join) =>
+      join.includes('opportunity_recommendation_ranks'),
+    )
+  ) {
+    const rankJoin = recommendationRankJoinSql(
+      {
+        assessmentCandidateMaterialFingerprint,
+        assessmentPreferencesFingerprint,
+        candidateSkills,
+        filters,
+        questionRecommendationScope,
+        reviewFilter,
+        search,
+        triageRejectDepriority,
+        workspaceSubject,
+      },
+      query.values,
+    );
+    if (rankJoin) query.joins.unshift(rankJoin);
+  }
+  const questionRank = questionRecommendationScope?.questionScreeningEnabled
+    ? {
+        enabled: true,
+        conflicts:
+          filters.sort === 'best'
+            ? 'rank.must_have_conflict_count'
+            : 'CAST(NULL AS DOUBLE PRECISION)',
+        recommendation: 'rank.recommendation_percent',
+        coverage: 'rank.evidence_coverage_percent',
+      }
+    : undefined;
   const limitPlaceholder = pushParam(query.values, limit);
   const offsetPlaceholder = pushParam(query.values, offset);
-  const result = await db.query(
-    `SELECT o.id
+  const sql = `SELECT o.id
     FROM opportunities o
     ${query.joins.join('\n')}
     ${query.whereSql}
     ORDER BY ${orderBySql(filters.sort, filters.sortDirection, {
-      dialect: opportunityQueryDialect(),
+      dialect,
+      citedSupport,
+      questionRank,
+      completeMarker,
+      sourceEligibilityPriority,
       triageRejectDepriority:
         triageRejectDepriority && filters.sort === 'score',
     })}
     LIMIT ${limitPlaceholder}
-    OFFSET ${offsetPlaceholder}`,
-    ...query.values,
-  );
+    OFFSET ${offsetPlaceholder}`;
+  const result = await queryOpportunitySql(db, dialect, sql, query.values);
   return rowsFromResult(result)
     .map((row) => row.id)
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
@@ -774,13 +1898,12 @@ export async function listOpportunityPageIds({
 /**
  * Current evaluation score context for the bounded local triage collection.
  *
- * SQLite cannot order the collection rows by their later hydration values. The
- * raw query selects one score whose fingerprint matches each opportunity's
- * current source content, then the caller attaches only values for its bounded
- * candidate ids before applying filters, ranking, and paging.
+ * This is display-only hydration after a page has already been selected by a
+ * current assessment projection. It cannot be used for filtering or ranking.
  */
 export async function listCurrentOpportunityScores(
   opportunityIds: readonly string[],
+  workspaceSubject: WorkspaceSubject & { profileId: string },
 ): Promise<Map<string, { recommendation: string; score: number | null }>> {
   const requestedIds = [...new Set(opportunityIds.filter(Boolean))];
   const requestedIdSet = new Set(requestedIds);
@@ -788,7 +1911,12 @@ export async function listCurrentOpportunityScores(
     string,
     { recommendation: string; score: number | null }
   >();
-  if (requestedIds.length === 0) return scores;
+  if (
+    requestedIds.length === 0 ||
+    !hasCandidateWorkspaceSubject(workspaceSubject)
+  ) {
+    return scores;
+  }
 
   const dialect = opportunityQueryDialect();
   const db = await queryDatabase();
@@ -800,13 +1928,11 @@ export async function listCurrentOpportunityScores(
       .slice(start, start + 500)
       .map((id) => pushParam(values, id))
       .join(', ');
-    const result = await db.query(
-      `SELECT CAST(o.id AS TEXT) AS "opportunityId", latest.score, latest.recommendation
+    const sql = `SELECT CAST(o.id AS TEXT) AS "opportunityId", latest.score, latest.recommendation
       FROM opportunities o
-      ${latestScoreJoinSql(dialect)}
-      WHERE CAST(o.id AS TEXT) IN (${placeholders})`,
-      ...values,
-    );
+      ${latestScoreJoinSql(dialect, workspaceSubject, values)}
+      WHERE CAST(o.id AS TEXT) IN (${placeholders})`;
+    const result = await queryOpportunitySql(db, dialect, sql, values);
     for (const row of rowsFromResult(result)) {
       const id = row.opportunityId;
       if (typeof id !== 'string' || !requestedIdSet.has(id)) continue;
@@ -820,74 +1946,160 @@ export async function listCurrentOpportunityScores(
 }
 
 /**
- * Load at most one current application and evaluation score for each supplied
- * opportunity. The lateral joins keep history cardinality inside PostgreSQL,
- * so browser-facing summaries never hydrate an unbounded set of old rows.
+ * Load at most one current subject-owned application, evaluation score, and
+ * decision overlay for each supplied opportunity. The joins run after paging,
+ * so browser-facing summaries never hydrate unbounded private history.
  */
 export async function listLatestOpportunityRelatedContext(
   opportunityIds: readonly string[],
+  workspaceSubject: WorkspaceSubject & { profileId: string },
 ): Promise<LatestOpportunityRelatedContextRow[]> {
   const ids = Array.from(new Set(opportunityIds.filter(Boolean))).slice(0, 25);
-  if (ids.length === 0) return [];
+  if (ids.length === 0 || !hasCandidateWorkspaceSubject(workspaceSubject)) {
+    return [];
+  }
 
   const db = await queryDatabase();
-  const result = await db.query(
-    `SELECT
+  const dialect = opportunityQueryDialect();
+  const values: unknown[] = [];
+  const idsWhere =
+    dialect === 'sqlite'
+      ? `CAST(o.id AS TEXT) IN (${ids.map((id) => pushParam(values, id)).join(', ')})`
+      : `o.id = ANY(${pushParam(values, ids)})`;
+  const applicationJoin = latestApplicationJoinSql(
+    dialect,
+    workspaceSubject,
+    values,
+  );
+  const scoreJoin = latestScoreJoinSql(
+    dialect,
+    workspaceSubject,
+    values,
+    'latest_score',
+  );
+  const reviewJoin = latestReviewJoinSql(dialect, workspaceSubject, values);
+  const reviewContextColumns =
+    dialect === 'sqlite'
+      ? `latest_review.reason AS "humanReviewNotes",
+      latest_review.created_at AS "reviewedAt",
+      latest_review.decider_profile_id AS "reviewedByProfileId",
+      latest_review.decider_user_id AS "reviewedByUserId"`
+      : `latest_review.human_review_notes AS "humanReviewNotes",
+      latest_review.reviewed_at AS "reviewedAt",
+      latest_review.reviewed_by_profile_id AS "reviewedByProfileId",
+      latest_review.reviewed_by_user_id AS "reviewedByUserId"`;
+  const limitPlaceholder = pushParam(values, ids.length);
+  const sql = `SELECT
       o.id AS "opportunityId",
       latest_application.id AS "applicationId",
       latest_application.status AS "applicationStatus",
       latest_score.id AS "scoreId",
       latest_score.score,
       latest_score.recommendation,
-      latest_score.summary AS "scoreSummary"
+      latest_score.summary AS "scoreSummary",
+      latest_review.human_rating AS "humanRating",
+      ${normalizedReviewStatusSql(dialect)} AS "humanReviewStatus",
+      ${reviewContextColumns}
     FROM opportunities o
-    LEFT JOIN LATERAL (
-      SELECT a.id, a.status
-      FROM applications a
-      WHERE a.opportunity_id = CAST(o.id AS TEXT)
-      ORDER BY a.updated_at DESC
-      LIMIT 1
-    ) latest_application ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT es.id, es.score, es.recommendation, es.summary
-      FROM evaluation_scores es
-      WHERE es.opportunity_id = CAST(o.id AS TEXT)
-        AND COALESCE(es.source_content_fingerprint, '') =
-          COALESCE(o.source_content_fingerprint, '')
-        AND (
-          COALESCE(es.created_by_profile_id, '') <> ''
-          OR (
-            COALESCE(o.scoring_material_fingerprint, '') <> ''
-            AND COALESCE(es.scoring_material_fingerprint, '') =
-              COALESCE(o.scoring_material_fingerprint, '')
-          )
-        )
-      ORDER BY CASE WHEN COALESCE(es.created_by_profile_id, '') <> '' THEN 0 ELSE 1 END,
-        es.updated_at DESC
-      LIMIT 1
-    ) latest_score ON TRUE
-    WHERE o.id = ANY($1)
-    LIMIT $2`,
-    ids,
-    ids.length,
-  );
-  return rowsFromResult(result) as LatestOpportunityRelatedContextRow[];
+    ${applicationJoin}
+    ${scoreJoin}
+    ${reviewJoin}
+    WHERE ${idsWhere}
+    LIMIT ${limitPlaceholder}`;
+  const result = await queryOpportunitySql(db, dialect, sql, values);
+  return rowsFromResult(result).map((row) => ({
+    ...row,
+    humanRating: safeHumanRating(row.humanRating),
+    humanReviewNotes:
+      typeof row.humanReviewNotes === 'string' ? row.humanReviewNotes : '',
+    humanReviewStatus: safeReviewStatus(row.humanReviewStatus),
+    reviewedAt:
+      row.reviewedAt instanceof Date || typeof row.reviewedAt === 'string'
+        ? row.reviewedAt
+        : null,
+    reviewedByProfileId:
+      typeof row.reviewedByProfileId === 'string'
+        ? row.reviewedByProfileId
+        : '',
+    reviewedByUserId:
+      typeof row.reviewedByUserId === 'string' ? row.reviewedByUserId : '',
+  })) as LatestOpportunityRelatedContextRow[];
 }
 
 export async function listOpportunityFilterOptions(
   reviewFilter: string,
+  workspaceSubject: WorkspaceSubject & { profileId: string },
 ): Promise<OpportunityFilterOptions> {
+  if (!hasCandidateWorkspaceSubject(workspaceSubject)) {
+    return {
+      employmentTypes: [],
+      freshness: [],
+      seniorities: [],
+      skills: [],
+      statuses: [],
+      workModes: [],
+    };
+  }
   const db = await queryDatabase();
   const values: unknown[] = [];
   const dialect = opportunityQueryDialect();
-  const review = reviewWhereSql(reviewFilter, values, dialect);
-  const joins = review.needsApplication
-    ? [latestApplicationJoinSql(dialect)]
-    : [];
-  const whereSql =
-    review.where.length > 0 ? `WHERE ${review.where.join('\n AND ')}` : '';
-  const result = await db.query(
-    `WITH scoped AS (
+  const review = reviewWhereSql(
+    reviewFilter,
+    values,
+    workspaceSubject,
+    dialect,
+  );
+  const joins: string[] = [];
+  if (review.needsApplication) {
+    joins.push(latestApplicationJoinSql(dialect, workspaceSubject, values));
+  }
+  if (review.needsReview) {
+    joins.push(latestReviewJoinSql(dialect, workspaceSubject, values));
+  }
+  const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
+    ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
+    : new Map();
+  const screen = screeningWhereSql(
+    reviewFilter,
+    dialect,
+    screeningExclusions,
+    values,
+  );
+  const where = [...review.where, ...(screen ? [screen] : [])];
+  const whereSql = where.length > 0 ? `WHERE ${where.join('\n AND ')}` : '';
+  if (dialect === 'sqlite') {
+    const sql = `WITH RECURSIVE scoped AS (
+        SELECT o.*
+        FROM opportunities o
+        ${joins.join('\n')}
+        ${whereSql}
+      ), skill_values(skill, rest) AS (
+        SELECT '', replace(replace(COALESCE(required_skills, '') || ',' || COALESCE(preferred_skills, ''), char(10), ','), char(13), ',') || ','
+        FROM scoped
+        UNION ALL
+        SELECT trim(substr(rest, 1, instr(rest, ',') - 1)), substr(rest, instr(rest, ',') + 1)
+        FROM skill_values
+        WHERE rest <> ''
+      )
+      SELECT
+        COALESCE((SELECT group_concat(status, char(31)) FROM (SELECT DISTINCT status FROM scoped WHERE status <> '' ORDER BY status)), '') AS statuses,
+        COALESCE((SELECT group_concat(employment_type, char(31)) FROM (SELECT DISTINCT employment_type FROM scoped WHERE employment_type NOT IN ('', 'unknown') ORDER BY employment_type)), '') AS "employmentTypes",
+        COALESCE((SELECT group_concat(work_mode, char(31)) FROM (SELECT DISTINCT work_mode FROM scoped WHERE work_mode NOT IN ('', 'unknown') ORDER BY work_mode)), '') AS "workModes",
+        COALESCE((SELECT group_concat(seniority, char(31)) FROM (SELECT DISTINCT seniority FROM scoped WHERE seniority NOT IN ('', 'unknown') ORDER BY seniority)), '') AS seniorities,
+        COALESCE((SELECT group_concat(freshness, char(31)) FROM (SELECT DISTINCT freshness FROM scoped WHERE freshness NOT IN ('', 'unknown') ORDER BY freshness)), '') AS freshness,
+        COALESCE((SELECT group_concat(skill, char(31)) FROM (SELECT DISTINCT skill FROM skill_values WHERE skill <> '' ORDER BY skill)), '') AS skills`;
+    const result = await queryOpportunitySql(db, dialect, sql, values);
+    const [row] = rowsFromResult(result);
+    return {
+      employmentTypes: sqlStringArray(row?.employmentTypes),
+      freshness: sqlStringArray(row?.freshness),
+      seniorities: sqlStringArray(row?.seniorities),
+      skills: sqlStringArray(row?.skills),
+      statuses: sqlStringArray(row?.statuses),
+      workModes: sqlStringArray(row?.workModes),
+    };
+  }
+  const sql = `WITH scoped AS (
       SELECT o.*
       FROM opportunities o
       ${joins.join('\n')}
@@ -910,9 +2122,8 @@ export async function listOpportunityFilterOptions(
         ) AS skill(value)
         WHERE btrim(skill.value) <> ''
         ORDER BY btrim(skill.value)
-      ) AS skills`,
-    ...values,
-  );
+      ) AS skills`;
+  const result = await queryOpportunitySql(db, dialect, sql, values);
   const [row] = rowsFromResult(result);
   return {
     employmentTypes: sqlStringArray(row?.employmentTypes),

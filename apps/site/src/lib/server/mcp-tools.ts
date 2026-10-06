@@ -16,8 +16,6 @@ import {
 import { getAppConfig, getConfiguredMcpServerName } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
-  applicationWorkflowSyncOperations,
-  recommendedOpportunityTaskSyncOperations,
   resumeVariantWorkflowSyncOperations,
   sourceWorkflowSyncOperations,
   uniqueWorkflowOperations,
@@ -66,17 +64,6 @@ const generatedToolSideEffects: Record<
   string,
   Partial<Record<McpOperationAction, readonly McpToolOperation[]>>
 > = {
-  // `currentApplicationRecord()` and the post-write re-read, then
-  // `syncApplicationWorkflowTasks()`.
-  Application: {
-    create: applicationWorkflowSyncOperations,
-    update: applicationWorkflowSyncOperations,
-  },
-  // `syncRecommendedOpportunityDecisionTasks()` after every write.
-  Opportunity: {
-    create: recommendedOpportunityTaskSyncOperations,
-    update: recommendedOpportunityTaskSyncOperations,
-  },
   // `assertMcpResumeAssetWriteAllowed()` reads the asset before an update or
   // delete to refuse application-owned materials.
   ResumeAsset: {

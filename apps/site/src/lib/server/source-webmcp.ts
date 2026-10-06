@@ -5,6 +5,10 @@ import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import { recordAgentAudit } from './application-workflow.js';
 import { getDbConfig } from './db.js';
+import {
+  runtimeWorkspaceSubjectFromJobArgs,
+  withRuntimeWorkspaceSubject,
+} from './job-workspace-subject.js';
 import { ensureLocalSourceCrawlWorker } from './local-source-crawl-worker.js';
 import { resolveOpportunityIntelligenceBudgetConfig } from './opportunity-intelligence-config.js';
 import { getCollection } from './smrt.js';
@@ -12,6 +16,7 @@ import {
   getSourceCrawlJobDedupeStatus,
   isSourceCrawlActiveJobConflict,
 } from './source-crawl-job-schema.js';
+import { captureSourceCrawlOperator } from './source-crawl-operator.js';
 import {
   assertActiveOperableRootSource,
   assertOperableRootSource,
@@ -696,6 +701,9 @@ export async function enqueueRootSourceCrawl(
   user: Pick<User, 'id'>,
   dependencies: SourceWebMcpDependencies = {},
 ) {
+  const operator = captureSourceCrawlOperator();
+  if (user.id !== operator.userId)
+    error(403, 'Source crawl user does not match its verified operator.');
   const sourceId = requiredUuid(input.sourceId, 'sourceId');
   const idempotencyKey = requiredText(
     input.idempotencyKey,
@@ -819,13 +827,13 @@ export async function enqueueRootSourceCrawl(
         userId: stringValue(user.id),
       });
 
-      const args = {
+      const args = withRuntimeWorkspaceSubject({
         idempotencyKey,
         includeGeneric: true,
         limit,
         reason,
         sourceCrawlId: crawlId,
-      };
+      });
       let reused = Boolean(job);
       if (!job) {
         const completedRetry = await jobs.get(jobId);
@@ -855,6 +863,27 @@ export async function enqueueRootSourceCrawl(
           reused = true;
         }
       }
+      if (job) {
+        let stored;
+        try {
+          stored = runtimeWorkspaceSubjectFromJobArgs(
+            job.args as Record<string, unknown>,
+          );
+        } catch {
+          error(409, 'Existing source crawl has no verified operator binding.');
+        }
+        if (
+          job.tenantId !== operator.tenantId ||
+          stored.tenantId !== operator.tenantId ||
+          stored.userId !== operator.userId ||
+          stored.profileId !== operator.profileId
+        ) {
+          error(
+            409,
+            'Existing source crawl belongs to a different operator workspace.',
+          );
+        }
+      }
       const crawlStatus = stringValue(crawl.status);
       if (
         job &&
@@ -875,6 +904,7 @@ export async function enqueueRootSourceCrawl(
       if (!job && !durableCrawlOwnsOperation) {
         job = await jobs.create({
           args,
+          tenantId: operator.tenantId,
           id: jobId,
           maxAttempts: 1,
           method: SOURCE_CRAWL_METHOD,

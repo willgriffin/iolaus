@@ -152,6 +152,12 @@ const applicationConcurrencyMock = vi.hoisted(() => ({
     },
   ),
 }));
+const assessmentStoreMock = vi.hoisted(() => ({
+  refreshOpportunityAssessmentProjections: vi.fn(async () => ({
+    refreshed: 0,
+    scanned: 0,
+  })),
+}));
 
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async (className: string) => {
@@ -200,6 +206,11 @@ vi.mock('./resume-variant-workflow.js', () => ({
 vi.mock('./resume-data.js', () => ({
   invalidatePublishedResumeCache:
     resumeRefreshMock.invalidatePublishedResumeCache,
+}));
+
+vi.mock('./opportunity-assessment-store.js', () => ({
+  refreshOpportunityAssessmentProjections:
+    assessmentStoreMock.refreshOpportunityAssessmentProjections,
 }));
 
 vi.mock('./resume-source-refresh.js', () => ({
@@ -955,10 +966,11 @@ describe('createAdminRecord combo fields', () => {
     expect(opportunities.list).toHaveBeenCalledWith({
       limit: 1000,
       orderBy: 'updated_at DESC',
+      where: {},
     });
   });
 
-  it('syncs recommendation review tasks after creating and updating opportunities', async () => {
+  it('does not sync private recommendation tasks from unbound generic opportunity writes', async () => {
     const resource: AdminResource = {
       className: 'Opportunity',
       description: '',
@@ -996,7 +1008,7 @@ describe('createAdminRecord combo fields', () => {
 
     expect(
       workflowMock.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalledTimes(2);
+    ).not.toHaveBeenCalled();
   });
 
   it('syncs selected application approvals after creating and updating resume variants', async () => {
@@ -1011,7 +1023,11 @@ describe('createAdminRecord combo fields', () => {
 
     expect(
       resumeVariantWorkflowMock.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('2');
+    ).toHaveBeenCalledWith('2', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
 
     const updateForm = new FormData();
     updateForm.set('id', 'variant-1');
@@ -1020,10 +1036,18 @@ describe('createAdminRecord combo fields', () => {
 
     expect(
       resumeVariantWorkflowMock.reserveResumeVariantApplicationWrite,
-    ).toHaveBeenCalledWith('variant-1');
+    ).toHaveBeenCalledWith('variant-1', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
     expect(
       resumeVariantWorkflowMock.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('variant-1');
+    ).toHaveBeenCalledWith('variant-1', {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    });
   });
 
   it('rejects unsafe admin resume variant updates before saving', async () => {
@@ -1549,3 +1573,12 @@ describe('assertAdminWorkflowPayload', () => {
     );
   });
 });
+
+vi.mock('./workspace-subject.js', () => ({
+  getCurrentWorkspaceSubject: () => ({
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+    profileId: 'profile-1',
+  }),
+  isCurrentWorkspaceOperator: () => true,
+}));

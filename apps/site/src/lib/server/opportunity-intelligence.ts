@@ -21,13 +21,34 @@ import {
   syncApplicationWorkflowTasks,
   syncRecommendedOpportunityDecisionTasks,
 } from './application-workflow.js';
+import { candidateWorkEligibilityFromProfile } from './candidate-work-eligibility.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
+import { runAsRevalidatedJobWorkspaceSubject } from './job-workspace-subject.js';
 import {
   llmJsonParseDiagnostics,
   parseJsonObjectFromText,
   requireJsonObjectFromText,
 } from './llm-json.js';
+import { prepareOpportunityAssessment } from './opportunity-assessment.js';
+import { evaluateOpportunityAssessment } from './opportunity-assessment-decision-provider.js';
+import {
+  buildOpportunityAssessmentPostingInput,
+  opportunityAssessmentSubjectMaterialFingerprint,
+  readVerifiedOpportunityRequirementCoverage,
+  selectOpportunityAssessmentCandidateSources,
+} from './opportunity-assessment-input.js';
+import {
+  evaluatePartialOpportunityAssessment,
+  OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+  preparePartialOpportunityAssessment,
+  storePartialOpportunityAssessment,
+} from './opportunity-assessment-partial.js';
+import {
+  hasOpportunityAssessment,
+  loadOpportunityAssessmentPreferences,
+  storeOpportunityAssessment,
+} from './opportunity-assessment-store.js';
 import { processOpportunityWithLlm } from './opportunity-details.js';
 import { resolveOpportunityScoringConfig } from './opportunity-intelligence-config.js';
 import {
@@ -41,6 +62,7 @@ import {
   countOpportunityInputTokens,
   inputTokenCeilingForModel,
 } from './opportunity-posting-preparation.js';
+import { readPartialOpportunityRequirementEvidence } from './opportunity-requirement-coverage-provider.js';
 import {
   attributableOpportunityScoringReasons,
   buildBoundedOpportunityScoringRequest,
@@ -60,6 +82,12 @@ import {
   validatePreparedPostingForScoring,
 } from './opportunity-scoring.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
+import {
+  createPrivateRecord,
+  listPrivateRecords,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import { loadWorkspaceCandidateEvidence } from './resume-data.js';
 import { evaluateSkillMatches } from './skill-decision-provider.js';
 import { prepareSkillMatching } from './skill-matching.js';
 import { getCollection } from './smrt.js';
@@ -73,13 +101,17 @@ type OpportunityIntelligenceDatabase = Awaited<
 >;
 type Collection = {
   create: (payload: Record<string, unknown>) => Promise<MutableRecord>;
-  get: (id: string) => Promise<MutableRecord | null>;
+  get: (
+    filter: string | { id: string },
+    options?: { cache?: false },
+  ) => Promise<MutableRecord | null>;
   list: (options?: Record<string, unknown>) => Promise<MutableRecord[]>;
 };
 
 export const opportunityIntelligenceModes = [
   'extract',
   'score',
+  'assessment',
   'evidence',
   'plan',
   'research',
@@ -132,6 +164,8 @@ export interface NormalizedOpportunityScore {
 }
 
 export interface OpportunityIntelligenceOptions {
+  /** Explicit evidence-only path; never enables full score or eligibility projection. */
+  partialAssessmentEvidence?: boolean;
   agentRunId?: string;
   aiClient?: Pick<AIInterface, 'chat'>;
   apiKey?: string;
@@ -160,6 +194,8 @@ export interface OpportunityIntelligenceOptions {
   sourceId?: string;
   timeout?: number;
   user?: Pick<User, 'id'> | null;
+  /** Set only by a freshly resolved candidate-owned job wrapper. */
+  workspaceSubject?: WorkspaceSubject;
 }
 
 async function runLifecycleMutation<T>(
@@ -173,12 +209,30 @@ async function runLifecycleMutation<T>(
 }
 
 interface OpportunityIntelligenceStepResult {
+  partialEvidence?: {
+    contractVersion: string;
+    fingerprint: string;
+    matchReadiness: 'needs_evidence';
+    requirements: Array<{
+      id: string;
+      support: 'supported' | 'uncertain';
+      candidateSourceKeys: string[];
+      postingSourceKeys: string[];
+    }>;
+    unresolvedClauses: Array<{ clauseId: string; reason: string }>;
+  };
   agentRunId?: string;
   evaluationScoreId?: string;
   message: string;
   mode: Exclude<OpportunityIntelligenceMode, 'all'>;
   skipReason?: 'prerequisite' | 'stale';
   status: 'error' | 'processed' | 'skipped';
+  sourceDependency?: {
+    kind: 'requirement_coverage';
+    sourceContentFingerprint: string;
+    sourceContentVersion: number;
+    dedupeKey: string;
+  };
 }
 
 interface EvidenceSource extends OpportunityScoringEvidenceSource {}
@@ -186,6 +240,7 @@ interface EvidenceSource extends OpportunityScoringEvidenceSource {}
 const processOrder: Array<Exclude<OpportunityIntelligenceMode, 'all'>> = [
   'extract',
   'score',
+  'assessment',
   'evidence',
   'quality',
   'research',
@@ -1003,6 +1058,30 @@ async function latestCurrentEvaluationScore(
   return id ? await (await collection('EvaluationScore')).get(id) : null;
 }
 
+async function latestPrivateEvaluationScore(
+  opportunity: MutableRecord,
+  subject: WorkspaceSubject,
+  materialFingerprint = '',
+): Promise<MutableRecord | null> {
+  const opportunityId = stringValue(opportunity.id);
+  const sourceContentFingerprint = stringValue(
+    opportunity.sourceContentFingerprint,
+  );
+  if (!opportunityId || !sourceContentFingerprint) return null;
+  const records = await listPrivateRecords('EvaluationScore', subject, {
+    limit: 1,
+    orderBy: 'updated_at DESC',
+    where: {
+      ...(materialFingerprint
+        ? { scoringMaterialFingerprint: materialFingerprint }
+        : {}),
+      opportunityId,
+      sourceContentFingerprint,
+    },
+  });
+  return (records[0] as MutableRecord | undefined) ?? null;
+}
+
 async function markCurrentScoringMaterial(
   opportunity: MutableRecord,
   sourceContentFingerprint: string,
@@ -1060,6 +1139,8 @@ export async function applyRecommendationSideEffects(options: {
   expectedScoringMaterialFingerprint?: string;
   opportunity: MutableRecord;
   score: NormalizedOpportunityScore;
+  /** Verified owner for private recommendation task reconciliation only. */
+  workspaceSubject?: WorkspaceSubject;
 }): Promise<boolean> {
   const expected = stringValue(options.expectedSourceContentFingerprint);
   const expectedMaterial = stringValue(
@@ -1137,9 +1218,13 @@ export async function applyRecommendationSideEffects(options: {
     ) {
       return false;
     }
-    await syncRecommendedOpportunityDecisionTasks();
+    if (options.workspaceSubject) {
+      await syncRecommendedOpportunityDecisionTasks(options.workspaceSubject);
+    }
   } else if (status === 'found') {
-    await syncRecommendedOpportunityDecisionTasks();
+    if (options.workspaceSubject) {
+      await syncRecommendedOpportunityDecisionTasks(options.workspaceSubject);
+    }
   }
   return true;
 }
@@ -1160,6 +1245,411 @@ async function runExtract(
           ? 'skipped'
           : 'error',
   };
+}
+
+async function runPartialAssessment(
+  opportunity: MutableRecord,
+  options: OpportunityIntelligenceOptions,
+): Promise<OpportunityIntelligenceStepResult> {
+  const subject = options.workspaceSubject;
+  const opportunityId = stringValue(opportunity.id);
+  if (!subject || !opportunityId)
+    return {
+      mode: 'assessment',
+      status: 'skipped',
+      skipReason: 'prerequisite',
+      message:
+        'A verified candidate workspace and current opportunity are required for partial matching.',
+    };
+  try {
+    const source = await readPartialOpportunityRequirementEvidence(opportunity);
+    if (!source || !source.acceptedRequirements.length)
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'prerequisite',
+        message:
+          'No current recorded applicant excerpts are available for partial matching.',
+      };
+    if (
+      (options.expectedSourceContentFingerprint &&
+        options.expectedSourceContentFingerprint !==
+          source.context.sourceFingerprint) ||
+      (options.sourceContentVersion !== undefined &&
+        options.sourceContentVersion !== source.context.sourceVersion)
+    )
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'stale',
+        message: 'Skipped stale partial source evidence.',
+      };
+    const evidence = await loadWorkspaceCandidateEvidence(subject);
+    const selected = selectOpportunityAssessmentCandidateSources(
+      evidence.evidence,
+      [],
+    );
+    const prepared = preparePartialOpportunityAssessment({
+      opportunityId,
+      evidence: source,
+      candidateSources: selected.sources,
+      candidateCoverageTruncated: selected.truncated,
+      candidateMaterialFingerprint: evidence.fingerprint,
+    });
+    const subjectFingerprint = opportunityAssessmentSubjectMaterialFingerprint({
+      candidateMaterialFingerprint: evidence.fingerprint,
+      sourceContentFingerprint: source.context.sourceFingerprint,
+      sourceContentVersion: source.context.sourceVersion,
+      requirementCoverageFingerprint: source.fingerprint,
+      subject,
+    });
+    if (
+      options.expectedScoringMaterialFingerprint &&
+      options.expectedScoringMaterialFingerprint !== subjectFingerprint
+    )
+      return {
+        mode: 'assessment',
+        status: 'skipped',
+        skipReason: 'stale',
+        message: 'Skipped stale private partial material.',
+      };
+    const prior = await listPrivateRecords('OpportunityAssessment', subject, {
+      limit: 1,
+      where: {
+        opportunityId,
+        assessmentFingerprint: prepared.fingerprint,
+        contractVersion: OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+      },
+    });
+    if (prior.length)
+      return {
+        mode: 'assessment',
+        status: 'processed',
+        message: 'Reused current private partial evidence.',
+      };
+    const result = await evaluatePartialOpportunityAssessment(prepared, {
+      agentRunId: stringValue(options.agentRunId),
+      opportunityId,
+      opportunity,
+      subject,
+      subjectFingerprint,
+      signal: options.signal,
+      store: options.governanceStore,
+    });
+    return await runAsRevalidatedJobWorkspaceSubject(
+      subject,
+      'assessment.execute',
+      async (currentSubject, run) => {
+        await run.assertOperation('opportunities', 'read');
+        const current = await getOpportunity(opportunityId);
+        const currentEvidence =
+          await loadWorkspaceCandidateEvidence(currentSubject);
+        if (
+          !current ||
+          currentEvidence.fingerprint !== evidence.fingerprint ||
+          (await readPartialOpportunityRequirementEvidence(current))
+            ?.fingerprint !== source.fingerprint
+        )
+          return {
+            mode: 'assessment' as const,
+            status: 'skipped' as const,
+            skipReason: 'stale' as const,
+            message: 'Discarded stale partial evidence after usage settlement.',
+          };
+        const created = await storePartialOpportunityAssessment({
+          result,
+          subject: currentSubject,
+          opportunityId,
+          agentRunId: stringValue(options.agentRunId),
+        });
+        return {
+          mode: 'assessment' as const,
+          status: 'processed' as const,
+          message: created
+            ? 'Saved private partial evidence; overall match remains uncertain.'
+            : 'Reused current private partial evidence.',
+          partialEvidence: {
+            contractVersion: result.contractVersion,
+            fingerprint: result.fingerprint,
+            matchReadiness: result.matchReadiness,
+            requirements: result.requirements,
+            unresolvedClauses: result.unresolvedClauses.map((clause) => ({
+              clauseId: clause.clauseId,
+              reason: clause.reason,
+            })),
+          },
+        };
+      },
+    );
+  } catch (cause) {
+    if (options.signal?.aborted) throw cause;
+    return {
+      mode: 'assessment',
+      status: 'error',
+      message:
+        cause instanceof Error
+          ? cause.message
+          : 'Private partial matching failed.',
+    };
+  }
+}
+
+async function runAssessment(
+  opportunity: MutableRecord,
+  options: OpportunityIntelligenceOptions,
+): Promise<OpportunityIntelligenceStepResult> {
+  if (options.partialAssessmentEvidence)
+    return await runPartialAssessment(opportunity, options);
+  const subject = options.workspaceSubject;
+  const opportunityId = stringValue(opportunity.id);
+  if (!subject) {
+    return {
+      message:
+        'A verified candidate workspace is required for a private opportunity assessment.',
+      mode: 'assessment',
+      skipReason: 'prerequisite',
+      status: 'skipped',
+    };
+  }
+  const sourceFingerprint =
+    stringValue(options.expectedSourceContentFingerprint) ||
+    stringValue(opportunity.sourceContentFingerprint);
+  const sourceVersion =
+    Math.max(0, Math.trunc(numberValue(options.sourceContentVersion) ?? 0)) ||
+    Math.max(0, Math.trunc(numberValue(opportunity.sourceContentVersion) ?? 0));
+  if (!opportunityId || !sourceFingerprint) {
+    return {
+      message: 'A source-current opportunity is required for assessment.',
+      mode: 'assessment',
+      skipReason: 'prerequisite',
+      status: 'skipped',
+    };
+  }
+  try {
+    const verifiedCoverage =
+      await readVerifiedOpportunityRequirementCoverage(opportunity);
+    if (!verifiedCoverage) {
+      return {
+        message:
+          'The current posting needs a separately recorded source extraction and clause coverage audit before private matching.',
+        mode: 'assessment',
+        skipReason: 'prerequisite',
+        status: 'skipped',
+        sourceDependency: {
+          kind: 'requirement_coverage',
+          sourceContentFingerprint: sourceFingerprint,
+          sourceContentVersion: sourceVersion,
+          dedupeKey: `requirement-coverage/v1:${opportunityId}:${sourceFingerprint}:${sourceVersion}`,
+        },
+      };
+    }
+    const evidence = await loadWorkspaceCandidateEvidence(subject);
+    const candidate = candidateWorkEligibilityFromProfile(evidence.candidate);
+    const posting = buildOpportunityAssessmentPostingInput(
+      opportunity,
+      verifiedCoverage,
+    );
+    const selectedCandidateSources =
+      selectOpportunityAssessmentCandidateSources(
+        evidence.evidence,
+        posting.requirements,
+      );
+    const prepared = prepareOpportunityAssessment({
+      candidate,
+      candidateCoverageTruncated: selectedCandidateSources.truncated,
+      candidateMaterialFingerprint: evidence.fingerprint,
+      candidateSources: selectedCandidateSources.sources,
+      postingMaterial: {
+        sourceContentFingerprint: sourceFingerprint,
+        sourceContentVersion: sourceVersion,
+        requirementCoverageFingerprint: verifiedCoverage.fingerprint,
+      },
+      postingSources: posting.postingSources,
+      postingCoverageTruncated: posting.postingCoverageTruncated,
+      requirements: posting.requirements,
+    });
+    const privateMaterialFingerprint =
+      opportunityAssessmentSubjectMaterialFingerprint({
+        candidateMaterialFingerprint: evidence.fingerprint,
+        sourceContentFingerprint: sourceFingerprint,
+        sourceContentVersion: sourceVersion,
+        requirementCoverageFingerprint: verifiedCoverage.fingerprint,
+        subject,
+      });
+    if (
+      stringValue(options.expectedScoringMaterialFingerprint) &&
+      stringValue(options.expectedScoringMaterialFingerprint) !==
+        privateMaterialFingerprint
+    ) {
+      return {
+        message: 'Skipped stale private opportunity assessment material.',
+        mode: 'assessment',
+        skipReason: 'stale',
+        status: 'skipped',
+      };
+    }
+    if (prepared.requirements.length === 0) {
+      return {
+        message:
+          'Extract structured role requirements before private matching.',
+        mode: 'assessment',
+        skipReason: 'prerequisite',
+        status: 'skipped',
+      };
+    }
+    if (
+      await hasOpportunityAssessment({
+        assessmentFingerprint: prepared.fingerprint,
+        opportunityId,
+        subject,
+      })
+    ) {
+      return {
+        message: 'Reused the current private opportunity assessment.',
+        mode: 'assessment',
+        status: 'processed',
+      };
+    }
+    const assessment = await evaluateOpportunityAssessment(prepared, {
+      agentRunId: options.agentRunId,
+      contentFingerprint: sourceFingerprint,
+      opportunityId,
+      signal: options.signal,
+      store: options.governanceStore,
+      subjectFingerprint: privateMaterialFingerprint,
+      workspaceSubject: subject,
+      requirementCoverage: {
+        context: verifiedCoverage.context,
+        ledger: verifiedCoverage.ledger,
+      },
+    });
+    if (!assessment) {
+      return {
+        message: 'Private opportunity assessment decisions are disabled.',
+        mode: 'assessment',
+        skipReason: 'prerequisite',
+        status: 'skipped',
+      };
+    }
+    // Usage has settled before this point. A new principal context makes a
+    // suspended membership, revoked profile, or missing workflow permission
+    // stop the private write without disturbing provider accounting.
+    return await runAsRevalidatedJobWorkspaceSubject(
+      subject,
+      'assessment.execute',
+      async (currentSubject, run) => {
+        // A model response can never mutate a new posting revision or a
+        // changed candidate profile. Re-read both inside the fresh context.
+        await run.assertOperation('opportunities', 'read');
+        const current = await getOpportunity(opportunityId);
+        const currentEvidence =
+          await loadWorkspaceCandidateEvidence(currentSubject);
+        if (
+          !current ||
+          stringValue(current.sourceContentFingerprint) !== sourceFingerprint ||
+          Math.max(
+            0,
+            Math.trunc(numberValue(current.sourceContentVersion) ?? 0),
+          ) !== sourceVersion ||
+          currentEvidence.fingerprint !== evidence.fingerprint ||
+          (await readVerifiedOpportunityRequirementCoverage(current))
+            ?.fingerprint !== verifiedCoverage.fingerprint
+        ) {
+          return {
+            message: 'Discarded stale private opportunity assessment material.',
+            mode: 'assessment' as const,
+            skipReason: 'stale' as const,
+            status: 'skipped' as const,
+          };
+        }
+        const preferences =
+          await loadOpportunityAssessmentPreferences(currentSubject);
+        const stored = await storeOpportunityAssessment({
+          agentRunId: stringValue(options.agentRunId),
+          assessment,
+          candidate,
+          opportunityId,
+          preferences,
+          subject: currentSubject,
+        });
+        const existingScore = await listPrivateRecords(
+          'EvaluationScore',
+          currentSubject,
+          {
+            limit: 1,
+            where: {
+              opportunityId,
+              scoringMaterialFingerprint: privateMaterialFingerprint,
+            },
+          },
+        );
+        if (!existingScore.length) {
+          const scorePayload = {
+            agentRunId: stringValue(options.agentRunId),
+            createdByProfileId: '',
+            opportunityId,
+            reasonJson: JSON.stringify({
+              assessmentFingerprint: assessment.fingerprint,
+              eligibility: stored.projection.personalEligibility,
+              reason: stored.projection.reason,
+              sourceStatus: stored.projection.sourceStatus,
+            }),
+            recommendation: stored.projection.ranking.excluded
+              ? 'reject'
+              : 'maybe',
+            score: stored.projection.ranking.fitScore,
+            scoringMaterialFingerprint: privateMaterialFingerprint,
+            sourceContentFingerprint: sourceFingerprint,
+            sourceContentVersion: sourceVersion,
+            sourceCrawlId: stringValue(options.sourceCrawlId),
+            sourceCrawlItemId: stringValue(options.sourceCrawlItemId),
+            sourceId: stringValue(options.sourceId),
+            summary: stored.projection.reason,
+          };
+          try {
+            await createPrivateRecord(
+              'EvaluationScore',
+              currentSubject,
+              scorePayload,
+            );
+          } catch (cause) {
+            const message =
+              cause instanceof Error ? cause.message : String(cause);
+            if (!/unique|duplicate|conflict/i.test(message)) throw cause;
+            const concurrent = await listPrivateRecords(
+              'EvaluationScore',
+              currentSubject,
+              {
+                limit: 1,
+                where: {
+                  opportunityId,
+                  scoringMaterialFingerprint: privateMaterialFingerprint,
+                },
+              },
+            );
+            if (!concurrent.length) throw cause;
+          }
+        }
+        return {
+          message: stored.created
+            ? 'Saved the current private opportunity assessment.'
+            : 'Reused the current private opportunity assessment.',
+          mode: 'assessment' as const,
+          status: 'processed' as const,
+        };
+      },
+    );
+  } catch (cause) {
+    if (options.signal?.aborted) throw cause;
+    return {
+      message:
+        cause instanceof Error
+          ? cause.message
+          : 'Private opportunity assessment failed.',
+      mode: 'assessment',
+      status: 'error',
+    };
+  }
 }
 
 async function runScore(
@@ -1577,6 +2067,7 @@ async function runScore(
       expectedScoringMaterialFingerprint: expectedMaterialTarget,
       opportunity,
       score,
+      workspaceSubject: options.workspaceSubject,
     });
     if (!sideEffectsApplied) {
       return {
@@ -2393,7 +2884,12 @@ async function runPlan(
           return {};
         }
         options.assertWriteAllowed?.();
-        await syncApplicationWorkflowTasks(application);
+        if (options.workspaceSubject) {
+          await syncApplicationWorkflowTasks(
+            application,
+            options.workspaceSubject,
+          );
+        }
         options.assertWriteAllowed?.();
         return await recordOpportunityAudit({
           application,
@@ -2473,7 +2969,10 @@ function expandModes(
 async function getOpportunity(
   opportunityId: string,
 ): Promise<MutableRecord | null> {
-  return await (await collection('Opportunity')).get(opportunityId);
+  return await (await collection('Opportunity')).get(
+    { id: opportunityId },
+    { cache: false },
+  );
 }
 
 async function processOpportunityIntelligenceInternal(
@@ -2532,6 +3031,8 @@ async function processOpportunityIntelligenceInternal(
       results.push(await runExtract(opportunityId, options));
     else if (mode === 'score')
       results.push(await runScore(opportunity, options));
+    else if (mode === 'assessment')
+      results.push(await runAssessment(opportunity, options));
     else if (mode === 'evidence') {
       results.push(await runEvidence(opportunity, options));
     } else if (mode === 'quality') {
@@ -2547,10 +3048,16 @@ async function processOpportunityIntelligenceInternal(
   const failed = results.filter((result) => result.status === 'error');
   const skipped = results.filter((result) => result.status === 'skipped');
   const stale = skipped.some((result) => result.skipReason === 'stale');
-  const latestScore = await latestCurrentEvaluationScore(
-    opportunity,
-    stringValue(options.expectedSourceContentFingerprint),
-  );
+  const latestScore = options.workspaceSubject
+    ? await latestPrivateEvaluationScore(
+        opportunity,
+        options.workspaceSubject,
+        stringValue(options.expectedScoringMaterialFingerprint),
+      )
+    : await latestCurrentEvaluationScore(
+        opportunity,
+        stringValue(options.expectedSourceContentFingerprint),
+      );
   return {
     count: processed.length,
     evaluationScoreId: stringValue(latestScore?.id),
@@ -2591,6 +3098,7 @@ export async function processOpportunityIntelligence(
     sourceCrawlId: options.sourceCrawlId,
     sourceId: options.sourceId,
     userId: stringValue(options.user?.id),
+    workspaceSubject: options.workspaceSubject,
   });
   try {
     const result = await processOpportunityIntelligenceInternal({
@@ -2603,6 +3111,7 @@ export async function processOpportunityIntelligence(
       agentRunId,
       succeeded ? 'succeeded' : 'failed',
       succeeded ? '' : result.message,
+      options.workspaceSubject,
     );
     return result;
   } catch (error) {
@@ -2610,6 +3119,7 @@ export async function processOpportunityIntelligence(
       agentRunId,
       'failed',
       error instanceof Error ? error.message : String(error),
+      options.workspaceSubject,
     );
     throw error;
   }

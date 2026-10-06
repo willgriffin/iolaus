@@ -8,12 +8,14 @@ import {
   normalizeApplicationStatus,
 } from '$lib/objects/lifecycle';
 import { isActiveTaskStatus } from '$lib/objects/workflow';
+import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
 import { loadApplicationReviewSnapshot } from './application-review.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import {
   parseRequiredAnswers,
   summarizeApplicationFormAnswers,
 } from './auto-submit-eligibility.js';
+import { listPrivateRecords } from './private-workspace.js';
 import { getCollection } from './smrt.js';
 
 /**
@@ -261,7 +263,8 @@ export async function inspectJobApplication(input: Record<string, unknown>) {
     'Application id',
     128,
   );
-  const snapshot = await loadApplicationReviewSnapshot(applicationId);
+  const subject = requireCurrentPrivateWorkspaceSubject();
+  const snapshot = await loadApplicationReviewSnapshot(applicationId, subject);
   if (!snapshot) error(404, 'Application not found.');
   const { application, comments, materials } = snapshot;
   const status = normalizeApplicationStatus(application.status);
@@ -273,7 +276,7 @@ export async function inspectJobApplication(input: Record<string, unknown>) {
           opportunityId,
         )
       : Promise.resolve(null),
-    ((await getCollection('Task')) as unknown as Collection).list({
+    listPrivateRecords('Task', subject, {
       limit: 100,
       orderBy: 'updated_at DESC',
       where: { applicationId },

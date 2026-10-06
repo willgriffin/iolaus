@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AtsFormSchema } from './ats/types.js';
 import type { AutoSubmitConfig } from './auto-submit-config.js';
 import {
@@ -10,6 +10,11 @@ import {
 } from './auto-submit-eligibility.js';
 
 const ACTIVE: AutoSubmitConfig = { enabled: false, dryRun: true };
+const SUBJECT = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
 
 const SCHEMA: AtsFormSchema = {
   ats: 'greenhouse',
@@ -31,6 +36,9 @@ const SCHEMA: AtsFormSchema = {
 function application(overrides: Record<string, unknown> = {}) {
   return {
     id: 'app-1',
+    candidateProfileId: SUBJECT.profileId,
+    ownerUserId: SUBJECT.userId,
+    tenantId: SUBJECT.tenantId,
     status: 'approved',
     approvedByUserId: 'user-1',
     finalApprovalAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -53,6 +61,7 @@ function options(overrides = {}) {
     config: ACTIVE,
     detect: greenhouseDetect,
     resumeExists: resumePresent,
+    subject: SUBJECT,
     ...overrides,
   };
 }
@@ -156,6 +165,36 @@ describe('summarizeApplicationFormAnswers', () => {
 });
 
 describe('canAutoSubmit', () => {
+  it('rejects a foreign profile before approval, ATS, or resume reads', async () => {
+    const approvalMaterialsCurrent = vi.fn(async () => true);
+    const detect = vi.fn(greenhouseDetect);
+    const resumeExists = vi.fn(resumePresent);
+    const result = await canAutoSubmit(
+      application({ candidateProfileId: 'foreign-profile' }),
+      options({ approvalMaterialsCurrent, detect, resumeExists }),
+    );
+
+    expect(result).toMatchObject({ eligible: false, code: 'not_approved' });
+    expect(approvalMaterialsCurrent).not.toHaveBeenCalled();
+    expect(detect).not.toHaveBeenCalled();
+    expect(resumeExists).not.toHaveBeenCalled();
+  });
+
+  it('passes the validated profile subject to approval and resume reads', async () => {
+    const approvalMaterialsCurrent = vi.fn(async () => true);
+    const resumeExists = vi.fn(resumePresent);
+    const target = application();
+
+    await expect(
+      canAutoSubmit(
+        target,
+        options({ approvalMaterialsCurrent, resumeExists }),
+      ),
+    ).resolves.toMatchObject({ eligible: true });
+    expect(approvalMaterialsCurrent).toHaveBeenCalledWith(target, SUBJECT);
+    expect(resumeExists).toHaveBeenCalledWith(target, SUBJECT);
+  });
+
   it('is eligible when all conditions hold', async () => {
     const result = await canAutoSubmit(application(), options());
     expect(result).toMatchObject({ eligible: true, code: 'eligible' });

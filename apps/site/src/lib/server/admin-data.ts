@@ -39,11 +39,10 @@ import {
 } from './application-concurrency.js';
 import {
   normalizeAccountStatus,
-  syncApplicationWorkflowTasks,
-  syncRecommendedOpportunityDecisionTasks,
   syncSourceAccountTasks,
   validateSubmittedApplicationPayload,
 } from './application-workflow.js';
+import { refreshOpportunityAssessmentProjections } from './opportunity-assessment-store.js';
 import { invalidatePublishedResumeCache } from './resume-data.js';
 import { queuePublishedCanonicalRefresh } from './resume-source-refresh.js';
 import {
@@ -57,6 +56,14 @@ import {
   deleteSourceSchedule,
   syncSourceSchedule,
 } from './source-schedules.js';
+import {
+  assertWorkspaceResourceWritable,
+  requireCandidateWorkspaceSubject,
+  workspaceRecordAllowed,
+  workspaceResourcePayload,
+  workspaceResourceReadable,
+  workspaceResourceWhere,
+} from './workspace-resource-policy.js';
 
 export interface ComboOption {
   fieldKey: string;
@@ -115,6 +122,7 @@ function queueResumeRefreshAfterSourceWrite(resource: AdminResource): void {
 }
 
 function assertAdminResourceIsWritable(resource: AdminResource): void {
+  assertWorkspaceResourceWritable(resource.className);
   if (resource.className === 'AgentRun') {
     error(403, 'Agent run audit records are system-authored and immutable.');
   }
@@ -148,6 +156,7 @@ export async function listAdminRecords(
   resource: AdminResource,
   options: ListAdminRecordsOptions = {},
 ): Promise<AdminRecord[]> {
+  if (!workspaceResourceReadable(resource.className)) return [];
   const collection = await getAdminCollection(resource);
   const listOptions: Record<string, unknown> = {
     orderBy: resource.orderBy,
@@ -157,7 +166,17 @@ export async function listAdminRecords(
   if (options.select) listOptions.select = options.select;
   if (options.where) listOptions.where = options.where;
 
-  const records = await collection.list(listOptions);
+  const ownership = workspaceResourceWhere(resource.className);
+  if (Object.keys(ownership).length) {
+    listOptions.where = { ...options.where, ...ownership };
+    if (options.select)
+      listOptions.select = [
+        ...new Set([...options.select, ...Object.keys(ownership)]),
+      ];
+  }
+  const records = (await collection.list(listOptions)).filter((row) =>
+    workspaceRecordAllowed(resource.className, row),
+  );
   const serialized = records.map(serializeRecord);
   if (options.includeApplicationDerivatives) return serialized;
   if (
@@ -175,26 +194,41 @@ export async function countAdminResourceRecords(
   resource: AdminResource,
   options: Pick<ListAdminRecordsOptions, 'where'> = {},
 ): Promise<number> {
+  if (!workspaceResourceReadable(resource.className)) return 0;
   const collection = await getAdminCollection(resource);
-  return await collection.count(options.where ? { where: options.where } : {});
+  const ownership = workspaceResourceWhere(resource.className);
+  return await collection.count(
+    options.where || Object.keys(ownership).length
+      ? { where: { ...options.where, ...ownership } }
+      : {},
+  );
 }
 
 export async function getAdminRecord(
   resource: AdminResource,
   id: string,
 ): Promise<AdminRecord | null> {
+  if (!workspaceResourceReadable(resource.className)) return null;
   const collection = await getAdminCollection(resource);
   const record = await collection.get(id);
-  if (record) return serializeRecord(record);
+  if (record)
+    return workspaceRecordAllowed(resource.className, record)
+      ? serializeRecord(record)
+      : null;
 
   const records = await collection.list({
     orderBy: resource.orderBy,
     limit: 1000,
+    where: workspaceResourceWhere(resource.className),
   });
   return (
     records
       .map(serializeRecord)
-      .find((item) => stringRecordValue(item.id) === id) ?? null
+      .find(
+        (item) =>
+          stringRecordValue(item.id) === id &&
+          workspaceRecordAllowed(resource.className, item),
+      ) ?? null
   );
 }
 
@@ -288,11 +322,15 @@ export async function listReferenceOptions(
     recordsByClass.set(
       className,
       (async () => {
+        if (!workspaceResourceReadable(className)) return [];
         const collection = await getCollection(className);
         // Label keys are often sensitive fields (CandidateProfile.name), which
         // SMRT refuses to ORDER BY. Fetch by a neutral column and sort the
         // rendered labels instead.
         const records = (await collection.list({
+          ...(Object.keys(workspaceResourceWhere(className)).length
+            ? { where: workspaceResourceWhere(className) }
+            : {}),
           orderBy: 'updated_at DESC',
           limit: 1000,
         })) as SmrtObject[];
@@ -341,10 +379,11 @@ export async function listPageReferenceOptions(
   const recordsByClass = new Map(
     await Promise.all(
       [...idsByClass].map(async ([className, ids]) => {
-        if (ids.size === 0) return [className, [] as AdminRecord[]] as const;
+        if (ids.size === 0 || !workspaceResourceReadable(className))
+          return [className, [] as AdminRecord[]] as const;
         const collection = await getCollection(className);
         const found = (await collection.list({
-          where: { 'id in': [...ids] },
+          where: { 'id in': [...ids], ...workspaceResourceWhere(className) },
           limit: ids.size,
         })) as SmrtObject[];
         return [className, found.map(serializeRecord)] as const;
@@ -374,8 +413,11 @@ export async function listComboOptions(
       .filter((field) => field.kind === 'combo' && field.combo)
       .map(async (field) => {
         const combo = field.combo as ComboFieldConfig;
+        if (!workspaceResourceReadable(combo.className))
+          return [field.key, []] as const;
         const collection = await getCollection(combo.className);
         const records = await collection.list({
+          where: workspaceResourceWhere(combo.className),
           orderBy: `${combo.labelKey} ASC`,
           limit: 1000,
         });
@@ -398,8 +440,15 @@ export async function listComboOptions(
 export async function countAdminRecords(): Promise<Record<string, number>> {
   const entries = await Promise.all(
     adminResources.map(async (resource) => {
+      if (!workspaceResourceReadable(resource.className))
+        return [resource.slug, 0] as const;
       const collection = await getAdminCollection(resource);
-      return [resource.slug, await collection.count()] as const;
+      return [
+        resource.slug,
+        await collection.count({
+          where: workspaceResourceWhere(resource.className),
+        }),
+      ] as const;
     }),
   );
   return Object.fromEntries(entries);
@@ -526,7 +575,10 @@ async function resolveComboValue(
   rawValue: string,
 ): Promise<AdminRecord> {
   const collection = await getCollection(combo.className);
-  const records = (await collection.list({ limit: 1000 })) as SmrtObject[];
+  const records = (await collection.list({
+    limit: 1000,
+    where: workspaceResourceWhere(combo.className),
+  })) as SmrtObject[];
   const serialized = records.map(serializeRecord);
   const normalizedRawValue = normalizeLabel(rawValue);
   const existing = serialized.find((record) => {
@@ -549,7 +601,13 @@ async function resolveComboValue(
     error(400, `${combo.className} not found: ${rawValue}`);
   }
 
-  const created = await collection.create(inlineComboPayload(combo, rawValue));
+  assertWorkspaceResourceWritable(combo.className);
+  const created = await collection.create(
+    workspaceResourcePayload(
+      combo.className,
+      inlineComboPayload(combo, rawValue),
+    ),
+  );
   await created.save();
   return serializeRecord(created);
 }
@@ -772,6 +830,21 @@ export function assertAdminWorkflowPayload(
   }
 }
 
+async function assertWorkspaceReferences(
+  resource: AdminResource,
+  payload: AdminRecord,
+): Promise<void> {
+  for (const [field, reference] of referenceFieldEntries(resource)) {
+    const id = stringRecordValue(payload[field.key]);
+    if (!id || !reference.className) continue;
+    const ownership = workspaceResourceWhere(reference.className);
+    if (!Object.keys(ownership).length) continue;
+    const target = await (await getCollection(reference.className)).get(id);
+    if (!workspaceRecordAllowed(reference.className, target))
+      error(404, 'Referenced record not found in this candidate workspace.');
+  }
+}
+
 export async function createAdminRecord(
   resource: AdminResource,
   formData: FormData,
@@ -779,8 +852,12 @@ export async function createAdminRecord(
 ) {
   assertAdminResourceIsWritable(resource);
   const collection = await getAdminCollection(resource);
-  const payload = parseResourceForm(resource, formData);
+  const payload = workspaceResourcePayload(
+    resource.className,
+    parseResourceForm(resource, formData),
+  );
   await resolveComboFields(resource, payload);
+  await assertWorkspaceReferences(resource, payload);
   normalizeAdminAgentPayload(resource, payload);
   if (resource.className === 'ResumeAsset') {
     assertAdminResumeAssetIsWritable({}, payload);
@@ -795,14 +872,19 @@ export async function createAdminRecord(
     );
     await syncSourceAccountTasks(record as unknown as AdminRecord);
   }
-  if (resource.className === 'Application') {
-    await syncApplicationWorkflowTasks(record as unknown as AdminRecord);
-  }
-  if (resource.className === 'Opportunity') {
-    await syncRecommendedOpportunityDecisionTasks();
-  }
+  // Candidate-owned application and review-task workflows require a verified
+  // profile subject. Generic admin CRUD deliberately has none; the dedicated
+  // workflow routes perform these synchronizations inside that authority.
   if (resource.className === 'ResumeVariant') {
-    await syncResumeVariantApplicationApprovals(String(record.id ?? ''));
+    await syncResumeVariantApplicationApprovals(
+      String(record.id ?? ''),
+      requireCandidateWorkspaceSubject(),
+    );
+  }
+  if (resource.className === 'PreferenceRule') {
+    await refreshOpportunityAssessmentProjections({
+      subject: requireCandidateWorkspaceSubject(),
+    });
   }
   queueResumeRefreshAfterSourceWrite(resource);
   return serializeRecord(record);
@@ -821,15 +903,19 @@ export async function updateAdminRecord(
 
   const collection = await getAdminCollection(resource);
   const record = await collection.get(id);
-  if (!record) {
+  if (!record || !workspaceRecordAllowed(resource.className, record)) {
     error(404, 'Record not found');
   }
   if (resource.className === 'ResumeAsset') {
     assertAdminResumeAssetIsWritable(serializeRecord(record));
   }
 
-  const payload = parseResourceForm(resource, formData);
+  const payload = workspaceResourcePayload(
+    resource.className,
+    parseResourceForm(resource, formData),
+  );
   await resolveComboFields(resource, payload);
+  await assertWorkspaceReferences(resource, payload);
   normalizeAdminAgentPayload(resource, payload);
   if (resource.className === 'ResumeAsset') {
     assertAdminResumeAssetIsWritable(serializeRecord(record), payload);
@@ -841,7 +927,10 @@ export async function updateAdminRecord(
   >['reservation'] = null;
   if (resource.className === 'ResumeVariant') {
     const { reservation, violation } =
-      await reserveResumeVariantApplicationWrite(id);
+      await reserveResumeVariantApplicationWrite(
+        id,
+        requireCandidateWorkspaceSubject(),
+      );
     if (violation) {
       error(409, violation);
     }
@@ -866,13 +955,17 @@ export async function updateAdminRecord(
     }
   } catch (cause) {
     if (resumeVariantReservation) {
-      await releaseResumeVariantApplicationWrite(resumeVariantReservation);
+      await releaseResumeVariantApplicationWrite(
+        resumeVariantReservation,
+        requireCandidateWorkspaceSubject(),
+      );
     }
     throw cause;
   }
   if (resumeVariantReservation) {
     const release = await releaseResumeVariantApplicationWrite(
       resumeVariantReservation,
+      requireCandidateWorkspaceSubject(),
     );
     if (!release.applicationLocksReleased) {
       error(
@@ -893,14 +986,18 @@ export async function updateAdminRecord(
     );
     await syncSourceAccountTasks(record as unknown as AdminRecord);
   }
-  if (resource.className === 'Application') {
-    await syncApplicationWorkflowTasks(record as unknown as AdminRecord);
-  }
-  if (resource.className === 'Opportunity') {
-    await syncRecommendedOpportunityDecisionTasks();
-  }
+  // See createAdminRecord: generic CRUD must not manufacture an owner for a
+  // candidate-owned workflow side effect.
   if (resource.className === 'ResumeVariant') {
-    await syncResumeVariantApplicationApprovals(id);
+    await syncResumeVariantApplicationApprovals(
+      id,
+      requireCandidateWorkspaceSubject(),
+    );
+  }
+  if (resource.className === 'PreferenceRule') {
+    await refreshOpportunityAssessmentProjections({
+      subject: requireCandidateWorkspaceSubject(),
+    });
   }
   queueResumeRefreshAfterSourceWrite(resource);
   return serializeRecord(record);
@@ -930,17 +1027,28 @@ export async function deleteAdminRecord(
       error(404, 'Record not found');
     }
 
-    const violation = await resumeVariantDeleteViolation(id);
+    const violation = await resumeVariantDeleteViolation(
+      id,
+      requireCandidateWorkspaceSubject(),
+    );
     if (violation) {
       error(400, violation);
     }
   }
+  const ownedRecord = await collection.get(id);
+  if (!workspaceRecordAllowed(resource.className, ownedRecord))
+    error(404, 'Record not found');
   const deleted = await collection.delete(id);
   if (!deleted) {
     error(404, 'Record not found');
   }
   if (resource.className === 'Source') {
     await deleteSourceSchedule(id);
+  }
+  if (resource.className === 'PreferenceRule') {
+    await refreshOpportunityAssessmentProjections({
+      subject: requireCandidateWorkspaceSubject(),
+    });
   }
   queueResumeRefreshAfterSourceWrite(resource);
 

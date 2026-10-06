@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getCollection = vi.hoisted(() => vi.fn());
 const privateEnv = vi.hoisted(() => ({}) as Record<string, string | undefined>);
@@ -23,17 +23,74 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+function coverageResponse(messages: unknown[]): { content: string } {
+  const user = (messages as Array<{ content: string }>)[1].content;
+  const marker = 'provenance:\n';
+  const payload = JSON.parse(
+    user.slice(user.indexOf(marker) + marker.length),
+  ) as {
+    sourceClauses: Array<{ id: string; text: string }>;
+    headingClauseIds: string[];
+  };
+  const body = payload.sourceClauses.filter(
+    ({ id }) => !payload.headingClauseIds.includes(id),
+  );
+  return {
+    content: JSON.stringify({
+      requirementCoverage: {
+        requirements: body.map(({ id, text }, index) => ({
+          id: `r${index + 1}`,
+          text,
+          clauseIds: [id],
+          importance: 'unknown',
+        })),
+        dispositions: payload.sourceClauses.map(({ id }) => {
+          const index = body.findIndex((clause) => clause.id === id);
+          return index < 0
+            ? {
+                clauseId: id,
+                type: 'nonrequirement',
+                requirementIds: [],
+                exclusionRule: 'section_heading',
+              }
+            : {
+                clauseId: id,
+                type: 'role_context',
+                requirementIds: [`r${index + 1}`],
+              };
+        }),
+      },
+    }),
+  };
+}
+
+function coverageTexts(opportunity: Record<string, unknown>): string[] {
+  return JSON.parse(
+    String(opportunity.preparedPostingJson),
+  ).requirementCoverage.requirements.map(({ text }: { text: string }) => text);
+}
+
 describe('processOpportunityWithLlm', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    // Admit the existing bounded extraction plus independent coverage audit.
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT', '4');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT', '80000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS', '100000');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MAX_INPUT_TOKENS', '6000');
     for (const key of Object.keys(privateEnv)) delete privateEnv[key];
     getCollection.mockReset();
     recordAgentAudit.mockReset();
   });
 
-  it('scrapes posting text, refetches the saved opportunity, and extracts fields', async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('scrapes posting text, refetches the saved opportunity, and preserves literal coverage', async () => {
     const initialOpportunity = {
       id: 'opp-1',
       postingUrl: 'https://boards.greenhouse.io/embed/job_board?for=acme',
@@ -73,13 +130,8 @@ describe('processOpportunityWithLlm', () => {
       ),
     );
 
-    const chatMock = vi.fn(
-      async (_messages: unknown[], _options?: unknown) => ({
-        content: JSON.stringify({
-          requiredSkills: ['TypeScript', 'Workflow systems'],
-          salaryMin: '160000',
-        }),
-      }),
+    const chatMock = vi.fn(async (messages: unknown[], _options?: unknown) =>
+      coverageResponse(messages),
     );
     const aiClient = {
       chat: chatMock,
@@ -94,12 +146,9 @@ describe('processOpportunityWithLlm', () => {
     expect(collection.get).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({
       status: 'processed',
-      // Extraction-owned list fields (requiredSkills) are now refreshed by a
-      // fresh extraction even when the crawler already seeded them.
       updatedFields: [
         'seniority',
-        'requiredSkills',
-        'salaryMin',
+        'preparedPostingJson',
         'applyUrl',
         'applyMethod',
       ],
@@ -107,10 +156,11 @@ describe('processOpportunityWithLlm', () => {
     expect(loadedOpportunity.descriptionRaw).toContain(
       'Build AI workflow systems.',
     );
-    expect(loadedOpportunity.requiredSkills).toBe(
-      'TypeScript\nWorkflow systems',
+    expect(loadedOpportunity.requiredSkills).toBe('');
+    expect(loadedOpportunity.salaryMin).toBeNull();
+    expect(coverageTexts(loadedOpportunity)).toEqual(
+      expect.arrayContaining(['Build AI workflow systems.', '- TypeScript']),
     );
-    expect(loadedOpportunity.salaryMin).toBe(160000);
     expect(loadedOpportunity.save).toHaveBeenCalledTimes(3);
 
     const [messages, chatOptions] = chatMock.mock.calls[0] as [
@@ -121,7 +171,7 @@ describe('processOpportunityWithLlm', () => {
     expect(messages).toHaveLength(2);
     expect(messages[1]?.content).toContain('Build AI workflow systems.');
     expect(chatOptions).toMatchObject({
-      maxTokens: 2_048,
+      maxTokens: 4_096,
       model: 'openai/gpt-6-luna',
       reasoning: { effort: 'low', maxTokens: 1_024 },
     });
@@ -143,11 +193,8 @@ describe('processOpportunityWithLlm', () => {
     getCollection.mockResolvedValue(collection);
 
     const chatMock = vi.fn(
-      async (_messages: unknown[], _options?: Record<string, unknown>) => ({
-        content: JSON.stringify({
-          requiredSkills: ['TypeScript'],
-        }),
-      }),
+      async (messages: unknown[], _options?: Record<string, unknown>) =>
+        coverageResponse(messages),
     );
     const aiClient = {
       chat: chatMock,
@@ -161,11 +208,16 @@ describe('processOpportunityWithLlm', () => {
 
     expect(result).toMatchObject({
       status: 'processed',
-      updatedFields: ['seniority', 'requiredSkills', 'applyUrl', 'applyMethod'],
+      updatedFields: [
+        'seniority',
+        'preparedPostingJson',
+        'applyUrl',
+        'applyMethod',
+      ],
     });
     const chatOptions = chatMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(chatOptions).toMatchObject({
-      maxTokens: 2_048,
+      maxTokens: 4_096,
       model: 'openai/gpt-6-luna',
     });
     expect(recordAgentAudit).toHaveBeenCalledWith(
@@ -183,7 +235,7 @@ describe('processOpportunityWithLlm', () => {
     const opportunity: Record<string, unknown> & {
       save: ReturnType<typeof vi.fn>;
     } = {
-      descriptionRaw: 'Backend platform role requiring TypeScript.',
+      descriptionRaw: 'Build {agent} workflow systems.',
       id: 'opp-1',
       postingUrl: 'https://example.com/jobs/staff-engineer',
       save: vi.fn(async () => {}),
@@ -195,10 +247,10 @@ describe('processOpportunityWithLlm', () => {
     getCollection.mockResolvedValue(collection);
 
     const chatMock = vi.fn(
-      async (_messages: unknown[], _options?: Record<string, unknown>) => ({
+      async (messages: unknown[], _options?: Record<string, unknown>) => ({
         content: [
           'Here is the extracted JSON:',
-          '{"descriptionSummary":"Build {agent} workflow systems.","requiredSkills":["TypeScript"]}',
+          coverageResponse(messages).content,
           'I also considered {"ignored":true}.',
         ].join('\n'),
       }),
@@ -210,13 +262,12 @@ describe('processOpportunityWithLlm', () => {
     });
 
     expect(result).toMatchObject({ status: 'processed' });
-    expect(result.updatedFields).toEqual(
-      expect.arrayContaining(['descriptionSummary', 'requiredSkills']),
-    );
-    expect(opportunity.descriptionSummary).toBe(
+    expect(result.updatedFields).toContain('preparedPostingJson');
+    expect(coverageTexts(opportunity)).toEqual([
       'Build {agent} workflow systems.',
-    );
-    expect(opportunity.requiredSkills).toBe('TypeScript');
+    ]);
+    expect(opportunity.descriptionSummary).toBeUndefined();
+    expect(opportunity.requiredSkills).toBeUndefined();
 
     const chatOptions = chatMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(chatOptions).toMatchObject({
@@ -225,7 +276,7 @@ describe('processOpportunityWithLlm', () => {
     });
   });
 
-  it('fills gaps without overwriting known deterministic values with unknowns', async () => {
+  it('preserves deterministic display fields during coverage-only extraction', async () => {
     const opportunity: Record<string, unknown> & {
       save: ReturnType<typeof vi.fn>;
     } = {
@@ -244,15 +295,9 @@ describe('processOpportunityWithLlm', () => {
     };
     getCollection.mockResolvedValue(collection);
 
-    const chatMock = vi.fn(async () => ({
-      content: JSON.stringify({
-        employmentType: 'unknown',
-        preferredSkills: ['Svelte'],
-        requiredSkills: [],
-        salaryMin: null,
-        workMode: 'onsite',
-      }),
-    }));
+    const chatMock = vi.fn(async (messages: unknown[]) =>
+      coverageResponse(messages),
+    );
 
     const { processOpportunityWithLlm } = await import('./opportunity-details');
     const result = await processOpportunityWithLlm('opp-1', {
@@ -263,18 +308,21 @@ describe('processOpportunityWithLlm', () => {
       status: 'processed',
       updatedFields: [
         'seniority',
-        'preferredSkills',
+        'preparedPostingJson',
         'applyUrl',
         'applyMethod',
       ],
     });
     expect(opportunity).toMatchObject({
       employmentType: 'full_time',
-      preferredSkills: 'Svelte',
       requiredSkills: 'TypeScript',
       salaryMin: 150000,
       workMode: 'remote',
     });
+    expect(opportunity.preferredSkills).toBeUndefined();
+    expect(coverageTexts(opportunity)).toEqual([
+      'Remote full-time role requiring TypeScript.',
+    ]);
   });
 
   it('builds extraction prompts from the canonical source snapshot', async () => {
@@ -297,9 +345,9 @@ describe('processOpportunityWithLlm', () => {
     getCollection.mockResolvedValue({
       get: vi.fn().mockResolvedValue(opportunity),
     });
-    const chatMock = vi.fn(async (_messages: unknown[]) => ({
-      content: JSON.stringify({ domainTags: ['AI platforms'] }),
-    }));
+    const chatMock = vi.fn(async (messages: unknown[]) =>
+      coverageResponse(messages),
+    );
 
     const { processOpportunityWithLlm } = await import('./opportunity-details');
     await processOpportunityWithLlm('opp-1', {
@@ -323,6 +371,7 @@ describe('processOpportunityWithLlm', () => {
       postingUrl: 'https://example.com/jobs/staff-engineer',
       save: vi.fn(async () => {}),
       sourceContentFingerprint: 'fingerprint-v1',
+      sourceContentVersion: 1,
       title: 'Staff Software Engineer',
     };
     getCollection.mockResolvedValue({
@@ -336,12 +385,11 @@ describe('processOpportunityWithLlm', () => {
     const { processOpportunityWithLlm } = await import('./opportunity-details');
     const result = await processOpportunityWithLlm('opp-1', {
       aiClient: {
-        chat: vi.fn(async () => ({
-          content: JSON.stringify({ requiredSkills: ['TypeScript'] }),
-        })),
+        chat: vi.fn(async (messages: unknown[]) => coverageResponse(messages)),
       },
       expectedSourceContentFingerprint: 'fingerprint-v1',
       fencedOpportunityUpdate,
+      sourceContentVersion: 1,
     });
 
     expect(result).toMatchObject({
@@ -352,12 +400,13 @@ describe('processOpportunityWithLlm', () => {
     expect(fencedOpportunityUpdate).toHaveBeenLastCalledWith(
       'opp-1',
       'fingerprint-v1',
-      expect.objectContaining({ requiredSkills: 'TypeScript' }),
+      expect.objectContaining({ preparedPostingJson: expect.any(String) }),
+      1,
     );
     expect(opportunity.save).not.toHaveBeenCalled();
   });
 
-  it('audits a no-update extraction as stale when its source changes in flight', async () => {
+  it('audits coverage-only extraction as stale when its source changes in flight', async () => {
     const opportunityV1: Record<string, unknown> & {
       save: ReturnType<typeof vi.fn>;
     } = {
@@ -368,26 +417,24 @@ describe('processOpportunityWithLlm', () => {
       postingUrl: 'https://example.com/jobs/staff-engineer',
       save: vi.fn(async () => {}),
       sourceContentFingerprint: 'fingerprint-v1',
+      sourceContentVersion: 1,
       title: 'Backend Software Engineer',
     };
-    const opportunityV2 = {
-      ...opportunityV1,
-      sourceContentFingerprint: 'fingerprint-v2',
-    };
     getCollection.mockResolvedValue({
-      get: vi
-        .fn()
-        .mockResolvedValueOnce(opportunityV1)
-        .mockResolvedValueOnce(opportunityV2),
+      get: vi.fn().mockResolvedValue(opportunityV1),
     });
 
     const { processOpportunityWithLlm } = await import('./opportunity-details');
-    const fencedOpportunityUpdate = vi.fn(async () => true);
+    const fencedOpportunityUpdate = vi.fn(
+      async (_id: string, expected: string) =>
+        opportunityV1.sourceContentFingerprint === expected,
+    );
     const result = await processOpportunityWithLlm('opp-1', {
       aiClient: {
-        chat: vi.fn(async () => ({
-          content: JSON.stringify({ requiredSkills: [] }),
-        })),
+        chat: vi.fn(async (messages: unknown[]) => {
+          opportunityV1.sourceContentFingerprint = 'fingerprint-v2';
+          return coverageResponse(messages);
+        }),
       },
       expectedSourceContentFingerprint: 'fingerprint-v1',
       fencedOpportunityUpdate,
@@ -414,11 +461,12 @@ describe('processOpportunityWithLlm', () => {
         }),
         output: expect.objectContaining({
           discardedAsStale: true,
-          updatedFields: [],
+          updatedFields: ['preparedPostingJson'],
         }),
         status: 'succeeded',
       }),
     );
+    expect(fencedOpportunityUpdate).toHaveBeenCalledTimes(2);
     expect(opportunityV1.save).not.toHaveBeenCalled();
   });
 

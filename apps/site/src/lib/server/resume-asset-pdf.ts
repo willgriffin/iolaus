@@ -1,7 +1,11 @@
 import type { FilesystemInterface } from '@happyvertical/files';
 import { error } from '@sveltejs/kit';
+import {
+  getPrivateRecord,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getResumeFilesystem } from './resume-files.js';
-import { getCollection } from './smrt.js';
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -13,15 +17,16 @@ function bufferValue(value: string | Buffer): Buffer {
 
 export async function loadResumeAssetPdf(
   assetId: string,
+  subject: WorkspaceSubject,
   filesystem?: FilesystemInterface,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const id = assetId.trim();
   if (!id) {
     error(400, 'Missing resume asset ID.');
   }
 
-  const assets = await getCollection('ResumeAsset');
-  const asset = await assets.get(id);
+  const asset = await getPrivateRecord('ResumeAsset', id, verifiedSubject);
   if (!asset) {
     error(404, 'Resume asset not found.');
   }

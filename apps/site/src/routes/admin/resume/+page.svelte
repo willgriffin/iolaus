@@ -251,7 +251,7 @@ function educationRecord(title: string): AdminRecord | undefined {
     <section class="section">
       <div class="section-title-row">
         <h3>Technical Skills</h3>
-        <a href="/admin/skills">Manage skills</a>
+        <div><a href="/admin/skills">Manage skills</a> · <a href="/admin/resume/skill-discovery">Discover skills</a></div>
       </div>
       <div class="skills-block">
         {#each data.source.skills.groups as group}

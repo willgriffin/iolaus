@@ -53,7 +53,6 @@ import {
   ensureOpportunityIntelligenceControl,
   ensureOpportunityIntelligenceGovernanceSchema,
 } from '../src/lib/server/opportunity-intelligence-governance.js';
-import { ensureCanonicalResumeTailoringConfig } from '../src/lib/server/resume-tailoring-configs.js';
 import { ensureSourceScheduleTable } from '../src/lib/server/source-schedules.js';
 import { getCollection } from '../src/lib/server/smrt.js';
 import { releaseIntegrityTextBridges } from '../src/lib/server/integrity-text-bridge.js';
@@ -154,7 +153,10 @@ export async function getPendingSchemaStatements(db?: SmrtDatabase) {
   };
 }
 
-export async function migrateSmrtDatabase(db?: SmrtDatabase) {
+export async function migrateSmrtDatabase(
+  db?: SmrtDatabase,
+  options: { maintenanceWindow?: boolean } = {},
+) {
   const database = await prepareSmrtDatabaseCompatibility(db);
   const pending = await getPendingSchemaStatements(database);
   if (!pending.hasChanges || pending.statements.length === 0) {
@@ -173,7 +175,10 @@ export async function migrateSmrtDatabase(db?: SmrtDatabase) {
 
   const tracker = new MigrationTracker({
     db: pending.db,
-    useConcurrentIndexes: true,
+    // Native NULL-equal conflict DDL requires an explicit atomic maintenance
+    // window. Existing index replacement remains the separate upstream
+    // migrateNullEqualIndexes operation with its catalog/dependency preflight.
+    useConcurrentIndexes: !options.maintenanceWindow,
   });
   const migration = createMigrationDefinition(
     `${generateMigrationTimestamp()}_smrt_schema_sync`,
@@ -186,7 +191,7 @@ export async function migrateSmrtDatabase(db?: SmrtDatabase) {
     },
   );
   const results = await tracker.applyAll([migration], {
-    postgresSafe: true,
+    postgresSafe: !options.maintenanceWindow,
     reconcile: true,
   });
 
@@ -214,6 +219,10 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
   for (const className of [
     'DataSurfaceIdempotencyRecord',
     'DataSurfacePreviewToken',
+    // Private assistant-turn reservations are not generated resources. The
+    // table is still part of the native manifest migration so idempotency and
+    // accounting state survive a process restart.
+    'AdminAssistantTurn',
   ]) {
     await getCollection(className);
     initialized.push(className);
@@ -267,7 +276,6 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
   await ensureOpportunityIntelligenceJobDedupe(db);
   await ensureOpportunityIntelligenceGovernanceSchema();
   await ensureOpportunityIntelligenceControl();
-  await ensureCanonicalResumeTailoringConfig();
 
   initialized.push(
     users.constructor.name,
@@ -292,7 +300,6 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     smrtJobs.constructor.name,
     smrtJobEvents.constructor.name,
     '_smrt_agent_schedules',
-    'ResumeTailoringConfig:canonical',
   );
 
   return initialized;

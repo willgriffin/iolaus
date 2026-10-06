@@ -49,3 +49,25 @@ describe('opportunity table sorting', () => {
     ).toBe(DEFAULT_OPPORTUNITY_FILTERS);
   });
 });
+
+it('keeps the cited support header separate from full match score sorting', () => {
+  expect(
+    opportunityTableSort({
+      ...DEFAULT_OPPORTUNITY_FILTERS,
+      sort: 'cited_support',
+      sortDirection: 'asc',
+    }),
+  ).toEqual({ columnId: 'citedSupport', direction: 'asc' });
+  expect(
+    filtersForOpportunityTableSort(DEFAULT_OPPORTUNITY_FILTERS, {
+      columnId: 'citedSupport',
+      direction: 'desc',
+    }),
+  ).toMatchObject({ sort: 'cited_support', sortDirection: 'desc' });
+  expect(
+    filtersForOpportunityTableSort(DEFAULT_OPPORTUNITY_FILTERS, {
+      columnId: 'score',
+      direction: 'desc',
+    }),
+  ).toMatchObject({ sort: 'score' });
+});

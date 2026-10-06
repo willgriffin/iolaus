@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import {
   applicationHasMaterialWriteLock,
@@ -30,6 +29,13 @@ import {
   loadApplicationAnswersEditorState,
 } from './candidate-answers.js';
 import { latestPostingPreflightStatus } from './posting-preflight-status.js';
+import {
+  createPrivateRecord,
+  getPrivateRecord,
+  listPrivateRecords,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import { getResumeFilesystem } from './resume-files.js';
 import { getCollection } from './smrt.js';
 
@@ -42,7 +48,7 @@ type Collection = {
   get: (id: string) => Promise<MutableRecord | null>;
   list: (options?: Record<string, unknown>) => Promise<MutableRecord[]>;
 };
-type AdminActor = Pick<User, 'id'> | null | undefined;
+type ReviewActor = { id: string };
 
 export type ApplicationReviewMaterial = {
   availability: 'ready' | 'not_required' | 'needs_attention';
@@ -119,15 +125,17 @@ function materialVersion(
     .digest('hex');
 }
 
-async function requireRecord(
-  className: string,
-  id: string,
-  message: string,
+async function requirePrivateApplication(
+  applicationId: string,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord> {
-  if (!id) error(400, message);
-  const record = await findRecord(className, id);
-  if (!record) error(404, message);
-  return record;
+  const application = (await getPrivateRecord(
+    'Application',
+    applicationId,
+    requireWorkspaceSubject(subject),
+  )) as MutableRecord | null;
+  if (!application) error(404, 'Application not found.');
+  return application;
 }
 
 async function copyAssetTextFile(
@@ -158,12 +166,12 @@ async function cloneAssetForApplication(options: {
   application: MutableRecord;
   materialType: string;
   source: MutableRecord;
+  subject: WorkspaceSubject;
 }): Promise<MutableRecord> {
-  const { application, materialType, source } = options;
+  const { application, materialType, source, subject } = options;
   const applicationId = stringValue(application.id);
   const sourceId = stringValue(source.id);
-  const assets = await collection('ResumeAsset');
-  const clone = await assets.create({
+  const clone = (await createPrivateRecord('ResumeAsset', subject, {
     applicationId,
     assetType: stringValue(source.assetType) || materialType,
     candidateProfileId: stringValue(source.candidateProfileId),
@@ -176,7 +184,7 @@ async function cloneAssetForApplication(options: {
     tailoringId: stringValue(source.tailoringId),
     targetOpportunityId: stringValue(source.targetOpportunityId),
     title: stringValue(source.title) || `Application ${materialType}`,
-  });
+  })) as MutableRecord;
   await clone.save();
 
   const cloneId = stringValue(clone.id);
@@ -241,15 +249,15 @@ async function findApplicationOwnedAsset(options: {
   application: MutableRecord;
   materialType: string;
   sourceAssetId?: string;
+  subject: WorkspaceSubject;
 }): Promise<MutableRecord | null> {
   const applicationId = stringValue(options.application.id);
   if (!applicationId) return null;
-  const assets = await collection('ResumeAsset');
-  const candidates = await assets.list({
+  const candidates = (await listPrivateRecords('ResumeAsset', options.subject, {
     limit: 1000,
     orderBy: 'updated_at DESC',
     where: { applicationId },
-  });
+  })) as MutableRecord[];
   const materialCandidates = candidates.filter((candidate) =>
     assetMatchesMaterialType(candidate, options.materialType),
   );
@@ -304,12 +312,12 @@ function assetMatchesArtifactSource(
 
 async function findFallbackArtifactSource(
   asset: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
-  const assets = await collection('ResumeAsset');
-  const candidates = await assets.list({
+  const candidates = (await listPrivateRecords('ResumeAsset', subject, {
     limit: 1000,
     orderBy: 'updated_at DESC',
-  });
+  })) as MutableRecord[];
   return (
     candidates.find(
       (candidate) =>
@@ -323,12 +331,18 @@ async function backfillApplicationAssetArtifacts(options: {
   application: MutableRecord;
   asset: MutableRecord;
   materialType: string;
+  subject: WorkspaceSubject;
 }): Promise<void> {
-  const { application, asset, materialType } = options;
+  const { application, asset, materialType, subject } = options;
   const sourceAssetId = stringValue(asset.sourceAssetId);
   const source =
-    (sourceAssetId ? await findRecord('ResumeAsset', sourceAssetId) : null) ??
-    (await findFallbackArtifactSource(asset));
+    (sourceAssetId
+      ? ((await getPrivateRecord(
+          'ResumeAsset',
+          sourceAssetId,
+          subject,
+        )) as MutableRecord | null)
+      : null) ?? (await findFallbackArtifactSource(asset, subject));
   if (!source) return;
 
   const applicationId = stringValue(application.id);
@@ -404,15 +418,21 @@ async function ensureApplicationAsset(
   application: MutableRecord,
   fieldKey: 'coverLetterAssetId' | 'packetAssetId' | 'resumeAssetId',
   materialType: string,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
   const assetId = stringValue(application[fieldKey]);
   if (!assetId) return null;
-  const source = await findRecord('ResumeAsset', assetId);
+  const source = (await getPrivateRecord(
+    'ResumeAsset',
+    assetId,
+    subject,
+  )) as MutableRecord | null;
   if (!source) {
     const recovered = await findApplicationOwnedAsset({
       application,
       materialType,
       sourceAssetId: assetId,
+      subject,
     });
     if (!recovered) return null;
     application[fieldKey] = stringValue(recovered.id);
@@ -420,6 +440,7 @@ async function ensureApplicationAsset(
       application,
       asset: recovered,
       materialType,
+      subject,
     });
     return recovered;
   }
@@ -428,6 +449,7 @@ async function ensureApplicationAsset(
       application,
       asset: source,
       materialType,
+      subject,
     });
     return source;
   }
@@ -435,6 +457,7 @@ async function ensureApplicationAsset(
     application,
     materialType,
     sourceAssetId: stringValue(source.id),
+    subject,
   });
   if (existingClone) {
     application[fieldKey] = stringValue(existingClone.id);
@@ -442,6 +465,7 @@ async function ensureApplicationAsset(
       application,
       asset: existingClone,
       materialType,
+      subject,
     });
     return existingClone;
   }
@@ -449,6 +473,7 @@ async function ensureApplicationAsset(
     application,
     materialType,
     source,
+    subject,
   });
   application[fieldKey] = stringValue(clone.id);
   return clone;
@@ -457,9 +482,9 @@ async function ensureApplicationAsset(
 async function cloneVariantForApplication(
   application: MutableRecord,
   source: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord> {
-  const variants = await collection('ResumeVariant');
-  const clone = await variants.create({
+  const clone = (await createPrivateRecord('ResumeVariant', subject, {
     applicationId: stringValue(application.id),
     candidateProfileId: stringValue(source.candidateProfileId),
     companyId: stringValue(source.companyId),
@@ -483,7 +508,7 @@ async function cloneVariantForApplication(
     tailoringConfigPath: stringValue(source.tailoringConfigPath),
     textPath: stringValue(source.textPath),
     titleOverride: stringValue(source.titleOverride),
-  });
+  })) as MutableRecord;
   await clone.save();
   application.resumeVariantId = stringValue(clone.id);
   return clone;
@@ -491,15 +516,20 @@ async function cloneVariantForApplication(
 
 async function ensureApplicationVariant(
   application: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
   const variantId = stringValue(application.resumeVariantId);
   if (!variantId) return null;
-  const source = await findRecord('ResumeVariant', variantId);
+  const source = (await getPrivateRecord(
+    'ResumeVariant',
+    variantId,
+    subject,
+  )) as MutableRecord | null;
   if (!source) return null;
   if (stringValue(source.applicationId) === stringValue(application.id)) {
     return source;
   }
-  return await cloneVariantForApplication(application, source);
+  return await cloneVariantForApplication(application, source, subject);
 }
 
 async function readMaterialBody(record: MutableRecord | null): Promise<{
@@ -548,6 +578,7 @@ async function reviewMaterialsForApplication(
     packet: MutableRecord | null;
     resume: MutableRecord | null;
   },
+  subject: WorkspaceSubject,
 ): Promise<ApplicationReviewMaterial[]> {
   const materialInputs = [
     {
@@ -584,7 +615,7 @@ async function reviewMaterialsForApplication(
       const rawPreview = await readMaterialBody(material.record);
       const selectedResume =
         material.type === 'resume'
-          ? await applicationResumePdfFile(application)
+          ? await applicationResumePdfFile(application, subject)
           : null;
       const preview = {
         ...rawPreview,
@@ -699,32 +730,42 @@ function isoTime(value: unknown): string {
 async function applicationOwnedReviewAsset(
   application: MutableRecord,
   fieldKey: 'coverLetterAssetId' | 'packetAssetId' | 'resumeAssetId',
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
   const applicationId = stringValue(application.id);
   const assetId = stringValue(application[fieldKey]);
   if (!applicationId || !assetId) return null;
-  const asset = await findRecord('ResumeAsset', assetId);
+  const asset = (await getPrivateRecord(
+    'ResumeAsset',
+    assetId,
+    subject,
+  )) as MutableRecord | null;
   return stringValue(asset?.applicationId) === applicationId ? asset : null;
 }
 
 async function reviewMaterialsForFinalApprovalVerification(
   application: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<ApplicationReviewMaterial[]> {
   const [coverLetter, packet, resume] = await Promise.all([
-    applicationOwnedReviewAsset(application, 'coverLetterAssetId'),
-    applicationOwnedReviewAsset(application, 'packetAssetId'),
-    applicationOwnedReviewAsset(application, 'resumeAssetId'),
+    applicationOwnedReviewAsset(application, 'coverLetterAssetId', subject),
+    applicationOwnedReviewAsset(application, 'packetAssetId', subject),
+    applicationOwnedReviewAsset(application, 'resumeAssetId', subject),
   ]);
-  return await reviewMaterialsForApplication(application, {
-    coverLetter,
-    packet,
-    resume,
-  });
+  return await reviewMaterialsForApplication(
+    application,
+    {
+      coverLetter,
+      packet,
+      resume,
+    },
+    subject,
+  );
 }
 
 function finalApprovalAuditMatches(
   application: MutableRecord,
-  audit: MutableRecord,
+  audit: Record<string, unknown>,
 ): boolean {
   try {
     const snapshot = JSON.parse(
@@ -747,10 +788,11 @@ function finalApprovalAuditMatches(
 
 async function finalApprovalSuccessAuditExists(
   application: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<boolean> {
   const applicationId = stringValue(application.id);
   if (!applicationId) return false;
-  const audits = await (await collection('AgentRun')).list({
+  const audits = await listPrivateRecords('AgentRun', subject, {
     limit: 25,
     orderBy: 'started_at DESC',
     where: {
@@ -769,15 +811,18 @@ async function finalApprovalSuccessAuditExists(
  */
 export async function finalApplicationApprovalMaterialsAreCurrent(
   applicationId: string,
+  subject: WorkspaceSubject,
 ): Promise<boolean> {
   if (!applicationId) return false;
-  const application = await requireRecord(
-    'Application',
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const application = await requirePrivateApplication(
     applicationId,
-    'Application not found.',
+    verifiedSubject,
   );
-  const materials =
-    await reviewMaterialsForFinalApprovalVerification(application);
+  const materials = await reviewMaterialsForFinalApprovalVerification(
+    application,
+    verifiedSubject,
+  );
   const resume = materials.find(
     (material) => material.materialType === 'resume',
   );
@@ -787,15 +832,18 @@ export async function finalApplicationApprovalMaterialsAreCurrent(
       finalApprovalMaterials(materials),
     ) &&
     Boolean(resume?.pdfDigest) &&
-    (await finalApprovalSuccessAuditExists(application))
+    (await finalApprovalSuccessAuditExists(application, verifiedSubject))
   );
 }
 
-export async function ensureApplicationReviewMaterials(applicationId: string) {
-  const application = await requireRecord(
-    'Application',
+export async function ensureApplicationReviewMaterials(
+  applicationId: string,
+  subject: WorkspaceSubject,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const application = await requirePrivateApplication(
     applicationId,
-    'Application not found.',
+    verifiedSubject,
   );
   const opportunity = stringValue(application.opportunityId)
     ? await findRecord('Opportunity', stringValue(application.opportunityId))
@@ -813,9 +861,21 @@ export async function ensureApplicationReviewMaterials(applicationId: string) {
   // the very material that execution later verifies.
   if (hasFinalApplicationApproval(application)) {
     const [coverLetter, packet, resume] = await Promise.all([
-      applicationOwnedReviewAsset(application, 'coverLetterAssetId'),
-      applicationOwnedReviewAsset(application, 'packetAssetId'),
-      applicationOwnedReviewAsset(application, 'resumeAssetId'),
+      applicationOwnedReviewAsset(
+        application,
+        'coverLetterAssetId',
+        verifiedSubject,
+      ),
+      applicationOwnedReviewAsset(
+        application,
+        'packetAssetId',
+        verifiedSubject,
+      ),
+      applicationOwnedReviewAsset(
+        application,
+        'resumeAssetId',
+        verifiedSubject,
+      ),
     ]);
     return {
       application,
@@ -830,18 +890,21 @@ export async function ensureApplicationReviewMaterials(applicationId: string) {
     application,
     'resumeAssetId',
     'resume',
+    verifiedSubject,
   );
   const packet = await ensureApplicationAsset(
     application,
     'packetAssetId',
     'packet',
+    verifiedSubject,
   );
   const coverLetter = await ensureApplicationAsset(
     application,
     'coverLetterAssetId',
     'cover-letter',
+    verifiedSubject,
   );
-  await ensureApplicationVariant(application);
+  await ensureApplicationVariant(application, verifiedSubject);
   const materialBindingUpdates = Object.fromEntries(
     [
       'coverLetterAssetId',
@@ -877,8 +940,9 @@ export async function ensureApplicationReviewMaterials(applicationId: string) {
 
 async function findActiveSubmissionTaskId(
   applicationId: string,
+  subject: WorkspaceSubject,
 ): Promise<string> {
-  const tasks = await (await collection('Task')).list({
+  const tasks = await listPrivateRecords('Task', subject, {
     limit: 25,
     orderBy: 'updated_at DESC',
     where: { applicationId, taskType: 'submit_application' },
@@ -887,12 +951,24 @@ async function findActiveSubmissionTaskId(
   return stringValue(active?.id);
 }
 
-export async function loadApplicationReviewPageData(applicationId: string) {
-  const reviewState = await ensureApplicationReviewMaterials(applicationId);
-  const comments = await (await collection('ApplicationMaterialComment')).list({
-    orderBy: 'updated_at DESC',
-    where: { applicationId },
-  });
+export async function loadApplicationReviewPageData(
+  applicationId: string,
+  subject: WorkspaceSubject,
+) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
+  const reviewState = await ensureApplicationReviewMaterials(
+    applicationId,
+    verifiedSubject,
+  );
+  const comments = await listPrivateRecords(
+    'ApplicationMaterialComment',
+    verifiedSubject,
+    {
+      orderBy: 'updated_at DESC',
+      where: { applicationId },
+    },
+  );
   const company =
     reviewState.opportunity && stringValue(reviewState.opportunity.companyId)
       ? await findRecord(
@@ -904,6 +980,7 @@ export async function loadApplicationReviewPageData(applicationId: string) {
   const materials = await reviewMaterialsForApplication(
     reviewState.application,
     reviewState.assets,
+    verifiedSubject,
   );
   const commentRecords = comments.map(jsonRecord);
 
@@ -911,6 +988,7 @@ export async function loadApplicationReviewPageData(applicationId: string) {
     application: jsonRecord(reviewState.application),
     answersEditor: await loadApplicationAnswersEditorState(
       reviewState.application,
+      verifiedSubject,
     ),
     autoSubmit: summarizeApplicationFormAnswers(reviewState.application),
     comments: commentRecords,
@@ -932,7 +1010,10 @@ export async function loadApplicationReviewPageData(applicationId: string) {
     // pending approval audit as executable simply because its fingerprints
     // still match.
     finalApprovalMaterialsCurrent:
-      await finalApplicationApprovalMaterialsAreCurrent(applicationId),
+      await finalApplicationApprovalMaterialsAreCurrent(
+        applicationId,
+        verifiedSubject,
+      ),
     opportunity: reviewState.opportunity
       ? jsonRecord(reviewState.opportunity)
       : null,
@@ -956,7 +1037,10 @@ export async function loadApplicationReviewPageData(applicationId: string) {
         ...definition,
       })),
     },
-    submissionTaskId: await findActiveSubmissionTaskId(applicationId),
+    submissionTaskId: await findActiveSubmissionTaskId(
+      applicationId,
+      verifiedSubject,
+    ),
   };
 }
 
@@ -976,15 +1060,21 @@ export type ApplicationReviewSnapshot = {
  */
 export async function loadApplicationReviewSnapshot(
   applicationId: string,
+  subject: WorkspaceSubject,
 ): Promise<ApplicationReviewSnapshot | null> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const id = stringValue(applicationId);
   if (!id) return null;
-  const application = await findRecord('Application', id);
+  const application = (await getPrivateRecord(
+    'Application',
+    id,
+    verifiedSubject,
+  )) as MutableRecord | null;
   if (!application) return null;
 
   const [materials, comments] = await Promise.all([
-    reviewMaterialsForFinalApprovalVerification(application),
-    (await collection('ApplicationMaterialComment')).list({
+    reviewMaterialsForFinalApprovalVerification(application, verifiedSubject),
+    listPrivateRecords('ApplicationMaterialComment', verifiedSubject, {
       limit: 500,
       orderBy: 'updated_at DESC',
       where: { applicationId: id },
@@ -1001,7 +1091,7 @@ export async function loadApplicationReviewSnapshot(
       finalApprovalMaterials(materials),
     ) &&
     Boolean(resume?.pdfDigest) &&
-    (await finalApprovalSuccessAuditExists(application));
+    (await finalApprovalSuccessAuditExists(application, verifiedSubject));
 
   return {
     application: jsonRecord(application),
@@ -1025,30 +1115,39 @@ export async function loadApplicationReviewSnapshot(
 async function saveCommentsFromForm(
   applicationId: string,
   form: FormData,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
-  const reviewState = await ensureApplicationReviewMaterials(applicationId);
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
+  const reviewState = await ensureApplicationReviewMaterials(
+    applicationId,
+    verifiedSubject,
+  );
   const materials = await reviewMaterialsForApplication(
     reviewState.application,
     reviewState.assets,
+    verifiedSubject,
   );
-  const comments = await collection('ApplicationMaterialComment');
   let created = 0;
 
   for (const material of materials) {
     const body = stringValue(form.get(`comment:${material.materialType}`));
     if (!body) continue;
-    const comment = await comments.create({
-      applicationId,
-      body,
-      materialRecordId: material.materialRecordId,
-      materialRecordType: material.materialRecordType,
-      materialType: material.materialType,
-      materialVersion: material.materialVersion,
-      reviewerProfileId: stringValue(form.get('reviewerProfileId')),
-      reviewerUserId: stringValue(user?.id),
-      status: 'open',
-    });
+    const comment = (await createPrivateRecord(
+      'ApplicationMaterialComment',
+      verifiedSubject,
+      {
+        applicationId,
+        body,
+        materialRecordId: material.materialRecordId,
+        materialRecordType: material.materialRecordType,
+        materialType: material.materialType,
+        materialVersion: material.materialVersion,
+        reviewerProfileId: verifiedSubject.profileId,
+        reviewerUserId: verifiedSubject.userId,
+        status: 'open',
+      },
+    )) as MutableRecord;
     await comment.save();
     created += 1;
   }
@@ -1059,11 +1158,11 @@ async function saveCommentsFromForm(
 export async function addApplicationMaterialComments(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
   const form = await request.formData();
   return {
-    ...(await saveCommentsFromForm(applicationId, form, user)),
+    ...(await saveCommentsFromForm(applicationId, form, subject)),
     status: 'saved',
   };
 }
@@ -1071,11 +1170,15 @@ export async function addApplicationMaterialComments(
 export async function requestApplicationMaterialTweaks(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
   const form = await request.formData();
-  const currentReviewState =
-    await ensureApplicationReviewMaterials(applicationId);
+  const currentReviewState = await ensureApplicationReviewMaterials(
+    applicationId,
+    verifiedSubject,
+  );
   if (
     applicationMaterialsAreLockedOrLeased(
       currentReviewState.application.status,
@@ -1090,7 +1193,7 @@ export async function requestApplicationMaterialTweaks(
   const { created, reviewState } = await saveCommentsFromForm(
     applicationId,
     form,
-    user,
+    verifiedSubject,
   );
   if (
     applicationMaterialsAreLockedOrLeased(
@@ -1124,28 +1227,28 @@ export async function requestApplicationMaterialTweaks(
       'Application changed before material revisions could be requested. Reload and review the current application.',
     );
   }
-  await syncApplicationWorkflowTasks(reviewState.application);
+  await syncApplicationWorkflowTasks(reviewState.application, verifiedSubject);
   return { commentsCreated: created, status: 'revision_requested' };
 }
 
 export async function markApplicationMaterialReviewed(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
-  if (!user?.id) {
-    error(400, 'Material review requires an authenticated user.');
-  }
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
   const form = await request.formData();
   const { created, reviewState } = await saveCommentsFromForm(
     applicationId,
     form,
-    user,
+    verifiedSubject,
   );
   const materialType = stringValue(form.get('materialType'));
   const materials = await reviewMaterialsForApplication(
     reviewState.application,
     reviewState.assets,
+    verifiedSubject,
   );
   const material = materials.find(
     (candidate) => candidate.materialType === materialType,
@@ -1160,19 +1263,22 @@ export async function markApplicationMaterialReviewed(
     );
   }
 
-  const comments = await collection('ApplicationMaterialComment');
-  const review = await comments.create({
-    applicationId,
-    body: '',
-    materialRecordId: material.materialRecordId,
-    materialRecordType: material.materialRecordType,
-    materialType: material.materialType,
-    materialVersion: material.materialVersion,
-    resolvedAt: new Date(),
-    reviewerProfileId: stringValue(form.get('reviewerProfileId')),
-    reviewerUserId: user.id,
-    status: 'reviewed',
-  });
+  const review = (await createPrivateRecord(
+    'ApplicationMaterialComment',
+    verifiedSubject,
+    {
+      applicationId,
+      body: '',
+      materialRecordId: material.materialRecordId,
+      materialRecordType: material.materialRecordType,
+      materialType: material.materialType,
+      materialVersion: material.materialVersion,
+      resolvedAt: new Date(),
+      reviewerProfileId: verifiedSubject.profileId,
+      reviewerUserId: verifiedSubject.userId,
+      status: 'reviewed',
+    },
+  )) as MutableRecord;
   await review.save();
 
   return {
@@ -1185,11 +1291,11 @@ export async function markApplicationMaterialReviewed(
 export async function approveApplicationForSubmission(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
-  if (!user?.id) {
-    error(400, 'Application approval requires an authenticated user.');
-  }
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
+  const user: ReviewActor = { id: verifiedSubject.userId };
   const form = await request.formData();
   if (
     stringValue(form.get('finalSubmissionIntent')) !==
@@ -1203,7 +1309,7 @@ export async function approveApplicationForSubmission(
   const { created, reviewState } = await saveCommentsFromForm(
     applicationId,
     form,
-    user,
+    verifiedSubject,
   );
   const violation = validateApplicationStatusTransition({
     approvedByUserId: user.id,
@@ -1224,6 +1330,7 @@ export async function approveApplicationForSubmission(
   const materials = await reviewMaterialsForApplication(
     reviewState.application,
     reviewState.assets,
+    verifiedSubject,
   );
   const approvedResume = materials.find(
     (material) => material.materialType === 'resume',
@@ -1314,7 +1421,7 @@ export async function approveApplicationForSubmission(
     status: 'succeeded',
     user,
   });
-  await syncApplicationWorkflowTasks(reviewState.application);
+  await syncApplicationWorkflowTasks(reviewState.application, verifiedSubject);
 
   // When auto-submit is active and the application is eligible, move it to
   // "Pending submission" and enqueue the worker job. No-op (stays approved)
@@ -1324,7 +1431,10 @@ export async function approveApplicationForSubmission(
     const { maybeEnqueueAutoSubmitOnApproval } = await import(
       './auto-submit-application-job.js'
     );
-    await maybeEnqueueAutoSubmitOnApproval(reviewState.application, { user });
+    await maybeEnqueueAutoSubmitOnApproval(reviewState.application, {
+      subject: verifiedSubject,
+      user,
+    });
   } catch {
     // Approval already persisted; auto-submit can be retried by an operator.
   }
@@ -1335,18 +1445,20 @@ export async function approveApplicationForSubmission(
 export async function recordApplicationSubmissionFromReview(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
   const form = await request.formData();
   await recordApplicationSubmission({
     applicationId,
     evidenceUrl: stringValue(form.get('submissionEvidenceUrl')),
     notes: stringValue(form.get('submissionNotes')),
-    profileId: stringValue(form.get('submittedByProfileId')),
     submissionMethod: stringValue(form.get('submissionMethod')),
+    subject: verifiedSubject,
     submittedByRole: stringValue(form.get('submittedByRole')),
     taskId: stringValue(form.get('taskId')),
-    user,
+    user: { id: verifiedSubject.userId },
   });
   return { status: 'submission_recorded' };
 }
@@ -1354,8 +1466,10 @@ export async function recordApplicationSubmissionFromReview(
 export async function recordApplicationSubmissionBlockerFromReview(
   applicationId: string,
   request: Request,
-  user: AdminActor,
+  subject: WorkspaceSubject,
 ) {
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  await requirePrivateApplication(applicationId, verifiedSubject);
   const form = await request.formData();
   await recordApplicationSubmissionBlocker({
     applicationId,
@@ -1363,8 +1477,9 @@ export async function recordApplicationSubmissionBlockerFromReview(
     blockerReason: stringValue(form.get('blockerReason')),
     blockerType: stringValue(form.get('blockerType')),
     notes: stringValue(form.get('blockerNotes')),
+    subject: verifiedSubject,
     taskId: stringValue(form.get('taskId')),
-    user,
+    user: { id: verifiedSubject.userId },
   });
   return { status: 'submission_blocked' };
 }

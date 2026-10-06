@@ -9,6 +9,7 @@ import { getSmrtOptions } from '$lib/server/db';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
 import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
 import { withBearerSessionContext } from '$lib/server/terminal-auth';
+import { verifyWorkspaceSubject } from '$lib/server/workspace-subject';
 
 // Warm the published resume before the readiness probe passes, so a fresh
 // replica never serves a public request from a cold cache. Skipped during the
@@ -67,12 +68,21 @@ const authGuard: Handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 
+/** JWT access tokens for the canonical MCP resource are verified by its OAuth
+ * resource-auth handler. Opaque terminal bearer tokens keep the CLI path. */
+function isMcpOAuthJwt(pathname: string, token: string): boolean {
+  return (
+    pathname === '/api/mcp' &&
+    /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2}$/u.test(token)
+  );
+}
+
 const bearerSessionHandler: Handle = async ({ event, resolve }) => {
   if (!event.locals.user) {
     const authorization = event.request.headers.get('authorization');
     const match = authorization?.match(/^Bearer\s+(.+)$/iu);
 
-    if (match) {
+    if (match && !isMcpOAuthJwt(event.url.pathname, match[1].trim())) {
       return await withBearerSessionContext(
         match[1].trim(),
         async (context) => {
@@ -92,8 +102,15 @@ const bearerSessionHandler: Handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 
+/** Refresh tenant membership and permissions after either session mechanism. */
+const workspaceSubjectHandler: Handle = async ({ event, resolve }) => {
+  await verifyWorkspaceSubject(event.locals);
+  return resolve(event);
+};
+
 export const handle = sequence(
   sessionHandler as unknown as Handle,
   bearerSessionHandler,
+  workspaceSubjectHandler,
   authGuard,
 );

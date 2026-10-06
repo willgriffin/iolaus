@@ -1,10 +1,11 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'candidate_profiles',
-  // Iolaus is a single-owner application. The canonical onboarding profile is
-  // a singleton even when two first-save requests race.
-  conflictColumns: ['profile_key'],
+  // A canonical onboarding profile is unique per authenticated owner in a
+  // tenant; it is never a process-wide singleton.
+  conflictColumns: ['tenant_id', 'owner_user_id', 'profile_key'],
   // Profile fields are private candidate context. The authenticated onboarding
   // and application services access them directly; broad generated APIs, CLI,
   // MCP, and WebMCP must not expose even a partial profile record.
@@ -12,7 +13,13 @@ import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
   cli: { include: [] },
   mcp: { include: [] },
 })
+@TenantScoped()
 export class CandidateProfile extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  /** Immutable authenticated owner, not a user-supplied profile field. */
+  @field({ type: 'text', required: true })
+  ownerUserId = '';
   @field({ type: 'text' })
   profileKey = 'default';
   // The owner-facing onboarding and application workflows read them directly
@@ -39,6 +46,21 @@ export class CandidateProfile extends SmrtObject {
   githubUrl = '';
   @field({ type: 'text', sensitive: true })
   workAuthorization = '';
+  /** ISO country references; citizenship never implies work authorization. */
+  @field({ type: 'text', sensitive: true })
+  citizenshipsJson = '[]';
+  /** Current home country, not a representation of authorization. */
+  @field({ type: 'text', sensitive: true })
+  residenceCountryJson = '{}';
+  /** Candidate-selected target country for opportunity compatibility. */
+  @field({ type: 'text', sensitive: true })
+  targetWorkCountryJson = '{}';
+  /** Verified country authorizations with country/employer/conditional scope. */
+  @field({ type: 'text', sensitive: true })
+  authorizedWorkCountriesJson = '[]';
+  /** True only when the candidate confirms employer sponsorship is required. */
+  @field({ type: 'text', sensitive: true })
+  sponsorshipRequired = 'unknown';
   @field({ type: 'text', sensitive: true })
   summary = '';
   /** Structured facts retain whether a value was verified, safely derived, or unresolved. */

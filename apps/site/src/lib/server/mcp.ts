@@ -26,8 +26,6 @@ import {
 } from './application-concurrency.js';
 import {
   normalizeAccountStatus,
-  syncApplicationWorkflowTasks,
-  syncRecommendedOpportunityDecisionTasks,
   syncSourceAccountTasks,
   validateSubmittedApplicationPayload,
 } from './application-workflow.js';
@@ -52,6 +50,7 @@ import {
   listRootSourceHealth,
   listSourceCrawlStatus,
 } from './source-webmcp.js';
+import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
 
 export {
   configuredPublicMcpToolPatterns,
@@ -235,8 +234,14 @@ async function executeMcpTool(
     }
     return await callSourceReadMcpTool(name, args);
   }
+  const subject = requireCandidateWorkspaceSubject();
   const options = { name, user };
-  await assertMcpWorkflowPayload(options.name, args, options.user ?? null);
+  await assertMcpWorkflowPayload(
+    options.name,
+    args,
+    options.user ?? null,
+    subject,
+  );
 
   if (options.name === 'application_update') {
     const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
@@ -265,7 +270,7 @@ async function executeMcpTool(
         },
       ],
     };
-    await syncMcpWorkflowSideEffects(options.name, args, response);
+    await syncMcpWorkflowSideEffects(options.name, args, response, subject);
     return response;
   }
 
@@ -275,7 +280,7 @@ async function executeMcpTool(
   if (options.name === 'resumevariant_update') {
     const resumeVariantId = hasNonEmptyString(args.id) ? args.id.trim() : '';
     const { reservation, violation } =
-      await reserveResumeVariantApplicationWrite(resumeVariantId);
+      await reserveResumeVariantApplicationWrite(resumeVariantId, subject);
     if (violation) throw new McpAccessError(409, violation);
     resumeVariantReservation = reservation;
   }
@@ -291,13 +296,17 @@ async function executeMcpTool(
     });
   } catch (cause) {
     if (resumeVariantReservation) {
-      await releaseResumeVariantApplicationWrite(resumeVariantReservation);
+      await releaseResumeVariantApplicationWrite(
+        resumeVariantReservation,
+        subject,
+      );
     }
     throw cause;
   }
   if (resumeVariantReservation) {
     const release = await releaseResumeVariantApplicationWrite(
       resumeVariantReservation,
+      subject,
     );
     if (!release.applicationLocksReleased) {
       throw new McpAccessError(
@@ -312,7 +321,7 @@ async function executeMcpTool(
       );
     }
   }
-  await syncMcpWorkflowSideEffects(options.name, args, response);
+  await syncMcpWorkflowSideEffects(options.name, args, response, subject);
   return response;
 }
 
@@ -346,29 +355,15 @@ async function syncMcpWorkflowSideEffects(
   toolName: string,
   args: Record<string, unknown>,
   response: MCPResponse,
+  subject: Parameters<typeof syncResumeVariantApplicationApprovals>[1],
 ) {
   if (responseText(response).startsWith('Error:')) return;
 
-  const applicationWrite =
-    toolName === 'application_create' || toolName === 'application_update';
-  const opportunityWrite =
-    toolName === 'opportunity_create' || toolName === 'opportunity_update';
   const sourceWrite =
     toolName === 'source_create' || toolName === 'source_update';
   const resumeVariantWrite =
     toolName === 'resumevariant_create' || toolName === 'resumevariant_update';
-  if (
-    !applicationWrite &&
-    !opportunityWrite &&
-    !sourceWrite &&
-    !resumeVariantWrite
-  )
-    return;
-
-  if (opportunityWrite) {
-    await syncRecommendedOpportunityDecisionTasks();
-    return;
-  }
+  if (!sourceWrite && !resumeVariantWrite) return;
 
   const id = hasNonEmptyString(args.id)
     ? args.id.trim()
@@ -376,17 +371,7 @@ async function syncMcpWorkflowSideEffects(
   if (!id) return;
 
   if (resumeVariantWrite) {
-    await syncResumeVariantApplicationApprovals(id);
-    return;
-  }
-
-  if (applicationWrite) {
-    const application = await (await getCollection('Application')).get(id);
-    if (application) {
-      await syncApplicationWorkflowTasks(
-        application as unknown as Record<string, unknown>,
-      );
-    }
+    await syncResumeVariantApplicationApprovals(id, subject);
     return;
   }
 
@@ -463,6 +448,7 @@ export async function assertMcpWorkflowPayload(
   toolName: string,
   args: Record<string, unknown>,
   user?: Pick<User, 'id'> | null,
+  subject?: Parameters<typeof syncResumeVariantApplicationApprovals>[1],
 ): Promise<void> {
   if (toolName.startsWith('agentrun_') && !isReadOnlyMcpTool(toolName)) {
     throw new McpAccessError(
@@ -522,7 +508,16 @@ export async function assertMcpWorkflowPayload(
       );
     }
 
-    const violation = await resumeVariantWriteViolation(resumeVariantId);
+    if (!subject) {
+      throw new McpAccessError(
+        401,
+        'A verified candidate profile is required for resume variant updates.',
+      );
+    }
+    const violation = await resumeVariantWriteViolation(
+      resumeVariantId,
+      subject,
+    );
     if (violation) {
       throw new McpAccessError(400, violation);
     }

@@ -52,9 +52,24 @@ describe('deployed parity inventory', () => {
 
     expect(restClasses).not.toEqual(
       expect.arrayContaining([
+        'Achievement',
+        'AgentRun',
+        'Application',
+        'ApplicationMaterialComment',
         'CandidateAnswer',
         'CandidateProfile',
         'CandidateProfileLink',
+        'Decision',
+        'Education',
+        'EmploymentRole',
+        'EvaluationScore',
+        'Experience',
+        'PreferenceRule',
+        'Project',
+        'ResumeAsset',
+        'ResumeProfile',
+        'ResumeVariant',
+        'Task',
       ]),
     );
     expect(webMcpNames).not.toEqual(

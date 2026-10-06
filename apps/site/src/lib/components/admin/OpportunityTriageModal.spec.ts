@@ -11,6 +11,37 @@ function renderModal(props: Record<string, unknown> = {}) {
 }
 
 describe('OpportunityTriageModal shell', () => {
+  it('renders the selected opportunity in the same dialog with its explicit detail link', () => {
+    const { body } = renderModal({
+      singleOpportunity: {
+        id: 'selected-opportunity',
+        title: 'Selected role',
+        descriptionRaw: 'The selected role posting.',
+        assessmentProjection: {
+          sourceStatus: 'current',
+          eligibilityBucket: 'unknown',
+          matchReadiness: 'needs_extraction',
+          coverage: {
+            requirementCount: 0,
+            candidateTruncated: false,
+            postingTruncated: false,
+            requirementsTruncated: false,
+          },
+          ranking: { eligibilityPriority: 2, fitScore: 0 },
+          reason: 'Eligibility needs clarification',
+        },
+      },
+    });
+    expect(body).toContain('aria-label="Triage opportunities"');
+    expect(body).toContain('Selected role');
+    expect(body).toContain('The selected role posting.');
+    expect(body).toContain('href="/admin/opportunities/selected-opportunity"');
+    expect(body).toContain('Open opportunity');
+    expect(body).toContain('Needs extraction');
+    expect(body).toContain('Eligibility needs clarification');
+    expect(body).not.toContain('Nothing left to look at');
+  });
+
   it('is a dialog, not a page: no viewport-fixed bar of its own', () => {
     const { body } = renderModal();
 

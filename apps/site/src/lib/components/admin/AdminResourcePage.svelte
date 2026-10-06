@@ -46,9 +46,11 @@ import {
 } from '$lib/opportunity-bulk-workflows';
 import {
   filterStateFromSearchParams,
+  OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
 import SourceControlList from '../sources/SourceControlList.svelte';
+import AddUrlIntake from './AddUrlIntake.svelte';
 import AdminRecordValue from './AdminRecordValue.svelte';
 import ApplicationCardList from './ApplicationCardList.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
@@ -60,6 +62,7 @@ const TASK_COLLAPSED_LANES_STORAGE_KEY =
 const opportunityReviewFilters = [
   { label: 'All', value: 'all' },
   { label: 'Unsorted', value: 'unsorted' },
+  { label: 'Screened out', value: OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER },
   { label: 'Applied', value: 'apply' },
   { label: 'Maybe', value: 'maybe' },
   { label: 'Rejected', value: 'reject' },
@@ -1330,6 +1333,8 @@ function taskMeta(record: AdminRecord): string {
         <h1>{data.resource.label}</h1>
         <p>{data.resource.description}</p>
       </div>
+      {#if data.resource.slug === 'preferences'}<a class="new-record-link" href="/admin/preferences/screening-questions">Screening Questions</a>{/if}
+      {#if isSourceResource}<AddUrlIntake />{/if}
       {#if (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
           {isSourceResource ? 'Add a job source' : `New ${data.resource.singularLabel}`}

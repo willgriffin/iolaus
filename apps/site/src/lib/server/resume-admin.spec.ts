@@ -1,4 +1,10 @@
 import type { FilesystemInterface } from '@happyvertical/files';
+import {
+  applyTailoring,
+  type GenerateResumeArtifactsOptions,
+  type ResumeSource,
+  type TailoringConfig,
+} from '@willgriffin/iolaus-resume';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ensurePublishedResumePdf,
@@ -59,20 +65,23 @@ function collection(records: MockRecord[] = []) {
 
 const mocks = vi.hoisted(() => ({
   collections: new Map<string, ReturnType<typeof collection>>(),
-  generateResumeArtifacts: vi.fn(async () => ({
-    htmlPath: 'generated-resumes/created-2/resume.html',
-    markdownPath: 'generated-resumes/created-2/resume.md',
-    outputPrefix: 'resume.canonical',
-    pdfBasename: 'resume.pdf',
-    pdfPath: 'generated-resumes/created-2/resume.pdf',
-    slug: 'canonical',
-    source: {},
-    textPath: 'generated-resumes/created-2/resume.txt',
-  })),
+  generateResumeArtifacts: vi.fn(
+    async (_options?: GenerateResumeArtifactsOptions) => ({
+      htmlPath: 'generated-resumes/created-2/resume.html',
+      markdownPath: 'generated-resumes/created-2/resume.md',
+      outputPrefix: 'resume.canonical',
+      pdfBasename: 'resume.pdf',
+      pdfPath: 'generated-resumes/created-2/resume.pdf',
+      slug: 'canonical',
+      source: {},
+      textPath: 'generated-resumes/created-2/resume.txt',
+    }),
+  ),
   getDefaultPuppeteerExecutablePath: vi.fn(async () => undefined),
   getResumeFilesystem: vi.fn(async () => ({})),
   getResumeTailoringConfig: vi.fn(),
   loadPublishedResumeSource: vi.fn(),
+  loadAdminResumeSource: vi.fn(),
   requestScopedDatabase: vi.fn(),
   resolveDatabase: vi.fn(),
   publishedAsset: {
@@ -104,6 +113,7 @@ vi.mock('./resume-data.js', () => ({
   }),
   listResumeTailoringConfigs: vi.fn(),
   loadPublishedResumeSource: mocks.loadPublishedResumeSource,
+  loadAdminResumeSource: mocks.loadAdminResumeSource,
   parseTailoringConfigRecord: vi.fn((record: Record<string, unknown>) => ({
     ...record,
     config: JSON.parse(String(record.configJson ?? '{}')),
@@ -166,6 +176,7 @@ beforeEach(() => {
   mocks.getResumeFilesystem.mockResolvedValue({});
   mocks.getResumeTailoringConfig.mockClear();
   mocks.getResumeTailoringConfig.mockResolvedValue(null);
+  mocks.loadAdminResumeSource.mockReset();
   mocks.loadPublishedResumeSource.mockReset();
   mocks.loadPublishedResumeSource.mockResolvedValue({
     experience: { education: [], other: [], positions: [] },
@@ -214,6 +225,37 @@ describe('nextPublishedAssetStates', () => {
 });
 
 describe('publishResumeAsset', () => {
+  it('rechecks authority after awaited PDF reads before publication state or alias writes', async () => {
+    const asset = record({
+      id: 'resume-1',
+      pdfPath: 'resume.pdf',
+      isPublished: false,
+    });
+    mocks.collections.set('ResumeAsset', collection([asset]));
+    let allowed = true;
+    const filesystem = {
+      read: vi.fn(async () => {
+        allowed = false;
+        return Buffer.from('%PDF-1.4');
+      }),
+      write: vi.fn(async () => {}),
+    };
+    const assertWriteAllowed = async () => {
+      await Promise.resolve();
+      if (!allowed) throw new Error('authority revoked');
+    };
+    await expect(
+      publishResumeAsset(
+        'resume-1',
+        filesystem as unknown as FilesystemInterface,
+        undefined,
+        assertWriteAllowed,
+      ),
+    ).rejects.toThrow('authority revoked');
+    expect(asset.save).not.toHaveBeenCalled();
+    expect(filesystem.write).not.toHaveBeenCalled();
+  });
+
   it('rejects application-owned materials as canonical resume candidates', async () => {
     const applicationAsset = record({
       applicationId: 'app-1',
@@ -513,6 +555,183 @@ describe('generateResumeAsset canonical tailoring', () => {
   });
 });
 
+describe('target-aware truthful resume selection', () => {
+  const cases: Array<{
+    name: string;
+    terms: string[];
+    config: TailoringConfig;
+    variant?: TailoringConfig;
+    expected: string;
+  }> = [
+    {
+      name: 'matching catalog label wins the cap',
+      terms: ['Node.js'],
+      config: {},
+      expected: 'Target evidence',
+    },
+    {
+      name: 'existing naming-only auto variant still gets target selection',
+      terms: ['Node.js'],
+      config: {},
+      variant: {
+        name: 'Platform Engineer resume variant',
+        outputSlug: 'platform-engineer',
+      },
+      expected: 'Target evidence',
+    },
+    {
+      name: 'whole-word no-match keeps canonical order',
+      terms: ['RAG'],
+      config: {},
+      expected: 'General evidence',
+    },
+    {
+      name: 'explicit emphasis wins over posting',
+      terms: ['Node.js'],
+      config: { emphasizeTags: ['storage'] },
+      expected: 'Storage evidence',
+    },
+    {
+      name: 'explicit empty emphasis disables automatic order',
+      terms: ['Node.js'],
+      config: { emphasizeTags: [] },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored pinned evidence stays first',
+      terms: ['Node.js'],
+      config: {
+        pinnedAchievementTitles: {
+          role: ['General evidence'],
+          project: ['General evidence'],
+        },
+      },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored dropped target cannot return',
+      terms: ['Node.js'],
+      config: {
+        droppedAchievementTitles: {
+          role: ['Target evidence'],
+          project: ['Target evidence'],
+        },
+      },
+      expected: 'General evidence',
+    },
+    {
+      name: 'authored excluded target cannot return',
+      terms: ['Node.js'],
+      config: { excludeTags: ['backend-runtime'] },
+      expected: 'General evidence',
+    },
+  ];
+  it.each(cases)('$name', async ({ terms, config, variant, expected }) => {
+    const achievements = [
+      {
+        title: 'General evidence',
+        body: 'Reviewed general outcome.',
+        tags: [],
+      },
+      {
+        title: 'Storage evidence',
+        body: 'Reviewed storage outcome.',
+        tags: ['storage'],
+      },
+      {
+        title: 'Target evidence',
+        body: 'Reviewed runtime outcome.',
+        tags: ['backend-runtime'],
+      },
+    ];
+    const source: ResumeSource = {
+      profile: {
+        name: 'Candidate',
+        email: '',
+        links: [],
+        title: 'Engineer',
+        summary: 'Reviewed profile.',
+      },
+      experience: {
+        education: [],
+        other: [],
+        positions: [
+          {
+            id: 'role',
+            role: 'Engineer',
+            company: 'Example',
+            start: '2020',
+            end: '2026',
+            achievements,
+            projects: [{ id: 'project', name: 'Project', achievements }],
+          },
+        ],
+      },
+      skills: {
+        skillGroups: [],
+        groups: [
+          {
+            id: 'software',
+            label: 'Software',
+            skills: [
+              { id: 'backend-runtime', label: 'Node.js' },
+              { id: 'storage', label: 'Storage' },
+            ],
+          },
+        ],
+      },
+    };
+    const originalSource = JSON.parse(JSON.stringify(source));
+    const baseConfig: TailoringConfig = {
+      maxAchievementsPerPosition: 1,
+      maxAchievementsPerProject: 1,
+      ...config,
+    };
+    const canonical = record({
+      id: 'owned-canonical',
+      configSlug: 'canonical',
+      configJson: JSON.stringify(baseConfig),
+      ...PRIVATE_OWNERSHIP,
+    });
+    mocks.collections.set('ResumeTailoringConfig', collection([canonical]));
+    mocks.collections.set('ResumeAsset', collection());
+    mocks.loadAdminResumeSource.mockResolvedValueOnce(source);
+    await generateResumeAsset({
+      applicationId: 'application',
+      subject: PRIVATE_SUBJECT,
+      targetOpportunityId: 'posting',
+      targetSkillTerms: terms,
+      tailoring: variant,
+      filesystem: {} as FilesystemInterface,
+    });
+    const options = mocks.generateResumeArtifacts.mock.calls.at(-1)?.[0];
+    if (!options) throw new Error('Resume renderer was not reached.');
+    const tailored = applyTailoring(
+      options.source.profile,
+      options.source.experience,
+      options.source.skills,
+      options.tailoring,
+    );
+    expect(
+      tailored.experience.positions[0]?.achievements.map((item) => item.title),
+    ).toEqual([expected]);
+    expect(
+      tailored.experience.positions[0]?.projects?.[0]?.achievements.map(
+        (item) => item.title,
+      ),
+    ).toEqual([expected]);
+    expect(tailored.profile).toEqual(source.profile);
+    expect(source).toEqual(originalSource);
+    expect(canonical.configJson).toBe(JSON.stringify(baseConfig));
+    expect(canonical.save).not.toHaveBeenCalled();
+    if (Object.hasOwn(config, 'emphasizeTags'))
+      expect(options.tailoring?.emphasizeTags).toEqual(config.emphasizeTags);
+    else if (terms.includes('RAG'))
+      expect(options.tailoring).toEqual(baseConfig);
+    else expect(options.tailoring?.emphasizeTags).toEqual(['backend-runtime']);
+  });
+});
+
 describe('regenerateResumeAsset', () => {
   it('creates a fresh asset from the selected asset tailoring config', async () => {
     const sourceAsset = record({
@@ -556,7 +775,10 @@ describe('regenerateResumeAsset', () => {
       targetOpportunityId: 'opportunity-1',
       title: 'Resume - Backend',
     });
-    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith('tailoring-1');
+    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith(
+      'tailoring-1',
+      undefined,
+    );
     expect(resumeAssets.create).toHaveBeenCalledWith(
       expect.objectContaining({
         context: '',
@@ -602,6 +824,49 @@ describe('generateResumeAsset', () => {
 
     expect(resumeAssets.delete).toHaveBeenCalledWith('resume-locked');
     expect(resumeAssets.records).toHaveLength(0);
+    expect(filesystem.delete).toHaveBeenCalledTimes(4);
+  });
+
+  it('awaits a denied authority guard before creating an asset or starting the renderer', async () => {
+    const resumeAssets = collection();
+    mocks.collections.set('ResumeAsset', resumeAssets);
+    const assertWriteAllowed = vi.fn(async () => {
+      throw new Error('authority revoked');
+    });
+    await expect(generateResumeAsset({ assertWriteAllowed })).rejects.toThrow(
+      'authority revoked',
+    );
+    expect(resumeAssets.create).not.toHaveBeenCalled();
+    expect(mocks.generateResumeArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('awaits authority after rendering and cleans artifacts without saving a denied asset', async () => {
+    const resumeAssets = collection();
+    mocks.collections.set('ResumeAsset', resumeAssets);
+    mocks.collections.set('ResumeTailoringConfig', collection());
+    const filesystem = { delete: vi.fn(async (_path: string) => {}) };
+    let allowed = true;
+    mocks.generateResumeArtifacts.mockImplementationOnce(async () => {
+      allowed = false;
+      return {
+        htmlPath: 'resume.html',
+        markdownPath: 'resume.md',
+        pdfPath: 'resume.pdf',
+        textPath: 'resume.txt',
+      } as never;
+    });
+    const assertWriteAllowed = async () => {
+      await Promise.resolve();
+      if (!allowed) throw new Error('authority revoked');
+    };
+    await expect(
+      generateResumeAsset({
+        assertWriteAllowed,
+        filesystem: filesystem as unknown as FilesystemInterface,
+      }),
+    ).rejects.toThrow('authority revoked');
+    expect(resumeAssets.records[0]?.save).not.toHaveBeenCalled();
+    expect(resumeAssets.records[0]).not.toHaveProperty('pdfPath');
     expect(filesystem.delete).toHaveBeenCalledTimes(4);
   });
 
@@ -1303,5 +1568,115 @@ describe('refreshPublishedCanonicalResumeAsset', () => {
       isPublished: true,
       status: 'published',
     });
+  });
+});
+
+const PRIVATE_SUBJECT = {
+  profileId: 'profile-owner',
+  tenantId: 'tenant-owner',
+  userId: 'user-owner',
+};
+const PRIVATE_OWNERSHIP = {
+  candidateProfileId: PRIVATE_SUBJECT.profileId,
+  tenantId: PRIVATE_SUBJECT.tenantId,
+  ownerUserId: PRIVATE_SUBJECT.userId,
+};
+
+describe('private resume generation', () => {
+  it('uses owned candidate source and seeds an owned canonical config and asset on first generation', async () => {
+    const source = {
+      experience: { education: [], other: [], positions: [] },
+      profile: {
+        email: 'owner@example.test',
+        links: [],
+        name: 'Private Candidate',
+        summary: 'Owner evidence.',
+        title: 'Engineer',
+      },
+      skills: { groups: [], skillGroups: [] },
+    };
+    mocks.loadAdminResumeSource.mockResolvedValueOnce(source);
+    const configs = collection([
+      record({
+        id: 'foreign-config',
+        configSlug: 'canonical',
+        configJson: '{}',
+        ...PRIVATE_OWNERSHIP,
+        ownerUserId: 'foreign-user',
+      }),
+    ]);
+    const assets = collection();
+    mocks.collections.set('ResumeTailoringConfig', configs);
+    mocks.collections.set('ResumeAsset', assets);
+
+    const asset = await generateResumeAsset({
+      applicationId: 'owner-application',
+      filesystem: {} as FilesystemInterface,
+      subject: PRIVATE_SUBJECT,
+    });
+
+    expect(mocks.loadAdminResumeSource).toHaveBeenCalledWith(
+      undefined,
+      PRIVATE_SUBJECT,
+    );
+    expect(mocks.loadPublishedResumeSource).not.toHaveBeenCalled();
+    expect(configs.create).toHaveBeenCalledWith(
+      expect.objectContaining(PRIVATE_OWNERSHIP),
+    );
+    expect(asset).toMatchObject({
+      ...PRIVATE_OWNERSHIP,
+      applicationId: 'owner-application',
+      tailoringId: 'created-2',
+    });
+    expect(mocks.generateResumeArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({ source }),
+    );
+  });
+
+  it('rejects an unavailable foreign tailoring selection before creating an asset', async () => {
+    mocks.loadAdminResumeSource.mockResolvedValueOnce({ profile: {} });
+    const assets = collection();
+    mocks.collections.set('ResumeAsset', assets);
+    await expect(
+      generateResumeAsset({
+        applicationId: 'owner-application',
+        subject: PRIVATE_SUBJECT,
+        tailoringId: 'foreign-config',
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mocks.getResumeTailoringConfig).toHaveBeenCalledWith(
+      'foreign-config',
+      PRIVATE_SUBJECT,
+    );
+    expect(assets.create).not.toHaveBeenCalled();
+    expect(mocks.generateResumeArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('rejects another profile asset before regeneration or filesystem access', async () => {
+    const foreign = record({
+      id: 'foreign-asset',
+      ...PRIVATE_OWNERSHIP,
+      candidateProfileId: 'foreign-profile',
+    });
+    const assets = collection([foreign]);
+    mocks.collections.set('ResumeAsset', assets);
+    const filesystem = { read: vi.fn() };
+    await expect(
+      regenerateResumeAsset(
+        'foreign-asset',
+        filesystem as unknown as FilesystemInterface,
+        PRIVATE_SUBJECT,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      publishResumeAsset(
+        'foreign-asset',
+        filesystem as unknown as FilesystemInterface,
+        PRIVATE_SUBJECT,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(assets.create).not.toHaveBeenCalled();
+    expect(filesystem.read).not.toHaveBeenCalled();
+    expect(foreign.save).not.toHaveBeenCalled();
   });
 });

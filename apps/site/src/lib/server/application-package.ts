@@ -19,7 +19,9 @@ import {
   normalizeApplicationStatus,
   toOpportunityStatus,
 } from '../objects/lifecycle.js';
+import { getOpportunityEligibility } from '../opportunity-eligibility.js';
 import { resolveWritingAiProfileClient } from './ai-config.js';
+import { isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import {
   archiveApplicationsForClosedPosting,
@@ -31,11 +33,20 @@ import {
 } from './application-workflow.js';
 import { isAtsFileQuestion, parseAtsFormSchema } from './ats/index.js';
 import { parseRequiredAnswers } from './auto-submit-eligibility.js';
+import { verifiedOpportunityEligibilityProjection } from './opportunity-eligibility-refresh.js';
 import {
-  getPublishedResumeAsset,
-  getResumeTailoringConfig,
-  type ResumeRecord,
-} from './resume-data.js';
+  loadCurrentOpportunityReviewOverlays,
+  recordPrivateOpportunityReview,
+} from './opportunity-review-overlay.js';
+import {
+  createPrivateRecord,
+  getPrivateRecord,
+  listPrivateRecords,
+  privateRecordWhere,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
+import { getResumeTailoringConfig, type ResumeRecord } from './resume-data.js';
 import { getResumeFilesystem } from './resume-files.js';
 import { commitResumeVariantIfCurrent } from './resume-variant-concurrency.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
@@ -394,10 +405,13 @@ function applyResumeVariantOverrides(
   return config;
 }
 
-async function tailoringOptionsForResumeVariant(variant: MutableRecord) {
+async function tailoringOptionsForResumeVariant(
+  variant: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const tailoringId = stringValue(variant.tailoringConfigId);
   const tailoringRecord = tailoringId
-    ? await getResumeTailoringConfig(tailoringId)
+    ? await getResumeTailoringConfig(tailoringId, subject)
     : null;
   if (tailoringId && !tailoringRecord) {
     error(400, 'Resume variant tailoring config not found.');
@@ -424,13 +438,15 @@ async function tailoringOptionsForResumeVariant(variant: MutableRecord) {
 async function findResumeVariantForApplication(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord | null> {
-  const collection = await getCollection('ResumeVariant');
   const resumeVariantId = stringValue(application.resumeVariantId);
   if (resumeVariantId) {
-    const variant = (await collection.get(
+    const variant = (await getPrivateRecord(
+      'ResumeVariant',
       resumeVariantId,
-    )) as unknown as MutableRecord | null;
+      subject,
+    )) as MutableRecord | null;
     if (!variant) {
       error(404, 'Resume variant not found.');
     }
@@ -440,11 +456,11 @@ async function findResumeVariantForApplication(
 
   const applicationId = stringValue(application.id);
   if (applicationId) {
-    const variants = (await collection.list({
+    const variants = (await listPrivateRecords('ResumeVariant', subject, {
       limit: 25,
       orderBy: 'updated_at DESC',
       where: { applicationId },
-    })) as unknown as MutableRecord[];
+    })) as MutableRecord[];
     const variant = variants.find((candidate) =>
       resumeVariantCanAttach(candidate, application, opportunity),
     );
@@ -455,11 +471,11 @@ async function findResumeVariantForApplication(
 
   const opportunityId = stringValue(opportunity.id);
   if (!opportunityId) return null;
-  const variants = (await collection.list({
+  const variants = (await listPrivateRecords('ResumeVariant', subject, {
     limit: 25,
     orderBy: 'updated_at DESC',
     where: { opportunityId },
-  })) as unknown as MutableRecord[];
+  })) as MutableRecord[];
   return (
     variants.find((variant) =>
       resumeVariantCanAttach(variant, application, opportunity),
@@ -535,21 +551,22 @@ function assertResumeVariantCompatible(
 async function getOrCreateResumeVariantForApplication(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
 ): Promise<{
   persistedState: Record<string, unknown> | null;
   variant: MutableRecord;
 }> {
-  const collection = await getCollection('ResumeVariant');
   const existing = await findResumeVariantForApplication(
     application,
     opportunity,
+    subject,
   );
   const persistedState = existing ? jsonRecord(existing) : null;
   const variant =
     existing ??
-    ((await collection.create({
+    ((await createPrivateRecord('ResumeVariant', subject, {
       status: 'draft',
-    })) as unknown as MutableRecord);
+    })) as MutableRecord);
   const variantId = stringValue(variant.id);
   const existingOutputSlug = stringValue(variant.outputSlug);
   if (variantId) application.resumeVariantId = variantId;
@@ -679,51 +696,52 @@ export function normalizeOpportunityRating(value: unknown): number | null {
 
 export async function updateOpportunityReview(options: {
   /**
-   * The revision the caller resolved this row at. When supplied the write is
-   * pinned to it, so a row edited since then fails its compare-and-swap
-   * instead of overwriting the newer value. Bulk callers pass it because the
-   * gap between resolving a selection and applying to it is wide enough for
-   * another writer to land; single-row callers read and write in one step and
-   * can rely on the revision the load itself carried.
+   * Retained for route compatibility. Reviews are immutable Decision revisions,
+   * so a shared Opportunity revision cannot be used as a write fence.
    */
   expectedUpdatedAt?: Date | string;
   humanRating?: unknown;
   humanReviewNotes?: string;
   humanReviewStatus: string;
   opportunityId: string;
-  reviewedByProfileId?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
-  const status = stringValue(options.humanReviewStatus);
+  const subject = requireWorkspaceSubject(options.subject);
+  const rawStatus = stringValue(options.humanReviewStatus);
+  const humanReviewStatus = rawStatus || 'needs_input';
   if (
-    status &&
-    !['needs_input', 'maybe', 'apply', 'reject', 'archived'].includes(status)
+    !['needs_input', 'maybe', 'apply', 'reject', 'archived'].includes(
+      humanReviewStatus,
+    )
   ) {
     error(400, 'Invalid opportunity review status.');
   }
+  const humanRating = normalizeOpportunityRating(options.humanRating);
+  const humanReviewNotes = stringValue(options.humanReviewNotes);
+  const decision = (await recordPrivateOpportunityReview({
+    humanRating,
+    humanReviewNotes,
+    humanReviewStatus: humanReviewStatus as
+      | 'apply'
+      | 'archived'
+      | 'maybe'
+      | 'needs_input'
+      | 'reject',
+    opportunityId: stringValue(options.opportunityId),
+    subject,
+  })) as MutableRecord;
+  await decision.save();
 
-  const collection = await getCollection('Opportunity');
-  const opportunity = (await collection.get(
-    options.opportunityId,
-  )) as unknown as MutableRecord | null;
-  if (!opportunity) {
-    error(404, 'Opportunity not found.');
-  }
-
-  Object.assign(opportunity, {
-    humanRating: normalizeOpportunityRating(options.humanRating),
-    humanReviewNotes: stringValue(options.humanReviewNotes),
-    humanReviewStatus: status,
-    reviewedAt: new Date(),
-    reviewedByProfileId: stringValue(options.reviewedByProfileId),
-    reviewedByUserId: stringValue(options.user?.id),
-  });
-  await opportunity.save(
-    options.expectedUpdatedAt
-      ? { expectedUpdatedAt: options.expectedUpdatedAt }
-      : undefined,
-  );
-  return jsonRecord(opportunity);
+  return {
+    ...jsonRecord(decision),
+    humanRating,
+    humanReviewNotes,
+    humanReviewStatus,
+    reviewedAt: decision.createdAt ?? decision.created_at ?? new Date(),
+    reviewedByProfileId: subject.profileId,
+    reviewedByUserId: subject.userId,
+  };
 }
 
 export async function bulkUpdateOpportunityReviews(options: {
@@ -731,9 +749,10 @@ export async function bulkUpdateOpportunityReviews(options: {
   humanReviewNotes?: string;
   humanReviewStatus: string;
   opportunityIds: string[];
-  reviewedByProfileId?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
+  const subject = requireWorkspaceSubject(options.subject);
   const status = stringValue(options.humanReviewStatus);
   if (!status) {
     error(400, 'Bulk review status is required.');
@@ -746,31 +765,31 @@ export async function bulkUpdateOpportunityReviews(options: {
     error(400, 'Select at least one opportunity.');
   }
 
-  const collection = await getCollection('Opportunity');
-  const ratingOverride = stringValue(options.humanRating);
-  const notesOverride = stringValue(options.humanReviewNotes);
-  const reviewedByProfileId = stringValue(options.reviewedByProfileId);
+  // Preserve only this subject's current private projection. Shared catalog
+  // fields are deliberately never read as defaults for a private review.
+  const currentReviews = await loadCurrentOpportunityReviewOverlays({
+    opportunityIds,
+    subject,
+  });
+  const overridesRating =
+    options.humanRating !== undefined && options.humanRating !== '';
+  const overridesNotes =
+    options.humanReviewNotes !== undefined && options.humanReviewNotes !== '';
   const records: Record<string, unknown>[] = [];
 
   for (const opportunityId of opportunityIds) {
-    const opportunity = (await collection.get(
-      opportunityId,
-    )) as unknown as MutableRecord | null;
-    if (!opportunity) {
-      error(404, 'Opportunity not found.');
-    }
-
+    const current = currentReviews.get(opportunityId);
     records.push(
       await updateOpportunityReview({
-        humanRating: ratingOverride
+        humanRating: overridesRating
           ? options.humanRating
-          : opportunity.humanRating,
-        humanReviewNotes:
-          notesOverride || stringValue(opportunity.humanReviewNotes),
+          : (current?.humanRating ?? null),
+        humanReviewNotes: overridesNotes
+          ? options.humanReviewNotes
+          : (current?.humanReviewNotes ?? ''),
         humanReviewStatus: status,
         opportunityId,
-        reviewedByProfileId:
-          reviewedByProfileId || stringValue(opportunity.reviewedByProfileId),
+        subject,
         user: options.user,
       }),
     );
@@ -792,12 +811,13 @@ export async function createDraftApplicationForOpportunity(options: {
   preflightOverrideReason?: string;
   requiredAnswers?: string;
   resumeMode?: string;
+  subject: WorkspaceSubject;
   user?: Pick<User, 'id'> | null;
 }) {
-  const opportunityCollection = await getCollection('Opportunity');
-  const opportunity = (await opportunityCollection.get(
-    options.opportunityId,
-  )) as unknown as MutableRecord | null;
+  const subject = requireWorkspaceSubject(options.subject);
+  const opportunity = (await (
+    await getCollection('Opportunity')
+  ).get(options.opportunityId)) as unknown as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Opportunity not found.');
   }
@@ -817,7 +837,7 @@ export async function createDraftApplicationForOpportunity(options: {
   return await runWithFreshPostingPreflight({
     action: 'create_application_draft',
     onClosed: async () => {
-      await archiveApplicationsForClosedPosting(options.opportunityId);
+      await archiveApplicationsForClosedPosting(options.opportunityId, subject);
     },
     opportunity,
     overrideReason: options.preflightOverrideReason,
@@ -832,20 +852,33 @@ export async function createDraftApplicationForOpportunity(options: {
         const opportunity = (await opportunities.get(
           stringValue(currentOpportunity.id),
         )) as unknown as MutableRecord | null;
-        if (!opportunity) error(404, 'Opportunity not found.');
+        if (!opportunity) {
+          error(404, 'Opportunity not found.');
+        }
         const existing = (await applicationCollection.list({
           limit: 1,
           orderBy: 'updated_at DESC',
-          where: { opportunityId: options.opportunityId },
+          where: {
+            opportunityId: options.opportunityId,
+            ...privateRecordWhere(subject),
+          },
         })) as unknown as MutableRecord[];
         const existingApplication = existing[0];
         const application =
           existingApplication ??
           ((await applicationCollection.create(
-            {},
+            privateRecordWhere(subject),
           )) as unknown as MutableRecord);
         const publishedResume =
-          resumeMode === 'default' ? await getPublishedResumeAsset() : null;
+          resumeMode === 'default'
+            ? ((
+                await listPrivateRecords('ResumeAsset', subject, {
+                  limit: 1,
+                  orderBy: 'updated_at DESC',
+                  where: { isPublished: true },
+                })
+              )[0] as ResumeRecord | undefined)
+            : null;
         const resumeAssetId =
           resumeMode === 'default'
             ? (publishedResume?.id ?? stringValue(application.resumeAssetId))
@@ -910,19 +943,25 @@ export async function createDraftApplicationForOpportunity(options: {
           await application.save();
         }
 
-        if (shouldMoveOpportunityIntoApplicationWorkflow(opportunity.status)) {
+        if (
+          !isSharedHosted() &&
+          shouldMoveOpportunityIntoApplicationWorkflow(opportunity.status)
+        ) {
           opportunity.status = 'apply';
           await opportunity.save();
         }
 
-        await syncApplicationWorkflowTasks(application);
+        await syncApplicationWorkflowTasks(application, subject);
         return jsonRecord(application);
       }),
     user: options.user,
   });
 }
 
-async function linkedFactSubjects(opportunity: MutableRecord) {
+async function linkedFactSubjects(
+  opportunity: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const subjects: Array<{ entityId: string; entityType: string }> = [];
   const opportunityId = stringValue(opportunity.id);
   const organizationProfileId = stringValue(opportunity.organizationProfileId);
@@ -934,24 +973,10 @@ async function linkedFactSubjects(opportunity: MutableRecord) {
     subjects.push({ entityId: organizationProfileId, entityType: 'Profile' });
   }
 
-  const candidateProfiles = (await (
-    await getCollection('CandidateProfile')
-  ).list({
-    limit: 50,
-    orderBy: 'updated_at DESC',
-  })) as unknown as MutableRecord[];
-  const orderedProfiles = candidateProfiles
-    .sort(
-      (left, right) =>
-        Number(Boolean(right.isDefault)) - Number(Boolean(left.isDefault)),
-    )
-    .slice(0, 5);
-  for (const profile of orderedProfiles) {
-    const profileId = stringValue(profile.id);
-    if (profileId) {
-      subjects.push({ entityId: profileId, entityType: 'CandidateProfile' });
-    }
-  }
+  subjects.push({
+    entityId: subject.profileId,
+    entityType: 'CandidateProfile',
+  });
 
   if (organizationProfileId) {
     const companyResearch = (await (
@@ -971,23 +996,26 @@ async function linkedFactSubjects(opportunity: MutableRecord) {
   return subjects;
 }
 
-async function factsForApplication(opportunity: MutableRecord) {
+async function factsForApplication(
+  opportunity: MutableRecord,
+  subject: WorkspaceSubject,
+) {
   const facts = await getCollection('Fact');
   const smrtOptions = getRequestScopedSmrtOptions();
   const subjects = await FactSubjectCollection.create(smrtOptions);
   const evidences = await FactEvidenceCollection.create(smrtOptions);
   const factIds = new Set<string>();
   const candidateFactIds = new Set<string>();
-  for (const subject of await linkedFactSubjects(opportunity)) {
+  for (const factSubject of await linkedFactSubjects(opportunity, subject)) {
     const links = await subjects.getForEntity(
-      subject.entityType,
-      subject.entityId,
+      factSubject.entityType,
+      factSubject.entityId,
     );
     for (const link of links) {
       const factId = stringValue(link.factId);
       if (!factId) continue;
       factIds.add(factId);
-      if (subject.entityType === 'CandidateProfile') {
+      if (factSubject.entityType === 'CandidateProfile') {
         candidateFactIds.add(factId);
       }
     }
@@ -1147,6 +1175,41 @@ function linkedContextFactLines(
   );
 }
 
+/** Default model booleans do not establish employer immigration support. */
+function packetVisaOrEorEvidence(opportunity: MutableRecord): string {
+  // Recompute from fingerprint-verified captured posting source. Historical
+  // booleans and self-authored derived eligibility JSON are never evidence.
+  const eligibility = getOpportunityEligibility({
+    ...opportunity,
+    ...verifiedOpportunityEligibilityProjection(opportunity),
+  });
+  const kinds = new Set(eligibility.assertions.map(({ kind }) => kind));
+  const sponsorshipOffered = kinds.has('sponsorship_offered');
+  const sponsorshipDenied = kinds.has('sponsorship_denied');
+  const eorOffered = kinds.has('eor_offered');
+  const eorDenied = kinds.has('eor_denied');
+  const sponsorship = kinds.has('conditional_sponsorship')
+    ? 'Unknown (conditional posting evidence)'
+    : sponsorshipOffered && sponsorshipDenied
+      ? 'Unknown (conflicting posting evidence)'
+      : sponsorshipOffered
+        ? 'yes (explicit posting evidence)'
+        : sponsorshipDenied
+          ? 'no (explicit posting evidence)'
+          : 'Unknown';
+  const eor =
+    eorOffered && eorDenied
+      ? 'Unknown (conflicting posting evidence)'
+      : eorOffered
+        ? 'yes (explicit posting evidence)'
+        : eorDenied
+          ? 'no (explicit posting evidence)'
+          : 'Unknown';
+  if (sponsorship === 'Unknown' && eor === 'Unknown') return 'Unknown';
+  // A visa denial cannot establish an EOR denial, or the reverse.
+  return `Visa sponsorship: ${sponsorship}; EOR: ${eor}`;
+}
+
 function buildApplicationPacketMarkdown(options: {
   application: MutableRecord;
   companyResearch: MutableRecord[];
@@ -1222,12 +1285,14 @@ function buildApplicationPacketMarkdown(options: {
   addDetail(
     compensationFacts,
     'Visa/EOR possible',
-    opportunity.visaOrEorPossible,
+    packetVisaOrEorEvidence(opportunity),
   );
   addDetail(
     compensationFacts,
     'Relocation supported',
-    opportunity.relocationSupported,
+    // The posting source contract has no verified relocation assertion.
+    // A default boolean (including true) cannot establish this employer fact.
+    'Unknown',
   );
   addDetail(compensationFacts, 'Application due at', application.dueAt);
 
@@ -1440,6 +1505,7 @@ function buildApplicationPacketMarkdown(options: {
 async function generateApplicationPacketAsset(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
   assertWriteAllowed: () => void,
 ) {
   const generatedAt = new Date();
@@ -1447,7 +1513,7 @@ async function generateApplicationPacketAsset(
   const opportunityId = stringValue(opportunity.id);
   const title = `Application packet - ${stringValue(opportunity.title) || opportunityId}`;
   const companyResearch = await companyResearchForOpportunity(opportunity);
-  const factEntries = await factsForApplication(opportunity);
+  const factEntries = await factsForApplication(opportunity, subject);
   const verifiedCandidateFacts = verifiedCandidateFactEntries(factEntries);
   const sourceUrls = packetSourceUrls({
     application,
@@ -1484,10 +1550,11 @@ async function generateApplicationPacketAsset(
   // database-visible asset unless the lifecycle gate is still held once that
   // external work returns.
   await assertMaterialArtifactWriteAllowed(artifacts, assertWriteAllowed);
-  const assetCollection = await getCollection('ResumeAsset');
-  const packetAsset = (await assetCollection.create(
+  const packetAsset = (await createPrivateRecord(
+    'ResumeAsset',
+    subject,
     {},
-  )) as unknown as MutableRecord;
+  )) as MutableRecord;
 
   Object.assign(packetAsset, {
     applicationId,
@@ -1609,6 +1676,7 @@ async function generateCoverLetterProse(
 async function generateCoverLetterAsset(
   application: MutableRecord,
   opportunity: MutableRecord,
+  subject: WorkspaceSubject,
   signal?: AbortSignal,
   assertWriteAllowed?: () => void,
 ) {
@@ -1616,7 +1684,7 @@ async function generateCoverLetterAsset(
   const applicationId = stringValue(application.id);
   const opportunityId = stringValue(opportunity.id);
   const title = `Cover letter - ${stringValue(opportunity.title) || opportunityId}`;
-  const factEntries = await factsForApplication(opportunity);
+  const factEntries = await factsForApplication(opportunity, subject);
   const candidateFactEntries = verifiedCandidateFactEntries(factEntries);
   const prose = await generateCoverLetterProse(
     opportunity,
@@ -1696,8 +1764,7 @@ async function generateCoverLetterAsset(
   if (assertWriteAllowed) {
     await assertMaterialArtifactWriteAllowed(artifacts, assertWriteAllowed);
   }
-  const assetCollection = await getCollection('ResumeAsset');
-  const asset = (await assetCollection.create({
+  const asset = (await createPrivateRecord('ResumeAsset', subject, {
     applicationId,
     assetType: 'cover_letter',
     generatedAt: now,
@@ -1719,7 +1786,7 @@ async function generateCoverLetterAsset(
     pdfPath: artifacts.pdfPath,
     textPath: artifacts.textPath,
     title,
-  })) as unknown as MutableRecord;
+  })) as MutableRecord;
   assertWriteAllowed?.();
   await asset.save();
   if (assertWriteAllowed) {
@@ -1737,29 +1804,31 @@ export async function generateApplicationPackage(
   options: {
     preflightOverrideReason?: string;
     signal?: AbortSignal;
+    subject: WorkspaceSubject;
     user?: Pick<User, 'id'> | null;
-  } = {},
+  },
 ) {
-  const applicationCollection = await getCollection('Application');
-  const opportunityCollection = await getCollection('Opportunity');
-  const application = (await applicationCollection.get(
+  const subject = requireWorkspaceSubject(options.subject);
+  const application = (await getPrivateRecord(
+    'Application',
     applicationId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
 
   const opportunityId = stringValue(application.opportunityId);
-  const opportunity = (await opportunityCollection.get(
-    opportunityId,
-  )) as unknown as MutableRecord | null;
+  const opportunity = (await (
+    await getCollection('Opportunity')
+  ).get(opportunityId)) as unknown as MutableRecord | null;
   if (!opportunity) {
     error(404, 'Application opportunity not found.');
   }
   return await runWithFreshPostingPreflight({
     action: 'generate_packet',
     onClosed: async () => {
-      await archiveApplicationsForClosedPosting(opportunityId);
+      await archiveApplicationsForClosedPosting(opportunityId, subject);
     },
     opportunity,
     overrideReason: options.preflightOverrideReason,
@@ -1767,7 +1836,7 @@ export async function generateApplicationPackage(
       generateApplicationPackageAfterPreflight({
         applicationId,
         currentOpportunity,
-        request: options,
+        request: { ...options, subject },
       }),
     user: options.user,
   });
@@ -1785,14 +1854,17 @@ async function generateApplicationPackageAfterPreflight(options: {
   request: {
     preflightOverrideReason?: string;
     signal?: AbortSignal;
+    subject: WorkspaceSubject;
     user?: Pick<User, 'id'> | null;
   };
 }) {
   assertOpportunityLifecycleLockIsActive();
-  const applicationCollection = await getCollection('Application');
-  const application = (await applicationCollection.get(
+  const subject = requireWorkspaceSubject(options.request.subject);
+  const application = (await getPrivateRecord(
+    'Application',
     options.applicationId,
-  )) as unknown as MutableRecord | null;
+    subject,
+  )) as MutableRecord | null;
   if (!application) {
     error(404, 'Application not found.');
   }
@@ -1822,9 +1894,11 @@ async function generateApplicationPackageAfterPreflight(options: {
       runLifecycleMutation: runOpportunityLifecycleTransaction,
       signal: options.request.signal,
     });
-    const plannedApplication = (await applicationCollection.get(
+    const plannedApplication = (await getPrivateRecord(
+      'Application',
       stringValue(application.id),
-    )) as unknown as MutableRecord | null;
+      subject,
+    )) as MutableRecord | null;
     if (plannedApplication) {
       Object.assign(application, plannedApplication);
       restoreMaterialAssetIds(application, existingMaterialAssetIds);
@@ -1859,8 +1933,13 @@ async function generateApplicationPackageAfterPreflight(options: {
       stringValue(application.resumeMode) === 'default' &&
       !stringValue(application.resumeAssetId)
     ) {
-      const published =
-        (await getPublishedResumeAsset()) as ResumeRecord | null;
+      const published = (
+        await listPrivateRecords('ResumeAsset', subject, {
+          limit: 1,
+          orderBy: 'updated_at DESC',
+          where: { isPublished: true },
+        })
+      )[0] as ResumeRecord | undefined;
       assertOpportunityLifecycleLockIsActive();
       application.resumeAssetId = published?.id ?? '';
     } else if (stringValue(application.resumeMode) === 'generate_tailored') {
@@ -1868,6 +1947,7 @@ async function generateApplicationPackageAfterPreflight(options: {
       const resumeVariant = await getOrCreateResumeVariantForApplication(
         application,
         opportunity,
+        subject,
       );
       const { persistedState, variant } = resumeVariant;
       if (persistedState) {
@@ -1875,7 +1955,10 @@ async function generateApplicationPackageAfterPreflight(options: {
       } else {
         trackNewResumeVariant(cleanupLedger, variant);
       }
-      const tailoringOptions = await tailoringOptionsForResumeVariant(variant);
+      const tailoringOptions = await tailoringOptionsForResumeVariant(
+        variant,
+        subject,
+      );
       const asset = await generateResumeAsset({
         applicationId: stringValue(application.id),
         assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
@@ -1884,6 +1967,11 @@ async function generateApplicationPackageAfterPreflight(options: {
         tailoringName: tailoringOptions.tailoringName,
         tailoringSlug: tailoringOptions.tailoringSlug,
         targetOpportunityId: opportunityId,
+        targetSkillTerms: [
+          ...textList(opportunity.requiredSkills),
+          ...textList(opportunity.preferredSkills),
+        ].flatMap((term) => term.split(/[,\r\n]+/)),
+        subject,
       });
       trackGeneratedMaterialAsset(
         cleanupLedger,
@@ -1909,6 +1997,7 @@ async function generateApplicationPackageAfterPreflight(options: {
       const asset = await generateCoverLetterAsset(
         application,
         opportunity,
+        subject,
         options.request.signal,
         assertOpportunityLifecycleLockIsActive,
       );
@@ -1939,7 +2028,10 @@ async function generateApplicationPackageAfterPreflight(options: {
           const { seedApplicationAnswersFromCandidateProfile } = await import(
             './candidate-answers.js'
           );
-          await seedApplicationAnswersFromCandidateProfile(application);
+          await seedApplicationAnswersFromCandidateProfile(
+            application,
+            subject,
+          );
         } catch {
           // Leave answers untouched when profile/library facts can't be read.
         }
@@ -1953,6 +2045,7 @@ async function generateApplicationPackageAfterPreflight(options: {
     const packetAsset = await generateApplicationPacketAsset(
       application,
       opportunity,
+      subject,
       assertOpportunityLifecycleLockIsActive,
     );
     trackGeneratedMaterialAsset(cleanupLedger, packetAsset);
@@ -2018,7 +2111,7 @@ async function generateApplicationPackageAfterPreflight(options: {
         runType: 'application_packet',
         status: 'succeeded',
       });
-      await syncApplicationWorkflowTasks(application);
+      await syncApplicationWorkflowTasks(application, subject);
     });
     return jsonRecord(application);
   } catch (cause) {

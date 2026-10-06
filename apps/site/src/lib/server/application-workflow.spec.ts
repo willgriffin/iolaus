@@ -28,11 +28,25 @@ type MockRecord = Record<string, unknown> & {
 
 function record(data: Record<string, unknown>): MockRecord {
   return {
+    candidateProfileId: 'profile-1',
     id: String(data.id ?? 'record-1'),
+    ownerUserId: 'user-1',
     save: vi.fn(async () => {}),
+    tenantId: 'tenant-1',
     ...data,
   } as MockRecord;
 }
+
+const subject = {
+  profileId: 'profile-1',
+  tenantId: 'tenant-1',
+  userId: 'user-1',
+};
+const applicationOwnership = {
+  candidateProfileId: subject.profileId,
+  ownerUserId: subject.userId,
+  tenantId: subject.tenantId,
+};
 
 function matchesWhere(
   item: MockRecord,
@@ -132,6 +146,7 @@ const mocks = vi.hoisted(() => ({
     reason: 'verified_live' as const,
   })),
   transactionDatabases: [] as Array<Record<string, unknown>>,
+  workspaceOperator: true,
 }));
 
 vi.mock('@happyvertical/smrt-users', () => ({
@@ -201,6 +216,15 @@ vi.mock('./smrt.js', () => ({
       return found;
     },
   ),
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  isCurrentWorkspaceOperator: () => mocks.workspaceOperator,
+  requireCurrentWorkspaceSubject: () => ({
+    profileId: 'profile-1',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  }),
 }));
 
 vi.mock('./opportunity-intelligence.js', () => ({
@@ -336,6 +360,7 @@ describe('ensureCompanyResearch source provenance', () => {
         companyId: 'company-1',
         createdBy: 'automation',
         sourceId: 'discovery-source-1',
+        subject,
       }),
     ).resolves.toMatchObject({ careersSourceCreated: true });
 
@@ -371,11 +396,22 @@ describe('syncRecommendedOpportunityDecisionTasks', () => {
       ]),
     );
     mocks.collections.set('Task', collection());
+    mocks.collections.set('Decision', collection());
+    mocks.collections.set(
+      'EvaluationScore',
+      collection([
+        record({
+          id: 'score-1',
+          opportunityId: 'opp-1',
+          recommendation: 'recommend',
+        }),
+      ]),
+    );
   });
 
   it('creates one active Will decision task per recommended opportunity', async () => {
     await expect(
-      syncRecommendedOpportunityDecisionTasks(),
+      syncRecommendedOpportunityDecisionTasks(subject),
     ).resolves.toMatchObject({
       closed: 0,
       created: 1,
@@ -383,7 +419,7 @@ describe('syncRecommendedOpportunityDecisionTasks', () => {
       scanned: 1,
     });
     await expect(
-      syncRecommendedOpportunityDecisionTasks(),
+      syncRecommendedOpportunityDecisionTasks(subject),
     ).resolves.toMatchObject({
       closed: 0,
       created: 0,
@@ -394,7 +430,7 @@ describe('syncRecommendedOpportunityDecisionTasks', () => {
     expect(mocks.collections.get('Task')?.records).toHaveLength(1);
     expect(mocks.collections.get('Task')?.records[0]).toMatchObject({
       assigneeRole: 'owner',
-      externalTaskId: 'review-recommendation:opp-1',
+      externalTaskId: 'review-recommendation:profile-1:opp-1',
       kanbanColumn: 'needs_user_decision',
       opportunityId: 'opp-1',
       taskType: 'review_recommendation',
@@ -406,7 +442,7 @@ describe('syncRecommendedOpportunityDecisionTasks', () => {
       'Task',
       collection([
         record({
-          externalTaskId: 'review-recommendation:opp-2',
+          externalTaskId: 'review-recommendation:profile-1:opp-2',
           id: 'task-stale',
           kanbanColumn: 'needs_user_decision',
           opportunityId: 'opp-2',
@@ -417,7 +453,7 @@ describe('syncRecommendedOpportunityDecisionTasks', () => {
     );
 
     await expect(
-      syncRecommendedOpportunityDecisionTasks(),
+      syncRecommendedOpportunityDecisionTasks(subject),
     ).resolves.toMatchObject({
       closed: 1,
       created: 1,
@@ -623,6 +659,7 @@ describe('processRecommendationTask', () => {
       decision: 'accept_to_apply',
       reason: 'Strong fit',
       taskId: 'task-1',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -743,6 +780,7 @@ describe('processRecommendationTask', () => {
       processRecommendationTask({
         decision: 'accept_to_apply',
         taskId: 'task-1',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({ status: 409 });
@@ -805,6 +843,7 @@ describe('processRecommendationTask', () => {
       processRecommendationTask({
         decision: 'accept_to_apply',
         taskId: 'task-1',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({ status: 409 });
@@ -837,6 +876,7 @@ describe('processRecommendationTask', () => {
       processRecommendationTask({
         decision: 'accept_to_apply',
         taskId: 'task-1',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({ status: 409 });
@@ -883,6 +923,7 @@ describe('processRecommendationTask', () => {
       processRecommendationTask({
         decision: 'accept_to_apply',
         taskId: 'task-1',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({
@@ -916,6 +957,7 @@ describe('processRecommendationTask', () => {
         decision: 'accept_to_apply',
         reason: 'Strong fit',
         taskId: 'task-1',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({
@@ -937,6 +979,7 @@ describe('processRecommendationTask', () => {
       decision: 'request_more_research',
       reason: 'Need funding and remote-policy notes',
       taskId: 'task-1',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -951,6 +994,45 @@ describe('processRecommendationTask', () => {
         assigneeRole: 'hermes',
         kanbanColumn: 'researching',
         taskType: 'research_company',
+      }),
+    );
+  });
+
+  it('does not reuse a foreign matching follow-up task', async () => {
+    mocks.collections.get('Task')?.records.push(
+      record({
+        candidateProfileId: 'profile-other',
+        externalTaskId: 'company-research:profile-1:opp-1',
+        id: 'foreign-research-task',
+        opportunityId: 'opp-1',
+        ownerUserId: 'user-other',
+        status: 'open',
+        taskType: 'research_company',
+        tenantId: 'tenant-1',
+      }),
+    );
+
+    await processRecommendationTask({
+      decision: 'request_more_research',
+      reason: 'Need private follow-up research',
+      subject,
+      taskId: 'task-1',
+      user: { id: 'user-1' },
+    });
+
+    const tasks = mocks.collections.get('Task')?.records ?? [];
+    expect(
+      tasks.find((task) => task.id === 'foreign-research-task'),
+    ).toMatchObject({
+      status: 'open',
+    });
+    expect(tasks).toContainEqual(
+      expect.objectContaining({
+        candidateProfileId: 'profile-1',
+        externalTaskId: 'company-research:profile-1:opp-1',
+        ownerUserId: 'user-1',
+        taskType: 'research_company',
+        tenantId: 'tenant-1',
       }),
     );
   });
@@ -973,6 +1055,7 @@ describe('processRecommendationTask', () => {
           decision: 'reject',
           reason: 'Contradictory task-board decision',
           taskId: 'task-1',
+          subject,
           user: { id: 'user-1' },
         }),
       'A non-apply decision cannot replace the lifecycle of an existing application. Update the application instead.',
@@ -989,6 +1072,7 @@ describe('processRecommendationTask', () => {
       decision: 'request_more_research',
       reason: 'Need funding and remote-policy notes',
       taskId: 'task-1',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -998,6 +1082,7 @@ describe('processRecommendationTask', () => {
           decision: 'accept_to_apply',
           reason: 'Double submit before research is done',
           taskId: 'task-1',
+          subject,
           user: { id: 'user-1' },
         }),
       'Recommendation task is blocked pending requested work.',
@@ -1017,6 +1102,7 @@ describe('processRecommendationTask', () => {
       decision: 'accept_to_apply',
       reason: 'Research cleared concerns',
       taskId: 'task-1',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1036,6 +1122,7 @@ describe('processRecommendationTask', () => {
       decision: 'accept_to_apply',
       reason: 'Strong fit',
       taskId: 'task-1',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1045,6 +1132,7 @@ describe('processRecommendationTask', () => {
           decision: 'accept_to_apply',
           reason: 'Double submit',
           taskId: 'task-1',
+          subject,
           user: { id: 'user-1' },
         }),
       'Recommendation task has already been processed.',
@@ -1062,6 +1150,7 @@ describe('processRecommendationTask', () => {
           decision: 'accept_to_apply',
           reason: 'Stale task',
           taskId: 'task-1',
+          subject,
           user: { id: 'user-1' },
         }),
       'Opportunity is no longer recommended for review.',
@@ -1107,7 +1196,7 @@ describe('archiveApplicationForClosedPosting', () => {
       collection([packetTask, submitTask, accountTask]),
     );
 
-    await archiveApplicationForClosedPosting(application);
+    await archiveApplicationForClosedPosting(application, subject);
 
     expect(application).toMatchObject({ status: 'archived' });
     expect(packetTask).toMatchObject({
@@ -1133,7 +1222,7 @@ describe('archiveApplicationForClosedPosting', () => {
     mocks.collections.set('Application', collection([application]));
     mocks.collections.set('Task', collection());
 
-    await archiveApplicationForClosedPosting(application);
+    await archiveApplicationForClosedPosting(application, subject);
 
     expect(application).toMatchObject({ status: 'submitted' });
     expect(mocks.databaseUpdate).not.toHaveBeenCalled();
@@ -1181,7 +1270,7 @@ describe('archiveApplicationForCleanup', () => {
       collection([activeTask, completedTask, unrelatedTask]),
     );
 
-    const result = await archiveApplicationForCleanup(application);
+    const result = await archiveApplicationForCleanup(application, subject);
 
     expect(result).toEqual({ canceled: 1, status: 'archived' });
     expect(application).toMatchObject({
@@ -1210,7 +1299,9 @@ describe('archiveApplicationForCleanup', () => {
     mocks.collections.set('Application', collection([application]));
     mocks.collections.set('Task', collection([activeTask]));
 
-    await expect(archiveApplicationForCleanup(application)).resolves.toEqual({
+    await expect(
+      archiveApplicationForCleanup(application, subject),
+    ).resolves.toEqual({
       canceled: 1,
       status: 'archived',
     });
@@ -1230,7 +1321,9 @@ describe('archiveApplicationForCleanup', () => {
     mocks.collections.set('Application', collection([application]));
     mocks.collections.set('Task', collection(tasks));
 
-    await expect(archiveApplicationForCleanup(application)).resolves.toEqual({
+    await expect(
+      archiveApplicationForCleanup(application, subject),
+    ).resolves.toEqual({
       canceled: 201,
       status: 'archived',
     });
@@ -1251,9 +1344,9 @@ describe('archiveApplicationForCleanup', () => {
     mocks.collections.set('Application', applications);
     mocks.collections.set('Task', collection([task]));
 
-    await expect(archiveApplicationForCleanup(application)).rejects.toThrow(
-      'task save failed',
-    );
+    await expect(
+      archiveApplicationForCleanup(application, subject),
+    ).rejects.toThrow('task save failed');
     expect(mocks.databaseTransaction).toHaveBeenCalledOnce();
     expect(applications.records[0]).toMatchObject({ status: 'approved' });
   });
@@ -1390,6 +1483,7 @@ describe('recordExplicitOpportunityDecision', () => {
       decision: 'reject',
       opportunityId: 'opp-found',
       reason: 'Requires relocation',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1451,6 +1545,7 @@ describe('recordExplicitOpportunityDecision', () => {
       recordExplicitOpportunityDecision({
         decision: 'reject',
         opportunityId: 'opp-found',
+        subject,
         user: { id: 'user-1' },
       }),
     ).resolves.toMatchObject({ status: 'reject' });
@@ -1465,6 +1560,7 @@ describe('recordExplicitOpportunityDecision', () => {
       decision: 'maybe',
       opportunityId: 'opp-found',
       reason: 'Need compensation details',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1494,6 +1590,7 @@ describe('recordExplicitOpportunityDecision', () => {
     const result = await recordExplicitOpportunityDecision({
       decision: 'maybe',
       opportunityId: 'opp-found',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1506,12 +1603,14 @@ describe('recordExplicitOpportunityDecision', () => {
       decision: 'apply',
       opportunityId: 'opp-found',
       reuseExistingApplication: true,
+      subject,
       user: { id: 'user-1' },
     });
     const second = await recordExplicitOpportunityDecision({
       decision: 'apply',
       opportunityId: 'opp-found',
       reuseExistingApplication: true,
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1549,6 +1648,7 @@ describe('recordExplicitOpportunityDecision', () => {
       recordExplicitOpportunityDecision({
         decision: 'apply',
         opportunityId: 'opp-found',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toThrow('Application persistence failed.');
@@ -1565,6 +1665,7 @@ describe('recordExplicitOpportunityDecision', () => {
       recordExplicitOpportunityDecision({
         decision: 'apply',
         opportunityId: 'opp-found',
+        subject,
         user: { id: 'user-1' },
       }),
     ).resolves.toMatchObject({ status: 'apply' });
@@ -1597,6 +1698,7 @@ describe('recordExplicitOpportunityDecision', () => {
       recordExplicitOpportunityDecision({
         decision: 'apply',
         opportunityId: 'opp-found',
+        subject,
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({
@@ -1632,6 +1734,7 @@ describe('recordExplicitOpportunityDecision', () => {
       recordExplicitOpportunityDecision({
         decision: 'reject',
         opportunityId: 'opp-found',
+        subject,
         user: { id: 'user-1' },
       }),
     ).resolves.toMatchObject({ status: 'reject' });
@@ -1648,6 +1751,7 @@ describe('recordExplicitOpportunityDecision', () => {
       decision: 'maybe',
       opportunityId: 'opp-recommended',
       reason: 'Revisit after company research',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1688,6 +1792,7 @@ describe('recordExplicitOpportunityDecision', () => {
         recordExplicitOpportunityDecision({
           decision: 'reject',
           opportunityId: 'opp-found',
+          subject,
           user: { id: 'user-1' },
         }),
       'A non-apply decision cannot replace the lifecycle of an existing application. Update the application instead.',
@@ -1697,6 +1802,32 @@ describe('recordExplicitOpportunityDecision', () => {
     expect(mocks.collections.get('Opportunity')?.records[0]).toMatchObject({
       status: 'found',
     });
+  });
+
+  it('does not let a foreign application block this workspace decision', async () => {
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          candidateProfileId: 'profile-other',
+          id: 'app-foreign',
+          opportunityId: 'opp-found',
+          ownerUserId: 'user-other',
+          status: 'application_drafting',
+          tenantId: 'tenant-1',
+        }),
+      ]),
+    );
+
+    await expect(
+      recordExplicitOpportunityDecision({
+        decision: 'reject',
+        opportunityId: 'opp-found',
+        subject,
+        user: { id: 'user-1' },
+      }),
+    ).resolves.toMatchObject({ status: 'reject' });
+    expect(mocks.collections.get('Decision')?.records).toHaveLength(1);
   });
 
   it('allows a new disposition after an existing application is terminal', async () => {
@@ -1714,6 +1845,7 @@ describe('recordExplicitOpportunityDecision', () => {
     const result = await recordExplicitOpportunityDecision({
       decision: 'reject',
       opportunityId: 'opp-found',
+      subject,
       user: { id: 'user-1' },
     });
 
@@ -1722,6 +1854,18 @@ describe('recordExplicitOpportunityDecision', () => {
       humanReviewStatus: 'reject',
       status: 'rejected',
     });
+  });
+
+  it('refuses a caller whose user id conflicts with the verified decision subject', async () => {
+    await expect(
+      recordExplicitOpportunityDecision({
+        decision: 'reject',
+        opportunityId: 'opp-found',
+        subject,
+        user: { id: 'user-other' },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.collections.get('Decision')?.records).toHaveLength(0);
   });
 });
 
@@ -1885,6 +2029,7 @@ describe('submission validation and follow-up tasks', () => {
       submittedByRole: 'agent_with_approval',
       taskId: 'task-1',
       user: { id: 'user-1' },
+      subject,
     });
 
     const tasks = mocks.collections.get('Task')?.records ?? [];
@@ -1930,6 +2075,7 @@ describe('submission validation and follow-up tasks', () => {
         submittedByRole: 'agent_with_approval',
         taskId: 'task-1',
         user: { id: 'user-1' },
+        subject,
       }),
     ).rejects.toThrow('Audit storage unavailable.');
 
@@ -1950,6 +2096,7 @@ describe('submission validation and follow-up tasks', () => {
         submittedByRole: 'agent_with_approval',
         taskId: 'task-1',
         user: { id: 'user-1' },
+        subject,
       }),
     ).rejects.toMatchObject({
       body: {
@@ -1987,6 +2134,7 @@ describe('submission validation and follow-up tasks', () => {
           submissionMethod: 'company_site',
           submittedByRole: 'agent_with_approval',
           user: { id: 'user-1' },
+          subject,
         }),
       'Application status cannot transition from application_drafting to submitted.',
     );
@@ -2026,6 +2174,7 @@ describe('submission validation and follow-up tasks', () => {
           submittedByRole: 'owner',
           taskId: 'task-2',
           user: { id: 'user-1' },
+          subject,
         }),
       'Submitted applications require final application approval.',
     );
@@ -2077,6 +2226,7 @@ describe('submission validation and follow-up tasks', () => {
           submittedByRole: 'owner',
           taskId: 'task-3',
           user: { id: 'user-1' },
+          subject,
         }),
       'Application materials changed or could not be verified after final approval.',
     );
@@ -2109,6 +2259,7 @@ describe('submission validation and follow-up tasks', () => {
           submittedByRole: 'agent_with_approval',
           taskId: 'task-other',
           user: { id: 'user-1' },
+          subject,
         }),
       'Submission task does not belong to this application.',
     );
@@ -2134,6 +2285,7 @@ describe('submission validation and follow-up tasks', () => {
       blockerType: '2fa',
       taskId: 'task-1',
       user: { id: 'user-1' },
+      subject,
     });
 
     const tasks = mocks.collections.get('Task')?.records ?? [];
@@ -2171,6 +2323,7 @@ describe('submission validation and follow-up tasks', () => {
         blockerType: '2fa',
         taskId: 'task-1',
         user: { id: 'user-1' },
+        subject,
       }),
     ).rejects.toMatchObject({
       body: {
@@ -2200,6 +2353,7 @@ describe('submission validation and follow-up tasks', () => {
         blockerType: '2fa',
         taskId: 'task-1',
         user: { id: 'user-1' },
+        subject,
       }),
     ).rejects.toThrow('Audit storage unavailable.');
 
@@ -2235,6 +2389,7 @@ describe('submission validation and follow-up tasks', () => {
           applicationId: 'app-2',
           blockerReason: 'Missing answer.',
           user: { id: 'user-1' },
+          subject,
         }),
       'Submission blocker requires an active submission task or an approved application.',
     );
@@ -2256,12 +2411,16 @@ describe('syncApplicationWorkflowTasks phase reconciliation', () => {
 
   it('creates a submit task for applications already in submitting state', async () => {
     await expect(
-      syncApplicationWorkflowTasks({
-        accountStatus: 'unknown',
-        id: 'app-1',
-        opportunityId: 'opp-1',
-        status: 'submitting',
-      }),
+      syncApplicationWorkflowTasks(
+        {
+          ...applicationOwnership,
+          accountStatus: 'unknown',
+          id: 'app-1',
+          opportunityId: 'opp-1',
+          status: 'submitting',
+        },
+        subject,
+      ),
     ).resolves.toMatchObject({ closed: 0, created: 1 });
 
     expect(mocks.collections.get('Task')?.records[0]).toMatchObject({
@@ -2286,13 +2445,17 @@ describe('syncApplicationWorkflowTasks phase reconciliation', () => {
     );
 
     await expect(
-      syncApplicationWorkflowTasks({
-        accountStatus: 'unknown',
-        id: 'app-1',
-        opportunityId: 'opp-1',
-        status: 'submitted',
-        submittedAt: new Date('2026-06-04T12:00:00.000Z'),
-      }),
+      syncApplicationWorkflowTasks(
+        {
+          ...applicationOwnership,
+          accountStatus: 'unknown',
+          id: 'app-1',
+          opportunityId: 'opp-1',
+          status: 'submitted',
+          submittedAt: new Date('2026-06-04T12:00:00.000Z'),
+        },
+        subject,
+      ),
     ).resolves.toMatchObject({ closed: 1, created: 2 });
 
     const tasks = mocks.collections.get('Task')?.records ?? [];
@@ -2326,12 +2489,16 @@ describe('syncApplicationWorkflowTasks phase reconciliation', () => {
     );
 
     await expect(
-      syncApplicationWorkflowTasks({
-        accountStatus: 'unknown',
-        id: 'app-1',
-        opportunityId: 'opp-1',
-        status: 'awaiting_user',
-      }),
+      syncApplicationWorkflowTasks(
+        {
+          ...applicationOwnership,
+          accountStatus: 'unknown',
+          id: 'app-1',
+          opportunityId: 'opp-1',
+          status: 'awaiting_user',
+        },
+        subject,
+      ),
     ).resolves.toMatchObject({ closed: 0, created: 1 });
 
     const tasks = mocks.collections.get('Task')?.records ?? [];
@@ -2353,12 +2520,29 @@ describe('syncSourceAccountTasks', () => {
   beforeEach(() => {
     mocks.collections.clear();
     mocks.collections.set('Task', collection());
+    mocks.workspaceOperator = true;
   });
 
   it('normalizes blank account statuses and rejects unknown values before sync', () => {
     expect(normalizeAccountStatus('')).toBe('unknown');
     expect(normalizeAccountStatus('needs_2fa')).toBe('needs_2fa');
     expect(() => normalizeAccountStatus('needs_magic')).toThrow();
+  });
+
+  it('denies a member from materializing an installation source task', async () => {
+    mocks.workspaceOperator = false;
+
+    await expectHttpError(
+      () =>
+        syncSourceAccountTasks({
+          accountStatus: 'needs_login',
+          id: 'source-1',
+        }),
+      'Source account tasks require an installation operator.',
+      403,
+    );
+
+    expect(mocks.collections.get('Task')?.records).toHaveLength(0);
   });
 
   it('creates an owner account handoff task using the configured identity', async () => {
@@ -2382,9 +2566,12 @@ describe('syncSourceAccountTasks', () => {
 
     expect(mocks.collections.get('Task')?.records[0]).toMatchObject({
       assigneeRole: 'owner',
+      candidateProfileId: 'profile-1',
       kanbanColumn: 'needs_account_credentials',
+      ownerUserId: 'user-1',
       sourceId: 'source-1',
       taskType: 'account_setup',
+      tenantId: 'tenant-1',
     });
     expect(
       String(mocks.collections.get('Task')?.records[0]?.description),
@@ -2443,11 +2630,15 @@ describe('syncApplicationWorkflowTasks account reconciliation', () => {
 
   it('closes stale application account tasks when the account is resolved', async () => {
     await expect(
-      syncApplicationWorkflowTasks({
-        accountStatus: 'active',
-        id: 'app-1',
-        status: 'awaiting_user',
-      }),
+      syncApplicationWorkflowTasks(
+        {
+          ...applicationOwnership,
+          accountStatus: 'active',
+          id: 'app-1',
+          status: 'awaiting_user',
+        },
+        subject,
+      ),
     ).resolves.toMatchObject({ created: 1 });
 
     const tasks = mocks.collections.get('Task')?.records ?? [];
@@ -2479,11 +2670,15 @@ describe('syncApplicationWorkflowTasks account reconciliation', () => {
     );
 
     await expect(
-      syncApplicationWorkflowTasks({
-        accountStatus: 'unknown',
-        id: 'app-1',
-        status: 'awaiting_user',
-      }),
+      syncApplicationWorkflowTasks(
+        {
+          ...applicationOwnership,
+          accountStatus: 'unknown',
+          id: 'app-1',
+          status: 'awaiting_user',
+        },
+        subject,
+      ),
     ).resolves.toMatchObject({ created: 1 });
 
     expect(
@@ -2510,11 +2705,15 @@ describe('syncApplicationWorkflowTasks account reconciliation', () => {
       ]),
     );
 
-    await syncApplicationWorkflowTasks({
-      accountStatus: 'active',
-      id: 'app-1',
-      status: 'awaiting_user',
-    });
+    await syncApplicationWorkflowTasks(
+      {
+        ...applicationOwnership,
+        accountStatus: 'active',
+        id: 'app-1',
+        status: 'awaiting_user',
+      },
+      subject,
+    );
 
     expect(
       mocks.collections
@@ -2526,14 +2725,39 @@ describe('syncApplicationWorkflowTasks account reconciliation', () => {
     });
   });
 
+  it('denies workflow synchronization for an application owned by another profile', async () => {
+    await expectHttpError(
+      () =>
+        syncApplicationWorkflowTasks(
+          {
+            accountStatus: 'unknown',
+            candidateProfileId: 'profile-2',
+            id: 'foreign-app',
+            ownerUserId: 'user-2',
+            status: 'awaiting_user',
+            tenantId: 'tenant-1',
+          },
+          subject,
+        ),
+      'Application not found.',
+      404,
+    );
+
+    expect(mocks.collections.get('Task')?.records).toHaveLength(1);
+  });
+
   it('rejects invalid application account status without closing account tasks', async () => {
     await expectHttpError(
       () =>
-        syncApplicationWorkflowTasks({
-          accountStatus: 'needs_magic',
-          id: 'app-1',
-          status: 'awaiting_user',
-        }),
+        syncApplicationWorkflowTasks(
+          {
+            ...applicationOwnership,
+            accountStatus: 'needs_magic',
+            id: 'app-1',
+            status: 'awaiting_user',
+          },
+          subject,
+        ),
       'Invalid account status.',
     );
 
@@ -2552,8 +2776,13 @@ describe('routeApplicationToAnswerCollection', () => {
 
     await expect(
       routeApplicationToAnswerCollection({
-        application: { id: 'app-1', status: 'approved' },
+        application: {
+          ...applicationOwnership,
+          id: 'app-1',
+          status: 'approved',
+        },
         questions: [{ id: 'q1', label: 'Work authorization?' }],
+        subject,
       }),
     ).resolves.toEqual({ created: false });
 
@@ -2653,6 +2882,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_start': '2026-08-01',
         'answer:q_unknown': 'ignored', // not in schema -> dropped
       }),
+      subject,
     );
 
     // q_cover is required and now cleared, so the application is incomplete.
@@ -2675,6 +2905,7 @@ describe('recordApplicationFormAnswers', () => {
     const result = await recordApplicationFormAnswers(
       'app-1',
       formRequest({ 'answer:q_cover': 'Because it fits.' }),
+      subject,
     );
 
     expect(result).toMatchObject({ complete: false, saved: 1 });
@@ -2706,6 +2937,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_cover': 'Because it fits.',
         'answer:q_start': '2026-08-01',
       }),
+      subject,
     );
 
     expect(mocks.collections.get('Application')?.records[0]).toMatchObject({
@@ -2725,6 +2957,7 @@ describe('recordApplicationFormAnswers', () => {
       recordApplicationFormAnswers(
         'app-1',
         formRequest({ 'answer:q_cover': 'Because it fits.' }),
+        subject,
       ),
     ).rejects.toMatchObject({
       body: {
@@ -2755,6 +2988,7 @@ describe('recordApplicationFormAnswers', () => {
         recordApplicationFormAnswers(
           'app-1',
           formRequest({ 'answer:q_cover': 'x' }),
+          subject,
         ),
       'This application has no fetched form questions to answer.',
     );
@@ -2770,6 +3004,7 @@ describe('recordApplicationFormAnswers', () => {
       await recordApplicationFormAnswers(
         'app-1',
         formRequest({ 'answer:q_start': '2026-08-01' }),
+        subject,
       );
     } catch (caught) {
       thrown = caught;
@@ -2817,6 +3052,7 @@ describe('recordApplicationFormAnswers', () => {
     const result = await recordApplicationFormAnswers(
       'app-1',
       formRequest({ 'answer:resume': 'not a file' }),
+      subject,
     );
 
     expect(result).toMatchObject({ saved: 0 });
@@ -2834,6 +3070,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_cover': 'Developer experience is my focus.',
         'reuse:q_cover': 'on',
       }),
+      subject,
     );
 
     expect(result).toMatchObject({ saved: 1, savedForReuse: 1 });
@@ -2870,6 +3107,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_cover': 'Refreshed answer.',
         'reuse:q_cover': 'on',
       }),
+      subject,
     );
 
     const library = mocks.collections.get('CandidateAnswer')?.records;
@@ -2895,6 +3133,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_start': '2026-08-01',
         'reuse:q_start': 'on',
       }),
+      subject,
     );
 
     // The answer is unchanged, so no application-scoped write (and no approval
@@ -2923,6 +3162,7 @@ describe('recordApplicationFormAnswers', () => {
         'reuse:q_start': 'on',
         'reuse:q_unknown': 'on',
       }),
+      subject,
     );
 
     expect(result).toMatchObject({ saved: 0, savedForReuse: 0 });
@@ -2936,6 +3176,7 @@ describe('recordApplicationFormAnswers', () => {
     const result = await recordApplicationFormAnswers(
       'app-1',
       formRequest({ 'reuse:resume': 'on' }),
+      subject,
     );
 
     expect(result.savedForReuse).toBe(0);
@@ -2961,6 +3202,7 @@ describe('recordApplicationFormAnswers', () => {
     const result = await recordApplicationFormAnswers(
       'app-1',
       formRequest({ 'unreuse:q_cover': 'on' }),
+      subject,
     );
 
     expect(result).toMatchObject({ revokedForReuse: 1 });
@@ -3002,6 +3244,7 @@ describe('recordApplicationFormAnswers', () => {
         'answer:q_cover': 'Canonical answer.',
         'reuse:q_cover': 'on',
       }),
+      subject,
     );
 
     expect(result.savedForReuse).toBe(1);
@@ -3036,6 +3279,7 @@ describe('recordApplicationFormAnswers', () => {
         'reuse:q_cover': 'on',
         'unreuse:q_cover': 'on',
       }),
+      subject,
     );
 
     expect(result).toMatchObject({ savedForReuse: 1, revokedForReuse: 0 });
@@ -3071,7 +3315,10 @@ describe('revokeReusableAnswerByLabelKey', () => {
     });
     mocks.collections.set('Application', collection([submittedApplication]));
 
-    const result = await revokeReusableAnswerByLabelKey('why this role%3f');
+    const result = await revokeReusableAnswerByLabelKey(
+      'why this role%3f',
+      subject,
+    );
 
     expect(result).toBe(1);
     expect(row.active).toBe(false);
@@ -3082,7 +3329,7 @@ describe('revokeReusableAnswerByLabelKey', () => {
     mocks.collections.clear();
     mocks.collections.set('CandidateProfile', collection());
     await expectHttpError(
-      () => revokeReusableAnswerByLabelKey('   '),
+      () => revokeReusableAnswerByLabelKey('   ', subject),
       'A reusable answer label key is required.',
     );
   });

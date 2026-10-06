@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  effectivePermissions: [] as string[],
   browse: vi.fn(async () => ({ items: [] })),
   digDeeper: vi.fn(async () => ({
     failed: [],
@@ -29,9 +30,48 @@ const mocks = vi.hoisted(() => ({
   verifyPosting: vi.fn(async () => ({ preflight: { state: 'live' } })),
 }));
 
-// The owner principal runs the real `executeAsPrincipal()` gate against an
-// in-memory database; only the workflow handlers behind it are mocked.
+// The native principal, context, operation gate and profile verifier stay real;
+// live identity and permission resolution are explicit route-unit fixtures.
+// owner-principal.spec.ts and mcp-app-server.spec.ts cover native RBAC rows.
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-users')>();
+  return {
+    ...actual,
+    UserCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'user-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    TenantCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'tenant-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    MembershipCollection: {
+      create: async () => ({
+        findByUserAndTenant: async (userId: string, tenantId: string) =>
+          userId === 'user-1' && tenantId === 'tenant-1'
+            ? { roleId: 'role-1', status: 'active', userId, tenantId }
+            : null,
+      }),
+    },
+  };
+});
+
 vi.mock('$lib/server/smrt', () => ({
+  getCollection: async (className: string) => {
+    if (className !== 'CandidateProfile')
+      throw new Error(`Unexpected fixture collection: ${className}`);
+    return {
+      get: async (id: string) =>
+        id === 'profile-1'
+          ? { id, active: true, ownerUserId: 'user-1', tenantId: 'tenant-1' }
+          : null,
+    };
+  },
   getRequestScopedSmrtOptions: vi.fn(() => ({ db: ':memory:' })),
 }));
 
@@ -63,70 +103,25 @@ vi.mock('$lib/server/source-webmcp', () => ({
   setRootSourceActive: mocks.setSourceActive,
 }));
 
-const collections = [
-  'agentruns',
-  'applications',
-  'companies',
-  'decisions',
-  'evaluationscores',
-  'opportunities',
-  'sources',
-  'tasks',
-] as const;
-
-/** Every collection the published resume read plans (and tailoring) touch. */
-const resumeReadCollections = [
-  'achievements',
-  'achievementattachments',
-  'achievementtags',
-  'attachments',
-  'companyattachments',
-  'duties',
-  'dutytags',
-  'educations',
-  'educationtags',
-  'employmentroles',
-  'employmentroletags',
-  'experiencecompanies',
-  'experienceroles',
-  'experiences',
-  'experiencetags',
-  'projectattachments',
-  'projects',
-  'projecttags',
-  'resumeachievements',
-  'resumeeducations',
-  'resumelinks',
-  'resumeotherroles',
-  'resumepositions',
-  'resumeprofiles',
-  'resumeskillcategories',
-  'resumeskillgroups',
-  'resumeskills',
-  'resumetailoringconfigs',
-  'skillcategories',
-  'skillcategorymembers',
-  'skillgroupmembers',
-  'skillgroups',
-  'tags',
-] as const;
-
-const readResumePermissions = [
-  ...resumeReadCollections.map((collection) => `${collection}.read`),
-  'companies.read',
-];
-
-/** Every generated operation permission the route can require. */
+/** Exact catalog permissions asserted by this route. Private records use workflow capabilities. */
 const ownerPermissions = [
-  ...collections.flatMap((collection) =>
-    ['read', 'create', 'update'].map((action) => `${collection}.${action}`),
-  ),
-  'applicationmaterialcomments.read',
+  'companies.create',
+  'companies.read',
+  'companies.update',
+  'opportunities.create',
   'opportunities.delete',
-  'resumeassets.read',
+  'opportunities.read',
+  'opportunities.update',
   'sourcecrawls.read',
   'sourcecrawlitems.read',
-  ...readResumePermissions,
+  'sources.create',
+  'sources.read',
+  'sources.update',
+  'workflow.application.inspect',
+  'workflow.application.prepare',
+  'workflow.application.review',
+  'workflow.audit.record',
+  'workflow.profile.manage',
 ];
 
 /** Schema-valid local identifiers; the tool schemas declare `format: 'uuid'`. */
@@ -155,12 +150,23 @@ function event({
   tenantId?: string | null;
   user?: { id: string } | null;
 }) {
+  mocks.effectivePermissions = [...permissions];
   return {
     locals: {
+      membership: {
+        roleId: 'role-1',
+        status: 'active',
+        tenantId,
+        userId: user?.id ?? null,
+      },
       permissions,
       sessionId: 'session-1',
       tenantId,
       user,
+      workspaceSubject:
+        tenantId && user
+          ? { profileId: 'profile-1', tenantId, userId: user.id }
+          : undefined,
     },
     params: { action },
     request: new Request(`https://iolaus.localhost/api/job-search/${action}`, {
@@ -172,6 +178,30 @@ function event({
     url: new URL(`https://iolaus.localhost/api/job-search/${action}${query}`),
   };
 }
+
+// SMRT dependencies load their native runtime outside the app module mock, so
+// intercept its actual resolver method, rather than replacing the app export.
+// Its result is fixture-owned; the native context and exact operation catalog
+// assertion still run, and each deny case removes its required capability.
+beforeEach(async () => {
+  const { PermissionResolver } = await import('@happyvertical/smrt-users');
+  vi.spyOn(
+    PermissionResolver.prototype,
+    'resolvePermissions',
+  ).mockImplementation(async (userId: string, tenantId: string) => ({
+    permissions: new Set(
+      userId === 'user-1' && tenantId === 'tenant-1'
+        ? mocks.effectivePermissions
+        : [],
+    ),
+    membershipId: 'membership-fixture',
+    roleId: 'role-1',
+    groupIds: [],
+    deniedPermissionIds: [],
+    inheritedFromTenantId: null,
+    ancestorReadFromTenantIds: [],
+  }));
+});
 
 describe('job-search WebMCP route', () => {
   beforeEach(() => {
@@ -208,10 +238,10 @@ describe('job-search WebMCP route', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mocks.browse).toHaveBeenCalledWith({
-      limit: '5',
-      query: 'platform',
-    });
+    expect(mocks.browse).toHaveBeenCalledWith(
+      { limit: '5', query: 'platform' },
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
+    );
   });
 
   it('serves one triage candidate through the same bounded context read', async () => {
@@ -225,10 +255,10 @@ describe('job-search WebMCP route', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mocks.nextTriageCandidate).toHaveBeenCalledWith({
-      offset: '2',
-      workMode: 'remote',
-    });
+    expect(mocks.nextTriageCandidate).toHaveBeenCalledWith(
+      { offset: '2', workMode: 'remote' },
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
+    );
     await expect(response.json()).resolves.toMatchObject({ position: 1 });
   });
 
@@ -276,6 +306,7 @@ describe('job-search WebMCP route', () => {
     expect(mocks.digDeeper).toHaveBeenCalledWith(
       { opportunityId, reason: 'Worth a look.' },
       actor,
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
     );
     await expect(response.json()).resolves.toMatchObject({
       humanReviewStatus: 'maybe',
@@ -283,10 +314,9 @@ describe('job-search WebMCP route', () => {
   });
 
   it.each([
-    'companies.update',
-    'tasks.create',
-    'sources.create',
-    'agentruns.read',
+    'companies.read',
+    'opportunities.read',
+    'workflow.application.review',
   ])('refuses dig-deeper without %s, rather than half-queuing the deep dive', async (permission) => {
     const { POST } = await import('./+server');
 
@@ -524,6 +554,7 @@ describe('job-search WebMCP route', () => {
     expect(mocks.recordDecision).toHaveBeenCalledWith(
       { decision: 'maybe', opportunityId },
       actor,
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
     );
   });
 
@@ -559,13 +590,13 @@ describe('job-search WebMCP route', () => {
     expect(mocks.browse).not.toHaveBeenCalled();
   });
 
-  it('requires application-read permission before returning opportunity context', async () => {
+  it('requires the declared inspection capability before returning opportunity context', async () => {
     const { GET } = await import('./+server');
 
     const response = await GET(
       event({
         action: 'browse',
-        permissions: without('applications.read'),
+        permissions: without('workflow.application.inspect'),
       }) as never,
     );
 
@@ -573,7 +604,7 @@ describe('job-search WebMCP route', () => {
     expect(mocks.browse).not.toHaveBeenCalled();
   });
 
-  it('requires every related write permission for Apply and rejects untrimmed decisions', async () => {
+  it('requires the declared review capability for decisions and rejects untrimmed values', async () => {
     const { POST } = await import('./+server');
 
     const untrimmed = await POST(
@@ -593,7 +624,7 @@ describe('job-search WebMCP route', () => {
         action: 'record-decision',
         body: { decision: 'apply', opportunityId },
         method: 'POST',
-        permissions: without('applications.update'),
+        permissions: without('workflow.application.review'),
       }) as never,
     );
     const maybe = await POST(
@@ -601,68 +632,54 @@ describe('job-search WebMCP route', () => {
         action: 'record-decision',
         body: { decision: 'maybe', opportunityId },
         method: 'POST',
-        permissions: without('applications.update'),
+        permissions: without('workflow.application.review'),
       }) as never,
     );
 
     expect(refused.status).toBe(403);
-    expect(maybe.status).toBe(200);
-    expect(mocks.recordDecision).toHaveBeenCalledTimes(1);
+    expect(maybe.status).toBe(403);
+    expect(mocks.recordDecision).not.toHaveBeenCalled();
   });
 
-  it('requires task-read permission for decision and application workflows', async () => {
+  it('rejects a caller-supplied profile authority hint', async () => {
     const { POST } = await import('./+server');
 
-    const decisionResponse = await POST(
+    const response = await POST(
       event({
         action: 'record-decision',
-        body: { decision: 'maybe', opportunityId },
+        body: {
+          decision: 'maybe',
+          opportunityId,
+          reviewedByProfileId: '11111111-1111-4111-8111-111111111111',
+        },
         method: 'POST',
-        permissions: without('tasks.read'),
       }) as never,
     );
-    const applicationResponse = await POST(
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('reviewedByProfileId'),
+    });
+    expect(mocks.recordDecision).not.toHaveBeenCalled();
+  });
+
+  it('requires the declared preparation capability before opening an application', async () => {
+    const { POST } = await import('./+server');
+
+    const refused = await POST(
       event({
         action: 'open-application',
         body: { opportunityId },
         method: 'POST',
-        permissions: without('tasks.read'),
+        permissions: without('workflow.application.prepare'),
       }) as never,
     );
 
-    expect(decisionResponse.status).toBe(403);
-    expect(applicationResponse.status).toBe(403);
-    expect(mocks.recordDecision).not.toHaveBeenCalled();
+    expect(refused.status).toBe(403);
     expect(mocks.openApplication).not.toHaveBeenCalled();
   });
 
-  it('requires decision-read permission before returning decision context', async () => {
-    const { POST } = await import('./+server');
-
-    const decisionResponse = await POST(
-      event({
-        action: 'record-decision',
-        body: { decision: 'maybe', opportunityId },
-        method: 'POST',
-        permissions: without('decisions.read'),
-      }) as never,
-    );
-    const applicationResponse = await POST(
-      event({
-        action: 'open-application',
-        body: { opportunityId },
-        method: 'POST',
-        permissions: without('decisions.read'),
-      }) as never,
-    );
-
-    expect(decisionResponse.status).toBe(403);
-    expect(applicationResponse.status).toBe(403);
-    expect(mocks.recordDecision).not.toHaveBeenCalled();
-    expect(mocks.openApplication).not.toHaveBeenCalled();
-  });
-
-  it('inspects one opportunity only with audit-log read permission for the preflight verdict', async () => {
+  it('inspects one opportunity only with the declared inspection capability', async () => {
     const { GET } = await import('./+server');
 
     const allowed = await GET(
@@ -674,7 +691,7 @@ describe('job-search WebMCP route', () => {
     const refused = await GET(
       event({
         action: 'inspect',
-        permissions: without('agentruns.read'),
+        permissions: without('workflow.application.inspect'),
         query: `?opportunityId=${opportunityId}`,
       }) as never,
     );
@@ -682,7 +699,10 @@ describe('job-search WebMCP route', () => {
     expect(allowed.status).toBe(200);
     expect(refused.status).toBe(403);
     expect(mocks.inspect).toHaveBeenCalledTimes(1);
-    expect(mocks.inspect).toHaveBeenCalledWith({ opportunityId });
+    expect(mocks.inspect).toHaveBeenCalledWith(
+      { opportunityId },
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
+    );
   });
 
   it.each([
@@ -710,21 +730,11 @@ describe('job-search WebMCP route', () => {
       handler: 'importOpportunity',
     },
     {
-      action: 'record-decision',
-      body: { decision: 'apply', opportunityId },
-      handler: 'recordDecision',
-    },
-    {
-      action: 'open-application',
-      body: { opportunityId },
-      handler: 'openApplication',
-    },
-    {
       action: 'verify-posting',
       body: { opportunityId },
       handler: 'verifyPosting',
     },
-  ] as const)('refuses $action without the AgentRun audit surrogate (agentruns.read)', async ({
+  ] as const)('refuses $action without the declared audit capability', async ({
     action,
     body,
     handler,
@@ -736,7 +746,7 @@ describe('job-search WebMCP route', () => {
         action,
         body,
         method: 'POST',
-        permissions: without('agentruns.read'),
+        permissions: without('workflow.audit.record'),
       }) as never,
     );
 
@@ -752,7 +762,7 @@ describe('job-search WebMCP route', () => {
     expect(mocks[handler]).toHaveBeenCalledTimes(1);
   });
 
-  it('does not require the audit surrogate for a decision that records no AgentRun', async () => {
+  it('does not require the audit capability for a decision workflow', async () => {
     const { POST } = await import('./+server');
 
     for (const decision of ['maybe', 'reject']) {
@@ -761,7 +771,7 @@ describe('job-search WebMCP route', () => {
           action: 'record-decision',
           body: { decision, opportunityId },
           method: 'POST',
-          permissions: without('agentruns.read'),
+          permissions: without('workflow.audit.record'),
         }) as never,
       );
       expect(response.status, decision).toBe(200);
@@ -769,7 +779,7 @@ describe('job-search WebMCP route', () => {
     expect(mocks.recordDecision).toHaveBeenCalledTimes(2);
   });
 
-  it('verifies a posting as the owner and requires audit-log read permission', async () => {
+  it('verifies a posting as the owner and requires the audit capability', async () => {
     const { POST } = await import('./+server');
     const actor = { id: 'user-1' };
 
@@ -786,7 +796,7 @@ describe('job-search WebMCP route', () => {
         action: 'verify-posting',
         body: { opportunityId },
         method: 'POST',
-        permissions: without('agentruns.read'),
+        permissions: without('workflow.audit.record'),
         user: actor,
       }) as never,
     );
@@ -871,10 +881,7 @@ describe('job-search WebMCP route', () => {
       'opportunities.read',
       'opportunities.update',
       'sources.read',
-      // The predicate reads these to exclude already-decided postings.
-      'applications.read',
-      'decisions.read',
-      'agentruns.read',
+      'workflow.audit.record',
     ]) {
       const refused = await POST(
         event({
@@ -921,7 +928,7 @@ describe('job-search WebMCP route', () => {
     );
   });
 
-  it('inspects one application with every review-context read permission', async () => {
+  it('inspects one application only with the declared inspection capability', async () => {
     const { GET } = await import('./+server');
 
     const allowed = await GET(
@@ -935,14 +942,7 @@ describe('job-search WebMCP route', () => {
       applicationId,
     });
 
-    for (const denied of [
-      'applications.read',
-      'applicationmaterialcomments.read',
-      'agentruns.read',
-      'opportunities.read',
-      'resumeassets.read',
-      'tasks.read',
-    ]) {
+    for (const denied of ['workflow.application.inspect']) {
       const refused = await GET(
         event({
           action: 'inspect-application',
@@ -972,7 +972,7 @@ describe('job-search WebMCP route', () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it('reads the resume only with every resume read-plan permission', async () => {
+  it('reads the resume only with the declared profile capability', async () => {
     const { GET } = await import('./+server');
 
     const allowed = await GET(
@@ -981,12 +981,7 @@ describe('job-search WebMCP route', () => {
     expect(allowed.status).toBe(200);
     expect(mocks.readResume).toHaveBeenCalledWith({ tailoring: 'canonical' });
 
-    for (const denied of [
-      'experiences.read',
-      'resumetailoringconfigs.read',
-      'resumeprofiles.read',
-      'tags.read',
-    ]) {
+    for (const denied of ['workflow.profile.manage']) {
       const refused = await GET(
         event({
           action: 'read-resume',
@@ -1109,7 +1104,10 @@ describe('job-search WebMCP route', () => {
 
     expect(accepted.status).toBe(200);
     // The handler still receives the raw query value and applies its own bounds.
-    expect(mocks.browse).toHaveBeenCalledWith({ limit: '2' });
+    expect(mocks.browse).toHaveBeenCalledWith(
+      { limit: '2' },
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
+    );
     expect(rejected.status).toBe(400);
     expect((await rejected.json()).error).toBe(
       'Invalid arguments for job_search_browse_opportunities: property "limit" must be an integer, received string',
@@ -1140,7 +1138,7 @@ describe('job-search WebMCP route', () => {
         action: 'record-decision',
         body: { decision: 'maybe', opportunityId },
         method: 'POST',
-        permissions: without('decisions.create'),
+        permissions: without('workflow.application.review'),
       }) as never,
     );
 

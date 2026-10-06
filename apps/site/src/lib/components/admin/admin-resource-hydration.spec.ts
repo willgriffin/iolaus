@@ -141,6 +141,58 @@ describe('admin live invalidation', () => {
   });
 });
 
+describe('curated admin list fetchers', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.browser = true;
+  });
+
+  for (const slug of ['applications', 'opportunities', 'tasks'] as const) {
+    it(`reads ${slug} only through the guarded admin route`, async () => {
+      const records = [{ id: `${slug}-1` }];
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              records,
+              pagination: { page: 1, pageSize: 100, totalRecords: 1 },
+            }),
+          ),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const { createAdminResourceFetchers } = await import(
+        './admin-resource-hydration'
+      );
+      const onPayload = vi.fn();
+      const fetchers = createAdminResourceFetchers(
+        slug,
+        '?page=2&owner=me',
+        onPayload,
+      );
+
+      await expect(fetchers.list()).resolves.toEqual(records);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/admin-resources/${slug}?page=2&owner=me`,
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+      expect(onPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ records }),
+      );
+      fetchMock.mockClear();
+
+      await expect(fetchers.create({ id: 'forbidden' })).rejects.toThrow(
+        'does not support generic CRUD',
+      );
+      expect(fetchers.get).toBeUndefined();
+      expect(fetchers.update).toBeUndefined();
+      expect(fetchers.delete).toBeUndefined();
+      expect(fetchers.custom).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+  }
+});
+
 describe('readAdminResourceListPayload', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -1,12 +1,32 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'evaluation_scores',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  conflictColumns: [
+    'tenant_id',
+    'owner_user_id',
+    'candidate_profile_id',
+    'opportunity_id',
+    'scoring_material_fingerprint',
+  ],
+  // Scores contain private candidate evidence and are served only by scoped projections.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+/**
+ * A candidate-scoped machine score. `createdByProfileId` remains human
+ * provenance only; tenant/owner/profile are the authorization boundary.
+ */
+@TenantScoped()
 export class EvaluationScore extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text', required: true })
+  ownerUserId = '';
+  @field({ type: 'text', required: true })
+  candidateProfileId = '';
   @field({ type: 'text' })
   opportunityId = '';
   @field({ type: 'text' })

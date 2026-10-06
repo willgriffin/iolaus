@@ -15,6 +15,32 @@ import {
   syncSourceSchedule,
 } from './source-schedules';
 
+const sourceAuthMock = vi.hoisted(() => ({
+  shared: false,
+  subject: null as Record<string, string> | null,
+}));
+vi.mock('./app-config.js', () => ({
+  getAppConfig: () => ({
+    workspaceMode: sourceAuthMock.shared ? 'shared' : 'private',
+  }),
+}));
+vi.mock('./workspace-subject.js', () => ({
+  getCurrentWorkspaceSubject: () => sourceAuthMock.subject,
+}));
+vi.mock('./source-crawl-operator.js', () => ({
+  captureSourceCrawlOperator: () => {
+    if (!sourceAuthMock.subject) throw new Error('verified operator required');
+    return sourceAuthMock.subject;
+  },
+}));
+vi.mock('./job-workspace-subject.js', () => ({
+  withRuntimeWorkspaceSubject: (args: Record<string, unknown>) => {
+    if ('runtimeWorkspaceSubject' in args)
+      throw new Error('ownership cannot be supplied');
+    return { ...args, runtimeWorkspaceSubject: sourceAuthMock.subject };
+  },
+}));
+
 const schedulesMock = vi.hoisted(() => ({
   deleted: [] as Array<{ delete: () => Promise<void> }>,
   get: vi.fn(),
@@ -56,6 +82,8 @@ vi.mock('./smrt.js', () => ({
 }));
 
 beforeEach(() => {
+  sourceAuthMock.shared = false;
+  sourceAuthMock.subject = null;
   smrtMock.listCalls.length = 0;
   smrtMock.sources.length = 0;
   schedulesMock.deleted.length = 0;
@@ -70,6 +98,32 @@ beforeEach(() => {
 });
 
 describe('source schedule cadence mapping', () => {
+  it('keeps shared schedules unbound and disabled until an operator envelope is explicit', () => {
+    sourceAuthMock.shared = true;
+    const source = {
+      id: 'source-1',
+      name: 'Root',
+      sourceRole: 'root',
+      parentSourceId: null,
+      isActive: true,
+      refreshCadence: 'daily',
+    };
+    expect(buildSourceSchedule(source)).toMatchObject({
+      enabled: false,
+      nextRun: null,
+      methodArgs: { reason: 'scheduled' },
+    });
+    const operator = {
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      profileId: 'profile-1',
+    };
+    expect(buildSourceSchedule(source, new Date(), operator)).toMatchObject({
+      enabled: true,
+      methodArgs: { runtimeWorkspaceSubject: operator },
+    });
+  });
+
   it('normalizes blank and invalid cadences to ad_hoc', () => {
     expect(normalizeRefreshCadence('daily')).toBe('daily');
     expect(normalizeRefreshCadence(' weekly ')).toBe('weekly');

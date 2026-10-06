@@ -1,12 +1,22 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'fact_candidates',
-  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
-  mcp: { include: ['list', 'get', 'create', 'update'] },
+  // Extracted statements and their review decisions are private candidate
+  // context. The fact workflow owns their subject-scoped access.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class FactCandidate extends SmrtObject {
+  @tenantId()
+  tenantId = '';
+  @field({ type: 'text', required: true })
+  ownerUserId = '';
+  @field({ type: 'text', required: true })
+  candidateProfileId = '';
   @field({ type: 'text' })
   factIntakeId = '';
   @field({ type: 'text' })

@@ -2,16 +2,27 @@ import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
 
 @smrt({
   tableName: 'opportunity_intelligence_requests',
-  api: { include: ['list', 'get'] },
-  cli: { include: ['list', 'get'] },
-  mcp: { include: ['list', 'get'] },
+  // Provider request history may be a global source ledger or candidate-private
+  // assessment accounting. It is served only through scoped workflows.
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
+  // Keep mixed private/operator ledger identifiers out of native change feeds.
+  sensitive: true,
 })
 export class OpportunityIntelligenceRequest extends SmrtObject {
-  @field({ type: 'text' })
+  /** Blank only for preserved operator/source ledger history. */
+  @field({ type: 'text', nullable: true })
+  tenantId = '';
+  @field({ type: 'text', nullable: true })
+  ownerUserId = '';
+  @field({ type: 'text', nullable: true })
+  candidateProfileId = '';
+  @field({ type: 'text', sensitive: true })
   requestId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   providerRequestId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   idempotencyKey = '';
   @field({ type: 'text' })
   feature = '';
@@ -21,11 +32,11 @@ export class OpportunityIntelligenceRequest extends SmrtObject {
   sourceCrawlItemId = '';
   @field({ type: 'text' })
   opportunityId = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   agentRunId = '';
   @field({ type: 'text' })
   contentFingerprint = '';
-  @field({ type: 'text' })
+  @field({ type: 'text', sensitive: true })
   inputFingerprint = '';
   @field({ type: 'text' })
   profile = '';

@@ -61,8 +61,7 @@ export const applicationStatusDefinitions = [
     value: 'draft',
   },
   {
-    description:
-      'Hermes, an agent, or automation is preparing materials or answers.',
+    description: 'An agent or automation is preparing materials or answers.',
     label: 'Application Drafting',
     value: 'application_drafting',
   },
@@ -80,7 +79,7 @@ export const applicationStatusDefinitions = [
   },
   {
     description:
-      'Approved and queued for submission: an automated/Hermes submission attempt is pending or underway.',
+      'Approved and queued for submission: an automated or agent submission attempt is pending or underway.',
     label: 'Pending submission',
     value: 'submitting',
   },

@@ -38,11 +38,25 @@ SMRT_RUNTIME_PROFILE=self-hosted
 SMRT_APP_ID=career-hub
 IOLAUS_APP_NAME="My Career Hub"
 IOLAUS_PUBLIC_URL=https://jobs.example.com
+# Set only to the exact immediate MCP Apps host origin for the interactive
+# embedded workspace. It may be HTTPS, or loopback HTTP for local development.
+IOLAUS_MCP_HOST_ORIGIN=https://trusted-host.example.com
+# Optional OAuth 2.1 validation for non-browser MCP clients. Configure every
+# value together; leave all unset to retain only the normal cookie/CLI session path.
+IOLAUS_MCP_OAUTH_JWKS_URI=https://identity.example.com/realms/career/protocol/openid-connect/certs
+IOLAUS_MCP_OAUTH_SCOPES=iolaus.mcp
+IOLAUS_MCP_OAUTH_ALGORITHMS=RS256
+# Use JWT only when the issuer documents that access-token type.
+IOLAUS_MCP_OAUTH_TOKEN_TYPE=at+jwt
 IOLAUS_OIDC_SERVER_URL=https://identity.example.com
 # `realm` is the default OIDC issuer mode.
 IOLAUS_OIDC_ISSUER_MODE=realm
 IOLAUS_OIDC_REALM=career
 IOLAUS_OIDC_CLIENT_ID=career-hub
+# `private` is the backwards-compatible default. Set `shared` only when this
+# is a public multi-user installation: each verified account receives a
+# separate tenant and private workspace.
+IOLAUS_WORKSPACE_MODE=private
 IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
 DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
@@ -50,6 +64,42 @@ DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 Use a dedicated PostgreSQL user and database name for every public deployment.
 The legacy/default `iolaus` and `iolaus_dev` database names are refused so a
 new installation cannot silently attach to predecessor or example data.
+
+### MCP Apps
+
+The portable package lives in `mcp-apps/` and connects through the authenticated
+Streamable HTTP endpoint at `/api/mcp`. Set `IOLAUS_MCP_HOST_ORIGIN` only to the
+known, exact origin of the immediate embedding MCP Apps host. The embedded
+workspace refuses to negotiate with an unspecified, wildcard, opaque, or
+untrusted origin; when that setting is absent it leaves structured MCP results
+available and tells the user to use Iolaus's authenticated review page.
+
+For local development, `mcp-apps/mcp.json` uses the loopback endpoint. Copy the
+package for a hosted deployment and replace only its URL with that deployment's
+HTTPS `/api/mcp` endpoint. Do not put users, tenants, profile identifiers, or
+credentials in the manifest. The server resolves the verified session and
+workspace on every tool and resource request.
+
+For an independent private installation, retain `IOLAUS_WORKSPACE_MODE=private`:
+the configured administrative membership remains the workspace authority. For
+the public shared-hosted app, set `IOLAUS_WORKSPACE_MODE=shared` and provision
+each account into its own active tenant, membership, role, and server-verified
+candidate profile. The same package URL is used in both modes; it never carries
+or selects another account's tenant, profile, records, or credentials.
+
+When an OpenAI-hosted MCP client needs account access, configure the optional
+OAuth values together. Iolaus then publishes RFC 9728 protected-resource
+metadata at `/.well-known/oauth-protected-resource/api/mcp` and validates a
+signed, audience-bound access token against the configured JWKS. A token is
+mapped only through an existing Iolaus OIDC identity and one live active
+membership; it cannot select a user, tenant, or candidate profile. Cookie and
+terminal CLI sessions keep their existing authentication path.
+
+Private developer-mode host testing may use a Secure MCP Tunnel that forwards
+only `/api/mcp`. It remains pending until the operator has the required tunnel
+control-plane key, workspace association, and host login; the local HTTP and
+simulated-DOM checks do not establish ChatGPT-host acceptance. This work does
+not publish a directory listing or deploy a public endpoint.
 
 `IOLAUS_OIDC_CLIENT_SECRET` is optional for a public OIDC client. When your
 provider issues a confidential client, set it only in the deployment secret
@@ -111,10 +161,12 @@ path. Record only its aggregate success in the cutover evidence; do not copy
 identity rows or sensitive values into a ticket, log, or repository.
 
 Every private administrative request requires an active user, tenant,
-membership, role, and resolved permissions. In a hosted profile the user's
-email must also still match `IOLAUS_OIDC_ADMIN_EMAILS`, so removing an address
-from that allowlist revokes existing browser and CLI sessions at their next
-protected request.
+membership, role, and resolved permissions. `IOLAUS_WORKSPACE_MODE=private`
+also requires the user's email to still match `IOLAUS_OIDC_ADMIN_EMAILS`, so
+removing an address from that allowlist revokes existing browser and CLI
+sessions at their next protected request. `shared` accepts verified OIDC
+identities and creates a separate tenant per user; it must not be enabled for
+an operator's existing single-workspace installation.
 
 Before a production cutover, the identity-provider operator must complete one
 synthetic-account authorization-code login against the isolated rehearsal

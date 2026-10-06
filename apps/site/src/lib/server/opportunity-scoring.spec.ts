@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { opportunityEligibilityProjection } from '../opportunity-eligibility.js';
 import {
   borderlineScoringFixture,
   clearAcceptScoringFixture,
@@ -34,6 +35,86 @@ async function build(fixture: OpportunityScoringFixture) {
 }
 
 describe('bounded opportunity scoring fixtures', () => {
+  it('carries only current, explicit posting eligibility assertions into scoring', async () => {
+    const sourceContentFingerprint = 'posting-eligibility-v1';
+    const sourceContentVersion = 1;
+    const descriptionRaw = [
+      'Location',
+      'This role supports remote work from Canada.',
+      'We offer visa sponsorship.',
+      'Qualifications',
+      'TypeScript is required.',
+    ].join('\n');
+    const sourceRecord = {
+      ...borderlineScoringFixture.opportunity,
+      descriptionRaw,
+      sourceContentFingerprint,
+      sourceContentJson: JSON.stringify({ descriptionRaw }),
+      sourceContentVersion,
+    };
+    const opportunity = {
+      ...sourceRecord,
+      ...opportunityEligibilityProjection(sourceRecord),
+    };
+    const request = await build({
+      ...borderlineScoringFixture,
+      opportunity,
+      prepared: prepareOpportunityPosting(opportunity),
+    });
+
+    expect(request.input.postingEligibility).toMatchObject({
+      buckets: expect.arrayContaining([
+        'canada_eligible',
+        'sponsorship_possible',
+      ]),
+      sourceContentFingerprint,
+      sourceContentVersion,
+      status: 'current',
+    });
+    expect(request.input.postingEligibility.assertions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          excerpt: 'This role supports remote work from Canada.',
+          kind: 'canada_supported',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(request.messages)).toContain(
+      'This role supports remote work from Canada.',
+    );
+  });
+
+  it('withholds stale eligibility assertions without changing deterministic scoring rules', async () => {
+    const sourceRecord = {
+      ...clearAcceptScoringFixture.opportunity,
+      sourceContentFingerprint: 'current-posting',
+      sourceContentJson: JSON.stringify({
+        descriptionRaw: clearAcceptScoringFixture.opportunity.descriptionRaw,
+      }),
+      sourceContentVersion: 2,
+      postingEligibilityJson: JSON.stringify({
+        version: 'posting-eligibility/v1',
+        sourceContentFingerprint: 'old-posting',
+        sourceContentVersion: 1,
+        assertions: [],
+      }),
+    };
+    const request = await build({
+      ...clearAcceptScoringFixture,
+      opportunity: sourceRecord,
+      prepared: prepareOpportunityPosting(sourceRecord),
+    });
+
+    expect(request.input.postingEligibility).toMatchObject({
+      assertions: [],
+      status: 'stale',
+    });
+    expect(preScoreOpportunity(request.input)).toMatchObject({
+      kind: 'clear_accept',
+      modelEligible: false,
+    });
+  });
+
   it('invalidates material freshness when semantic-only candidate evidence changes', () => {
     const opportunity = {
       ...clearAcceptScoringFixture.opportunity,

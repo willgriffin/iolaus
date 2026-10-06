@@ -1,5 +1,6 @@
 import { error, json, type RequestHandler } from '@sveltejs/kit';
 import { loadAdminResourcePageData } from '$lib/server/admin-resource-route';
+import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject.js';
 
 export const GET: RequestHandler = async ({ locals, params, url }) => {
   if (!locals.user) {
@@ -11,7 +12,11 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
     error(404, 'Resource not found');
   }
 
-  const data = await loadAdminResourcePageData(resource, url);
+  const data = await loadAdminResourcePageData(
+    resource,
+    url,
+    workspaceSubjectFromLocals(locals),
+  );
   return json({
     ...data,
     count: data.pagination.totalRecords,

@@ -11,6 +11,10 @@ FROM base AS deps
 # into the image. Never add credentials to it: pass them with a BuildKit
 # secret mount. `pnpm lint` fails on credential keys (scripts/check-npmrc-credentials.mjs).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json .npmrc ./
+# The frozen lockfile resolves local SMRT archives and a declaration patch.
+# Copy them before installation so cold builds have every file-backed input.
+COPY vendor/smrt vendor/smrt
+COPY patches patches
 COPY apps/site/package.json apps/site/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/resume/package.json packages/resume/package.json

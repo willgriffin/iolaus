@@ -4,9 +4,11 @@ import {
   Modal,
   ToastViewport,
 } from '@happyvertical/smrt-ui/feedback';
+import ExternalLink from '@lucide/svelte/icons/external-link';
 import Heart from '@lucide/svelte/icons/heart';
 import Star from '@lucide/svelte/icons/star';
 import X from '@lucide/svelte/icons/x';
+import { untrack } from 'svelte';
 import { deserialize } from '$app/forms';
 import type { AdminRecord } from '$lib/admin/dock';
 import {
@@ -112,19 +114,27 @@ let {
   open = $bindable(false),
   candidateSkills = [],
   search = '',
+  singleOpportunity = null,
   onClose,
+  onDecision,
 }: {
   /** Whether the deck is on screen. Owned by the list. */
   open?: boolean;
   candidateSkills?: string[];
   /** The list's current filter query string; the queue is seeded from it. */
   search?: string;
+  /** A server-loaded list record reviewed alone, without reading the queue. */
+  singleOpportunity?: AdminRecord | null;
   /** Called on Esc and the close button. */
   onClose?: () => void;
+  /** Fired only after a single-opportunity review write succeeds. */
+  onDecision?: (opportunityId: string) => void;
 } = $props();
 
 /** Cards in hand, oldest first; the head is the card on screen. */
-let queue = $state<AdminRecord[]>([]);
+let queue = $state<AdminRecord[]>(
+  untrack(() => (singleOpportunity ? [singleOpportunity] : [])),
+);
 /**
  * How many cards the operator passed on. Skipped rows stay undecided, so they
  * stay in the server queue — the offset steps past exactly this many of them.
@@ -263,7 +273,7 @@ function str(record: AdminRecord, key: string): string {
  * against whatever filter the list is showing now.
  */
 $effect(() => {
-  const key = triageSessionKey({ open, search });
+  const key = `${triageSessionKey({ open, search })}:${singleOpportunity ? str(singleOpportunity, 'id') : 'queue'}`;
   if (key === sessionKey) return;
   sessionKey = key;
   if (open) startSession();
@@ -300,12 +310,15 @@ $effect(() => {
   const id = current ? str(current, 'id') : '';
   if (id === notesCardId) return;
   notesCardId = id;
+  // Reset only the modal body when the role changes, never the page behind it.
+  const body = focusAnchor?.closest<HTMLElement>('.modal__body');
+  if (body) body.scrollTop = 0;
   notes = current ? str(current, 'humanReviewNotes') : '';
 });
 
 /** Keep a card ahead of the operator, so the deck never waits on a fetch. */
 $effect(() => {
-  if (!open || loading || atEnd) return;
+  if (!open || singleOpportunity || loading || atEnd) return;
   if (queue.length >= TRIAGE_PREFETCH_THRESHOLD) return;
   const key = refillKey();
   if (key === lastRefillKey) return;
@@ -323,7 +336,9 @@ function startSession(): void {
   // replaces, and releasing the latch lets this session issue its own.
   sessionToken += 1;
   refilling = false;
-  queue = [];
+  queue = singleOpportunity ? [singleOpportunity] : [];
+  busy = false;
+  loading = false;
   skipped = 0;
   decided = 0;
   undoStack = [];
@@ -333,10 +348,10 @@ function startSession(): void {
   loadError = '';
   servedIds = new Set();
   writes = new Map();
-  atEnd = false;
+  atEnd = singleOpportunity !== null;
   refillTick = 0;
   lastRefillKey = '0:0:0';
-  void refill();
+  if (!singleOpportunity) void refill();
 }
 
 /**
@@ -345,7 +360,7 @@ function startSession(): void {
  * hands `loadTriageQueue` the list's filter parameters verbatim.
  */
 async function refill(): Promise<void> {
-  if (refilling) return;
+  if (singleOpportunity || refilling) return;
   refilling = true;
   loading = true;
   const token = sessionToken;
@@ -448,7 +463,17 @@ async function post(
     });
     const result = deserialize(await response.text());
     if (result.type === 'success') {
-      return (result.data ?? {}) as Record<string, unknown>;
+      const data = (result.data ?? {}) as Record<string, unknown>;
+      if (data.status === 'error') {
+        notify(
+          typeof data.message === 'string'
+            ? data.message
+            : 'The decision could not be recorded.',
+          'error',
+        );
+        return null;
+      }
+      return data;
     }
     notify(
       result.type === 'error'
@@ -514,6 +539,10 @@ function restore(record: AdminRecord): void {
 function decide(verdict: 'digDeeper' | 'reject'): void {
   const record = current;
   if (!record) return;
+  if (singleOpportunity) {
+    void decideSingleOpportunity(record, verdict);
+    return;
+  }
   const snapshot = snapshotOf(record);
   const id = snapshot.opportunityId;
   const label = str(record, 'title') || 'untitled opportunity';
@@ -579,10 +608,47 @@ function decide(verdict: 'digDeeper' | 'reject'): void {
   writes.set(id, write);
 }
 
+/** A one-record review stays open until its write has actually succeeded. */
+async function decideSingleOpportunity(
+  record: AdminRecord,
+  verdict: 'digDeeper' | 'reject',
+): Promise<void> {
+  if (busy) return;
+  busy = true;
+  const token = sessionToken;
+  const id = str(record, 'id');
+  const fields = {
+    humanRating: String(
+      triageVerdictRating(getNumber(record, 'humanRating'), verdict),
+    ),
+    humanReviewNotes: notes,
+    opportunityId: id,
+  };
+  try {
+    const result =
+      verdict === 'reject'
+        ? await post('reviewOpportunity', {
+            ...fields,
+            humanReviewStatus: 'reject',
+          })
+        : await post('digDeeper', fields);
+    if (!result) return;
+    onDecision?.(id);
+    // A late response must not dismiss a different record opened meanwhile.
+    if (token === sessionToken && open) close();
+  } finally {
+    if (token === sessionToken) busy = false;
+  }
+}
+
 /** The cheap default: record nothing, step past the card, keep moving. */
 function later(): void {
   const record = current;
   if (!record) return;
+  if (singleOpportunity) {
+    close();
+    return;
+  }
   advance();
   skipped += 1;
   deepDive = [];
@@ -654,6 +720,7 @@ function openPosting(): void {
 }
 
 function handleAction(action: TriageShortcutAction): void {
+  if (singleOpportunity && busy) return;
   switch (action) {
     case 'digDeeper':
       decide('digDeeper');
@@ -681,6 +748,7 @@ function handleAction(action: TriageShortcutAction): void {
  * closed: the list underneath owns the keyboard then.
  */
 function handleKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return;
   if (!triageDeckAcceptsKeys({ open })) return;
   const action = triageShortcutFor({
     altKey: event.altKey,
@@ -802,6 +870,11 @@ const shortlistHref = $derived.by(() => {
   >
   {#snippet header()}
     <div class="deck-head">
+      {#if current}
+        <a class="close" href={`/admin/opportunities/${encodeURIComponent(str(current, 'id'))}`}>
+          <ExternalLink size={16} strokeWidth={2.2} /> Open opportunity
+        </a>
+      {/if}
       <button type="button" class="close" onclick={close} aria-label="Close triage">
         <X size={18} strokeWidth={2.4} /> Close
       </button>
@@ -879,7 +952,7 @@ const shortlistHref = $derived.by(() => {
           <button
             type="button"
             class={`orb ${deckAction.tone}`}
-            disabled={!current}
+            disabled={!current || (singleOpportunity !== null && busy)}
             aria-label={deckAction.label}
             title={`${deckAction.label} (${deckAction.hint})`}
             onclick={() => handleAction(deckAction.action)}

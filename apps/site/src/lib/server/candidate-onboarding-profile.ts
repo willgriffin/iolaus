@@ -1,4 +1,5 @@
 import { reusableAnswerLabelKey } from './candidate-answers.js';
+import { projectBasicWorkEligibility } from './candidate-work-eligibility.js';
 
 /** Project a reusable answer with the current canonical revocation key. */
 export function projectCandidateOnboardingAnswer(
@@ -53,7 +54,24 @@ export function projectCandidateOnboardingProfile(
   } catch {
     // Invalid legacy JSON is not reflected into the form.
   }
+  const sponsorshipRequired =
+    record.sponsorshipRequired === true ||
+    String(record.sponsorshipRequired ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+      ? true
+      : record.sponsorshipRequired === false ||
+          String(record.sponsorshipRequired ?? '')
+            .trim()
+            .toLowerCase() === 'false'
+        ? false
+        : 'unknown';
   return {
+    basicWorkEligibility: projectBasicWorkEligibility(record),
+    authorizedWorkCountriesJson: String(
+      record.authorizedWorkCountriesJson ?? '[]',
+    ),
+    citizenshipsJson: String(record.citizenshipsJson ?? '[]'),
     demographics,
     demographicsConsent: Boolean(record.demographicsConsentAt),
     email: String(record.email ?? ''),
@@ -65,9 +83,12 @@ export function projectCandidateOnboardingProfile(
     name: String(record.name ?? ''),
     phone: String(record.phone ?? ''),
     preferencesJson: String(record.preferencesJson ?? '{}'),
+    residenceCountryJson: String(record.residenceCountryJson ?? '{}'),
     resumeAssetId: String(record.resumeAssetId ?? ''),
     resumeSource: String(record.resumeSource ?? 'not_selected'),
     summary: String(record.summary ?? ''),
+    sponsorshipRequired,
+    targetWorkCountryJson: String(record.targetWorkCountryJson ?? '{}'),
     title: String(record.title ?? ''),
     workAuthorization: String(record.workAuthorization ?? ''),
   };

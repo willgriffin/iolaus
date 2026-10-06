@@ -7,6 +7,7 @@ import {
   getConfiguredUserAgent,
   isLoopbackAddress,
   isLoopbackHostname,
+  isSharedHosted,
 } from './app-config';
 
 describe('Iolaus application configuration', () => {
@@ -131,6 +132,31 @@ describe('Iolaus application configuration', () => {
         SMRT_RUNTIME_PROFILE: 'cloud',
       }),
     ).toBe('https://cloud.example.com');
+  });
+
+  it('keeps hosted installs private by default and enables per-user workspaces only explicitly', () => {
+    const base = {
+      IOLAUS_OIDC_CLIENT_ID: 'career-hub',
+      IOLAUS_OIDC_REALM: 'career',
+      IOLAUS_OIDC_SERVER_URL: 'https://identity.example.com',
+      IOLAUS_PUBLIC_URL: 'https://career.example.com',
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+    };
+    expect(getAppConfig(base).workspaceMode).toBe('private');
+    expect(isSharedHosted(base)).toBe(false);
+    expect(getAuthConfiguration(base)).toMatchObject({ kind: 'invalid' });
+
+    const shared = { ...base, IOLAUS_WORKSPACE_MODE: 'shared' };
+    expect(getAppConfig(shared).workspaceMode).toBe('shared');
+    expect(isSharedHosted(shared)).toBe(true);
+    expect(getAuthConfiguration(shared)).toMatchObject({
+      kind: 'self-hosted',
+      oidc: { adminEmails: [] },
+    });
+    expect(() =>
+      getAppConfig({ ...base, IOLAUS_WORKSPACE_MODE: 'public' }),
+    ).toThrow(/IOLAUS_WORKSPACE_MODE/u);
   });
 
   it('requires a unique non-default identity for public deployments', () => {

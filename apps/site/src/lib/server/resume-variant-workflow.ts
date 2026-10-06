@@ -6,7 +6,12 @@ import {
 } from '../objects/application-approval-scope.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import { syncApplicationWorkflowTasks } from './application-workflow.js';
-import { getCollection } from './smrt.js';
+import {
+  listPrivateRecords,
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -29,11 +34,11 @@ function stringValue(value: unknown): string {
 
 async function selectedApplicationsForResumeVariant(
   resumeVariantId: string,
+  subject: WorkspaceSubject,
 ): Promise<MutableRecord[]> {
   const variantId = stringValue(resumeVariantId);
   if (!variantId) return [];
 
-  const collection = await getCollection('Application');
   const pageSize = 100;
   const applications: MutableRecord[] = [];
 
@@ -41,12 +46,12 @@ async function selectedApplicationsForResumeVariant(
   // immutable key. Ordering by updated_at would move already-reserved records
   // between pages and could skip a later selected application.
   for (let offset = 0; ; offset += pageSize) {
-    const page = (await collection.list({
+    const page = (await listPrivateRecords('Application', subject, {
       limit: pageSize,
       offset,
       orderBy: 'id ASC',
       where: { resumeVariantId: variantId },
-    })) as unknown as MutableRecord[];
+    })) as MutableRecord[];
     applications.push(...page);
     if (page.length < pageSize) break;
   }
@@ -56,9 +61,13 @@ async function selectedApplicationsForResumeVariant(
 
 export async function resumeVariantWriteViolation(
   resumeVariantId: string,
+  subject: WorkspaceSubject,
 ): Promise<string> {
-  const selectedApplications =
-    await selectedApplicationsForResumeVariant(resumeVariantId);
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const selectedApplications = await selectedApplicationsForResumeVariant(
+    resumeVariantId,
+    verifiedSubject,
+  );
   if (
     selectedApplications.some((application) =>
       applicationMaterialsAreLockedOrLeased(application.status, application),
@@ -77,12 +86,16 @@ export async function resumeVariantWriteViolation(
  */
 export async function reserveResumeVariantApplicationWrite(
   resumeVariantId: string,
+  subject: WorkspaceSubject,
 ): Promise<{
   reservation: ResumeVariantWriteReservation | null;
   violation: string;
 }> {
-  const selectedApplications =
-    await selectedApplicationsForResumeVariant(resumeVariantId);
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const selectedApplications = await selectedApplicationsForResumeVariant(
+    resumeVariantId,
+    verifiedSubject,
+  );
   if (
     selectedApplications.some((application) =>
       applicationMaterialsAreLockedOrLeased(application.status, application),
@@ -108,7 +121,7 @@ export async function reserveResumeVariantApplicationWrite(
       clearApplicationApprovalFields(updates);
     }
     if (!(await commitApplicationIfCurrent(application, updates))) {
-      await releaseResumeVariantApplicationWrite(reservation);
+      await releaseResumeVariantApplicationWrite(reservation, verifiedSubject);
       return {
         reservation: null,
         violation:
@@ -123,12 +136,18 @@ export async function reserveResumeVariantApplicationWrite(
 
 export async function releaseResumeVariantApplicationWrite(
   reservation: ResumeVariantWriteReservation,
+  subject: WorkspaceSubject,
 ): Promise<ResumeVariantWriteRelease> {
+  const verifiedSubject = requireWorkspaceSubject(subject);
   const result: ResumeVariantWriteRelease = {
     applicationLocksReleased: true,
     workflowTasksSynced: true,
   };
   for (const application of reservation.applications) {
+    if (!recordOwnedBySubject(application, verifiedSubject)) {
+      result.applicationLocksReleased = false;
+      continue;
+    }
     if (stringValue(application.materialWriteLock) !== reservation.token) {
       result.applicationLocksReleased = false;
       continue;
@@ -137,7 +156,7 @@ export async function releaseResumeVariantApplicationWrite(
       await commitApplicationIfCurrent(application, { materialWriteLock: '' })
     ) {
       try {
-        await syncApplicationWorkflowTasks(application);
+        await syncApplicationWorkflowTasks(application, verifiedSubject);
       } catch {
         // Continue releasing every selected application before reporting the
         // task-sync failure to the caller.
@@ -152,9 +171,13 @@ export async function releaseResumeVariantApplicationWrite(
 
 export async function resumeVariantDeleteViolation(
   resumeVariantId: string,
+  subject: WorkspaceSubject,
 ): Promise<string> {
-  const selectedApplications =
-    await selectedApplicationsForResumeVariant(resumeVariantId);
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const selectedApplications = await selectedApplicationsForResumeVariant(
+    resumeVariantId,
+    verifiedSubject,
+  );
   if (selectedApplications.length) {
     return 'Resume variant is selected by an application and cannot be deleted.';
   }
@@ -163,9 +186,13 @@ export async function resumeVariantDeleteViolation(
 
 export async function syncResumeVariantApplicationApprovals(
   resumeVariantId: string,
+  subject: WorkspaceSubject,
 ) {
-  const selectedApplications =
-    await selectedApplicationsForResumeVariant(resumeVariantId);
+  const verifiedSubject = requireWorkspaceSubject(subject);
+  const selectedApplications = await selectedApplicationsForResumeVariant(
+    resumeVariantId,
+    verifiedSubject,
+  );
   let invalidated = 0;
 
   for (const application of selectedApplications) {
@@ -182,7 +209,7 @@ export async function syncResumeVariantApplicationApprovals(
       }
       invalidated += 1;
     }
-    await syncApplicationWorkflowTasks(application);
+    await syncApplicationWorkflowTasks(application, verifiedSubject);
   }
 
   return { invalidated, selected: selectedApplications.length };

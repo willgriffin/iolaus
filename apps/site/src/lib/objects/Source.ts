@@ -53,6 +53,43 @@ export class Source extends SmrtObject {
   }
 
   async crawl(args: SourceCrawlJobArgs = {}, context?: JobExecutionContext) {
+    const { getAppConfig } = await import('../server/app-config.js');
+    if ('runtimeWorkspaceSubject' in args) {
+      const { runAsSourceCrawlOperator } = await import(
+        '../server/source-crawl-operator.js'
+      );
+      const { runSourceCrawlJob } = await import(
+        '../server/source-crawl-job.js'
+      );
+      return await runAsSourceCrawlOperator(
+        args,
+        context as JobExecutionContext,
+        async (subject, writeFence) => {
+          const summary = await runSourceCrawlJob(this, args, context, {
+            writeFence,
+          });
+          await writeFence(async () => {
+            const { recordAgentAudit } = await import(
+              '../server/application-workflow.js'
+            );
+            await recordAgentAudit({
+              input: { sourceCrawlId: args.sourceCrawlId, reason: args.reason },
+              output: { ...summary },
+              runType: 'source_crawl_execute',
+              sourceId: this.id ?? undefined,
+              status: 'completed',
+              user: { id: subject.userId },
+            });
+          });
+          return summary;
+        },
+      );
+    }
+    if (getAppConfig().workspaceMode === 'shared') {
+      throw new Error(
+        'Shared workspace source crawls require an explicit operator dispatch.',
+      );
+    }
     const { runSourceCrawlJob } = await import('../server/source-crawl-job.js');
     return await runSourceCrawlJob(this, args, context);
   }

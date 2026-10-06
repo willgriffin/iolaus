@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   matchingIds: vi.fn(),
   pageIds: vi.fn(),
   revisionsByIds: vi.fn(),
+  reviewOverlays: vi.fn(async () => new Map()),
   updateReview: vi.fn(),
 }));
 
@@ -26,6 +27,17 @@ vi.mock('./admin-opportunity-query.js', () => ({
   listOpportunityPageIds: mocks.pageIds,
   listOpportunityRevisionsByIds: mocks.revisionsByIds,
   OPPORTUNITY_TABLE_PAGE_SIZE: 100,
+}));
+
+vi.mock('./opportunity-review-overlay.js', () => ({
+  loadCurrentOpportunityReviewOverlays: mocks.reviewOverlays,
+}));
+
+vi.mock('./workspace-subject.js', () => ({
+  withVerifiedWorkspaceSubject: async (
+    _subject: unknown,
+    fn: () => Promise<unknown>,
+  ) => await fn(),
 }));
 
 vi.mock('./application-package.js', () => ({
@@ -91,6 +103,11 @@ async function createAdapter(overrides: Record<string, unknown> = {}) {
   );
   return createOpportunityDataSurfaceAdapter({
     state: new InMemoryDataSurfaceActionStateStore(),
+    workspaceSubject: {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    },
     resolveQueryTarget: () => ({
       candidateSkills: [],
       filters: DEFAULT_OPPORTUNITY_FILTERS,
@@ -134,6 +151,7 @@ describe('opportunity data-surface actions', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.fingerprint.mockReturnValue(QUERY_FINGERPRINT);
+    mocks.reviewOverlays.mockResolvedValue(new Map());
     mocks.revisionsByIds.mockResolvedValue([
       { id: 'opp-1', updatedAt: '2026-09-02T08:00:00.000Z' },
     ]);
@@ -213,7 +231,11 @@ describe('opportunity data-surface actions', () => {
     const result = await adapter.preview(request(), { principal });
 
     expect(result.ok).toBe(true);
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1']);
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
     // An explicit selection must not be bounded by how many rows the current
     // filter happens to match.
     expect(mocks.matchingIds).not.toHaveBeenCalled();
@@ -244,7 +266,11 @@ describe('opportunity data-surface actions', () => {
     expect(mocks.pageIds).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 100, offset: 0 }),
     );
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1']);
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    });
   });
 
   it('rejects a review payload with an unknown disposition', async () => {
@@ -289,6 +315,18 @@ describe('opportunity data-surface actions', () => {
   });
 
   it('carries over rating, notes, and reviewer the caller did not mention', async () => {
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([
+        [
+          'opp-1',
+          {
+            humanRating: 7,
+            humanReviewNotes: 'existing note',
+            humanReviewStatus: 'apply',
+          },
+        ],
+      ]),
+    );
     const adapter = await createAdapter();
     const preview = await adapter.preview(request(), { principal });
 
@@ -307,7 +345,11 @@ describe('opportunity data-surface actions', () => {
         humanRating: 7,
         humanReviewNotes: 'existing note',
         humanReviewStatus: 'apply',
-        reviewedByProfileId: 'profile-1',
+        subject: {
+          profileId: 'profile-1',
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+        },
       }),
     );
   });
@@ -351,7 +393,7 @@ describe('opportunity data-surface actions', () => {
     expect(JSON.stringify(result.details)).toContain('already_queued');
   });
 
-  it('attributes each queued LLM job to the acting operator', async () => {
+  it('queues each LLM job in the verified workspace context', async () => {
     mocks.enqueue.mockResolvedValue({ enqueued: true, job: { id: 'job-1' } });
     const adapter = await createAdapter();
     const llmRequest = {
@@ -370,12 +412,6 @@ describe('opportunity data-surface actions', () => {
       { principal },
     );
 
-    // Without this the job records an empty initiatedByUserId and the batch
-    // audit cannot restore per-job attribution.
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      expect.any(String),
-      {},
-      { user: { id: 'user-1' } },
-    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.any(String), {}, {});
   });
 });

@@ -1,0 +1,50 @@
+{
+  "sourceUrl": "https://jobs.ashbyhq.com/vanta/dbd4e02c-0c6c-4031-a658-f57e88ec9943",
+  "capturedAt": "2026-10-02",
+  "organization": {
+    "name": "Vanta",
+    "publicWebsite": "https://vanta.com"
+  },
+  "posting": {
+    "id": "dbd4e02c-0c6c-4031-a658-f57e88ec9943",
+    "title": "Senior Software Engineer, Developer Experience ",
+    "locationName": "Remote U.S.",
+    "secondaryLocationNames": [
+      "Remote - Canada"
+    ],
+    "employmentType": "FullTime",
+    "workplaceType": "Remote",
+    "compensationTierSummary": "$224K \u2013 $263K \u2022 Offers Equity \u2022 This role is also eligible for medical benefits, 401(k) plan, and other company perk programs.",
+    "scrapeableCompensationSalarySummary": "$224K - $263K",
+    "descriptionHtml": "<p style=\"min-height:1.5em\">At Vanta, our mission is to help businesses earn and prove trust.<strong> </strong>We believe that security should be monitored and verified continuously, and we empower companies to practice better security and prove it with ease. Vanta has a kind and talented team, and while some have prior security experience, many have been successful at Vanta without it.\u00a0</p>"
+  },
+  "jobPosting": {
+    "@type": "JobPosting",
+    "hiringOrganization": {
+      "@type": "Organization",
+      "name": "Vanta",
+      "sameAs": "https://vanta.com",
+      "logo": "https://app.ashbyhq.com/api/images/org-theme-logo/d7e68137-5dac-406c-9924-6e9d9df07856/1f2409f6-5294-4c37-8fbf-c60ac5761513/d43d0eb1-0f8b-41d3-a65d-3ce4fca1838b.png"
+    },
+    "baseSalary": {
+      "@type": "MonetaryAmount",
+      "currency": "USD",
+      "value": {
+        "@type": "QuantitativeValue",
+        "minValue": 224000,
+        "maxValue": 263000,
+        "unitText": "YEAR"
+      }
+    },
+    "applicantLocationRequirements": [
+      {
+        "@type": "Country",
+        "name": "Canada"
+      },
+      {
+        "@type": "Country",
+        "name": "USA"
+      }
+    ]
+  }
+}

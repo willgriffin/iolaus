@@ -3,6 +3,8 @@ import { render } from 'svelte/server';
 import { describe, expect, it, vi } from 'vitest';
 import { createAdminListPagination } from '$lib/admin/pagination';
 import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
+import { completeReviewFixture } from '$lib/opportunity-resume-fit-review-projection.test-support';
+import { questionScreeningFixture } from '$lib/question-screening-projection.test-support';
 import OpportunityCardList from './OpportunityCardList.svelte';
 
 vi.mock('$app/state', () => ({
@@ -39,6 +41,206 @@ function renderList(
     },
   });
 }
+
+describe('OpportunityCardList assessment readiness', () => {
+  it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'question-result',
+          title: 'API engineer',
+          questionScreeningEnabled: true,
+          questionScreeningStatus: 'current',
+          questionScreeningProjection: await questionScreeningFixture(),
+          latestScore: 99,
+        },
+      ],
+    });
+    expect(body).toContain('Recommendation 40.0%');
+    expect(body).not.toContain('Run screening');
+    expect(body).toContain('title="Weighted alignment');
+    expect(body).not.toContain('Questions, answers and evidence');
+    expect(body).not.toContain('99/100');
+  });
+  it('links opportunity screening to editable private questions', () => {
+    expect(renderList().body).toContain(
+      'href="/admin/preferences/screening-questions"',
+    );
+  });
+  it('keeps owned stale complete review unavailable instead of reviving a numeric legacy score', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'stale-complete',
+          title: 'API engineer',
+          completeReviewStatus: 'unknown',
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness: 'assessable',
+            coverage: {
+              candidateTruncated: false,
+              postingTruncated: false,
+              requirementsTruncated: false,
+              requirementCount: 4,
+            },
+            ranking: { eligibilityPriority: 2, fitScore: 99 },
+          },
+        },
+      ],
+    });
+    expect(body).toContain('Complete review needs refresh');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('All reviewed criteria supported');
+  });
+
+  it('uses the complete evidence review as the primary assessment without a legacy score or partial headline', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'complete-review',
+          title: 'API engineer',
+          resumeFitReviewProjection: completeReviewFixture(),
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness: 'assessable',
+            coverage: {
+              candidateTruncated: false,
+              postingTruncated: false,
+              requirementsTruncated: false,
+              requirementCount: 1,
+            },
+            ranking: { fitScore: 99, eligibilityPriority: 2 },
+          },
+        },
+      ],
+    });
+    expect(body).toContain('All reviewed criteria supported');
+    expect(body).not.toContain('1 supported of 1 considered criteria');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('No current cited support assessment');
+    expect(body).not.toContain('Partial assessment');
+  });
+  it('renders accessible view controls with Table selected during SSR', () => {
+    const { body } = renderList();
+    expect(body).toContain('aria-label="Opportunity view"');
+    expect(body.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(body).toContain('Table');
+    expect(body).toContain('<table');
+  });
+  it('shows the coarse screen and explicit screened-out view without promoting a legacy fit score', () => {
+    const quote = 'This role requires working in the United States.';
+    const { body } = renderList({
+      reviewFilters: [
+        { label: 'Unsorted', value: 'unsorted' },
+        { label: 'Screened out', value: 'screened_out' },
+      ],
+      records: [
+        {
+          id: 'screened-role',
+          title: 'Platform role',
+          latestScore: 99,
+          sourceContentFingerprint: 'source',
+          sourceContentVersion: 1,
+          sourceContentJson: JSON.stringify({ descriptionRaw: quote }),
+          screeningProjection: {
+            version: 'opportunity-screening-projection/v1',
+            mode: 'coarse_screen',
+            sourceStatus: 'current',
+            status: 'clear_mismatch',
+            excludeFromDefaultTriage: true,
+            requestId: 'owned',
+            sourceContentFingerprint: 'source',
+            sourceContentVersion: 1,
+            sourceFingerprint: 'a'.repeat(64),
+            profileFingerprint: 'b'.repeat(64),
+            inputFingerprint: 'c'.repeat(64),
+            evidence: [
+              {
+                dimension: 'country_mismatch',
+                probability: 0.95,
+                confidence: 0.95,
+                witness: {
+                  id: 's0',
+                  path: 'sourceContentJson.descriptionRaw',
+                  text: quote,
+                },
+              },
+            ],
+            conditionalPaths: [],
+            uncertainties: [],
+            holdReasons: [],
+          },
+        },
+      ],
+    });
+    expect(body).not.toContain('Coarse screening:');
+    expect(body).toContain('Screened out');
+    expect(body).toContain('value="screened_out"');
+    expect(body).not.toContain(quote);
+    expect(body).not.toContain('99/100');
+  });
+  it.each([
+    {
+      matchReadiness: 'assessable',
+      requirementCount: 4,
+      candidateTruncated: false,
+      label: '72/100',
+      message: '',
+    },
+    {
+      matchReadiness: 'needs_extraction',
+      requirementCount: 0,
+      candidateTruncated: false,
+      label: 'Needs extraction',
+      message: 'No structured role requirements were extracted.',
+    },
+    {
+      matchReadiness: 'needs_evidence',
+      requirementCount: 4,
+      candidateTruncated: true,
+      label: 'Needs evidence',
+      message: 'Candidate evidence was truncated.',
+    },
+  ])('shows $label from the safe assessment without using a legacy score', ({
+    matchReadiness,
+    requirementCount,
+    candidateTruncated,
+    label,
+    message,
+  }) => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'opp-1',
+          title: 'Staff engineer',
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness,
+            coverage: {
+              requirementCount,
+              candidateTruncated,
+              postingTruncated: false,
+              requirementsTruncated: false,
+            },
+            ranking: { eligibilityPriority: 2, fitScore: 72 },
+            reason: 'Eligibility needs clarification',
+          },
+        },
+      ],
+    });
+    expect(body).toContain(label);
+    if (message) expect(body).toContain(message);
+    expect(body).toContain('Unknown');
+    expect(body).not.toContain('99/100');
+    if (matchReadiness !== 'assessable') expect(body).not.toContain('72/100');
+  });
+});
 
 describe('OpportunityCardList triage', () => {
   it('opens the deck as a modal over the list rather than navigating away', () => {
@@ -162,27 +364,229 @@ describe('OpportunityCardList bulk selection summary', () => {
   });
 });
 
-describe('OpportunityCardList row expansion', () => {
-  it('keeps the upstream expander button and its aria wiring', () => {
-    // Expansion state is seeded client-side by DataTable, so SSR renders every
-    // row collapsed; the chevron is CSS-only on the upstream button.
+describe('OpportunityCardList one-opportunity review rows', () => {
+  it('uses accessible upstream row activation without an expansion column', () => {
     const { body } = renderList();
-
-    const buttons =
-      body.match(/<button[^>]*data-table__expand-button[^>]*>/g) ?? [];
-    expect(buttons).toHaveLength(2);
-    for (const button of buttons) {
-      expect(button).toContain('aria-expanded="false"');
-      expect(button).toMatch(/aria-controls="[^"]+"/);
-    }
-    expect(body).toContain('aria-label="Expand Staff engineer"');
-    expect(body).toContain('aria-label="Expand Platform lead"');
+    expect(body).not.toContain('data-table__expand-button');
+    expect(body).not.toContain('Expand Staff engineer');
+    expect(body).not.toContain('opportunity-expanded');
+    expect(body).toContain('data-table__row--interactive');
+    expect(body).toMatch(/<tr[^>]*tabindex="0"/);
+    expect(body).toMatch(
+      /<span class="title-link(?:\s+[^"\s]+)*">[\s\S]*?Staff engineer/,
+    );
   });
 
-  it('does not render the relocated workflow forms for collapsed rows', () => {
+  it('keeps external posting navigation and checkbox selection outside row review', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'opp-1',
+          title: 'Staff engineer',
+          postingUrl: 'https://employer.example/jobs/1',
+        },
+      ],
+      onSelectedIdsChange: () => undefined,
+    });
+    expect(body).toContain('href="https://employer.example/jobs/1"');
+    expect(body).toContain('aria-label="View posting"');
+    expect(body).toContain('aria-label="Select Staff engineer"');
+    expect(body).not.toContain('data-table__expand-button');
+  });
+
+  it('does not duplicate application and fact forms in the row view', () => {
     const { body } = renderList();
 
     expect(body).not.toContain('createDraftApplication');
     expect(body).not.toContain('createFactIntake');
   });
+});
+
+const partialEvidence = {
+  version: 'opportunity-assessment-partial-projection/v1',
+  mode: 'partial',
+  sourceStatus: 'current',
+  criterionCount: 1,
+  supportedCriterionCount: 1,
+  unresolvedSourceClauseCount: 2,
+  requirements: [
+    {
+      id: 'criterion',
+      text: 'Maintain tested API integrations.',
+      support: 'supported',
+      postingCitations: [
+        {
+          excerpt: 'You must maintain tested API integrations.',
+          clauseId: 'clause-1',
+          start: 10,
+          end: 51,
+        },
+      ],
+      candidateCitations: [
+        {
+          sourceId: 'employment:1',
+          title: 'Platform engineer',
+          excerpt: 'Maintained tested API integrations.',
+          recordId: 'job-1',
+        },
+      ],
+    },
+  ],
+};
+
+it('keeps partial evidence details out of rows without promoting a legacy score', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'opp-1',
+        title: 'Engineer',
+        latestScore: 99,
+        partialAssessmentProjection: partialEvidence,
+      },
+    ],
+  });
+  expect(body).toContain('Partial assessment');
+  expect(body).toContain('Overall fit not yet established');
+  expect(body).not.toContain('Match assessment unavailable');
+  expect(body).not.toContain('No current assessment is available.');
+  expect(body).not.toContain('Run Assess to assess this posting');
+  expect(body).not.toContain('1 supported criterion of 1 assessed');
+  expect(body).not.toContain('2 unresolved source clauses');
+  expect(body).not.toContain('No overall fit conclusion.');
+  expect(body).not.toContain('You must maintain tested API integrations.');
+  expect(body).not.toContain('Maintained tested API integrations.');
+  expect(body).not.toContain('99/100');
+  expect(body).not.toContain('Strong match');
+});
+
+it.each([
+  { ...partialEvidence, sourceStatus: 'stale' },
+  { ...partialEvidence, criterionCount: 0 },
+])('preserves unavailable assessment messaging for invalid partial proof (%j)', (partialAssessmentProjection) => {
+  const { body } = renderList({
+    records: [
+      { id: 'partial-stale', title: 'Engineer', partialAssessmentProjection },
+    ],
+  });
+  expect(body).toContain('Match assessment unavailable');
+  expect(body).not.toContain('Partial assessment');
+  expect(body).not.toContain('Overall fit not yet established');
+});
+
+it('retains current full-assessment messaging when partial evidence is also present', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'full-current',
+        title: 'Engineer',
+        partialAssessmentProjection: partialEvidence,
+        assessmentProjection: {
+          sourceStatus: 'current',
+          eligibilityBucket: 'eligible',
+          matchReadiness: 'assessable',
+          ranking: { fitScore: 72, eligibilityPriority: 0 },
+          coverage: {
+            candidateTruncated: false,
+            postingTruncated: false,
+            requirementsTruncated: false,
+            requirementCount: 1,
+          },
+          reason: 'Current full assessment',
+        },
+      },
+    ],
+  });
+  expect(body).toContain('72/100');
+  expect(body).not.toContain('Overall fit not yet established');
+  expect(body).not.toContain('Partial assessment');
+});
+
+it('retains Cited support sorting without a column or evidence details', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'cited',
+        title: 'Engineer',
+        partialAssessmentProjection: partialEvidence,
+      },
+      {
+        id: 'unknown',
+        title: 'Unknown role',
+        assessmentJson: JSON.stringify(partialEvidence),
+      },
+    ],
+  });
+  expect(body).toContain('value="cited_support"');
+  expect(body).toContain('Cited support');
+  expect(body).not.toContain('data-column-id="citedSupport"');
+  expect(body).not.toContain('1 supported criterion of 1 assessed');
+  expect(body).not.toContain('2 unresolved source clauses');
+  expect(body).not.toContain('No current cited support assessment');
+  expect(body).not.toContain('No overall fit conclusion.');
+  expect(body).not.toContain('100%');
+});
+
+const sourceConditionalEligibility = {
+  sourceStatus: 'current',
+  sourceContentFingerprint: 'conditional-source',
+  sourceContentVersion: 3,
+  eligibilityBucket: 'location_restriction',
+  reason: 'This role requires working in the United States.',
+  conditionalPaths: [
+    {
+      kind: 'sponsorship',
+      status: 'offered',
+      facts: [
+        {
+          key: 'sponsorship_offered',
+          citations: [
+            {
+              quote: 'We offer visa sponsorship.',
+              start: 20,
+              end: 46,
+              hash: 'attested-hash',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  unresolvedConstraintFactKeys: [],
+};
+
+it('leaves source eligibility detail in the opportunity modal', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'conditional',
+        title: 'US role',
+        sourceContentFingerprint: 'conditional-source',
+        sourceContentVersion: 3,
+        sourceEligibilityProjection: sourceConditionalEligibility,
+      },
+    ],
+  });
+  expect(body).not.toContain('Posting work-location eligibility:');
+  expect(body).not.toContain('Location or authorization restriction');
+  expect(body).not.toContain('Sponsorship stated for this role');
+  expect(body).not.toContain('We offer visa sponsorship.');
+  expect(body).not.toContain('Eligible for your work location');
+  expect(body).not.toContain('Canada eligible');
+});
+
+it('hides cached conditional paths when the captured posting has changed on reload', () => {
+  const { body } = renderList({
+    records: [
+      {
+        id: 'conditional-stale',
+        title: 'US role',
+        sourceContentFingerprint: 'refreshed-source',
+        sourceContentVersion: 4,
+        sourceEligibilityProjection: sourceConditionalEligibility,
+      },
+    ],
+  });
+  expect(body).not.toContain('Posting work-location eligibility:');
+  expect(body).not.toContain('Sponsorship stated for this role');
+  expect(body).not.toContain('We offer visa sponsorship.');
 });

@@ -7,14 +7,16 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveLocalRuntimePaths } from '@happyvertical/smrt-app-runtime';
-import { request } from '@playwright/test';
+import { chromium, request } from '@playwright/test';
 import { resolveApplicationStateRoot } from '../../../scripts/smrt-runtime-identity.mjs';
+import { startSourceCoverageProvider } from './source-coverage-provider.js';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -34,6 +36,10 @@ export default async function setup() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'iolaus-mobile-e2e-')));
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  const coverageProvider =
+    process.env.IOLAUS_E2E_SOURCE_COVERAGE === '1'
+      ? await startSourceCoverageProvider(root)
+      : undefined;
   const environment: NodeJS.ProcessEnv = {};
   for (const key of [
     'PATH',
@@ -51,13 +57,45 @@ export default async function setup() {
     SMRT_BACKGROUND_JOBS: 'false',
     IOLAUS_ENABLE_DEMO_FIXTURES: '1',
     IOLAUS_E2E_FIXTURE: join(root, 'fixture.json'),
+    IOLAUS_DEMO_OWNER_EMAIL: 'mobile-qa@example.invalid',
+    IOLAUS_E2E_FOREIGN_AUTH: join(root, 'foreign-auth.json'),
     HOST: '127.0.0.1',
     PORT: String(port),
     ORIGIN: origin,
     TURBO_FORCE: 'true',
     CI: 'true',
     pnpm_config_verify_deps_before_run: 'false',
+    // Exercise the upstream PDF renderer with the existing test browser.
+    PUPPETEER_EXECUTABLE_PATH: chromium.executablePath(),
   });
+  if (coverageProvider) {
+    // Only this disposable test opt-in supplies fictional local transports.
+    // Native governance, principal checks and job execution stay enabled.
+    Object.assign(environment, {
+      IOLAUS_E2E_SOURCE_COVERAGE: '1',
+      HAVE_AI_BASE_URL: coverageProvider.baseUrl,
+      HAVE_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_BASE_URL:
+        coverageProvider.baseUrl,
+      HAVE_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_API_KEY:
+        'fictional-local-provider-key',
+      HAVE_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_MODEL: 'openai/gpt-6-luna',
+      TYPESAFE_API_KEY: 'fictional-local-provider-key',
+      OPPORTUNITY_ASSESSMENT_DECISIONS_ENABLED: 'true',
+      OPPORTUNITY_INTELLIGENCE_ENABLED: 'true',
+      OPPORTUNITY_INTELLIGENCE_RUN_CALL_LIMIT: '4',
+      OPPORTUNITY_INTELLIGENCE_RUN_INPUT_TOKEN_LIMIT: '80000',
+      OPPORTUNITY_INTELLIGENCE_RUN_SPEND_LIMIT_MICROS: '100000',
+      OPPORTUNITY_INTELLIGENCE_CRAWL_CALL_LIMIT: '100',
+      OPPORTUNITY_INTELLIGENCE_CRAWL_INPUT_TOKEN_LIMIT: '1000000',
+      OPPORTUNITY_INTELLIGENCE_CRAWL_SPEND_LIMIT_MICROS: '1000000',
+      OPPORTUNITY_INTELLIGENCE_CIRCUIT_REQUEST_THRESHOLD: '100',
+      OPPORTUNITY_INTELLIGENCE_CIRCUIT_INPUT_TOKEN_THRESHOLD: '1000000',
+      OPPORTUNITY_INTELLIGENCE_INPUT_COST_MICROS_PER_MILLION: '100000',
+      OPPORTUNITY_INTELLIGENCE_OUTPUT_COST_MICROS_PER_MILLION: '500000',
+      OPPORTUNITY_SKILL_DECISION_INPUT_COST_MICROS_PER_MILLION: '100000',
+      OPPORTUNITY_SKILL_DECISION_OUTPUT_COST_MICROS_PER_MILLION: '500000',
+    });
+  }
   const stateRoot = resolveApplicationStateRoot({
     appId: 'iolaus-e2e',
     dataDirectory: environment.SMRT_DATA_DIR,
@@ -151,6 +189,7 @@ export default async function setup() {
         child.kill('SIGTERM');
       });
     }
+    await coverageProvider?.close();
     if (removeData) {
       rmSync(stateRoot, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
@@ -166,7 +205,6 @@ export default async function setup() {
       'db:status',
     ]);
     await site('scripts/demo-permissions.ts');
-    await site('e2e/seed.ts');
     await startServer();
     const handoff = JSON.parse(
       readFileSync(join(stateRoot, 'onboarding.json'), 'utf8'),
@@ -187,11 +225,23 @@ export default async function setup() {
       });
       if (response.status() !== 303)
         throw new Error(`Owner setup failed (${response.status()})`);
-      await api.storageState({ path: join(root, 'auth.json') });
+      const ownerStorage = await api.storageState({
+        path: join(root, 'auth.json'),
+      });
+      const sessionCookies = ownerStorage.cookies.filter(
+        (cookie) => cookie.httpOnly && cookie.path === '/',
+      );
+      if (sessionCookies.length !== 1)
+        throw new Error('Expected exactly one native owner session cookie');
+      // Use the runtime fingerprint minted by the running server, whose
+      // database environment can differ from the seed CLI process.
+      environment.IOLAUS_E2E_SESSION_COOKIE_NAME = sessionCookies[0].name;
       chmodSync(join(root, 'auth.json'), 0o600);
     } finally {
       await api.dispose();
     }
+    // Owner setup and native membership must exist before private fixtures.
+    await site('e2e/seed.ts');
     const health = await fetch(`${origin}/api/admin-resources/tasks`, {
       headers: {
         cookie: JSON.parse(readFileSync(join(root, 'auth.json'), 'utf8'))
@@ -209,9 +259,23 @@ export default async function setup() {
     console.log(
       'E2E runtime ready: build, db:migrate, db:status, synthetic seed and authenticated task data passed.',
     );
+    process.env.IOLAUS_E2E_LOG = logPath;
     process.env.IOLAUS_E2E_ORIGIN = origin;
+    process.env.IOLAUS_E2E_FOREIGN_AUTH = environment.IOLAUS_E2E_FOREIGN_AUTH;
     process.env.IOLAUS_E2E_AUTH = join(root, 'auth.json');
     process.env.IOLAUS_E2E_FIXTURE = environment.IOLAUS_E2E_FIXTURE;
+    if (coverageProvider) {
+      const environmentPath = join(
+        root,
+        'source-coverage-runtime-environment.json',
+      );
+      writeFileSync(environmentPath, JSON.stringify(environment), {
+        mode: 0o600,
+      });
+      chmodSync(environmentPath, 0o600);
+      process.env.IOLAUS_E2E_RUNTIME_ENVIRONMENT = environmentPath;
+      process.env.IOLAUS_E2E_PROVIDER_EVENTS = coverageProvider.eventsPath;
+    }
     return () => cleanup(true);
   } catch (error) {
     try {

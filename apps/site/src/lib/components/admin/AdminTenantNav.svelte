@@ -1,5 +1,7 @@
 <script lang="ts">
 import type { ShellNavItem } from '@happyvertical/smrt-svelte/workspace';
+import ChevronDown from '@lucide/svelte/icons/chevron-down';
+import { adminNavigationIsActive } from '$lib/admin/category-navigation';
 import NavIcon from './NavIcon.svelte';
 
 let {
@@ -14,12 +16,37 @@ let {
   onNavigate?: () => void;
 }>();
 
+let openMenu = $state<string | null>(null);
+let menuToggle: HTMLButtonElement | null = null;
+
+$effect(() => {
+  currentHref;
+  openMenu = null;
+});
+
+function toggleMenu(item: ShellNavItem, event: MouseEvent): void {
+  menuToggle = event.currentTarget as HTMLButtonElement;
+  openMenu = openMenu === item.href ? null : item.href;
+}
+
+function handleMenuKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !openMenu) return;
+  event.preventDefault();
+  openMenu = null;
+  menuToggle?.focus();
+  // Let Escape reach AdminShell as well, so its overlay closes and restores
+  // the navigation trigger's focus after this disclosure has settled.
+}
+
 function isActive(item: ShellNavItem): boolean {
-  return item.href === currentHref || currentHref.startsWith(`${item.href}/`);
+  return adminNavigationIsActive(item.href, currentHref);
 }
 
 function hasActiveChild(item: ShellNavItem): boolean {
-  return item.children?.some((child) => isActive(child)) ?? false;
+  return (
+    item.children?.some((child) => isActive(child) || hasActiveChild(child)) ??
+    false
+  );
 }
 
 function isVisibleActive(item: ShellNavItem): boolean {
@@ -36,6 +63,7 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
 <nav class="admin-tenant-nav" class:collapsed aria-label="Admin navigation">
   {#each items as item (item.href)}
     <div class="admin-tenant-nav-section">
+      <div class="admin-tenant-nav-heading">
       <a
         href={item.href}
         class:active={isVisibleActive(item)}
@@ -57,15 +85,22 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
           {/if}
         {/if}
       </a>
-
       {#if item.children?.length && !collapsed}
-        <div class="admin-tenant-nav-children">
+        <button type="button" class="menu-toggle" class:open={openMenu === item.href} aria-label={`${item.label} sections`} aria-expanded={openMenu === item.href} aria-controls={`admin-menu-${item.label.toLowerCase()}`} onclick={(event) => toggleMenu(item, event)} onkeydown={handleMenuKeydown}>
+          <ChevronDown size={18} aria-hidden="true" />
+        </button>
+      {/if}
+      </div>
+
+      {#if item.children?.length && !collapsed && openMenu === item.href}
+        <div class="admin-tenant-nav-children" id={`admin-menu-${item.label.toLowerCase()}`}>
           {#each item.children as child (child.href)}
             <a
               href={child.href}
-              class:active={isActive(child)}
+              class:active={isVisibleActive(child)}
               aria-current={isActive(child) ? 'page' : undefined}
               title={child.description}
+              onkeydown={handleMenuKeydown}
               onclick={onNavigate}
             >
               {#if child.icon}
@@ -94,12 +129,20 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
     min-width: 0;
   }
 
+  .admin-tenant-nav-heading { display: flex; align-items: center; min-width: 0; }
+  .admin-tenant-nav-heading > a { flex: 1; }
+  .menu-toggle { display: grid; place-items: center; flex: 0 0 auto; width: 44px; height: 44px; border: 0; border-radius: var(--smrt-radius-medium); background: transparent; color: var(--smrt-color-on-surface-variant); cursor: pointer; }
+  .menu-toggle:hover { background: var(--smrt-color-surface-container-high); }
+  .menu-toggle.open :global(svg) { transform: rotate(180deg); }
+  .admin-tenant-nav a:focus-visible, .menu-toggle:focus-visible { outline: 2px solid var(--smrt-color-on-surface); outline-offset: 2px; }
+
   .admin-tenant-nav a {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--smrt-spacing-2);
     min-inline-size: 0;
+    min-height: 44px;
     padding: var(--smrt-spacing-2) var(--smrt-spacing-3);
     border-radius: var(--smrt-radius-medium);
     color: var(--smrt-color-on-surface);
@@ -111,13 +154,18 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
     justify-items: center;
   }
 
+  .admin-tenant-nav.collapsed .admin-tenant-nav-section { width: 100%; }
+  .admin-tenant-nav.collapsed .admin-tenant-nav-heading { width: 100%; justify-content: center; }
+
   .admin-tenant-nav.collapsed a {
     grid-template-columns: minmax(0, 1fr);
     place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: min(2.75rem, 100%);
+    height: 2.75rem;
     padding: 0;
   }
+
+  .admin-tenant-nav.collapsed a:focus-visible { outline-offset: -2px; }
 
   .admin-tenant-nav a:hover,
   .admin-tenant-nav a.active {

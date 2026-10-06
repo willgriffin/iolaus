@@ -7,6 +7,32 @@ import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
 import AdminResourcePage from './AdminResourcePage.svelte';
 
 describe('AdminResourcePage task loading', () => {
+  it('makes Screening Questions discoverable from the actual Preferences list', () => {
+    const resource = getAdminResource('preferences');
+    if (!resource) throw new Error('Expected Preferences resource');
+    const { body } = render(AdminResourcePage, {
+      props: {
+        data: {
+          activeTaskOwnerFilter: 'all',
+          activeTaskStatusFilter: 'all',
+          activeReviewFilter: 'all',
+          candidateSkills: [],
+          comboOptions: {},
+          opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+          pagination: createAdminListPagination(0, 1, 250),
+          records: [],
+          referenceOptions: {},
+          resource,
+        },
+      },
+      context: new Map([
+        [ADMIN_DOCK_CONTEXT, { setResourceContext: () => undefined }],
+      ]),
+    });
+    expect(body).toContain('href="/admin/preferences/screening-questions"');
+    expect(body).toContain('Screening Questions</a>');
+  });
+
   it('shows a retryable error instead of empty workflow lanes', () => {
     const resource = getAdminResource('tasks');
     if (!resource) throw new Error('Expected tasks admin resource fixture');

@@ -131,6 +131,7 @@ const mcpMocks = vi.hoisted(() => {
   }
 
   const state = {
+    effectivePermissions: [] as string[],
     applications: seedApplications(),
     generatorHandleToolCall: vi.fn(),
     generatorTools: vi.fn(async () =>
@@ -211,6 +212,34 @@ const mcpMocks = vi.hoisted(() => {
       state.tasks.length = 0;
       state.generatorHandleToolCall.mockClear();
       state.generatorTools.mockClear();
+    },
+  };
+});
+
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@happyvertical/smrt-users')>();
+  return {
+    ...actual,
+    UserCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'user-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    TenantCollection: {
+      create: async () => ({
+        get: async ({ id }: { id: string }) =>
+          id === 'tenant-1' ? { id, isActive: () => true } : null,
+      }),
+    },
+    MembershipCollection: {
+      create: async () => ({
+        findByUserAndTenant: async (userId: string, tenantId: string) =>
+          userId === 'user-1' && tenantId === 'tenant-1'
+            ? { roleId: 'role-1', status: 'active', userId, tenantId }
+            : null,
+      }),
     },
   };
 });
@@ -367,6 +396,38 @@ vi.mock('./resume-variant-workflow.js', () => ({
     resumeVariantWorkflowMocks.syncResumeVariantApplicationApprovals,
 }));
 
+// SMRT dependencies load their native runtime outside the app module mock, so
+// intercept its actual resolver method, rather than replacing the app export.
+// Its result is fixture-owned; the native context and exact operation catalog
+// assertion still run, and each deny case removes its required capability.
+beforeEach(async () => {
+  const { PermissionResolver } = await import('@happyvertical/smrt-users');
+  vi.spyOn(
+    PermissionResolver.prototype,
+    'resolvePermissions',
+  ).mockImplementation(async (userId: string, tenantId: string) => ({
+    permissions: new Set(
+      userId === 'user-1' && tenantId === 'tenant-1'
+        ? mcpMocks.effectivePermissions
+        : [],
+    ),
+    membershipId: 'membership-fixture',
+    roleId: 'role-1',
+    groupIds: [],
+    deniedPermissionIds: [],
+    inheritedFromTenantId: null,
+    ancestorReadFromTenantIds: [],
+  }));
+});
+
+/** Install this call's explicit live permission fixture, then use the real service. */
+function callMcpToolWithAuthorityFixture(
+  options: Parameters<typeof callMcpTool>[0],
+) {
+  mcpMocks.effectivePermissions = [...(options.permissions ?? [])];
+  return callMcpTool(options);
+}
+
 describe('MCP public tool policy', () => {
   beforeEach(() => {
     mcpMocks.reset();
@@ -405,7 +466,7 @@ describe('MCP public tool policy', () => {
     sourceReadMocks.sourceCrawlStatus.mockResolvedValue({ items: [] });
   });
 
-  it('lists only the two bounded source-read extensions for authenticated MCP clients', async () => {
+  it('keeps private model CRUD out of the generated MCP catalog and adds only bounded source reads', async () => {
     const anonymous = await listMcpTools({ authenticated: false });
     expect(anonymous.map((tool) => tool.name)).not.toContain(
       'job_search_list_source_health',
@@ -413,9 +474,13 @@ describe('MCP public tool policy', () => {
 
     const authenticated = await listMcpTools({ authenticated: true });
     const names = authenticated.map((tool) => tool.name);
-    // Decorator `mcp` includes decide which generated tools survive the filter.
-    expect(names).toContain('resumeprofile_list');
-    expect(names).toContain('resumeprofile_update');
+    // Global source and catalog operations may be generated, but every
+    // candidate-owned model stays behind the scoped workspace workflows.
+    expect(names).toContain('source_update');
+    expect(names).toContain('opportunity_update');
+    expect(names).not.toContain('application_update');
+    expect(names).not.toContain('resumevariant_update');
+    expect(names).not.toContain('resumeprofile_list');
     expect(names).not.toContain('candidateanswer_list');
     expect(names).not.toContain('user_list');
     const extensions = authenticated.filter((tool) =>
@@ -452,7 +517,7 @@ describe('MCP public tool policy', () => {
       providers: [{ created: 3, provider: 'greenhouse' }],
     });
 
-    const response = await callMcpTool({
+    const response = await callMcpToolWithAuthorityFixture({
       arguments: { historyLimit: 20, limit: 25, query: 'greenhouse' },
       name: 'job_search_list_source_health',
       permissions: ['sources.read', 'sourcecrawls.read'],
@@ -483,7 +548,7 @@ describe('MCP public tool policy', () => {
       limit: 20,
     });
 
-    const response = await callMcpTool({
+    const response = await callMcpToolWithAuthorityFixture({
       arguments: {
         limit: 20,
         sourceId: '11111111-1111-4111-8111-111111111111',
@@ -502,7 +567,7 @@ describe('MCP public tool policy', () => {
       status: 400,
     });
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: {},
         name: 'job_search_source_crawl_status',
         permissions: ['sources.read', 'sourcecrawls.read'],
@@ -517,7 +582,7 @@ describe('MCP public tool policy', () => {
 
   it('refuses source reads without both required read permissions', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { limit: 1 },
         name: 'job_search_list_source_health',
         permissions: ['sources.read'],
@@ -530,7 +595,7 @@ describe('MCP public tool policy', () => {
 
   it('refuses generated MCP writes the owner principal lacks permission for', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { accountStatus: 'needs_2fa', id: 'source-1' },
         name: 'source_update',
         permissions: ['sources.read'],
@@ -541,7 +606,7 @@ describe('MCP public tool policy', () => {
     expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
 
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: { accountStatus: 'needs_2fa', id: 'source-1' },
         name: 'source_update',
         permissions: ['sources.update'],
@@ -620,16 +685,6 @@ describe('MCP public tool policy', () => {
     ).rejects.toThrowError(
       'List fields must contain string, number, or boolean values.',
     );
-
-    await expect(
-      assertMcpWorkflowPayload(
-        'preferencerule_create',
-        {
-          ruleJson: { generatedAt: new Date() },
-        },
-        { id: 'user-1' },
-      ),
-    ).rejects.toThrowError('JSON fields must be serializable JSON.');
   });
 
   it('rejects MCP mutations of AgentRun audit records', async () => {
@@ -921,48 +976,13 @@ describe('MCP public tool policy', () => {
     );
   });
 
-  it('rejects unsafe MCP resume variant updates before tool execution', async () => {
-    resumeVariantWorkflowMocks.resumeVariantWriteViolation.mockResolvedValueOnce(
-      'Submitted or closed applications cannot have selected resume variants changed.',
-    );
-
+  it('rejects invalid MCP source account status before generated execution', async () => {
+    const args: Record<string, unknown> = {
+      accountStatus: 'needs_magic',
+      id: 'source-1',
+    };
     await expect(
-      assertMcpWorkflowPayload(
-        'resumevariant_update',
-        {
-          id: 'variant-1',
-          name: 'Changed variant',
-        },
-        { id: 'user-1' },
-      ),
-    ).rejects.toThrowError(
-      'Submitted or closed applications cannot have selected resume variants changed.',
-    );
-
-    expect(
-      resumeVariantWorkflowMocks.resumeVariantWriteViolation,
-    ).toHaveBeenCalledWith('variant-1');
-    await expect(
-      assertMcpWorkflowPayload(
-        'resumevariant_update',
-        { name: 'Missing id' },
-        { id: 'user-1' },
-      ),
-    ).rejects.toThrowError(
-      'Resume variant update requires a resume variant id.',
-    );
-  });
-
-  it('rejects invalid MCP source account status before calling the generator', async () => {
-    await expect(
-      callMcpTool({
-        arguments: {
-          accountStatus: 'needs_magic',
-          id: 'source-1',
-        },
-        name: 'source_update',
-        ...owner,
-      }),
+      assertMcpWorkflowPayload('source_update', args, { id: 'user-1' }),
     ).rejects.toThrowError('Invalid account status.');
 
     expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
@@ -974,7 +994,7 @@ describe('MCP public tool policy', () => {
 
   it('rejects non-object MCP tool arguments before calling the generator', async () => {
     await expect(
-      callMcpTool({
+      callMcpToolWithAuthorityFixture({
         arguments: [],
         name: 'source_update',
         ...owner,
@@ -985,250 +1005,48 @@ describe('MCP public tool policy', () => {
     expect(scheduleMocks.syncSourceSchedule).not.toHaveBeenCalled();
   });
 
-  it('syncs selected application approvals after successful MCP resume variant writes', async () => {
-    await callMcpTool({
-      arguments: {
-        id: 'variant-1',
-        name: 'Renamed variant',
-      },
-      name: 'resumevariant_update',
-      ...owner,
-    });
-
-    expect(
-      resumeVariantWorkflowMocks.resumeVariantWriteViolation,
-    ).toHaveBeenCalledWith('variant-1');
-    expect(
-      resumeVariantWorkflowMocks.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('variant-1');
-
-    await callMcpTool({
-      arguments: {
-        name: 'New variant',
-      },
-      name: 'resumevariant_create',
-      ...owner,
-    });
-
-    expect(
-      resumeVariantWorkflowMocks.syncResumeVariantApplicationApprovals,
-    ).toHaveBeenCalledWith('resumevariant_create-created');
-  });
-
-  it('declares the workflow side-effect operations of every generated mutation tool', () => {
+  it('maps only global generated operations and bounded source-read permissions', () => {
     const slugs = (name: string) =>
       (mcpToolOperations(name) ?? []).map(
         (operation) => `${operation.collection}.${operation.action}`,
       );
 
-    expect(slugs('application_update')).toEqual([
-      'applications.update',
-      'applications.read',
-      'tasks.read',
-      'tasks.create',
-      'tasks.update',
-      'opportunities.read',
-      'opportunities.update',
-    ]);
-    expect(slugs('application_create')).toContain('tasks.create');
-    expect(slugs('opportunity_update')).toEqual([
-      'opportunities.update',
-      'opportunities.read',
-      'tasks.read',
-      'tasks.create',
-      'tasks.update',
-    ]);
-    expect(slugs('source_create')).toEqual([
-      'sources.create',
-      'sources.read',
+    expect(slugs('source_update')).toEqual([
       'sources.update',
+      'sources.read',
       'tasks.read',
       'tasks.create',
       'tasks.update',
     ]);
-    expect(slugs('resumevariant_update')).toEqual([
-      'resumevariants.update',
-      'applications.read',
-      'applications.update',
-      'tasks.read',
-      'tasks.create',
-      'tasks.update',
-      'opportunities.read',
-      'opportunities.update',
+    expect(slugs('opportunity_update')).toEqual(['opportunities.update']);
+    expect(slugs('job_search_list_source_health')).toEqual([
+      'sources.read',
+      'sourcecrawls.read',
     ]);
-    expect(slugs('resumeasset_update')).toEqual([
-      'resumeassets.update',
-      'resumeassets.read',
-    ]);
-    // Deletes and classes without workflow hooks keep the primary operation.
-    expect(slugs('application_delete')).toEqual(['applications.delete']);
-    expect(slugs('resumeasset_create')).toEqual(['resumeassets.create']);
-    expect(slugs('company_update')).toEqual(['companies.update']);
-    expect(slugs('task_get')).toEqual(['tasks.read']);
-    expect(slugs('resumeprofile_update')).toEqual(['resumeprofiles.update']);
-    expect(slugs('resumeposition_list')).toEqual(['resumepositions.read']);
+    expect(mcpToolOperations('application_update')).toBeNull();
+    expect(mcpToolOperations('resumevariant_update')).toBeNull();
+    expect(mcpToolOperations('resumeprofile_update')).toBeNull();
     expect(mcpToolOperations('candidateanswer_list')).toBeNull();
   });
 
-  it('refuses an application update whose task sync the principal may not perform', async () => {
-    await expect(
-      callMcpTool({
-        arguments: { id: 'app-approved', status: 'approved' },
-        name: 'application_update',
-        permissions: without('tasks.create', 'tasks.read', 'tasks.update'),
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-
-    expect(mcpMocks.tasks).toEqual([]);
-    expect(
-      applicationConcurrencyMocks.commitApplicationIfCurrent,
-    ).not.toHaveBeenCalled();
+  it('rejects private generic CRUD before authorization or execution', async () => {
+    for (const name of [
+      'application_update',
+      'resumevariant_update',
+      'resumeprofile_list',
+      'candidateanswer_list',
+    ]) {
+      await expect(
+        callMcpToolWithAuthorityFixture({
+          arguments: { id: 'private-record' },
+          name,
+          user: { id: 'user-1' },
+        }),
+      ).rejects.toMatchObject({
+        message: `Unknown MCP tool: ${name}`,
+        status: 404,
+      });
+    }
     expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
-    expect(mcpMocks.applications.get('app-approved')).toMatchObject({
-      status: 'approved',
-    });
-
-    // A submitted application's sync re-statuses its opportunity.
-    await expect(
-      callMcpTool({
-        arguments: { id: 'app-approved', notes: 'Follow up' },
-        name: 'application_update',
-        permissions: without('opportunities.update'),
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-    expect(
-      applicationConcurrencyMocks.commitApplicationIfCurrent,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('refuses opportunity and source writes whose side effects the principal may not perform', async () => {
-    await expect(
-      callMcpTool({
-        arguments: { id: 'opp-1', status: 'recommended' },
-        name: 'opportunity_update',
-        permissions: ['opportunities.read', 'opportunities.update'],
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-    expect(
-      workflowMocks.syncRecommendedOpportunityDecisionTasks,
-    ).not.toHaveBeenCalled();
-
-    await expect(
-      callMcpTool({
-        arguments: { accountStatus: 'needs_2fa', id: 'source-1' },
-        name: 'source_update',
-        permissions: ['sources.read', 'sources.update'],
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-    expect(scheduleMocks.syncSourceSchedule).not.toHaveBeenCalled();
-
-    await expect(
-      callMcpTool({
-        arguments: { name: 'Greenhouse' },
-        name: 'source_create',
-        permissions: without('sources.update'),
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-
-    await expect(
-      callMcpTool({
-        arguments: { id: 'variant-1', name: 'Renamed variant' },
-        name: 'resumevariant_update',
-        permissions: without('applications.update'),
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
-    expect(
-      resumeVariantWorkflowMocks.reserveResumeVariantApplicationWrite,
-    ).not.toHaveBeenCalled();
-
-    expect(mcpMocks.tasks).toEqual([]);
-    expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
-  });
-
-  it('syncs workflow side effects after MCP writes by a principal holding the composite operation set', async () => {
-    await callMcpTool({
-      arguments: {
-        id: 'app-approved',
-        status: 'approved',
-      },
-      name: 'application_update',
-      ...owner,
-    });
-
-    expect(mcpMocks.tasks).toContainEqual(
-      expect.objectContaining({
-        applicationId: 'app-approved',
-        taskType: 'submit_application',
-      }),
-    );
-
-    await callMcpTool({
-      arguments: {
-        accountStatus: 'needs_2fa',
-        id: 'source-1',
-      },
-      name: 'source_update',
-      ...owner,
-    });
-
-    expect(mcpMocks.tasks).toContainEqual(
-      expect.objectContaining({
-        sourceId: 'source-1',
-        taskType: 'account_setup',
-      }),
-    );
-    expect(scheduleMocks.syncSourceSchedule).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountStatus: 'needs_2fa',
-        id: 'source-1',
-      }),
-    );
-
-    await callMcpTool({
-      arguments: {
-        id: 'opp-1',
-        status: 'recommended',
-      },
-      name: 'opportunity_update',
-      ...owner,
-    });
-
-    expect(
-      workflowMocks.syncRecommendedOpportunityDecisionTasks,
-    ).toHaveBeenCalled();
-  });
-
-  it('does not let a stale MCP application update restore final approval', async () => {
-    applicationConcurrencyMocks.commitApplicationIfCurrent.mockResolvedValueOnce(
-      false,
-    );
-
-    await expect(
-      callMcpTool({
-        arguments: { id: 'app-approved', notes: 'Stale edit' },
-        name: 'application_update',
-        ...owner,
-      }),
-    ).rejects.toMatchObject({
-      message:
-        'Application changed before this update could be saved. Reload and review the current application.',
-      status: 409,
-    });
-    expect(mcpMocks.applications.get('app-approved')).toMatchObject({
-      finalApprovalKind: 'final_submission',
-      status: 'approved',
-    });
   });
 });

@@ -1,14 +1,19 @@
 import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'agent_runs',
   // Agent runs are system-authored audit records. Workflow services create and
   // advance them internally; public data surfaces can only inspect them.
-  api: { include: ['list', 'get'] },
-  cli: { include: ['list', 'get'] },
-  mcp: { include: ['list', 'get'] },
+  api: { include: [] },
+  cli: { include: [] },
+  mcp: { include: [] },
 })
+@TenantScoped()
 export class AgentRun extends SmrtObject {
+  @tenantId() tenantId = '';
+  @field({ type: 'text', required: true }) ownerUserId = '';
+  @field({ type: 'text', required: true }) candidateProfileId = '';
   @field({ type: 'text' })
   runType = 'other';
   @field({ type: 'text' })

@@ -6,6 +6,7 @@ import {
   type ResourceField,
   referenceForField,
 } from '$lib/admin/resources';
+import { workflowLabel } from '$lib/objects/workflow';
 
 type AdminRecord = Record<string, unknown>;
 
@@ -77,6 +78,12 @@ function displayDate(value: string): string {
 function displayText(): string {
   if (!value) return '';
   if (isDateField()) return displayDate(value);
+  if (
+    field.key === 'assigneeRole' ||
+    field.key === 'blockerOwnerRole' ||
+    field.key === 'submittedByRole'
+  )
+    return workflowLabel(value);
   if (field.kind === 'select') return humanizedValue(value);
   if (compact && value.length > 96) return `${value.slice(0, 93)}...`;
   return value;

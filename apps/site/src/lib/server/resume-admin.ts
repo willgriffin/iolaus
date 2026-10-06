@@ -3,12 +3,21 @@ import type { FilesystemInterface } from '@happyvertical/files';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
-import type { TailoringConfig } from '@willgriffin/iolaus-resume';
+import type { ResumeSource, TailoringConfig } from '@willgriffin/iolaus-resume';
+import { createCandidateSkillMatcher } from '$lib/skill-matching';
+import { isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
+import {
+  getPrivateRecord,
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 import {
   getPublishedResumeAsset,
   getResumeTailoringConfig,
   listResumeAssets,
+  loadAdminResumeSource,
   loadPublishedResumeSource,
   type ResumeRecord,
 } from './resume-data.js';
@@ -28,11 +37,15 @@ interface GenerateResumeAssetOptions {
    * their opportunity lifecycle lock without coupling canonical resume work to
    * that lock.
    */
-  assertWriteAllowed?: () => void;
+  assertWriteAllowed?: () => void | Promise<void>;
   failureNote?: string;
   filesystem?: FilesystemInterface;
   sourcePath?: string;
+  /** Required when this creates an application-owned private artifact. */
+  subject?: WorkspaceSubject;
   targetOpportunityId?: string;
+  /** Extracted posting terms used only to prioritize existing candidate tags. */
+  targetSkillTerms?: readonly string[];
   tailoring?: TailoringConfig;
   tailoringId?: string;
   tailoringName?: string;
@@ -317,16 +330,61 @@ export function nextPublishedAssetStates(
     });
 }
 
+function withTargetSkillEmphasis(
+  source: ResumeSource,
+  config: TailoringConfig | undefined,
+  targetTerms: readonly string[] | undefined,
+): TailoringConfig | undefined {
+  // An explicit empty emphasis list is also an owner choice. Never replace
+  // authored overrides, exclusions, pins or content with inferred values.
+  if (!targetTerms?.length || Object.hasOwn(config ?? {}, 'emphasizeTags'))
+    return config;
+  const matchesTarget = createCandidateSkillMatcher(targetTerms);
+  const skills = source.skills.groups.flatMap((group) => group.skills);
+  const labelsById = new Map(skills.map((skill) => [skill.id, skill.label]));
+  const existingTags = new Set([
+    ...skills.map((skill) => skill.id),
+    ...source.experience.positions.flatMap((position) => [
+      ...position.achievements.flatMap((achievement) => achievement.tags),
+      ...(position.projects ?? []).flatMap((project) =>
+        project.achievements.flatMap((achievement) => achievement.tags),
+      ),
+    ]),
+  ]);
+  const emphasizeTags = [...existingTags].filter(
+    (tag) => matchesTarget(tag) || matchesTarget(labelsById.get(tag) ?? ''),
+  );
+  return emphasizeTags.length ? { ...config, emphasizeTags } : config;
+}
+
 export async function generateResumeAsset(
   options: GenerateResumeAssetOptions = {},
 ) {
-  const source = await loadPublishedResumeSource();
+  // An application packet can never create a tenant-only asset: the same
+  // owner/profile key must be written atomically with its artifact metadata.
+  const subject =
+    options.subject || options.applicationId || isSharedHosted()
+      ? requireWorkspaceSubject(options.subject as WorkspaceSubject)
+      : undefined;
+  const source = subject
+    ? await loadAdminResumeSource(undefined, subject)
+    : await loadPublishedResumeSource();
+  if (!source)
+    error(400, 'No resume source is available for this candidate profile.');
+  await options.assertWriteAllowed?.();
   const tailoringRecord = options.tailoringId
-    ? await getResumeTailoringConfig(options.tailoringId)
-    : await ensureCanonicalResumeTailoringConfig();
-  const tailoring = options.tailoring
-    ? { ...(tailoringRecord?.config ?? {}), ...options.tailoring }
-    : tailoringRecord?.config;
+    ? await getResumeTailoringConfig(options.tailoringId, subject)
+    : await ensureCanonicalResumeTailoringConfig(subject);
+  if (options.tailoringId && !tailoringRecord) {
+    error(404, 'Resume tailoring config not found.');
+  }
+  const tailoring = withTargetSkillEmphasis(
+    source,
+    options.tailoring
+      ? { ...(tailoringRecord?.config ?? {}), ...options.tailoring }
+      : tailoringRecord?.config,
+    options.targetSkillTerms,
+  );
   const collection = await getCollection('ResumeAsset');
   const now = new Date();
   const title = titleForAsset(
@@ -335,7 +393,7 @@ export async function generateResumeAsset(
       stringValue(tailoring?.name),
   );
   const tailoringId = options.tailoringId || stringValue(tailoringRecord?.id);
-  options.assertWriteAllowed?.();
+  await options.assertWriteAllowed?.();
   const asset = await collection.create({
     applicationId: stringValue(options.applicationId),
     assetType: 'resume',
@@ -345,6 +403,13 @@ export async function generateResumeAsset(
     slug: `resume-${randomUUID()}`,
     sourcePath: options.sourcePath ?? 'admin',
     status: 'generated',
+    ...(subject
+      ? {
+          candidateProfileId: subject.profileId,
+          ownerUserId: subject.userId,
+          tenantId: subject.tenantId,
+        }
+      : {}),
     targetOpportunityId: stringValue(options.targetOpportunityId),
     tailoringId,
     title,
@@ -363,6 +428,7 @@ export async function generateResumeAsset(
     const filesystem = options.filesystem ?? (await getResumeFilesystem());
     const { generateResumeArtifacts, getDefaultPuppeteerExecutablePath } =
       await import('@willgriffin/iolaus-resume');
+    await options.assertWriteAllowed?.();
     const artifact = await generateResumeArtifacts({
       executablePath: await getDefaultPuppeteerExecutablePath(),
       filesystem,
@@ -378,7 +444,7 @@ export async function generateResumeAsset(
     });
 
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
     } catch (cause) {
       await Promise.all(
         [
@@ -413,10 +479,10 @@ export async function generateResumeAsset(
       textPath: artifact.textPath,
       title,
     });
-    options.assertWriteAllowed?.();
+    await options.assertWriteAllowed?.();
     await asset.save();
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
     } catch (cause) {
       await Promise.all([
         (async () => {
@@ -447,7 +513,7 @@ export async function generateResumeAsset(
     // If a guarded application workflow lost its lifecycle lock, do not turn
     // this into a visible failed asset after another request may have closed
     // the application.
-    options.assertWriteAllowed?.();
+    await options.assertWriteAllowed?.();
     Object.assign(asset, {
       notes:
         options.failureNote ??
@@ -455,7 +521,7 @@ export async function generateResumeAsset(
       status: 'failed',
     });
     try {
-      options.assertWriteAllowed?.();
+      await options.assertWriteAllowed?.();
       await asset.save();
     } catch {
       // Preserve the generation failure when its status cannot be persisted.
@@ -469,6 +535,8 @@ export async function generateResumeAsset(
 export async function regenerateResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ) {
   const id = assetId.trim();
   if (!id) {
@@ -476,14 +544,22 @@ export async function regenerateResumeAsset(
   }
 
   const collection = await getCollection('ResumeAsset');
-  const asset = await collection.get(id);
+  const scopedSubject = subject ? requireWorkspaceSubject(subject) : undefined;
+  if (isSharedHosted() && !scopedSubject)
+    requireWorkspaceSubject(subject as WorkspaceSubject);
+  const asset = scopedSubject
+    ? await getPrivateRecord('ResumeAsset', id, scopedSubject)
+    : await collection.get(id);
   if (!asset) {
     error(404, 'Resume asset not found.');
   }
 
   const record = asset as unknown as Record<string, unknown>;
   return await generateResumeAsset({
+    assertWriteAllowed,
+    applicationId: stringValue(record.applicationId),
     filesystem,
+    subject: scopedSubject,
     tailoringId: stringValue(record.tailoringId),
     targetOpportunityId: stringValue(record.targetOpportunityId),
   });
@@ -648,29 +724,53 @@ async function markResumeAssetFailed(
 export async function publishResumeAsset(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ) {
   if (!assetId) {
     error(400, 'Missing resume asset ID.');
   }
 
   return await withCanonicalResumePublicationLock(
-    async () => await publishResumeAssetUnlocked(assetId, filesystem),
+    async () =>
+      await publishResumeAssetUnlocked(
+        assetId,
+        filesystem,
+        subject,
+        assertWriteAllowed,
+      ),
   );
 }
 
 async function publishResumeAssetUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ): Promise<ResumeRecord> {
-  return (await publishResumeAssetWithPdfUnlocked(assetId, filesystem)).asset;
+  return (
+    await publishResumeAssetWithPdfUnlocked(
+      assetId,
+      filesystem,
+      subject,
+      assertWriteAllowed,
+    )
+  ).asset;
 }
 
 async function publishResumeAssetWithPdfUnlocked(
   assetId: string,
   filesystem?: FilesystemInterface,
+  subject?: WorkspaceSubject,
+  assertWriteAllowed?: GenerateResumeAssetOptions['assertWriteAllowed'],
 ): Promise<PublishedResumeAsset> {
   const collection = await getCollection('ResumeAsset');
-  const asset = await collection.get(assetId);
+  const scopedSubject = subject ? requireWorkspaceSubject(subject) : undefined;
+  if (isSharedHosted() && !scopedSubject)
+    requireWorkspaceSubject(subject as WorkspaceSubject);
+  const asset = scopedSubject
+    ? await getPrivateRecord('ResumeAsset', assetId, scopedSubject)
+    : await collection.get(assetId);
   if (!asset) {
     error(404, 'Resume asset not found.');
   }
@@ -693,7 +793,7 @@ async function publishResumeAssetWithPdfUnlocked(
   const pdf = await fs.read(pdfPath, { raw: true });
 
   const now = new Date();
-  const assets = await listResumeAssets();
+  const assets = await listResumeAssets(scopedSubject);
   const nextStates = nextPublishedAssetStates(assets, assetId, now);
   await Promise.all(
     nextStates.map(async (state) => {
@@ -701,13 +801,22 @@ async function publishResumeAssetWithPdfUnlocked(
       const existing = assets.find((asset) => asset.id === state.id);
       if (!existing?.isPublished && existing?.status !== 'published') return;
       const record = await collection.get(state.id);
-      if (!record) return;
+      if (
+        !record ||
+        (scopedSubject &&
+          !recordOwnedBySubject(
+            record as unknown as Record<string, unknown>,
+            scopedSubject,
+          ))
+      )
+        return;
       const mutable = record as unknown as Record<string, unknown> & {
         save: () => Promise<void>;
       };
       mutable.isPublished = state.isPublished;
       mutable.status = state.status;
       mutable.publishedAt = state.publishedAt;
+      await assertWriteAllowed?.();
       await record.save();
     }),
   );
@@ -717,15 +826,18 @@ async function publishResumeAssetWithPdfUnlocked(
     publishedAt: now,
     status: 'published',
   });
-  await asset.save();
+  await assertWriteAllowed?.();
+  await assetRecord.save();
 
   // The asset PDF is immutable and is the source of truth for public reads.
   // Update this compatibility alias only after publication state is durable, so
   // a failed state transition cannot expose an uncommitted candidate.
+  await assertWriteAllowed?.();
   try {
-    await fs.write(PUBLISHED_RESUME_PDF_PATH, bufferValue(pdf), {
-      createParents: true,
-    });
+    if (!isSharedHosted())
+      await fs.write(PUBLISHED_RESUME_PDF_PATH, bufferValue(pdf), {
+        createParents: true,
+      });
   } catch {
     // Public delivery reads the immutable published asset first; an alias
     // refresh failure must not invalidate the durable publication state.

@@ -22,6 +22,11 @@ import {
   autoSubmitFeatureActive,
   resolveAutoSubmitConfig,
 } from './auto-submit-config.js';
+import {
+  recordOwnedBySubject,
+  requireWorkspaceSubject,
+  type WorkspaceSubject,
+} from './private-workspace.js';
 
 const ACCOUNT_OK_STATUSES = new Set(['none_needed', 'active', 'logged_in']);
 const ALREADY_SUBMITTED_STATUSES = new Set([
@@ -69,11 +74,15 @@ export interface AutoSubmitEligibility {
 }
 
 export interface CanAutoSubmitOptions {
+  subject: WorkspaceSubject;
   config?: AutoSubmitConfig;
   /** Injected ATS detection; defaults to `detectJobBoard`. */
   detect?: (url: string) => Promise<{ type?: unknown } | null>;
   /** Injected application-resume presence check; defaults to its selected PDF. */
-  resumeExists?: (application: Record<string, unknown>) => Promise<boolean>;
+  resumeExists?: (
+    application: Record<string, unknown>,
+    subject: WorkspaceSubject,
+  ) => Promise<boolean>;
   /**
    * Verifies that the current material fingerprints still equal the snapshot
    * taken by final approval. The production default loads the application
@@ -81,6 +90,7 @@ export interface CanAutoSubmitOptions {
    */
   approvalMaterialsCurrent?: (
     application: Record<string, unknown>,
+    subject: WorkspaceSubject,
   ) => Promise<boolean>;
 }
 
@@ -191,6 +201,7 @@ async function defaultDetect(url: string): Promise<{ type?: unknown } | null> {
 
 async function defaultApprovalMaterialsCurrent(
   application: Record<string, unknown>,
+  subject: WorkspaceSubject,
 ): Promise<boolean> {
   const applicationId = stringValue(application.id);
   if (!applicationId) return false;
@@ -198,7 +209,10 @@ async function defaultApprovalMaterialsCurrent(
     const { finalApplicationApprovalMaterialsAreCurrent } = await import(
       './application-review.js'
     );
-    return await finalApplicationApprovalMaterialsAreCurrent(applicationId);
+    return await finalApplicationApprovalMaterialsAreCurrent(
+      applicationId,
+      subject,
+    );
   } catch {
     return false;
   }
@@ -215,8 +229,15 @@ function ineligible(
 
 export async function canAutoSubmit(
   application: Record<string, unknown>,
-  options: CanAutoSubmitOptions = {},
+  options: CanAutoSubmitOptions,
 ): Promise<AutoSubmitEligibility> {
+  const subject = requireWorkspaceSubject(options.subject);
+  if (!recordOwnedBySubject(application, subject)) {
+    return ineligible(
+      'not_approved',
+      'Application is outside the active workspace.',
+    );
+  }
   const config = options.config ?? resolveAutoSubmitConfig();
   if (!autoSubmitFeatureActive(config)) {
     return ineligible('feature_off', 'Auto-submit feature flag is off.');
@@ -248,7 +269,7 @@ export async function canAutoSubmit(
 
   const approvalMaterialsCurrent =
     options.approvalMaterialsCurrent ?? defaultApprovalMaterialsCurrent;
-  if (!(await approvalMaterialsCurrent(application))) {
+  if (!(await approvalMaterialsCurrent(application, subject))) {
     return ineligible(
       'approval_materials_changed',
       'Application materials changed or could not be verified after final approval.',
@@ -280,7 +301,7 @@ export async function canAutoSubmit(
   }
 
   const resumeExists = options.resumeExists ?? applicationResumePdfExists;
-  if (!(await resumeExists(application))) {
+  if (!(await resumeExists(application, subject))) {
     return ineligible(
       'resume_missing',
       'No resume artifact is available to attach.',

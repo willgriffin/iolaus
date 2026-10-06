@@ -1,4 +1,8 @@
-import { getAppConfig, getAuthConfiguration } from './app-config.js';
+import {
+  getAppConfig,
+  getAuthConfiguration,
+  isSharedHosted,
+} from './app-config.js';
 
 type AdministrativeUser = {
   email?: string | null;
@@ -76,8 +80,10 @@ export function administrativeSessionFailure(
   }
 
   // Local installation has a single loopback-only owner created by the local
-  // bootstrap. Every remotely reachable profile is instead bound to the OIDC
-  // allowlist above; it never inherits local bootstrap authority.
+  // bootstrap. A shared hosted installation makes the active tenant membership
+  // the user workspace boundary. A private hosted installation remains bound
+  // to the operator allowlist, which is rechecked on every protected request.
   if (getAppConfig().runtimeProfile === 'local') return null;
+  if (isSharedHosted()) return null;
   return isConfiguredOidcAdminEmail(session.user?.email) ? null : 'forbidden';
 }

@@ -5,22 +5,42 @@ import {
 } from '$lib/opportunity-filters';
 
 const mocks = vi.hoisted(() => ({
+  assessmentProjections: vi.fn(async (_options: unknown) => new Map()),
+  assessmentQueryContext: vi.fn(async () => ({
+    assessmentCandidateMaterialFingerprint: 'candidate-material-test',
+    assessmentPreferencesFingerprint: 'preferences-test',
+  })),
   attachOpportunityContext: vi.fn(async (records: unknown[]) => records),
   count: vi.fn(async () => 0),
+  citedSupport: vi.fn(async () => new Map()),
+  sourceEligibility: vi.fn(async () => new Map()),
+  screeningExclusions: vi.fn(async () => new Map()),
   dbConfig: vi.fn(() => ({ type: 'postgres' })),
-  currentScores: vi.fn(async () => new Map()),
+  currentScores: vi.fn(async (_ids: string[]) => new Map()),
   listAdminRecords: vi.fn(async () => [] as Record<string, unknown>[]),
   opportunities: vi.fn(async () => [] as Record<string, unknown>[]),
   pageIds: vi.fn(async () => [] as string[]),
   requireAdminResource: vi.fn(() => ({ slug: 'opportunities' })),
+  reviewOverlays: vi.fn(async () => new Map()),
 }));
 
 vi.mock('./admin-opportunity-query', () => ({
   countOpportunityRecords: mocks.count,
-  listCurrentOpportunityScores: mocks.currentScores,
   listOpportunityPageIds: mocks.pageIds,
+  loadCurrentCitedOpportunitySupport: mocks.citedSupport,
+  loadCurrentSourceOpportunityEligibility: mocks.sourceEligibility,
+  loadCurrentScreenedOpportunityExclusions: mocks.screeningExclusions,
   normalizeOpportunityRecommendation: (value: unknown) =>
     typeof value === 'string' ? value.trim().toLowerCase() : '',
+}));
+
+vi.mock('./opportunity-assessment-store', () => ({
+  loadCurrentOpportunityAssessmentProjections: mocks.assessmentProjections,
+  loadOpportunityAssessmentQueryContext: mocks.assessmentQueryContext,
+}));
+
+vi.mock('./opportunity-review-overlay', () => ({
+  loadCurrentOpportunityReviewOverlays: mocks.reviewOverlays,
 }));
 
 vi.mock('./admin-data', () => ({
@@ -44,15 +64,239 @@ async function triage() {
   return await import('./opportunity-triage');
 }
 
+const TEST_WORKSPACE_SUBJECT = {
+  profileId: 'profile-test',
+  tenantId: 'tenant-test',
+  userId: 'user-test',
+} as const;
+
+function projection(score: unknown, recommendation: unknown) {
+  return {
+    ranking: {
+      excluded:
+        String(recommendation)
+          .trim()
+          .replaceAll(/[\u00a0\ufeff]/gu, '') === 'reject',
+      fitScore: typeof score === 'number' ? score : null,
+    },
+  };
+}
+
+function installProjectionFromLegacyScoreFixture() {
+  mocks.assessmentProjections.mockImplementation(async (options: unknown) => {
+    const opportunities = (
+      options as { opportunities: Array<{ id?: unknown }> }
+    ).opportunities;
+    const ids = opportunities
+      .map((opportunity) =>
+        typeof opportunity.id === 'string' ? opportunity.id : '',
+      )
+      .filter(Boolean);
+    const scores = await mocks.currentScores(ids);
+    return new Map(
+      [...scores].map(([id, score]) => [
+        id,
+        projection(
+          (score as { score?: unknown }).score,
+          (score as { recommendation?: unknown }).recommendation,
+        ),
+      ]),
+    );
+  });
+}
+
 describe('opportunity triage preset', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockClear();
     mocks.count.mockResolvedValue(0);
+    mocks.citedSupport.mockResolvedValue(new Map());
+    mocks.sourceEligibility.mockResolvedValue(new Map());
+    mocks.screeningExclusions.mockResolvedValue(new Map());
     mocks.pageIds.mockResolvedValue([]);
     mocks.listAdminRecords.mockResolvedValue([]);
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
     mocks.currentScores.mockResolvedValue(new Map());
     mocks.opportunities.mockResolvedValue([]);
+    mocks.assessmentProjections.mockResolvedValue(new Map());
+    mocks.reviewOverlays.mockResolvedValue(new Map());
+    installProjectionFromLegacyScoreFixture();
+  });
+
+  it('removes only current screening mismatches before local triage count and slicing', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue(
+      ['excluded', 'stale', 'unknown', 'decided'].map((id) => ({
+        id,
+        status: 'found',
+        title: id,
+        sourceContentFingerprint: id === 'stale' ? 'new-source' : `fp-${id}`,
+        sourceContentVersion: 1,
+        updatedAt: '2026-10-02',
+        firstSeenAt: '2026-10-01',
+      })),
+    );
+    mocks.screeningExclusions.mockResolvedValue(
+      new Map(
+        ['excluded', 'stale', 'decided'].map((id) => [
+          id,
+          {
+            sourceContentFingerprint: `fp-${id}`,
+            sourceContentVersion: 1,
+            projection: {
+              mode: 'coarse_screen',
+              sourceStatus: 'current',
+              status: 'clear_mismatch',
+              excludeFromDefaultTriage: true,
+              evidence: [{ witness: { text: 'Literal posting restriction.' } }],
+            },
+          },
+        ]),
+      ),
+    );
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([['decided', { humanReviewStatus: 'apply' }]]),
+    );
+    const { loadTriageQueue } = await triage();
+    const request: Parameters<typeof loadTriageQueue>[0] = {
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'newest' as const },
+      context: 'list',
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      hydrateContext: false,
+      limit: 1,
+    };
+    const queue = await loadTriageQueue(request);
+    expect(queue.total).toBe(2);
+    expect(queue.candidates.map(({ id }) => id)).toEqual(['stale']);
+    expect(queue.candidates[0]?.screeningProjection).toBeNull();
+    mocks.screeningExclusions.mockResolvedValue(new Map());
+    const changed = await loadTriageQueue({
+      ...request,
+      workspaceSubject: { ...TEST_WORKSPACE_SUBJECT, profileId: 'new-profile' },
+    });
+    expect(changed.total).toBe(3);
+    expect(changed.candidates.map(({ id }) => id)).toEqual(['excluded']);
+    expect(mocks.count).not.toHaveBeenCalled();
+  });
+
+  for (const sortDirection of ['asc', 'desc'] as const) {
+    it(`ranks current cited support ${sortDirection} before SQLite triage slices a page`, async () => {
+      mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+      const partial = (supported: number) => ({
+        version: 'opportunity-assessment-partial-projection/v1',
+        mode: 'partial',
+        sourceStatus: 'current',
+        criterionCount: 7,
+        supportedCriterionCount: supported,
+        unresolvedSourceClauseCount: 15,
+        requirements: Array.from({ length: 7 }, (_, index) => ({
+          id: `r${index}`,
+          text: `Requirement ${index}`,
+          support: index < supported ? 'supported' : 'uncertain',
+          postingCitations: [],
+          candidateCitations: [],
+        })),
+      });
+      mocks.opportunities.mockResolvedValue(
+        ['missing', 'stale', 'seven', 'zero'].map((id) => ({
+          id,
+          status: 'found',
+          sourceContentFingerprint: `fp-${id}`,
+          sourceContentVersion: id === 'stale' ? 2 : 1,
+          updatedAt: '2026-10-02',
+          partialAssessmentProjection: partial(7),
+          supportedCriterionCount: 99,
+        })),
+      );
+      mocks.citedSupport.mockResolvedValue(
+        new Map(
+          ['stale', 'seven', 'zero'].map((id) => [
+            id,
+            {
+              sourceContentFingerprint: `fp-${id}`,
+              sourceContentVersion: 1,
+              projection: partial(id === 'zero' ? 0 : 7),
+            },
+          ]),
+        ),
+      );
+      const { loadTriageQueue } = await triage();
+      const request = {
+        context: 'list' as const,
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          sort: 'cited_support' as const,
+          sortDirection,
+        },
+        hydrateContext: false,
+        workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      };
+      const first = await loadTriageQueue({ ...request, limit: 2, offset: 0 });
+      const rest = await loadTriageQueue({ ...request, limit: 2, offset: 2 });
+      expect(first.candidates.map((row) => row.id)).toEqual(
+        sortDirection === 'asc' ? ['zero', 'seven'] : ['seven', 'zero'],
+      );
+      expect(rest.candidates.map((row) => row.id)).toEqual([
+        'missing',
+        'stale',
+      ]);
+      expect(
+        rest.candidates.every(
+          (row) => row.partialAssessmentProjection === null,
+        ),
+      ).toBe(true);
+      expect(first.total).toBe(4);
+      expect(mocks.citedSupport).toHaveBeenCalledWith(TEST_WORKSPACE_SUBJECT);
+    });
+  }
+
+  it('uses sparse source/profile eligibility before SQLite filter and page selection, rejecting changed source identities and forged scalars', async () => {
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.opportunities.mockResolvedValue(
+      ['current', 'stale', 'forged'].map((id) => ({
+        id,
+        status: 'found',
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: id === 'stale' ? 2 : 1,
+        sourceEligibilityProjection: {
+          eligibilityBucket: 'eligible',
+          sourceStatus: 'current',
+        },
+      })),
+    );
+    mocks.sourceEligibility.mockResolvedValue(
+      new Map(
+        ['current', 'stale'].map((id) => [
+          id,
+          {
+            sourceContentFingerprint: `fp-${id}`,
+            sourceContentVersion: 1,
+            projection: {
+              eligibilityBucket: 'eligible',
+              sourceStatus: 'current',
+              reason: 'Actual source/profile replay',
+              unresolvedConstraintFactKeys: [],
+            },
+          },
+        ]),
+      ),
+    );
+    const { loadTriageQueue } = await triage();
+    const result = await loadTriageQueue({
+      context: 'list',
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        eligibilityBuckets: ['eligible'],
+        sort: 'eligibility',
+      },
+      hydrateContext: false,
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      limit: 1,
+    });
+    expect(result.total).toBe(1);
+    expect(result.candidates.map((row) => row.id)).toEqual(['current']);
+    expect(mocks.sourceEligibility).toHaveBeenCalledWith(
+      TEST_WORKSPACE_SUBJECT,
+    );
   });
 
   it('forces the undecided, unarchived, unexpired, unstale, score-ordered queue', async () => {
@@ -128,6 +372,9 @@ describe('loadTriageQueue', () => {
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
     mocks.currentScores.mockResolvedValue(new Map());
     mocks.opportunities.mockResolvedValue([]);
+    mocks.assessmentProjections.mockResolvedValue(new Map());
+    mocks.reviewOverlays.mockResolvedValue(new Map());
+    installProjectionFromLegacyScoreFixture();
     mocks.attachOpportunityContext.mockImplementation(
       async (records: unknown[]) => records,
     );
@@ -147,6 +394,7 @@ describe('loadTriageQueue', () => {
     ]);
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
     });
 
@@ -174,11 +422,36 @@ describe('loadTriageQueue', () => {
     mocks.pageIds.mockResolvedValue(['opp-1']);
     mocks.listAdminRecords.mockResolvedValue([{ id: 'opp-1' }]);
 
-    await loadTriageQueue({ filters: DEFAULT_OPPORTUNITY_FILTERS });
+    await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+    });
 
     expect(mocks.attachOpportunityContext).toHaveBeenCalledWith(
       [{ id: 'opp-1' }],
-      { includeActivity: false },
+      { includeActivity: false, workspaceSubject: TEST_WORKSPACE_SUBJECT },
+    );
+  });
+
+  it('passes the verified workspace subject into the card hydration', async () => {
+    const { loadTriageQueue } = await triage();
+    const subject = {
+      profileId: 'profile-1',
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+    };
+    mocks.count.mockResolvedValue(1);
+    mocks.pageIds.mockResolvedValue(['opp-1']);
+    mocks.listAdminRecords.mockResolvedValue([{ id: 'opp-1' }]);
+
+    await loadTriageQueue({
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      workspaceSubject: subject,
+    });
+
+    expect(mocks.attachOpportunityContext).toHaveBeenCalledWith(
+      [{ id: 'opp-1' }],
+      { includeActivity: false, workspaceSubject: subject },
     );
   });
 
@@ -187,7 +460,10 @@ describe('loadTriageQueue', () => {
     mocks.count.mockResolvedValue(50);
     mocks.pageIds.mockResolvedValue([]);
 
-    await loadTriageQueue({ filters: DEFAULT_OPPORTUNITY_FILTERS });
+    await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+    });
 
     expect(TRIAGE_QUEUE_SIZE).toBe(3);
     expect(mocks.pageIds).toHaveBeenCalledWith(
@@ -200,6 +476,7 @@ describe('loadTriageQueue', () => {
     mocks.count.mockResolvedValue(0);
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       offset: 25,
     });
@@ -219,6 +496,7 @@ describe('loadTriageQueue', () => {
     mocks.pageIds.mockResolvedValue([]);
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       offset: 900,
     });
@@ -231,6 +509,7 @@ describe('loadTriageQueue', () => {
     mocks.count.mockResolvedValue(0);
 
     await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       search: '  platform  ',
     });
@@ -239,6 +518,7 @@ describe('loadTriageQueue', () => {
     );
 
     await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       search: ' ',
     });
@@ -262,6 +542,7 @@ describe('loadTriageQueue', () => {
     mocks.count.mockResolvedValue(0);
 
     await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       context: 'list',
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
     });
@@ -339,7 +620,12 @@ describe('loadTriageQueue', () => {
       },
     ]);
 
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([['decided', { humanReviewStatus: 'apply' }]]),
+    );
+
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       context: 'list',
       filters: {
         ...DEFAULT_OPPORTUNITY_FILTERS,
@@ -520,8 +806,18 @@ describe('loadTriageQueue', () => {
         ['reject-20', { recommendation: 'reject', score: 20 }],
       ]),
     );
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([
+        ['unscored', { humanRating: 4, humanReviewStatus: 'needs_input' }],
+        ['reject-20', { humanRating: 5, humanReviewStatus: 'needs_input' }],
+        ['recommend-96', { humanRating: 2, humanReviewStatus: 'needs_input' }],
+        ['reject-100', { humanRating: 1, humanReviewStatus: 'needs_input' }],
+        ['unknown-90', { humanRating: 3, humanReviewStatus: 'needs_input' }],
+      ]),
+    );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       context: 'list',
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
       limit: 5,
@@ -560,6 +856,12 @@ describe('loadTriageQueue', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     ]);
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([
+        ['already-decided', { humanReviewStatus: 'apply' }],
+        ['triageable', { humanReviewStatus: 'needs_input' }],
+      ]),
+    );
     mocks.currentScores.mockResolvedValue(
       new Map([
         ['a-tie', { recommendation: 'recommend', score: 50 }],
@@ -568,6 +870,7 @@ describe('loadTriageQueue', () => {
     );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       context: 'list',
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
       limit: 3,
@@ -589,8 +892,10 @@ describe('nextTriageCandidate', () => {
     );
     mocks.count.mockResolvedValue(0);
     mocks.currentScores.mockResolvedValue(new Map());
+    mocks.assessmentProjections.mockResolvedValue(new Map());
+    mocks.reviewOverlays.mockResolvedValue(new Map());
+    installProjectionFromLegacyScoreFixture();
     mocks.dbConfig.mockReturnValue({ type: 'postgres' });
-    mocks.listAdminRecords.mockResolvedValue([]);
     mocks.opportunities.mockResolvedValue([]);
     mocks.pageIds.mockResolvedValue([]);
   });
@@ -602,6 +907,7 @@ describe('nextTriageCandidate', () => {
     mocks.listAdminRecords.mockResolvedValue([{ id: 'opp-4', title: 'Four' }]);
 
     const result = await nextTriageCandidate({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       offset: 3,
     });
@@ -625,6 +931,7 @@ describe('nextTriageCandidate', () => {
     // asserted operation set does not cover, and the tool discards every field
     // it would add.
     const result = await nextTriageCandidate({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
     });
 
@@ -638,7 +945,10 @@ describe('nextTriageCandidate', () => {
     mocks.pageIds.mockResolvedValue(['opp-1']);
     mocks.listAdminRecords.mockResolvedValue([{ id: 'opp-1', title: 'One' }]);
 
-    await loadTriageQueue({ filters: DEFAULT_OPPORTUNITY_FILTERS });
+    await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
+      filters: DEFAULT_OPPORTUNITY_FILTERS,
+    });
 
     expect(mocks.attachOpportunityContext).toHaveBeenCalled();
   });
@@ -652,6 +962,7 @@ describe('nextTriageCandidate', () => {
     // Raising the offset is the agent's only way to pass, and a null candidate
     // is its only stop signal, so a clamped offset would loop it forever.
     const result = await nextTriageCandidate({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       offset: 3,
     });
@@ -670,6 +981,7 @@ describe('nextTriageCandidate', () => {
     mocks.pageIds.mockResolvedValue([]);
 
     const result = await nextTriageCandidate({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
     });
 
@@ -699,8 +1011,15 @@ describe('nextTriageCandidate', () => {
         title: 'Fictional Staff Engineer',
       },
     ]);
+    mocks.reviewOverlays.mockResolvedValue(
+      new Map([
+        ['already-decided', { humanReviewStatus: 'apply' }],
+        ['triageable', { humanReviewStatus: 'needs_input' }],
+      ]),
+    );
 
     const result = await nextTriageCandidate({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       search: 'staff engineer',
     });
@@ -729,10 +1048,12 @@ describe('nextTriageCandidate', () => {
     );
 
     const firstPage = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       limit: 2,
     });
     const lastCard = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       limit: 1,
       offset: 2,
@@ -767,6 +1088,7 @@ describe('nextTriageCandidate', () => {
     );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       context: 'list',
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'score' },
       limit: 2,
@@ -796,6 +1118,7 @@ describe('nextTriageCandidate', () => {
     );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       limit: 2,
     });
@@ -824,6 +1147,7 @@ describe('nextTriageCandidate', () => {
     );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       limit: 2,
     });
@@ -857,6 +1181,7 @@ describe('nextTriageCandidate', () => {
     );
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'newest' },
       limit: 2,
     });
@@ -886,6 +1211,7 @@ describe('nextTriageCandidate', () => {
     mocks.currentScores.mockResolvedValue(new Map());
 
     const queue = await loadTriageQueue({
+      workspaceSubject: TEST_WORKSPACE_SUBJECT,
       filters: DEFAULT_OPPORTUNITY_FILTERS,
       limit: 2,
     });

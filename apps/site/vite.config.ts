@@ -90,7 +90,12 @@ export default defineConfig({
   test: {
     // Browser lifecycle specs run through `vitest.browser.config.ts`, which
     // selects Svelte's browser export without changing the SSR test suite.
-    exclude: [...configDefaults.exclude, 'src/**/*.browser.spec.ts', 'e2e/**'],
+    exclude: [
+      ...configDefaults.exclude,
+      'src/**/*.browser.spec.ts',
+      'src/**/*.mcp-app.spec.ts',
+      'e2e/**',
+    ],
   },
   server: {
     host: '127.0.0.1',

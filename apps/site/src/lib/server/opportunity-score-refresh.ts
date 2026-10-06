@@ -20,6 +20,15 @@ export const OPPORTUNITY_SCORE_REFRESH_PAGE_SIZE = 25;
 export const OPPORTUNITY_SCORE_REFRESH_MAX_ATTEMPTS = 3;
 export const OPPORTUNITY_SCORE_REFRESH_RETRY_MS = 15 * 60 * 1_000;
 
+async function requirePrivateScoreRefresh(): Promise<void> {
+  const { isSharedHosted } = await import('./app-config.js');
+  if (isSharedHosted()) {
+    throw new Error(
+      'Shared workspace score refresh requires an explicit operator dispatch.',
+    );
+  }
+}
+
 type Database = Awaited<ReturnType<typeof resolveDatabase>>;
 type MutableRecord = Record<string, unknown> & {
   id?: string;
@@ -190,6 +199,10 @@ async function persistScoreRefreshCursor(
 export async function ensureOpportunityScoreRefreshSchedule(
   db?: Database,
 ): Promise<void> {
+  // Shared hosting never runs the global refresh on a schedule, so there is
+  // nothing to register; migrations must still complete on a shared install.
+  const { isSharedHosted } = await import('./app-config.js');
+  if (isSharedHosted()) return;
   const database = db ?? (await resolveDatabase(getDbConfig()));
   await ensureOpportunityIntelligenceControl();
   const controls = (await getCollection(
@@ -243,6 +256,7 @@ export async function reconcileSavedOpportunityScores(
   scanned: number;
   skipped: number;
 }> {
+  await requirePrivateScoreRefresh();
   const db = options.db ?? (await resolveDatabase(getDbConfig()));
   const now = options.now ?? new Date();
   const ids = await listPage(db, stringValue(control.scoreRefreshCursor));
