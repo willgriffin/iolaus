@@ -57,6 +57,10 @@ const authGuard: Handle = async ({ event, resolve }) => {
         );
       }
 
+      if (event.locals.invitationRequired) {
+        redirect(303, '/not-invited');
+      }
+
       if (failure === 'unauthenticated') {
         const next = `${event.url.pathname}${event.url.search}`;
         redirect(303, `/login?next=${encodeURIComponent(next)}`);

@@ -166,6 +166,39 @@ export function getAppConfig(
   };
 }
 
+export interface InviteRequestContact {
+  /** `mailto:` or `https:` link for the "request an invite" call to action. */
+  href: string;
+  /** Human-readable address or host shown beside the link. */
+  label: string;
+}
+
+/**
+ * Where an uninvited user is told to request access. Operator-configured so
+ * the application never hardcodes a deployment's contact. Accepts an email
+ * address or an https URL; anything else is ignored and the page falls back
+ * to generic wording rather than rendering an unsafe link.
+ */
+export function getInviteRequestContact(
+  environment: AppConfigEnvironment = process.env,
+): InviteRequestContact | null {
+  const raw = stringValue(environment.IOLAUS_INVITE_REQUEST_CONTACT);
+  if (!raw) return null;
+
+  if (/^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/u.test(raw)) {
+    return { href: `mailto:${raw}`, label: raw };
+  }
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || !url.hostname || url.username) {
+      return null;
+    }
+    return { href: url.toString(), label: url.host };
+  } catch {
+    return null;
+  }
+}
+
 /** Whether this deployed application provisions one workspace per user. */
 export function isSharedHosted(
   environment: AppConfigEnvironment = process.env,

@@ -7,6 +7,8 @@ declare global {
     interface Locals extends SessionLocals {
       /** Set only by the server hook after live membership verification. */
       workspaceSubject?: WorkspaceSubject;
+      /** Set when a shared-mode session's operator invitation is missing/revoked. */
+      invitationRequired?: boolean;
     }
     // interface PageData {}
     // interface PageState {}

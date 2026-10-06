@@ -157,6 +157,7 @@ describe('decorator-driven surface exposure', () => {
         'DataSurfaceIdempotencyRecord',
         'DataSurfacePreviewToken',
         'EmploymentPerson',
+        'HostedInvite',
         ...privateEvidenceClasses,
       ]),
     );
