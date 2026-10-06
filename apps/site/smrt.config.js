@@ -25,6 +25,11 @@ const localDatabase =
 export default {
   runtime: {
     profile,
+    // Email magic-link sign-in replaces the OIDC provider for invite-only
+    // hosted installs (IOLAUS_AUTH_MODE=magic-link, self-hosted profile).
+    ...(process.env.IOLAUS_AUTH_MODE === 'magic-link'
+      ? { providers: { authentication: { provider: 'magic-link' } } }
+      : {}),
   },
   smrt: {
     logLevel: 'info',

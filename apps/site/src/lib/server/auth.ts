@@ -32,7 +32,11 @@ import {
 } from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 import { isEmailInvited } from './hosted-invite.js';
-import { provisionHostedOidcUser } from './hosted-oidc-provisioning.js';
+import {
+  provisionHostedMagicLinkUser,
+  provisionHostedOidcUser,
+} from './hosted-oidc-provisioning.js';
+import { consumeMagicLink } from './magic-link-login.js';
 import { seedSystemRolesWithPermissions } from './role-permissions.js';
 
 const appConfig = getAppConfig();
@@ -172,7 +176,9 @@ export async function getOidcAuth(event: RequestEvent) {
     const message =
       configuration.kind === 'invalid'
         ? configuration.message
-        : `${appConfig.appName} local mode does not require OIDC authentication.`;
+        : configuration.kind === 'magic-link'
+          ? `${appConfig.appName} signs in with email links, not OIDC.`
+          : `${appConfig.appName} local mode does not require OIDC authentication.`;
     error(503, message);
   }
 
@@ -586,6 +592,30 @@ export async function completeOidcLogin(event: RequestEvent): Promise<void> {
   const { tenant } = await ensureWorkspaceAccess(user);
 
   await createAdminSession(event, user, tenant.id as string);
+}
+
+/**
+ * Complete a magic-link sign-in. The token is verified and consumed, the
+ * address must still be invited, and the session is then created through the
+ * same hosted provisioning, workspace and session path as OIDC, so tenant
+ * isolation, the per-request invite check, AI caps and account deletion apply
+ * unchanged. Returns false (no user, tenant or session) for any rejection.
+ */
+export async function completeMagicLinkLogin(
+  event: RequestEvent,
+  token: string,
+): Promise<'signed-in' | 'invalid' | 'not-invited'> {
+  if (getAuthConfiguration().kind !== 'magic-link') {
+    error(404, 'Not found');
+  }
+  const result = await consumeMagicLink(token);
+  if (result.status !== 'verified') return result.status;
+
+  const users = await UserCollection.create(getSmrtOptions());
+  const user = await provisionHostedMagicLinkUser(result.email, users);
+  const { tenant } = await ensureWorkspaceAccess(user);
+  await createAdminSession(event, user, tenant.id as string);
+  return 'signed-in';
 }
 
 export async function logout(event: RequestEvent): Promise<never> {

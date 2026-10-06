@@ -117,11 +117,12 @@ export function buildInviteMessage(
 }
 
 /**
- * Send the invitation. Never throws and never reports credentials or message
- * bodies: an unconfigured deployment is `skipped`, a delivery error `failed`.
+ * Deliver one message over the configured SMTP (or an injected transport).
+ * Never throws and never reports credentials or message bodies: unconfigured
+ * SMTP is `skipped`, a delivery error `failed` with only the error code.
  */
-export async function sendInviteEmail(
-  email: string,
+export async function deliverEmail(
+  build: (from: string) => InviteMessage,
   options: InviteEmailOptions = {},
 ): Promise<InviteEmailOutcome> {
   const environment = options.environment ?? process.env;
@@ -133,19 +134,6 @@ export async function sendInviteEmail(
         'SMTP is not configured (SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM)',
     };
   }
-  const origin = getConfiguredPublicOrigin(environment);
-  if (!origin) {
-    return {
-      status: 'skipped',
-      reason: 'IOLAUS_PUBLIC_URL is not configured for this runtime profile',
-    };
-  }
-  const message = buildInviteMessage(email, {
-    appName: getAppConfig(environment).appName,
-    loginUrl: `${origin}/login`,
-    supportEmail: getSupportEmail(environment),
-    from: smtp?.from ?? value(environment.SMTP_FROM),
-  });
   const transport: InviteTransport =
     options.transport ??
     nodemailer.createTransport({
@@ -156,7 +144,7 @@ export async function sendInviteEmail(
       auth: { user: smtp?.user, pass: smtp?.password },
     });
   try {
-    await transport.sendMail(message);
+    await transport.sendMail(build(smtp?.from ?? value(environment.SMTP_FROM)));
     return { status: 'sent' };
   } catch (error) {
     const code =
@@ -165,4 +153,76 @@ export async function sendInviteEmail(
         : 'unknown';
     return { status: 'failed', reason: `SMTP delivery failed (${code})` };
   }
+}
+
+/** Send the invitation email. */
+export async function sendInviteEmail(
+  email: string,
+  options: InviteEmailOptions = {},
+): Promise<InviteEmailOutcome> {
+  const environment = options.environment ?? process.env;
+  const origin = getConfiguredPublicOrigin(environment);
+  if (!origin) {
+    return {
+      status: 'skipped',
+      reason: 'IOLAUS_PUBLIC_URL is not configured for this runtime profile',
+    };
+  }
+  return await deliverEmail(
+    (from) =>
+      buildInviteMessage(email, {
+        appName: getAppConfig(environment).appName,
+        loginUrl: `${origin}/login`,
+        supportEmail: getSupportEmail(environment),
+        from,
+      }),
+    options,
+  );
+}
+
+/** Build the single-use sign-in message for magic-link authentication. */
+export function buildMagicLinkMessage(
+  recipient: string,
+  details: {
+    appName: string;
+    link: string;
+    expiresInMinutes: number;
+    from: string;
+  },
+): InviteMessage {
+  const { appName, link, expiresInMinutes, from } = details;
+  return {
+    from,
+    to: recipient,
+    subject: `Your ${appName} sign-in link`,
+    text: [
+      `Use this link to sign in to ${appName}:`,
+      '',
+      link,
+      '',
+      `It works once and expires in ${expiresInMinutes} minutes. If you did not request it, you can ignore this email.`,
+      '',
+    ].join('\n'),
+    html: `<!doctype html><html><body><p>Use this link to sign in to <strong>${escapeHtml(appName)}</strong>:</p><p><a href="${escapeHtml(link)}">Sign in to ${escapeHtml(appName)}</a></p><p>It works once and expires in ${expiresInMinutes} minutes. If you did not request it, you can ignore this email.</p></body></html>`,
+  };
+}
+
+/** Email a magic sign-in link. The link is never logged or returned. */
+export async function sendMagicLinkEmail(
+  email: string,
+  link: string,
+  expiresInMinutes: number,
+  options: InviteEmailOptions = {},
+): Promise<InviteEmailOutcome> {
+  const environment = options.environment ?? process.env;
+  return await deliverEmail(
+    (from) =>
+      buildMagicLinkMessage(email, {
+        appName: getAppConfig(environment).appName,
+        link,
+        expiresInMinutes,
+        from,
+      }),
+    options,
+  );
 }

@@ -294,6 +294,16 @@ async function checkOidcReadiness(
   }
 }
 
+/** @param {Environment} environment */
+function checkMagicLinkReadiness(environment) {
+  if (requiredString(environment, 'IOLAUS_MAGIC_LINK_SECRET').length < 32) {
+    throw new Error('weak IOLAUS_MAGIC_LINK_SECRET');
+  }
+  for (const name of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM']) {
+    requiredString(environment, name);
+  }
+}
+
 /** @param {Environment} environment @param {number} timeoutMs @param {any} dependencies */
 async function checkAssetsReadiness(environment, timeoutMs, dependencies) {
   const options = resolveS3Options(environment);
@@ -345,6 +355,16 @@ export function createProviderReadinessProbe(component, context, options = {}) {
       const importModule = options.importModule || ((specifier) => import(specifier));
       const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
       if (await runOverride(component, context, environment, importModule)) return;
+      if (
+        component === 'authentication' &&
+        context.profile === 'self-hosted' &&
+        context.provider === 'magic-link'
+      ) {
+        // Magic-link sign-in has no external identity provider to probe; it is
+        // ready when its signing secret and SMTP mailer settings are present.
+        checkMagicLinkReadiness(environment);
+        return;
+      }
       if (
         context.profile !== 'self-hosted' ||
         context.provider !== SELF_HOSTED_DEFAULTS[component]

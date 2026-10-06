@@ -70,6 +70,38 @@ IOLAUS_SUPPORT_URL=https://www.example.com/support
 DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
 
+### Email magic-link sign-in (shared mode)
+
+Beta users do not need an identity provider. With `IOLAUS_AUTH_MODE=magic-link`
+(default `oidc`) on a `self-hosted` profile in `shared` workspace mode, `/login`
+shows an email field instead of the OIDC button, and OIDC is not used.
+
+```sh
+IOLAUS_AUTH_MODE=magic-link
+# At least 32 random characters; signs the links. Keep it in the secret store.
+IOLAUS_MAGIC_LINK_SECRET=
+# Plus IOLAUS_PUBLIC_URL and the SMTP_* mailer settings below. Startup is
+# refused when any is missing.
+```
+
+The link is a single-use, signed token (SMRT `MagicLinkService`, stored in
+`users_magic_link_tokens`) that expires after 15 minutes, delivered through the
+SMTP mailer. Opening it shows a confirmation button; the token is consumed only
+when that form is submitted, so mail scanners that prefetch links cannot spend
+it. Only invited addresses receive a link, and the invite is re-checked when the
+link is used, so revoking an invitation blocks any link already sent. Every
+well-formed submission gets the same "check your email" answer, so the form
+cannot be used to learn who is invited. Requests are limited to 5 per address
+and 20 per client address per hour per replica.
+
+Sign-in creates the session through the same hosted provisioning path as OIDC
+(one User, Profile, private tenant and membership per address), so isolation,
+the per-request invite check, AI caps and account deletion are unchanged. An
+address that already has an account from an earlier OIDC sign-in keeps it.
+Terminal CLI sign-in is unchanged. MCP OAuth bearer tokens need an OIDC issuer,
+so they are not available in this mode. Tokens are not bound to the requesting
+browser: the link works in any browser until used or expired.
+
 ### Shared-workspace invitations
 
 A `shared` installation is invite-only. A verified OIDC identity is admitted
