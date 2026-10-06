@@ -74,9 +74,11 @@ export async function requestMagicLink(
   const limiters = context.limiters ?? defaultMagicLinkLimiters;
   const email = normalizeInviteEmail(rawEmail);
 
-  const ipAllowed = limiters.ip.allow(`ip:${clientAddress}`);
-  const emailAllowed = limiters.email.allow(`email:${email}`);
-  if (!ipAllowed || !emailAllowed) return 'rate-limited';
+  // Charge the client address first: a throttled address must not keep
+  // inserting mailbox keys. Both limits apply before the invite is read, so
+  // limiting cannot distinguish invited from uninvited addresses.
+  if (!limiters.ip.allow(`ip:${clientAddress}`)) return 'rate-limited';
+  if (!limiters.email.allow(`email:${email}`)) return 'rate-limited';
   if (!email || email.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(email)) {
     return 'invalid-email';
   }

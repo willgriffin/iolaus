@@ -6,12 +6,12 @@ export const MAGIC_LINK_EMAIL_LIMIT = 5;
 export const MAGIC_LINK_IP_LIMIT = 20;
 export const MAGIC_LINK_WINDOW_MS = 60 * 60 * 1000;
 
-const MAX_TRACKED_KEYS = 10_000;
+export const MAX_TRACKED_KEYS = 10_000;
 
 /**
  * A small fixed-window limiter held in process memory. Keys are hashed so the
- * map never retains an address, and a full map evicts the oldest entries
- * instead of growing without bound. It is per replica: with N replicas the
+ * map never retains an address, and the map is bounded: when it is full of
+ * live windows new keys are refused instead of evicting existing counters. It is per replica: with N replicas the
  * effective cap is at most N times the limit, which still bounds abuse.
  */
 export class WindowRateLimiter {
@@ -30,7 +30,9 @@ export class WindowRateLimiter {
     const key = createHash('sha256').update(rawKey).digest('hex');
     const current = this.windows.get(key);
     if (!current || now - current.start >= this.windowMs) {
-      this.evict(now);
+      // A full map of live windows rejects the new key rather than evicting a
+      // live counter: flooding junk keys must never reset a victim's limit.
+      if (!this.makeRoom(now)) return false;
       this.windows.set(key, { count: 1, start: now });
       return true;
     }
@@ -38,16 +40,13 @@ export class WindowRateLimiter {
     return current.count <= this.limit;
   }
 
-  private evict(now: number): void {
-    if (this.windows.size < MAX_TRACKED_KEYS) return;
+  /** Drop expired windows when full; false when every window is still live. */
+  private makeRoom(now: number): boolean {
+    if (this.windows.size < MAX_TRACKED_KEYS) return true;
     for (const [key, entry] of this.windows) {
       if (now - entry.start >= this.windowMs) this.windows.delete(key);
     }
-    while (this.windows.size >= MAX_TRACKED_KEYS) {
-      const oldest = this.windows.keys().next().value;
-      if (oldest === undefined) break;
-      this.windows.delete(oldest);
-    }
+    return this.windows.size < MAX_TRACKED_KEYS;
   }
 }
 

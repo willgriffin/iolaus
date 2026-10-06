@@ -3,12 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const getAuthMock = vi.hoisted(() => vi.fn());
 
 const inviteMock = vi.hoisted(() => ({ isEmailInvited: vi.fn() }));
+const magicLinkMock = vi.hoisted(() => ({ consumeMagicLink: vi.fn() }));
 
 vi.mock('@happyvertical/auth', () => ({ getAuth: getAuthMock }));
 vi.mock('./hosted-invite', () => inviteMock);
+vi.mock('./magic-link-login', () => magicLinkMock);
 
 import {
   canUseLocalDevLogin,
+  completeMagicLinkLogin,
   completeOidcLogin,
   getOidcAuth,
   getRuntimeCookieName,
@@ -374,5 +377,52 @@ describe('tenantSlugsFor', () => {
     expect(tenantSlugsFor('iolaus', 'self-hosted')).toEqual(['iolaus']);
     expect(tenantSlugsFor('iolaus', 'cloud')).toEqual(['iolaus']);
     expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
+  });
+});
+
+describe('completeMagicLinkLogin', () => {
+  const magicLinkEnvironment = {
+    ADDRESS_HEADER: 'X-Forwarded-For',
+    IOLAUS_AUTH_MODE: 'magic-link',
+    IOLAUS_MAGIC_LINK_SECRET: 'a-very-long-test-only-signing-secret-0123456789',
+    IOLAUS_PUBLIC_URL: 'https://jobs.example.invalid',
+    IOLAUS_WORKSPACE_MODE: 'shared',
+    SMRT_APP_ID: 'career-hub',
+    SMRT_RUNTIME_PROFILE: 'self-hosted',
+    SMTP_FROM: 'noreply@example.invalid',
+    SMTP_HOST: 'smtp.example.invalid',
+    SMTP_PASSWORD: 'private',
+    SMTP_USER: 'user',
+  } as const;
+  const touched = [...Object.keys(magicLinkEnvironment), 'IOLAUS_AUTH_MODE'];
+  const saved = Object.fromEntries(touched.map((n) => [n, process.env[n]]));
+
+  afterEach(() => {
+    magicLinkMock.consumeMagicLink.mockReset();
+    for (const name of touched) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it('is unavailable unless magic-link mode is configured', async () => {
+    delete process.env.IOLAUS_AUTH_MODE;
+    await expect(
+      completeMagicLinkLogin({} as never, 'token'),
+    ).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(magicLinkMock.consumeMagicLink).not.toHaveBeenCalled();
+  });
+
+  it('creates no user, workspace or session for a rejected link', async () => {
+    Object.assign(process.env, magicLinkEnvironment);
+    for (const status of ['invalid', 'not-invited'] as const) {
+      magicLinkMock.consumeMagicLink.mockResolvedValueOnce({ status });
+      // A session would need `event.cookies`; an empty event proves none is touched.
+      await expect(completeMagicLinkLogin({} as never, 'token')).resolves.toBe(
+        status,
+      );
+    }
   });
 });

@@ -14,7 +14,11 @@ import {
   provisionHostedMagicLinkUser,
   provisionHostedOidcUser,
 } from './hosted-oidc-provisioning';
-import { createMagicLinkLimiters } from './login-rate-limit';
+import {
+  createMagicLinkLimiters,
+  MAX_TRACKED_KEYS,
+  WindowRateLimiter,
+} from './login-rate-limit';
 import { consumeMagicLink, requestMagicLink } from './magic-link-login';
 import './smrt.js';
 
@@ -317,5 +321,44 @@ describe('operator gating in magic-link mode', () => {
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
     expect(isConfiguredOidcAdminEmail(' OPERATOR@example.invalid ')).toBe(true);
     expect(isConfiguredOidcAdminEmail('friend@example.invalid')).toBe(false);
+  });
+});
+
+describe('rate limiter bounds', () => {
+  it('never evicts a live counter to admit a new key', () => {
+    const limiter = new WindowRateLimiter(2, 60_000);
+    const now = 1_000;
+    expect(limiter.allow('victim', now)).toBe(true);
+    expect(limiter.allow('victim', now)).toBe(true);
+    for (let i = 0; i < MAX_TRACKED_KEYS; i += 1)
+      limiter.allow(`junk:${i}`, now);
+    // The map is full of live windows: the victim stays limited, and a new key
+    // is refused rather than displacing anyone.
+    expect(limiter.allow('victim', now)).toBe(false);
+    expect(limiter.allow('brand-new', now)).toBe(false);
+    // Once windows expire the map admits new keys again.
+    expect(limiter.allow('brand-new', now + 61_000)).toBe(true);
+  });
+
+  it('does not charge the mailbox when the client address is throttled', async () => {
+    const db = await getTestDatabase({ classes: ['HostedInvite'] });
+    try {
+      const limiters = createMagicLinkLimiters();
+      const ctx = {
+        environment: env,
+        limiters,
+        smrtOptions: { db },
+        db,
+      } as never;
+      for (let i = 0; i < 20; i += 1) {
+        await requestMagicLink(`x${i}@example.invalid`, '192.0.2.50', ctx);
+      }
+      for (let i = 0; i < 10; i += 1) {
+        await requestMagicLink('victim@example.invalid', '192.0.2.50', ctx);
+      }
+      expect(limiters.email.allow('email:victim@example.invalid')).toBe(true);
+    } finally {
+      await db.close?.();
+    }
   });
 });
