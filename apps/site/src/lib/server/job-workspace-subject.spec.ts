@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertOperation: vi.fn(),
   execute: vi.fn(),
+  invited: vi.fn(async (_email: string) => true),
   app: { runtimeProfile: 'local', workspaceMode: 'private' },
   auth: { kind: 'local' } as Record<string, unknown>,
   membership: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('./app-config.js', () => ({
   getAuthConfiguration: () => mocks.auth,
 }));
 vi.mock('./db.js', () => ({ getSmrtOptions: () => ({ db: 'test' }) }));
+vi.mock('./hosted-invite.js', () => ({ isEmailInvited: mocks.invited }));
 vi.mock('./smrt.js', () => ({
   getCollection: vi.fn(async () => ({ get: mocks.profile })),
 }));
@@ -68,6 +70,7 @@ const subject = {
 describe('queued workspace subject', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.invited.mockResolvedValue(true);
     mocks.app.runtimeProfile = 'local';
     mocks.app.workspaceMode = 'private';
     mocks.auth = { kind: 'local' };
@@ -214,6 +217,57 @@ describe('queued workspace subject', () => {
         async () => 'completed',
       ),
     ).resolves.toBe('completed');
+  });
+
+  it('stops a queued shared-hosted job once the owner invitation is revoked', async () => {
+    mocks.app.runtimeProfile = 'self-hosted';
+    mocks.app.workspaceMode = 'shared';
+    mocks.user.mockResolvedValue({
+      email: 'Member@example.invalid',
+      id: subject.userId,
+      status: 'active',
+    });
+    const work = vi.fn(async () => 'completed');
+
+    await expect(
+      runAsResolvedJobWorkspaceSubject(
+        { runtimeWorkspaceSubject: subject },
+        work,
+      ),
+    ).resolves.toBe('completed');
+    expect(mocks.invited).toHaveBeenCalledWith('Member@example.invalid');
+
+    mocks.invited.mockResolvedValue(false);
+    work.mockClear();
+    await expect(
+      runAsResolvedJobWorkspaceSubject(
+        { runtimeWorkspaceSubject: subject },
+        work,
+      ),
+    ).rejects.toThrow('no longer invited');
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('never consults invites for a private hosted job', async () => {
+    mocks.app.runtimeProfile = 'self-hosted';
+    mocks.auth = {
+      kind: 'self-hosted',
+      oidc: { adminEmails: ['owner@example.invalid'] },
+    };
+    mocks.user.mockResolvedValue({
+      email: 'owner@example.invalid',
+      id: subject.userId,
+      status: 'active',
+    });
+    mocks.invited.mockResolvedValue(false);
+
+    await expect(
+      runAsResolvedJobWorkspaceSubject(
+        { runtimeWorkspaceSubject: subject },
+        async () => 'completed',
+      ),
+    ).resolves.toBe('completed');
+    expect(mocks.invited).not.toHaveBeenCalled();
   });
 
   it('rechecks a revoked membership at the in-context write fence', async () => {

@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   getCurrentTenant: vi.fn(),
   permissions: vi.fn(),
   privateHosted: false,
+  sharedHosted: false,
+  invited: true,
+  isEmailInvited: vi.fn(async () => mocks.invited),
   operatorAllowed: true,
   withTenant: vi.fn(),
 }));
@@ -38,9 +41,13 @@ vi.mock('@happyvertical/smrt-tenancy', () => ({
 
 vi.mock('./app-config.js', () => ({
   getAppConfig: () => ({
-    runtimeProfile: mocks.privateHosted ? 'hosted' : 'local',
+    runtimeProfile:
+      mocks.privateHosted || mocks.sharedHosted ? 'cloud' : 'local',
     workspaceMode: mocks.privateHosted ? 'private' : 'shared',
   }),
+}));
+vi.mock('./hosted-invite.js', () => ({
+  isEmailInvited: mocks.isEmailInvited,
 }));
 vi.mock('./administrative-auth.js', () => ({
   isConfiguredOidcAdminEmail: () => mocks.operatorAllowed,
@@ -82,6 +89,8 @@ describe('workspace subject', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.privateHosted = false;
+    mocks.sharedHosted = false;
+    mocks.invited = true;
     mocks.operatorAllowed = true;
     mocks.getCurrentTenant.mockReturnValue({
       metadata: {},
@@ -315,6 +324,49 @@ describe('workspace subject', () => {
     await expect(
       revalidateWorkspaceIdentity({ tenantId: 'tenant-1', userId: 'user-1' }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  describe('shared hosted invite gate', () => {
+    beforeEach(() => {
+      mocks.sharedHosted = true;
+      mocks.invited = true;
+    });
+
+    it('admits an invited shared-hosted user', async () => {
+      await expect(verifyWorkspaceSubject(locals())).resolves.toMatchObject({
+        userId: 'user-1',
+      });
+      expect(mocks.isEmailInvited).toHaveBeenCalled();
+    });
+
+    it('rejects an uninvited shared-hosted user and flags the invite page', async () => {
+      mocks.invited = false;
+      const requestLocals = locals() as ReturnType<typeof locals> & {
+        invitationRequired?: boolean;
+      };
+      await expect(
+        revalidateWorkspaceIdentity({ tenantId: 'tenant-1', userId: 'user-1' }),
+      ).rejects.toMatchObject({ status: 403 });
+      await expect(verifyWorkspaceSubject(requestLocals)).resolves.toBeNull();
+      expect(requestLocals.invitationRequired).toBe(true);
+      expect(requestLocals.permissions).toEqual([]);
+    });
+
+    it('ends an existing session on the next request once the invite is revoked', async () => {
+      await expect(verifyWorkspaceSubject(locals())).resolves.not.toBeNull();
+      mocks.invited = false;
+      await expect(verifyWorkspaceSubject(locals())).resolves.toBeNull();
+    });
+
+    it('does not consult invites for private hosted installations', async () => {
+      mocks.sharedHosted = false;
+      mocks.privateHosted = true;
+      mocks.invited = false;
+      await expect(verifyWorkspaceSubject(locals())).resolves.toMatchObject({
+        userId: 'user-1',
+      });
+      expect(mocks.isEmailInvited).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps profile authority absent when the verified owner has no default profile', async () => {

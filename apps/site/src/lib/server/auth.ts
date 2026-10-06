@@ -31,6 +31,7 @@ import {
   applicationRuntimeConfiguration,
 } from './application-runtime.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
+import { isEmailInvited } from './hosted-invite.js';
 import { provisionHostedOidcUser } from './hosted-oidc-provisioning.js';
 import { seedSystemRolesWithPermissions } from './role-permissions.js';
 
@@ -567,6 +568,15 @@ export async function completeOidcLogin(event: RequestEvent): Promise<void> {
 
   if (!isAuthorizedHostedOidcUser(claims)) {
     error(403, 'This account is not authorized to use this site.');
+  }
+
+  // Shared installations are invite-only. Reject before any user, tenant, or
+  // session row exists so an uninvited identity leaves no trace.
+  if (
+    getAppConfig().workspaceMode === 'shared' &&
+    !(await isEmailInvited(claims.email))
+  ) {
+    redirect(303, '/not-invited');
   }
 
   const user = await getOrCreateHostedOidcLoginUser(

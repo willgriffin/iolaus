@@ -223,6 +223,8 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     // table is still part of the native manifest migration so idempotency and
     // accounting state survive a process restart.
     'AdminAssistantTurn',
+    // Operator-managed invite allowlist for shared hosted workspaces.
+    'HostedInvite',
   ]) {
     await getCollection(className);
     initialized.push(className);

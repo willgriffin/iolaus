@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const getAuthMock = vi.hoisted(() => vi.fn());
 
+const inviteMock = vi.hoisted(() => ({ isEmailInvited: vi.fn() }));
+
 vi.mock('@happyvertical/auth', () => ({ getAuth: getAuthMock }));
+vi.mock('./hosted-invite', () => inviteMock);
 
 import {
   canUseLocalDevLogin,
+  completeOidcLogin,
   getOidcAuth,
   getRuntimeCookieName,
   hostedWorkspaceTenantSlug,
@@ -200,6 +204,78 @@ describe('isAuthorizedHostedOidcUser', () => {
     expect(
       hostedWorkspaceTenantSlug('11111111-1111-4111-8111-111111111111'),
     ).toMatch(/^iolaus-user-[a-f0-9]{24}$/u);
+  });
+});
+
+describe('completeOidcLogin invite gate', () => {
+  function configureHosted(mode?: 'shared') {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://jobs.example.invalid';
+    process.env.IOLAUS_OIDC_ISSUER_MODE = 'root';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.invalid';
+    delete process.env.IOLAUS_OIDC_REALM;
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'career-hub';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'owner@example.invalid';
+    if (mode) process.env.IOLAUS_WORKSPACE_MODE = mode;
+    else delete process.env.IOLAUS_WORKSPACE_MODE;
+  }
+
+  function callbackEvent() {
+    return {
+      cookies: {
+        delete: vi.fn(),
+        // Cookie names are fingerprinted per runtime; every temporary OIDC
+        // cookie here may carry the same value (state must match the query).
+        get: () => 'state-1',
+        set: vi.fn(),
+      },
+      getClientAddress: () => '127.0.0.1',
+      request: new Request('https://jobs.example.invalid/auth/oidc/callback'),
+      url: new URL(
+        'https://jobs.example.invalid/auth/oidc/callback?code=c&state=state-1',
+      ),
+    } as never;
+  }
+
+  function mockProvider(email: string) {
+    getAuthMock.mockResolvedValue({
+      exchangeCode: vi.fn().mockResolvedValue({ idToken: 'id-token' }),
+      getDiscoveryDocument: vi
+        .fn()
+        .mockResolvedValue({ issuer: 'https://identity.example.invalid' }),
+      validateToken: vi.fn().mockResolvedValue({
+        email,
+        email_verified: true,
+        iss: 'https://identity.example.invalid',
+        sub: 'subject-1',
+      }),
+    });
+  }
+
+  it('sends an uninvited verified shared-mode user to the invite page without a session', async () => {
+    configureHosted('shared');
+    mockProvider('stranger@example.invalid');
+    inviteMock.isEmailInvited.mockResolvedValue(false);
+
+    await expect(completeOidcLogin(callbackEvent())).rejects.toMatchObject({
+      location: '/not-invited',
+      status: 303,
+    });
+    expect(inviteMock.isEmailInvited).toHaveBeenCalledWith(
+      'stranger@example.invalid',
+    );
+  });
+
+  it('never consults invites for a private installation', async () => {
+    configureHosted();
+    inviteMock.isEmailInvited.mockClear();
+    mockProvider('stranger@example.invalid');
+
+    await expect(completeOidcLogin(callbackEvent())).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(inviteMock.isEmailInvited).not.toHaveBeenCalled();
   });
 });
 
