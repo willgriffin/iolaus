@@ -3,29 +3,27 @@ import '@happyvertical/smrt-ui/themes/styles/studio.css';
 import type { User as SmrtUser } from '@happyvertical/smrt-svelte';
 import { Provider as SmrtProvider } from '@happyvertical/smrt-svelte';
 import {
+  ActivityList,
   AdminShell,
   AppScopePanel,
   createShellState,
   type ShellFocusTool,
   type ShellPanelDefaults,
-  type ShellStatusChip,
-  type ShellSystemPanel,
-  SystemScopePanel,
-  SystemStatusChips,
 } from '@happyvertical/smrt-svelte/workspace';
 import { getThemeContext } from '@happyvertical/smrt-ui/themes';
-import LogOut from '@lucide/svelte/icons/log-out';
-import Moon from '@lucide/svelte/icons/moon';
+import MessageSquare from '@lucide/svelte/icons/message-square';
 import PanelBottomClose from '@lucide/svelte/icons/panel-bottom-close';
 import PanelBottomOpen from '@lucide/svelte/icons/panel-bottom-open';
-import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
-import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
-import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
-import Sun from '@lucide/svelte/icons/sun';
-import UserRound from '@lucide/svelte/icons/user-round';
 import { onMount, setContext, untrack } from 'svelte';
 import { page } from '$app/state';
-import { buildAdminNavigation } from '$lib/admin/category-navigation';
+import {
+  type AdminActivityFeedState,
+  startAdminActivityFeed,
+} from '$lib/admin/activity-feed';
+import {
+  adminCategories,
+  buildAdminNavigation,
+} from '$lib/admin/category-navigation';
 import {
   ADMIN_DOCK_CONTEXT,
   type AdminDockApi,
@@ -39,9 +37,10 @@ import {
   navigationStateForViewport,
   readStoredNavigationState,
 } from '$lib/admin/shell-navigation';
-import AdminResourceDockPanel from '$lib/components/admin/AdminResourceDockPanel.svelte';
+import AdminActivityTicker from '$lib/components/admin/AdminActivityTicker.svelte';
+import AdminAssistantPanel from '$lib/components/admin/AdminAssistantPanel.svelte';
+import AdminSidebarControls from '$lib/components/admin/AdminSidebarControls.svelte';
 import AdminTenantNav from '$lib/components/admin/AdminTenantNav.svelte';
-import NavIcon from '$lib/components/admin/NavIcon.svelte';
 
 type BreadcrumbItem = {
   href?: string;
@@ -65,14 +64,19 @@ const ADMIN_SHELL_CONFIG = {
     label: 'Navigation',
     presentation: 'overlay',
   },
-  // Keep the demo focused on the primary workflow until the tool dock has
-  // completed its QA pass. The shell treats `false` as a fully hidden edge.
-  right: false,
+  right: {
+    collapsedSize: '0rem',
+    expandedSize: 'min(420px, calc(100vw - 1rem))',
+    initial: 'collapsed',
+    label: 'Assistant',
+    presentation: 'overlay',
+    keepMounted: true,
+  },
   bottom: {
     collapsedSize: '2.75rem',
     expandedSize: 'min(360px, 42vh)',
     initial: 'collapsed',
-    label: 'System',
+    label: 'Activities',
     presentation: 'overlay',
   },
 } satisfies ShellPanelDefaults;
@@ -104,7 +108,12 @@ function initialNavigationState(): 'collapsed' | 'expanded' {
 }
 
 const adminShell = createShellState({
-  config: ADMIN_SHELL_CONFIG,
+  config: {
+    ...ADMIN_SHELL_CONFIG,
+    right: untrack(() => data.assistantEnabled)
+      ? ADMIN_SHELL_CONFIG.right
+      : false,
+  },
   storageKey: ADMIN_SHELL_STORAGE_KEY,
 });
 // Keep the responsive default out of the persisted settings delta. ShellState
@@ -112,6 +121,37 @@ const adminShell = createShellState({
 // must be added only by an explicit left-panel action.
 adminShell.panels.left = initialNavigationState();
 let shellReady = $state(false);
+let activityFeedState = $state<AdminActivityFeedState>({
+  status: 'loading',
+  observedAt: null,
+  truncated: false,
+});
+$effect(() => {
+  const owner = data.activityScopeKey;
+  if (typeof window === 'undefined') return;
+  if (!owner) {
+    activityFeedState = {
+      status: 'unavailable',
+      observedAt: null,
+      truncated: false,
+    };
+    return;
+  }
+  const feed = untrack(() =>
+    startAdminActivityFeed({
+      shell: adminShell,
+      onState: (state) => {
+        activityFeedState = state;
+      },
+    }),
+  );
+  return () => feed.stop();
+});
+let assistantOpened = $state(false);
+$effect(() => {
+  if (data.assistantEnabled && adminShell.panels.right === 'expanded')
+    assistantOpened = true;
+});
 
 const providerUser = $derived(data.user as unknown as SmrtUser | null);
 const routeAdminDockContext = $derived(
@@ -130,61 +170,6 @@ const adminBreadcrumbs = $derived(
 );
 const showAdminBreadcrumbs = $derived(adminBreadcrumbs.length > 1);
 const tenantCurrentHref = $derived(currentTenantHref(page.url.pathname));
-const systemStatusChips = $derived<ShellStatusChip[]>([
-  {
-    id: 'session',
-    label: 'Session',
-    tone: data.user?.email ? 'success' : 'warning',
-    value: data.user?.email ? 'Active' : 'Guest',
-  },
-  {
-    id: 'resources',
-    label: 'Resources',
-    tone: 'info',
-    value: data.resources.length,
-  },
-  {
-    id: 'theme',
-    label: 'Theme',
-    value: theme,
-  },
-]);
-const systemPanels = $derived<ShellSystemPanel[]>([
-  {
-    id: 'admin',
-    label: 'Admin',
-    items: [
-      {
-        id: 'shell',
-        label: 'AdminShell',
-        status: 'Four-edge layout',
-        detail: 'App, tenant, focus, and system scopes are active.',
-      },
-      {
-        id: 'resources',
-        label: 'Resources',
-        status: `${data.resources.length} registered`,
-        href: '/admin/tasks',
-      },
-    ],
-  },
-  {
-    id: 'runtime',
-    label: 'Runtime',
-    items: [
-      {
-        id: 'tenant',
-        label: 'Tenant',
-        status: data.tenantId ? `Tenant ${data.tenantId}` : 'Admin',
-      },
-      {
-        id: 'theme',
-        label: 'Theme',
-        status: theme,
-      },
-    ],
-  },
-]);
 const navItems = $derived(buildAdminNavigation(data.resources));
 
 const activeRouteAliases: Record<string, string[]> = {
@@ -289,7 +274,7 @@ $effect(() => {
     tools.map((tool) => adminShell.registerFocusTool(tool)),
   );
 
-  if (tools.length === 0) {
+  if (tools.length === 0 && !data.assistantEnabled) {
     pendingAdminToolId = null;
     untrack(() => adminShell.collapsePanel('right'));
   }
@@ -384,12 +369,39 @@ function resolveAdminBreadcrumbs(
   const crumbs: BreadcrumbItem[] = [{ href: '/admin', label: 'Overview' }];
   const resourceSlug = parts[1];
   if (!resourceSlug) return crumbs;
+  if (resourceSlug === 'resume' && parts[2] === 'skill-discovery') {
+    return [
+      ...crumbs,
+      { href: '/admin/career', label: 'Resume' },
+      { label: 'Discover skills' },
+    ];
+  }
+
+  const memoryResources = new Set<string>(
+    adminCategories.find(({ key }) => key === 'memory')?.resources ?? [],
+  );
+  const resumeResources = new Set<string>(
+    adminCategories.find(({ key }) => key === 'career')?.resources ?? [],
+  );
+  if (resourceSlug === 'resume' || resumeResources.has(resourceSlug))
+    crumbs.push({ href: '/admin/career', label: 'Resume' });
+  if (resourceSlug === 'memory' || memoryResources.has(resourceSlug))
+    crumbs.push({ href: '/admin/system', label: 'System' });
+  if (memoryResources.has(resourceSlug))
+    crumbs.push({ href: '/admin/memory', label: 'Memory' });
 
   const resource = resources.find((item) => item.slug === resourceSlug);
   if (!resource) {
+    const categoryLabel = adminCategories.find(
+      ({ key }) => key === resourceSlug,
+    )?.label;
+    const label =
+      resourceSlug === 'resume'
+        ? 'Preview & PDFs'
+        : (categoryLabel ?? segmentLabel(resourceSlug));
     crumbs.push({
       href: `/admin/${resourceSlug}`,
-      label: segmentLabel(resourceSlug),
+      label,
     });
     return crumbs;
   }
@@ -471,58 +483,19 @@ function currentTenantHref(pathname: string): string {
 {#snippet appBar()}
   <div class="admin-app-bar">
     <div class="admin-app-bar-left">
-      <button
-        class="admin-icon-button"
-        type="button"
-        aria-label={adminShell.panels.left === 'expanded' ? 'Close navigation menu' : 'Open navigation menu'}
-        aria-expanded={adminShell.panels.left === 'expanded'}
-        aria-controls="admin-navigation"
-        onclick={() => adminShell.togglePanel('left')}
-      >
-        <PanelLeftOpen size={18} strokeWidth={2.1} />
-      </button>
-      <a class="admin-brand" href="/admin" aria-label={`${data.appName} employment search`}>
+      <button class="admin-brand" type="button" aria-label={`${data.appName}: ${adminShell.panels.left === 'expanded' ? 'Close' : 'Open'} navigation menu`} aria-expanded={adminShell.panels.left === 'expanded'} aria-controls="admin-navigation" onclick={() => { if (!window.matchMedia(ADMIN_NAVIGATION_MEDIA_QUERY).matches && adminShell.panels.left !== 'expanded') adminShell.collapsePanel('right'); adminShell.togglePanel('left'); }}>
         <span class="admin-brand-mark">{data.appMark}</span>
         <span class="admin-brand-text">
           <span class="admin-brand-eyebrow">{data.appName}</span>
           <strong>Employment Search</strong>
         </span>
-      </a>
-    </div>
-
-    <div class="admin-app-bar-actions">
-      {#if data.user?.email}
-        <button
-          class="admin-user-button"
-          type="button"
-          title="Open app settings"
-          aria-label="Open app settings"
-          aria-expanded={adminShell.panels.top === 'expanded'}
-          onclick={() => adminShell.togglePanel('top')}
-        >
-          <UserRound size={16} strokeWidth={2.1} />
-          <span>{data.user.email}</span>
-        </button>
-      {/if}
-      <button
-        class="admin-icon-button"
-        type="button"
-        title={theme === 'light' ? 'Use dark mode' : 'Use light mode'}
-        aria-label={theme === 'light' ? 'Use dark mode' : 'Use light mode'}
-        aria-pressed={theme === 'dark'}
-        onclick={toggleTheme}
-      >
-        {#if theme === 'light'}
-          <Moon size={16} strokeWidth={2.1} />
-        {:else}
-          <Sun size={16} strokeWidth={2.1} />
-        {/if}
       </button>
-      <form method="POST" action="/logout">
-        <button class="admin-icon-button" type="submit" title="Sign out" aria-label="Sign out">
-          <LogOut size={16} strokeWidth={2.1} />
-        </button>
-      </form>
+      {#if data.assistantEnabled}
+        <button class="admin-icon-button" type="button" title={adminShell.panels.right === 'expanded' ? 'Close assistant' : 'Open assistant'} aria-label={adminShell.panels.right === 'expanded' ? 'Close assistant' : 'Open assistant'} aria-expanded={adminShell.panels.right === 'expanded'} aria-controls="admin-assistant" onclick={() => {
+          if (!window.matchMedia(ADMIN_NAVIGATION_MEDIA_QUERY).matches && adminShell.panels.right !== 'expanded') adminShell.collapsePanel('left');
+          adminShell.togglePanel('right');
+        }}><MessageSquare size={18} aria-hidden="true" /></button>
+      {/if}
     </div>
   </div>
 {/snippet}
@@ -537,22 +510,15 @@ function currentTenantHref(pathname: string): string {
 
 {#snippet tenantRail()}
   <div class="admin-tenant-rail" data-sveltekit-preload-data="tap">
-    <button
-      class="admin-icon-button"
-      type="button"
-      title="Expand navigation"
-      aria-label="Expand navigation"
-      aria-expanded={adminShell.panels.left === 'expanded'}
-      onclick={() => adminShell.expandPanel('left')}
-    >
-      <PanelLeftOpen size={17} strokeWidth={2.1} />
-    </button>
+    <div class="admin-rail-navigation">
     <AdminTenantNav
       collapsed
       items={navItems}
       currentHref={tenantCurrentHref}
       onNavigate={handleTenantNavigate}
     />
+    </div>
+    <AdminSidebarControls id="admin-rail-account" compact email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
   </div>
 {/snippet}
 
@@ -560,75 +526,21 @@ function currentTenantHref(pathname: string): string {
   <div id="admin-navigation" class="admin-tenant-panel" data-sveltekit-preload-data="tap">
     <div class="admin-panel-header">
       <strong>Navigation</strong>
-      <button
-        class="admin-icon-button"
-        type="button"
-        title="Collapse navigation"
-        aria-label="Collapse navigation"
-        onclick={() => adminShell.collapsePanel('left')}
-      >
-        <PanelLeftClose size={16} strokeWidth={2.1} />
-      </button>
     </div>
     <AdminTenantNav items={navItems} currentHref={tenantCurrentHref} onNavigate={handleTenantNavigate} />
   </div>
 {/snippet}
 
-{#snippet focusRail()}
-  <div class="admin-focus-rail" aria-label="Admin tools">
-    {#each adminDockTools as tool (tool.id)}
-      <button
-        type="button"
-        class:active={activeAdminToolId === tool.id}
-        title={tool.label}
-        aria-label={tool.label}
-        aria-pressed={activeAdminToolId === tool.id}
-        onclick={() => toggleAdminTool(tool.id)}
-      >
-        <NavIcon name={tool.icon} size={18} />
-        {#if tool.badge !== null && tool.badge !== undefined && tool.badge !== ''}
-          <span class="admin-dock-badge">{tool.badge}</span>
-        {/if}
-      </button>
-    {/each}
-  </div>
+{#snippet tenantFooter()}
+  <AdminSidebarControls id="admin-panel-account" email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
 {/snippet}
 
+{#snippet focusRail()}{/snippet}
+
 {#snippet focusPanel()}
-  <section class="admin-focus-panel">
-    <header class="admin-panel-header">
-      <div>
-        <span>Tools</span>
-        <strong>{activeAdminTool?.label ?? 'Inspector'}</strong>
-      </div>
-      <button
-        class="admin-icon-button"
-        type="button"
-        title="Collapse tools"
-        aria-label="Collapse tools"
-        onclick={closeAdminDock}
-      >
-        <PanelRightClose size={16} strokeWidth={2.1} />
-      </button>
-    </header>
-
-    {#if adminDockTools.length > 1}
-      <div class="admin-focus-switcher">
-        {#each adminDockTools as tool (tool.id)}
-          <button
-            type="button"
-            class:active={activeAdminToolId === tool.id}
-            onclick={() => toggleAdminTool(tool.id)}
-          >
-            <NavIcon name={tool.icon} size={15} />
-            <span>{tool.label}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    <AdminResourceDockPanel context={activeAdminDockContext} />
-  </section>
+  {#if data.assistantEnabled && assistantOpened}
+    <AdminAssistantPanel visible={adminShell.panels.right === 'expanded'} onClose={() => adminShell.collapsePanel('right')} />
+  {/if}
 {/snippet}
 
 {#snippet systemBar()}
@@ -636,8 +548,8 @@ function currentTenantHref(pathname: string): string {
     <button
       class="admin-icon-button"
       type="button"
-      title={adminShell.panels.bottom === 'expanded' ? 'Collapse system panel' : 'Expand system panel'}
-      aria-label={adminShell.panels.bottom === 'expanded' ? 'Collapse system panel' : 'Expand system panel'}
+      title={adminShell.panels.bottom === 'expanded' ? 'Collapse activities' : 'Expand activities'}
+      aria-label={adminShell.panels.bottom === 'expanded' ? 'Collapse activities' : 'Expand activities'}
       aria-expanded={adminShell.panels.bottom === 'expanded'}
       onclick={() => adminShell.togglePanel('bottom')}
     >
@@ -647,7 +559,11 @@ function currentTenantHref(pathname: string): string {
         <PanelBottomOpen size={16} strokeWidth={2.1} />
       {/if}
     </button>
-    <SystemStatusChips chips={systemStatusChips} />
+    {#if activityFeedState.status === 'ready'}
+      <AdminActivityTicker activities={adminShell.activities} statuses={['queued', 'running']} label="Active processes" />
+    {:else}
+      <span class="admin-activity-status">{activityFeedState.status === 'loading' ? 'Loading activities…' : 'Activity unavailable'}</span>
+    {/if}
   </div>
 {/snippet}
 
@@ -655,20 +571,28 @@ function currentTenantHref(pathname: string): string {
   <section class="admin-system-panel">
     <header class="admin-panel-header">
       <div>
-        <span>System</span>
-        <strong>Admin runtime</strong>
+        <strong>Activities</strong>
       </div>
       <button
         class="admin-icon-button"
         type="button"
-        title="Collapse system panel"
-        aria-label="Collapse system panel"
+        title="Collapse activities"
+        aria-label="Collapse activities"
         onclick={() => adminShell.collapsePanel('bottom')}
       >
         <PanelBottomClose size={16} strokeWidth={2.1} />
       </button>
     </header>
-    <SystemScopePanel panels={systemPanels} />
+    {#if activityFeedState.status === 'ready'}
+      <ActivityList filter={{ status: ['queued', 'running'] }} emptyLabel="No active processes" />
+      {#if adminShell.activities.some((activity) => ['completed', 'failed', 'canceled'].includes(activity.status))}
+        <strong>Recently finished · last 5 minutes</strong>
+        <ActivityList filter={{ status: ['completed', 'failed', 'canceled'] }} hideWhenEmpty />
+      {/if}
+      {#if activityFeedState.truncated}<p class="admin-activity-status">Showing the first 20 activities.</p>{/if}
+    {:else}
+      <p class="admin-activity-status">{activityFeedState.status === 'loading' ? 'Loading activities…' : 'Activity unavailable. Retrying automatically.'}</p>
+    {/if}
   </section>
 {/snippet}
 
@@ -682,6 +606,7 @@ function currentTenantHref(pathname: string): string {
       {appPanel}
       {tenantRail}
       {tenantPanel}
+      {tenantFooter}
       {focusRail}
       {focusPanel}
       {systemBar}
@@ -711,38 +636,31 @@ function currentTenantHref(pathname: string): string {
   </SmrtProvider>
 </div>
 
-<style>
+
+  <style>
   :global(body) {
     background: var(--smrt-color-surface);
   }
-
   .admin-shell-hydrating :global(.smrt-admin-shell__edge--left) {
     visibility: hidden;
   }
-
   :global(.smrt-admin-shell) {
     --smrt-admin-shell-left-expanded: min(18rem, calc(100vw - 1rem));
-    --smrt-admin-shell-right-expanded: min(420px, 32vw);
+    --smrt-admin-shell-right-expanded: min(420px, calc(100vw - 1rem));
   }
-
   :global(.smrt-admin-shell__edge--top .smrt-admin-shell__band),
   :global(.smrt-admin-shell__edge--bottom .smrt-admin-shell__band) {
     padding: 0;
   }
-
   .admin-app-bar,
   .admin-app-bar-left,
-  .admin-app-bar-actions,
   .admin-brand,
-  .admin-user-button,
   .admin-panel-header,
-  .admin-focus-switcher,
   .admin-system-bar {
     display: flex;
     align-items: center;
     min-width: 0;
   }
-
   .admin-app-bar {
     justify-content: space-between;
     gap: 14px;
@@ -750,22 +668,20 @@ function currentTenantHref(pathname: string): string {
     height: 100%;
     padding: 0 14px;
   }
-
-  .admin-app-bar-left,
-  .admin-app-bar-actions {
+  .admin-app-bar-left {
     gap: 8px;
   }
-
-  .admin-app-bar-actions form {
-    display: contents;
-  }
-
   .admin-brand {
     gap: 10px;
     color: inherit;
     text-decoration: none;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
   }
-
+  .admin-brand:focus-visible { outline: 2px solid var(--smrt-color-on-surface); outline-offset: 4px; border-radius: 7px; }
   .admin-brand-mark {
     display: grid;
     place-items: center;
@@ -778,18 +694,15 @@ function currentTenantHref(pathname: string): string {
     color: var(--smrt-color-on-surface);
     background: var(--smrt-color-surface);
   }
-
   .admin-brand-text {
     min-width: 0;
   }
-
   .admin-brand-eyebrow {
     display: block;
     color: var(--smrt-color-on-surface-variant);
     font-size: 11px;
     line-height: 1.2;
   }
-
   .admin-brand strong {
     display: block;
     overflow: hidden;
@@ -798,11 +711,7 @@ function currentTenantHref(pathname: string): string {
     font-size: 14px;
     line-height: 1.2;
   }
-
-  .admin-icon-button,
-  .admin-user-button,
-  .admin-focus-rail button,
-  .admin-focus-switcher button {
+  .admin-icon-button {
     border: 1px solid transparent;
     border-radius: 7px;
     background: transparent;
@@ -813,7 +722,6 @@ function currentTenantHref(pathname: string): string {
       border-color 0.15s ease,
       color 0.15s ease;
   }
-
   .admin-icon-button {
     flex: 0 0 auto;
     display: grid;
@@ -822,119 +730,35 @@ function currentTenantHref(pathname: string): string {
     height: 44px;
     padding: 0;
   }
-
-  .admin-user-button {
-    gap: 7px;
-    min-width: 0;
-    max-width: min(280px, 38vw);
-    height: 32px;
-    padding: 0 9px;
-  }
-
-  .admin-user-button span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-  }
-
   .admin-icon-button:hover,
-  .admin-icon-button:focus-visible,
-  .admin-user-button:hover,
-  .admin-user-button:focus-visible,
-  .admin-focus-rail button:hover,
-  .admin-focus-rail button.active,
-  .admin-focus-switcher button:hover,
-  .admin-focus-switcher button.active {
+  .admin-icon-button:focus-visible {
     border-color: var(--smrt-color-outline-variant);
     background: var(--smrt-color-surface-container);
     color: var(--smrt-color-on-surface);
   }
-
-  .admin-icon-button:focus-visible,
-  .admin-user-button:focus-visible,
-  .admin-focus-rail button:focus-visible,
-  .admin-focus-switcher button:focus-visible {
+  .admin-icon-button:focus-visible {
     outline: 2px solid var(--smrt-color-on-surface);
     outline-offset: 2px;
   }
-
-  .admin-tenant-rail,
-  .admin-focus-rail {
-    display: grid;
-    justify-items: center;
-    align-content: start;
-    gap: 7px;
-    min-height: 100%;
-  }
-
+  .admin-tenant-rail { display:flex; flex-direction:column; align-items:center; height:100%; min-height:0; gap:8px; }
+  .admin-rail-navigation { flex:1; min-height:0; overflow:auto; width:100%; }
   .admin-tenant-panel,
-  .admin-focus-panel,
   .admin-system-panel {
     display: grid;
     align-content: start;
     gap: 12px;
     min-width: 0;
   }
-
   .admin-panel-header {
     justify-content: space-between;
     gap: 10px;
   }
-
-  .admin-panel-header span {
-    display: block;
-    color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
-    line-height: 1.2;
-  }
-
   .admin-panel-header strong {
     display: block;
     color: var(--smrt-color-on-surface);
     font-size: 13px;
     line-height: 1.2;
   }
-
-  .admin-focus-rail button {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    padding: 0;
-  }
-
-  .admin-focus-switcher {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .admin-focus-switcher button {
-    gap: 6px;
-    min-width: 0;
-    min-height: 30px;
-    padding: 0 8px;
-    font-size: 12px;
-  }
-
-  .admin-dock-badge {
-    position: absolute;
-    top: 3px;
-    right: 2px;
-    display: grid;
-    place-items: center;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 3px;
-    border-radius: 999px;
-    background: var(--smrt-color-warning);
-    color: var(--smrt-color-on-warning);
-    font-size: 9px;
-    font-weight: 800;
-    line-height: 1;
-  }
-
   .admin-system-bar {
     justify-content: space-between;
     gap: 12px;
@@ -942,11 +766,8 @@ function currentTenantHref(pathname: string): string {
     height: 100%;
     padding: 0 14px;
   }
-
-  .admin-system-bar :global(.smrt-system-status-chips) {
-    justify-content: safe flex-end;
-  }
-
+  .admin-system-bar { min-width: 0; }
+  .admin-activity-status { color: var(--smrt-color-on-surface-variant); font-size: 12px; }
   .admin-content {
     display: grid;
     align-content: start;
@@ -955,47 +776,33 @@ function currentTenantHref(pathname: string): string {
     min-width: 0;
     padding: 22px;
   }
-
   :global(.admin-content .smrt-breadcrumbs) {
     margin: 0;
     padding: 0 12px 6px;
     border: 0;
     background: transparent;
   }
-
   :global(.admin-content .smrt-breadcrumbs .crumb-item) {
     color: var(--smrt-color-on-surface-variant);
     font-size: 12px;
     font-weight: 700;
   }
-
   :global(.admin-content .smrt-breadcrumbs .crumb-link) {
     color: var(--smrt-color-on-surface-variant);
   }
-
   :global(.admin-content .smrt-breadcrumbs .current) {
     color: var(--smrt-color-on-surface);
   }
-
   :global(.admin-content .smrt-breadcrumbs .separator) {
     margin: 0 4px;
     color: var(--smrt-color-on-surface-variant);
   }
 
   @media (max-width: 640px) {
-    .admin-brand-mark,
-    .admin-brand-eyebrow,
-    .admin-user-button span {
+  .admin-brand-eyebrow {
       display: none;
     }
-
-    .admin-user-button {
-      width: 32px;
-      padding: 0;
-      justify-content: center;
-    }
-
-    .admin-content {
+  .admin-content {
       padding: 14px;
     }
   }

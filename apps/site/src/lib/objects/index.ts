@@ -1,6 +1,7 @@
 export { Achievement } from './Achievement.js';
 export { AchievementAttachment } from './AchievementAttachment.js';
 export { AchievementTag } from './AchievementTag.js';
+export { AdminAssistantTurn } from './AdminAssistantTurn.js';
 export { AgentRun } from './AgentRun.js';
 export { Application } from './Application.js';
 export { ApplicationMaterialComment } from './ApplicationMaterialComment.js';
@@ -37,6 +38,7 @@ export { OpportunityIntelligenceControl } from './OpportunityIntelligenceControl
 export { OpportunityIntelligenceRequest } from './OpportunityIntelligenceRequest.js';
 export { OpportunityIntelligenceResult } from './OpportunityIntelligenceResult.js';
 export { OpportunityPlace } from './OpportunityPlace.js';
+export { OpportunityRecommendationRank } from './OpportunityRecommendationRank.js';
 export { OpportunityRole } from './OpportunityRole.js';
 export { OpportunityTag } from './OpportunityTag.js';
 export { EmploymentPerson } from './Person.js';
