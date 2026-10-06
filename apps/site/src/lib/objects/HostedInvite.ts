@@ -21,4 +21,7 @@ export class HostedInvite extends SmrtObject {
   email = '';
   @field({ type: 'datetime', nullable: true })
   revokedAt: Date | null = null;
+  /** When an invitation email was last attempted (sent or failed). */
+  @field({ type: 'datetime', nullable: true })
+  emailAttemptedAt: Date | null = null;
 }
