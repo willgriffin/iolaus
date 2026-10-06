@@ -49,11 +49,15 @@
     "@happyvertical/files": "0.76.2",
     "@happyvertical/pdf": "0.65.9",
     "@happyvertical/smrt-agents": "0.52.0",
+    "@happyvertical/smrt-app-mcp": "0.52.0",
     "@happyvertical/smrt-app-runtime": "0.52.0",
+    "@happyvertical/smrt-chat": "0.52.0",
     "@happyvertical/smrt-config": "0.52.0",
     "@happyvertical/smrt-core": "0.52.0",
     "@happyvertical/smrt-facts": "0.52.0",
     "@happyvertical/smrt-jobs": "0.52.0",
+    "@happyvertical/smrt-mcp-apps": "0.52.0",
+    "@happyvertical/smrt-mcp-openai": "0.52.0",
     "@happyvertical/smrt-places": "0.52.0",
     "@happyvertical/smrt-profiles": "0.52.0",
     "@happyvertical/smrt-svelte": "0.52.0",
@@ -66,10 +70,7 @@
     "@happyvertical/sql": "0.96.1",
     "@lucide/svelte": "^1.16.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@willgriffin/iolaus-resume": "workspace:*",
-    "@happyvertical/smrt-app-mcp": "0.52.0",
-    "@happyvertical/smrt-mcp-apps": "0.52.0",
-    "@happyvertical/smrt-mcp-openai": "0.52.0"
+    "@willgriffin/iolaus-resume": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

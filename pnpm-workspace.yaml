@@ -8,6 +8,11 @@ overrides:
   '@happyvertical/ai': 0.96.1
   '@happyvertical/smrt-dev-mcp': file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz
 
+# Declaration-only bridge for the existing OpenAI-compatible schema serializer.
+patchedDependencies:
+  '@happyvertical/ai@0.96.1': patches/@happyvertical__ai@0.96.1.patch
+  '@happyvertical/smrt-personas@0.52.0': patches/@happyvertical__smrt-personas@0.52.0.patch
+
 # pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
 # package.json (overrides, onlyBuiltDependencies) are no longer honored.
 #
@@ -81,6 +86,9 @@ minimumReleaseAgeExclude:
   - '@happyvertical/smrt-app-mcp@0.52.0'
   - '@happyvertical/smrt-mcp-apps@0.52.0'
   - '@happyvertical/smrt-mcp-openai@0.52.0'
+  - '@happyvertical/smrt-chat@0.52.0'
+  - '@happyvertical/smrt-messages@0.52.0'
+  - '@happyvertical/smrt-personas@0.52.0'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4

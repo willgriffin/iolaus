@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -38,6 +38,16 @@ const dependencyManifests = [
   JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
   JSON.parse(readFileSync(resolve(root, 'apps/site/package.json'), 'utf8')),
 ];
+const qualifiedEmbeddedSmrtTooling = new Map([
+  [
+    '@happyvertical/smrt-cli',
+    'file:vendor/smrt/happyvertical-smrt-cli-0.52.0-c6e5cdf2.tgz',
+  ],
+  [
+    '@happyvertical/smrt-dev-mcp',
+    'file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz',
+  ],
+]);
 
 for (const manifest of dependencyManifests) {
   for (const [name, version] of Object.entries({
@@ -45,6 +55,14 @@ for (const manifest of dependencyManifests) {
     ...manifest.devDependencies,
   })) {
     if (!name.startsWith('@happyvertical/smrt')) continue;
+    const embeddedArchive = qualifiedEmbeddedSmrtTooling.get(name);
+    if (embeddedArchive === version) {
+      const archivePath = resolve(root, embeddedArchive.slice('file:'.length));
+      if (!existsSync(archivePath)) {
+        throw new Error(`${name} qualified embedded archive is missing.`);
+      }
+      continue;
+    }
     if (!/^\d+\.\d+\.\d+$/u.test(version)) {
       throw new Error(`${name} must be pinned to a released semantic version.`);
     }

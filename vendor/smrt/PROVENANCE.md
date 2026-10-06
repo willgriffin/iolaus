@@ -16,6 +16,29 @@ contains environment files, keys, credentials, `node_modules`, or generated
 SMRT knowledge output. Their upstream release defect is tracked in
 [happyvertical/smrt#3335](https://github.com/happyvertical/smrt/issues/3335).
 
-This is a local-development checkpoint only. Replace both archives with the
-matching published release after it passes the same clean-consumer validator
-checks; do not publish these archives independently.
+## Embedded validator qualification
+
+These archives are intentionally retained together as embedded build tooling for
+the daily-use release tracked by [Iolaus #164](https://github.com/willgriffin/iolaus/issues/164).
+They are not a claim of parity with the published 0.52.0 validator, which lacks
+the command/schema-export closure described above. Do not publish these archives
+independently.
+
+The exact installed CLI was exercised under Node 24.18.0: valid plugin metadata
+passed, invalid plugin metadata failed, and both pinned dev-MCP schema exports
+resolved. A clean frozen-lockfile install and the Docker dependency stage also
+passed with both archives and the declaration patch present before installation.
+Final application build, tests and independent review qualify the integrated
+release separately; these tool checks do not replace application validation.
+
+The archived CLI declares SDK dependencies at `^0.98.0`; the application keeps its
+explicit AI 0.96.1 override. This qualification covers the filesystem/Ajv/schema
+validator path, which performs no AI operation. It does not certify unrelated
+CLI AI commands against that override. No provider credentials or personal data
+are needed for the validator checks.
+
+Published CLI/dev-MCP 0.54.2 includes the validator but requires a Node 26
+closure. Replacing these archives therefore needs a separately qualified runtime
+and dependency upgrade, not a silent version substitution in this Node 24
+release. Replace both together once that supported closure passes the same
+positive and negative validator checks.
