@@ -5407,6 +5407,29 @@ describe('opportunity source crawler discovery', () => {
     ).toBe(false);
   });
 
+  it('keeps technical architect postings when Canada is only a location query', () => {
+    const source = { searchQuery: 'Canada' };
+
+    // Canada is intentionally a stopword, so these must be admitted through
+    // the technical-role allowlist rather than an incidental query-token hit.
+    expect(keywordTokens(source)).toEqual([]);
+    expect(
+      candidateMatchesSource(
+        source,
+        'Senior Enterprise Architect — Remote Alberta',
+      ),
+    ).toBe(true);
+    expect(
+      candidateMatchesSource(
+        source,
+        'Senior Enterprise Architect — Remote Ontario',
+      ),
+    ).toBe(true);
+    expect(
+      candidateMatchesSource(source, 'Enterprise Account Executive — Canada'),
+    ).toBe(false);
+  });
+
   it('discovers relevant provider links from the latest Hacker News Who is Hiring thread', async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);

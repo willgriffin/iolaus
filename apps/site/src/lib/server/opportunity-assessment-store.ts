@@ -15,6 +15,7 @@ import {
   type WorkspaceSubject,
 } from './private-workspace.js';
 import { loadWorkspaceCandidateEvidence } from './resume-data.js';
+import type { ScreeningQuestionRecommendationScope } from './screening-question-assessment-service.js';
 
 export interface OpportunityAssessmentProjection {
   coverage: {
@@ -196,12 +197,21 @@ export async function loadOpportunityAssessmentQueryContext(
 ): Promise<{
   assessmentCandidateMaterialFingerprint: string;
   assessmentPreferencesFingerprint: string;
+  questionRecommendationScope: ScreeningQuestionRecommendationScope;
 }> {
   const [evidence, preferences] = await Promise.all([
     loadWorkspaceCandidateEvidence(subject),
     loadOpportunityAssessmentPreferences(subject),
   ]);
+  const { loadCurrentScreeningQuestionRecommendationScope } = await import(
+    './screening-question-assessment-service.js'
+  );
+  const questionRecommendationScope =
+    await loadCurrentScreeningQuestionRecommendationScope(subject, {
+      loadCandidate: async () => evidence,
+    });
   return {
+    questionRecommendationScope,
     assessmentCandidateMaterialFingerprint: evidence.fingerprint,
     assessmentPreferencesFingerprint:
       opportunityAssessmentPreferencesFingerprint(preferences),

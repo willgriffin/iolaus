@@ -99,6 +99,33 @@ describe.runIf(runSnapshotCoverage)(
       expect(result.rows).toEqual([{ id }]);
     });
 
+    it('orders the complete support tuple with typed missing values on native PostgreSQL in both directions', async () => {
+      assertLocalSnapshotDatabase();
+      const db = await resolveDatabase(getDbConfig());
+      for (const direction of ['ASC', 'DESC']) {
+        const result =
+          await db.query(`WITH ranks(id, strict_count, strict_ratio, advisory_mean, partial_count, partial_ratio) AS (
+          VALUES ('higher-mean', 1, 1.0, 0.8, NULL::integer, NULL::double precision),
+            ('lower-mean', 1, 1.0, 0.6, NULL::integer, NULL::double precision),
+            ('lower-ratio', 1, 0.5, 0.9, NULL::integer, NULL::double precision),
+            ('missing', NULL::integer, NULL::double precision, NULL::double precision, NULL::integer, NULL::double precision)
+        ) SELECT id FROM ranks ORDER BY strict_count ${direction} NULLS LAST,
+          strict_ratio ${direction} NULLS LAST, advisory_mean ${direction} NULLS LAST,
+          partial_count ${direction} NULLS LAST, partial_ratio ${direction} NULLS LAST, id ASC`);
+        expect(
+          result.rows.map((row: Record<string, unknown>) => row.id),
+        ).toEqual(
+          direction === 'DESC'
+            ? ['higher-mean', 'lower-mean', 'lower-ratio', 'missing']
+            : ['lower-ratio', 'lower-mean', 'higher-mean', 'missing'],
+        );
+        const empty = await db.query(
+          'SELECT 1 AS id ORDER BY CAST(NULL AS DOUBLE PRECISION) DESC NULLS LAST',
+        );
+        expect(empty.rows).toEqual([{ id: 1 }]);
+      }
+    });
+
     it('keeps URL skill filters and compact facets off the rendered page payload', async () => {
       assertLocalSnapshotDatabase();
       const query = {

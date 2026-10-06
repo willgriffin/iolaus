@@ -13,6 +13,9 @@ import {
   sortOpportunities,
   writeFilterStateSearchParams,
 } from './opportunity-filters';
+import { completeReviewFixture } from './opportunity-resume-fit-review-projection.test-support';
+import { aggregateScreeningQuestionAnswers } from './opportunity-screening-questions';
+import { questionScreeningFixture } from './question-screening-projection.test-support';
 
 function filters(
   overrides: Partial<OpportunityFilterState> = {},
@@ -56,6 +59,44 @@ describe('parseSkillList', () => {
 });
 
 describe('matchesOpportunity', () => {
+  it('uses the same eligibility fallback for filtering and sorting captured-location-only rows', () => {
+    const metadataOnly = eligibilityRecord('eligible', {
+      id: 'legacy-current',
+      sourceEligibilityProjection: {
+        sourceStatus: 'unknown',
+        eligibilityBucket: 'unknown',
+        capturedPostingLocation: {
+          sourceStatus: 'current',
+          locationNotes: 'Remote Canada',
+        },
+      },
+    });
+    const currentUnknown = eligibilityRecord('eligible', {
+      id: 'source-unknown',
+      sourceEligibilityProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        reason: 'Legal eligibility is unresolved.',
+      },
+    });
+    const stale = eligibilityRecord('eligible', {
+      id: 'stale',
+      sourceEligibilityProjection: { sourceStatus: 'unknown' },
+      assessmentProjection: {
+        sourceStatus: 'stale',
+        eligibilityBucket: 'eligible',
+      },
+    });
+    const selected = filters({ eligibilityBuckets: ['eligible'] });
+    expect(matchesOpportunity(metadataOnly, selected, matchAll)).toBe(true);
+    expect(matchesOpportunity(currentUnknown, selected, matchAll)).toBe(false);
+    expect(matchesOpportunity(stale, selected, matchAll)).toBe(false);
+    expect(
+      sortOpportunities([currentUnknown, metadataOnly], 'eligibility').map(
+        (row) => row.id,
+      ),
+    ).toEqual(['legacy-current', 'source-unknown']);
+  });
   it('passes everything with default filters', () => {
     const record: AdminRecord = { status: 'found' };
     expect(matchesOpportunity(record, filters(), matchAll)).toBe(true);
@@ -71,34 +112,64 @@ describe('matchesOpportunity', () => {
     ).toBe(true);
   });
 
-  it('fit=have excludes records with an unmatched required skill', () => {
+  it('fit=have does not treat matched static skills as an assessment', () => {
     const record: AdminRecord = { requiredSkills: 'Rust, Go' };
     expect(
       matchesOpportunity(record, filters({ fit: 'have' }), matchNone),
     ).toBe(false);
     expect(matchesOpportunity(record, filters({ fit: 'have' }), matchAll)).toBe(
-      true,
+      false,
     );
   });
 
-  it('fit=gaps keeps only records with an unmatched required skill', () => {
+  it('fit=NeedsEvidence requires a current review rather than a static skill mismatch', () => {
     const record: AdminRecord = { requiredSkills: 'Rust' };
     expect(
       matchesOpportunity(record, filters({ fit: 'gaps' }), matchNone),
-    ).toBe(true);
+    ).toBe(false);
     expect(matchesOpportunity(record, filters({ fit: 'gaps' }), matchAll)).toBe(
       false,
     );
   });
 
-  it('treats a posting with no required skills as having no gaps', () => {
+  it('does not infer supported criteria from an empty static skill list', () => {
     const record: AdminRecord = { requiredSkills: '' };
     expect(
       matchesOpportunity(record, filters({ fit: 'have' }), matchNone),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       matchesOpportunity(record, filters({ fit: 'gaps' }), matchNone),
     ).toBe(false);
+  });
+  it('filters current reviewed support and uncertainty without implying a candidate gap', () => {
+    const supported = { resumeFitReviewProjection: completeReviewFixture() };
+    const uncertain = {
+      resumeFitReviewProjection: completeReviewFixture({ sourceUnknown: true }),
+    };
+    const stale = {
+      resumeFitReviewProjection: {
+        ...completeReviewFixture(),
+        sourceStatus: 'stale',
+      },
+    };
+    expect(
+      matchesOpportunity(supported, filters({ fit: 'have' }), matchNone),
+    ).toBe(true);
+    expect(
+      matchesOpportunity(supported, filters({ fit: 'gaps' }), matchNone),
+    ).toBe(false);
+    expect(
+      matchesOpportunity(uncertain, filters({ fit: 'have' }), matchAll),
+    ).toBe(false);
+    expect(
+      matchesOpportunity(uncertain, filters({ fit: 'gaps' }), matchAll),
+    ).toBe(true);
+    expect(matchesOpportunity(stale, filters({ fit: 'have' }), matchAll)).toBe(
+      false,
+    );
+    expect(matchesOpportunity(stale, filters({ fit: 'gaps' }), matchAll)).toBe(
+      false,
+    );
   });
 
   it('matches any of the selected skills', () => {
@@ -340,6 +411,142 @@ describe('matchesOpportunity', () => {
 });
 
 describe('sortOpportunities', () => {
+  it('orders best by native complete support counts while preserving human status, eligibility and legacy-only scores', () => {
+    const one = completeReviewFixture();
+    const fit = {
+      ...one.evidenceFit,
+      supportedCriterionCount: 2,
+      consideredCriterionCount: 2,
+    };
+    const two = {
+      ...one,
+      evidenceFit: fit,
+      completion: {
+        ...one.completion,
+        catalogClauseCount: 2,
+        reviewedMaterialClauseCount: 2,
+      },
+      coverage: {
+        ...one.coverage,
+        fullFit: fit,
+        reviewedRequirementIds: ['material:c1', 'material:c2'],
+        reviewedMaterialClauseIds: ['c1', 'c2'],
+        sourceClauseConsideration: [
+          ...one.coverage.sourceClauseConsideration,
+          {
+            ...one.coverage.sourceClauseConsideration[0],
+            clauseId: 'c2',
+            requirementIds: ['original:r2'],
+            originalRequirementIds: ['original:r2'],
+          },
+        ],
+      },
+      requirements: [
+        ...one.requirements,
+        {
+          ...one.requirements[0],
+          id: 'material:c2',
+          originalRequirementIds: ['original:r2'],
+          postingCitations: [
+            { ...one.requirements[0].postingCitations[0], clauseId: 'c2' },
+          ],
+        },
+      ],
+    };
+    const lower = {
+      id: 'one',
+      status: 'found',
+      latestScore: 100,
+      resumeFitReviewProjection: one,
+    };
+    const higher = {
+      id: 'two',
+      status: 'found',
+      latestScore: 1,
+      resumeFitReviewProjection: two,
+    };
+    const legacy = { id: 'legacy', status: 'found', latestScore: 99 };
+    expect(
+      sortOpportunities([lower, legacy, higher], 'best').map((row) => row.id),
+    ).toEqual(['two', 'one', 'legacy']);
+    expect(
+      sortOpportunities([higher, { ...lower, status: 'apply' }], 'best').map(
+        (row) => row.id,
+      ),
+    ).toEqual(['one', 'two']);
+    expect(
+      sortOpportunities(
+        [
+          higher,
+          {
+            ...lower,
+            sourceEligibilityProjection: {
+              sourceStatus: 'current',
+              eligibilityBucket: 'eligible',
+            },
+          },
+        ],
+        'best',
+      ).map((row) => row.id),
+    ).toEqual(['one', 'two']);
+    expect(
+      sortOpportunities(
+        [legacy, { id: 'older', status: 'found', latestScore: 50 }],
+        'best',
+      ).map((row) => row.id),
+    ).toEqual(['legacy', 'older']);
+    expect(
+      sortOpportunities(
+        [
+          legacy,
+          {
+            ...lower,
+            resumeFitReviewProjection: completeReviewFixture({ context: true }),
+          },
+        ],
+        'best',
+      ).map((row) => row.id),
+    ).toEqual(['legacy', 'one']);
+  });
+
+  it('treats current complete reviews and owned unavailable complete reviews as unscored without changing legacy numeric scores', () => {
+    const complete = {
+      id: 'complete',
+      latestScore: 99,
+      resumeFitReviewProjection: completeReviewFixture(),
+    };
+    const unavailable = {
+      id: 'unavailable',
+      latestScore: 100,
+      completeReviewStatus: 'unknown',
+    };
+    const legacy = { id: 'legacy', latestScore: 50 };
+    for (const record of [complete, unavailable]) {
+      expect(
+        matchesOpportunity(record, filters({ minScore: 1 }), matchAll),
+      ).toBe(false);
+      expect(
+        matchesOpportunity(record, filters({ maxScore: 100 }), matchAll),
+      ).toBe(false);
+    }
+    expect(
+      matchesOpportunity(
+        legacy,
+        filters({ minScore: 40, maxScore: 60 }),
+        matchAll,
+      ),
+    ).toBe(true);
+    for (const direction of ['asc', 'desc'] as const) {
+      expect(
+        sortOpportunities(
+          [complete, unavailable, legacy],
+          'score',
+          direction,
+        ).map((r) => r.id),
+      ).toEqual(['legacy', 'complete', 'unavailable']);
+    }
+  });
+
   const records: AdminRecord[] = [
     {
       id: 'a',
@@ -679,6 +886,369 @@ function citedProjection(
 }
 
 describe('cited support order', () => {
+  it('ranks current user questions before pagination-equivalent ties without promoting stale scores or treating unknown must-haves as conflicts', async () => {
+    const current = await questionScreeningFixture();
+    const conflictingAnswers = current.answers.map((answer) =>
+      answer.questionId === 'authorization'
+        ? {
+            ...answer,
+            answer: 'no' as const,
+            alignment: 0 as const,
+            confidence: 0.99,
+            sourceCitations: [
+              {
+                id: 'authorization-clause',
+                text: 'Authorization is not provided.',
+                start: 0,
+                end: 30,
+              },
+            ],
+          }
+        : answer,
+    );
+    const conflict = {
+      ...current,
+      answers: conflictingAnswers,
+      aggregate: aggregateScreeningQuestionAnswers(
+        current.questions,
+        conflictingAnswers,
+      ),
+    };
+    const rows = [
+      {
+        id: 'stale',
+        status: 'found',
+        questionScreeningEnabled: true,
+        questionScreeningProjection: current,
+        questionScreeningStatus: 'unknown',
+        latestScore: 99,
+        updatedAt: '2026-01-01',
+      },
+      {
+        id: 'conflict',
+        status: 'found',
+        questionScreeningEnabled: true,
+        questionScreeningProjection: conflict,
+        updatedAt: '2026-01-01',
+      },
+      {
+        id: 'current',
+        status: 'found',
+        questionScreeningEnabled: true,
+        questionScreeningProjection: current,
+        updatedAt: '2026-01-01',
+      },
+      {
+        id: 'human-apply',
+        status: 'apply',
+        questionScreeningEnabled: true,
+        updatedAt: '2026-01-01',
+      },
+    ];
+    expect(sortOpportunities(rows, 'best').map((row) => row.id)).toEqual([
+      'human-apply',
+      'current',
+      'stale',
+      'conflict',
+    ]);
+    expect(
+      sortOpportunities(rows, 'recommendation').map((row) => row.id),
+    ).toEqual(['conflict', 'current', 'human-apply', 'stale']);
+    expect(current.aggregate.mustHaveConflictIds).toEqual([]);
+    expect(current.aggregate.unresolvedMustHaveIds).toHaveLength(2);
+  });
+
+  it.each([
+    'score',
+    'recommendation',
+  ] as const)('sorts %s by badge number in both directions, putting stale and title-only last', async (sort) => {
+    const mid = await questionScreeningFixture();
+    const highAnswers = mid.answers.map((answer) =>
+      answer.questionId === 'experience'
+        ? { ...answer, answer: 'yes' as const, alignment: 4 as const }
+        : answer,
+    );
+    const high = {
+      ...mid,
+      answers: highAnswers,
+      aggregate: aggregateScreeningQuestionAnswers(mid.questions, highAnswers),
+    };
+    const rows = [
+      {
+        id: 'mid',
+        latestScore: 99,
+        questionScreeningEnabled: true,
+        questionScreeningProjection: mid,
+      },
+      {
+        id: 'high',
+        latestScore: 1,
+        questionScreeningEnabled: true,
+        questionScreeningProjection: high,
+      },
+      {
+        id: 'stale',
+        latestScore: 100,
+        questionScreeningEnabled: true,
+        questionScreeningProjection: high,
+        questionScreeningStatus: 'unknown',
+      },
+      {
+        id: 'title',
+        latestScore: 100,
+        questionScreeningEnabled: true,
+        questionScreeningProjection: {
+          ...mid,
+          answers: [],
+          aggregate: aggregateScreeningQuestionAnswers([], []),
+          rolePreScreen: {
+            title: 'Accountant',
+            targetRoles: ['Engineer'],
+            outcome: 'unrelated',
+            confidence: 0.99,
+          },
+        },
+      },
+    ];
+    expect(sortOpportunities(rows, sort, 'asc').map((row) => row.id)).toEqual([
+      'mid',
+      'high',
+      'stale',
+      'title',
+    ]);
+    expect(sortOpportunities(rows, sort, 'desc').map((row) => row.id)).toEqual([
+      'high',
+      'mid',
+      'stale',
+      'title',
+    ]);
+  });
+
+  it('orders continuous supplied-evidence relevance after strict support without inventing verified partial positives', () => {
+    function advisoryReview(probability: number) {
+      const fixture = completeReviewFixture({ uncertain: true });
+      return {
+        ...fixture,
+        model: 'openai/gpt-6.1-sol',
+        requirements: [
+          {
+            ...fixture.requirements[0],
+            candidateCitations:
+              completeReviewFixture().requirements[0]?.candidateCitations,
+          },
+        ],
+        verification: {
+          sourceStatus: 'current',
+          version:
+            'opportunity-review-strength-verification/v2-partial-relevance',
+          model: 'jev-1.13.0',
+          strengthClaimCount: 1,
+          verifiedStrengthCount: 0,
+          seniorityClaimCount: 1,
+          verifiedSeniorityCount: 0,
+          partialClaimCount: 1,
+          verifiedPartialCount: 0,
+          partialSupportedRequirementIds: [],
+        },
+        advisoryRelevance: {
+          kind: 'supplied_evidence_relevance',
+          denominator: 1,
+          weightedMean: probability,
+          criterionProbabilityPairs: [
+            {
+              requirementId: 'material:c1',
+              probability,
+              evidenceStatus: 'cited',
+            },
+          ],
+        },
+      };
+    }
+    const rows = [
+      {
+        id: 'less-relevant',
+        status: 'found',
+        resumeFitReviewProjection: advisoryReview(0.2),
+      },
+      {
+        id: 'more-relevant',
+        status: 'found',
+        resumeFitReviewProjection: advisoryReview(0.6),
+      },
+      {
+        id: 'strict',
+        status: 'found',
+        resumeFitReviewProjection: completeReviewFixture(),
+      },
+    ];
+    for (const sort of ['cited_support', 'best'] as const) {
+      expect(sortOpportunities(rows, sort).map((row) => row.id)).toEqual([
+        'strict',
+        'more-relevant',
+        'less-relevant',
+      ]);
+    }
+    expect(
+      sortOpportunities(rows, 'cited_support', 'asc').map((row) => row.id),
+    ).toEqual(['less-relevant', 'more-relevant', 'strict']);
+  });
+
+  it('orders advisory partial evidence only after strict native counts and ratio in cited and best order', () => {
+    function partialReview(partialCount: number, considered: number) {
+      const fixture = completeReviewFixture({ uncertain: true });
+      const fit = {
+        ...fixture.evidenceFit,
+        uncertainCriterionCount: considered,
+        consideredCriterionCount: considered,
+      };
+      const rows = Array.from({ length: considered }, (_, index) => ({
+        ...fixture.requirements[0],
+        id: `material:c${index}`,
+        originalRequirementIds: [`r${index}`],
+        candidateCitations:
+          completeReviewFixture().requirements[0]?.candidateCitations,
+        postingCitations: [
+          {
+            ...fixture.requirements[0]?.postingCitations[0],
+            clauseId: `c${index}`,
+          },
+        ],
+      }));
+      return {
+        ...fixture,
+        model: 'openai/gpt-6.1-sol',
+        evidenceFit: fit,
+        requirements: rows,
+        completion: {
+          ...fixture.completion,
+          catalogClauseCount: considered,
+          reviewedMaterialClauseCount: considered,
+        },
+        coverage: {
+          ...fixture.coverage,
+          fullFit: fit,
+          reviewedRequirementIds: rows.map((row) => row.id),
+          reviewedMaterialClauseIds: rows.map((_, index) => `c${index}`),
+          sourceClauseConsideration: rows.map((_, index) => ({
+            ...fixture.coverage.sourceClauseConsideration[0],
+            clauseId: `c${index}`,
+            requirementIds: [`r${index}`],
+            originalRequirementIds: [`r${index}`],
+          })),
+        },
+        verification: {
+          sourceStatus: 'current',
+          version:
+            'opportunity-review-strength-verification/v2-partial-relevance',
+          model: 'jev-1.13.0',
+          strengthClaimCount: considered,
+          verifiedStrengthCount: 0,
+          seniorityClaimCount: 0,
+          verifiedSeniorityCount: 0,
+          partialClaimCount: considered,
+          verifiedPartialCount: partialCount,
+          partialSupportedRequirementIds: rows
+            .slice(0, partialCount)
+            .map((row) => row.id),
+        },
+      };
+    }
+    const rows = [
+      {
+        id: 'one-of-two',
+        status: 'found',
+        resumeFitReviewProjection: partialReview(1, 2),
+      },
+      {
+        id: 'two-of-two',
+        status: 'found',
+        resumeFitReviewProjection: partialReview(2, 2),
+      },
+      {
+        id: 'one-of-one',
+        status: 'found',
+        resumeFitReviewProjection: partialReview(1, 1),
+      },
+      {
+        id: 'strict',
+        status: 'found',
+        resumeFitReviewProjection: completeReviewFixture(),
+      },
+    ];
+    for (const sort of ['cited_support', 'best'] as const) {
+      expect(sortOpportunities(rows, sort).map((row) => row.id)).toEqual([
+        'strict',
+        'two-of-two',
+        'one-of-one',
+        'one-of-two',
+      ]);
+    }
+    expect(
+      sortOpportunities(rows, 'cited_support', 'asc').map((row) => row.id),
+    ).toEqual(['one-of-two', 'one-of-one', 'two-of-two', 'strict']);
+  });
+
+  it('uses complete current counts and ratio before legacy ties and suppresses stale complete fallback', () => {
+    const full = completeReviewFixture();
+    const unknown = completeReviewFixture({ sourceUnknown: true });
+    const fit = {
+      ...full.evidenceFit,
+      sourceUnknownCriterionCount: 1,
+      sourceClassificationUnknownCount: 1,
+      consideredCriterionCount: 2,
+      supportLowerBound: 0.5,
+      status: 'supported_with_uncertainties',
+    };
+    const mixed = {
+      ...full,
+      evidenceFit: fit,
+      completion: {
+        ...full.completion,
+        catalogClauseCount: 2,
+        reviewedMaterialClauseCount: 2,
+        possibleRequirementCount: 1,
+      },
+      coverage: {
+        ...full.coverage,
+        fullFit: fit,
+        reviewedRequirementIds: ['material:c1', 'material:c2'],
+        reviewedMaterialClauseIds: ['c1', 'c2'],
+        unresolvedClauseIds: ['c2'],
+        requirementsCertainty: 'uncertain',
+        sourceClauseConsideration: [
+          ...full.coverage.sourceClauseConsideration,
+          { ...unknown.coverage.sourceClauseConsideration[0], clauseId: 'c2' },
+        ],
+      },
+      requirements: [
+        ...full.requirements,
+        {
+          ...unknown.requirements[0],
+          id: 'material:c2',
+          postingCitations: [
+            { ...unknown.requirements[0].postingCitations[0], clauseId: 'c2' },
+          ],
+        },
+      ],
+    };
+    const records = [
+      { id: 'a-half', resumeFitReviewProjection: mixed },
+      { id: 'z-full', resumeFitReviewProjection: full },
+      { id: 'legacy', partialAssessmentProjection: citedProjection(1) },
+      {
+        id: 'stale-v4',
+        resumeFitReviewProjection: { ...full, sourceStatus: 'stale' },
+        partialAssessmentProjection: citedProjection(99),
+      },
+    ];
+    expect(
+      sortOpportunities(records, 'cited_support').map((r) => r.id),
+    ).toEqual(['z-full', 'a-half', 'legacy', 'stale-v4']);
+    expect(
+      sortOpportunities(records, 'cited_support', 'asc').map((r) => r.id),
+    ).toEqual(['a-half', 'z-full', 'legacy', 'stale-v4']);
+  });
+
   const rows = [
     {
       id: 'cache-only',

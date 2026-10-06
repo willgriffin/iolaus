@@ -45,6 +45,12 @@ export const OPPORTUNITY_INTELLIGENCE_PROVIDER_WINDOW_LIMITS = {
 /** Server-authored contracts from the adapters that instantiate Typesafe. */
 export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
   {
+    feature: 'candidate-skill-discovery',
+    profile: 'typesafe-candidate-skill-discovery',
+    versions: ['candidate-skill-discovery/v1-named-capability'],
+    historicalVersions: [],
+  },
+  {
     feature: 'opportunity-source-requirement-coverage',
     profile: 'typesafe-opportunity-source-coverage',
     versions: ['requirement-coverage-audit/v6-direct-literal'],
@@ -86,6 +92,37 @@ export const OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS = [
     historicalVersions: [],
   },
   {
+    feature: 'opportunity-review-strength-verification',
+    profile: 'typesafe-opportunity-review-strength-verification',
+    versions: [
+      'opportunity-review-strength-verification/v1-independent-jev',
+      'opportunity-review-strength-verification/v2-partial-relevance',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-question-screening',
+    profile: 'typesafe-opportunity-question-screening',
+    versions: [
+      'opportunity-question-screening/v1-user-questions',
+      'opportunity-question-screening/v2-multi-source-witnesses',
+      'opportunity-question-screening/v3-source-classification',
+      'opportunity-question-screening/v4-role-prescreen-sizing',
+      'opportunity-question-screening/v5-semantic-candidate-witnesses',
+      'opportunity-question-screening/v6-individual-skill-witnesses',
+      'opportunity-question-screening/v7-bounded-evidence-bundles',
+      'opportunity-question-screening/v8-named-capability-evidence',
+      'opportunity-question-screening/v9-lossless-overflow',
+    ],
+    historicalVersions: [],
+  },
+  {
+    feature: 'opportunity-jev-assessment-experiment',
+    profile: 'typesafe-opportunity-jev-assessment-experiment',
+    versions: ['opportunity-jev-assessment-experiment/v1-ordinal-evidence'],
+    historicalVersions: [],
+  },
+  {
     feature: 'opportunity-skill-match',
     profile: 'typesafe-skills',
     versions: ['skill-match/v3'],
@@ -111,11 +148,16 @@ export function opportunityIntelligenceProviderVolume(
       row.feature === identity.feature && row.profile === identity.profile,
   );
   const model =
-    identity.profile === 'typesafe-skills'
-      ? process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() || 'jev-latest'
-      : process.env.OPPORTUNITY_ASSESSMENT_DECISION_MODEL?.trim() ||
-        process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() ||
-        'jev-latest';
+    identity.profile === 'typesafe-opportunity-review-strength-verification' ||
+    identity.profile === 'typesafe-opportunity-jev-assessment-experiment' ||
+    identity.profile === 'typesafe-opportunity-question-screening' ||
+    identity.profile === 'typesafe-candidate-skill-discovery'
+      ? 'jev-1.13.0'
+      : identity.profile === 'typesafe-skills'
+        ? process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() || 'jev-latest'
+        : process.env.OPPORTUNITY_ASSESSMENT_DECISION_MODEL?.trim() ||
+          process.env.OPPORTUNITY_SKILL_DECISION_MODEL?.trim() ||
+          'jev-latest';
   return contract &&
     contract.versions.some(
       (version) =>

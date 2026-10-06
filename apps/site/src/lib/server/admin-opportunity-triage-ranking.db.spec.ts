@@ -17,19 +17,33 @@ const mocks = vi.hoisted(() => ({
   database: undefined as DatabaseInterface | undefined,
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => {
     if (!mocks.database) throw new Error('Test database is not initialized.');
     return mocks.database;
   }),
 }));
 
-vi.mock('@happyvertical/smrt-users', () => ({
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-users')>()),
   getRequestScopedDatabase: vi.fn(() => undefined),
 }));
 
-vi.mock('./db.js', () => ({
+vi.mock('./db.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./db.js')>()),
   getDbConfig: vi.fn(() => mocks.config),
+}));
+vi.mock('./private-workspace.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./private-workspace.js')>()),
+  listPrivateRecords: vi.fn(async () => []),
+}));
+vi.mock('./job-workspace-subject.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./job-workspace-subject.js')>()),
+  runAsRevalidatedJobWorkspaceSubject: vi.fn(
+    async (subject, _capability, work) =>
+      await work(subject, { assertOperation: async () => undefined }),
+  ),
 }));
 
 const postgresUrl = process.env.TRIAGE_TEST_POSTGRES_URL?.trim();
@@ -146,6 +160,23 @@ async function createTables(
     excluded BOOLEAN,
     updated_at TIMESTAMP
   )`;
+  const createIntelligenceRequestTable = `CREATE ${
+    dialect === 'postgres' ? 'TEMP ' : ''
+  }TABLE${dialect === 'postgres' ? ' IF NOT EXISTS' : ''} opportunity_intelligence_requests (
+    request_id TEXT, idempotency_key TEXT, opportunity_id TEXT, agent_run_id TEXT,
+    content_fingerprint TEXT, input_fingerprint TEXT, feature TEXT, model TEXT,
+    profile TEXT, status TEXT, accounting_basis TEXT, actual_total_tokens INTEGER,
+    tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT
+  )`;
+  const createIntelligenceResultTable = `CREATE ${
+    dialect === 'postgres' ? 'TEMP ' : ''
+  }TABLE${dialect === 'postgres' ? ' IF NOT EXISTS' : ''} opportunity_intelligence_results (
+    owner_request_id TEXT, idempotency_key TEXT, opportunity_id TEXT, agent_run_id TEXT,
+    content_fingerprint TEXT, input_fingerprint TEXT, feature TEXT, model TEXT,
+    profile TEXT, status TEXT, output_schema_version TEXT, prompt_version TEXT,
+    prepared_payload_version TEXT, tenant_id TEXT, owner_user_id TEXT,
+    candidate_profile_id TEXT
+  )`;
   if (dialect === 'postgres') {
     // The opt-in suite never names a persistent table. `pg_temp` resolves only
     // for this test connection, so reset cannot touch the supplied database.
@@ -155,8 +186,10 @@ async function createTables(
     await database.query(createApplicationTable);
     await database.query(createDecisionTable);
     await database.query(createAssessmentTable);
+    await database.query(createIntelligenceRequestTable);
+    await database.query(createIntelligenceResultTable);
     await database.query(
-      'TRUNCATE TABLE pg_temp.evaluation_scores, pg_temp.opportunities, pg_temp.companies, pg_temp.applications, pg_temp.decisions, pg_temp.opportunity_assessments',
+      'TRUNCATE TABLE pg_temp.evaluation_scores, pg_temp.opportunities, pg_temp.companies, pg_temp.applications, pg_temp.decisions, pg_temp.opportunity_assessments, pg_temp.opportunity_intelligence_requests, pg_temp.opportunity_intelligence_results',
     );
   } else {
     await database.query('DROP TABLE IF EXISTS evaluation_scores');
@@ -165,12 +198,20 @@ async function createTables(
     await database.query('DROP TABLE IF EXISTS applications');
     await database.query('DROP TABLE IF EXISTS decisions');
     await database.query('DROP TABLE IF EXISTS opportunity_assessments');
+    await database.query(
+      'DROP TABLE IF EXISTS opportunity_intelligence_requests',
+    );
+    await database.query(
+      'DROP TABLE IF EXISTS opportunity_intelligence_results',
+    );
     await database.query(createOpportunityTable);
     await database.query(createScoreTable);
     await database.query(createCompanyTable);
     await database.query(createApplicationTable);
     await database.query(createDecisionTable);
     await database.query(createAssessmentTable);
+    await database.query(createIntelligenceRequestTable);
+    await database.query(createIntelligenceResultTable);
   }
   const opportunityTable =
     dialect === 'postgres' ? 'pg_temp.opportunities' : 'opportunities';
@@ -278,6 +319,7 @@ function query(triageRejectDepriority = false) {
     triageRejectDepriority,
     assessmentCandidateMaterialFingerprint: 'candidate-material',
     assessmentPreferencesFingerprint: 'preferences',
+    questionRecommendationScope: { questionScreeningEnabled: false },
     workspaceSubject: TEST_WORKSPACE_SUBJECT,
   };
 }
@@ -290,8 +332,8 @@ const listContextRankings = [
       'score-96-tie',
       'wrong-status',
       'reject-20',
-      'unknown-90',
       'unscored',
+      'unknown-90',
     ],
     sort: 'best' as const,
     sortDirection: 'asc' as const,
@@ -303,8 +345,8 @@ const listContextRankings = [
       'score-96-tie',
       'wrong-status',
       'reject-20',
-      'unknown-90',
       'unscored',
+      'unknown-90',
     ],
     sort: 'best' as const,
     sortDirection: 'desc' as const,
@@ -645,6 +687,7 @@ function runSuite(
           triageRejectDepriority: false,
           assessmentCandidateMaterialFingerprint: 'candidate-material',
           assessmentPreferencesFingerprint: 'preferences',
+          questionRecommendationScope: { questionScreeningEnabled: false },
           workspaceSubject: TEST_WORKSPACE_SUBJECT,
         };
 
@@ -905,6 +948,7 @@ function runSuite(
           sort: 'score' as const,
           status: 'found',
         },
+        questionRecommendationScope: { questionScreeningEnabled: false },
         reviewFilter: 'apply',
         workspaceSubject: subject,
       };

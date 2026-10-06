@@ -10,20 +10,31 @@ import {
   TRIAGE_SHORTCUTS,
   type TriageShortcutAction,
 } from '$lib/admin/triage-shortcuts';
+import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
 import {
   assessmentCoverageMessages,
   assessmentEligibilityLabels,
   assessmentMatchReadinessLabel,
   getOpportunityAssessmentProjection,
+  getOpportunityEligibilityProjection,
 } from '$lib/opportunity-assessment-projection';
 import { getNumber, getString, parseSkillList } from '$lib/opportunity-filters';
-import { createCandidateSkillMatcher } from '$lib/skill-matching';
+import {
+  completeReviewLabel,
+  getCurrentCompleteOpportunityReview,
+  hasUnavailableCompleteOpportunityReview,
+} from '$lib/opportunity-resume-fit-review-projection';
+import {
+  currentQuestionScreeningRank,
+  getCurrentQuestionScreeningProjection,
+  questionScreeningLabel,
+} from '$lib/question-screening-projection';
+import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
-import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
 /**
@@ -60,8 +71,6 @@ let {
   notes?: string;
 }>();
 
-const hasSkill = $derived(createCandidateSkillMatcher(candidateSkills));
-
 function str(key: string): string {
   return getString(record, key);
 }
@@ -86,8 +95,26 @@ const postingUrl = $derived(str('postingUrl') || str('applyUrl'));
 const assessment = $derived(
   getOpportunityAssessmentProjection(record.assessmentProjection),
 );
+const questionRank = $derived(currentQuestionScreeningRank(record));
+const questionReview = $derived(
+  getCurrentQuestionScreeningProjection(
+    record.questionScreeningProjection,
+    record.questionScreeningStatus,
+  ),
+);
+const completeReview = $derived(
+  getCurrentCompleteOpportunityReview(
+    record.resumeFitReviewProjection,
+    record.completeReviewStatus,
+  ),
+);
+const unavailableCompleteReview = $derived(
+  hasUnavailableCompleteOpportunityReview(record),
+);
 const hasCurrentPartialAssessment = $derived(
-  assessment.sourceStatus !== 'current' &&
+  !unavailableCompleteReview &&
+    !completeReview &&
+    assessment.sourceStatus !== 'current' &&
     Boolean(
       getCurrentPartialOpportunityAssessmentProjection(
         record.partialAssessmentProjection,
@@ -95,9 +122,49 @@ const hasCurrentPartialAssessment = $derived(
     ),
 );
 const score = $derived(
-  assessment.matchReadiness === 'assessable' ? assessment.fitScore : null,
+  !unavailableCompleteReview &&
+    !completeReview &&
+    assessment.matchReadiness === 'assessable'
+    ? assessment.fitScore
+    : null,
 );
 const summary = $derived(str('descriptionSummary'));
+function skillEvidence(
+  skill: string,
+  field: 'requiredSkills' | 'preferredSkills',
+) {
+  return questionReview?.skillMatches?.find(
+    (match) =>
+      match.sourceField === field &&
+      match.requirement.toLowerCase() === skill.toLowerCase(),
+  );
+}
+function skillStatusLabel(
+  skill: string,
+  field: 'requiredSkills' | 'preferredSkills',
+) {
+  const match = skillEvidence(skill, field);
+  if (!match?.assessed) return 'Not assessed';
+  if (match.status === 'unknown') return 'Unknown';
+  if (match.meaning === 'named_capability')
+    return match.status === 'supported'
+      ? 'Direct experience'
+      : 'Related or introductory';
+  return match.status === 'supported' ? 'Supported' : 'Partial support';
+}
+function skillEvidenceLabel(
+  skill: string,
+  field: 'requiredSkills' | 'preferredSkills',
+) {
+  const match = skillEvidence(skill, field);
+  if (!match?.assessed) return 'Not assessed';
+  if (match.status === 'unknown')
+    return 'Evidence not established; see Individual skill evidence for full citations.';
+  return `${skillStatusLabel(skill, field)}: ${match.candidateCitations
+    .slice(0, 3)
+    .map((cite) => cite.title)
+    .join(', ')}. See Individual skill evidence for full citations.`;
+}
 const requiredSkills = $derived(parseSkillList(str('requiredSkills')));
 const preferredSkills = $derived(parseSkillList(str('preferredSkills')));
 const responsibilities = $derived(lineItems('responsibilities'));
@@ -149,10 +216,11 @@ const facts = $derived(
       <p class="meta">
         <span><Building2 size={14} strokeWidth={2.2} /> {company || 'Unknown company'}</span>
         <span><MapPin size={14} strokeWidth={2.2} /> {locations || 'Location not stated'}</span>
-        {#if score !== null}
+        {#if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
+        {:else if score !== null}
           <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
-          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {hasCurrentPartialAssessment ? 'Partial assessment' : assessmentMatchReadinessLabel(assessment)}</span>
+          <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {completeReview?.evidenceFit ? completeReviewLabel(completeReview) : unavailableCompleteReview ? 'Complete review needs refresh' : hasCurrentPartialAssessment ? 'Partial assessment' : assessmentMatchReadinessLabel(assessment)}</span>
         {/if}
       </p>
       {#if postingUrl}
@@ -176,8 +244,13 @@ const facts = $derived(
     <OpportunityScreeningSummary {record} />
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
-      <p>Eligibility: {assessmentEligibilityLabels[assessment.buckets[0]]}</p>
-      {#if hasCurrentPartialAssessment}
+      <p>Eligibility: {assessmentEligibilityLabels[getOpportunityEligibilityProjection(record.sourceEligibilityProjection, record.assessmentProjection).buckets[0]]}</p>
+      {#if questionRank.enabled}<p>{questionReview ? questionScreeningLabel(questionReview) : 'Recommendation unknown'}</p>
+      {:else if completeReview?.evidenceFit}
+        <p>{completeReviewLabel(completeReview)}</p>
+      {:else if unavailableCompleteReview}
+        <p><strong>Complete review needs refresh</strong></p>
+      {:else if hasCurrentPartialAssessment}
         <p>Overall fit not yet established.</p>
         <p class="muted">Current partial evidence is available for this posting and candidate profile. Review the supported criteria and unresolved source clauses before deciding what evidence needs clarification.</p>
       {:else}
@@ -187,7 +260,8 @@ const facts = $derived(
         {/each}
       {/if}
       <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} />
-      <PartialOpportunityEvidence projection={record.partialAssessmentProjection} />
+      {#if !completeReview && !unavailableCompleteReview}<PartialOpportunityEvidence projection={record.partialAssessmentProjection} />{/if}
+      {#if typeof record.id === 'string'}<OpportunityQuestionScreening disabled={busy} opportunityId={record.id} projection={record.questionScreeningProjection} status={record.questionScreeningStatus} blockedReason={record.questionScreeningBlockedReason} />{/if}
       <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
@@ -219,10 +293,10 @@ const facts = $derived(
         <h4>Skills</h4>
         <div class="skills">
           {#each requiredSkills as skill}
-            <span class="chip" class:have={hasSkill(skill)}>{skill}</span>
+            <span class="chip" class:have={skillEvidence(skill, 'requiredSkills')?.status === 'supported'} title={skillEvidenceLabel(skill, 'requiredSkills')}>{skill} · {skillStatusLabel(skill, 'requiredSkills')}</span>
           {/each}
           {#each preferredSkills as skill}
-            <span class="chip preferred" class:have={hasSkill(skill)}>{skill}</span>
+            <span class="chip preferred" class:have={skillEvidence(skill, 'preferredSkills')?.status === 'supported'} title={skillEvidenceLabel(skill, 'preferredSkills')}>{skill} · {skillStatusLabel(skill, 'preferredSkills')}</span>
           {/each}
         </div>
       {/if}

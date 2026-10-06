@@ -8,11 +8,20 @@ import {
   type OpportunityFilterState,
   opportunityScreeningReviewMode,
 } from '$lib/opportunity-filters';
+import { OPPORTUNITY_RECOMMENDATION_RANK_VERSION } from '../objects/OpportunityRecommendationRank.js';
+import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
 import { getDbConfig } from './db.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
 import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
+import {
+  OPPORTUNITY_QUESTION_SCREENING_MODEL,
+  OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+  OPPORTUNITY_QUESTION_SCREENING_VERSION,
+} from './opportunity-question-screening.js';
+import type { OpportunityResumeFitReviewProjection } from './opportunity-resume-fit-review-projection.js';
 import type { OpportunityScreeningProjection } from './opportunity-screening-projection.js';
 import type { SourceEligibilityUiProjection } from './opportunity-source-eligibility-projection.js';
+import { loadCurrentScreeningQuestionRecommendationScope } from './screening-question-assessment-service.js';
 import type { WorkspaceSubject } from './workspace-subject.js';
 
 /** Hidden from every default listing; selectable through an explicit filter. */
@@ -75,8 +84,17 @@ export type OpportunityQuery = {
   /** Current private evidence and preferences that make ranking materialized scalars usable. */
   assessmentCandidateMaterialFingerprint?: string;
   assessmentPreferencesFingerprint?: string;
+  /** One request-scoped screening snapshot, supplied by the route when available. */
+  questionRecommendationScope?: QuestionRecommendationScope;
   /** Verified request subject for every candidate-owned score, app, and review. */
   workspaceSubject?: WorkspaceSubject;
+};
+
+export type QuestionRecommendationScope = {
+  questionScreeningEnabled: boolean;
+  candidateMaterialFingerprint?: string;
+  questionSetFingerprint?: string;
+  blockedReason?: string;
 };
 
 export type WorkspaceOpportunityQuery = OpportunityQuery & {
@@ -176,6 +194,36 @@ function hasCandidateWorkspaceSubject(
   subject: WorkspaceSubject | undefined,
 ): subject is WorkspaceSubject & { profileId: string } {
   return Boolean(subject?.tenantId && subject.userId && subject.profileId);
+}
+
+function needsQuestionRecommendationScope(
+  filters: OpportunityFilterState,
+): boolean {
+  return (
+    filters.minScore !== null ||
+    filters.maxScore !== null ||
+    filters.sort === 'best' ||
+    filters.sort === 'recommendation' ||
+    filters.sort === 'score'
+  );
+}
+
+async function withQuestionRecommendationScope<T extends OpportunityQuery>(
+  query: T,
+): Promise<T> {
+  if (
+    query.questionRecommendationScope ||
+    !needsQuestionRecommendationScope(query.filters) ||
+    !hasCandidateWorkspaceSubject(query.workspaceSubject)
+  )
+    return query;
+  return {
+    ...query,
+    questionRecommendationScope:
+      await loadCurrentScreeningQuestionRecommendationScope(
+        query.workspaceSubject,
+      ),
+  };
 }
 
 function privateSubjectWhereSql(
@@ -527,16 +575,26 @@ function filterWhereSql({
   candidateSkills,
   dialect,
   filters,
+  questionRecommendationScope,
   search,
   values,
   sourceEligibility,
-}: Pick<OpportunityQuery, 'candidateSkills' | 'filters' | 'search'> & {
+}: Pick<
+  OpportunityQuery,
+  'candidateSkills' | 'filters' | 'search' | 'questionRecommendationScope'
+> & {
   dialect: OpportunityQueryDialect;
   values: unknown[];
   sourceEligibility?: Map<string, CurrentSourceOpportunityEligibility>;
-}): { needsAssessment: boolean; needsReview: boolean; where: string[] } {
+}): {
+  needsAssessment: boolean;
+  needsRecommendationRank: boolean;
+  needsReview: boolean;
+  where: string[];
+} {
   const where: string[] = [];
   let needsAssessment = false;
+  let needsRecommendationRank = false;
   let needsReview = false;
 
   const searchTerm = search?.trim().slice(0, 200);
@@ -722,19 +780,31 @@ function filterWhereSql({
     );
   }
   if (filters.minScore !== null) {
-    needsAssessment = true;
-    where.push(
-      `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score >= ${pushParam(values, filters.minScore)}`,
-    );
+    if (questionRecommendationScope?.questionScreeningEnabled) {
+      needsRecommendationRank = true;
+      where.push(
+        `rank.recommendation_percent >= ${pushParam(values, filters.minScore)}`,
+      );
+    } else needsAssessment = true;
+    if (!questionRecommendationScope?.questionScreeningEnabled)
+      where.push(
+        `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score >= ${pushParam(values, filters.minScore)}`,
+      );
   }
   if (filters.maxScore !== null) {
-    needsAssessment = true;
-    where.push(
-      `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score <= ${pushParam(values, filters.maxScore)}`,
-    );
+    if (questionRecommendationScope?.questionScreeningEnabled) {
+      needsRecommendationRank = true;
+      where.push(
+        `rank.recommendation_percent <= ${pushParam(values, filters.maxScore)}`,
+      );
+    } else needsAssessment = true;
+    if (!questionRecommendationScope?.questionScreeningEnabled)
+      where.push(
+        `latest_assessment.match_readiness = 'assessable' AND latest_assessment.fit_score <= ${pushParam(values, filters.maxScore)}`,
+      );
   }
 
-  return { needsAssessment, needsReview, where };
+  return { needsAssessment, needsRecommendationRank, needsReview, where };
 }
 
 function opportunityStatusRankSql(): string {
@@ -755,13 +825,51 @@ function opportunityStatusRankSql(): string {
   END`;
 }
 
+/**
+ * Current recommendation values are private and materialized. The live
+ * opportunity source remains the final freshness fence, so a changed posting
+ * naturally becomes NULL without reading an assessment receipt.
+ */
+function recommendationRankJoinSql(
+  query: OpportunityQuery,
+  values: unknown[],
+): string | undefined {
+  const scope = query.questionRecommendationScope;
+  if (!scope?.questionScreeningEnabled) return undefined;
+  const subject = query.workspaceSubject;
+  const material = scope.candidateMaterialFingerprint;
+  const questions = scope.questionSetFingerprint;
+  if (!hasCandidateWorkspaceSubject(subject) || !material || !questions)
+    return 'LEFT JOIN opportunity_recommendation_ranks rank ON FALSE';
+  const contracts = [
+    OPPORTUNITY_QUESTION_SCREENING_VERSION,
+    OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+  ].map((version) => pushParam(values, version));
+  return `LEFT JOIN opportunity_recommendation_ranks rank
+    ON rank.tenant_id = ${pushParam(values, subject.tenantId)}
+    AND rank.owner_user_id = ${pushParam(values, subject.userId)}
+    AND rank.candidate_profile_id = ${pushParam(values, subject.profileId)}
+    AND rank.opportunity_id = CAST(o.id AS TEXT)
+    AND rank.candidate_material_fingerprint = ${pushParam(values, material)}
+    AND rank.question_set_fingerprint = ${pushParam(values, questions)}
+    AND rank.contract_version IN (${contracts.join(', ')})
+    AND rank.model = ${pushParam(values, OPPORTUNITY_QUESTION_SCREENING_MODEL)}
+    AND rank.projection_version = ${pushParam(values, OPPORTUNITY_RECOMMENDATION_RANK_VERSION)}
+    AND rank.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
+    AND rank.source_content_version = COALESCE(o.source_content_version, 0)
+    AND rank.required_skills_snapshot = COALESCE(o.required_skills, '')
+    AND rank.preferred_skills_snapshot = COALESCE(o.preferred_skills, '')`;
+}
+
 export type CurrentCitedOpportunitySupport = {
   sourceContentFingerprint: string;
   sourceContentVersion: number;
-  projection: OpportunityPartialAssessmentProjection;
+  projection?: OpportunityPartialAssessmentProjection;
+  completeProjection?: OpportunityResumeFitReviewProjection;
+  completeReviewStatus?: 'current' | 'unknown';
 };
 
-/** Replay only owned saved partials against uncached sources; never hydrate the posting corpus. */
+/** Replay only owned saved locators against uncached sources, using one projection batch. */
 export async function loadCurrentCitedOpportunitySupport(
   subject: WorkspaceSubject,
 ): Promise<Map<string, CurrentCitedOpportunitySupport>> {
@@ -770,17 +878,34 @@ export async function loadCurrentCitedOpportunitySupport(
     { listPrivateRecords },
     { OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION },
     { loadCurrentPartialOpportunityAssessmentProjections },
+    { loadCurrentOpportunityResumeFitReviewProjections },
+    { OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION },
+    {
+      OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_V1_VERSION,
+      OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_VERSION,
+    },
     { getCollection },
   ] = await Promise.all([
     import('./private-workspace.js'),
     import('./opportunity-assessment-partial.js'),
     import('./opportunity-assessment-partial-projection.js'),
+    import('./opportunity-resume-fit-review-projection.js'),
+    import('./opportunity-resume-fit-review.js'),
+    import('./opportunity-review-strength-verification.js'),
     import('./smrt.js'),
+  ]);
+  const completeVersions = new Set<string>([
+    OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_V1_VERSION,
+    OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_VERSION,
   ]);
   const rows = await listPrivateRecords('OpportunityAssessment', subject, {
     where: {
-      status: 'partial',
-      contractVersion: OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+      'status in': ['partial', 'reviewed_with_unknowns', 'strength_verified'],
+      'contractVersion in': [
+        OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION,
+        ...completeVersions,
+      ],
     },
   });
   const ids = [
@@ -790,9 +915,16 @@ export async function loadCurrentCitedOpportunitySupport(
         .filter((id): id is string => typeof id === 'string' && id.length > 0),
     ),
   ];
+  // A failed current complete replay must suppress older partial and numeric fit fallbacks.
+  const completeIds = new Set(
+    rows
+      .filter((row) => completeVersions.has(row.contractVersion as string))
+      .map((row) => row.opportunityId),
+  );
   const result = new Map<string, CurrentCitedOpportunitySupport>();
   if (!ids.length) return result;
   const collection = await getCollection('Opportunity');
+  const sources = new Map<string, Record<string, unknown>>();
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(4, ids.length) }, async () => {
@@ -801,31 +933,53 @@ export async function loadCurrentCitedOpportunitySupport(
         const native = await collection.get({ id }, { cache: false });
         if (!native) continue;
         const opportunity = native.toJSON() as Record<string, unknown>;
-        const fingerprint = opportunity.sourceContentFingerprint;
-        const version = opportunity.sourceContentVersion;
         if (
           opportunity.id !== id ||
-          typeof fingerprint !== 'string' ||
-          !fingerprint ||
-          !Number.isSafeInteger(version) ||
-          Number(version) < 0
+          typeof opportunity.sourceContentFingerprint !== 'string' ||
+          !opportunity.sourceContentFingerprint ||
+          !Number.isSafeInteger(opportunity.sourceContentVersion) ||
+          Number(opportunity.sourceContentVersion) < 0
         )
           continue;
-        const projections =
-          await loadCurrentPartialOpportunityAssessmentProjections({
-            opportunities: [opportunity],
-            subject,
-          });
-        const projection = projections.get(id);
-        if (projection)
-          result.set(id, {
-            sourceContentFingerprint: fingerprint,
-            sourceContentVersion: Number(version),
-            projection,
-          });
+        sources.set(id, opportunity);
       }
     }),
   );
+  const completeSources = [...sources.values()].filter((row) =>
+    completeIds.has(row.id as string),
+  );
+  const partialSources = [...sources.values()].filter(
+    (row) => !completeIds.has(row.id as string),
+  );
+  const [complete, partial] = await Promise.all([
+    completeSources.length
+      ? loadCurrentOpportunityResumeFitReviewProjections({
+          opportunities: completeSources,
+          subject,
+        })
+      : undefined,
+    partialSources.length
+      ? loadCurrentPartialOpportunityAssessmentProjections({
+          opportunities: partialSources,
+          subject,
+        })
+      : undefined,
+  ]);
+  for (const [id, source] of sources) {
+    const projection = partial?.get(id);
+    const completeProjection = complete?.get(id);
+    const completeReviewStatus = completeIds.has(id)
+      ? (complete?.completeReviewStatuses.get(id) ?? 'unknown')
+      : undefined;
+    if (projection || completeReviewStatus)
+      result.set(id, {
+        sourceContentFingerprint: source.sourceContentFingerprint as string,
+        sourceContentVersion: Number(source.sourceContentVersion),
+        ...(projection ? { projection } : {}),
+        ...(completeProjection ? { completeProjection } : {}),
+        ...(completeReviewStatus ? { completeReviewStatus } : {}),
+      });
+  }
   return result;
 }
 
@@ -1109,22 +1263,79 @@ function needsSourceEligibility(filters: OpportunityFilterState): boolean {
   );
 }
 
+type CitedSupportTuple = NonNullable<ReturnType<typeof currentCitedSupport>>;
+
+function supportTuple(
+  current: CurrentCitedOpportunitySupport,
+): CitedSupportTuple | null {
+  if (current.completeReviewStatus || current.completeProjection)
+    return currentCitedSupport({
+      resumeFitReviewProjection: current.completeProjection,
+      completeReviewStatus: current.completeReviewStatus,
+    });
+  const count = current.projection?.supportedCriterionCount;
+  return Number.isSafeInteger(count) && Number(count) >= 0
+    ? { supportedCriterionCount: Number(count), supportLowerBound: null }
+    : null;
+}
+
+function currentSupportMetricSql(
+  support: Map<string, CurrentCitedOpportunitySupport>,
+  values: unknown[],
+  metric: (
+    current: CurrentCitedOpportunitySupport,
+  ) => number | null | undefined,
+  bindSource = true,
+): string {
+  const branches = [...support]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .flatMap(([id, current]) => {
+      const value = metric(current);
+      if (value == null || !Number.isFinite(value)) return [];
+      return [
+        `WHEN o.id = ${pushParam(values, id)}
+        ${
+          bindSource
+            ? `AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
+        AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}`
+            : ''
+        }
+        THEN CAST(${pushParam(values, value)} AS DOUBLE PRECISION)`,
+      ];
+    });
+  // Typed NULL also remains legal as a standalone PostgreSQL ORDER BY expression.
+  return branches.length
+    ? `CASE ${branches.join('\n')} ELSE CAST(NULL AS DOUBLE PRECISION) END`
+    : 'CAST(NULL AS DOUBLE PRECISION)';
+}
+
 function citedSupportSql(
   support: Map<string, CurrentCitedOpportunitySupport>,
   values: unknown[],
-): string {
-  // PostgreSQL rejects a bare NULL in ORDER BY as a non-integer constant.
-  // Keep unsupported rows unranked while retaining the stable fallback order.
-  if (!support.size) return 'CAST(NULL AS INTEGER)';
-  const branches = [...support]
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(
-      ([id, current]) => `WHEN o.id = ${pushParam(values, id)}
-      AND o.source_content_fingerprint = ${pushParam(values, current.sourceContentFingerprint)}
-      AND o.source_content_version = ${pushParam(values, current.sourceContentVersion)}
-      THEN ${pushParam(values, current.projection.supportedCriterionCount)}`,
-    );
-  return `CASE ${branches.join('\n')} ELSE NULL END`;
+  best = false,
+): string[] {
+  const tuple = (current: CurrentCitedOpportunitySupport) => {
+    const value = supportTuple(current);
+    return best &&
+      (!current.completeReviewStatus || value?.supportLowerBound == null)
+      ? null
+      : value;
+  };
+  return (
+    [
+      'supportedCriterionCount',
+      'supportLowerBound',
+      'advisoryRelevanceMean',
+      'partialSupportedCriterionCount',
+      'partialSupportLowerBound',
+    ] as const
+  ).map((key) =>
+    currentSupportMetricSql(
+      support,
+      values,
+      (current) => tuple(current)?.[key],
+    ),
+  );
 }
 
 function orderBySql(
@@ -1133,20 +1344,37 @@ function orderBySql(
   options: {
     dialect: OpportunityQueryDialect;
     triageRejectDepriority?: boolean;
-    citedSupport?: string;
+    citedSupport?: string[];
+    completeMarker?: string;
     sourceEligibilityPriority?: string;
+    questionRank?: {
+      enabled: boolean;
+      conflicts: string;
+      recommendation: string;
+      coverage: string;
+    };
   },
 ): string {
   const sqlDirection = direction === 'asc' ? 'ASC' : 'DESC';
   const assessableFit = `CASE WHEN latest_assessment.match_readiness = 'assessable' THEN latest_assessment.fit_score ELSE NULL END`;
+  const supportOrder = (direction: string) =>
+    (options.citedSupport ?? ['CAST(NULL AS DOUBLE PRECISION)'])
+      .map((metric) => `${metric} ${direction} NULLS LAST`)
+      .join(', ');
+  const questionOrder = (order: string, prioritizeConflicts = true) =>
+    `${prioritizeConflicts ? `COALESCE(${options.questionRank?.conflicts ?? 'CAST(NULL AS DOUBLE PRECISION)'}, 0) ASC, ` : ''} ${options.questionRank?.recommendation ?? 'CAST(NULL AS DOUBLE PRECISION)'} ${order} NULLS LAST, ${options.questionRank?.coverage ?? 'CAST(NULL AS DOUBLE PRECISION)'} DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   switch (sort) {
+    case 'recommendation':
+      return questionOrder(sqlDirection, false);
     case 'cited_support':
-      return `${options.citedSupport ?? 'CAST(NULL AS INTEGER)'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
+      return `${supportOrder(sqlDirection)}, o.updated_at DESC, o.id ASC`;
     case 'eligibility':
       return `${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'} ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'newest':
       return `COALESCE(o.posted_at, o.first_seen_at) ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     case 'score':
+      if (options.questionRank?.enabled)
+        return questionOrder(sqlDirection, false);
       return `${
         options.triageRejectDepriority
           ? 'CASE WHEN latest_assessment.excluded THEN 1 ELSE 0 END ASC, '
@@ -1157,7 +1385,9 @@ function orderBySql(
     case 'rating':
       return `latest_review.human_rating ${sqlDirection} NULLS LAST, o.updated_at DESC, o.id ASC`;
     default:
-      return `${opportunityStatusRankSql()} ASC, latest_assessment.eligibility_priority ASC NULLS LAST, ${assessableFit} DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
+      if (options.questionRank?.enabled)
+        return `${opportunityStatusRankSql()} ASC, ${questionOrder('DESC')}`;
+      return `${opportunityStatusRankSql()} ASC, COALESCE(${options.sourceEligibilityPriority ?? 'latest_assessment.eligibility_priority'}, 2) ASC, ${supportOrder('DESC')}, CASE WHEN ${options.completeMarker ?? 'CAST(NULL AS DOUBLE PRECISION)'} IS NULL THEN ${assessableFit} ELSE NULL END DESC NULLS LAST, o.updated_at DESC, o.id ASC`;
   }
 }
 
@@ -1188,6 +1418,7 @@ export function createOpportunityWhereSql(
     candidateSkills: query.candidateSkills,
     dialect,
     filters: query.filters,
+    questionRecommendationScope: query.questionRecommendationScope,
     search: query.search,
     values,
     sourceEligibility,
@@ -1195,6 +1426,10 @@ export function createOpportunityWhereSql(
   const joins: string[] = [];
   if (filters.needsAssessment) {
     joins.push(latestAssessmentJoinSql(dialect, query, values));
+  }
+  if (filters.needsRecommendationRank) {
+    const rankJoin = recommendationRankJoinSql(query, values);
+    if (rankJoin) joins.push(rankJoin);
   }
   if (review.needsApplication) {
     joins.push(
@@ -1302,6 +1537,12 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
       'assessmentPreferencesFingerprint',
       query.assessmentPreferencesFingerprint ?? '',
     ],
+    [
+      'questionRecommendationScope',
+      query.questionRecommendationScope?.questionScreeningEnabled ?? false,
+      query.questionRecommendationScope?.candidateMaterialFingerprint ?? '',
+      query.questionRecommendationScope?.questionSetFingerprint ?? '',
+    ],
     ['reviewFilter', query.reviewFilter.trim()],
     ['search', (query.search ?? '').trim().slice(0, 200).toLowerCase()],
     ['status', filters.status],
@@ -1367,6 +1608,7 @@ export async function listOpportunityMatchingIds(
   { limit }: { limit: number },
 ): Promise<OpportunityMatchingRow[]> {
   if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return [];
+  query = await withQuestionRecommendationScope(query);
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
   const sourceEligibility = query.filters.eligibilityBuckets.length
@@ -1455,6 +1697,7 @@ export async function countOpportunityRecords(
   query: WorkspaceOpportunityQuery,
 ): Promise<number> {
   if (!hasCandidateWorkspaceSubject(query.workspaceSubject)) return 0;
+  query = await withQuestionRecommendationScope(query);
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
   const sourceEligibility = query.filters.eligibilityBuckets.length
@@ -1492,6 +1735,7 @@ export async function listOpportunityPageIds({
   reviewFilter,
   search,
   triageRejectDepriority,
+  questionRecommendationScope: suppliedQuestionRecommendationScope,
   workspaceSubject,
 }: WorkspaceOpportunityQuery & {
   limit: number;
@@ -1500,9 +1744,17 @@ export async function listOpportunityPageIds({
   if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
-  const sourceEligibility = needsSourceEligibility(filters)
-    ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
-    : new Map();
+  const questionRecommendationScope =
+    suppliedQuestionRecommendationScope ??
+    (needsQuestionRecommendationScope(filters)
+      ? await loadCurrentScreeningQuestionRecommendationScope(workspaceSubject)
+      : undefined);
+  const sourceEligibility =
+    needsSourceEligibility(filters) ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
+      : new Map();
   const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
     ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
     : new Map();
@@ -1512,6 +1764,7 @@ export async function listOpportunityPageIds({
       assessmentCandidateMaterialFingerprint,
       assessmentPreferencesFingerprint,
       filters,
+      questionRecommendationScope,
       reviewFilter,
       search,
       workspaceSubject,
@@ -1521,9 +1774,11 @@ export async function listOpportunityPageIds({
     screeningExclusions,
   );
   const needsAssessmentForSort =
-    filters.sort === 'best' ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled) ||
     filters.sort === 'eligibility' ||
-    filters.sort === 'score';
+    (filters.sort === 'score' &&
+      !questionRecommendationScope?.questionScreeningEnabled);
   if (
     needsAssessmentForSort &&
     !query.joins.some((join) => join.includes('opportunity_assessments'))
@@ -1536,6 +1791,7 @@ export async function listOpportunityPageIds({
           assessmentPreferencesFingerprint,
           candidateSkills,
           filters,
+          questionRecommendationScope,
           reviewFilter,
           search,
           triageRejectDepriority,
@@ -1554,16 +1810,68 @@ export async function listOpportunityPageIds({
     );
   }
   const sourceEligibilityPriority =
-    filters.sort === 'eligibility' && sourceEligibility.size
+    (filters.sort === 'eligibility' || filters.sort === 'best') &&
+    sourceEligibility.size
       ? sourceEligibilityPrioritySql(sourceEligibility, query.values)
       : undefined;
+  const support =
+    filters.sort === 'cited_support' ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? await loadCurrentCitedOpportunitySupport(workspaceSubject)
+      : new Map<string, CurrentCitedOpportunitySupport>();
   const citedSupport =
-    filters.sort === 'cited_support'
-      ? citedSupportSql(
-          await loadCurrentCitedOpportunitySupport(workspaceSubject),
+    filters.sort === 'cited_support' ||
+    (filters.sort === 'best' &&
+      !questionRecommendationScope?.questionScreeningEnabled)
+      ? citedSupportSql(support, query.values, filters.sort === 'best')
+      : undefined;
+  const completeMarker =
+    filters.sort === 'best'
+      ? currentSupportMetricSql(
+          support,
           query.values,
+          (current) =>
+            current.completeReviewStatus || current.completeProjection
+              ? 1
+              : null,
+          // Owned locator IDs deny legacy fallback even if source changes after replay.
+          false,
         )
       : undefined;
+  if (
+    questionRecommendationScope?.questionScreeningEnabled &&
+    !query.joins.some((join) =>
+      join.includes('opportunity_recommendation_ranks'),
+    )
+  ) {
+    const rankJoin = recommendationRankJoinSql(
+      {
+        assessmentCandidateMaterialFingerprint,
+        assessmentPreferencesFingerprint,
+        candidateSkills,
+        filters,
+        questionRecommendationScope,
+        reviewFilter,
+        search,
+        triageRejectDepriority,
+        workspaceSubject,
+      },
+      query.values,
+    );
+    if (rankJoin) query.joins.unshift(rankJoin);
+  }
+  const questionRank = questionRecommendationScope?.questionScreeningEnabled
+    ? {
+        enabled: true,
+        conflicts:
+          filters.sort === 'best'
+            ? 'rank.must_have_conflict_count'
+            : 'CAST(NULL AS DOUBLE PRECISION)',
+        recommendation: 'rank.recommendation_percent',
+        coverage: 'rank.evidence_coverage_percent',
+      }
+    : undefined;
   const limitPlaceholder = pushParam(query.values, limit);
   const offsetPlaceholder = pushParam(query.values, offset);
   const sql = `SELECT o.id
@@ -1573,6 +1881,8 @@ export async function listOpportunityPageIds({
     ORDER BY ${orderBySql(filters.sort, filters.sortDirection, {
       dialect,
       citedSupport,
+      questionRank,
+      completeMarker,
       sourceEligibilityPriority,
       triageRejectDepriority:
         triageRejectDepriority && filters.sort === 'score',

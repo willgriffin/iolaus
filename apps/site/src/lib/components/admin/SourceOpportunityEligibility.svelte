@@ -13,6 +13,34 @@ let {
   sourceContentVersion?: unknown;
   compact?: boolean;
 }>();
+const capturedLocation = $derived.by(() => {
+  if (
+    !projection ||
+    typeof projection !== 'object' ||
+    Array.isArray(projection)
+  )
+    return null;
+  const captured = (projection as SourceEligibilityUiProjection)
+    .capturedPostingLocation;
+  if (
+    !captured ||
+    captured.sourceStatus !== 'current' ||
+    typeof sourceContentFingerprint !== 'string' ||
+    !sourceContentFingerprint ||
+    !Number.isSafeInteger(sourceContentVersion) ||
+    Number(sourceContentVersion) < 1 ||
+    captured.sourceContentFingerprint !== sourceContentFingerprint ||
+    captured.sourceContentVersion !== sourceContentVersion ||
+    (captured.locationNotes !== null &&
+      (typeof captured.locationNotes !== 'string' ||
+        !captured.locationNotes.trim())) ||
+    (captured.workMode !== null &&
+      (typeof captured.workMode !== 'string' || !captured.workMode.trim())) ||
+    (!captured.locationNotes && !captured.workMode)
+  )
+    return null;
+  return captured;
+});
 const current = $derived.by(() => {
   if (
     !projection ||
@@ -86,8 +114,14 @@ function pathLabel(status: 'offered' | 'denied' | 'conflicting'): string {
 }
 </script>
 
-{#if current}
+{#if current || capturedLocation}
   <div class="source-eligibility" class:compact role="group" aria-label="Posting eligibility and conditional paths">
+    {#if capturedLocation}
+      {#if capturedLocation.locationNotes}<p>Captured posting location: <strong>{capturedLocation.locationNotes}</strong></p>{/if}
+      {#if capturedLocation.workMode}<p>Captured work arrangement: <strong>{capturedLocation.workMode}</strong></p>{/if}
+      <p>Captured location does not establish work authorization or candidate eligibility.</p>
+    {/if}
+    {#if current}
     <p>Posting work-location eligibility: <strong>{assessmentEligibilityLabels[current.eligibilityBucket]}</strong></p>
     {#if !compact && typeof current.reason === 'string' && current.reason}<p>{current.reason}</p>{/if}
     {#each current.conditionalPaths as path}
@@ -102,6 +136,7 @@ function pathLabel(status: 'offered' | 'denied' | 'conflicting'): string {
         {/each}
       </details>
     {/each}
+    {/if}
   </div>
 {/if}
 

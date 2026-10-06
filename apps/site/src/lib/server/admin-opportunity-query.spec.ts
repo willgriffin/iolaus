@@ -1,7 +1,15 @@
 import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
+import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
+import { completeReviewFixture } from '../opportunity-resume-fit-review-projection.test-support.js';
+import { aggregateScreeningQuestionAnswers } from '../opportunity-screening-questions.js';
+import { questionScreeningFixture } from '../question-screening-projection.test-support.js';
 import type { WorkspaceOpportunityQuery } from './admin-opportunity-query';
+import {
+  OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+  OPPORTUNITY_QUESTION_SCREENING_VERSION,
+} from './opportunity-question-screening.js';
 
 const mocks = vi.hoisted(() => ({
   dbConfig: vi.fn(() => ({})),
@@ -11,8 +19,11 @@ const mocks = vi.hoisted(() => ({
   privatePartials: vi.fn(),
   source: vi.fn(),
   partialProjections: vi.fn(),
+  completeProjections: vi.fn(),
   sourceEligibility: vi.fn(),
   screeningProjections: vi.fn(),
+  questionProjections: vi.fn(),
+  questionRecommendationScope: vi.fn(),
 }));
 
 const WORKSPACE_SUBJECT = {
@@ -29,18 +40,42 @@ vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: mocks.requestDatabase,
 }));
 
+vi.mock('../objects/OpportunityRecommendationRank.js', () => ({
+  OPPORTUNITY_RECOMMENDATION_RANK_VERSION: 'opportunity-recommendation-rank/v2',
+}));
+
 vi.mock('./db.js', () => ({
   getDbConfig: mocks.dbConfig,
 }));
 
 vi.mock('./private-workspace.js', () => ({
   listPrivateRecords: mocks.privatePartials,
+  recordOwnedBySubject: (
+    row: Record<string, unknown>,
+    subject: typeof WORKSPACE_SUBJECT,
+  ) =>
+    row.tenantId === subject.tenantId &&
+    row.ownerUserId === subject.userId &&
+    row.candidateProfileId === subject.profileId,
 }));
 vi.mock('./opportunity-assessment-partial.js', () => ({
   OPPORTUNITY_ASSESSMENT_PARTIAL_VERSION: 'opportunity-assessment-partial/v1',
 }));
 vi.mock('./opportunity-assessment-partial-projection.js', () => ({
   loadCurrentPartialOpportunityAssessmentProjections: mocks.partialProjections,
+}));
+vi.mock('./opportunity-resume-fit-review-projection.js', () => ({
+  loadCurrentOpportunityResumeFitReviewProjections: mocks.completeProjections,
+}));
+vi.mock('./opportunity-resume-fit-review.js', () => ({
+  OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION:
+    'opportunity-resume-fit-review/v4-complete-material',
+}));
+vi.mock('./opportunity-review-strength-verification.js', () => ({
+  OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_V1_VERSION:
+    'opportunity-review-strength-verification/v1-independent-jev',
+  OPPORTUNITY_REVIEW_STRENGTH_VERIFICATION_VERSION:
+    'opportunity-review-strength-verification/v2-partial-relevance',
 }));
 vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION:
@@ -55,15 +90,42 @@ vi.mock('./opportunity-screening-projection.js', () => ({
   OPPORTUNITY_SCREENING_RECEIPT_PROFILE: 'typesafe-opportunity-screening',
   loadCurrentOpportunityScreeningProjections: mocks.screeningProjections,
 }));
+vi.mock('./opportunity-question-screening.js', () => ({
+  OPPORTUNITY_QUESTION_SCREENING_MODEL: 'jev-1.13.0',
+  OPPORTUNITY_QUESTION_SCREENING_VERSION:
+    'opportunity-question-screening/v8-named-capability-evidence',
+  OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION:
+    'opportunity-question-screening/v9-lossless-overflow',
+}));
+vi.mock('./screening-question-assessment-service.js', () => ({
+  loadCurrentScreeningQuestionAssessmentProjections: mocks.questionProjections,
+  loadCurrentScreeningQuestionRecommendationScope:
+    mocks.questionRecommendationScope,
+}));
 vi.mock('./smrt.js', () => ({
   getCollection: async () => ({ get: mocks.source }),
 }));
 
 describe('admin-opportunity-query', () => {
   beforeEach(() => {
+    mocks.questionRecommendationScope.mockReset();
+    mocks.questionRecommendationScope.mockResolvedValue({
+      questionScreeningEnabled: false,
+    });
+    mocks.questionProjections.mockReset();
+    mocks.questionProjections.mockResolvedValue(
+      Object.assign(new Map(), {
+        questionScreeningEnabled: false,
+        questionScreeningStatuses: new Map(),
+      }),
+    );
     mocks.privatePartials.mockReset();
     mocks.privatePartials.mockResolvedValue([]);
     mocks.source.mockReset();
+    mocks.completeProjections.mockReset();
+    mocks.completeProjections.mockResolvedValue(
+      Object.assign(new Map(), { completeReviewStatuses: new Map() }),
+    );
     mocks.partialProjections.mockReset();
     mocks.partialProjections.mockResolvedValue(new Map());
     mocks.sourceEligibility.mockReset();
@@ -78,6 +140,132 @@ describe('admin-opportunity-query', () => {
     mocks.requestDatabase.mockReturnValue(undefined);
     mocks.scopedQuery.mockReset();
     mocks.scopedQuery.mockResolvedValue({ rows: [] });
+  });
+
+  it('joins one current owned recommendation rank and orders it before pagination', async () => {
+    const db = await getDatabase({
+      type: 'sqlite',
+      url: ':memory:',
+      cache: false,
+    });
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.requestDatabase.mockReturnValue(db);
+    try {
+      await db.query(
+        'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, required_skills TEXT, preferred_skills TEXT)',
+      );
+      await db.query(
+        'CREATE TABLE opportunity_recommendation_ranks (tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, opportunity_id TEXT, candidate_material_fingerprint TEXT, question_set_fingerprint TEXT, contract_version TEXT, model TEXT, projection_version TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, required_skills_snapshot TEXT, preferred_skills_snapshot TEXT, recommendation_percent REAL, evidence_coverage_percent REAL, must_have_conflict_count INTEGER)',
+      );
+      for (const [id, updatedAt] of [
+        ['low', '2026-10-01'],
+        ['high', '2026-10-02'],
+        ['stale', '2026-10-03'],
+      ])
+        await db.query(
+          'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [id, 'found', updatedAt, `fp-${id}`, 1, 'TypeScript', 'Svelte'],
+        );
+      for (const [id, score, contract] of [
+        ['low', 10, OPPORTUNITY_QUESTION_SCREENING_VERSION],
+        ['high', 90, OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION],
+        ['stale', 100, OPPORTUNITY_QUESTION_SCREENING_VERSION],
+      ])
+        await db.query(
+          'INSERT INTO opportunity_recommendation_ranks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            WORKSPACE_SUBJECT.tenantId,
+            WORKSPACE_SUBJECT.userId,
+            WORKSPACE_SUBJECT.profileId,
+            id,
+            'candidate-current',
+            'questions-current',
+            contract,
+            'jev-1.13.0',
+            'opportunity-recommendation-rank/v2',
+            id === 'stale' ? 'old-source' : `fp-${id}`,
+            1,
+            'TypeScript',
+            'Svelte',
+            score,
+            100,
+            0,
+          ],
+        );
+      const { listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const query = {
+        candidateSkills: [],
+        filters: {
+          ...DEFAULT_OPPORTUNITY_FILTERS,
+          sort: 'recommendation' as const,
+          sortDirection: 'desc' as const,
+        },
+        questionRecommendationScope: {
+          questionScreeningEnabled: true,
+          candidateMaterialFingerprint: 'candidate-current',
+          questionSetFingerprint: 'questions-current',
+        },
+        reviewFilter: 'all',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 1, offset: 0 }),
+      ).toEqual(['high']);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 2, offset: 1 }),
+      ).toEqual(['low', 'stale']);
+      await db.query(
+        'UPDATE opportunities SET required_skills = ? WHERE id = ?',
+        ['Rust', 'high'],
+      );
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 3, offset: 0 }),
+      ).toEqual(['low', 'stale', 'high']);
+      expect(
+        await listOpportunityPageIds({
+          ...query,
+          filters: { ...query.filters, minScore: 1 },
+          limit: 3,
+          offset: 0,
+        }),
+      ).toEqual(['low']);
+      await db.query(
+        'UPDATE opportunities SET required_skills = ?, preferred_skills = ? WHERE id = ?',
+        ['TypeScript', 'Rust', 'high'],
+      );
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 3, offset: 0 }),
+      ).toEqual(['low', 'stale', 'high']);
+      expect(mocks.questionProjections).not.toHaveBeenCalled();
+      expect(mocks.privatePartials).not.toHaveBeenCalled();
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it('uses current recommendation ranks for score bounds and does not join legacy assessments', async () => {
+    const { createOpportunityWhereSql } = await import(
+      './admin-opportunity-query'
+    );
+    const built = createOpportunityWhereSql({
+      candidateSkills: [],
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, minScore: 40, maxScore: 80 },
+      questionRecommendationScope: {
+        questionScreeningEnabled: true,
+        candidateMaterialFingerprint: 'candidate-current',
+        questionSetFingerprint: 'questions-current',
+      },
+      reviewFilter: 'all',
+      workspaceSubject: WORKSPACE_SUBJECT,
+    });
+    expect(built.joins.join('\n')).toContain(
+      'opportunity_recommendation_ranks rank',
+    );
+    expect(built.whereSql).toContain('rank.recommendation_percent >=');
+    expect(built.whereSql).toContain('rank.recommendation_percent <=');
+    expect(built.joins.join('\n')).not.toContain('opportunity_assessments');
   });
 
   it('replays screening selectors in pages of 100 with one uncached owned profile read', async () => {
@@ -377,6 +565,179 @@ describe('admin-opportunity-query', () => {
     it.runIf(
       dialect === 'sqlite' ||
         Boolean(process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL),
+    )(`executes current rank joins safely on native ${dialect}`, async () => {
+      const url = process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL ?? '';
+      if (
+        dialect === 'postgres' &&
+        !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname)
+      )
+        throw new Error(
+          'Query regression requires a local PostgreSQL test database.',
+        );
+      const db = await getDatabase(
+        dialect === 'sqlite'
+          ? { type: 'sqlite', url: ':memory:', cache: false }
+          : { type: 'postgres', url, cache: false },
+      );
+      const session =
+        dialect === 'postgres' ? await db.acquireSession?.() : null;
+      if (dialect === 'postgres' && !session)
+        throw new Error('PostgreSQL regression requires a pinned session.');
+      const executor = session ?? db;
+      mocks.dbConfig.mockReturnValue({ type: dialect });
+      mocks.requestDatabase.mockReturnValue(executor);
+      try {
+        const temporary = dialect === 'postgres' ? 'TEMP ' : '';
+        await executor.query(
+          `CREATE ${temporary}TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, required_skills TEXT, preferred_skills TEXT)`,
+        );
+        await executor.query(
+          `CREATE ${temporary}TABLE opportunity_recommendation_ranks (tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, opportunity_id TEXT, candidate_material_fingerprint TEXT, question_set_fingerprint TEXT, contract_version TEXT, model TEXT, projection_version TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, required_skills_snapshot TEXT, preferred_skills_snapshot TEXT, recommendation_percent DOUBLE PRECISION, evidence_coverage_percent DOUBLE PRECISION, must_have_conflict_count INTEGER)`,
+        );
+        for (const [id, updated] of [
+          ['a', '2026-10-01'],
+          ['b', '2026-10-02'],
+          ['c', '2026-10-03'],
+          ['unknown', '2026-10-04'],
+        ])
+          await executor.query(
+            'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?, ?, ?)',
+            id,
+            'found',
+            updated,
+            `fp-${id}`,
+            1,
+            'TypeScript',
+            'Svelte',
+          );
+        const insert = async (
+          id: string,
+          score: number,
+          overrides: Record<string, string | number> = {},
+        ) =>
+          executor.query(
+            'INSERT INTO opportunity_recommendation_ranks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            overrides.tenantId ?? WORKSPACE_SUBJECT.tenantId,
+            overrides.userId ?? WORKSPACE_SUBJECT.userId,
+            overrides.profileId ?? WORKSPACE_SUBJECT.profileId,
+            id,
+            'candidate',
+            'questions',
+            overrides.contract ?? OPPORTUNITY_QUESTION_SCREENING_VERSION,
+            'jev-1.13.0',
+            'opportunity-recommendation-rank/v2',
+            overrides.fingerprint ?? `fp-${id}`,
+            overrides.version ?? 1,
+            overrides.requiredSkills ?? 'TypeScript',
+            overrides.preferredSkills ?? 'Svelte',
+            score,
+            100,
+            0,
+          );
+        await insert('a', 50);
+        await insert('b', 50, {
+          contract: OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
+        });
+        await insert('c', 99, { fingerprint: 'stale' });
+        await insert('c', 100, { userId: 'foreign' });
+        const { listOpportunityPageIds } = await import(
+          './admin-opportunity-query'
+        );
+        const base = {
+          candidateSkills: [],
+          questionRecommendationScope: {
+            questionScreeningEnabled: true,
+            candidateMaterialFingerprint: 'candidate',
+            questionSetFingerprint: 'questions',
+          },
+          reviewFilter: 'all',
+          workspaceSubject: WORKSPACE_SUBJECT,
+        };
+        expect(
+          await listOpportunityPageIds({
+            ...base,
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'recommendation',
+              sortDirection: 'asc',
+            },
+            limit: 4,
+            offset: 0,
+          }),
+        ).toEqual(['b', 'a', 'unknown', 'c']);
+        expect(
+          await listOpportunityPageIds({
+            ...base,
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'recommendation',
+              sortDirection: 'desc',
+            },
+            limit: 4,
+            offset: 0,
+          }),
+        ).toEqual(['b', 'a', 'unknown', 'c']);
+        await executor.query(
+          'UPDATE opportunities SET required_skills = ? WHERE id = ?',
+          'Rust',
+          'b',
+        );
+        expect(
+          await listOpportunityPageIds({
+            ...base,
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'recommendation',
+              sortDirection: 'desc',
+            },
+            limit: 4,
+            offset: 0,
+          }),
+        ).toEqual(['a', 'unknown', 'c', 'b']);
+        expect(
+          await listOpportunityPageIds({
+            ...base,
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'score',
+              sortDirection: 'desc',
+              minScore: 1,
+            },
+            limit: 4,
+            offset: 0,
+          }),
+        ).toEqual(['a']);
+        await executor.query(
+          'UPDATE opportunities SET required_skills = ?, preferred_skills = ? WHERE id = ?',
+          'TypeScript',
+          'Rust',
+          'b',
+        );
+        expect(
+          await listOpportunityPageIds({
+            ...base,
+            filters: {
+              ...DEFAULT_OPPORTUNITY_FILTERS,
+              sort: 'recommendation',
+              sortDirection: 'desc',
+            },
+            limit: 4,
+            offset: 0,
+          }),
+        ).toEqual(['a', 'unknown', 'c', 'b']);
+        expect(mocks.privatePartials).not.toHaveBeenCalled();
+        expect(mocks.questionProjections).not.toHaveBeenCalled();
+      } finally {
+        await session?.release?.();
+        await db.close?.();
+      }
+    });
+  }
+
+  for (const dialect of ['sqlite', 'postgres'] as const) {
+    it.runIf(
+      dialect === 'sqlite' ||
+        Boolean(process.env.OPPORTUNITY_QUERY_TEST_POSTGRES_URL),
     )(
       `keeps empty or stale cited support sortable and paginated on native ${dialect}`,
       async () => {
@@ -485,12 +846,14 @@ describe('admin-opportunity-query', () => {
       }));
       mocks.partialProjections.mockImplementation(
         async ({ opportunities }: { opportunities: Array<{ id: string }> }) => {
-          const id = opportunities[0].id;
-          return id === 'forged'
-            ? new Map()
-            : new Map([
-                [id, { supportedCriterionCount: id === 'zero' ? 0 : 7 }],
-              ]);
+          return new Map(
+            opportunities
+              .filter(({ id }) => id !== 'forged')
+              .map(({ id }) => [
+                id,
+                { supportedCriterionCount: id === 'zero' ? 0 : 7 },
+              ]),
+          );
         },
       );
       try {
@@ -539,8 +902,17 @@ describe('admin-opportunity-query', () => {
           WORKSPACE_SUBJECT,
           {
             where: {
-              status: 'partial',
-              contractVersion: 'opportunity-assessment-partial/v1',
+              'status in': [
+                'partial',
+                'reviewed_with_unknowns',
+                'strength_verified',
+              ],
+              'contractVersion in': [
+                'opportunity-assessment-partial/v1',
+                'opportunity-resume-fit-review/v4-complete-material',
+                'opportunity-review-strength-verification/v1-independent-jev',
+                'opportunity-review-strength-verification/v2-partial-relevance',
+              ],
             },
           },
         );
@@ -558,30 +930,29 @@ describe('admin-opportunity-query', () => {
     });
   }
 
-  it('replays only deduplicated saved partial selectors with at most four simultaneous native proof reads', async () => {
+  it('loads only deduplicated owned selectors with four uncached source reads and one projection batch', async () => {
     const ids = Array.from({ length: 9 }, (_, index) => `opp-${index}`);
     mocks.privatePartials.mockResolvedValue(
       [...ids, ids[0], ''].map((opportunityId) => ({ opportunityId })),
     );
-    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
-      toJSON: () => ({
-        id,
-        sourceContentFingerprint: `fp-${id}`,
-        sourceContentVersion: 1,
-      }),
-    }));
     let active = 0;
     let maximum = 0;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    mocks.partialProjections.mockImplementation(async () => {
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => {
       active++;
       maximum = Math.max(maximum, active);
       await gate;
       active--;
-      return new Map(); // Foreign/stale/unreplayable receipts contribute no count.
+      return {
+        toJSON: () => ({
+          id,
+          sourceContentFingerprint: `fp-${id}`,
+          sourceContentVersion: 1,
+        }),
+      };
     });
     const { loadCurrentCitedOpportunitySupport } = await import(
       './admin-opportunity-query'
@@ -592,16 +963,388 @@ describe('admin-opportunity-query', () => {
     expect(await pending).toEqual(new Map());
     expect(maximum).toBe(4);
     expect(mocks.source).toHaveBeenCalledTimes(ids.length);
-    expect(mocks.partialProjections).toHaveBeenCalledTimes(ids.length);
+    expect(mocks.partialProjections).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.partialProjections.mock.calls[0][0].opportunities,
+    ).toHaveLength(ids.length);
+    expect(mocks.completeProjections).not.toHaveBeenCalled();
   });
 
-  it('does not hydrate partial source records for ordinary list ordering', async () => {
+  for (const sort of ['cited_support', 'best'] as const) {
+    for (const sortDirection of ['asc', 'desc'] as const) {
+      it(`ranks current complete support by ratio and advisory mean before ${sort} ${sortDirection} pagination, suppressing unknown fallbacks`, async () => {
+        const db = await getDatabase({
+          type: 'sqlite',
+          url: ':memory:',
+          cache: false,
+        });
+        mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+        mocks.requestDatabase.mockReturnValue({
+          query: async (sql: string, ...values: unknown[]) =>
+            sql.includes('SELECT DISTINCT r.opportunity_id')
+              ? { rows: [] }
+              : db.query(sql, ...values),
+        });
+        const version = 'opportunity-resume-fit-review/v4-complete-material';
+        const ids = [
+          'higher-mean',
+          'lower-mean',
+          'lower-ratio',
+          'unknown',
+          'malformed',
+          'stale',
+          'foreign',
+        ];
+        mocks.privatePartials.mockResolvedValue(
+          ids.map((opportunityId) => ({
+            opportunityId,
+            contractVersion: version,
+          })),
+        );
+        mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+          toJSON: () => ({
+            id,
+            sourceContentFingerprint: `fp-${id}`,
+            sourceContentVersion: 1,
+          }),
+        }));
+        const verified = (mean: number) =>
+          Object.assign(completeReviewFixture(), {
+            model: 'openai/gpt-6.1-sol',
+            verification: {
+              version:
+                'opportunity-review-strength-verification/v2-partial-relevance',
+              model: 'jev-1.13.0',
+              sourceStatus: 'current',
+              strengthClaimCount: 1,
+              verifiedStrengthCount: 1,
+              seniorityClaimCount: 1,
+              verifiedSeniorityCount: 1,
+              partialClaimCount: 1,
+              verifiedPartialCount: 0,
+              partialSupportedRequirementIds: [],
+            },
+            advisoryRelevance: {
+              kind: 'supplied_evidence_relevance',
+              criterionProbabilityPairs: [
+                {
+                  requirementId: 'material:c1',
+                  probability: mean,
+                  evidenceStatus: 'cited',
+                },
+              ],
+              denominator: 1,
+              weightedMean: mean,
+            },
+          });
+        const lowerRatio = completeReviewFixture();
+        const extra = completeReviewFixture({ uncertain: true });
+        extra.requirements[0].id = 'material:c2';
+        extra.requirements[0].postingCitations[0].clauseId = 'c2';
+        lowerRatio.requirements.push(extra.requirements[0]);
+        lowerRatio.coverage.reviewedRequirementIds.push('material:c2');
+        lowerRatio.coverage.reviewedMaterialClauseIds.push('c2');
+        lowerRatio.coverage.sourceClauseConsideration.push({
+          ...extra.coverage.sourceClauseConsideration[0],
+          clauseId: 'c2',
+        });
+        lowerRatio.completion.catalogClauseCount = 2;
+        lowerRatio.completion.reviewedMaterialClauseCount = 2;
+        lowerRatio.evidenceFit.uncertainCriterionCount = 1;
+        lowerRatio.evidenceFit.consideredCriterionCount = 2;
+        lowerRatio.evidenceFit.supportLowerBound = 0.5;
+        lowerRatio.evidenceFit.status = 'supported_with_uncertainties';
+        expect(
+          currentCitedSupport({
+            resumeFitReviewProjection: verified(0.8),
+            completeReviewStatus: 'current',
+          }),
+        ).toMatchObject({
+          supportedCriterionCount: 1,
+          supportLowerBound: 1,
+          advisoryRelevanceMean: 0.8,
+        });
+        expect(
+          currentCitedSupport({
+            resumeFitReviewProjection: lowerRatio,
+            completeReviewStatus: 'current',
+          }),
+        ).toMatchObject({ supportedCriterionCount: 1, supportLowerBound: 0.5 });
+        const projections = new Map<string, unknown>([
+          ['higher-mean', verified(0.8)],
+          ['lower-mean', verified(0.6)],
+          ['lower-ratio', lowerRatio],
+          ['stale', verified(0.99)],
+          [
+            'malformed',
+            { ...verified(0.99), advisoryRelevance: { weightedMean: 0.99 } },
+          ],
+        ]);
+        mocks.completeProjections.mockResolvedValue(
+          Object.assign(projections, {
+            completeReviewStatuses: new Map(
+              ids
+                .filter((id) => id !== 'foreign')
+                .map((id) => [id, id === 'unknown' ? 'unknown' : 'current']),
+            ),
+          }),
+        );
+        mocks.partialProjections.mockResolvedValue(
+          new Map(ids.map((id) => [id, { supportedCriterionCount: 999 }])),
+        );
+        try {
+          await db.query(
+            'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+          );
+          await db.query(
+            'CREATE TABLE opportunity_assessments (id TEXT, updated_at TEXT, eligibility_priority INTEGER, fit_score REAL, match_readiness TEXT)',
+          );
+          for (const id of ids)
+            await db.query(
+              'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+              id,
+              'found',
+              '2026-10-02',
+              `fp-${id}`,
+              id === 'stale' ? 2 : 1,
+            );
+          const { listOpportunityPageIds } = await import(
+            './admin-opportunity-query'
+          );
+          const query = {
+            candidateSkills: [],
+            filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort, sortDirection },
+            reviewFilter: 'all',
+            workspaceSubject: WORKSPACE_SUBJECT,
+          };
+          const expected =
+            sort === 'best' || sortDirection === 'desc'
+              ? ['higher-mean', 'lower-mean', 'lower-ratio']
+              : ['lower-ratio', 'lower-mean', 'higher-mean'];
+          expect(
+            await listOpportunityPageIds({ ...query, limit: 2, offset: 0 }),
+          ).toEqual(expected.slice(0, 2));
+          expect(
+            await listOpportunityPageIds({ ...query, limit: 5, offset: 2 }),
+          ).toEqual([
+            ...expected.slice(2),
+            'foreign',
+            'malformed',
+            'stale',
+            'unknown',
+          ]);
+          expect(mocks.partialProjections).not.toHaveBeenCalled();
+          expect(mocks.completeProjections).toHaveBeenCalledTimes(2);
+          expect(
+            mocks.completeProjections.mock.calls[0][0].opportunities,
+          ).toHaveLength(ids.length);
+        } finally {
+          await db.close?.();
+        }
+      });
+    }
+  }
+
+  it('defaults absent best eligibility to unknown before support ranking and page slicing, keeping conflicting proof lower', async () => {
+    const db = await getDatabase({
+      type: 'sqlite',
+      url: ':memory:',
+      cache: false,
+    });
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.requestDatabase.mockReturnValue({
+      query: async (sql: string, ...values: unknown[]) =>
+        sql.includes('SELECT DISTINCT r.opportunity_id')
+          ? { rows: [{ id: 'explicit-unknown' }, { id: 'conflicting' }] }
+          : db.query(sql, ...values),
+    });
+    const ids = ['absent', 'explicit-unknown', 'conflicting'];
+    mocks.privatePartials.mockResolvedValue(
+      ids.map((opportunityId) => ({
+        opportunityId,
+        contractVersion: 'opportunity-resume-fit-review/v4-complete-material',
+      })),
+    );
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+      toJSON: () => ({
+        id,
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: 1,
+      }),
+    }));
+    mocks.sourceEligibility.mockImplementation(
+      async ({ opportunities }: { opportunities: { id: string }[] }) =>
+        new Map(
+          opportunities.map(({ id }) => [
+            id,
+            {
+              eligibilityBucket:
+                id === 'conflicting' ? 'conflicting' : 'unknown',
+              sourceStatus: 'current',
+              reason: 'Current native proof',
+              unresolvedConstraintFactKeys: [],
+            },
+          ]),
+        ),
+    );
+    mocks.completeProjections.mockResolvedValue(
+      Object.assign(
+        new Map(
+          ids.map((id) => [
+            id,
+            completeReviewFixture({ uncertain: id === 'explicit-unknown' }),
+          ]),
+        ),
+        {
+          completeReviewStatuses: new Map(ids.map((id) => [id, 'current'])),
+        },
+      ),
+    );
+    try {
+      await db.query(
+        'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+      );
+      await db.query(
+        'CREATE TABLE opportunity_assessments (id TEXT, updated_at TEXT, eligibility_priority INTEGER, fit_score REAL, match_readiness TEXT)',
+      );
+      for (const id of ids)
+        await db.query(
+          'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+          id,
+          'found',
+          '2026-10-02',
+          `fp-${id}`,
+          1,
+        );
+      const { listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const query = {
+        candidateSkills: [],
+        filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'best' as const },
+        reviewFilter: 'all',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 2, offset: 0 }),
+      ).toEqual(['absent', 'explicit-unknown']);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 2, offset: 2 }),
+      ).toEqual(['conflicting']);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it('keeps owned complete denial markers after source drift without ranking stale support or reviving a current legacy fit', async () => {
+    const db = await getDatabase({
+      type: 'sqlite',
+      url: ':memory:',
+      cache: false,
+    });
+    mocks.dbConfig.mockReturnValue({ type: 'sqlite' });
+    mocks.requestDatabase.mockReturnValue({
+      query: async (sql: string, ...values: unknown[]) =>
+        sql.includes('SELECT DISTINCT r.opportunity_id')
+          ? { rows: [] }
+          : db.query(sql, ...values),
+    });
+    const ids = ['stale-complete', 'known-weaker', 'unknown-complete'];
+    mocks.privatePartials.mockResolvedValue(
+      ids.map((opportunityId) => ({
+        opportunityId,
+        contractVersion: 'opportunity-resume-fit-review/v4-complete-material',
+      })),
+    );
+    mocks.source.mockImplementation(async ({ id }: { id: string }) => ({
+      toJSON: () => ({
+        id,
+        sourceContentFingerprint: `fp-${id}`,
+        sourceContentVersion: 1,
+      }),
+    }));
+    mocks.completeProjections.mockResolvedValue(
+      Object.assign(
+        new Map([
+          ['stale-complete', completeReviewFixture()],
+          ['known-weaker', completeReviewFixture({ uncertain: true })],
+        ]),
+        {
+          completeReviewStatuses: new Map(
+            ids.map((id) => [
+              id,
+              id === 'unknown-complete' ? 'unknown' : 'current',
+            ]),
+          ),
+        },
+      ),
+    );
+    try {
+      await db.query(
+        'CREATE TABLE opportunities (id TEXT PRIMARY KEY, status TEXT, updated_at TEXT, source_content_fingerprint TEXT, source_content_version INTEGER)',
+      );
+      await db.query(
+        'CREATE TABLE opportunity_assessments (id TEXT PRIMARY KEY, opportunity_id TEXT, status TEXT, contract_version TEXT, source_content_fingerprint TEXT, source_content_version INTEGER, candidate_material_fingerprint TEXT, preferences_fingerprint TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, eligibility_priority INTEGER, updated_at TEXT, fit_score REAL, match_readiness TEXT)',
+      );
+      for (const id of [...ids, 'legacy-only']) {
+        const fp = id === 'stale-complete' ? 'new-fp' : `fp-${id}`;
+        await db.query(
+          'INSERT INTO opportunities VALUES (?, ?, ?, ?, ?)',
+          id,
+          'found',
+          '2026-10-02',
+          fp,
+          1,
+        );
+        if (id !== 'known-weaker')
+          await db.query(
+            'INSERT INTO opportunity_assessments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            `a-${id}`,
+            id,
+            'current',
+            'opportunity-assessment/v6',
+            fp,
+            1,
+            'candidate',
+            'preferences',
+            WORKSPACE_SUBJECT.tenantId,
+            WORKSPACE_SUBJECT.userId,
+            WORKSPACE_SUBJECT.profileId,
+            2,
+            '2026-10-02',
+            id === 'legacy-only' ? 90 : 99,
+            'assessable',
+          );
+      }
+      const { listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const query = {
+        candidateSkills: [],
+        assessmentCandidateMaterialFingerprint: 'candidate',
+        assessmentPreferencesFingerprint: 'preferences',
+        filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'best' as const },
+        reviewFilter: 'all',
+        workspaceSubject: WORKSPACE_SUBJECT,
+      };
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 2, offset: 0 }),
+      ).toEqual(['known-weaker', 'legacy-only']);
+      expect(
+        await listOpportunityPageIds({ ...query, limit: 2, offset: 2 }),
+      ).toEqual(['stale-complete', 'unknown-complete']);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it('does not hydrate support records for unrelated salary ordering', async () => {
     const { listOpportunityPageIds } = await import(
       './admin-opportunity-query'
     );
     await listOpportunityPageIds({
       candidateSkills: [],
-      filters: DEFAULT_OPPORTUNITY_FILTERS,
+      filters: { ...DEFAULT_OPPORTUNITY_FILTERS, sort: 'salary' },
       reviewFilter: 'all',
       workspaceSubject: WORKSPACE_SUBJECT,
       limit: 10,
@@ -1201,7 +1944,26 @@ describe('admin-opportunity-query', () => {
       WORKSPACE_SUBJECT,
     );
 
-    expect(mocks.scopedQuery).toHaveBeenCalledTimes(3);
+    const statements = mocks.scopedQuery.mock.calls.map(
+      ([sql]) => sql as string,
+    );
+    expect(
+      statements.filter((sql) => sql.includes('SELECT COUNT(*)')),
+    ).toHaveLength(1);
+    expect(
+      statements.filter(
+        (sql) =>
+          /SELECT o\.id\s+FROM opportunities o/.test(sql) &&
+          /LIMIT \$\d+\s+OFFSET/.test(sql),
+      ),
+    ).toHaveLength(1);
+    expect(
+      statements.filter(
+        (sql) =>
+          sql.includes('FROM applications a') &&
+          sql.includes('WHERE o.id = ANY'),
+      ),
+    ).toHaveLength(1);
     expect(mocks.query).not.toHaveBeenCalled();
   });
 
@@ -1269,7 +2031,12 @@ describe('admin-opportunity-query', () => {
       reviewFilter: 'all',
       workspaceSubject: WORKSPACE_SUBJECT,
     });
-    const [defaultSql, ...defaultValues] = mocks.query.mock.calls[0] ?? [];
+    const [defaultSql, ...defaultValues] =
+      mocks.query.mock.calls.find(
+        ([sql]) =>
+          /SELECT o\.id\s+FROM opportunities o/.test(sql) &&
+          /LIMIT \$\d+\s+OFFSET/.test(sql),
+      ) ?? [];
     expect(defaultSql).toMatch(/o\.status <> \$\d+/);
     expect(defaultValues).toContain('archived');
 
@@ -1770,7 +2537,12 @@ describe('admin-opportunity-query', () => {
       workspaceSubject: WORKSPACE_SUBJECT,
     });
 
-    const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
+    const [sql, ...params] =
+      mocks.query.mock.calls.find(
+        ([statement]) =>
+          /SELECT o\.id\s+FROM opportunities o/.test(statement) &&
+          /LIMIT \$\d+\s+OFFSET/.test(statement),
+      ) ?? [];
     expect(sql).toContain('regexp_split_to_array');
     expect(sql).toContain('NOT (EXISTS');
     expect(sql).toContain('o.salary_min IS NULL AND o.salary_max IS NULL');
@@ -1801,7 +2573,12 @@ describe('admin-opportunity-query', () => {
       workspaceSubject: WORKSPACE_SUBJECT,
     });
 
-    const [sql, ...params] = mocks.query.mock.calls[0] ?? [];
+    const [sql, ...params] =
+      mocks.query.mock.calls.find(
+        ([statement]) =>
+          /SELECT o\.id\s+FROM opportunities o/.test(statement) &&
+          /LIMIT \$\d+\s+OFFSET/.test(statement),
+      ) ?? [];
     expect(sql).toContain("lower(o.title) LIKE lower($1) ESCAPE '!'");
     expect(sql).toContain(
       "lower(search_company.name) LIKE lower($1) ESCAPE '!'",

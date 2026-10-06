@@ -56,6 +56,7 @@ vi.mock('./app-config.js', () => ({
   }),
 }));
 vi.mock('./opportunity-intelligence-job.js', () => ({
+  assertOpportunityAssessmentPilotJobRouting: vi.fn(),
   runOpportunityIntelligenceJob: fixture.processor,
 }));
 vi.mock('./auto-submit-application-job.js', () => ({

@@ -3,6 +3,8 @@ import { render } from 'svelte/server';
 import { describe, expect, it, vi } from 'vitest';
 import { createAdminListPagination } from '$lib/admin/pagination';
 import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
+import { completeReviewFixture } from '$lib/opportunity-resume-fit-review-projection.test-support';
+import { questionScreeningFixture } from '$lib/question-screening-projection.test-support';
 import OpportunityCardList from './OpportunityCardList.svelte';
 
 vi.mock('$app/state', () => ({
@@ -41,6 +43,87 @@ function renderList(
 }
 
 describe('OpportunityCardList assessment readiness', () => {
+  it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'question-result',
+          title: 'API engineer',
+          questionScreeningEnabled: true,
+          questionScreeningStatus: 'current',
+          questionScreeningProjection: await questionScreeningFixture(),
+          latestScore: 99,
+        },
+      ],
+    });
+    expect(body).toContain('Recommendation 40.0%');
+    expect(body).not.toContain('Run screening');
+    expect(body).toContain('title="Weighted alignment');
+    expect(body).not.toContain('Questions, answers and evidence');
+    expect(body).not.toContain('99/100');
+  });
+  it('links opportunity screening to editable private questions', () => {
+    expect(renderList().body).toContain(
+      'href="/admin/preferences/screening-questions"',
+    );
+  });
+  it('keeps owned stale complete review unavailable instead of reviving a numeric legacy score', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'stale-complete',
+          title: 'API engineer',
+          completeReviewStatus: 'unknown',
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness: 'assessable',
+            coverage: {
+              candidateTruncated: false,
+              postingTruncated: false,
+              requirementsTruncated: false,
+              requirementCount: 4,
+            },
+            ranking: { eligibilityPriority: 2, fitScore: 99 },
+          },
+        },
+      ],
+    });
+    expect(body).toContain('Complete review needs refresh');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('All reviewed criteria supported');
+  });
+
+  it('uses the complete evidence review as the primary assessment without a legacy score or partial headline', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'complete-review',
+          title: 'API engineer',
+          resumeFitReviewProjection: completeReviewFixture(),
+          latestScore: 99,
+          assessmentProjection: {
+            sourceStatus: 'current',
+            eligibilityBucket: 'unknown',
+            matchReadiness: 'assessable',
+            coverage: {
+              candidateTruncated: false,
+              postingTruncated: false,
+              requirementsTruncated: false,
+              requirementCount: 1,
+            },
+            ranking: { fitScore: 99, eligibilityPriority: 2 },
+          },
+        },
+      ],
+    });
+    expect(body).toContain('All reviewed criteria supported');
+    expect(body).not.toContain('1 supported of 1 considered criteria');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('No current cited support assessment');
+    expect(body).not.toContain('Partial assessment');
+  });
   it('renders accessible view controls with Table selected during SSR', () => {
     const { body } = renderList();
     expect(body).toContain('aria-label="Opportunity view"');
@@ -94,10 +177,10 @@ describe('OpportunityCardList assessment readiness', () => {
         },
       ],
     });
-    expect(body).toContain('Coarse screening:');
+    expect(body).not.toContain('Coarse screening:');
     expect(body).toContain('Screened out');
     expect(body).toContain('value="screened_out"');
-    expect(body).toContain(quote);
+    expect(body).not.toContain(quote);
     expect(body).not.toContain('99/100');
   });
   it.each([
@@ -351,7 +434,7 @@ const partialEvidence = {
   ],
 };
 
-it('shows current partial evidence alongside an unavailable full match without promoting a legacy score', () => {
+it('keeps partial evidence details out of rows without promoting a legacy score', () => {
   const { body } = renderList({
     records: [
       {
@@ -367,11 +450,11 @@ it('shows current partial evidence alongside an unavailable full match without p
   expect(body).not.toContain('Match assessment unavailable');
   expect(body).not.toContain('No current assessment is available.');
   expect(body).not.toContain('Run Assess to assess this posting');
-  expect(body).toContain('1 supported criterion of 1 assessed');
-  expect(body).toContain('2 unresolved source clauses');
-  expect(body).toContain('No overall fit conclusion.');
-  expect(body).toContain('You must maintain tested API integrations.');
-  expect(body).toContain('Maintained tested API integrations.');
+  expect(body).not.toContain('1 supported criterion of 1 assessed');
+  expect(body).not.toContain('2 unresolved source clauses');
+  expect(body).not.toContain('No overall fit conclusion.');
+  expect(body).not.toContain('You must maintain tested API integrations.');
+  expect(body).not.toContain('Maintained tested API integrations.');
   expect(body).not.toContain('99/100');
   expect(body).not.toContain('Strong match');
 });
@@ -418,7 +501,7 @@ it('retains current full-assessment messaging when partial evidence is also pres
   expect(body).not.toContain('Partial assessment');
 });
 
-it('offers a separate Cited support sort and column while showing assessed and unresolved counts', () => {
+it('retains Cited support sorting without a column or evidence details', () => {
   const { body } = renderList({
     records: [
       {
@@ -435,10 +518,11 @@ it('offers a separate Cited support sort and column while showing assessed and u
   });
   expect(body).toContain('value="cited_support"');
   expect(body).toContain('Cited support');
-  expect(body).toContain('1 supported criterion of 1 assessed');
-  expect(body).toContain('2 unresolved source clauses');
-  expect(body).toContain('No current cited support assessment');
-  expect(body).toContain('No overall fit conclusion.');
+  expect(body).not.toContain('data-column-id="citedSupport"');
+  expect(body).not.toContain('1 supported criterion of 1 assessed');
+  expect(body).not.toContain('2 unresolved source clauses');
+  expect(body).not.toContain('No current cited support assessment');
+  expect(body).not.toContain('No overall fit conclusion.');
   expect(body).not.toContain('100%');
 });
 
@@ -470,7 +554,7 @@ const sourceConditionalEligibility = {
   unresolvedConstraintFactKeys: [],
 };
 
-it('shows the current posting restriction and sponsorship statement separately without granting authorization', () => {
+it('leaves source eligibility detail in the opportunity modal', () => {
   const { body } = renderList({
     records: [
       {
@@ -482,10 +566,10 @@ it('shows the current posting restriction and sponsorship statement separately w
       },
     ],
   });
-  expect(body).toContain('Posting work-location eligibility:');
-  expect(body).toContain('Location or authorization restriction');
-  expect(body).toContain('Sponsorship stated for this role');
-  expect(body).toContain('We offer visa sponsorship.');
+  expect(body).not.toContain('Posting work-location eligibility:');
+  expect(body).not.toContain('Location or authorization restriction');
+  expect(body).not.toContain('Sponsorship stated for this role');
+  expect(body).not.toContain('We offer visa sponsorship.');
   expect(body).not.toContain('Eligible for your work location');
   expect(body).not.toContain('Canada eligible');
 });

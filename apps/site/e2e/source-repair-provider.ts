@@ -68,7 +68,7 @@ export async function startRepairProvider(
           output = {
             requirementCoverage: {
               requirements: targets.map((row, index) => ({
-                id: 'repair_r' + index,
+                id: `repair_r${index}`,
                 text: row.text,
                 clauseIds: [row.clauseId],
                 importance: 'required',
@@ -82,7 +82,7 @@ export async function startRepairProvider(
                         (item) => (item as unknown[])[0],
                       )
                     : []),
-                  'repair_r' + index,
+                  `repair_r${index}`,
                 ],
               })),
               removedRequirementIds: [],
@@ -98,7 +98,7 @@ export async function startRepairProvider(
           output = {
             requirementCoverage: {
               requirements: bodyClauses.map((row, index) => ({
-                id: 'paid_r' + index,
+                id: `paid_r${index}`,
                 text: index === 0 ? row.text : 'Use TypeScript.',
                 clauseIds: [row.id],
                 importance: 'required',
@@ -114,7 +114,7 @@ export async function startRepairProvider(
                   : {
                       clauseId: row.id,
                       type: 'material_requirement',
-                      requirementIds: ['paid_r' + bodyClauses.indexOf(row)],
+                      requirementIds: [`paid_r${bodyClauses.indexOf(row)}`],
                     },
               ),
             },
@@ -129,7 +129,7 @@ export async function startRepairProvider(
         });
         response.end(
           JSON.stringify({
-            id: 'fictional-repair-response-' + events.length,
+            id: `fictional-repair-response-${events.length}`,
             object: 'chat.completion',
             created: 0,
             model: body.model,
@@ -197,7 +197,7 @@ export async function startRepairProvider(
   if (!address || typeof address === 'string')
     throw new Error('No loopback repair port');
   return {
-    url: 'http://127.0.0.1:' + address.port,
+    url: `http://127.0.0.1:${address.port}`,
     events,
     close: async () =>
       await new Promise<void>((resolve, reject) =>

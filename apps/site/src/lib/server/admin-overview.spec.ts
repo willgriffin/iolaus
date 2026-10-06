@@ -12,9 +12,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./smrt', () => ({ getCollection: mocks.getCollection }));
 vi.mock('./admin-data', () => ({
   listAdminRecords: mocks.listAdminRecords,
-  requireAdminResource: () => ({
-    slug: 'opportunities',
-    className: 'Opportunity',
+  requireAdminResource: (slug: string) => ({
+    slug,
+    className:
+      slug === 'sources'
+        ? 'Source'
+        : slug === 'companies'
+          ? 'Company'
+          : 'Opportunity',
   }),
   serializeRecord: (record: unknown) => record,
 }));
@@ -47,6 +52,11 @@ const subjectB = {
   tenantId: 'tenant',
   userId: 'user-b',
   profileId: 'profile-b',
+};
+const ownedByA = {
+  tenantId: subjectA.tenantId,
+  ownerUserId: subjectA.userId,
+  candidateProfileId: subjectA.profileId,
 };
 const postings = [
   { id: 'new', status: 'found', title: 'Engineer' },
@@ -89,7 +99,13 @@ beforeEach(() => {
   mocks.listOpportunityPageIds.mockResolvedValue(
     postings.map((posting) => posting.id),
   );
-  mocks.listAdminRecords.mockResolvedValue(postings);
+  mocks.listAdminRecords.mockImplementation(async (resource, options) => {
+    if (resource.slug !== 'opportunities') return [];
+    const ids = options?.where?.['id in'];
+    return Array.isArray(ids)
+      ? postings.filter((posting) => ids.includes(posting.id))
+      : postings;
+  });
   mocks.attachOpportunityContext.mockImplementation((records, options) =>
     records.map((record: Record<string, unknown>) => ({
       ...record,
@@ -108,6 +124,7 @@ describe('subject-scoped admin overview', () => {
       id: 'packet-task',
       title: 'Review application packet: application-a',
       status: 'open',
+      taskType: 'approve_application',
       applicationId: 'application-a',
       tenantId: subjectA.tenantId,
       ownerUserId: subjectA.userId,
@@ -125,6 +142,9 @@ describe('subject-scoped admin overview', () => {
     ]);
     expect((await loadAdminOverview(subjectA)).tasks[0].title).toBe(
       'Review application packet: Engineer',
+    );
+    expect((await loadAdminOverview(subjectA)).tasks[0].href).toBe(
+      '/admin/applications/application-a',
     );
     expect(task.title).toBe('Review application packet: application-a');
     expect(mocks.applicationList).toHaveBeenCalledWith(
@@ -145,6 +165,7 @@ describe('subject-scoped admin overview', () => {
         id: 'packet-task',
         title: 'Review application packet: application-b',
         status: 'open',
+        taskType: 'approve_application',
         applicationId: 'application-b',
         tenantId: subjectA.tenantId,
         ownerUserId: subjectA.userId,
@@ -162,6 +183,82 @@ describe('subject-scoped admin overview', () => {
     ]);
     expect((await loadAdminOverview(subjectA)).tasks[0].title).toBe(
       'Review application packet: application-b',
+    );
+    expect((await loadAdminOverview(subjectA)).tasks[0].href).toBe(
+      '/admin/tasks/packet-task',
+    );
+  });
+
+  it('takes source account setup to the owned source edit form', async () => {
+    mocks.taskList.mockResolvedValue([
+      {
+        ...ownedByA,
+        id: 'setup',
+        status: 'open',
+        taskType: 'account_setup',
+        sourceId: 'source-a',
+      },
+    ]);
+    mocks.listAdminRecords.mockImplementation(async (resource) =>
+      resource.slug === 'sources'
+        ? [{ id: 'source-a', ownerProfileId: subjectA.profileId }]
+        : postings,
+    );
+    expect((await loadAdminOverview(subjectA)).tasks[0].href).toBe(
+      '/admin/sources/source-a/edit',
+    );
+    mocks.taskList.mockResolvedValue([
+      {
+        ...ownedByA,
+        id: 'legacy-signup',
+        status: 'open',
+        taskType: 'signup_needed',
+        sourceId: 'source-a',
+      },
+    ]);
+    expect((await loadAdminOverview(subjectA)).tasks[0].href).toBe(
+      '/admin/sources/source-a/edit',
+    );
+  });
+
+  it('falls back to task detail for a foreign source or an untrusted href', async () => {
+    mocks.taskList.mockResolvedValue([
+      {
+        ...ownedByA,
+        id: 'setup',
+        status: 'open',
+        taskType: 'account_setup',
+        sourceId: 'source-b',
+        href: 'https://unsafe.example/',
+      },
+    ]);
+    mocks.listAdminRecords.mockImplementation(async (resource) =>
+      resource.slug === 'sources'
+        ? [{ id: 'source-b', ownerProfileId: subjectB.profileId }]
+        : postings,
+    );
+    expect((await loadAdminOverview(subjectA)).tasks[0].href).toBe(
+      '/admin/tasks/setup',
+    );
+  });
+
+  it('opens a linked opportunity review and keeps missing relations on task detail', async () => {
+    mocks.taskList.mockResolvedValue([
+      {
+        ...ownedByA,
+        id: 'review',
+        status: 'open',
+        taskType: 'review_recommendation',
+        opportunityId: 'new',
+      },
+      { ...ownedByA, id: 'missing', status: 'open', taskType: 'account_setup' },
+    ]);
+    const tasks = (await loadAdminOverview(subjectA)).tasks;
+    expect(tasks.find((task) => task.id === 'review')?.href).toBe(
+      '/admin/opportunities?selected=new',
+    );
+    expect(tasks.find((task) => task.id === 'missing')?.href).toBe(
+      '/admin/tasks/missing',
     );
   });
 

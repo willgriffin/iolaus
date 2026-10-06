@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 import {
   type SourceEligibilityEvidence,
   sourceEligibilityFactKey,
@@ -49,6 +50,60 @@ function evidence(): SourceEligibilityEvidence {
 }
 
 describe('current source eligibility projections', () => {
+  it('keeps immutable captured Remote Canada visible when eligibility evidence is unavailable', async () => {
+    const captured = {
+      descriptionRaw: 'Build software.',
+      locationNotes: 'Remote Canada',
+      workMode: 'remote',
+    };
+    const opportunity = {
+      id: 'opp-location',
+      sourceContentJson: JSON.stringify(captured),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(captured),
+      sourceContentVersion: 2,
+      locationNotes: 'United States',
+      workMode: 'onsite',
+    };
+    const { loadCurrentSourceEligibilityProjections } = await import(
+      './opportunity-source-eligibility-projection.js'
+    );
+    const result = await loadCurrentSourceEligibilityProjections({
+      opportunities: [opportunity],
+      subject: { tenantId: 'tenant', userId: 'user', profileId: 'profile' },
+      readEvidence: async () => undefined,
+    });
+    expect(result.get(opportunity.id)).toMatchObject({
+      sourceStatus: 'unknown',
+      eligibilityBucket: 'unknown',
+      capturedPostingLocation: {
+        sourceStatus: 'current',
+        locationNotes: 'Remote Canada',
+        workMode: 'remote',
+        sourceContentFingerprint: opportunity.sourceContentFingerprint,
+        sourceContentVersion: 2,
+      },
+    });
+    expect(loadEvidence).not.toHaveBeenCalled();
+  });
+  it('does not project captured location from mutable fields or a changed source fingerprint', async () => {
+    const { projectCapturedPostingLocation } = await import(
+      './opportunity-source-eligibility-projection.js'
+    );
+    expect(
+      projectCapturedPostingLocation({
+        locationNotes: 'Remote Canada',
+        sourceContentFingerprint: 'old',
+        sourceContentVersion: 2,
+      }),
+    ).toBeNull();
+    expect(
+      projectCapturedPostingLocation({
+        sourceContentJson: JSON.stringify({ locationNotes: 'Remote Canada' }),
+        sourceContentFingerprint: 'old',
+        sourceContentVersion: 2,
+      }),
+    ).toBeNull();
+  });
   it('uses a current GLOBAL-reader receipt with only the active typed profile', async () => {
     loadEvidence.mockResolvedValue({
       candidate: {

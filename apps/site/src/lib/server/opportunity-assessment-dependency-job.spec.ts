@@ -177,19 +177,19 @@ vi.mock('./db.js', () => ({
 }));
 
 import {
-  type OpportunityAssessmentDependencyJobArgs,
-  enqueueOpportunityAssessmentCoverage,
-  enqueueOpportunityAssessmentCoveragePilot,
-  enqueueOpportunityAssessmentCoverageFreshPilot,
-  OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT,
-  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
-  opportunityAssessmentPilotIntent,
   assertOpportunityAssessmentPilotJobRouting,
+  enqueueOpportunityAssessmentCoverage,
+  enqueueOpportunityAssessmentCoverageFreshPilot,
+  enqueueOpportunityAssessmentCoveragePilot,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_CONTRACT,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_METHOD,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_OBJECT_TYPE,
   OPPORTUNITY_ASSESSMENT_DEPENDENCY_QUEUE,
+  OPPORTUNITY_ASSESSMENT_FRESH_PILOT_CONTRACT,
+  OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
+  type OpportunityAssessmentDependencyJobArgs,
   opportunityAssessmentCoverageDedupeKey,
+  opportunityAssessmentPilotIntent,
   opportunityAssessmentSourceDependency,
   runOpportunityAssessmentDependencyJob,
 } from './opportunity-assessment-dependency-job';

@@ -116,7 +116,17 @@ export function getOpportunityAssessmentProjection(
  */
 export function getOpportunityEligibilityProjection(
   assessment?: unknown,
+  fallback?: unknown,
 ): OpportunityAssessmentProjection {
+  if (
+    fallback !== undefined &&
+    (!assessment ||
+      typeof assessment !== 'object' ||
+      Array.isArray(assessment) ||
+      (assessment as Record<string, unknown>).sourceStatus !== 'current')
+  ) {
+    return getOpportunityAssessmentProjection(fallback);
+  }
   const full = getOpportunityAssessmentProjection(assessment);
   if (full.sourceStatus === 'current') return full;
   if (
@@ -221,11 +231,15 @@ export function assessmentCoverageMessages(
 export function matchesAssessmentEligibility(
   assessment: unknown,
   selected: readonly AssessmentEligibilityBucket[],
+  fallback?: unknown,
 ): boolean {
   return (
     selected.length === 0 ||
     selected.some((bucket) =>
-      getOpportunityEligibilityProjection(assessment).buckets.includes(bucket),
+      getOpportunityEligibilityProjection(
+        assessment,
+        fallback,
+      ).buckets.includes(bucket),
     )
   );
 }
@@ -233,9 +247,11 @@ export function matchesAssessmentEligibility(
 export function compareAssessmentEligibility(
   left: unknown,
   right: unknown,
+  leftFallback?: unknown,
+  rightFallback?: unknown,
 ): number {
-  const a = getOpportunityEligibilityProjection(left);
-  const b = getOpportunityEligibilityProjection(right);
+  const a = getOpportunityEligibilityProjection(left, leftFallback);
+  const b = getOpportunityEligibilityProjection(right, rightFallback);
   return (
     a.eligibilityPriority - b.eligibilityPriority ||
     (a.matchReadiness === 'assessable' && b.matchReadiness === 'assessable'

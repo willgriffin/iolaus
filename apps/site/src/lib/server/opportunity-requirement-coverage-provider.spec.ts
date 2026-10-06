@@ -39,6 +39,7 @@ import {
   REQUIREMENT_EVIDENCE_CAPTURED_SOURCE_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_ELIGIBILITY_AUDIT_VERSION,
   REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+  readCompleteOpportunitySourceMaterial,
   readPartialOpportunityRequirementEvidence,
   readRecordedRequirementCoverageOutcome,
   readVerifiedOpportunityRequirementCoverage,
@@ -3420,6 +3421,60 @@ describe('opt-in captured source and paid-ledger recovery', () => {
           requirementCoverageEvidenceAudit: badSelector,
         }),
       }),
+    ).resolves.toBeUndefined();
+  });
+  it('retains every original paid row and exact clause even without admitted applicant evidence', async () => {
+    const { opportunity, ledger, attested } = recoveryFixture();
+    const record = Object.create({ id: opportunity.id });
+    Object.assign(record, opportunity);
+    delete record.id;
+    mocks.query.mockResolvedValue({
+      rows: [{ request_id: attested.requestId }],
+    });
+    mocks.attestExtraction.mockResolvedValue(attested);
+    const material = await readCompleteOpportunitySourceMaterial(record);
+    expect(material?.ledger).toEqual(ledger);
+    expect(material?.extraction?.ledgerFingerprint).toBe(
+      requirementCoverageLedgerFingerprint(ledger),
+    );
+    expect(material?.capturedSource.sourceContentJson).toBe(
+      opportunity.sourceContentJson,
+    );
+    expect(material?.audit).toBeUndefined();
+    expect(mocks.attestExtraction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: opportunity.id }),
+      attested.requestId,
+      expect.anything(),
+    );
+    mocks.attestExtraction.mockResolvedValue({
+      ...attested,
+      ledgerFingerprint: 'invented',
+    });
+    await expect(
+      readCompleteOpportunitySourceMaterial(record),
+    ).resolves.toBeUndefined();
+  });
+  it('reconstructs untouched exact captured material without inventing a paid receipt and rejects metadata drift', async () => {
+    const { opportunity, context } = recoveryFixture();
+    mocks.query.mockResolvedValue({ rows: [] });
+    const material = await readCompleteOpportunitySourceMaterial(opportunity);
+    expect(material?.ledger).toEqual(buildRequirementCoverageSource(context));
+    expect(material?.extraction).toBeUndefined();
+    expect(mocks.attestExtraction).not.toHaveBeenCalled();
+    await expect(
+      readCompleteOpportunitySourceMaterial({
+        ...opportunity,
+        sourceContentJson: JSON.stringify({
+          ...JSON.parse(opportunity.sourceContentJson),
+          locationNotes: 'United States',
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    mocks.query.mockResolvedValue({
+      rows: [{ request_id: 'one' }, { request_id: 'two' }],
+    });
+    await expect(
+      readCompleteOpportunitySourceMaterial(opportunity),
     ).resolves.toBeUndefined();
   });
 });

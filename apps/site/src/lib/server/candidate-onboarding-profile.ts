@@ -1,4 +1,5 @@
 import { reusableAnswerLabelKey } from './candidate-answers.js';
+import { projectBasicWorkEligibility } from './candidate-work-eligibility.js';
 
 /** Project a reusable answer with the current canonical revocation key. */
 export function projectCandidateOnboardingAnswer(
@@ -66,6 +67,7 @@ export function projectCandidateOnboardingProfile(
         ? false
         : 'unknown';
   return {
+    basicWorkEligibility: projectBasicWorkEligibility(record),
     authorizedWorkCountriesJson: String(
       record.authorizedWorkCountriesJson ?? '[]',
     ),

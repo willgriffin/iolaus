@@ -2,6 +2,8 @@ export type TaskWorkTarget = {
   description: string;
   href: string;
   label: string;
+  recordClass: 'Application' | 'Opportunity' | 'Company' | 'Source';
+  recordId: string;
 };
 
 type TaskRecord = Record<string, unknown>;
@@ -46,6 +48,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the application package review page.',
       href: `/admin/applications/${encodeURIComponent(applicationId)}`,
       label: 'Review application',
+      recordClass: 'Application',
+      recordId: applicationId,
     };
   }
 
@@ -67,6 +71,8 @@ export function taskWorkTargetForRecord(
         taskType === 'submit_application'
           ? 'Open application'
           : 'Work application',
+      recordClass: 'Application',
+      recordId: applicationId,
     };
   }
 
@@ -78,6 +84,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the opportunity row drawer for review.',
       href: adminSelectedRecordHref('opportunities', opportunityId),
       label: 'Review opportunity',
+      recordClass: 'Opportunity',
+      recordId: opportunityId,
     };
   }
 
@@ -86,15 +94,19 @@ export function taskWorkTargetForRecord(
       description: 'Open the company research record.',
       href: adminRecordHref('companies', companyId),
       label: 'Research company',
+      recordClass: 'Company',
+      recordId: companyId,
     };
   }
 
-  if (taskType === 'account_setup' && sourceId) {
+  if (['account_setup', 'signup_needed'].includes(taskType) && sourceId) {
     return {
       description:
         'Open the source setup form. Store only the secret reference here.',
       href: adminEditHref('sources', sourceId),
       label: 'Set up source',
+      recordClass: 'Source',
+      recordId: sourceId,
     };
   }
 
@@ -103,6 +115,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the source record for this task.',
       href: adminRecordHref('sources', sourceId),
       label: 'Open source',
+      recordClass: 'Source',
+      recordId: sourceId,
     };
   }
 
@@ -111,6 +125,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the application connected to this account setup.',
       href: adminRecordHref('applications', applicationId),
       label: 'Open application',
+      recordClass: 'Application',
+      recordId: applicationId,
     };
   }
 
@@ -119,6 +135,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the opportunity connected to this task.',
       href: adminSelectedRecordHref('opportunities', opportunityId),
       label: 'Open opportunity',
+      recordClass: 'Opportunity',
+      recordId: opportunityId,
     };
   }
   if (applicationId) {
@@ -126,6 +144,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the application connected to this task.',
       href: adminRecordHref('applications', applicationId),
       label: 'Open application',
+      recordClass: 'Application',
+      recordId: applicationId,
     };
   }
   if (companyId) {
@@ -133,6 +153,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the company connected to this task.',
       href: adminRecordHref('companies', companyId),
       label: 'Open company',
+      recordClass: 'Company',
+      recordId: companyId,
     };
   }
   if (sourceId) {
@@ -140,6 +162,8 @@ export function taskWorkTargetForRecord(
       description: 'Open the source connected to this task.',
       href: adminRecordHref('sources', sourceId),
       label: 'Open source',
+      recordClass: 'Source',
+      recordId: sourceId,
     };
   }
   return null;

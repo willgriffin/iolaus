@@ -16,7 +16,7 @@ const navigation = $derived(adminCategoryNavigation(category, resources));
 <svelte:head><title>{navigation.label} — Iolaus</title></svelte:head>
 
 <section class="category-overview" aria-labelledby="category-title">
-  <a class="back-link" href="/admin">← Back to Overview</a>
+  <a class="back-link" href={category === 'memory' ? '/admin/system' : '/admin'}>← Back to {category === 'memory' ? 'System' : 'Overview'}</a>
   <header>
     <span class="category-icon" aria-hidden="true"><NavIcon name={navigation.icon ?? 'folder-tree'} size={24} /></span>
     <div><h1 id="category-title">{navigation.label}</h1><p>{navigation.description}</p></div>

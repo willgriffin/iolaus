@@ -1333,6 +1333,7 @@ function taskMeta(record: AdminRecord): string {
         <h1>{data.resource.label}</h1>
         <p>{data.resource.description}</p>
       </div>
+      {#if data.resource.slug === 'preferences'}<a class="new-record-link" href="/admin/preferences/screening-questions">Screening Questions</a>{/if}
       {#if isSourceResource}<AddUrlIntake />{/if}
       {#if (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>

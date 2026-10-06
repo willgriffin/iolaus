@@ -1,82 +1,23 @@
 import { type Actions, fail } from '@sveltejs/kit';
 import {
-  type CandidateOnboardingInput,
   isCandidateResumeAssetSelectable,
   revokeCandidateOnboardingReusableAnswer,
   saveCandidateOnboarding,
 } from '$lib/server/candidate-onboarding.js';
+import { onboardingInput } from '$lib/server/candidate-onboarding-form.js';
 import {
   mergeCandidateOnboardingResumeAssets,
   projectCandidateOnboardingAnswer,
   projectCandidateOnboardingProfile,
 } from '$lib/server/candidate-onboarding-profile.js';
+import { candidateWorkEligibilityFromProfile } from '$lib/server/candidate-work-eligibility.js';
+import { onboardingCountryOptions } from '$lib/server/country-reference.js';
 import { getCollection } from '$lib/server/smrt.js';
 import { workspaceSubjectFromLocals } from '$lib/server/workspace-subject.js';
 import type { PageServerLoad } from './$types';
 
 function stringValue(value: FormDataEntryValue | null): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function listValue(value: FormDataEntryValue | null): string[] {
-  return stringValue(value)
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function onboardingInput(form: FormData): CandidateOnboardingInput {
-  const saveVoluntaryDemographics =
-    form.get('saveVoluntaryDemographics') === 'on';
-  const demographics = {
-    disability: stringValue(form.get('demographicDisability')),
-    gender: stringValue(form.get('demographicGender')),
-    raceOrEthnicity: stringValue(form.get('demographicRaceOrEthnicity')),
-    veteranStatus: stringValue(form.get('demographicVeteranStatus')),
-  };
-  return {
-    authorizedWorkCountries: listValue(form.get('authorizedWorkCountries')),
-    citizenshipCountries: listValue(form.get('citizenshipCountries')),
-    email: stringValue(form.get('email')),
-    firstName: stringValue(form.get('firstName')),
-    githubUrl: stringValue(form.get('githubUrl')),
-    lastName: stringValue(form.get('lastName')),
-    linkedinUrl: stringValue(form.get('linkedinUrl')),
-    location: stringValue(form.get('location')),
-    name: stringValue(form.get('name')),
-    phone: stringValue(form.get('phone')),
-    preferences: {
-      locations: listValue(form.get('preferredLocations')),
-      targetCompensation: stringValue(form.get('targetCompensation')),
-      targetRoles: listValue(form.get('targetRoles')),
-      workModes: listValue(form.get('workModes')),
-    },
-    reusableAnswers: [
-      {
-        label: stringValue(form.get('reusableAnswerLabel')),
-        saveForReuse: form.get('saveReusableAnswer') === 'on',
-        value: stringValue(form.get('reusableAnswerValue')),
-      },
-    ],
-    residenceCountry: stringValue(form.get('residenceCountry')),
-    resumeAssetId: stringValue(form.get('resumeAssetId')),
-    resumeSource:
-      form.get('resumeSource') === 'upload_later'
-        ? 'upload_later'
-        : 'not_selected',
-    saveVoluntaryDemographics,
-    sponsorshipRequired:
-      form.get('sponsorshipRequired') === 'yes'
-        ? 'yes'
-        : form.get('sponsorshipRequired') === 'no'
-          ? 'no'
-          : 'unknown',
-    summary: stringValue(form.get('summary')),
-    targetWorkCountry: stringValue(form.get('targetWorkCountry')),
-    title: stringValue(form.get('title')),
-    workAuthorization: stringValue(form.get('workAuthorization')),
-    ...(saveVoluntaryDemographics ? { demographics } : {}),
-  };
 }
 
 function recordValue(row: unknown): Record<string, unknown> {
@@ -145,7 +86,16 @@ export const load: PageServerLoad = async ({ locals }) => {
       subject.userId
       ? recordValue(selectedResumeAsset)
       : null;
+  const eligibility = candidateWorkEligibilityFromProfile(activeProfile ?? {});
   return {
+    countryOptions: onboardingCountryOptions([
+      ...eligibility.citizenships.map(({ code }) => code),
+      ...eligibility.authorizedWorkCountries.map(({ country }) => country.code),
+      ...[
+        eligibility.residenceCountry?.code,
+        eligibility.targetWorkCountry?.code,
+      ].filter((code): code is string => Boolean(code)),
+    ]),
     profile: projectCandidateOnboardingProfile(activeProfile),
     reusableAnswers: answerRows.map((item) =>
       projectCandidateOnboardingAnswer(recordValue(item)),

@@ -219,31 +219,32 @@ test('archives orphan, approved, and in-progress applications through the dedica
   }
 });
 
-test('navigation can be opened, used and reopened', async ({ page }) => {
+test('logo navigation can be opened with a keyboard, used and reopened', async ({
+  page,
+}) => {
   await openTasks(page);
   const panel = page.locator('.admin-tenant-panel');
-  if ((page.viewportSize()?.width ?? 0) >= 1280) {
-    await expect(panel).toBeInViewport();
-    await panel
-      .getByRole('button', { name: 'Collapse navigation', exact: true })
-      .tap();
-  }
-  const opener = page
-    .getByRole('button', { name: 'Expand navigation', exact: true })
-    .first();
-  await expect(opener).toBeInViewport();
-  await opener.tap();
+  const logo = page.getByRole('button', {
+    name: /: (Open|Close) navigation menu$/,
+  });
+  await expect(logo).toBeInViewport();
+  await expect(
+    page.getByRole('button', { name: 'Expand navigation', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Collapse navigation', exact: true }),
+  ).toHaveCount(0);
+  if ((await logo.getAttribute('aria-expanded')) === 'true') await logo.tap();
+  await logo.press('Enter');
+  await expect(logo).toHaveAttribute('aria-expanded', 'true');
   await expect(panel).toBeInViewport();
   await panel.getByRole('link', { name: 'Opportunities', exact: true }).tap();
   await expect(page).toHaveURL(/\/admin\/opportunities/);
-  if ((page.viewportSize()?.width ?? 0) <= 768) {
-    await expect(opener).toBeInViewport();
-    await opener.tap();
-  }
-  await panel
-    .getByRole('button', { name: 'Collapse navigation', exact: true })
-    .tap();
-  await expect(opener).toBeInViewport();
+  await expect(logo).toHaveAttribute('aria-expanded', 'false');
+  await logo.tap();
+  await expect(panel).toBeInViewport();
+  await logo.tap();
+  await expect(logo).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('task cards have usable height and respond to a vertical swipe', async ({
@@ -347,7 +348,26 @@ test('eligibility bucket filters share the list query and survive a reload', asy
 
 test('app settings use the full mobile width', async ({ page }) => {
   await openTasks(page);
-  await page.getByRole('button', { name: 'Open app settings' }).tap();
+  const logo = page.getByRole('button', {
+    name: /: (Open|Close) navigation menu$/,
+  });
+  if ((await logo.getAttribute('aria-expanded')) !== 'true') await logo.tap();
+  const account = page.getByRole('button', {
+    name: 'Open account menu',
+    exact: true,
+  });
+  await expect(account).toBeInViewport();
+  await account.tap();
+  await expect(
+    page.getByRole('button', { name: 'Sign out', exact: true }),
+  ).toBeVisible();
+  await account.press('Escape');
+  await expect(
+    page.getByRole('button', { name: 'Sign out', exact: true }),
+  ).toBeHidden();
+  await expect(logo).toHaveAttribute('aria-expanded', 'true');
+  await account.tap();
+  await page.getByRole('button', { name: 'App settings', exact: true }).tap();
   const drawer = page.locator('.smrt-admin-shell__drawer--top');
   await expect(drawer).toBeVisible();
   const width = page.viewportSize()?.width ?? 0;
@@ -424,11 +444,14 @@ test('application stage labels do not overlap', async ({ page }) => {
   }
 });
 
-test('footer status chips stay inside the visible footer', async ({ page }) => {
+test('activity footer stays inside the visible footer', async ({ page }) => {
   await openTasks(page);
   const bar = page.locator('footer.smrt-admin-shell__edge--bottom');
-  const chips = bar.locator('.smrt-system-status-chips');
+  const chips = bar
+    .locator('.smrt-activity-ticker, .admin-activity-status')
+    .first();
   await expect(chips).toBeVisible();
+  await expect(bar.locator('.smrt-system-status-chips')).toHaveCount(0);
   const outer = await bar.boundingBox();
   const inner = await chips.boundingBox();
   expect(outer).not.toBeNull();
@@ -558,6 +581,9 @@ test('triage uses the mobile viewport and keeps scrolling and actions reachable'
   await page.screenshot({ path: testInfo.outputPath('triage-scrolled.png') });
   await later.tap();
   await expect(card).not.toHaveAttribute('aria-label', originalCard ?? '');
+  await expect
+    .poll(() => body.evaluate((element) => element.scrollTop))
+    .toBe(0);
   await close.tap();
   await expect(dialog).toBeHidden();
   await expect(

@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   enqueueOpportunityIntelligence,
   enqueueOpportunityIntelligenceWithStatus,
-  enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
   enqueueWorkspaceOpportunityAssessmentFreshPilotWithStatus,
+  enqueueWorkspaceOpportunityAssessmentPilotWithStatus,
   findActiveOpportunityIntelligenceJob,
   OPPORTUNITY_INTELLIGENCE_JOB_OBJECT_TYPE,
   OPPORTUNITY_INTELLIGENCE_METHOD,

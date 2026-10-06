@@ -3,6 +3,7 @@ import {
   overviewOpportunity,
   prioritizeOverviewTasks,
 } from '$lib/admin/overview';
+import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import {
   listAdminRecords,
@@ -41,6 +42,19 @@ export async function loadAdminOverview(
   const displayedTasks = tasks.filter((task) =>
     displayedTaskIds.has(String(task.id)),
   );
+  const targetByTaskId = new Map(
+    displayedTasks.map((task) => [
+      String(task.id),
+      taskWorkTargetForRecord(task),
+    ]),
+  );
+  const targetIds = (recordClass: 'Source' | 'Opportunity' | 'Company') => [
+    ...new Set(
+      [...targetByTaskId.values()].flatMap((target) =>
+        target?.recordClass === recordClass ? [target.recordId] : [],
+      ),
+    ),
+  ];
   const applicationIds = [
     ...new Set(
       displayedTasks.flatMap((task) =>
@@ -50,11 +64,59 @@ export async function loadAdminOverview(
       ),
     ),
   ];
+  const sourceIds = targetIds('Source');
+  const opportunityTargetIds = targetIds('Opportunity');
+  const companyIds = targetIds('Company');
+  const [applications, sources, opportunityTargets, companies] =
+    await Promise.all([
+      applicationIds.length
+        ? listPrivateRecords('Application', subject, {
+            where: { 'id in': applicationIds },
+            limit: applicationIds.length,
+          })
+        : Promise.resolve([]),
+      sourceIds.length
+        ? listAdminRecords(requireAdminResource('sources'), {
+            where: { 'id in': sourceIds },
+            limit: sourceIds.length,
+            select: ['id', 'ownerProfileId'],
+          })
+        : Promise.resolve([]),
+      opportunityTargetIds.length
+        ? listAdminRecords(resource, {
+            where: { 'id in': opportunityTargetIds },
+            limit: opportunityTargetIds.length,
+            select: ['id'],
+          })
+        : Promise.resolve([]),
+      companyIds.length
+        ? listAdminRecords(requireAdminResource('companies'), {
+            where: { 'id in': companyIds },
+            limit: companyIds.length,
+            select: ['id'],
+          })
+        : Promise.resolve([]),
+    ]);
+  const applicationById = new Map(
+    applications.map((application) => [application.id, application]),
+  );
+  const validTargets = new Set([
+    ...applications.map((application) => `Application:${application.id}`),
+    ...sources
+      .filter(
+        (source) =>
+          !source.ownerProfileId || source.ownerProfileId === subject.profileId,
+      )
+      .map((source) => `Source:${source.id}`),
+    ...opportunityTargets.map((opportunity) => `Opportunity:${opportunity.id}`),
+    ...companies.map((company) => `Company:${company.id}`),
+  ]);
+  for (const task of overview.tasks) {
+    const target = targetByTaskId.get(task.id);
+    if (target && validTargets.has(`${target.recordClass}:${target.recordId}`))
+      task.href = target.href;
+  }
   if (applicationIds.length) {
-    const applications = await listPrivateRecords('Application', subject, {
-      where: { 'id in': applicationIds },
-      limit: applicationIds.length,
-    });
     const opportunityIds = [
       ...new Set(
         applications.flatMap((application) =>
@@ -65,9 +127,6 @@ export async function loadAdminOverview(
         ),
       ),
     ];
-    const applicationById = new Map(
-      applications.map((application) => [application.id, application]),
-    );
     const postings = opportunityIds.length
       ? await attachOpportunityContext(
           await listAdminRecords(resource, {

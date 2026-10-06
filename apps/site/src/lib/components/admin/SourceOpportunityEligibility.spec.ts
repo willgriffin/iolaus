@@ -32,6 +32,61 @@ const props = {
 };
 
 describe('SourceOpportunityEligibility', () => {
+  it('shows captured Remote Canada independently of unknown legal eligibility in compact lists', () => {
+    const { body } = render(SourceOpportunityEligibility, {
+      props: {
+        ...props,
+        compact: true,
+        projection: {
+          ...projection,
+          sourceStatus: 'unknown',
+          eligibilityBucket: 'unknown',
+          conditionalPaths: [],
+          capturedPostingLocation: {
+            sourceStatus: 'current',
+            sourceContentFingerprint: 'source-current',
+            sourceContentVersion: 3,
+            locationNotes: 'Remote Canada',
+            workMode: 'remote',
+          },
+        },
+      },
+    });
+    expect(body).toContain(
+      'Captured posting location: <strong>Remote Canada</strong>',
+    );
+    expect(body).toContain(
+      'Captured work arrangement: <strong>remote</strong>',
+    );
+    expect(body).toContain(
+      'does not establish work authorization or candidate eligibility',
+    );
+    expect(body).not.toContain('Eligible for your work location');
+    expect(body).not.toContain('no explicit current allowance');
+  });
+  it.each([
+    { sourceContentFingerprint: 'changed' },
+    { sourceContentVersion: 4 },
+  ])('hides captured location when its source identity is stale', (change) => {
+    const { body } = render(SourceOpportunityEligibility, {
+      props: {
+        ...props,
+        ...change,
+        projection: {
+          ...projection,
+          capturedPostingLocation: {
+            sourceStatus: 'current',
+            sourceContentFingerprint: 'source-current',
+            sourceContentVersion: 3,
+            locationNotes: 'Remote Canada',
+            workMode: 'remote',
+          },
+        },
+      },
+    });
+    expect(body).not.toContain('Captured posting location');
+    expect(body).not.toContain('Remote Canada');
+  });
   it.each([
     ['offered', 'Sponsorship stated for this role'],
     ['denied', 'Sponsorship explicitly denied'],

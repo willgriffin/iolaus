@@ -25,6 +25,7 @@ import type {
   Skills,
   TailoringConfig,
 } from '@willgriffin/iolaus-resume';
+import { parseConfirmedCandidateSkills } from '../candidate-skill-discovery.js';
 import experienceData from '../data/experience.json';
 import profileData from '../data/profile.json';
 import skillsData from '../data/skills.json';
@@ -1194,6 +1195,22 @@ export async function loadWorkspaceCandidateEvidence(
     text: evidenceText(profile.title, profile.summary, profile.factsJson),
     title: stringValue(profile.name) || 'Candidate profile',
   });
+  for (const skill of parseConfirmedCandidateSkills(profile.factsJson)) {
+    append({
+      id: `confirmed-skill:${skill.id}`,
+      recordId: scopedSubject.profileId,
+      sectionId: 'facts.confirmedSkills',
+      kind: 'skill_context',
+      title: `Confirmed skill: ${skill.label}`,
+      text: evidenceText(
+        `User-confirmed skill: ${skill.label}. Experience: ${skill.classification === 'direct' ? 'direct experience; depth not otherwise specified' : 'introductory exposure only; not established proficiency'}.`,
+        ...skill.evidence.map(
+          (cite) =>
+            `Supporting career record [${cite.id}] ${cite.title}:\n${cite.text}`,
+        ),
+      ),
+    });
+  }
   // Preserve atomic role/tenure facts alongside every narrative source.
   for (const position of source?.experience.positions ?? []) {
     append({

@@ -944,3 +944,36 @@ describe('opportunity intelligence governance', () => {
     }
   });
 });
+
+it('reserves a larger financial basis without increasing token admission or actual usage', async () => {
+  const store = new MemoryStore();
+  await executeGovernedOpportunityIntelligenceRequest({
+    config,
+    identity,
+    estimatedInputTokens: 500,
+    inputTokenCeiling: 1000,
+    financialInputTokenCeiling: 3000,
+    maxOutputTokens: 100,
+    store,
+    invoke: async () => ({
+      output: {},
+      usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100 },
+    }),
+  });
+  const reservation = [...store.results.values()][0]!.reservation;
+  expect(reservation.reservedInputTokens).toBe(1000);
+  expect(reservation.reservedSpendMicros).toBe(340);
+  expect(store.terminal[0]?.actualSpendMicros).toBe(10);
+  await expect(
+    executeGovernedOpportunityIntelligenceRequest({
+      config,
+      identity,
+      estimatedInputTokens: 500,
+      inputTokenCeiling: 1000,
+      financialInputTokenCeiling: 999,
+      maxOutputTokens: 100,
+      store: new MemoryStore(),
+      invoke: vi.fn(),
+    }),
+  ).rejects.toThrow('financial');
+});

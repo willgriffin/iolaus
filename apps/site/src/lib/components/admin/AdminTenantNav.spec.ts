@@ -12,7 +12,7 @@ describe('compact admin navigation', () => {
     });
     expect(body).toContain('href="/admin/career"');
     expect(body).toContain('href="/admin/research"');
-    expect(body).toContain('aria-label="Career sections"');
+    expect(body).toContain('aria-label="Resume sections"');
     expect(body).toContain('aria-expanded="false"');
     expect(body).not.toContain('href="/admin/resume"');
     expect(body).not.toContain('href="/admin/sources"');
@@ -32,5 +32,12 @@ describe('compact admin navigation', () => {
     expect(body).toContain('href="/admin/research"');
     expect(body).toContain('title="Research"');
     expect(body).not.toContain('aria-expanded');
+  });
+  it('keeps System active for a Memory subsection', () => {
+    const { body } = render(AdminTenantNav, {
+      props: { items, collapsed: true, currentHref: '/admin/facts' },
+    });
+    expect(body).toMatch(/href="\/admin\/system"[^>]*class="[^"]*active/);
+    expect(body).not.toMatch(/href="\/admin\/memory"/);
   });
 });

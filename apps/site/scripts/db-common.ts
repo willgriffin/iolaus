@@ -219,6 +219,10 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
   for (const className of [
     'DataSurfaceIdempotencyRecord',
     'DataSurfacePreviewToken',
+    // Private assistant-turn reservations are not generated resources. The
+    // table is still part of the native manifest migration so idempotency and
+    // accounting state survive a process restart.
+    'AdminAssistantTurn',
   ]) {
     await getCollection(className);
     initialized.push(className);

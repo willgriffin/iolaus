@@ -669,8 +669,8 @@ try {
           });
         return projections.get(id);
       });
-    privateProjection = await readProjection();
-    privateProjectionReload = await readProjection();
+    privateProjection = (await readProjection()) as Json | undefined;
+    privateProjectionReload = (await readProjection()) as Json | undefined;
     if (privateVariant === 'fitting') {
       const paid = final.requests.find(
         (row) => row.feature === 'opportunity-assessment-partial',
@@ -681,7 +681,9 @@ try {
         ['forged-fixture-contract', paid.request_id],
       );
       privateProjectionAfterForgeAttempted = true;
-      privateProjectionAfterForge = await readProjection();
+      privateProjectionAfterForge = (await readProjection()) as
+        | Json
+        | undefined;
     }
   }
   const prepared = final.record.preparedPostingJson as Json;

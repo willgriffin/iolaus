@@ -1260,7 +1260,7 @@ export function projectSourceEligibility(
   if (!targetAllowed)
     return result(
       'unknown',
-      'Posting has no explicit current allowance for the target work country.',
+      'Current eligibility evidence does not establish permission for the target work country.',
     );
   const targetAuthorizationRequirements = unique(
     authorizationCountries.map((country) => country.code),

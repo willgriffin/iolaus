@@ -3,9 +3,15 @@ import {
   ASSESSMENT_ELIGIBILITY_BUCKETS,
   type AssessmentEligibilityBucket,
   compareAssessmentEligibility,
+  getOpportunityEligibilityProjection,
   matchesAssessmentEligibility,
 } from '$lib/opportunity-assessment-projection';
-import { getCurrentPartialOpportunityAssessmentProjection } from '$lib/opportunity-partial-projection';
+import {
+  currentCitedSupport,
+  getCurrentCompleteOpportunityReview,
+  hasUnavailableCompleteOpportunityReview,
+} from '$lib/opportunity-resume-fit-review-projection';
+import { currentQuestionScreeningRank } from '$lib/question-screening-projection';
 
 // Status ordering for the default "best fit" sort — active/early stages first,
 // terminal last. Shared with the list component so sort and grouping agree.
@@ -50,6 +56,7 @@ export type OpportunitySort =
   | 'best'
   | 'eligibility'
   | 'cited_support'
+  | 'recommendation'
   | 'newest'
   | 'score'
   | 'salary'
@@ -258,16 +265,6 @@ export function collectOpportunityOptions(
   };
 }
 
-// True when at least one of `record`'s required skills is NOT matched by the
-// candidate. A posting with no listed required skills has no gaps.
-function hasSkillGap(
-  record: AdminRecord,
-  hasSkill: (skill: string) => boolean,
-): boolean {
-  const required = parseSkillList(getString(record, 'requiredSkills'));
-  return required.some((skill) => !hasSkill(skill));
-}
-
 function rangeOverlaps(
   recordMin: number | null,
   recordMax: number | null,
@@ -300,10 +297,25 @@ export function matchesOpportunity(
   )
     return false;
 
-  if (filters.fit === 'have' && hasSkillGap(record, context.hasSkill))
-    return false;
-  if (filters.fit === 'gaps' && !hasSkillGap(record, context.hasSkill))
-    return false;
+  if (filters.fit !== 'all') {
+    const fit = getCurrentCompleteOpportunityReview(
+      record.resumeFitReviewProjection,
+      record.completeReviewStatus,
+    )?.evidenceFit;
+    if (
+      filters.fit === 'have' &&
+      fit?.status !== 'supports_all_reviewed_criteria'
+    )
+      return false;
+    if (
+      filters.fit === 'gaps' &&
+      (!fit ||
+        !['supported_with_uncertainties', 'needs_evidence'].includes(
+          fit.status,
+        ))
+    )
+      return false;
+  }
 
   if (filters.skills.length > 0) {
     const owned = new Set(recordSkills(record).map((s) => s.toLowerCase()));
@@ -373,8 +385,9 @@ export function matchesOpportunity(
   if (filters.eligibilityBuckets.length > 0) {
     if (
       !matchesAssessmentEligibility(
-        record.sourceEligibilityProjection ?? record.assessmentProjection,
+        record.sourceEligibilityProjection,
         filters.eligibilityBuckets,
+        record.assessmentProjection,
       )
     )
       return false;
@@ -405,7 +418,13 @@ export function matchesOpportunity(
   }
 
   if (filters.minScore !== null || filters.maxScore !== null) {
-    const score = getNumber(record, 'latestScore');
+    const score =
+      getCurrentCompleteOpportunityReview(
+        record.resumeFitReviewProjection,
+        record.completeReviewStatus,
+      ) || hasUnavailableCompleteOpportunityReview(record)
+        ? null
+        : getNumber(record, 'latestScore');
     if (score === null) return false;
     if (filters.minScore !== null && score < filters.minScore) return false;
     if (filters.maxScore !== null && score > filters.maxScore) return false;
@@ -452,7 +471,12 @@ export function sortOpportunities(
     return order === 'asc' ? left - right : right - left;
   };
   const score = (record: AdminRecord) =>
-    getNumber(record, 'latestScore') ?? Number.NEGATIVE_INFINITY;
+    getCurrentCompleteOpportunityReview(
+      record.resumeFitReviewProjection,
+      record.completeReviewStatus,
+    ) || hasUnavailableCompleteOpportunityReview(record)
+      ? Number.NEGATIVE_INFINITY
+      : (getNumber(record, 'latestScore') ?? Number.NEGATIVE_INFINITY);
   return [...records].sort((left, right) => {
     let primary: number;
     switch (sort) {
@@ -461,23 +485,80 @@ export function sortOpportunities(
         break;
       case 'eligibility':
         primary = compareAssessmentEligibility(
-          left.sourceEligibilityProjection ?? left.assessmentProjection,
-          right.sourceEligibilityProjection ?? right.assessmentProjection,
+          left.sourceEligibilityProjection,
+          right.sourceEligibilityProjection,
+          left.assessmentProjection,
+          right.assessmentProjection,
         );
         break;
+      case 'recommendation': {
+        const leftQuestions = currentQuestionScreeningRank(left);
+        const rightQuestions = currentQuestionScreeningRank(right);
+        primary =
+          compare(
+            leftQuestions.recommendationPercent ?? Number.NEGATIVE_INFINITY,
+            rightQuestions.recommendationPercent ?? Number.NEGATIVE_INFINITY,
+          ) ||
+          compare(
+            leftQuestions.evidenceCoveragePercent ?? Number.NEGATIVE_INFINITY,
+            rightQuestions.evidenceCoveragePercent ?? Number.NEGATIVE_INFINITY,
+            'desc',
+          );
+        break;
+      }
       case 'cited_support':
-        primary = compare(
-          getCurrentPartialOpportunityAssessmentProjection(
-            left.partialAssessmentProjection,
-          )?.supportedCriterionCount ?? Number.NEGATIVE_INFINITY,
-          getCurrentPartialOpportunityAssessmentProjection(
-            right.partialAssessmentProjection,
-          )?.supportedCriterionCount ?? Number.NEGATIVE_INFINITY,
-        );
+        primary =
+          compare(
+            currentCitedSupport(left)?.supportedCriterionCount ??
+              Number.NEGATIVE_INFINITY,
+            currentCitedSupport(right)?.supportedCriterionCount ??
+              Number.NEGATIVE_INFINITY,
+          ) ||
+          compare(
+            currentCitedSupport(left)?.supportLowerBound ??
+              Number.NEGATIVE_INFINITY,
+            currentCitedSupport(right)?.supportLowerBound ??
+              Number.NEGATIVE_INFINITY,
+          ) ||
+          compare(
+            currentCitedSupport(left)?.advisoryRelevanceMean ??
+              Number.NEGATIVE_INFINITY,
+            currentCitedSupport(right)?.advisoryRelevanceMean ??
+              Number.NEGATIVE_INFINITY,
+          ) ||
+          compare(
+            currentCitedSupport(left)?.partialSupportedCriterionCount ??
+              Number.NEGATIVE_INFINITY,
+            currentCitedSupport(right)?.partialSupportedCriterionCount ??
+              Number.NEGATIVE_INFINITY,
+          ) ||
+          compare(
+            currentCitedSupport(left)?.partialSupportLowerBound ??
+              Number.NEGATIVE_INFINITY,
+            currentCitedSupport(right)?.partialSupportLowerBound ??
+              Number.NEGATIVE_INFINITY,
+          );
         break;
-      case 'score':
-        primary = compare(score(left), score(right));
+      case 'score': {
+        const leftQuestions = currentQuestionScreeningRank(left);
+        const rightQuestions = currentQuestionScreeningRank(right);
+        primary =
+          leftQuestions.enabled || rightQuestions.enabled
+            ? compare(
+                leftQuestions.recommendationPercent ?? Number.NEGATIVE_INFINITY,
+                rightQuestions.recommendationPercent ??
+                  Number.NEGATIVE_INFINITY,
+              ) ||
+              compare(
+                leftQuestions.evidenceCoveragePercent ??
+                  Number.NEGATIVE_INFINITY,
+                rightQuestions.evidenceCoveragePercent ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              )
+            : compare(score(left), score(right));
         break;
+      }
       case 'salary':
         primary = compare(salaryRank(left), salaryRank(right));
         break;
@@ -487,14 +568,109 @@ export function sortOpportunities(
           getNumber(right, 'humanRating') ?? Number.NEGATIVE_INFINITY,
         );
         break;
-      default:
+      default: {
+        const leftComplete = getCurrentCompleteOpportunityReview(
+          left.resumeFitReviewProjection,
+          left.completeReviewStatus,
+        );
+        const rightComplete = getCurrentCompleteOpportunityReview(
+          right.resumeFitReviewProjection,
+          right.completeReviewStatus,
+        );
+        const completeTier =
+          leftComplete ||
+          rightComplete ||
+          hasUnavailableCompleteOpportunityReview(left) ||
+          hasUnavailableCompleteOpportunityReview(right);
+        // Eligibility remains independent of candidate support. Legacy fit is
+        // comparable only inside a tier containing no complete-review records.
+        const eligibilityOrder = completeTier
+          ? getOpportunityEligibilityProjection(
+              left.sourceEligibilityProjection,
+              left.assessmentProjection,
+            ).eligibilityPriority -
+            getOpportunityEligibilityProjection(
+              right.sourceEligibilityProjection,
+              right.assessmentProjection,
+            ).eligibilityPriority
+          : compareAssessmentEligibility(
+              left.sourceEligibilityProjection,
+              right.sourceEligibilityProjection,
+              left.assessmentProjection,
+              right.assessmentProjection,
+            );
+        const leftSupport =
+          leftComplete?.evidenceFit &&
+          leftComplete.evidenceFit.consideredCriterionCount > 0
+            ? leftComplete.evidenceFit
+            : null;
+        const rightSupport =
+          rightComplete?.evidenceFit &&
+          rightComplete.evidenceFit.consideredCriterionCount > 0
+            ? rightComplete.evidenceFit
+            : null;
+        // Native supported-count first, ratio second; context-only reviews get
+        // no support boost. This is evidence ordering, never a numeric fit score.
+        const supportOrder =
+          leftSupport || rightSupport
+            ? compare(
+                leftSupport?.supportedCriterionCount ??
+                  Number.NEGATIVE_INFINITY,
+                rightSupport?.supportedCriterionCount ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              ) ||
+              compare(
+                leftSupport?.supportLowerBound ?? Number.NEGATIVE_INFINITY,
+                rightSupport?.supportLowerBound ?? Number.NEGATIVE_INFINITY,
+                'desc',
+              ) ||
+              compare(
+                currentCitedSupport(left)?.advisoryRelevanceMean ??
+                  Number.NEGATIVE_INFINITY,
+                currentCitedSupport(right)?.advisoryRelevanceMean ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              ) ||
+              compare(
+                currentCitedSupport(left)?.partialSupportedCriterionCount ??
+                  Number.NEGATIVE_INFINITY,
+                currentCitedSupport(right)?.partialSupportedCriterionCount ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              ) ||
+              compare(
+                currentCitedSupport(left)?.partialSupportLowerBound ??
+                  Number.NEGATIVE_INFINITY,
+                currentCitedSupport(right)?.partialSupportLowerBound ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              )
+            : compare(score(left), score(right), 'desc');
+        const leftQuestions = currentQuestionScreeningRank(left);
+        const rightQuestions = currentQuestionScreeningRank(right);
         primary =
-          statusRank(left) - statusRank(right) ||
-          compareAssessmentEligibility(
-            left.sourceEligibilityProjection ?? left.assessmentProjection,
-            right.sourceEligibilityProjection ?? right.assessmentProjection,
-          ) ||
-          compare(score(left), score(right), 'desc');
+          leftQuestions.enabled || rightQuestions.enabled
+            ? statusRank(left) - statusRank(right) ||
+              leftQuestions.conflictCount - rightQuestions.conflictCount ||
+              compare(
+                leftQuestions.recommendationPercent ?? Number.NEGATIVE_INFINITY,
+                rightQuestions.recommendationPercent ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              ) ||
+              compare(
+                leftQuestions.evidenceCoveragePercent ??
+                  Number.NEGATIVE_INFINITY,
+                rightQuestions.evidenceCoveragePercent ??
+                  Number.NEGATIVE_INFINITY,
+                'desc',
+              )
+            : statusRank(left) - statusRank(right) ||
+              eligibilityOrder ||
+              supportOrder;
+        break;
+      }
     }
     if (primary) return primary;
     const updated = compare(
@@ -627,6 +803,7 @@ export function normalizeFilterState(raw: unknown): OpportunityFilterState {
     input.sort === 'best' ||
     input.sort === 'eligibility' ||
     input.sort === 'cited_support' ||
+    input.sort === 'recommendation' ||
     input.sort === 'newest' ||
     input.sort === 'score' ||
     input.sort === 'salary' ||

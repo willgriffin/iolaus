@@ -32,6 +32,7 @@ import {
   assessmentEligibilityLabels,
   assessmentMatchReadinessLabel,
   getOpportunityAssessmentProjection,
+  getOpportunityEligibilityProjection,
 } from '$lib/opportunity-assessment-projection';
 import {
   countActiveFilters,
@@ -46,19 +47,24 @@ import {
   writeFilterStateSearchParams,
 } from '$lib/opportunity-filters';
 import {
+  completeReviewLabel,
+  getCurrentCompleteOpportunityReview,
+  hasUnavailableCompleteOpportunityReview,
+} from '$lib/opportunity-resume-fit-review-projection';
+import {
   filtersForOpportunityTableSort,
   opportunityTableSort,
 } from '$lib/opportunity-table-sorting';
+import {
+  currentQuestionScreeningRank,
+  getCurrentQuestionScreeningProjection,
+  questionScreeningLabel,
+} from '$lib/question-screening-projection';
 import AddUrlIntake from './AddUrlIntake.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
-import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
-import PartialOpportunityEvidence, {
-  getCurrentPartialOpportunityAssessmentProjection,
-} from './PartialOpportunityEvidence.svelte';
-import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
-import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
+import { getCurrentPartialOpportunityAssessmentProjection } from './PartialOpportunityEvidence.svelte';
 
 type WorkflowOption = { label: string; value: string };
 type SignalFilterKey =
@@ -178,13 +184,6 @@ const tableColumns: DataTableColumn<AdminRecord>[] = [
     align: 'right',
     minWidth: '6rem',
     sortable: true,
-  },
-  {
-    id: 'citedSupport',
-    label: 'Cited support',
-    minWidth: '12rem',
-    sortable: true,
-    responsive: { priority: 1 },
   },
   { id: 'status', label: 'Status', minWidth: '7rem' },
   {
@@ -683,9 +682,48 @@ function salaryLabel(record: AdminRecord): string {
   return '';
 }
 
+function questionScreeningTooltip(record: AdminRecord): string {
+  const current = getCurrentQuestionScreeningProjection(
+    record.questionScreeningProjection,
+    record.questionScreeningStatus,
+  );
+  if (!current)
+    return record.questionScreeningStatus === 'unknown'
+      ? 'Screening needs refresh. Questions, captured source or candidate evidence may have changed.'
+      : 'Screening questions have not been run for this opportunity.';
+  if (current.rolePreScreen)
+    return 'Title-only pre-screen against your target roles. Full questions have not been assessed; open the opportunity to run full screening anyway.';
+  const coverage = current.aggregate.evidenceCoveragePercent;
+  return [
+    'Weighted alignment with your enabled questions. Unknowns earn no points; this is not hiring probability.',
+    `Evidence coverage: ${coverage === null ? 'Unknown' : `${coverage.toFixed(1)}%`}.`,
+    `${current.aggregate.mustHaveConflictIds.length} must-have conflicts; ${current.aggregate.unresolvedMustHaveIds.length} unresolved must-haves.`,
+    'Open the opportunity to review questions, answers and evidence.',
+  ].join(' ');
+}
+
 // Score only — the recommendation is still conveyed by the badge's tone color
 // (toneFor(latestRecommendation) on the badge) and by the status badge.
 function scoreLabel(record: AdminRecord): string {
+  const questionRank = currentQuestionScreeningRank(record);
+  if (questionRank.enabled) {
+    const questions = getCurrentQuestionScreeningProjection(
+      record.questionScreeningProjection,
+      record.questionScreeningStatus,
+    );
+    return questions
+      ? questionScreeningLabel(questions)
+      : record.questionScreeningStatus === 'unknown'
+        ? 'Screening needs refresh'
+        : 'Recommendation unknown';
+  }
+  const complete = getCurrentCompleteOpportunityReview(
+    record.resumeFitReviewProjection,
+    record.completeReviewStatus,
+  );
+  if (complete?.evidenceFit) return completeReviewLabel(complete);
+  if (hasUnavailableCompleteOpportunityReview(record))
+    return 'Complete review needs refresh';
   const assessment = getOpportunityAssessmentProjection(
     record.assessmentProjection,
   );
@@ -700,8 +738,10 @@ function scoreLabel(record: AdminRecord): string {
 }
 
 function eligibilityLabel(record: AdminRecord): string {
-  const bucket = getOpportunityAssessmentProjection(record.assessmentProjection)
-    .buckets[0];
+  const bucket = getOpportunityEligibilityProjection(
+    record.sourceEligibilityProjection,
+    record.assessmentProjection,
+  ).buckets[0];
   return bucket ? assessmentEligibilityLabels[bucket] : 'Unknown';
 }
 
@@ -878,6 +918,7 @@ const resultCountLabel = $derived.by(() => {
         <option value="best">Best fit</option>
         <option value="eligibility">Eligibility for your work location</option>
         <option value="cited_support">Cited support</option>
+        <option value="recommendation">Recommendation</option>
         <option value="newest">Newest</option>
         <option value="score">AI score</option>
         <option value="salary">Salary</option>
@@ -902,6 +943,7 @@ const resultCountLabel = $derived.by(() => {
     <a class="triage-link" href={shortlistHref}>
       <Heart size={15} strokeWidth={2.2} /> Shortlist
     </a>
+    <a class="triage-link" href="/admin/preferences/screening-questions">Screening Questions</a>
     <div class="view-selector" role="group" aria-label="Opportunity view">
       {#each opportunityViews as view}
         <Button
@@ -967,33 +1009,21 @@ const resultCountLabel = $derived.by(() => {
         >
           {str(record, 'title') || 'Untitled opportunity'}
         </span>
-        <span class="eligibility-label" title="Eligibility for your active work-location profile">
-          {eligibilityLabel(record)}
-        </span>
         {#if posting}
           <a class="posting-icon" href={posting} target="_blank" rel="noreferrer" title="View posting" aria-label="View posting">
             <ExternalLink size={15} strokeWidth={2.2} />
           </a>
         {/if}
       </div>
-      <SourceOpportunityEligibility projection={record.sourceEligibilityProjection} sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} compact />
-      <OpportunityScreeningSummary {record} compact />
     {:else if column.id === 'company'}
       <span class="table-meta"><Building2 size={13} strokeWidth={2.2} /> {companyLabel(record)}</span>
     {:else if column.id === 'location'}
       <span class="table-meta"><MapPin size={13} strokeWidth={2.2} /> {locationLabel(record)}</span>
     {:else if column.id === 'score'}
-      <span class="badge neutral" title={getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
+      <span class="badge neutral" title={currentQuestionScreeningRank(record).enabled ? questionScreeningTooltip(record) : hasUnavailableCompleteOpportunityReview(record) ? 'Saved complete review could not be validated for current material.' : getCurrentCompleteOpportunityReview(record.resumeFitReviewProjection, record.completeReviewStatus)?.evidenceFit ? 'Current complete material review. Candidate support and source uncertainty are shown separately.' : getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
         <Sparkles size={12} strokeWidth={2.4} /> {scoreLabel(record)}
       </span>
       <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
-    {:else if column.id === 'citedSupport'}
-      <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} compact />
-      {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
-        <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
-      {:else}
-        <span class="table-meta">No current cited support assessment</span>
-      {/if}
     {:else if column.id === 'status'}
       <span class={`badge ${toneFor(str(record, 'status'))}`}>
         {humanize(str(record, 'status'), 'unknown')}
@@ -1071,20 +1101,13 @@ const resultCountLabel = $derived.by(() => {
         <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
         <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
         <span class="eligibility-label">{eligibilityLabel(record)}</span>
-        <span>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        <span title={questionScreeningTooltip(record)}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
       {#if postingUrlFor(record)}
         <a href={postingUrlFor(record)} target="_blank" rel="noreferrer">View posting</a>
       {/if}
-      <SourceOpportunityEligibility projection={record.sourceEligibilityProjection}
-        sourceContentFingerprint={record.sourceContentFingerprint} sourceContentVersion={record.sourceContentVersion} compact />
-      <OpportunityScreeningSummary {record} compact />
-      {#if getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection)}
-        <PartialOpportunityEvidence projection={record.partialAssessmentProjection} compact />
-      {:else}<span class="table-meta">No current cited support assessment</span>{/if}
-      <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} compact />
     </div>
   {/snippet}
 
@@ -1238,8 +1261,8 @@ const resultCountLabel = $derived.by(() => {
           <span class="field-label">Fit</span>
           <div class="segmented" role="group" aria-label="Skill fit">
             <button type="button" class:active={filters.fit === 'all'} onclick={() => setFilters({ ...filters, fit: 'all' })}>All</button>
-            <button type="button" class:active={filters.fit === 'have'} onclick={() => setFilters({ ...filters, fit: 'have' })}>I have all</button>
-            <button type="button" class:active={filters.fit === 'gaps'} onclick={() => setFilters({ ...filters, fit: 'gaps' })}>Has gaps</button>
+            <button type="button" class:active={filters.fit === 'have'} onclick={() => setFilters({ ...filters, fit: 'have' })}>Reviewed criteria supported</button>
+            <button type="button" class:active={filters.fit === 'gaps'} onclick={() => setFilters({ ...filters, fit: 'gaps' })}>Needs evidence</button>
           </div>
           {#if filterOptions.skills.length}
             <div

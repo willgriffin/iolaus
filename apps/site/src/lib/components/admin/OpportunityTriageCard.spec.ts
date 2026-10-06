@@ -1,6 +1,8 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import type { AdminRecord } from '$lib/admin/dock';
+import { completeReviewFixture } from '$lib/opportunity-resume-fit-review-projection.test-support';
+import { questionScreeningFixture } from '$lib/question-screening-projection.test-support';
 import OpportunityTriageCard from './OpportunityTriageCard.svelte';
 
 function renderCard(record: AdminRecord, props: Record<string, unknown> = {}) {
@@ -14,6 +16,79 @@ function renderCard(record: AdminRecord, props: Record<string, unknown> = {}) {
 }
 
 describe('OpportunityTriageCard', () => {
+  it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
+    const { body } = renderCard({
+      id: 'question-result',
+      title: 'API engineer',
+      questionScreeningEnabled: true,
+      questionScreeningStatus: 'current',
+      questionScreeningProjection: await questionScreeningFixture(),
+      latestScore: 99,
+    });
+    expect(body).toContain('Recommendation 40.0%');
+    expect(body).toContain('Run screening');
+    expect(body).toContain('Partial');
+    expect(body).not.toContain('99/100');
+  });
+  it('shows only individual semantic receipts as supported and leaves unassessed skills neutral', async () => {
+    const projection = await questionScreeningFixture();
+    const { body } = renderCard(
+      {
+        id: 'skills',
+        title: 'API engineer',
+        requiredSkills: 'Postgres, Python',
+        questionScreeningEnabled: true,
+        questionScreeningStatus: 'current',
+        questionScreeningProjection: {
+          ...projection,
+          skillMatches: [
+            {
+              requirement: 'Postgres',
+              meaning: 'named_capability',
+              sourceField: 'requiredSkills',
+              status: 'supported',
+              assessed: true,
+              confidence: 0.95,
+              sourceCitation: {
+                id: 'field',
+                text: 'Postgres',
+                start: 0,
+                end: 8,
+              },
+              candidateCitations: [
+                {
+                  id: 'p',
+                  title: 'Database work',
+                  kind: 'project',
+                  text: 'Built PostgreSQL services.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      { candidateSkills: ['python'] },
+    );
+    expect(body).toContain('Postgres · Direct experience');
+    expect(body).toContain('Python · Not assessed');
+    expect(body).toContain('Built PostgreSQL services.');
+    expect(body).toContain('Individual skill evidence');
+    expect(body).not.toContain('Python · Supported');
+  });
+  it('presents current complete evidence as primary while keeping legal eligibility unknown', () => {
+    const { body } = renderCard({
+      id: 'complete-review',
+      title: 'API engineer',
+      resumeFitReviewProjection: completeReviewFixture(),
+      latestScore: 99,
+    });
+    expect(body).toContain('All reviewed criteria supported');
+    expect(body).toContain('1 supported of 1 considered criteria');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).not.toContain('No current assessment is available');
+    expect(body).not.toContain('Overall fit not yet established');
+    expect(body).not.toContain('99/100');
+  });
   it('separates coarse relevance from unknown fit and retains human review state', () => {
     const quote = 'We are hiring software engineers.';
     const record = {

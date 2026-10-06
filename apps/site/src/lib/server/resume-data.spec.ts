@@ -1504,6 +1504,58 @@ describe('workspace candidate evidence', () => {
     );
   });
 
+  it('includes confirmed private skills with exact introductory limits and citations', async () => {
+    const records = normalizedRecordsFromSource(
+      structuredClone(loadLegacyResumeSource()),
+    );
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      Object.fromEntries(
+        Object.keys(plan).map((key) => [
+          key,
+          records[key as keyof ResumeSourceRecords] ?? [],
+        ]),
+      ),
+    );
+    mocks.getPrivateRecord.mockResolvedValue({
+      id: subject.profileId,
+      tenantId: subject.tenantId,
+      ownerUserId: subject.userId,
+      factsJson: JSON.stringify({
+        version: 1,
+        facts: {
+          confirmedSkills: [
+            {
+              id: 'confirmation-1',
+              label: 'Python',
+              classification: 'introductory',
+              provenance: 'user_verified',
+              discoveryRequestId: 'request-1',
+              evidence: [
+                {
+                  id: 'project-1',
+                  title: 'Prototype',
+                  text: 'Dabbled in Python.',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    const result = await loadWorkspaceCandidateEvidence(subject);
+    expect(
+      result.evidence.find(
+        (row) => row.id === 'confirmed-skill:confirmation-1',
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        kind: 'skill_context',
+        title: 'Confirmed skill: Python',
+        text: 'User-confirmed skill: Python. Experience: introductory exposure only; not established proficiency.\nSupporting career record [project-1] Prototype:\nDabbled in Python.',
+      }),
+    );
+  });
+
   it('rejects a forged candidate profile before loading candidate material', async () => {
     mocks.getPrivateRecord.mockResolvedValue(null);
 

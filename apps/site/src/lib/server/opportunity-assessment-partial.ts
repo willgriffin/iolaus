@@ -25,8 +25,8 @@ import {
   prepareCompositeRequirementEvidenceAudit,
   prepareRequirementEvidenceAudit,
   prepareSourceEligibilityCompositeRequirementEvidenceAudit,
-  readPartialOpportunityRequirementEvidence,
   REQUIREMENT_EVIDENCE_QUARANTINED_SOURCE_AUDIT_VERSION,
+  readPartialOpportunityRequirementEvidence,
 } from './opportunity-requirement-coverage-provider.js';
 import {
   createPrivateRecord,

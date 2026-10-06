@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { questionScreeningFixture } from '../question-screening-projection.test-support.js';
 
 const mocks = vi.hoisted(() => {
   const collections = new Map<
@@ -8,6 +9,8 @@ const mocks = vi.hoisted(() => {
 
   return {
     collections,
+    digDeeperOnOpportunity: vi.fn(),
+    sweepInactiveSourceOpportunities: vi.fn(),
     effectivePermissions: [] as string[],
     countAdminResourceRecords: vi.fn(),
     countOpportunityRecords: vi.fn(),
@@ -43,6 +46,12 @@ const mocks = vi.hoisted(() => {
     syncRecommendedOpportunityDecisionTasks: vi.fn(),
     updateAdminRecord: vi.fn(),
     isOpportunityIntelligenceEnqueueError: vi.fn(),
+    loadCurrentScreeningQuestionAssessmentProjections: vi.fn(async () =>
+      Object.assign(new Map(), {
+        questionScreeningEnabled: false,
+        questionScreeningStatuses: new Map(),
+      }),
+    ),
     loadCurrentOpportunityAssessmentProjections: vi.fn(),
     loadCurrentPartialOpportunityAssessmentProjections: vi.fn(
       async () => new Map(),
@@ -70,6 +79,14 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock('./opportunity-deep-dive.js', () => ({
+  digDeeperOnOpportunity: mocks.digDeeperOnOpportunity,
+}));
+
+vi.mock('./opportunity-sweep', () => ({
+  sweepInactiveSourceOpportunities: mocks.sweepInactiveSourceOpportunities,
+}));
+
 vi.mock('./admin-data', () => ({
   countAdminResourceRecords: mocks.countAdminResourceRecords,
   createAdminRecord: mocks.createAdminRecord,
@@ -96,6 +113,10 @@ vi.mock('./private-workspace', () => ({
   listPrivateRecords: mocks.listPrivateRecords,
 }));
 
+vi.mock('./screening-question-assessment-service', () => ({
+  loadCurrentScreeningQuestionAssessmentProjections:
+    mocks.loadCurrentScreeningQuestionAssessmentProjections,
+}));
 vi.mock('./opportunity-assessment-store', () => ({
   loadCurrentOpportunityAssessmentProjections:
     mocks.loadCurrentOpportunityAssessmentProjections,
@@ -322,6 +343,13 @@ describe('admin-resource-route', () => {
     mocks.loadCurrentPartialOpportunityAssessmentProjections.mockResolvedValue(
       new Map(),
     );
+    mocks.loadCurrentScreeningQuestionAssessmentProjections.mockReset();
+    mocks.loadCurrentScreeningQuestionAssessmentProjections.mockResolvedValue(
+      Object.assign(new Map(), {
+        questionScreeningEnabled: false,
+        questionScreeningStatuses: new Map(),
+      }),
+    );
     mocks.loadCurrentOpportunityAssessmentProjections.mockReset();
     mocks.loadCurrentOpportunityAssessmentProjections.mockResolvedValue(
       new Map(),
@@ -365,6 +393,156 @@ describe('admin-resource-route', () => {
     mocks.serializeRecord.mockClear();
     mocks.syncRecommendedOpportunityDecisionTasks.mockReset();
     mocks.updateAdminRecord.mockReset();
+  });
+
+  describe('triage deep-dive authority', () => {
+    const permissions = [
+      'opportunities.read',
+      'companies.read',
+      'workflow.application.review',
+    ];
+    beforeEach(() => {
+      mocks.digDeeperOnOpportunity.mockReset();
+      mocks.digDeeperOnOpportunity.mockResolvedValue({
+        humanReviewStatus: 'maybe',
+        failed: [],
+        steps: [],
+      });
+    });
+    it('allows the curated review workflow and preserves omitted fields', async () => {
+      const { digDeeperOpportunityAction } = await import(
+        './admin-resource-route'
+      );
+      await digDeeperOpportunityAction(
+        postForm('/admin/opportunities', { opportunityId: 'opp-1' }),
+        ownerLocals(permissions),
+      );
+      expect(mocks.digDeeperOnOpportunity).toHaveBeenCalledWith({
+        opportunityId: 'opp-1',
+        subject: workspaceSubject,
+        user: { id: 'user-1' },
+        humanRating: undefined,
+        humanReviewNotes: undefined,
+      });
+    });
+    it.each(
+      permissions,
+    )('refuses missing %s before writing a decision', async (denied) => {
+      const { digDeeperOpportunityAction } = await import(
+        './admin-resource-route'
+      );
+      await expect(
+        digDeeperOpportunityAction(
+          postForm('/admin/opportunities', { opportunityId: 'opp-1' }),
+          ownerLocals(permissions.filter((p) => p !== denied)),
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(mocks.digDeeperOnOpportunity).not.toHaveBeenCalled();
+    });
+    it('refuses revoked authority and a foreign profile', async () => {
+      const { digDeeperOpportunityAction } = await import(
+        './admin-resource-route'
+      );
+      const locals = ownerLocals(permissions);
+      mocks.effectivePermissions = [];
+      await expect(
+        digDeeperOpportunityAction(
+          postForm('/admin/opportunities', { opportunityId: 'opp-1' }),
+          locals,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      const foreign = ownerLocals(permissions);
+      foreign.workspaceSubject = {
+        ...workspaceSubject,
+        profileId: 'foreign-profile',
+      };
+      await expect(
+        digDeeperOpportunityAction(
+          postForm('/admin/opportunities', { opportunityId: 'opp-1' }),
+          foreign,
+        ),
+      ).rejects.toBeDefined();
+      expect(mocks.digDeeperOnOpportunity).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('inactive sweep authority', () => {
+    const permissions = [
+      'opportunities.read',
+      'opportunities.update',
+      'sources.read',
+      'workflow.audit.record',
+    ];
+    beforeEach(() => {
+      mocks.sweepInactiveSourceOpportunities.mockReset();
+      mocks.sweepInactiveSourceOpportunities.mockResolvedValue({
+        applied: false,
+        archivedCount: 0,
+        count: 0,
+        message: 'Nothing matches',
+        filter: { notSeenDays: 30 },
+        reviewTasksClosed: 0,
+        sample: [],
+        skippedCount: 0,
+      });
+    });
+    it.each([
+      true,
+      false,
+    ])('uses curated authority with dryRun=%s', async (dryRun) => {
+      const actions = await import('./admin-resource-route');
+      const action = dryRun
+        ? actions.previewInactiveOpportunitySweepAction
+        : actions.applyInactiveOpportunitySweepAction;
+      await action(
+        postForm('/admin/opportunities', { notSeenDays: '30' }),
+        ownerLocals(permissions),
+      );
+      expect(mocks.sweepInactiveSourceOpportunities).toHaveBeenCalledWith({
+        dryRun,
+        notSeenDays: '30',
+        user: { id: 'user-1' },
+      });
+    });
+    it.each(
+      permissions,
+    )('refuses missing %s before service access', async (denied) => {
+      const { previewInactiveOpportunitySweepAction } = await import(
+        './admin-resource-route'
+      );
+      await expect(
+        previewInactiveOpportunitySweepAction(
+          postForm('/admin/opportunities', {}),
+          ownerLocals(permissions.filter((p) => p !== denied)),
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(mocks.sweepInactiveSourceOpportunities).not.toHaveBeenCalled();
+    });
+    it('refuses revoked permission and mismatched profile', async () => {
+      const { previewInactiveOpportunitySweepAction } = await import(
+        './admin-resource-route'
+      );
+      const locals = ownerLocals(permissions);
+      mocks.effectivePermissions = [];
+      await expect(
+        previewInactiveOpportunitySweepAction(
+          postForm('/admin/opportunities', {}),
+          locals,
+        ),
+      ).rejects.toMatchObject({ status: 403 });
+      const foreign = ownerLocals(permissions);
+      foreign.workspaceSubject = {
+        ...workspaceSubject,
+        profileId: 'foreign-profile',
+      };
+      await expect(
+        previewInactiveOpportunitySweepAction(
+          postForm('/admin/opportunities', {}),
+          foreign,
+        ),
+      ).rejects.toBeDefined();
+      expect(mocks.sweepInactiveSourceOpportunities).not.toHaveBeenCalled();
+    });
   });
 
   it('queues only native assessment for the verified selected subject from the detail action', async () => {
@@ -1330,6 +1508,42 @@ describe('admin-resource-route', () => {
     expect(
       (record?.agentRuns as unknown[] | undefined)?.[0],
     ).not.toBeInstanceOf(AgentRunModel);
+  });
+
+  it('attaches current native question results and shared enabled status to the selected private detail', async () => {
+    const { loadAdminRecordPageData } = await import('./admin-resource-route');
+    const { getAdminResource } = await import('$lib/admin/resources');
+    const projection = await questionScreeningFixture();
+    const opportunity = {
+      id: 'opp-1',
+      sourceContentFingerprint: 'posting-fingerprint',
+      sourceContentVersion: 1,
+      title: 'Staff engineer',
+    };
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.getAdminRecord.mockResolvedValue(opportunity);
+    mocks.listComboOptions.mockResolvedValue({});
+    mocks.listReferenceOptions.mockResolvedValue({});
+    mocks.loadCurrentScreeningQuestionAssessmentProjections.mockResolvedValue(
+      Object.assign(new Map([['opp-1', projection]]), {
+        questionScreeningEnabled: true,
+        questionScreeningStatuses: new Map([['opp-1', 'current']]),
+      }),
+    );
+    const data = await loadAdminRecordPageData('opportunities', 'opp-1', {
+      workspaceSubject,
+    });
+    expect(
+      mocks.loadCurrentScreeningQuestionAssessmentProjections,
+    ).toHaveBeenCalledWith({
+      opportunities: [opportunity],
+      subject: workspaceSubject,
+    });
+    expect(data.record.questionScreeningProjection).toEqual(projection);
+    expect(data.record.questionScreeningStatus).toBe('current');
+    expect(data.record.questionScreeningEnabled).toBe(true);
   });
 
   it('passes the verified selected subject through the opportunity detail loader', async () => {

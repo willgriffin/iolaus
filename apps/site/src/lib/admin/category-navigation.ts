@@ -29,7 +29,7 @@ const resourceIcons: Record<string, string> = {
 export const adminCategories = [
   {
     key: 'career',
-    label: 'Career',
+    label: 'Resume',
     icon: 'file-text',
     description:
       'Build the profile, experience, and resume behind your next opportunity.',
@@ -67,7 +67,7 @@ export const adminCategories = [
     label: 'System',
     icon: 'sliders',
     description:
-      'Review your preferences, agent activity, and evaluation results.',
+      'Review your memory, preferences, agent activity, and evaluation results.',
     resources: ['preferences', 'agent-runs', 'evaluation-scores'],
   },
 ] as const;
@@ -90,6 +90,19 @@ function resourceItem(
     icon: resourceIcons[slug] ?? 'database',
     label: labels[slug] ?? resource.label,
     description: resource.description,
+    ...(slug === 'preferences'
+      ? {
+          children: [
+            {
+              href: '/admin/preferences/screening-questions',
+              icon: 'sliders',
+              label: 'Screening Questions',
+              description:
+                'Choose questions and priorities for opportunity screening.',
+            },
+          ],
+        }
+      : {}),
   };
 }
 
@@ -106,9 +119,13 @@ export function adminCategoryNavigation(
     children.unshift({
       href: '/admin/resume',
       icon: 'file-text',
-      label: 'Resume',
-      description: 'Review and tailor your resume for the next application.',
+      label: 'Preview & PDFs',
+      description: 'Preview your resume and generate PDFs for applications.',
     });
+  if (key === 'system') {
+    const memory = adminCategoryNavigation('memory', resources);
+    if (memory.children?.length) children.unshift(memory);
+  }
   return {
     href: `/admin/${key}`,
     label: category.label,
@@ -127,6 +144,7 @@ export function buildAdminNavigation(
       .map((slug) => resourceItem(slug, resources))
       .filter((item): item is ShellNavItem => Boolean(item)),
     ...adminCategories
+      .filter(({ key }) => key !== 'memory')
       .map(({ key }) => adminCategoryNavigation(key, resources))
       .filter((item) => item.children?.length),
   ];

@@ -7,7 +7,7 @@ import AdminCategoryOverview from './AdminCategoryOverview.svelte';
 describe('admin category overview pages', () => {
   it.each(
     adminCategories,
-  )('renders $label with accessible subsection links and an Overview return', ({
+  )('renders $label with accessible subsection links and its parent return', ({
     key,
     label,
   }) => {
@@ -16,8 +16,24 @@ describe('admin category overview pages', () => {
     });
     expect(body).toContain(`>${label}</h1>`);
     expect(body).toContain(`aria-label="${label} sections"`);
-    expect(body).toContain('href="/admin"');
-    expect(body).toContain('Back to Overview');
+    expect(body).toContain(
+      key === 'memory' ? 'href="/admin/system"' : 'href="/admin"',
+    );
+    expect(body).toContain(
+      key === 'memory' ? 'Back to System' : 'Back to Overview',
+    );
+  });
+  it('offers Memory from System without changing its existing section URLs', () => {
+    const system = render(AdminCategoryOverview, {
+      props: { category: 'system', resources: adminResources },
+    }).body;
+    expect(system).toContain('href="/admin/memory"');
+    const memory = render(AdminCategoryOverview, {
+      props: { category: 'memory', resources: adminResources },
+    }).body;
+    expect(memory).toContain('href="/admin/facts"');
+    expect(memory).toContain('href="/admin/fact-candidates"');
+    expect(memory).toContain('href="/admin/decisions"');
   });
   it('does not expose resource links absent from the supplied workspace resource set', () => {
     const { body } = render(AdminCategoryOverview, {

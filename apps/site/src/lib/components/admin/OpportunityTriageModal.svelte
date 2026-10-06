@@ -310,6 +310,9 @@ $effect(() => {
   const id = current ? str(current, 'id') : '';
   if (id === notesCardId) return;
   notesCardId = id;
+  // Reset only the modal body when the role changes, never the page behind it.
+  const body = focusAnchor?.closest<HTMLElement>('.modal__body');
+  if (body) body.scrollTop = 0;
   notes = current ? str(current, 'humanReviewNotes') : '';
 });
 

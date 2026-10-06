@@ -1087,6 +1087,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
 >(options: {
   config?: OpportunityIntelligenceBudgetConfig;
   estimatedInputTokens: number;
+  /** Optional larger financial reserve; never lowers the token-based spend reserve. */
+  financialInputTokenCeiling?: number;
   identity: OpportunityIntelligenceRequestIdentity;
   inputTokenCeiling: number;
   invoke: (requestId: string) => Promise<{
@@ -1141,6 +1143,12 @@ export async function executeGovernedOpportunityIntelligenceRequest<
       'Opportunity intelligence run limits are required.',
     );
   }
+  if (
+    options.financialInputTokenCeiling !== undefined &&
+    (!Number.isSafeInteger(options.financialInputTokenCeiling) ||
+      options.financialInputTokenCeiling < options.inputTokenCeiling)
+  )
+    throw new Error('Invalid financial input reservation.');
   const requestId = randomUUID();
   const workspaceSubject = options.workspaceSubject
     ? requireWorkspaceSubject(options.workspaceSubject)
@@ -1157,7 +1165,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     requestId,
     reservedInputTokens: options.inputTokenCeiling,
     reservedSpendMicros: reservedRequestSpendMicros({
-      inputTokens: options.inputTokenCeiling,
+      inputTokens:
+        options.financialInputTokenCeiling ?? options.inputTokenCeiling,
       maxOutputTokens: options.maxOutputTokens,
       pricing,
     }),

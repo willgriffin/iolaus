@@ -1,13 +1,20 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildCompleteCapturedFieldCatalog,
+  type CompleteOpportunitySourceMaterial,
+  fingerprintCompleteOpportunitySourceMaterial,
+} from './opportunity-assessment-completeness.js';
 import { buildRequirementCoverageSource } from './opportunity-requirement-coverage.js';
 import type { PartialOpportunityRequirementEvidence } from './opportunity-requirement-coverage-provider.js';
 import {
   assertOpportunityResumeFitReviewNotAttempted,
   evaluateOpportunityResumeFitReview,
+  OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
   OPPORTUNITY_RESUME_FIT_REVIEW_MODEL,
   OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+  OpportunityResumeFitReviewValidationError,
   opportunityResumeFitReviewInputFingerprint,
   preflightOpportunityResumeFitReview,
   prepareCurrentOpportunityResumeFitReview,
@@ -17,10 +24,12 @@ import {
   resolveOpportunityResumeFitReview,
   storeOpportunityResumeFitReview,
 } from './opportunity-resume-fit-review.js';
+import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 import type { CandidateEvidenceSource } from './resume-data.js';
 
 const mocks = vi.hoisted(() => ({
   readSource: vi.fn(),
+  readCompleteSource: vi.fn(),
   loadCandidate: vi.fn(),
   getProfile: vi.fn(),
   query: vi.fn(),
@@ -41,6 +50,7 @@ vi.mock('./smrt.js', () => ({
 vi.mock('./db.js', () => ({ getDbConfig: () => ({}) }));
 vi.mock('./opportunity-requirement-coverage-provider.js', () => ({
   readPartialOpportunityRequirementEvidence: mocks.readSource,
+  readCompleteOpportunitySourceMaterial: mocks.readCompleteSource,
 }));
 vi.mock('./resume-data.js', () => ({
   loadWorkspaceCandidateEvidence: mocks.loadCandidate,
@@ -749,7 +759,7 @@ describe('bounded complete-catalog Sol advisory review', () => {
   });
   it('reserves all V3 quote-envelope output and reasoning, holding over4096 without clipping any offered text', async () => {
     const value = fixture();
-    value.candidateSources[149]!.text = '\"\\'.repeat(100);
+    value.candidateSources[149]!.text = '"\\'.repeat(100);
     const prepared = prepareOpportunityResumeFitReview(
       {
         opportunityId: 'role-1',
@@ -779,6 +789,87 @@ describe('bounded complete-catalog Sol advisory review', () => {
     expect(denied.fits).toBe(false);
     expect(prepared.candidates[149]!.text).toBe(
       value.candidateSources[149]!.text,
+    );
+  });
+  // Changed-risk matrix: each reachable malformed typed row -> exact safe code
+  // + numeric row index/count, never private output. Pure resolver (runtime-neutral);
+  // actual native invoke boundary -> failed validation retains returned usage.
+  // No new persistence/auth/dialect path: existing native receipt fences unchanged.
+  it.each([
+    'id_order',
+    'status',
+    'seniority',
+    'note_type',
+    'note_length',
+    'note_control_characters',
+    'candidate_count',
+    'posting_count',
+  ] as const)('classifies %s without retaining private returned values', async (code) => {
+    const prepared = await current(),
+      value = output(prepared);
+    const row: Record<string, unknown> = value.requirements[0]!;
+    const privateMarker = 'PRIVATE_RETURNED_OUTPUT_DO_NOT_LOG';
+    if (code === 'id_order') row.id = privateMarker;
+    if (code === 'status') row.status = privateMarker;
+    if (code === 'seniority') row.seniority = privateMarker;
+    if (code === 'note_type') row.note = { secret: privateMarker };
+    if (code === 'note_length') row.note = privateMarker.repeat(3);
+    if (code === 'note_control_characters') row.note = 'private\nreturned';
+    if (code === 'candidate_count')
+      row.candidate = [
+        { id: privateMarker },
+        { id: privateMarker },
+        { id: privateMarker },
+      ];
+    if (code === 'posting_count') row.posting = [];
+    let failure: unknown;
+    try {
+      resolve(prepared, value);
+    } catch (cause) {
+      failure = cause;
+    }
+    expect(failure).toBeInstanceOf(OpportunityResumeFitReviewValidationError);
+    const error = failure as OpportunityResumeFitReviewValidationError;
+    expect(error.code).toBe(code);
+    expect(error.rowIndex).toBe(0);
+    expect(error.message).not.toContain(privateMarker);
+    expect(JSON.stringify(error)).not.toContain(privateMarker);
+    expect(
+      Object.keys(error).every((key) =>
+        ['name', 'code', 'rowIndex', 'observedCount'].includes(key),
+      ),
+    ).toBe(true);
+    if (code === 'candidate_count') expect(error.observedCount).toBe(3);
+    if (code === 'posting_count') expect(error.observedCount).toBe(0);
+    if (code === 'note_length')
+      expect(error.observedCount).toBe(privateMarker.length * 3);
+  });
+  it('rejects non-string enum coercions and attaches authentic returned usage to typed validation failures', async () => {
+    const prepared = await current(),
+      value = output(prepared);
+    Object.assign(value.requirements[0]!, { status: ['strength'] });
+    expect(() => resolve(prepared, value)).toThrow('status');
+    const noteFailure = output(prepared);
+    noteFailure.requirements[0]!.note = 'x'.repeat(49);
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify(noteFailure),
+      usage: USAGE,
+    });
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toMatchObject({
+      code: 'note_length',
+      rowIndex: 0,
+      observedCount: 49,
+    });
+    expect(mocks.metadata).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: 'note_length', rowIndex: 0 }),
+      { usage: USAGE },
     );
   });
   it('requires authentic governed identity and rejects fabricated or missing rows', async () => {
@@ -1080,5 +1171,611 @@ describe('bounded complete-catalog Sol advisory review', () => {
     expect(
       await readCurrentOpportunityResumeFitReview(OPPORTUNITY, SUBJECT),
     ).toBeUndefined();
+  });
+});
+
+// Complete-material changed-risk matrix: low source confidence retains exact
+// premises; every clause/ATS field must be considered; generated citations and
+// contradictory tags fail closed; historical V2/V3 stay on their original path.
+describe('complete-material V4 review', () => {
+  const options = {
+    model: 'openai/gpt-6-luna' as const,
+    version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+  } as const;
+  function fullSource(): CompleteOpportunitySourceMaterial {
+    const sourceText =
+      'Skills you bring\n5+ years of TypeScript experience.\n3+ years of React experience.\nExperience with SQL and BigQuery.\nOur team values collaboration.';
+    const captured = {
+      descriptionRaw: sourceText,
+      locationNotes: 'Remote - Canada',
+      workMode: 'remote',
+      qualifications: 'Experience with SQL and BigQuery.',
+    };
+    const context = {
+      sourceText,
+      sourceFingerprint: fingerprintOpportunitySourceContent(captured),
+      sourceVersion: 1,
+      extractionFingerprint: 'exact-native-extraction',
+    };
+    const ledger = buildRequirementCoverageSource(context);
+    ledger.requirements = ledger.clauses.slice(1, 4).map((clause, index) => ({
+      id: ['r26', 'r28', 'r31'][index]!,
+      text: clause.text,
+      clauseIds: [clause.id],
+      importance: 'unknown' as const,
+    }));
+    for (const clause of ledger.clauses) {
+      const row = ledger.requirements.find((row) =>
+        row.clauseIds.includes(clause.id),
+      );
+      if (row)
+        ledger.dispositions[ledger.clauses.indexOf(clause)] = {
+          clauseId: clause.id,
+          type: 'material_requirement',
+          requirementIds: [row.id],
+        };
+    }
+    const material = {
+      version: 'opportunity-source-material/v1-complete-catalog' as const,
+      context,
+      ledger,
+      capturedSource: {
+        sourceContentJson: JSON.stringify(captured),
+        fingerprint: createHash('sha256')
+          .update(JSON.stringify(captured))
+          .digest('hex'),
+      },
+      capturedFields: buildCompleteCapturedFieldCatalog(
+        JSON.stringify(captured),
+        ledger.clauses,
+        sourceText,
+      ),
+      extraction: {
+        requestId: 'actual-extract',
+        agentRunId: 'source-run',
+        ledgerFingerprint: createHash('sha256')
+          .update(JSON.stringify(ledger))
+          .digest('hex'),
+      },
+    };
+    return {
+      ...material,
+      fingerprint: fingerprintCompleteOpportunitySourceMaterial(material),
+    };
+  }
+  function completeOutput(
+    prepared: ReturnType<typeof prepareOpportunityResumeFitReview>,
+  ) {
+    return {
+      requirements: Object.fromEntries(
+        prepared.requirements.map((row) => [
+          row.key,
+          {
+            n: 'insufficient_evidence',
+            l: 'uncertain',
+            c: [] as string[],
+          },
+        ]),
+      ),
+    };
+  }
+  function preparedFull() {
+    return prepareOpportunityResumeFitReview(
+      {
+        opportunityId: 'role-1',
+        source: fullSource(),
+        candidateSources: fixture().candidateSources,
+        candidateMaterialFingerprint: 'current-complete-candidate',
+      },
+      options,
+    );
+  }
+  it('retains hard TypeScript/React/SQL premises and every fact, with uncertainty separate from considered coverage', async () => {
+    const prepared = preparedFull();
+    expect(prepared.candidates).toHaveLength(150);
+    expect(
+      prepared.requirements.flatMap((row) => row.originalRequirementIds ?? []),
+    ).toEqual(expect.arrayContaining(['r26', 'r28', 'r31']));
+    expect(prepared.requirements.map((row) => row.text)).toEqual(
+      expect.arrayContaining([
+        '5+ years of TypeScript experience.',
+        '3+ years of React experience.',
+        'Experience with SQL and BigQuery.',
+        'Remote - Canada',
+        'remote',
+      ]),
+    );
+    const result = resolve(prepared, completeOutput(prepared));
+    expect(result.mode).toBe('complete_material');
+    expect(result.coverage.completion).toMatchObject({
+      status: 'reviewed_with_unknowns',
+      consideredComplete: true,
+      unprocessedClauseIds: [],
+    });
+    expect(result.coverage.requirementsCertainty).toBe('uncertain');
+    expect(result.coverage.fullFit).toMatchObject({
+      kind: 'evidence_summary',
+      supportedCriterionCount: 0,
+      status: 'needs_evidence',
+    });
+    expect(result.evidenceFit).toEqual(result.coverage.fullFit);
+    expect(result.requirements.every((row) => row.status === 'uncertain')).toBe(
+      true,
+    );
+    const bound = await preflightOpportunityResumeFitReview(
+      prepared,
+      async () => 1000,
+    );
+    expect(bound.outputShapeTokens).toBeLessThanOrEqual(4096);
+    expect(bound.maxOutputTokens).toBe(5120);
+    expect(bound.requestBytes).toBeGreaterThan(
+      Buffer.byteLength(JSON.stringify(prepared.messages)),
+    );
+  });
+  it('keeps prior classification native and independently presents literal criteria without confidence anchoring', () => {
+    const prepared = preparedFull();
+    const payload = JSON.parse(String(prepared.messages[1]!.content));
+    expect(payload).not.toHaveProperty('sourceConsideration');
+    expect(payload).not.toHaveProperty('metadataConsideration');
+    expect(payload.originalExtraction).not.toHaveProperty('dispositions');
+    expect(payload.originalExtraction.requirements).toEqual(
+      fullSource().ledger.requirements,
+    );
+    expect(
+      payload.criteria.every(
+        (row: Record<string, unknown>) =>
+          !Object.hasOwn(row, 'sourceClassification'),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain(
+      'possible_requirement_unknown',
+    );
+    const schema = JSON.stringify(prepared.responseSchema);
+    expect(schema).not.toContain('possibleRow');
+    expect(schema).not.toContain('confirmedRow');
+    expect(schema).not.toContain('sourceClassification');
+    expect(schema).toContain('#/$defs/row');
+    expect(prepared.sourceClauseConsideration).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'possible_requirement_unknown' }),
+      ]),
+    );
+    expect(prepared.messages[0]!.content).toContain(
+      'never use it merely because a previous classifier or audit was uncertain',
+    );
+  });
+  it('appends exact current owned typed profile facts only to V4 and fences profile/model drift before transport', async () => {
+    mocks.readCompleteSource.mockResolvedValue(fullSource());
+    const typedProfile = {
+      ...PROFILE,
+      citizenshipsJson: '[{"code":"US"}]',
+      authorizedWorkCountriesJson:
+        ' [{"country":{"code":"CA"},"scope":"open"}] ',
+      residenceCountryJson: '{"code":"CA"}',
+      targetWorkCountryJson: '{"code":"CA"}',
+      preferencesJson: '{"workModes":["remote"]}',
+      sponsorshipRequired: false,
+    };
+    mocks.getProfile.mockResolvedValue({
+      id: PROFILE.id,
+      toJSON: () => typedProfile,
+    });
+    const prepared = await prepareCurrentOpportunityResumeFitReview(
+      OPPORTUNITY,
+      SUBJECT,
+      options,
+    );
+    expect(prepared.candidates).toHaveLength(156);
+    expect(
+      prepared.candidates.slice(0, 150).map(({ key: _key, ...fact }) => fact),
+    ).toEqual(fixture().candidateSources);
+    for (const field of [
+      'citizenshipsJson',
+      'authorizedWorkCountriesJson',
+      'residenceCountryJson',
+      'targetWorkCountryJson',
+      'preferencesJson',
+      'sponsorshipRequired',
+    ] as const) {
+      const fact = prepared.candidates.find(
+        (row) => row.id === `profile-field:${PROFILE.id}:${field}`,
+      )!;
+      expect(fact).toMatchObject({
+        kind: 'candidate_profile',
+        recordId: PROFILE.id,
+        sectionId: field,
+        text:
+          typeof typedProfile[field] === 'boolean'
+            ? JSON.stringify(typedProfile[field])
+            : typedProfile[field],
+      });
+    }
+    const legacy = await prepareCurrentOpportunityResumeFitReview(
+      OPPORTUNITY,
+      SUBJECT,
+      {
+        model: 'openai/gpt-6.1-sol',
+        version: OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+      },
+    );
+    expect(legacy.candidates).toHaveLength(150);
+    expect(
+      legacy.candidates.some((row) => row.id.startsWith('profile-field:')),
+    ).toBe(false);
+    const value = completeOutput(prepared);
+    Object.assign(value.requirements.r0!, {
+      n: 'explicit_support',
+      l: 'not_applicable',
+      c: ['c151'],
+    });
+    expect(
+      resolve(prepared, value).requirements[0]!.candidateCitations[0]!.quote,
+    ).toBe(typedProfile.authorizedWorkCountriesJson);
+    mocks.getProfile.mockResolvedValue({
+      id: PROFILE.id,
+      toJSON: () => ({ ...typedProfile, authorizedWorkCountriesJson: '[]' }),
+    });
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toThrow('not current');
+    expect(mocks.chat).not.toHaveBeenCalled();
+    mocks.getProfile.mockResolvedValue({
+      id: PROFILE.id,
+      toJSON: () => typedProfile,
+    });
+    mocks.clientModel.mockReturnValue('openai/gpt-6.1-sol');
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toThrow('selected dedicated');
+    expect(mocks.chat).not.toHaveBeenCalled();
+  });
+  it('allows advisory seniority from dated employment for a literal possible criterion while preserving source uncertainty', () => {
+    const source = fullSource();
+    const facts = fixture().candidateSources;
+    facts[149] = {
+      ...facts[149]!,
+      text: '2018–2025: developed and maintained TypeScript services throughout this seven-year employment role.',
+    };
+    const prepared = prepareOpportunityResumeFitReview(
+      {
+        opportunityId: 'role-1',
+        source,
+        candidateSources: facts,
+        candidateMaterialFingerprint: 'full150',
+      },
+      options,
+    );
+    const value = completeOutput(prepared);
+    const key = prepared.requirements.find(
+      (row) => row.text === '5+ years of TypeScript experience.',
+    )!.key;
+    Object.assign(value.requirements[key]!, {
+      n: 'explicit_support',
+      l: 'supported',
+      c: ['c149'],
+    });
+    const result = resolve(prepared, value);
+    expect(
+      result.requirements.find(
+        (row) => row.text === '5+ years of TypeScript experience.',
+      ),
+    ).toMatchObject({
+      status: 'strength',
+      seniority: 'supported',
+      sourceClassification: 'possible_requirement_unknown',
+    });
+    expect(
+      result.evidenceFit?.sourceClassificationUnknownCount,
+    ).toBeGreaterThan(0);
+    for (const reason of ['source_uncertain', 'context_only']) {
+      Object.assign(value.requirements[key]!, {
+        n: reason,
+        l: 'supported',
+        c: reason === 'context_only' ? [] : ['c149'],
+      });
+      expect(() => resolve(prepared, value)).toThrow('Inconsistent');
+    }
+  });
+  it('requires exact alias-object coverage and restores whole factual citations without generated quotes or spans', () => {
+    const prepared = preparedFull();
+    const value = completeOutput(prepared);
+    const first = value.requirements.r0!;
+    Object.assign(first, {
+      n: 'explicit_support',
+      l: 'not_applicable',
+      c: ['c149'],
+    });
+    const result = resolve(prepared, value);
+    expect(result.requirements[0]).toMatchObject({
+      status: 'strength',
+      sourceDisposition: 'criterion',
+    });
+    expect(result.evidenceFit).toMatchObject({
+      supportedCriterionCount: 1,
+      sourceClassificationUnknownCount: prepared.requirements.length,
+      status: 'supported_with_uncertainties',
+    });
+    expect(result.requirements[0]?.candidateCitations[0]).toMatchObject({
+      sourceId: prepared.candidates[149]!.id,
+      start: 0,
+      end: prepared.candidates[149]!.text.length,
+      quote: prepared.candidates[149]!.text,
+      citationMode: 'whole_fact',
+    });
+    delete value.requirements.r0;
+    expect(() => resolve(prepared, value)).toThrow('Unexpected');
+    value.requirements.invented = first;
+    expect(() => resolve(prepared, value)).toThrow('Unexpected');
+  });
+  it.each([
+    'foreign',
+    'duplicate',
+    'unknown_strength',
+    'context_candidate',
+    'unsupported_seniority',
+  ])('rejects %s citations or contradictory source/evidence tags', (kind) => {
+    const prepared = preparedFull();
+    const value = completeOutput(prepared);
+    const row = value.requirements.r0!;
+    if (kind === 'foreign') row.c = ['original-private-id'];
+    if (kind === 'duplicate') row.c = ['c149', 'c149'];
+    if (kind === 'unknown_strength')
+      Object.assign(row, {
+        n: 'source_uncertain',
+        status: 'strength',
+        c: ['c149'],
+      });
+    if (kind === 'context_candidate')
+      Object.assign(row, {
+        n: 'context_only',
+        l: 'not_applicable',
+        c: ['c149'],
+      });
+    if (kind === 'unsupported_seniority') {
+      prepared.candidates[149]!.kind = 'skill';
+      Object.assign(row, { l: 'supported', c: ['c149'] });
+    }
+    expect(() => resolve(prepared, value)).toThrow();
+  });
+  it('uses only the native strict schema route and preserves authentic usage on safe malformed-JSON failure', async () => {
+    const material = fullSource();
+    mocks.readCompleteSource.mockResolvedValue(material);
+    const prepared = await prepareCurrentOpportunityResumeFitReview(
+      OPPORTUNITY,
+      SUBJECT,
+      options,
+    );
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify(completeOutput(prepared)),
+      usage: USAGE,
+    });
+    await evaluateOpportunityResumeFitReview(prepared, {
+      opportunity: OPPORTUNITY,
+      subject: SUBJECT,
+      agentRunId: 'run-1',
+      revalidateMaterial: async () => {},
+    });
+    expect(mocks.chat).toHaveBeenLastCalledWith(
+      prepared.messages,
+      expect.objectContaining({
+        responseFormat: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'complete_material_review',
+            strict: true,
+            schema: prepared.responseSchema,
+          },
+        },
+        maxTokens: 4096,
+        reasoning: { effort: 'low', maxTokens: 1024 },
+      }),
+    );
+    mocks.chat.mockResolvedValue({
+      content: 'PRIVATE_BAD_JSON_MARKER {',
+      usage: USAGE,
+    });
+    await expect(
+      evaluateOpportunityResumeFitReview(prepared, {
+        opportunity: OPPORTUNITY,
+        subject: SUBJECT,
+        agentRunId: 'run-1',
+        revalidateMaterial: async () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'malformed_json' });
+    const error = mocks.metadata.mock.calls.at(-1)![0];
+    expect(JSON.stringify(error)).not.toContain('PRIVATE_BAD_JSON_MARKER');
+    expect(error.message).not.toContain('PRIVATE_BAD_JSON_MARKER');
+    expect(mocks.metadata).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: 'malformed_json' }),
+      { usage: USAGE },
+    );
+  });
+  it('admits the complete 94-unit lean layout and denies an actual output counter beyond 4096 without removing facts', async () => {
+    const sourceText = Array.from(
+      { length: 92 },
+      (_, index) =>
+        `Applicant duty ${index}: maintain the exact scoped platform service.`,
+    ).join('\n');
+    const captured = {
+      descriptionRaw: sourceText,
+      locationNotes: 'Remote - Canada',
+      workMode: 'remote',
+    };
+    const context = {
+      sourceText,
+      sourceFingerprint: fingerprintOpportunitySourceContent(captured),
+      sourceVersion: 1,
+      extractionFingerprint: 'native-untouched',
+    };
+    const ledger = buildRequirementCoverageSource(context);
+    const material = {
+      version: 'opportunity-source-material/v1-complete-catalog' as const,
+      context,
+      ledger,
+      capturedSource: {
+        sourceContentJson: JSON.stringify(captured),
+        fingerprint: createHash('sha256')
+          .update(JSON.stringify(captured))
+          .digest('hex'),
+      },
+      capturedFields: buildCompleteCapturedFieldCatalog(
+        JSON.stringify(captured),
+        ledger.clauses,
+        sourceText,
+      ),
+    };
+    const source = {
+      ...material,
+      fingerprint: fingerprintCompleteOpportunitySourceMaterial(material),
+    };
+    const prepared = prepareOpportunityResumeFitReview(
+      {
+        opportunityId: 'role-94',
+        source,
+        candidateSources: fixture().candidateSources,
+        candidateMaterialFingerprint: 'full150',
+      },
+      options,
+    );
+    expect(prepared.requirements).toHaveLength(94);
+    expect(prepared.candidates).toHaveLength(150);
+    const bound = await preflightOpportunityResumeFitReview(
+      prepared,
+      async (text) => (text === prepared.maximumSerializedOutput ? 1000 : 4000),
+    );
+    expect(bound.outputShapeTokens).toBe(2907);
+    expect(bound.fits).toBe(true);
+    const denied = await preflightOpportunityResumeFitReview(
+      prepared,
+      async (text) => (text === prepared.maximumSerializedOutput ? 4097 : 4000),
+    );
+    expect(denied.fits).toBe(false);
+    expect(prepared.requirements).toHaveLength(94);
+    const schema = JSON.stringify(prepared.responseSchema);
+    expect(schema).toContain('"required":["n","l","c"]');
+    expect(schema).not.toContain('"required":["sourceDisposition"');
+  });
+  it('reserves Sol V4 2048 visible plus 1024 reasoning with the same complete semantic input and holds oversized legal output', async () => {
+    function materialWithBodyUnits(
+      count: number,
+    ): CompleteOpportunitySourceMaterial {
+      const sourceText = Array.from(
+        { length: count },
+        (_, index) =>
+          `Applicant duty ${index}: maintain the exact scoped platform service.`,
+      ).join('\n');
+      const captured = {
+        descriptionRaw: sourceText,
+        locationNotes: 'Remote - Canada',
+        workMode: 'remote',
+      };
+      const context = {
+        sourceText,
+        sourceFingerprint: fingerprintOpportunitySourceContent(captured),
+        sourceVersion: 1,
+        extractionFingerprint: 'native-untouched',
+      };
+      const ledger = buildRequirementCoverageSource(context);
+      const material = {
+        version: 'opportunity-source-material/v1-complete-catalog' as const,
+        context,
+        ledger,
+        capturedSource: {
+          sourceContentJson: JSON.stringify(captured),
+          fingerprint: createHash('sha256')
+            .update(JSON.stringify(captured))
+            .digest('hex'),
+        },
+        capturedFields: buildCompleteCapturedFieldCatalog(
+          JSON.stringify(captured),
+          ledger.clauses,
+          sourceText,
+        ),
+      };
+      return {
+        ...material,
+        fingerprint: fingerprintCompleteOpportunitySourceMaterial(material),
+      };
+    }
+    const input = {
+      opportunityId: 'role-29',
+      source: materialWithBodyUnits(27),
+      candidateSources: fixture().candidateSources,
+      candidateMaterialFingerprint: 'full150',
+    };
+    const sol = prepareOpportunityResumeFitReview(input, {
+      ...options,
+      model: 'openai/gpt-6.1-sol',
+    });
+    const luna = prepareOpportunityResumeFitReview(input, options);
+    expect(sol.requirements).toHaveLength(29);
+    expect(sol.candidates).toHaveLength(150);
+    expect(sol.messages).toEqual(luna.messages);
+    expect(sol.responseSchema).toEqual(luna.responseSchema);
+    expect(sol.maximumSerializedOutput).toEqual(luna.maximumSerializedOutput);
+    expect(sol.visibleOutputTokens).toBe(2048);
+    expect(luna.visibleOutputTokens).toBe(4096);
+    const { fingerprint: _solFingerprint, ...solMaterial } = sol;
+    expect(luna.fingerprint).toBe(
+      createHash('sha256')
+        .update(
+          JSON.stringify({
+            ...solMaterial,
+            model: 'openai/gpt-6-luna',
+            visibleOutputTokens: 4096,
+          }),
+        )
+        .digest('hex'),
+    );
+    const bound = await preflightOpportunityResumeFitReview(
+      sol,
+      async (text) => (text === sol.maximumSerializedOutput ? 905 : 28165),
+    );
+    expect(bound).toMatchObject({
+      fits: true,
+      outputShapeTokens: 905,
+      visibleOutputTokens: 2048,
+      reasoningTokens: 1024,
+      maxOutputTokens: 3072,
+      reservedTokens: 31237,
+      reservedSpendMicros: 87050,
+    });
+    const long = prepareOpportunityResumeFitReview(
+      { ...input, source: materialWithBodyUnits(92) },
+      { ...options, model: 'openai/gpt-6.1-sol' },
+    );
+    expect(long.requirements).toHaveLength(94);
+    const denied = await preflightOpportunityResumeFitReview(
+      long,
+      async (text) => (text === long.maximumSerializedOutput ? 1000 : 28165),
+    );
+    expect(denied.outputShapeTokens).toBe(2907);
+    expect(denied.fits).toBe(false);
+    expect(long.candidates).toHaveLength(150);
+  });
+  it('holds malformed source and metadata identity instead of treating unprocessed material as known unknown', () => {
+    const material = fullSource();
+    material.ledger.clauses[1]!.spanStart++;
+    expect(() =>
+      prepareOpportunityResumeFitReview(
+        {
+          opportunityId: 'role-1',
+          source: material,
+          candidateSources: fixture().candidateSources,
+          candidateMaterialFingerprint: 'current',
+        },
+        options,
+      ),
+    ).toThrow('every captured');
   });
 });

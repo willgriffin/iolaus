@@ -43,7 +43,10 @@ function isActive(item: ShellNavItem): boolean {
 }
 
 function hasActiveChild(item: ShellNavItem): boolean {
-  return item.children?.some((child) => isActive(child)) ?? false;
+  return (
+    item.children?.some((child) => isActive(child) || hasActiveChild(child)) ??
+    false
+  );
 }
 
 function isVisibleActive(item: ShellNavItem): boolean {
@@ -94,7 +97,7 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
           {#each item.children as child (child.href)}
             <a
               href={child.href}
-              class:active={isActive(child)}
+              class:active={isVisibleActive(child)}
               aria-current={isActive(child) ? 'page' : undefined}
               title={child.description}
               onkeydown={handleMenuKeydown}
@@ -151,13 +154,18 @@ function ariaCurrent(item: ShellNavItem): 'page' | undefined {
     justify-items: center;
   }
 
+  .admin-tenant-nav.collapsed .admin-tenant-nav-section { width: 100%; }
+  .admin-tenant-nav.collapsed .admin-tenant-nav-heading { width: 100%; justify-content: center; }
+
   .admin-tenant-nav.collapsed a {
     grid-template-columns: minmax(0, 1fr);
     place-items: center;
-    width: 2.75rem;
+    width: min(2.75rem, 100%);
     height: 2.75rem;
     padding: 0;
   }
+
+  .admin-tenant-nav.collapsed a:focus-visible { outline-offset: -2px; }
 
   .admin-tenant-nav a:hover,
   .admin-tenant-nav a.active {

@@ -1349,6 +1349,7 @@ export function candidateMatchesSource(
 
   return [
     'agent',
+    'architect',
     'automation',
     'backend',
     'data',

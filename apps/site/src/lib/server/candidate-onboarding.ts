@@ -2,10 +2,15 @@ import {
   resolveDatabase,
   type SmrtClassOptions,
 } from '@happyvertical/smrt-core';
+import { parseConfirmedCandidateSkills } from '../candidate-skill-discovery.js';
 import {
   normalizeAnswerLabel,
   reusableAnswerLabelKey,
 } from './candidate-answers.js';
+import {
+  applyBasicWorkEligibility,
+  type BasicWorkEligibilityAnswers,
+} from './candidate-work-eligibility.js';
 import {
   countryReferenceFromCode,
   normalizeCountryReferences,
@@ -37,6 +42,7 @@ export interface CandidateFactState {
 }
 
 export interface CandidateOnboardingInput {
+  basicWorkEligibility?: BasicWorkEligibilityAnswers;
   authorizedWorkCountries?: string[];
   citizenshipCountries?: string[];
   demographics?: Record<string, string>;
@@ -556,7 +562,71 @@ export async function persistCandidateOnboarding(
 ): Promise<CandidateOnboardingResult> {
   const scope = requireCandidateOnboardingSubject(subject);
   const key = profileKey(input.profileKey);
-  const facts = candidateFactState(input);
+  const profile = await findDefaultProfile(
+    collections.candidateProfiles,
+    scope,
+  );
+  const basic = input.basicWorkEligibility
+    ? applyBasicWorkEligibility(profile ?? {}, input.basicWorkEligibility, {
+        authorizedWorkCountries: input.authorizedWorkCountries,
+      })
+    : undefined;
+  const factInput = {
+    ...input,
+    ...(basic?.workAuthorization && input.workAuthorization === undefined
+      ? { workAuthorization: basic.workAuthorization }
+      : {}),
+  };
+  const facts = candidateFactState(factInput);
+  if (basic) {
+    // Omitted advanced facts keep their original provenance; a basic save does not reconfirm them.
+    let previous: CandidateFactState | undefined;
+    try {
+      previous = JSON.parse(String(profile?.factsJson ?? '{}'));
+    } catch {
+      /* Malformed legacy facts remain unverified. */
+    }
+    for (const [key, submitted] of [
+      ['targetWorkCountryJson', input.targetWorkCountry],
+      ['workAuthorization', factInput.workAuthorization],
+      ['sponsorshipRequired', input.sponsorshipRequired],
+    ] as const) {
+      if (submitted !== undefined) continue;
+      delete facts.facts[key];
+      const old = previous?.version === 1 ? previous.facts?.[key] : undefined;
+      if (
+        old &&
+        typeof old.value === 'string' &&
+        ['user_verified', 'safe_derivation'].includes(old.provenance)
+      )
+        facts.facts[key] = old;
+    }
+    facts.unresolvedQuestions = requiredCandidateFacts
+      .filter(([key]) => !facts.facts[key])
+      .map(([, label]) => label);
+  }
+  // These private career facts have their own explicit review workflows. Profile
+  // form data cannot replace or assert them, including on advanced saves.
+  const privateCareerFacts: Record<string, unknown> = {};
+  const confirmations = parseConfirmedCandidateSkills(profile?.factsJson);
+  if (confirmations.length) privateCareerFacts.confirmedSkills = confirmations;
+  try {
+    const previous = JSON.parse(String(profile?.factsJson ?? '{}'));
+    const note =
+      previous?.version === 1 ? previous.facts?.skillExperience : undefined;
+    if (
+      note?.provenance === 'user_verified' &&
+      typeof note.value === 'string' &&
+      note.value.trim() &&
+      note.value.length <= 4000
+    )
+      privateCareerFacts.skillExperience = {
+        value: note.value,
+        provenance: 'user_verified',
+      };
+  } catch {
+    /* Malformed legacy facts cannot become confirmed career evidence. */
+  }
   const now = new Date();
   const selectedResumeAssetId = stringValue(input.resumeAssetId, 160);
   const resumeSource = selectedResumeAssetId
@@ -581,7 +651,10 @@ export async function persistCandidateOnboarding(
         : {},
     ),
     email: stringValue(input.email),
-    factsJson: JSON.stringify(facts),
+    factsJson: JSON.stringify({
+      ...facts,
+      facts: { ...facts.facts, ...privateCareerFacts },
+    }),
     firstName: stringValue(input.firstName),
     githubUrl: stringValue(input.githubUrl),
     isDefault: true,
@@ -607,10 +680,39 @@ export async function persistCandidateOnboarding(
     workAuthorization: stringValue(input.workAuthorization),
   };
 
-  const profile = await findDefaultProfile(
-    collections.candidateProfiles,
-    scope,
-  );
+  if (basic) {
+    profileValues.authorizedWorkCountriesJson =
+      basic.authorizedWorkCountriesJson;
+    profileValues.citizenshipsJson = basic.citizenshipsJson;
+    const mergedPreferences = { ...basic.preferences };
+    // An explicitly cleared search preference clears that key; omitted keys survive.
+    for (const preferenceKey of Object.keys(input.preferences ?? {}))
+      delete mergedPreferences[preferenceKey];
+    profileValues.preferencesJson = JSON.stringify({
+      ...mergedPreferences,
+      ...compactPreferences(input.preferences),
+    });
+    if (input.residenceCountry === undefined)
+      profileValues.residenceCountryJson = String(
+        profile?.residenceCountryJson ?? '{}',
+      );
+    if (input.targetWorkCountry === undefined)
+      profileValues.targetWorkCountryJson = String(
+        profile?.targetWorkCountryJson ?? '{}',
+      );
+    if (input.sponsorshipRequired === undefined)
+      profileValues.sponsorshipRequired = sponsorshipRequirement(
+        profile?.sponsorshipRequired === true
+          ? 'yes'
+          : profile?.sponsorshipRequired === false
+            ? 'no'
+            : 'unknown',
+      );
+    profileValues.workAuthorization =
+      input.workAuthorization !== undefined
+        ? stringValue(input.workAuthorization)
+        : (basic.workAuthorization ?? String(profile?.workAuthorization ?? ''));
+  }
   if (!collections.claimResumeAsset) {
     await validateResumeAssetSelection({
       assetId: selectedResumeAssetId,

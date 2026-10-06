@@ -2,22 +2,26 @@ import { createHash } from 'node:crypto';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
 import type { JobExecutionContext } from '@happyvertical/smrt-jobs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { summarizeCompleteReviewEvidence } from './opportunity-assessment-completeness.js';
 import {
+  OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
+  OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
+  type OpportunityResumeFitReviewResult,
+  type PreparedOpportunityResumeFitReview,
+} from './opportunity-resume-fit-review.js';
+import {
+  enqueueOpportunityCompleteResumeFitReviewComparisonPilot,
+  enqueueOpportunityCompleteResumeFitReviewPilot,
+  enqueueOpportunityResumeFitReviewPilot,
   OPPORTUNITY_RESUME_FIT_REVIEW_JOB_CONTRACT,
   OPPORTUNITY_RESUME_FIT_REVIEW_PILOT_QUEUE,
   type OpportunityResumeFitReviewJobDependencies,
-  enqueueOpportunityResumeFitReviewPilot,
   runOpportunityResumeFitReviewJob,
 } from './opportunity-resume-fit-review-job.js';
-import {
-  OPPORTUNITY_RESUME_FIT_REVIEW_VERSION,
-  OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION,
-  type PreparedOpportunityResumeFitReview,
-  type OpportunityResumeFitReviewResult,
-} from './opportunity-resume-fit-review.js';
+import type { OpportunityReviewOverlay } from './opportunity-review-overlay.js';
 import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
 import type { CurrentOpportunityAssessmentScreen } from './opportunity-screening-provider.js';
-import type { OpportunityReviewOverlay } from './opportunity-review-overlay.js';
 
 const mocks = vi.hoisted(() => ({
   active: undefined as unknown,
@@ -78,6 +82,8 @@ vi.mock('./opportunity-screening-provider.js', () => ({
   readCurrentOpportunityAssessmentScreen: mocks.readScreen,
 }));
 vi.mock('./opportunity-resume-fit-review.js', () => ({
+  OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION:
+    'opportunity-resume-fit-review/v4-complete-material',
   OPPORTUNITY_RESUME_FIT_REVIEW_VERSION:
     'opportunity-resume-fit-review/v2-catalog-aliases',
   OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION:
@@ -335,6 +341,125 @@ function fixture(
       published = true;
     },
   };
+}
+function completeFixture(
+  outcome: CurrentOpportunityAssessmentScreen['outcome'] = 'potentially_relevant',
+  model: PreparedOpportunityResumeFitReview['model'] = 'openai/gpt-6-luna',
+) {
+  const f = fixture(model);
+  f.prepared.visibleOutputTokens = model === 'openai/gpt-6.1-sol' ? 2048 : 4096;
+  f.prepared.version = OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION;
+  f.prepared.fingerprint = hash({ material: 'complete-material', model });
+  f.prepared.sourceComplete = true;
+  f.prepared.candidates = [
+    {
+      id: 'candidate',
+      key: 'c0',
+      kind: 'skill',
+      title: 'Native fact',
+      text: 'Build software',
+    },
+  ];
+  f.prepared.sourceClauseConsideration = [
+    {
+      clauseId: 'literal-clause',
+      status: 'possible_requirement_unknown',
+      requirementIds: [],
+      originalRequirementIds: ['original'],
+      reason: 'source_mapping',
+    },
+  ];
+  f.prepared.metadataConsideration = [
+    {
+      fieldId: 'source-field:title',
+      path: 'title',
+      hash: 'title-hash',
+      bodyClauseIds: ['literal-clause'],
+      status: 'represented_in_body',
+      reason: 'exact_body_coverage',
+    },
+    {
+      fieldId: 'source-field:locationNotes',
+      path: 'locationNotes',
+      hash: 'location-hash',
+      bodyClauseIds: [],
+      status: 'possible_requirement_unknown',
+      reason: 'captured_field_unknown',
+    },
+  ];
+  f.prepared.requirements.push({
+    key: 'r1',
+    id: 'material:source-field:locationNotes',
+    text: 'Canada',
+    clauseKeys: ['f0'],
+  });
+  f.review.contractVersion = f.prepared.version;
+  f.review.mode = 'complete_material';
+  f.review.fingerprint = f.prepared.fingerprint;
+  f.review.coverage.consideredComplete = true;
+  f.review.coverage.sourceComplete = true;
+  f.review.coverage.reviewedMaterialClauseIds = [
+    'literal-clause',
+    'source-field:locationNotes',
+  ];
+  f.review.coverage.metadataConsideration = f.prepared.metadataConsideration;
+  f.review.requirements = f.prepared.requirements.map((row, index) => ({
+    id: row.id,
+    text: row.text,
+    status: 'uncertain',
+    seniority: 'not_applicable',
+    note: 'Insufficient evidence',
+    sourceDisposition: 'criterion',
+    sourceClassification: 'possible_requirement_unknown',
+    candidateCitations: [],
+    postingCitations: [
+      {
+        clauseId: index === 0 ? 'literal-clause' : 'source-field:locationNotes',
+        start: 0,
+        end: row.text.length,
+        quote: row.text,
+      },
+    ],
+  }));
+  const evidenceFit = summarizeCompleteReviewEvidence(
+    f.review.requirements.map((row) => ({
+      status: row.status,
+      sourceDisposition: row.sourceDisposition ?? 'unknown',
+      sourceClassification:
+        row.sourceClassification ?? 'possible_requirement_unknown',
+    })),
+  );
+  f.review.evidenceFit = evidenceFit;
+  f.review.coverage.fullFit = evidenceFit;
+  f.review.coverage.completion = {
+    status: 'reviewed_with_unknowns',
+    consideredComplete: true,
+    catalogClauseCount: 3,
+    reviewedMaterialClauseCount: 2,
+    possibleRequirementCount: 2,
+    evidenceFit,
+    unprocessedClauseIds: [],
+    issues: [],
+  };
+  f.review.coverage.sourceClauseConsideration =
+    f.prepared.sourceClauseConsideration;
+  f.review.coverage.reviewedRequirementIds = f.prepared.requirements.map(
+    (row) => row.id,
+  );
+  f.screen.outcome = outcome;
+  f.screen.screen.status = outcome;
+  f.screen.screen.holdReasons =
+    outcome === 'uncertain' ? ['target_roles_missing'] : [];
+  f.screen.screen.plausiblyRelevant = outcome === 'potentially_relevant';
+  const intent = f.args.resumeFitReview as Record<string, unknown>;
+  Object.assign(intent, {
+    reviewVersion: f.prepared.version,
+    fingerprint: f.prepared.fingerprint,
+    screeningOutcome: outcome,
+    screeningHoldsFingerprint: hash(f.screen.screen.holdReasons),
+  });
+  f.job.args = structuredClone(f.args);
+  return f;
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -677,5 +802,190 @@ describe('native dedicated resume review', () => {
         },
       }),
     );
+  });
+  it('captures explicit Luna/V4 complete material on the existing queue', async () => {
+    const f = completeFixture();
+    mocks.prepare.mockResolvedValue(f.prepared);
+    mocks.read.mockResolvedValue(undefined);
+    mocks.preflight.mockResolvedValue({ fits: true });
+    mocks.readScreen.mockResolvedValue(f.screen);
+    mocks.reviews.mockResolvedValue(new Map());
+    mocks.get.mockImplementation(async (name: string) => ({
+      toJSON: () => (name === 'Opportunity' ? f.opportunity : f.profile),
+    }));
+    mocks.enqueue.mockResolvedValue({ id: 'queued' });
+    await enqueueOpportunityCompleteResumeFitReviewPilot('opportunity');
+    expect(mocks.prepare).toHaveBeenCalledWith(f.opportunity, subject, {
+      model: 'openai/gpt-6-luna',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: OPPORTUNITY_RESUME_FIT_REVIEW_PILOT_QUEUE,
+        args: f.args,
+      }),
+    );
+  });
+  it('reviews complete material for an uncertain screen without turning its holds into fit', async () => {
+    const f = completeFixture('uncertain');
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).resolves.toMatchObject({
+      status: 'reviewed',
+      review: {
+        mode: 'complete_material',
+        coverage: {
+          consideredComplete: true,
+          fullFit: {
+            kind: 'evidence_summary',
+            status: 'needs_evidence',
+            uncertainCriterionCount: 2,
+          },
+        },
+      },
+    });
+    expect(f.transport).toHaveBeenCalledOnce();
+    expect(f.deps.readReceipt).toHaveBeenCalledWith(f.opportunity, subject, {
+      model: 'openai/gpt-6-luna',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    });
+    expect(f.screen.screen.holdReasons).toEqual(['target_roles_missing']);
+    expect(f.deps.store).toHaveBeenCalledOnce();
+  });
+  it.each([
+    'legacy_version',
+    'incomplete_coverage',
+    'missing_field_review',
+    'evidence_summary_mismatch',
+  ])('refuses %s as a complete PRIVATE publication', async (cause) => {
+    const f = completeFixture();
+    if (cause === 'legacy_version')
+      f.review.contractVersion = OPPORTUNITY_RESUME_FIT_REVIEW_QUOTE_VERSION;
+    else if (cause === 'incomplete_coverage')
+      f.review.coverage.consideredComplete = false;
+    else if (cause === 'missing_field_review')
+      f.review.coverage.reviewedRequirementIds.pop();
+    else
+      f.review.evidenceFit = {
+        ...f.review.coverage.completion!.evidenceFit,
+        supportedCriterionCount: 1,
+      };
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).rejects.toThrow('PRIVATE');
+    expect(f.deps.store).not.toHaveBeenCalled();
+  });
+  it('denies changed coarse holds before a complete review creates a run', async () => {
+    const f = completeFixture('uncertain');
+    f.screen.screen.holdReasons.push('uncited_role');
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).rejects.toThrow('not current');
+    expect(f.deps.startRun).not.toHaveBeenCalled();
+    expect(f.transport).not.toHaveBeenCalled();
+  });
+  it('captures explicit Sol/V4 comparison without changing the Luna enqueue', async () => {
+    const f = completeFixture('potentially_relevant', 'openai/gpt-6.1-sol');
+    mocks.prepare.mockResolvedValue(f.prepared);
+    mocks.read.mockResolvedValue(undefined);
+    mocks.preflight.mockResolvedValue({ fits: true });
+    mocks.readScreen.mockResolvedValue(f.screen);
+    mocks.reviews.mockResolvedValue(new Map());
+    mocks.get.mockImplementation(async (name: string) => ({
+      toJSON: () => (name === 'Opportunity' ? f.opportunity : f.profile),
+    }));
+    mocks.enqueue.mockResolvedValue({ id: 'comparison' });
+    await enqueueOpportunityCompleteResumeFitReviewComparisonPilot(
+      'opportunity',
+    );
+    expect(mocks.prepare).toHaveBeenCalledWith(f.opportunity, subject, {
+      model: 'openai/gpt-6.1-sol',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queue: OPPORTUNITY_RESUME_FIT_REVIEW_PILOT_QUEUE,
+        args: f.args,
+        maxAttempts: 1,
+      }),
+    );
+  });
+  it('executes only the captured Sol/V4 comparison and publishes its exact receipt', async () => {
+    const f = completeFixture('potentially_relevant', 'openai/gpt-6.1-sol');
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).resolves.toMatchObject({
+      status: 'reviewed',
+      review: {
+        model: 'openai/gpt-6.1-sol',
+        contractVersion: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+      },
+    });
+    expect(f.transport).toHaveBeenCalledOnce();
+    expect(f.deps.prepare).toHaveBeenCalledWith(f.opportunity, subject, {
+      model: 'openai/gpt-6.1-sol',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    });
+    expect(f.deps.readReceipt).toHaveBeenCalledWith(f.opportunity, subject, {
+      model: 'openai/gpt-6.1-sol',
+      version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+    });
+    expect(f.deps.store).toHaveBeenCalledOnce();
+  });
+  it('refuses an unsupported captured complete model before any new run', async () => {
+    const f = completeFixture();
+    (f.args.resumeFitReview as Record<string, unknown>).reviewModel =
+      'caller-model';
+    f.job.args = structuredClone(f.args);
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).rejects.toThrow('server-selected');
+    expect(f.transport).not.toHaveBeenCalled();
+    expect(f.deps.startRun).not.toHaveBeenCalled();
+  });
+  it('denies changed comparison version before creating a run', async () => {
+    const f = completeFixture('potentially_relevant', 'openai/gpt-6.1-sol');
+    f.prepared.version = OPPORTUNITY_RESUME_FIT_REVIEW_VERSION;
+    await expect(
+      runOpportunityResumeFitReviewJob(
+        'opportunity',
+        f.args,
+        f.context,
+        subject,
+        f.deps,
+      ),
+    ).rejects.toThrow('not current');
+    expect(f.transport).not.toHaveBeenCalled();
+    expect(f.deps.startRun).not.toHaveBeenCalled();
   });
 });

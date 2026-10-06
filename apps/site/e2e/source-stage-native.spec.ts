@@ -236,7 +236,11 @@ test('native JEV-first screen excludes cited accountant duties before Luna or hu
     method: 'prepareAssessmentCoverage',
     status: 'running',
   });
-  expect(Object.keys(screen.request.questions)).toHaveLength(14);
+  const screenQuestions = (screen.request.questions ?? {}) as Record<
+    string,
+    unknown
+  >;
+  expect(Object.keys(screenQuestions)).toHaveLength(14);
   expect(result.final.requests).toHaveLength(1);
   expect(result.final.requests[0]).toMatchObject({
     feature: 'opportunity-screening',
@@ -883,8 +887,9 @@ test('native V4 captured-source recovery audits one completed extraction and exp
     method: 'prepareAssessmentCoverage',
     status: 'running',
   });
-  expect(decision.request.state).toEqual(result.exact.request.state);
-  expect(decision.request.state.sourceEligibilityCapturedFields).toEqual(
+  const decisionState = decision.request.state as Record<string, unknown>;
+  expect(decisionState).toEqual(result.exact.request.state);
+  expect(decisionState.sourceEligibilityCapturedFields).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         id: 'source-field:locationNotes',

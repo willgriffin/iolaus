@@ -6,28 +6,28 @@ import {
   SmrtJobCollection,
   type SmrtJobData,
 } from '@happyvertical/smrt-jobs';
-import { withOpportunityLifecycleLock } from './application-workflow.js';
 import { getAppConfig } from './app-config.js';
+import { withOpportunityLifecycleLock } from './application-workflow.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig, getSmrtOptions } from './db.js';
 import {
   type RuntimeWorkspaceSubject,
+  runAsRevalidatedJobWorkspaceSubject,
   runtimeWorkspaceSubjectFromJobArgs,
   withRuntimeWorkspaceSubject,
-  runAsRevalidatedJobWorkspaceSubject,
 } from './job-workspace-subject.js';
 import {
-  enqueueOpportunityAssessmentCoverage,
-  enqueueOpportunityAssessmentCoveragePilot,
-  enqueueOpportunityAssessmentCoverageFreshPilot,
-  opportunityAssessmentPilotIntent,
-  requireCurrentOpportunityAssessmentPilotScreen,
-  opportunityAssessmentJobQueue,
   assertOpportunityAssessmentPilotJobRouting,
+  enqueueOpportunityAssessmentCoverage,
+  enqueueOpportunityAssessmentCoverageFreshPilot,
+  enqueueOpportunityAssessmentCoveragePilot,
   OPPORTUNITY_ASSESSMENT_PILOT_QUEUE,
   OpportunityAssessmentDependencyEnqueueError,
   type OpportunityAssessmentSourceDependency,
   type OpportunityAssessmentSourceStatus,
+  opportunityAssessmentJobQueue,
+  opportunityAssessmentPilotIntent,
+  requireCurrentOpportunityAssessmentPilotScreen,
 } from './opportunity-assessment-dependency-job.js';
 import {
   opportunityAssessmentSubjectMaterialFingerprint,

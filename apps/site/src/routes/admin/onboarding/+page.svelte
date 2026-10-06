@@ -1,4 +1,6 @@
 <script lang="ts">
+import { Combobox, MultiSelect, Select } from '@happyvertical/smrt-ui/forms';
+import { untrack } from 'svelte';
 import { enhance } from '$app/forms';
 import { keepFormValues } from '$lib/admin/form-enhance';
 
@@ -36,7 +38,15 @@ function countryCodes(
         const record = entry as {
           code?: unknown;
           country?: { code?: unknown };
+          scope?: unknown;
+          condition?: unknown;
         };
+        if (
+          authorization &&
+          (record.scope !== 'country' ||
+            (typeof record.condition === 'string' && record.condition.trim()))
+        )
+          return '';
         const code = authorization ? record.country?.code : record.code;
         return typeof code === 'string' ? code : '';
       })
@@ -45,6 +55,78 @@ function countryCodes(
   } catch {
     return '';
   }
+}
+
+const initialProfile = untrack(() => data.profile);
+const savedEligibility = initialProfile?.basicWorkEligibility;
+let citizenshipCodes = $state<Array<string | number>>(
+  savedEligibility?.citizenshipCountryCodes ??
+    countryCodes(initialProfile?.citizenshipsJson).split(', ').filter(Boolean),
+);
+let otherAuthorizedCodes = $state<Array<string | number>>(
+  savedEligibility?.otherAuthorizedCountryCodes ?? [],
+);
+let citizenshipSearch = $state('');
+let otherCountrySearch = $state('');
+let canWorkElsewhere = $state(savedEligibility?.canWorkElsewhere ?? 'unknown');
+let advancedCountryEdits = $state(false);
+let selectedRoles = $state(
+  Array.isArray(savedPreferences.targetRoles)
+    ? savedPreferences.targetRoles.filter(Boolean)
+    : stringList(savedPreferences.targetRoles)
+        .split(',')
+        .map((role) => role.trim())
+        .filter(Boolean),
+);
+let roleDraft = $state('');
+
+const roleSuggestions = [
+  'Software Engineer',
+  'Senior Software Engineer',
+  'Staff Software Engineer',
+  'Principal Software Engineer',
+  'Engineering Manager',
+  'Technical Lead',
+  'AI Engineer',
+  'Machine Learning Engineer',
+  'Data Engineer',
+  'Solutions Architect',
+  'Software Architect',
+  'Platform Engineer',
+].map((label) => ({ value: label, label }));
+
+const countryOptions = $derived(data.countryOptions ?? []);
+const citizenshipOptions = $derived(
+  countryOptions.filter(
+    (option) =>
+      citizenshipCodes.includes(option.value) ||
+      `${option.label} ${option.value}`
+        .toLowerCase()
+        .includes(citizenshipSearch.trim().toLowerCase()),
+  ),
+);
+const otherCountryOptions = $derived(
+  countryOptions.filter(
+    (option) =>
+      otherAuthorizedCodes.includes(option.value) ||
+      `${option.label} ${option.value}`
+        .toLowerCase()
+        .includes(otherCountrySearch.trim().toLowerCase()),
+  ),
+);
+const submittedRoles = $derived([
+  ...new Set([...selectedRoles, roleDraft.trim()].filter(Boolean)),
+]);
+
+function addRole() {
+  const role = roleDraft.trim();
+  if (
+    role &&
+    !selectedRoles.some((saved) => saved.toLowerCase() === role.toLowerCase())
+  ) {
+    selectedRoles = [...selectedRoles, role];
+  }
+  roleDraft = '';
 }
 </script>
 
@@ -83,19 +165,6 @@ function countryCodes(
         <label>Email <input name="email" type="email" value={data.profile?.email ?? ''} autocomplete="email" /></label>
         <label>Phone <input name="phone" type="tel" value={data.profile?.phone ?? ''} autocomplete="tel" /></label>
         <label>Current location <input name="location" value={data.profile?.location ?? ''} autocomplete="address-level2" /></label>
-        <label>Work authorization <input name="workAuthorization" value={data.profile?.workAuthorization ?? ''} placeholder="For example, eligible to work in Canada" /></label>
-        <label>Citizenship countries <input name="citizenshipCountries" value={countryCodes(data.profile?.citizenshipsJson)} placeholder="CA, US" autocapitalize="characters" /></label>
-        <label>Residence country <input name="residenceCountry" value={countryCode(data.profile?.residenceCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
-        <label>Target work country <input name="targetWorkCountry" value={countryCode(data.profile?.targetWorkCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
-        <label>Verified work authorization countries <input name="authorizedWorkCountries" value={countryCodes(data.profile?.authorizedWorkCountriesJson, true)} placeholder="CA" autocapitalize="characters" /></label>
-        <p class="field-note">Enter only countries where you have unrestricted, verified authorization. Employer-limited or conditional authorization stays unknown until it has its own evidence.</p>
-        <label>Need employer sponsorship?
-          <select name="sponsorshipRequired" value={data.profile?.sponsorshipRequired === true ? 'yes' : data.profile?.sponsorshipRequired === false ? 'no' : 'unknown'}>
-            <option value="unknown">I’m not sure</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </select>
-        </label>
       </div>
       <div class="grid two">
         <label>LinkedIn URL <input name="linkedinUrl" type="url" value={data.profile?.linkedinUrl ?? ''} /></label>
@@ -104,12 +173,97 @@ function countryCodes(
     </section>
 
     <section>
+      <h2>Citizenship and work eligibility</h2>
+      <p>Select your citizenship countries, then confirm where you can work. Citizenship alone does not confirm work authorization, and not having a visa elsewhere does not mean you need sponsorship at home.</p>
+      <input type="hidden" name="onboardingMode" value="basic" />
+      <div class="grid two">
+        <div class="country-field">
+          <label for="citizenship-search">Find a citizenship country</label>
+          <input id="citizenship-search" type="search" bind:value={citizenshipSearch} placeholder="Search countries" autocomplete="off" />
+          <MultiSelect label="I’m a citizen of" options={citizenshipOptions} bind:values={citizenshipCodes} placeholder="Choose countries" class="country-picker" />
+          {#each citizenshipCodes as code (code)}
+            <input type="hidden" name="citizenshipCountryCodes" value={String(code)} />
+          {/each}
+        </div>
+        <label>Can you work in those countries without employer sponsorship?
+          <Select name="citizenshipWorkAuthorization" value={savedEligibility?.citizenshipWorkAuthorization ?? 'unknown'}>
+            <option value="unknown">I’m not sure</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </Select>
+        </label>
+        <label>Can you work in any other countries without employer sponsorship?
+          <Select name="canWorkElsewhere" bind:value={canWorkElsewhere}>
+            <option value="unknown">I’m not sure</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </Select>
+        </label>
+        <label>Do you need an employer to sponsor a work visa?
+          <Select name="sponsorshipRequired" value={data.profile?.sponsorshipRequired === true ? 'yes' : data.profile?.sponsorshipRequired === false ? 'no' : 'unknown'}>
+            <option value="unknown">I’m not sure</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </Select>
+        </label>
+      </div>
+      {#if canWorkElsewhere === 'yes'}
+        <div class="country-field other-countries">
+          <label for="other-country-search">Find other countries where you can work</label>
+          <input id="other-country-search" type="search" bind:value={otherCountrySearch} placeholder="Search countries" autocomplete="off" />
+          <MultiSelect label="I can work in" options={otherCountryOptions} bind:values={otherAuthorizedCodes} placeholder="Choose countries" class="country-picker" />
+          {#each otherAuthorizedCodes as code (code)}
+            <input type="hidden" name="otherAuthorizedCountryCodes" value={String(code)} />
+          {/each}
+        </div>
+      {/if}
+      {#if savedEligibility?.conflicts?.length}
+        <p class="field-note" role="note">Some saved work rights need a closer look. Open advanced details before changing them: {savedEligibility.conflicts.join('; ')}.</p>
+      {/if}
+      <details bind:open={advancedCountryEdits} class="advanced-details">
+        <summary>Advanced country and authorization details</summary>
+        {#if advancedCountryEdits}
+          <input type="hidden" name="advancedCountryEdits" value="1" />
+        {/if}
+        <fieldset disabled={!advancedCountryEdits}>
+          <p>Use these fields only to update details that need a more precise explanation. Existing details stay saved when this section is closed.</p>
+          <div class="grid two">
+            <label>Residence country code <input name="residenceCountry" value={countryCode(data.profile?.residenceCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
+            <label>Target work country code <input name="targetWorkCountry" value={countryCode(data.profile?.targetWorkCountryJson)} placeholder="CA" autocapitalize="characters" /></label>
+            <label>Work authorization details <input name="workAuthorization" value={data.profile?.workAuthorization ?? ''} placeholder="For example, employer-limited permit" /></label>
+            <label>Verified unrestricted work countries <input name="authorizedWorkCountries" value={countryCodes(data.profile?.authorizedWorkCountriesJson, true)} placeholder="CA" autocapitalize="characters" /></label>
+          </div>
+          <p class="field-note">Only list unrestricted, verified work rights. Conditional or employer-limited rights need their own evidence.</p>
+        </fieldset>
+      </details>
+    </section>
+
+    <section>
       <h2>Career preferences</h2>
       <div class="grid two">
         <label>Professional title <input name="title" value={data.profile?.title ?? ''} placeholder="Staff software engineer" /></label>
         <label>Target compensation <input name="targetCompensation" value={stringList(savedPreferences.targetCompensation)} placeholder="For example, CAD 180k+ depending on role" /></label>
-        <label>Target roles <input name="targetRoles" value={stringList(savedPreferences.targetRoles)} placeholder="Comma-separated" /></label>
-        <label>Preferred work modes <input name="workModes" value={stringList(savedPreferences.workModes)} placeholder="remote, hybrid" /></label>
+        <div class="role-field">
+          <Combobox label="Target roles" options={roleSuggestions} bind:value={roleDraft} allowCustom placeholder="Search or enter a role" />
+          <button type="button" class="secondary add-role" onclick={addRole}>Add role</button>
+          {#if selectedRoles.length}
+            <ul class="role-list" aria-label="Selected target roles">
+              {#each selectedRoles as role (role)}
+                <li>{role} <button type="button" class="remove-role" aria-label={`Remove ${role}`} onclick={() => selectedRoles = selectedRoles.filter((saved) => saved !== role)}>×</button></li>
+              {/each}
+            </ul>
+          {/if}
+          <input type="hidden" name="targetRoles" value={submittedRoles.join(', ')} />
+        </div>
+        <label>Preferred work mode
+          <Select name="workModeChoice" value={savedEligibility?.workModeChoice ?? 'unknown'}>
+            <option value="unknown">I’m not sure</option>
+            <option value="remote">Remote</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="onsite">On site</option>
+            <option value="any">Any</option>
+          </Select>
+        </label>
         <label>Preferred locations <input name="preferredLocations" value={stringList(savedPreferences.locations)} placeholder="Comma-separated" /></label>
       </div>
       <label>Professional summary <textarea name="summary" rows="4">{data.profile?.summary ?? ''}</textarea></label>
@@ -171,30 +325,44 @@ function countryCodes(
 </main>
 
 <style>
-  .onboarding-shell { max-width: 880px; margin: 0 auto; padding: 40px 24px 72px; color: var(--smrt-color-foreground, #1d1b18); }
+  .onboarding-shell { max-width: 880px; margin: 0 auto; padding: 40px 24px 72px; color: var(--smrt-color-on-surface); color-scheme: var(--smrt-color-scheme, light); }
   header { max-width: 680px; margin-bottom: 28px; }
-  .eyebrow { color: #756d60; font: 700 12px/1.2 var(--font-mono, monospace); letter-spacing: .08em; text-transform: uppercase; }
+  .eyebrow { color: var(--smrt-color-on-surface-variant); font: 700 12px/1.2 var(--smrt-font-family-mono, monospace); letter-spacing: .08em; text-transform: uppercase; }
   h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.06; margin: 8px 0 14px; }
   h2 { margin: 0 0 8px; font-size: 20px; }
-  p { line-height: 1.5; color: #625c52; }
+  p { line-height: 1.5; color: var(--smrt-color-on-surface-variant); }
   .onboarding-form { display: grid; gap: 18px; }
-  section { border: 1px solid #ded8ca; border-radius: 8px; padding: 20px; background: #fffdf9; }
+  section { border: 1px solid var(--smrt-color-outline-variant); border-radius: 8px; padding: 20px; background: var(--smrt-color-surface-container-low); }
   .grid { display: grid; gap: 14px; margin-top: 14px; }
   .field-note { grid-column: 1 / -1; margin: -4px 0 0; font-size: 13px; }
+  .country-field, .role-field { display: grid; align-content: start; gap: 8px; }
+  .role-field { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+  .role-list { grid-column: 1 / -1; }
+  .other-countries { max-width: 450px; margin-top: 16px; }
+  :global(.country-picker .options) { max-height: 280px; overflow-y: auto; }
+  .advanced-details { margin-top: 18px; border-top: 1px solid var(--smrt-color-outline-variant); padding-top: 14px; }
+  summary { color: var(--smrt-color-primary); cursor: pointer; font-weight: 700; }
+  fieldset { min-width: 0; margin: 10px 0 0; padding: 0; border: 0; }
+  .add-role { padding: 7px 11px; }
+  .role-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .role-list li { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: 1px solid var(--smrt-color-outline-variant); border-radius: 20px; background: var(--smrt-color-surface-container); color: var(--smrt-color-on-surface); padding: 3px 6px 3px 10px; overflow-wrap: anywhere; }
+  .role-list .remove-role { border: 0; background: transparent; color: var(--smrt-color-on-surface); padding: 0 4px; }
   .two { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   label { display: grid; gap: 6px; font-size: 14px; font-weight: 650; }
-  input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid #bcb4a7; border-radius: 5px; background: #fff; color: inherit; font: inherit; padding: 9px 10px; }
+  input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid var(--smrt-color-outline-variant); border-radius: 5px; background: var(--smrt-color-surface-container-lowest); color: var(--smrt-color-on-surface); font: inherit; padding: 9px 10px; }
+  input::placeholder, textarea::placeholder { color: var(--smrt-color-on-surface-variant); opacity: 1; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
   textarea { resize: vertical; }
   .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-weight: 500; }
-  .checkbox input { width: auto; }
-  button { justify-self: start; border: 1px solid #1f1d1a; border-radius: 6px; background: #1f1d1a; color: #fff; cursor: pointer; font: inherit; font-weight: 700; padding: 10px 15px; }
-  button.secondary { background: #fff; color: #3f3a33; border-color: #bcb4a7; }
+  .checkbox input { width: auto; accent-color: var(--smrt-color-primary); }
+  button { justify-self: start; border: 1px solid var(--smrt-color-primary); border-radius: 6px; background: var(--smrt-color-primary); color: var(--smrt-color-on-primary); cursor: pointer; font: inherit; font-weight: 700; padding: 10px 15px; }
+  button.secondary { background: var(--smrt-color-surface-container-lowest); color: var(--smrt-color-on-surface); border-color: var(--smrt-color-outline-variant); }
   .notice { border-radius: 6px; padding: 12px 14px; }
-  .notice.success { background: #e7f4eb; color: #204d2d; }
-  .notice.error { background: #fce9e6; color: #852b1d; }
+  .notice.success { background: var(--smrt-color-success-container); color: var(--smrt-color-on-success-container); }
+  .notice.error { background: var(--smrt-color-error-container); color: var(--smrt-color-on-error-container); }
   .saved-answers { margin-top: 24px; }
-  .saved-answers form { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid #e5dfd5; }
+  .saved-answers form { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--smrt-color-outline-variant); }
   .saved-answers form:first-of-type { border-top: 0; }
   .saved-answers div { display: grid; gap: 3px; }
-  .saved-answers span { color: #625c52; overflow-wrap: anywhere; }
+  .saved-answers span { color: var(--smrt-color-on-surface-variant); overflow-wrap: anywhere; }
 </style>

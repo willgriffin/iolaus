@@ -65,8 +65,8 @@ import {
   enqueueOpportunityIntelligenceWithStatus,
   isOpportunityIntelligenceEnqueueError,
 } from './opportunity-intelligence-job';
-import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { loadCurrentOpportunityResumeFitReviewProjections } from './opportunity-resume-fit-review-projection.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { opportunityWithSourceContent } from './opportunity-source-content';
 import { loadCurrentSourceEligibilityProjections } from './opportunity-source-eligibility-projection.js';
 import { sweepInactiveSourceOpportunities } from './opportunity-sweep';
@@ -83,16 +83,13 @@ import {
   listPrivateRecords,
   requireWorkspaceSubject,
 } from './private-workspace.js';
+import { loadCurrentScreeningQuestionAssessmentProjections } from './screening-question-assessment-service.js';
 import { getCollection } from './smrt';
 import {
   enqueueSourceCrawl,
   isSourceCrawlEnqueueError,
 } from './source-schedules';
-import {
-  opportunityDigDeeperOperations,
-  opportunitySweepOperations,
-  postingPreflightOperations,
-} from './workflow-operations';
+import { postingPreflightOperations } from './workflow-operations';
 import {
   requireCandidateWorkspaceSubject,
   type WorkspaceSubject,
@@ -162,6 +159,23 @@ async function runOwnerMutation<T>(
 const createDraftApplicationOperations = [
   workspaceWorkflowOperation('application.prepare'),
   workspaceWorkflowOperation('task.sync'),
+] satisfies AdminOperation[];
+
+// Match the curated job-search sweep API. Private application/decision CRUD
+// and the old AgentRun read surrogate are intentionally no longer exposed.
+const opportunitySweepOperations = [
+  { action: 'read', collection: 'opportunities' },
+  { action: 'update', collection: 'opportunities' },
+  { action: 'read', collection: 'sources' },
+  workspaceWorkflowOperation('audit.record'),
+] satisfies AdminOperation[];
+
+// Keep triage aligned with the curated job-search deep-dive endpoint.
+// The review capability authorizes the scoped decision and its follow-ups.
+const opportunityDigDeeperOperations = [
+  { action: 'read', collection: 'opportunities' },
+  { action: 'read', collection: 'companies' },
+  workspaceWorkflowOperation('application.review'),
 ] satisfies AdminOperation[];
 
 const archiveApplicationOperations = [
@@ -366,6 +380,7 @@ export async function attachOpportunityContext(
     videoRequirementsByOpportunity,
     screeningProjections,
     resumeFitReviewProjections,
+    questionScreeningProjections,
   ] = await Promise.all([
     subject
       ? listPrivateRecords('Application', subject, {
@@ -430,8 +445,28 @@ export async function attachOpportunityContext(
       ? loadOpportunityScreeningProjectionPages(records, subject)
       : Promise.resolve(new Map()),
     subject
-      ? loadCurrentOpportunityResumeFitReviewProjections({ opportunities: records, subject })
-      : Promise.resolve(new Map()),
+      ? loadCurrentOpportunityResumeFitReviewProjections({
+          opportunities: records,
+          subject,
+        })
+      : Promise.resolve(
+          Object.assign(new Map(), {
+            completeReviewStatuses: new Map<string, 'current' | 'unknown'>(),
+          }),
+        ),
+    subject
+      ? loadCurrentScreeningQuestionAssessmentProjections({
+          opportunities: records,
+          subject,
+        })
+      : Promise.resolve(
+          Object.assign(new Map(), {
+            questionScreeningEnabled: false,
+            blockedReason:
+              'Select an active candidate profile to run screening.',
+            questionScreeningStatuses: new Map(),
+          }),
+        ),
   ]);
 
   const companyById = new Map<string, AdminRecord>();
@@ -537,9 +572,26 @@ export async function attachOpportunityContext(
       partialAssessmentProjection: record.id
         ? (partialAssessmentProjections.get(record.id) ?? null)
         : null,
+      questionScreeningProjection: record.id
+        ? (questionScreeningProjections.get(record.id) ?? null)
+        : null,
+      questionScreeningStatus: record.id
+        ? (questionScreeningProjections.questionScreeningStatuses.get(
+            record.id,
+          ) ?? null)
+        : null,
+      questionScreeningEnabled:
+        questionScreeningProjections.questionScreeningEnabled,
+      questionScreeningBlockedReason:
+        questionScreeningProjections.blockedReason ?? null,
       resumeFitReviewProjection: record.id
         ? (resumeFitReviewProjections.get(record.id) ?? null)
         : null,
+      completeReviewStatus:
+        record.id && 'completeReviewStatuses' in resumeFitReviewProjections
+          ? (resumeFitReviewProjections.completeReviewStatuses.get(record.id) ??
+            null)
+          : null,
       reviewOverlay: record.id ? (reviewOverlays.get(record.id) ?? null) : null,
       // Omitted rather than emptied when the activity trail was not read: an
       // empty array would claim this posting has no runs, which is a different

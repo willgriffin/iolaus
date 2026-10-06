@@ -28,7 +28,6 @@ import {
   finishOpportunityIntelligenceAgentRun,
   startOpportunityIntelligenceAgentRun,
 } from './opportunity-intelligence-governance.js';
-import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { prepareOpportunityPosting } from './opportunity-posting-preparation.js';
 import { requirementCoverageContextForOpportunity } from './opportunity-requirement-coverage.js';
 import {
@@ -45,6 +44,8 @@ import {
   assertOpportunitySourceExtractionNotAttempted,
   attestCompletedOpportunitySourceExtraction,
 } from './opportunity-requirement-coverage-source-stage-job.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
+import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
 import {
   assertOpportunityAssessmentScreenNotAttempted,
   type CurrentOpportunityAssessmentScreen,
@@ -52,7 +53,6 @@ import {
   prepareCurrentOpportunityAssessmentScreen,
   readCurrentOpportunityAssessmentScreen,
 } from './opportunity-screening-provider.js';
-import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
 import { opportunityWithSourceContent } from './opportunity-source-content.js';
 import { getCollection } from './smrt.js';
 

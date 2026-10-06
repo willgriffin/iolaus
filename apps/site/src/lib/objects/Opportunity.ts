@@ -263,6 +263,17 @@ export class Opportunity extends SmrtObject {
           subject,
         );
         await run.assertOperation('opportunities', 'read');
+        if (args.reviewStrengthVerification !== undefined) {
+          const { runOpportunityReviewStrengthVerificationJob } = await import(
+            '../server/opportunity-review-strength-verification-job.js'
+          );
+          return await runOpportunityReviewStrengthVerificationJob(
+            this.id ?? '',
+            args,
+            runnerContext,
+            subject,
+          );
+        }
         if (args.resumeFitReview !== undefined) {
           const { runOpportunityResumeFitReviewJob } = await import(
             '../server/opportunity-resume-fit-review-job.js'

@@ -3,10 +3,56 @@ import {
   assessmentCoverageMessages,
   compareAssessmentEligibility,
   getOpportunityAssessmentProjection,
+  getOpportunityEligibilityProjection,
   matchesAssessmentEligibility,
 } from './opportunity-assessment-projection';
 
 describe('opportunity assessment projection', () => {
+  it('rejects malformed legacy assessment fallback instead of treating it as scoreless source authority', () => {
+    expect(
+      getOpportunityEligibilityProjection(
+        {
+          sourceStatus: 'unknown',
+          capturedPostingLocation: { sourceStatus: 'current' },
+        },
+        {
+          sourceStatus: 'current',
+          eligibilityBucket: 'eligible',
+          ranking: { fitScore: '72' },
+        },
+      ).buckets,
+    ).toEqual(['unknown']);
+  });
+  it('falls back from metadata-only eligibility to a current assessment while keeping current unknown eligibility authoritative', () => {
+    const current = {
+      sourceStatus: 'current',
+      eligibilityBucket: 'eligible',
+      ranking: { eligibilityPriority: 0, fitScore: 84 },
+    };
+    const metadataOnly = {
+      sourceStatus: 'unknown',
+      eligibilityBucket: 'unknown',
+      capturedPostingLocation: {
+        locationNotes: 'Remote Canada',
+        sourceStatus: 'current',
+      },
+    };
+    expect(
+      getOpportunityEligibilityProjection(metadataOnly, current).buckets,
+    ).toEqual(['eligible']);
+    expect(
+      getOpportunityEligibilityProjection(
+        { ...metadataOnly, sourceStatus: 'current' },
+        current,
+      ).buckets,
+    ).toEqual(['unknown']);
+    expect(
+      getOpportunityEligibilityProjection(metadataOnly, {
+        ...current,
+        sourceStatus: 'stale',
+      }).buckets,
+    ).toEqual(['unknown']);
+  });
   it('describes uncertain requirement completeness without claiming wire truncation', () => {
     const projection = getOpportunityAssessmentProjection({
       sourceStatus: 'current',

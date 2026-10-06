@@ -12,6 +12,10 @@ import {
   OPPORTUNITY_ASSESSMENT_MAX_OUTPUT_TOKENS,
   OPPORTUNITY_ASSESSMENT_MAX_REQUEST_BYTES,
 } from './opportunity-assessment.js';
+import {
+  buildCompleteCapturedFieldCatalog,
+  type CompleteOpportunitySourceMaterial,
+} from './opportunity-assessment-completeness.js';
 import { resolveOpportunityIntelligenceBudgetConfig } from './opportunity-intelligence-config.js';
 import {
   attachOpportunityIntelligenceInvocationMetadata,
@@ -39,7 +43,11 @@ import {
   type QuarantinedSourceCoverage,
   quarantinePartialRequirementCoverageFromCompletedExtraction,
 } from './opportunity-requirement-coverage-quarantine.js';
-import { opportunityWithSourceContent } from './opportunity-source-content.js';
+import {
+  fingerprintOpportunitySourceContent,
+  opportunityWithSourceContent,
+  parseOpportunitySourceContent,
+} from './opportunity-source-content.js';
 import {
   type PreparedOpportunityVideoRequirements,
   prepareOpportunityVideoRequirements,
@@ -2067,6 +2075,105 @@ async function readRecordedRequirementEvidenceAudit(
   } catch {
     return undefined;
   }
+}
+
+/** Complete captured material; paid model classification is optional, never fabricated. */
+export async function readCompleteOpportunitySourceMaterial(
+  opportunity: Record<string, unknown>,
+): Promise<CompleteOpportunitySourceMaterial | undefined> {
+  const opportunityId =
+    typeof opportunity.id === 'string' ? opportunity.id : '';
+  const captured = parseOpportunitySourceContent(opportunity.sourceContentJson);
+  if (
+    !opportunityId ||
+    !captured ||
+    typeof opportunity.sourceContentJson !== 'string' ||
+    fingerprintOpportunitySourceContent(captured) !==
+      opportunity.sourceContentFingerprint ||
+    !Number.isSafeInteger(opportunity.sourceContentVersion) ||
+    Number(opportunity.sourceContentVersion) < 1
+  )
+    return undefined;
+  const posting = prepareOpportunityPosting(
+    opportunityWithSourceContent(opportunity),
+  );
+  const canonical = {
+    ...opportunity,
+    id: opportunityId,
+    preparedPostingFingerprint: posting.fingerprint,
+  };
+  const context = requirementCoverageContextForOpportunity(canonical);
+  if (!context.sourceText) return undefined;
+  // Discover only the exact native current extraction identity. Cache JSON does
+  // not confer authority, and untouched sources have no invented paid receipt.
+  const db = await resolveDatabase(getDbConfig());
+  const selected = await db.query(
+    `SELECT request_id FROM opportunity_intelligence_requests
+    WHERE opportunity_id = ? AND content_fingerprint = ? AND input_fingerprint = ?
+      AND feature = 'opportunity-extraction-chunk-1'
+      AND COALESCE(tenant_id, '') = '' AND COALESCE(owner_user_id, '') = ''
+      AND COALESCE(candidate_profile_id, '') = ''`,
+    [opportunityId, context.sourceFingerprint, context.extractionFingerprint],
+  );
+  let ledger = buildRequirementCoverageSource(context);
+  let extraction: CompleteOpportunitySourceMaterial['extraction'];
+  if (selected.rows.length) {
+    if (
+      selected.rows.length !== 1 ||
+      typeof selected.rows[0]?.request_id !== 'string' ||
+      !selected.rows[0].request_id
+    )
+      return undefined;
+    const { attestCompletedOpportunitySourceExtraction } = await import(
+      './opportunity-requirement-coverage-source-stage-job.js'
+    );
+    const actual = await attestCompletedOpportunitySourceExtraction(
+      canonical,
+      selected.rows[0].request_id,
+      db,
+    );
+    if (
+      actual.opportunityId !== opportunityId ||
+      hash(actual.context) !== hash(context) ||
+      actual.sourceContentJson !== opportunity.sourceContentJson ||
+      requirementCoverageLedgerFingerprint(actual.ledger) !==
+        actual.ledgerFingerprint
+    )
+      return undefined;
+    ledger = actual.ledger;
+    extraction = {
+      requestId: actual.requestId,
+      agentRunId: actual.agentRunId,
+      ledgerFingerprint: actual.ledgerFingerprint,
+    };
+  }
+  const partial = extraction
+    ? await readPartialOpportunityRequirementEvidence(canonical)
+    : undefined;
+  if (
+    partial &&
+    (hash(partial.context) !== hash(context) ||
+      requirementCoverageLedgerFingerprint(partial.ledger) !==
+        requirementCoverageLedgerFingerprint(ledger))
+  )
+    return undefined;
+  const material: Omit<CompleteOpportunitySourceMaterial, 'fingerprint'> = {
+    version: 'opportunity-source-material/v1-complete-catalog',
+    context,
+    ledger,
+    capturedSource: {
+      sourceContentJson: opportunity.sourceContentJson,
+      fingerprint: hash(JSON.parse(opportunity.sourceContentJson)),
+    },
+    capturedFields: buildCompleteCapturedFieldCatalog(
+      opportunity.sourceContentJson,
+      ledger.clauses,
+      context.sourceText,
+    ),
+    ...(extraction ? { extraction } : {}),
+    ...(partial ? { audit: partial.audit } : {}),
+  };
+  return { ...material, fingerprint: hash(material) };
 }
 
 /** A partial cache is never certified by preparedPostingJson or diagnostic output. */

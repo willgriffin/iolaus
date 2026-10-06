@@ -17,16 +17,20 @@ import {
   finishOpportunityIntelligenceAgentRun,
   startOpportunityIntelligenceAgentRun,
 } from './opportunity-intelligence-governance.js';
-import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import {
   assertOpportunityResumeFitReviewNotAttempted,
   evaluateOpportunityResumeFitReview,
-  prepareCurrentOpportunityResumeFitReview,
+  OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+  type OpportunityResumeFitReviewOptions,
+  type OpportunityResumeFitReviewResult,
+  type PreparedOpportunityResumeFitReview,
   preflightOpportunityResumeFitReview,
+  prepareCurrentOpportunityResumeFitReview,
   readCurrentOpportunityResumeFitReview,
   readCurrentOpportunityResumeFitReviewReceipt,
   storeOpportunityResumeFitReview,
 } from './opportunity-resume-fit-review.js';
+import { loadCurrentOpportunityReviewOverlays } from './opportunity-review-overlay.js';
 import { OPPORTUNITY_SCREENING_VERSION } from './opportunity-screening.js';
 import { readCurrentOpportunityAssessmentScreen } from './opportunity-screening-provider.js';
 import { candidateProfileWhere } from './private-workspace.js';
@@ -107,6 +111,7 @@ async function currentMaterial(
   opportunityId: string,
   subject: RuntimeWorkspaceSubject,
   deps: OpportunityResumeFitReviewJobDependencies,
+  options: OpportunityResumeFitReviewOptions = {},
 ) {
   const opportunity = await (
     deps.getOpportunity ?? ((id) => nativeRow('Opportunity', id))
@@ -127,15 +132,18 @@ async function currentMaterial(
     throw new Error(
       'Resume review requires a current source and active owned profile.',
     );
+  const complete =
+    options.version === OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION;
   const screen = await (
     deps.readScreen ?? readCurrentOpportunityAssessmentScreen
   )({ opportunityId, subject });
   if (
     !screen ||
     screen.screen.version !== OPPORTUNITY_SCREENING_VERSION ||
-    screen.outcome !== 'potentially_relevant' ||
-    !screen.screen.plausiblyRelevant ||
-    screen.screen.holdReasons.length ||
+    (!complete &&
+      (screen.outcome !== 'potentially_relevant' ||
+        !screen.screen.plausiblyRelevant ||
+        screen.screen.holdReasons.length)) ||
     screen.screen.sourceIdentity.sourceContentFingerprint !==
       opportunity.sourceContentFingerprint ||
     screen.screen.sourceIdentity.sourceContentVersion !==
@@ -156,8 +164,11 @@ async function currentMaterial(
     );
   const prepared = await (
     deps.prepare ?? prepareCurrentOpportunityResumeFitReview
-  )(opportunity, subject);
+  )(opportunity, subject, options);
   if (
+    (complete &&
+      (prepared.version !== options.version ||
+        prepared.model !== options.model)) ||
     prepared.opportunityId !== opportunityId ||
     prepared.sourceContentFingerprint !==
       opportunity.sourceContentFingerprint ||
@@ -167,6 +178,8 @@ async function currentMaterial(
   return {
     opportunity,
     prepared,
+    screen,
+    options,
     intent: {
       contract: OPPORTUNITY_RESUME_FIT_REVIEW_JOB_CONTRACT,
       reviewVersion: prepared.version,
@@ -179,6 +192,12 @@ async function currentMaterial(
       profileRecordFingerprint: hash(profile),
       screeningRequestId: screen.requestId,
       screeningInputFingerprint: screen.inputFingerprint,
+      ...(complete
+        ? {
+            screeningOutcome: screen.outcome,
+            screeningHoldsFingerprint: hash(screen.screen.holdReasons),
+          }
+        : {}),
     },
   };
 }
@@ -195,6 +214,33 @@ function sameIntent(value: unknown, expected: Row) {
 export async function enqueueOpportunityResumeFitReviewPilot(
   opportunityId: string,
 ): Promise<SmrtJob> {
+  return await enqueueReview(opportunityId, {});
+}
+
+/** Explicit complete-material review; historical default contracts remain unchanged. */
+export async function enqueueOpportunityCompleteResumeFitReviewPilot(
+  opportunityId: string,
+): Promise<SmrtJob> {
+  return await enqueueReview(opportunityId, {
+    model: 'openai/gpt-6-luna',
+    version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+  });
+}
+
+/** Explicit empirical comparison; never a fallback from the Luna review. */
+export async function enqueueOpportunityCompleteResumeFitReviewComparisonPilot(
+  opportunityId: string,
+): Promise<SmrtJob> {
+  return await enqueueReview(opportunityId, {
+    model: 'openai/gpt-6.1-sol',
+    version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+  });
+}
+
+async function enqueueReview(
+  opportunityId: string,
+  options: OpportunityResumeFitReviewOptions,
+): Promise<SmrtJob> {
   identity(opportunityId);
   const args = withRuntimeWorkspaceSubject({});
   const subject = runtimeWorkspaceSubjectFromJobArgs(args);
@@ -208,12 +254,18 @@ export async function enqueueOpportunityResumeFitReviewPilot(
           if (!sameSubject(current, subject))
             throw new Error('Resume review principal changed.');
           await run.assertOperation('opportunities', 'read');
-          const material = await currentMaterial(opportunityId, current, {});
+          const material = await currentMaterial(
+            opportunityId,
+            current,
+            {},
+            options,
+          );
           const cached = await readCurrentOpportunityResumeFitReview(
             material.opportunity,
             current,
+            options,
           );
-          if (!cached) {
+          if (!cached && material.screen.outcome !== 'clear_mismatch') {
             await assertOpportunityResumeFitReviewNotAttempted(
               material.prepared,
               current,
@@ -244,7 +296,50 @@ export async function enqueueOpportunityResumeFitReviewPilot(
   );
 }
 
-/** Authentic native execution: exactly one Sol request or actual receipt replay. */
+function completeResultMatches(
+  prepared: PreparedOpportunityResumeFitReview,
+  review: OpportunityResumeFitReviewResult,
+) {
+  if (review.contractVersion !== prepared.version) return false;
+  if (prepared.version !== OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION)
+    return true;
+  return (
+    review.mode === 'complete_material' &&
+    prepared.sourceComplete &&
+    review.coverage.consideredComplete === true &&
+    review.coverage.sourceComplete === true &&
+    review.evidenceFit !== undefined &&
+    typeof review.coverage.fullFit === 'object' &&
+    Array.isArray(prepared.sourceClauseConsideration) &&
+    Array.isArray(review.coverage.sourceClauseConsideration) &&
+    Array.isArray(review.coverage.reviewedRequirementIds) &&
+    Array.isArray(review.coverage.reviewedMaterialClauseIds) &&
+    Array.isArray(prepared.metadataConsideration) &&
+    Array.isArray(review.coverage.metadataConsideration) &&
+    review.coverage.completion?.status === 'reviewed_with_unknowns' &&
+    review.coverage.completion.consideredComplete === true &&
+    hash(review.evidenceFit) === hash(review.coverage.completion.evidenceFit) &&
+    hash(review.coverage.fullFit) ===
+      hash(review.coverage.completion.evidenceFit) &&
+    review.coverage.completion.unprocessedClauseIds.length === 0 &&
+    review.coverage.completion.issues.length === 0 &&
+    review.coverage.completion.reviewedMaterialClauseCount ===
+      prepared.requirements.length &&
+    review.coverage.candidateSourceCount === prepared.candidates.length &&
+    hash(review.coverage.sourceClauseConsideration) ===
+      hash(prepared.sourceClauseConsideration) &&
+    hash(review.coverage.reviewedRequirementIds) ===
+      hash(prepared.requirements.map((row) => row.id)) &&
+    new Set(review.coverage.reviewedRequirementIds).size ===
+      prepared.requirements.length &&
+    review.coverage.reviewedMaterialClauseIds.length ===
+      prepared.requirements.length &&
+    hash(review.coverage.metadataConsideration) ===
+      hash(prepared.metadataConsideration)
+  );
+}
+
+/** Authentic native execution: exactly one selected request or actual receipt replay. */
 export async function runOpportunityResumeFitReviewJob(
   opportunityId: string,
   args: Row,
@@ -254,6 +349,26 @@ export async function runOpportunityResumeFitReviewJob(
 ) {
   identity(opportunityId);
   const runner = requireActiveRunnerExecutionContext(context);
+  const captured = args.resumeFitReview as Row | undefined;
+  const complete =
+    captured?.reviewVersion === OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION;
+  if (
+    complete &&
+    captured?.reviewModel !== 'openai/gpt-6-luna' &&
+    captured?.reviewModel !== 'openai/gpt-6.1-sol'
+  )
+    throw new Error(
+      'Complete resume review requires its server-selected supported contract.',
+    );
+  const options: OpportunityResumeFitReviewOptions = complete
+    ? {
+        model:
+          captured?.reviewModel === 'openai/gpt-6.1-sol'
+            ? 'openai/gpt-6.1-sol'
+            : 'openai/gpt-6-luna',
+        version: OPPORTUNITY_RESUME_FIT_REVIEW_COMPLETE_VERSION,
+      }
+    : {};
   if (
     runner.job.queue !== OPPORTUNITY_RESUME_FIT_REVIEW_PILOT_QUEUE ||
     runner.job.method !== method ||
@@ -305,7 +420,12 @@ export async function runOpportunityResumeFitReviewJob(
             !sameSubject(runtimeWorkspaceSubjectFromJobArgs(args), subject)
           )
             throw new Error('Resume review durable authority is not current.');
-          const material = await currentMaterial(opportunityId, subject, deps);
+          const material = await currentMaterial(
+            opportunityId,
+            subject,
+            deps,
+            options,
+          );
           if (
             !sameIntent(args.resumeFitReview, material.intent) ||
             !sameIntent(job.args.resumeFitReview, material.intent) ||
@@ -327,12 +447,22 @@ export async function runOpportunityResumeFitReviewJob(
         });
       const read = deps.read ?? readCurrentOpportunityResumeFitReview;
       const material = await assertCurrent();
-      const cached = await read(material.opportunity, subject);
+      if (complete && material.screen.outcome === 'clear_mismatch') {
+        const current = await assertCurrent();
+        return {
+          status: 'screened_out',
+          stage: 'resume_fit_review',
+          screening: current.screen,
+        };
+      }
+      const cached = await read(material.opportunity, subject, options);
       if (cached) {
         const current = await assertCurrent();
-        const confirmed = await read(current.opportunity, subject);
+        const confirmed = await read(current.opportunity, subject, options);
         if (
           !confirmed ||
+          !completeResultMatches(current.prepared, cached) ||
+          !completeResultMatches(current.prepared, confirmed) ||
           cached.model !== current.prepared.model ||
           confirmed.model !== current.prepared.model ||
           hash(cached) !== hash(confirmed) ||
@@ -346,6 +476,7 @@ export async function runOpportunityResumeFitReviewJob(
           stage: 'resume_fit_review',
           reused: true,
           review: confirmed,
+          ...(complete ? { screening: current.screen } : {}),
         };
       }
       await (
@@ -379,9 +510,10 @@ export async function runOpportunityResumeFitReviewJob(
         const current = await assertCurrent();
         const actual = await (
           deps.readReceipt ?? readCurrentOpportunityResumeFitReviewReceipt
-        )(current.opportunity, subject);
+        )(current.opportunity, subject, options);
         if (
           !actual ||
+          !completeResultMatches(current.prepared, actual) ||
           actual.model !== current.prepared.model ||
           actual.agentRunId !== agentRunId ||
           hash(actual) !== hash(review) ||
@@ -401,9 +533,14 @@ export async function runOpportunityResumeFitReviewJob(
           });
         });
         const publishedMaterial = await assertCurrent();
-        const published = await read(publishedMaterial.opportunity, subject);
+        const published = await read(
+          publishedMaterial.opportunity,
+          subject,
+          options,
+        );
         if (
           !published ||
+          !completeResultMatches(publishedMaterial.prepared, published) ||
           published.model !== publishedMaterial.prepared.model ||
           hash(published) !== hash(actual)
         )
@@ -421,6 +558,7 @@ export async function runOpportunityResumeFitReviewJob(
           stage: 'resume_fit_review',
           reused: false,
           review: actual,
+          ...(complete ? { screening: publishedMaterial.screen } : {}),
         };
       } catch (error) {
         await (deps.finishRun ?? finishOpportunityIntelligenceAgentRun)(

@@ -3,6 +3,8 @@ import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import { getAdminResource } from '$lib/admin/resources';
 import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
+import { completeReviewFixture } from '$lib/opportunity-resume-fit-review-projection.test-support';
+import { questionScreeningFixture } from '$lib/question-screening-projection.test-support';
 import AdminRecordViewPage from './AdminRecordViewPage.svelte';
 
 // smrt-svelte form primitives read the app state from context; SSR specs only
@@ -79,6 +81,62 @@ function renderOpportunity(
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
+    const { body } = renderOpportunity({
+      id: 'question-result',
+      title: 'API engineer',
+      questionScreeningEnabled: true,
+      questionScreeningStatus: 'current',
+      questionScreeningProjection: await questionScreeningFixture(),
+      latestScore: 99,
+    });
+    expect(body).toContain('Recommendation 40.0%');
+    expect(body).toContain('Run screening');
+    expect(body).toContain('Partial');
+    expect(body).not.toContain('99/100');
+  });
+  it('keeps a failed owned complete review unknown instead of reviving a legacy score', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      completeReviewStatus: 'unknown',
+      latestScore: 99,
+      assessmentProjection: {
+        sourceStatus: 'current',
+        eligibilityBucket: 'unknown',
+        matchReadiness: 'assessable',
+        coverage: {
+          candidateTruncated: false,
+          postingTruncated: false,
+          requirementsTruncated: false,
+          requirementCount: 4,
+        },
+        ranking: { eligibilityPriority: 2, fitScore: 99 },
+        reason: 'Legacy current.',
+      },
+    });
+    expect(body).toContain('Complete review needs refresh');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).not.toContain('99/100');
+    expect(body).not.toContain('Current complete review');
+  });
+
+  it('uses current complete evidence as the primary assessment while legal eligibility remains unknown', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      latestScore: 99,
+      latestScoreSummary: 'Legacy score summary',
+      resumeFitReviewProjection: completeReviewFixture(),
+    });
+    expect(body).toContain('Current complete review');
+    expect(body).toContain('All reviewed criteria supported');
+    expect(body).toContain('1 supported of 1 considered criteria');
+    expect(body).toContain('Eligibility: Unknown');
+    expect(body).not.toContain('Match score: 99/100');
+    expect(body).not.toContain('Legacy score summary');
+    expect(body).not.toContain('No current cited support');
+    expect(body).not.toContain('Run Assess to assess');
+  });
+
   it('shows coarse cited screening independently of fit and hides stale screening', () => {
     const quote = 'We are hiring software engineers.';
     const record = {

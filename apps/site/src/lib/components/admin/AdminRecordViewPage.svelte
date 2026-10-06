@@ -14,23 +14,35 @@ import { keepFormValues } from '$lib/admin/form-enhance';
 import { notifyOpportunityListChanged } from '$lib/admin/opportunity-list-refresh';
 import { displayFieldLabel, type ResourceField } from '$lib/admin/resources';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
+import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
 import { recommendationDecisionDefinitions } from '$lib/objects/workflow';
 import {
   assessmentCoverageMessages,
   assessmentEligibilityLabels,
   assessmentMatchReadinessLabel,
   getOpportunityAssessmentProjection,
+  getOpportunityEligibilityProjection,
 } from '$lib/opportunity-assessment-projection';
 import type { OpportunityPostingSupport } from '$lib/opportunity-posting-support';
+import {
+  completeReviewLabel,
+  getCurrentCompleteOpportunityReview,
+  hasUnavailableCompleteOpportunityReview,
+} from '$lib/opportunity-resume-fit-review-projection';
+import {
+  currentQuestionScreeningRank,
+  getCurrentQuestionScreeningProjection,
+  questionScreeningLabel,
+} from '$lib/question-screening-projection';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
+import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import OpportunityWorkflowForms from './OpportunityWorkflowForms.svelte';
 import PartialOpportunityEvidence, {
   getCurrentPartialOpportunityAssessmentProjection,
 } from './PartialOpportunityEvidence.svelte';
-import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import ResourceFormFields from './ResourceFormFields.svelte';
 import SourceOpportunityEligibility from './SourceOpportunityEligibility.svelte';
 
@@ -132,11 +144,29 @@ const isOpportunityRecord = $derived(data.resource.slug === 'opportunities');
 const assessmentProjection = $derived(
   getOpportunityAssessmentProjection(data.record.assessmentProjection),
 );
+const questionRank = $derived(currentQuestionScreeningRank(data.record));
+const questionReview = $derived(
+  getCurrentQuestionScreeningProjection(
+    data.record.questionScreeningProjection,
+    data.record.questionScreeningStatus,
+  ),
+);
+const completeReview = $derived(
+  getCurrentCompleteOpportunityReview(
+    data.record.resumeFitReviewProjection,
+    data.record.completeReviewStatus,
+  ),
+);
 const hasCurrentAssessment = $derived(
   assessmentProjection.sourceStatus === 'current',
 );
+const unavailableCompleteReview = $derived(
+  hasUnavailableCompleteOpportunityReview(data.record),
+);
 const hasCurrentPartialAssessment = $derived(
-  !hasCurrentAssessment &&
+  !unavailableCompleteReview &&
+    !completeReview &&
+    !hasCurrentAssessment &&
     Boolean(
       getCurrentPartialOpportunityAssessmentProjection(
         data.record.partialAssessmentProjection,
@@ -996,31 +1026,38 @@ $effect(() => {
     <section class="panel record-intelligence" aria-label="Your opportunity assessment">
       <div class="intel-head">
         <span class="field-kicker">Your opportunity assessment</span>
-        <strong>{hasCurrentAssessment ? 'Current' : hasCurrentPartialAssessment ? 'Partial assessment' : 'Unknown'}</strong>
+        <strong>{questionRank.enabled ? (questionReview ? 'Current screening' : 'Unknown') : completeReview ? 'Current complete review' : unavailableCompleteReview ? 'Unknown' : hasCurrentAssessment ? 'Current' : hasCurrentPartialAssessment ? 'Partial assessment' : 'Unknown'}</strong>
       </div>
       <div class="intelligence-meta">
-        <span>Eligibility: {assessmentEligibilityLabels[assessmentProjection.buckets[0]]}</span>
-        {#if assessmentProjection.matchReadiness === 'assessable'}
+        <span>Eligibility: {assessmentEligibilityLabels[getOpportunityEligibilityProjection(data.record.sourceEligibilityProjection, data.record.assessmentProjection).buckets[0]]}</span>
+        {#if !questionRank.enabled && !unavailableCompleteReview && !completeReview && assessmentProjection.matchReadiness === 'assessable'}
           <span>Match score: {assessmentProjection.fitScore}/100</span>
         {/if}
       </div>
-      <p><strong>{hasCurrentPartialAssessment ? 'Overall fit not yet established' : assessmentMatchReadinessLabel(assessmentProjection)}</strong></p>
-      {#if !hasCurrentPartialAssessment}
+      <p><strong>{questionRank.enabled ? (questionReview ? questionScreeningLabel(questionReview) : data.record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown') : completeReview?.evidenceFit ? completeReviewLabel(completeReview) : unavailableCompleteReview ? 'Complete review needs refresh' : hasCurrentPartialAssessment ? 'Overall fit not yet established' : assessmentMatchReadinessLabel(assessmentProjection)}</strong></p>
+      {#if !unavailableCompleteReview && !completeReview && !hasCurrentPartialAssessment}
         {#each assessmentCoverageMessages(assessmentProjection) as message}
           <p>{message}</p>
         {/each}
       {/if}
-      {#if hasCurrentAssessment && assessmentProjection.matchReadiness !== 'assessable'}
+      {#if !unavailableCompleteReview && !completeReview && hasCurrentAssessment && assessmentProjection.matchReadiness !== 'assessable'}
         <p>A match score is not available until role requirements and evidence have sufficient coverage.</p>
       {/if}
-      {#if hasCurrentPartialAssessment}
+      {#if questionRank.enabled}
+        <p>{questionReview?.rolePreScreen ? 'Title pre-screen only; full questions have not been assessed.' : questionReview ? 'Current for your enabled questions, captured posting and selected candidate evidence.' : 'Run screening to answer your enabled questions against the current posting and candidate evidence.'}</p>
+      {:else if completeReview}
+        <p>Current for the complete captured material and your selected candidate profile.</p>
+      {:else if unavailableCompleteReview}
+        <p>The saved complete review could not be validated for the current posting and candidate profile.</p>
+      {:else if hasCurrentPartialAssessment}
         <p>Current partial evidence is available for this posting and your selected candidate profile. Review the supported criteria and unresolved source clauses before deciding what evidence needs clarification.</p>
       {:else}
         <p>{assessmentProjection.reason || 'Assessment needs clarification.'}</p>
         <p>{hasCurrentAssessment ? 'Current for this posting and your selected candidate profile.' : 'Run Assess to assess this posting against your selected candidate profile.'}</p>
       {/if}
       <SourceOpportunityEligibility projection={data.record.sourceEligibilityProjection} sourceContentFingerprint={data.record.sourceContentFingerprint} sourceContentVersion={data.record.sourceContentVersion} />
-      <PartialOpportunityEvidence projection={data.record.partialAssessmentProjection} />
+      {#if !completeReview && !unavailableCompleteReview}<PartialOpportunityEvidence projection={data.record.partialAssessmentProjection} />{/if}
+      {#if typeof data.record.id === 'string'}<OpportunityQuestionScreening opportunityId={data.record.id} projection={data.record.questionScreeningProjection} status={data.record.questionScreeningStatus} blockedReason={data.record.questionScreeningBlockedReason} />{/if}
       <OpportunityResumeFitReview projection={data.record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={data.record.videoRequirements} />
     </section>
@@ -1051,11 +1088,11 @@ $effect(() => {
     <section class="panel record-intelligence" aria-label="Opportunity intelligence">
       <div class="intel-head">
         <span class="field-kicker">Earlier intelligence recommendation</span>
-        {#if !hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable'}
+        {#if !questionRank.enabled && !unavailableCompleteReview && !completeReview && (!hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable')}
           <strong>{latestScoreLabel()}</strong>
         {/if}
       </div>
-      {#if stringValue('latestScoreSummary') && (!hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable')}
+      {#if !questionRank.enabled && !unavailableCompleteReview && !completeReview && stringValue('latestScoreSummary') && (!hasCurrentAssessment || assessmentProjection.matchReadiness === 'assessable')}
         <p>{stringValue('latestScoreSummary')}</p>
       {/if}
       <div class="intelligence-meta">
