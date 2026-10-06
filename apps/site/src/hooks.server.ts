@@ -9,7 +9,10 @@ import { getSmrtOptions } from '$lib/server/db';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
 import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
 import { withBearerSessionContext } from '$lib/server/terminal-auth';
-import { verifyWorkspaceSubject } from '$lib/server/workspace-subject';
+import {
+  candidateProfileOnboardingRedirect,
+  verifyWorkspaceSubject,
+} from '$lib/server/workspace-subject';
 
 // Warm the published resume before the readiness probe passes, so a fresh
 // replica never serves a public request from a cold cache. Skipped during the
@@ -67,6 +70,16 @@ const authGuard: Handle = async ({ event, resolve }) => {
       }
       return new Response('Forbidden', { status: 403 });
     }
+  }
+
+  if (protectedAdmin) {
+    // A newly invited hosted user has an identity but no CandidateProfile until
+    // onboarding creates one; every other admin page needs it.
+    const onboarding = candidateProfileOnboardingRedirect(
+      event.locals,
+      pathname,
+    );
+    if (onboarding) redirect(303, onboarding);
   }
 
   return resolve(event);

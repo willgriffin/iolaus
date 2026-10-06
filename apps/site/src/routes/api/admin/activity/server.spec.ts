@@ -21,6 +21,9 @@ vi.mock('$lib/server/workspace-subject.js', () => ({
   WorkspaceSubjectError: class extends Error {
     status = 403;
   },
+  CandidateProfileRequiredError: class extends Error {
+    status = 409;
+  },
 }));
 vi.mock('$lib/server/workspace-workflow-capabilities.js', () => ({
   workspaceWorkflowOperation: () => ({
@@ -102,6 +105,17 @@ describe('authenticated workspace activity endpoint', () => {
     });
     const response = await GET(request() as never);
     expect(response.status).toBe(403);
+    expect(mocks.load).not.toHaveBeenCalled();
+  });
+  it('answers 409 when the user has not created a candidate profile yet', async () => {
+    const { CandidateProfileRequiredError } = await import(
+      '$lib/server/workspace-subject.js'
+    );
+    mocks.requireSubject.mockImplementation(() => {
+      throw new CandidateProfileRequiredError();
+    });
+    const response = await GET(request() as never);
+    expect(response.status).toBe(409);
     expect(mocks.load).not.toHaveBeenCalled();
   });
   it('distinguishes native unavailable from an honest empty snapshot without leaking its error', async () => {

@@ -4,6 +4,7 @@ import { isOwnerAuthorityDenial } from '$lib/server/owner-principal';
 import { runScreeningQuestionAssessment } from '$lib/server/screening-question-assessment-service';
 import { ScreeningQuestionStoreError } from '$lib/server/screening-question-store';
 import {
+  CandidateProfileRequiredError,
   requireCandidateWorkspaceSubject,
   WorkspaceSubjectError,
   workspaceSubjectFromLocals,
@@ -76,6 +77,11 @@ export const POST: RequestHandler = async ({
     });
     return json({ ok: true, reused: result.reused }, { headers });
   } catch (cause) {
+    if (cause instanceof CandidateProfileRequiredError)
+      return json(
+        { error: 'Candidate profile required.' },
+        { status: 409, headers },
+      );
     if (cause instanceof WorkspaceSubjectError || isOwnerAuthorityDenial(cause))
       return json(
         { error: 'You do not have permission to screen this opportunity.' },

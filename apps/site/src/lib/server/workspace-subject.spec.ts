@@ -61,6 +61,8 @@ vi.mock('./smrt.js', () => ({
 }));
 
 import {
+  CandidateProfileRequiredError,
+  candidateProfileOnboardingRedirect,
   getCurrentWorkspaceSubject,
   requireCandidateWorkspaceSubject,
   requireCurrentCandidateWorkspaceSubject,
@@ -421,5 +423,97 @@ describe('workspace subject', () => {
     expect(() => requireCurrentWorkspaceSubject()).toThrow(
       WorkspaceSubjectError,
     );
+  });
+
+  describe('hosted user without a candidate profile', () => {
+    const noProfile = { workspaceSubject: { tenantId: 't', userId: 'u' } };
+
+    it('raises a 409 profile-required error instead of a server fault', () => {
+      expect(() =>
+        requireCandidateWorkspaceSubject({ tenantId: 't', userId: 'u' }),
+      ).toThrow(CandidateProfileRequiredError);
+      expect(() =>
+        requireCandidateWorkspaceSubject({ tenantId: 't', userId: 'u' }),
+      ).toThrow(expect.objectContaining({ status: 409 }));
+      expect(() =>
+        requireCandidateWorkspaceSubject({ tenantId: '', userId: 'u' }),
+      ).toThrow(expect.objectContaining({ status: 403 }));
+    });
+
+    it('redirects shared hosted admin pages to onboarding', () => {
+      mocks.sharedHosted = true;
+      expect(candidateProfileOnboardingRedirect(noProfile, '/admin')).toBe(
+        '/admin/onboarding',
+      );
+      expect(
+        candidateProfileOnboardingRedirect(noProfile, '/admin/resume'),
+      ).toBe('/admin/onboarding');
+    });
+
+    it('lets the onboarding and account pages load without a profile', () => {
+      mocks.sharedHosted = true;
+      for (const path of [
+        '/admin/onboarding',
+        '/admin/account',
+        '/admin/terminal-login',
+      ]) {
+        expect(candidateProfileOnboardingRedirect(noProfile, path)).toBeNull();
+      }
+    });
+
+    it('does not redirect a user who already has a profile', () => {
+      mocks.sharedHosted = true;
+      expect(
+        candidateProfileOnboardingRedirect(
+          { workspaceSubject: { profileId: 'p', tenantId: 't', userId: 'u' } },
+          '/admin',
+        ),
+      ).toBeNull();
+    });
+
+    it('leaves private hosted and local modes unchanged', () => {
+      mocks.privateHosted = true;
+      expect(
+        candidateProfileOnboardingRedirect(noProfile, '/admin'),
+      ).toBeNull();
+      mocks.privateHosted = false;
+      mocks.sharedHosted = false;
+      expect(
+        candidateProfileOnboardingRedirect(noProfile, '/admin'),
+      ).toBeNull();
+    });
+
+    it("never selects another user's profile for a profile-less user", async () => {
+      mocks.sharedHosted = true;
+      // Storage returns only user A's profile; the owner-scoped query for user B
+      // is what is asked, and a row owned by A must not become B's selection.
+      mocks.list.mockResolvedValue([
+        {
+          active: true,
+          id: 'profile-of-a',
+          ownerUserId: 'user-a',
+          profileKey: 'default',
+          tenantId: 'tenant-1',
+        },
+      ]);
+      mocks.getUser.mockResolvedValue({ id: 'user-b', isActive: () => true });
+      mocks.findByUserAndTenant.mockResolvedValue({
+        roleId: 'role-1',
+        status: 'active',
+        tenantId: 'tenant-1',
+        userId: 'user-b',
+      });
+      const requestLocals = { ...locals(), user: { id: 'user-b' } };
+      requestLocals.membership.userId = 'user-b';
+      await expect(verifyWorkspaceSubject(requestLocals)).resolves.toEqual({
+        tenantId: 'tenant-1',
+        userId: 'user-b',
+      });
+      expect(mocks.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ ownerUserId: 'user-b' }),
+        }),
+      );
+    });
   });
 });

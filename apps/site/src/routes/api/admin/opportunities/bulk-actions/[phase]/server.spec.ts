@@ -118,13 +118,6 @@ describe('opportunity bulk-actions route', () => {
   it.each([
     ['missing subject', { ...locals, workspaceSubject: undefined }],
     [
-      'missing profile',
-      {
-        ...locals,
-        workspaceSubject: { tenantId: 'tenant-1', userId: 'user-1' },
-      },
-    ],
-    [
       'revoked membership',
       { ...locals, membership: { ...locals.membership, status: 'revoked' } },
     ],
@@ -157,6 +150,23 @@ describe('opportunity bulk-actions route', () => {
       } as never),
     ).rejects.toMatchObject({ status: 403 });
 
+    expect(mocks.createStore).not.toHaveBeenCalled();
+    expect(mocks.createAdapter).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 profile-required for a user without a candidate profile', async () => {
+    const POST = await handler();
+
+    const response = await POST({
+      locals: {
+        ...locals,
+        workspaceSubject: { tenantId: 'tenant-1', userId: 'user-1' },
+      },
+      params: { phase: 'preview' },
+      request: post(validBody),
+    } as never);
+
+    expect(response.status).toBe(409);
     expect(mocks.createStore).not.toHaveBeenCalled();
     expect(mocks.createAdapter).not.toHaveBeenCalled();
   });

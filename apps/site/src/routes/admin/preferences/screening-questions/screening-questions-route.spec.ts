@@ -129,11 +129,18 @@ describe('Screening Questions private preference route', () => {
     { ...locals, membership: null },
     { ...locals, membership: { ...locals.membership, status: 'inactive' } },
     { ...locals, tenantId: 'foreign-tenant' },
-    { ...locals, workspaceSubject: { ...subject, profileId: '' } },
   ])('denies missing, inactive, foreign or unselected workspace contexts before reads', async (invalidLocals) => {
     await expect(
       load({ locals: invalidLocals } as never),
     ).rejects.toMatchObject({ status: 403 });
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+  it('answers 409 profile-required before reads when no profile exists yet', async () => {
+    await expect(
+      load({
+        locals: { ...locals, workspaceSubject: { ...subject, profileId: '' } },
+      } as never),
+    ).rejects.toMatchObject({ status: 409 });
     expect(mocks.list).not.toHaveBeenCalled();
   });
   it('creates explicit desired-no preferences through the native service without trusting form profile IDs', async () => {

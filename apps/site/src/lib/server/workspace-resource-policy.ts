@@ -84,7 +84,7 @@ export function workspaceResourceWhere(
   if (!privateWorkspaceClasses.has(className)) return {};
   const subject = getCurrentWorkspaceSubject();
   if (!subject?.profileId)
-    error(403, 'A verified candidate workspace is required.');
+    error(subject ? 409 : 403, 'A verified candidate workspace is required.');
   return className === 'CandidateProfile'
     ? { ...candidateProfileWhere(subject), id: subject.profileId }
     : privateRecordWhere({ ...subject, profileId: subject.profileId });
@@ -138,7 +138,10 @@ export function assertGenericResourceAccess(): void {
 export function requireCandidateWorkspaceSubject() {
   const subject = getCurrentWorkspaceSubject();
   if (!subject?.profileId)
-    error(403, 'Select a candidate profile before using this workflow.');
+    error(
+      subject ? 409 : 403,
+      'A candidate profile is required. Complete onboarding to create one.',
+    );
   return requireWorkspaceSubject({ ...subject, profileId: subject.profileId });
 }
 
