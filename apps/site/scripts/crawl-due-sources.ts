@@ -4,7 +4,7 @@
 import '../src/lib/server/manifest-preload.js';
 import '../src/lib/server/smrt.js';
 import {
-  nextCheckAfter,
+  crawlDueSource,
   selectDueSources,
 } from '../src/lib/server/due-source-crawl.js';
 import { crawlOpportunitySource } from '../src/lib/server/opportunity-source-crawler.js';
@@ -62,34 +62,48 @@ const totals = {
   created: 0,
   due: due.length,
   failed: 0,
+  skipped: 0,
   skippedForBudget: 0,
+  timedOut: 0,
 };
-for (const source of due) {
+const PER_SOURCE_TIMEOUT_MS = 10 * 60_000;
+for (const candidate of due) {
   if (dryRun) continue;
   if (Date.now() - started > budgetMs) {
     totals.skippedForBudget += 1;
     continue;
   }
   totals.attempted += 1;
-  let failed = false;
-  try {
-    const summary = await crawlOpportunitySource(source as never, {
-      includeGeneric: true,
-      signal: AbortSignal.timeout(10 * 60_000),
-    });
-    totals.candidates += summary.candidates;
-    totals.created += summary.created;
-    // Board reconciliation needs a verified workspace subject in shared mode and
-    // is reported as an error; the crawl itself still ingested its postings.
-    failed = summary.candidates === 0 && summary.errors.length > 0;
-  } catch {
-    failed = true;
+  const result = await crawlDueSource(String(candidate.id), {
+    crawl: async (source, signal) => {
+      const summary = await crawlOpportunitySource(source as never, {
+        includeGeneric: true,
+        signal,
+      });
+      return {
+        candidates: summary.candidates,
+        created: summary.created,
+        errors: summary.errors,
+      };
+    },
+    get: async (id) =>
+      (await (sources as unknown as {
+        get: (id: string) => Promise<SourceRecord | null>;
+      }).get(id)) as never,
+    timeoutMs: PER_SOURCE_TIMEOUT_MS,
+  });
+  totals.candidates += result.candidates;
+  totals.created += result.created;
+  if (result.outcome === 'skipped') totals.skipped += 1;
+  if (result.outcome === 'failed') totals.failed += 1;
+  if (result.outcome === 'timed-out') {
+    totals.timedOut += 1;
+    // A hung provider request cannot be cancelled from here: record it, report
+    // and exit so the Job ends instead of blocking every later tick.
+    console.log(JSON.stringify({ dryRun, ...totals }));
+    process.exit(1);
   }
-  if (failed) totals.failed += 1;
-  const now = new Date();
-  source.lastCheckedAt = now;
-  source.nextCheckAt = nextCheckAfter(source as never, now, failed);
-  await source.save?.();
 }
 console.log(JSON.stringify({ dryRun, ...totals }));
-process.exit(0);
+// A run in which every attempted crawl failed must not look healthy.
+process.exit(totals.attempted > 0 && totals.failed === totals.attempted ? 1 : 0);

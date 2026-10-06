@@ -344,7 +344,9 @@ node --import tsx apps/site/scripts/crawl-due-sources.ts --max 10 --budget-minut
 It crawls up to `--max` active root sources whose own cadence says they are due
 (most overdue first), stops early after the time budget, and advances each
 source's `nextCheckAt` (a failed crawl cools down for six hours). Output is counts
-only. Run it with `concurrencyPolicy: Forbid`, the web runtime environment and
+only; it exits non-zero when every attempted crawl failed or one timed out. Each
+source is bounded to 10 minutes. Run it with `concurrencyPolicy: Forbid`, an
+`activeDeadlineSeconds` above the time budget plus 10 minutes, the web runtime environment and
 labels (egress policy), `IOLAUS_REPO_ROOT`-resolvable working directory `/app`,
 and an `emptyDir` at `/app/.cache` (the crawler's spider cache on a read-only
 root). Board reconciliation (relisting/closing vanished postings) still needs a
