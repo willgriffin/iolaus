@@ -321,6 +321,69 @@ function enableCoverLetterGeneration() {
   });
 }
 
+function setupGroundedCoverLetter(chat: ReturnType<typeof vi.fn>) {
+  mocks.collections.set(
+    'Application',
+    collection([
+      record({
+        coverLetterMode: 'generate',
+        id: 'app-grounded-cover-letter',
+        opportunityId: 'opp-1',
+        resumeMode: 'default',
+      }),
+    ]),
+  );
+  mocks.collections.set(
+    'CandidateProfile',
+    collection([record({ id: 'candidate-1', isDefault: true })]),
+  );
+  mocks.collections.set(
+    'Fact',
+    collection([
+      record({
+        id: 'candidate-active',
+        status: 'active',
+        textRefined: 'Verified candidate platform experience.',
+      }),
+      record({
+        id: 'candidate-pending',
+        status: 'pending',
+        textRefined: 'Unverified candidate claim.',
+      }),
+      record({
+        id: 'opportunity-active',
+        status: 'active',
+        textRefined: 'Employer research, not candidate evidence.',
+      }),
+    ]),
+  );
+  mocks.factSubjectGetForEntity.mockImplementation(
+    async (entityType: string, entityId: string) => {
+      if (entityType === 'CandidateProfile' && entityId === subject.profileId) {
+        return [
+          { factId: 'candidate-active' },
+          { factId: 'candidate-pending' },
+        ];
+      }
+      if (entityType === 'Opportunity' && entityId === 'opp-1') {
+        return [{ factId: 'opportunity-active' }];
+      }
+      return [];
+    },
+  );
+  mocks.factEvidenceGetForFact.mockImplementation(async (factId: string) =>
+    factId === 'candidate-active'
+      ? [{ id: 'evidence-candidate', status: 'supports' }]
+      : [{ id: `evidence-${factId}`, status: 'supports' }],
+  );
+  enableCoverLetterGeneration();
+  mocks.resolveWritingAiProfileClient.mockResolvedValue({
+    aiClient: { chat },
+    model: 'test-writing-model',
+    timeout: 1_000,
+  });
+}
+
 describe('normalizeOpportunityRating', () => {
   it('allows blank ratings and integer ratings from 1 to 10', () => {
     expect(normalizeOpportunityRating('')).toBeNull();
@@ -1651,69 +1714,7 @@ describe('generateApplicationPackage', () => {
         options: unknown,
       ) => Promise<{ content: string }>
     >(async () => ({ content: 'Evidence-backed letter.' }));
-    mocks.collections.set(
-      'Application',
-      collection([
-        record({
-          coverLetterMode: 'generate',
-          id: 'app-grounded-cover-letter',
-          opportunityId: 'opp-1',
-          resumeMode: 'default',
-        }),
-      ]),
-    );
-    mocks.collections.set(
-      'CandidateProfile',
-      collection([record({ id: 'candidate-1', isDefault: true })]),
-    );
-    mocks.collections.set(
-      'Fact',
-      collection([
-        record({
-          id: 'candidate-active',
-          status: 'active',
-          textRefined: 'Verified candidate platform experience.',
-        }),
-        record({
-          id: 'candidate-pending',
-          status: 'pending',
-          textRefined: 'Unverified candidate claim.',
-        }),
-        record({
-          id: 'opportunity-active',
-          status: 'active',
-          textRefined: 'Employer research, not candidate evidence.',
-        }),
-      ]),
-    );
-    mocks.factSubjectGetForEntity.mockImplementation(
-      async (entityType: string, entityId: string) => {
-        if (
-          entityType === 'CandidateProfile' &&
-          entityId === subject.profileId
-        ) {
-          return [
-            { factId: 'candidate-active' },
-            { factId: 'candidate-pending' },
-          ];
-        }
-        if (entityType === 'Opportunity' && entityId === 'opp-1') {
-          return [{ factId: 'opportunity-active' }];
-        }
-        return [];
-      },
-    );
-    mocks.factEvidenceGetForFact.mockImplementation(async (factId: string) =>
-      factId === 'candidate-active'
-        ? [{ id: 'evidence-candidate', status: 'supports' }]
-        : [{ id: `evidence-${factId}`, status: 'supports' }],
-    );
-    enableCoverLetterGeneration();
-    mocks.resolveWritingAiProfileClient.mockResolvedValue({
-      aiClient: { chat },
-      model: 'test-writing-model',
-      timeout: 1_000,
-    });
+    setupGroundedCoverLetter(chat);
 
     await generateApplicationPackage('app-grounded-cover-letter');
 
@@ -1758,6 +1759,45 @@ describe('generateApplicationPackage', () => {
     expect(packetMarkdown).toContain(
       'linked context only; verify before use; status: pending.',
     );
+  });
+
+  it('refuses a cover letter with no provider call when the global AI kill switch is on', async () => {
+    const chat = vi.fn(async () => ({ content: 'unused' }));
+    setupGroundedCoverLetter(chat);
+    vi.stubEnv('IOLAUS_AI_DISABLED', 'true');
+    try {
+      await expect(
+        generateApplicationPackage('app-grounded-cover-letter'),
+      ).rejects.toMatchObject({
+        body: {
+          message:
+            'AI features are temporarily turned off. No request was sent to a model.',
+        },
+        status: 503,
+      });
+      expect(chat).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses unmetered cover-letter generation when a user cap is active without writing prices', async () => {
+    const chat = vi.fn(async () => ({ content: 'unused' }));
+    setupGroundedCoverLetter(chat);
+    vi.stubEnv('IOLAUS_AI_USER_LIFETIME_CAP_MICROS', '1000000');
+    try {
+      await expect(
+        generateApplicationPackage('app-grounded-cover-letter'),
+      ).rejects.toMatchObject({
+        body: {
+          message: expect.stringContaining('not configured for metered use'),
+        },
+        status: 503,
+      });
+      expect(chat).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('reports an actionable error instead of binding generic cover-letter boilerplate', async () => {

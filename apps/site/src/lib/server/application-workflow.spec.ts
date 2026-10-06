@@ -686,6 +686,8 @@ describe('processRecommendationTask', () => {
     });
     expect(mocks.processOpportunityIntelligence).toHaveBeenCalledWith({
       applicationId: application?.id,
+      // Planning is billed to the accepting user's AI budget.
+      billTo: { tenantId: 'tenant-1', userId: 'user-1' },
       modes: ['plan'],
       opportunityId: 'opp-1',
       user: { id: 'user-1' },

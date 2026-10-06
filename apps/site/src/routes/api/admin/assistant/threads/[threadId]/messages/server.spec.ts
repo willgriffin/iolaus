@@ -149,6 +149,29 @@ describe('admin assistant messages route', () => {
     );
   });
 
+  it('returns a clear refusal with the right status when AI is off or the user budget is spent', async () => {
+    const { AiUsageRefusedError } = await import(
+      '$lib/server/ai-usage-guard.js'
+    );
+    const { POST } = await handler();
+    for (const [code, status] of [
+      ['user_budget_exhausted', 429],
+      ['ai_disabled', 503],
+    ] as const) {
+      mocks.sendMessage.mockRejectedValue(
+        new AiUsageRefusedError(code, `refused: ${code}`),
+      );
+      const response = await POST(
+        event(post({ content: 'Hello', clientRequestId: `request-${code}` })),
+      );
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({
+        code,
+        message: `refused: ${code}`,
+      });
+    }
+  });
+
   it('hides a foreign thread as not found', async () => {
     mocks.listMessages.mockRejectedValue(new MissingThreadError());
     const { GET } = await handler();

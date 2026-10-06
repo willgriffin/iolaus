@@ -21,6 +21,11 @@ import {
 } from '../objects/lifecycle.js';
 import { getOpportunityEligibility } from '../opportunity-eligibility.js';
 import { resolveWritingAiProfileClient } from './ai-config.js';
+import {
+  AiUsageRefusedError,
+  assertAiEnabled,
+  meterAiWritingCall,
+} from './ai-usage-guard.js';
 import { isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import {
@@ -1606,8 +1611,12 @@ async function generateApplicationPacketAsset(
 async function generateCoverLetterProse(
   opportunity: MutableRecord,
   factEntries: Awaited<ReturnType<typeof factsForApplication>>,
+  subject: WorkspaceSubject,
   signal?: AbortSignal,
 ): Promise<{ body: string; model: string } | null> {
+  // Refusals (kill switch, user budget) are surfaced to the user, never
+  // swallowed into the generic "could not generate" fallback below.
+  assertAiEnabled();
   let client: Awaited<ReturnType<typeof resolveWritingAiProfileClient>> = null;
   try {
     client = await resolveWritingAiProfileClient({
@@ -1662,12 +1671,30 @@ async function generateCoverLetterProse(
   };
   if (client.model) chatOptions.model = client.model;
 
+  // This ungoverned writing call is billed to the requesting user: the worst
+  // case (estimated input plus the output ceiling) is reserved before the
+  // provider call. Metering needs explicit prices; a capped deployment without
+  // them refuses rather than spending unmetered.
   try {
-    const response = await client.aiClient.chat(messages, chatOptions);
-    const body = stringValue(response.content);
-    if (!body) return null;
-    return { body, model: client.model };
+    return await meterAiWritingCall({
+      feature: 'application-cover-letter',
+      inputChars: messages.reduce(
+        (total, message) => total + String(message.content).length,
+        0,
+      ),
+      maxOutputTokens: chatOptions.maxTokens ?? 4_096,
+      subject,
+      invoke: async () => {
+        const response = await client.aiClient.chat(messages, chatOptions);
+        const body = stringValue(response.content);
+        return {
+          result: body ? { body, model: client.model } : null,
+          usage: response.usage,
+        };
+      },
+    });
   } catch (error) {
+    if (error instanceof AiUsageRefusedError) throw error;
     if (signal?.aborted) throw error;
     return null;
   }
@@ -1686,11 +1713,19 @@ async function generateCoverLetterAsset(
   const title = `Cover letter - ${stringValue(opportunity.title) || opportunityId}`;
   const factEntries = await factsForApplication(opportunity, subject);
   const candidateFactEntries = verifiedCandidateFactEntries(factEntries);
-  const prose = await generateCoverLetterProse(
-    opportunity,
-    candidateFactEntries,
-    signal,
-  );
+  let prose: Awaited<ReturnType<typeof generateCoverLetterProse>>;
+  try {
+    prose = await generateCoverLetterProse(
+      opportunity,
+      candidateFactEntries,
+      subject,
+      signal,
+    );
+  } catch (refusal) {
+    if (refusal instanceof AiUsageRefusedError)
+      error(refusal.status, refusal.message);
+    throw refusal;
+  }
   if (!prose) {
     error(
       422,
@@ -1889,6 +1924,7 @@ async function generateApplicationPackageAfterPreflight(options: {
     await processOpportunityIntelligence({
       applicationId: stringValue(application.id),
       assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
+      billTo: { tenantId: subject.tenantId, userId: subject.userId },
       modes: ['plan'],
       opportunityId,
       runLifecycleMutation: runOpportunityLifecycleTransaction,

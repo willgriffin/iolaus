@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { getAiUsageSummary } from '$lib/server/ai-usage-guard';
 
 vi.mock('$lib/admin/resources', () => ({ adminResources: [] }));
 vi.mock('$lib/server/admin-assistant-config', () => ({
   isAdminAssistantEnabled: () => false,
+}));
+vi.mock('$lib/server/ai-usage-guard', () => ({
+  getAiUsageSummary: vi.fn(async () => null),
 }));
 vi.mock('$lib/server/app-config', () => ({
   getAppConfig: () => ({ appMark: 'I', appName: 'Iolaus' }),
@@ -62,5 +66,52 @@ describe('admin activity scope disposal key', () => {
         })
       ).activityScopeKey,
     ).toBeNull();
+  });
+});
+
+describe('hosted AI budget indicator', () => {
+  const summary = (overrides: Record<string, unknown>) =>
+    ({
+      capped: true,
+      disabled: false,
+      lifetimeCapMicros: 0,
+      lifetimeSpentMicros: 0,
+      monthlyCapMicros: 0,
+      monthlySpentMicros: 0,
+      remainingLabel: '$1.250 AI budget left',
+      remainingMicros: 1_250_000,
+      ...overrides,
+    }) as never;
+
+  it('shows the remaining budget for the verified user only', async () => {
+    vi.mocked(getAiUsageSummary).mockResolvedValueOnce(summary({}));
+    const data = await read({ workspaceSubject: subject });
+    expect(data.aiBudget).toMatchObject({ label: '$1.250 AI budget left' });
+    expect(getAiUsageSummary).toHaveBeenLastCalledWith(subject);
+    vi.mocked(getAiUsageSummary).mockClear();
+    expect((await read({ tenantId: 'untrusted' })).aiBudget).toBeNull();
+    expect(getAiUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it('says so when the budget is used up or AI is paused', async () => {
+    vi.mocked(getAiUsageSummary).mockResolvedValueOnce(
+      summary({ remainingLabel: '$0.000 AI budget left', remainingMicros: 0 }),
+    );
+    expect((await read({ workspaceSubject: subject })).aiBudget).toMatchObject({
+      exhausted: true,
+      label: 'AI budget used up',
+    });
+    vi.mocked(getAiUsageSummary).mockResolvedValueOnce(
+      summary({ capped: false, disabled: true, remainingMicros: null }),
+    );
+    expect((await read({ workspaceSubject: subject })).aiBudget).toMatchObject({
+      disabled: true,
+      label: 'AI paused',
+    });
+  });
+
+  it('never breaks the shell when the ledger is unavailable', async () => {
+    vi.mocked(getAiUsageSummary).mockRejectedValueOnce(new Error('db down'));
+    expect((await read({ workspaceSubject: subject })).aiBudget).toBeNull();
   });
 });

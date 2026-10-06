@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listMessages: vi.fn(),
   markRunning: vi.fn(),
   reserve: vi.fn(),
+  reserveSpend: vi.fn(),
   resolveClient: vi.fn(),
   resolveConfig: vi.fn(),
   resolveDatabase: vi.fn(),
@@ -22,6 +23,10 @@ vi.mock('@happyvertical/smrt-core', () => ({
 }));
 vi.mock('@happyvertical/smrt-chat/internal/agent-runtime', () => ({
   sendAgentReply: mocks.sendAgentReply,
+}));
+vi.mock('./ai-usage-guard.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./ai-usage-guard.js')>()),
+  reserveAiUserSpend: mocks.reserveSpend,
 }));
 vi.mock('./admin-assistant-turn-config.js', () => ({
   actualAssistantSpendMicros: vi.fn(() => ({
@@ -241,5 +246,85 @@ describe('configured admin assistant turn adapter', () => {
         actualSpendMicros: 0,
       }),
     );
+  });
+
+  describe('per-user AI budget and kill switch', () => {
+    const spend = () => ({
+      release: vi.fn(async () => {}),
+      settle: vi.fn(async () => {}),
+    });
+
+    it('bills the turn to its owner and settles the actual cost', async () => {
+      const reservation = spend();
+      mocks.reserveSpend.mockResolvedValue(reservation);
+      const { runConfiguredAdminAssistantTurn } = await import(
+        './admin-assistant-turn-adapter.js'
+      );
+      await runConfiguredAdminAssistantTurn(input());
+      expect(mocks.reserveSpend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          feature: 'admin-assistant',
+          micros: 30,
+          subject: { tenantId: 'tenant-1', userId: 'user-1' },
+        }),
+      );
+      expect(reservation.settle).toHaveBeenCalledWith(20, 'actual');
+      expect(reservation.release).not.toHaveBeenCalled();
+    });
+
+    it('refuses with no transcript write or provider call when the cap is hit', async () => {
+      const { AiUsageRefusedError } = await import('./ai-usage-guard.js');
+      mocks.reserveSpend.mockRejectedValue(
+        new AiUsageRefusedError(
+          'user_budget_exhausted',
+          'You have reached your monthly AI budget.',
+        ),
+      );
+      const { runConfiguredAdminAssistantTurn } = await import(
+        './admin-assistant-turn-adapter.js'
+      );
+      await expect(
+        runConfiguredAdminAssistantTurn(input()),
+      ).rejects.toMatchObject({ code: 'user_budget_exhausted', status: 429 });
+      expect(mocks.sendMessage).not.toHaveBeenCalled();
+      expect(mocks.aiChat).not.toHaveBeenCalled();
+      expect(mocks.fail).toHaveBeenCalledWith(
+        expect.any(Object),
+        'turn-1',
+        'user_budget_exhausted',
+        expect.objectContaining({ actualSpendMicros: 0 }),
+      );
+    });
+
+    it('releases the budget when the provider was never reached', async () => {
+      const reservation = spend();
+      mocks.reserveSpend.mockResolvedValue(reservation);
+      mocks.sendMessage.mockRejectedValue(new Error('room unavailable'));
+      const { runConfiguredAdminAssistantTurn } = await import(
+        './admin-assistant-turn-adapter.js'
+      );
+      await expect(runConfiguredAdminAssistantTurn(input())).rejects.toThrow(
+        'room unavailable',
+      );
+      expect(reservation.release).toHaveBeenCalledTimes(1);
+      expect(reservation.settle).not.toHaveBeenCalled();
+    });
+
+    it('kill switch refuses before any reservation, transcript, or provider work', async () => {
+      vi.stubEnv('IOLAUS_AI_DISABLED', 'true');
+      try {
+        const { runConfiguredAdminAssistantTurn } = await import(
+          './admin-assistant-turn-adapter.js'
+        );
+        await expect(
+          runConfiguredAdminAssistantTurn(input()),
+        ).rejects.toMatchObject({ code: 'ai_disabled' });
+        expect(mocks.reserve).not.toHaveBeenCalled();
+        expect(mocks.resolveClient).not.toHaveBeenCalled();
+        expect(mocks.aiChat).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
   });
 });

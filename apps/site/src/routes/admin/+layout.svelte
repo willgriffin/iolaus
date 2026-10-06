@@ -497,6 +497,17 @@ function currentTenantHref(pathname: string): string {
         }}><MessageSquare size={18} aria-hidden="true" /></button>
       {/if}
     </div>
+    {#if data.aiBudget}
+      <p
+        class="admin-ai-budget"
+        class:admin-ai-budget-low={data.aiBudget.disabled || data.aiBudget.exhausted}
+        role="status"
+        title={data.aiBudget.detail}
+        data-testid="ai-budget-indicator"
+      >
+        {data.aiBudget.label}
+      </p>
+    {/if}
   </div>
 {/snippet}
 
@@ -670,6 +681,20 @@ function currentTenantHref(pathname: string): string {
   }
   .admin-app-bar-left {
     gap: 8px;
+  }
+  .admin-ai-budget {
+    margin: 0;
+    padding: 4px 10px;
+    border: 1px solid var(--smrt-color-outline-variant);
+    border-radius: 999px;
+    color: var(--smrt-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .admin-ai-budget-low {
+    border-color: var(--smrt-color-error, currentColor);
+    color: var(--smrt-color-error, inherit);
   }
   .admin-brand {
     gap: 10px;

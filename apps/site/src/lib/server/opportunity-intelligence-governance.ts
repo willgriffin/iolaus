@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { TokenUsage } from '@happyvertical/ai';
 import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
+import { assertAiEnabled, reserveAiUserSpend } from './ai-usage-guard.js';
 import { bumpOpportunityTableChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import {
@@ -1099,9 +1100,18 @@ export async function executeGovernedOpportunityIntelligenceRequest<
   maxOutputTokens: number;
   signal?: AbortSignal;
   store?: OpportunityIntelligenceGovernanceStore;
+  /**
+   * User to bill when the result is not candidate-private (and so carries no
+   * workspace subject), without scoping the governance ledger by owner.
+   */
+  billedUser?: { tenantId: string; userId: string };
   /** Server-verified owner tuple for a candidate-private provider result. */
   workspaceSubject?: WorkspaceSubject;
 }): Promise<{ output: T; requestId: string; reused: boolean }> {
+  // Global AI kill switch: refuse before any ledger, circuit, or provider work.
+  // It is deliberately not latched into the persisted circuit, so clearing the
+  // environment value restores service without an operator reset.
+  assertAiEnabled();
   const store =
     options.store ?? new DatabaseOpportunityIntelligenceGovernanceStore();
   if (options.estimatedInputTokens > options.inputTokenCeiling) {
@@ -1180,97 +1190,129 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     );
   }
 
-  const reserved = await store.reserve<T>(reservation);
-  if (reserved.kind === 'reused') {
-    return {
-      output: reserved.output,
-      requestId: reserved.requestId,
-      reused: true,
-    };
-  }
-  if (reserved.kind === 'blocked') {
-    throw new OpportunityIntelligenceGovernanceError(
-      reserved.code,
-      reserved.message,
-    );
-  }
-
-  const startedAt = Date.now();
-  let response: {
-    output: T;
-    providerRequestId?: string;
-    usage?: TokenUsage;
-  };
+  // Candidate-owned requests are billed to that user's cap before the
+  // governance reservation so a refusal leaves no ledger row that could block
+  // a later retry. Platform requests (crawl, shared catalog) carry no subject
+  // and are never billed to a user.
+  const billedUser = workspaceSubject ?? options.billedUser;
+  const userSpend = billedUser
+    ? await reserveAiUserSpend({
+        feature: options.identity.feature,
+        micros: reservation.reservedSpendMicros,
+        requestId,
+        subject: { tenantId: billedUser.tenantId, userId: billedUser.userId },
+      })
+    : null;
+  let providerInvoked = false;
+  let spentMicros: number | undefined;
   try {
-    options.signal?.throwIfAborted();
-    response = await options.invoke(requestId);
-  } catch (error) {
-    const metadata =
-      error && typeof error === 'object'
-        ? invocationMetadata.get(error)
-        : undefined;
-    const actualSpendMicros = metadata?.usage
-      ? requestCostMicros(metadata.usage, pricing)
-      : reservation.reservedSpendMicros;
+    const reserved = await store.reserve<T>(reservation);
+    if (reserved.kind === 'reused') {
+      return {
+        output: reserved.output,
+        requestId: reserved.requestId,
+        reused: true,
+      };
+    }
+    if (reserved.kind === 'blocked') {
+      throw new OpportunityIntelligenceGovernanceError(
+        reserved.code,
+        reserved.message,
+      );
+    }
+
+    const startedAt = Date.now();
+    let response: {
+      output: T;
+      providerRequestId?: string;
+      usage?: TokenUsage;
+    };
+    try {
+      options.signal?.throwIfAborted();
+      providerInvoked = true;
+      response = await options.invoke(requestId);
+    } catch (error) {
+      const metadata =
+        error && typeof error === 'object'
+          ? invocationMetadata.get(error)
+          : undefined;
+      const actualSpendMicros = metadata?.usage
+        ? requestCostMicros(metadata.usage, pricing)
+        : reservation.reservedSpendMicros;
+      spentMicros = metadata?.usage ? actualSpendMicros : undefined;
+      try {
+        await store.complete(reservation, {
+          accountingBasis: metadata?.usage ? 'actual' : 'conservative',
+          actualSpendMicros,
+          durationMs: Date.now() - startedAt,
+          errorCode: errorCode(error),
+          providerRequestId: metadata?.providerRequestId ?? requestId,
+          status: terminalStatus(error, options.signal),
+          usage: metadata?.usage,
+        });
+      } catch {
+        await safelyOpenCircuit(store, 'accounting_persistence_failed');
+        throw new OpportunityIntelligenceGovernanceError(
+          'accounting_required',
+          'The provider request failed and accounting could not be persisted; the circuit has been opened.',
+        );
+      }
+      throw error;
+    }
+
+    if (!response.usage) {
+      try {
+        await store.complete(reservation, {
+          accountingBasis: 'missing',
+          actualSpendMicros: reservation.reservedSpendMicros,
+          durationMs: Date.now() - startedAt,
+          errorCode: 'usage_accounting_missing',
+          output: response.output,
+          providerRequestId: response.providerRequestId ?? requestId,
+          status: 'failed',
+        });
+      } catch {
+        await safelyOpenCircuit(store, 'accounting_persistence_failed');
+      }
+      throw new OpportunityIntelligenceGovernanceError(
+        'accounting_required',
+        'Provider usage accounting is required; the circuit has been opened.',
+      );
+    }
+
+    const actualSpendMicros = requestCostMicros(response.usage, pricing);
+    spentMicros = actualSpendMicros;
     try {
       await store.complete(reservation, {
-        accountingBasis: metadata?.usage ? 'actual' : 'conservative',
+        accountingBasis: 'actual',
         actualSpendMicros,
         durationMs: Date.now() - startedAt,
-        errorCode: errorCode(error),
-        providerRequestId: metadata?.providerRequestId ?? requestId,
-        status: terminalStatus(error, options.signal),
-        usage: metadata?.usage,
+        output: response.output,
+        providerRequestId: response.providerRequestId ?? requestId,
+        status: 'succeeded',
+        usage: response.usage,
       });
     } catch {
       await safelyOpenCircuit(store, 'accounting_persistence_failed');
       throw new OpportunityIntelligenceGovernanceError(
         'accounting_required',
-        'The provider request failed and accounting could not be persisted; the circuit has been opened.',
+        'Provider usage was returned but accounting could not be persisted; the circuit has been opened.',
       );
     }
-    throw error;
-  }
-
-  if (!response.usage) {
-    try {
-      await store.complete(reservation, {
-        accountingBasis: 'missing',
-        actualSpendMicros: reservation.reservedSpendMicros,
-        durationMs: Date.now() - startedAt,
-        errorCode: 'usage_accounting_missing',
-        output: response.output,
-        providerRequestId: response.providerRequestId ?? requestId,
-        status: 'failed',
-      });
-    } catch {
-      await safelyOpenCircuit(store, 'accounting_persistence_failed');
+    return { output: response.output, requestId, reused: false };
+  } finally {
+    // Settle the user's reservation: actual cost when usage was reported,
+    // the full reservation when a provider call may have been charged, and a
+    // full release when no provider call was made (reuse, block, refusal).
+    if (userSpend) {
+      if (!providerInvoked) await userSpend.release();
+      else
+        await userSpend.settle(
+          spentMicros ?? reservation.reservedSpendMicros,
+          spentMicros === undefined ? 'conservative' : 'actual',
+        );
     }
-    throw new OpportunityIntelligenceGovernanceError(
-      'accounting_required',
-      'Provider usage accounting is required; the circuit has been opened.',
-    );
   }
-
-  const actualSpendMicros = requestCostMicros(response.usage, pricing);
-  try {
-    await store.complete(reservation, {
-      accountingBasis: 'actual',
-      actualSpendMicros,
-      durationMs: Date.now() - startedAt,
-      output: response.output,
-      providerRequestId: response.providerRequestId ?? requestId,
-      status: 'succeeded',
-      usage: response.usage,
-    });
-  } catch {
-    await safelyOpenCircuit(store, 'accounting_persistence_failed');
-    throw new OpportunityIntelligenceGovernanceError(
-      'accounting_required',
-      'Provider usage was returned but accounting could not be persisted; the circuit has been opened.',
-    );
-  }
-  return { output: response.output, requestId, reused: false };
 }
 
 let governanceSchemaPromise: Promise<void> | null = null;

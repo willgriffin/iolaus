@@ -223,6 +223,9 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     // table is still part of the native manifest migration so idempotency and
     // accounting state survive a process restart.
     'AdminAssistantTurn',
+    // Per-user hosted AI spend ledger and operator cap overrides.
+    'AiUserBudget',
+    'AiUserSpendEntry',
   ]) {
     await getCollection(className);
     initialized.push(className);

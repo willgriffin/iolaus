@@ -3,6 +3,8 @@ export { AchievementAttachment } from './AchievementAttachment.js';
 export { AchievementTag } from './AchievementTag.js';
 export { AdminAssistantTurn } from './AdminAssistantTurn.js';
 export { AgentRun } from './AgentRun.js';
+export { AiUserBudget } from './AiUserBudget.js';
+export { AiUserSpendEntry } from './AiUserSpendEntry.js';
 export { Application } from './Application.js';
 export { ApplicationMaterialComment } from './ApplicationMaterialComment.js';
 export { Attachment } from './Attachment.js';

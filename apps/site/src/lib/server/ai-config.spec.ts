@@ -24,6 +24,19 @@ describe('AI config profiles', () => {
     getAI.mockResolvedValue({ chat: vi.fn() });
   });
 
+  it('refuses to build any provider client while the global kill switch is on', async () => {
+    vi.stubEnv('IOLAUS_AI_DISABLED', 'true');
+    const { resolveAiProfileClient, resolveWritingAiProfileClient } =
+      await import('./ai-config');
+    await expect(
+      resolveAiProfileClient('cheap', { apiKey: 'key' }),
+    ).rejects.toMatchObject({ code: 'ai_disabled' });
+    await expect(
+      resolveWritingAiProfileClient({ aiClient: { chat: vi.fn() } }),
+    ).rejects.toMatchObject({ code: 'ai_disabled' });
+    expect(getAI).not.toHaveBeenCalled();
+  });
+
   it('resolves extraction and writing profiles from smrt-config', async () => {
     const aiClient = {
       chat: vi.fn(),
