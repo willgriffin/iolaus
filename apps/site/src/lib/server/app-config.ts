@@ -60,8 +60,29 @@ export interface OidcOwnerBinding {
   userId: string;
 }
 
+export interface MagicLinkConfiguration {
+  /** Secret that signs sign-in links (IOLAUS_MAGIC_LINK_SECRET). */
+  secret: string;
+  /** Operator emails (IOLAUS_OIDC_ADMIN_EMAILS) for operator-only actions. */
+  adminEmails: string[];
+  /** Sign-in link lifetime. Fixed at fifteen minutes. */
+  tokenExpirySeconds: number;
+}
+
+export const MAGIC_LINK_TOKEN_EXPIRY_SECONDS = 15 * 60;
+const MAGIC_LINK_MIN_SECRET_LENGTH = 32;
+const MAGIC_LINK_SMTP_KEYS = [
+  'SMTP_HOST',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+  'SMTP_FROM',
+] as const;
+
+export type AuthMode = 'magic-link' | 'oidc';
+
 export type AuthConfiguration =
   | { kind: 'local' }
+  | { kind: 'magic-link'; magicLink: MagicLinkConfiguration }
   | { kind: 'self-hosted'; oidc: OidcConfiguration }
   | { kind: 'invalid'; message: string };
 
@@ -434,6 +455,42 @@ function configuredImportedOwnerBindings(
 }
 
 /**
+ * Email magic-link sign-in is only for invite-only shared hosted installs on
+ * the self-hosted profile: the invite table is the admission list, and the
+ * SMTP mailer delivers the link. Incomplete setup is rejected at startup so a
+ * deployment can never expose a login nobody can complete.
+ */
+function magicLinkConfiguration(
+  environment: AppConfigEnvironment,
+  app: IolausAppConfig,
+): AuthConfiguration {
+  const secret = stringValue(environment.IOLAUS_MAGIC_LINK_SECRET);
+  if (
+    app.runtimeProfile !== 'self-hosted' ||
+    app.workspaceMode !== 'shared' ||
+    !configuredPublicUrl(environment) ||
+    secret.length < MAGIC_LINK_MIN_SECRET_LENGTH ||
+    MAGIC_LINK_SMTP_KEYS.some((key) => !stringValue(environment[key])) ||
+    // Behind the ingress the per-IP limit needs the real client address;
+    // adapter-node only trusts it when ADDRESS_HEADER names the proxy header.
+    !stringValue(environment.ADDRESS_HEADER)
+  ) {
+    return {
+      kind: 'invalid',
+      message: `${app.appName} magic-link authentication is incomplete. It requires the self-hosted profile, shared workspace mode, a public URL, an IOLAUS_MAGIC_LINK_SECRET of at least ${MAGIC_LINK_MIN_SECRET_LENGTH} characters, the SMTP_* mailer settings, and ADDRESS_HEADER (the trusted proxy header carrying the client address).`,
+    };
+  }
+  return {
+    kind: 'magic-link',
+    magicLink: {
+      adminEmails: configuredAdminEmails(environment),
+      secret,
+      tokenExpirySeconds: MAGIC_LINK_TOKEN_EXPIRY_SECONDS,
+    },
+  };
+}
+
+/**
  * Resolve local or public authentication without exposing configuration values.
  * Callers present `message` verbatim only as an operational recovery hint; it
  * never includes a hostname, client secret, or an administrator address.
@@ -443,6 +500,16 @@ export function getAuthConfiguration(
 ): AuthConfiguration {
   const app = getAppConfig(environment);
   if (app.runtimeProfile === 'local') return { kind: 'local' };
+
+  const authMode = stringValue(environment.IOLAUS_AUTH_MODE) || 'oidc';
+  if (authMode === 'magic-link')
+    return magicLinkConfiguration(environment, app);
+  if (authMode !== 'oidc') {
+    return {
+      kind: 'invalid',
+      message: `${app.appName} IOLAUS_AUTH_MODE must be oidc or magic-link.`,
+    };
+  }
 
   const publicUrl = configuredPublicUrl(environment);
   const serverUrl = configuredOidcServerUrl(environment);

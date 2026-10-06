@@ -174,9 +174,20 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     throw new Error('Deployed profiles require public authentication.');
   }
   const authenticationConfiguration = getAuthConfiguration();
-  if (authenticationConfiguration.kind !== 'self-hosted') {
+  if (
+    authenticationConfiguration.kind !== 'self-hosted' &&
+    authenticationConfiguration.kind !== 'magic-link'
+  ) {
     throw new Error(
       'Deployed profiles require complete public authentication.',
+    );
+  }
+  if (
+    (authenticationConfiguration.kind === 'magic-link') !==
+    (authenticationProvider === 'magic-link')
+  ) {
+    throw new Error(
+      'IOLAUS_AUTH_MODE and the SMRT authentication provider must agree.',
     );
   }
   deployedRuntimePromise ??= initializeDeployedApplicationRuntime({
@@ -201,7 +212,9 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     authentication: {
       provider: authenticationProvider,
       readiness: createProviderReadinessProbe('authentication', {
-        oidc: authenticationConfiguration.oidc,
+        ...(authenticationConfiguration.kind === 'self-hosted'
+          ? { oidc: authenticationConfiguration.oidc }
+          : {}),
         profile: applicationRuntime.profile,
         provider: authenticationProvider,
       }),

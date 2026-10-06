@@ -2,7 +2,7 @@
 import LogIn from '@lucide/svelte/icons/log-in';
 import LegalLinks from '$lib/components/LegalLinks.svelte';
 
-let { data } = $props();
+let { data, form } = $props();
 </script>
 
 <svelte:head>
@@ -16,10 +16,41 @@ let { data } = $props();
     <p class="copy">
       {#if data.localDevLogin}
         Continue with the private local workspace on this computer.
+      {:else if data.magicLink}
+        Enter the email address you were invited with and we will send you a
+        sign-in link.
       {:else}
         Sign in with your configured identity provider to continue.
       {/if}
     </p>
+    {#if data.magicLink}
+      {#if form?.sent}
+        <p class="copy" role="status">
+          If that address is invited, a sign-in link is on its way. Check your
+          email; the link works once and expires in 15 minutes.
+        </p>
+      {:else}
+        <form method="POST">
+          <input type="hidden" name="next" value={data.next} />
+          <label for="email">Email address</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+            aria-invalid={form?.invalidEmail ? 'true' : undefined}
+          />
+          {#if form?.invalidEmail}
+            <p class="error" role="alert">Enter a valid email address.</p>
+          {/if}
+          <button type="submit">
+            <LogIn size={17} strokeWidth={2.2} />
+            <span>Email me a sign-in link</span>
+          </button>
+        </form>
+      {/if}
+    {:else}
     <form method="POST">
       <input type="hidden" name="next" value={data.next} />
       <button type="submit">
@@ -27,6 +58,7 @@ let { data } = $props();
         <span>{data.localDevLogin ? 'Continue locally' : 'Continue securely'}</span>
       </button>
     </form>
+    {/if}
     <LegalLinks links={data.links} />
   </section>
 </main>
@@ -65,6 +97,28 @@ let { data } = $props();
   .copy {
     margin: 12px 0 22px;
     color: var(--ink-2, #5d574e);
+  }
+
+  label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  input[type='email'] {
+    width: 100%;
+    min-height: 42px;
+    margin-bottom: 14px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong, #ded8ca);
+    border-radius: 6px;
+    box-sizing: border-box;
+    font: inherit;
+  }
+
+  .error {
+    margin: -6px 0 14px;
+    color: var(--danger, #b3261e);
   }
 
   button {

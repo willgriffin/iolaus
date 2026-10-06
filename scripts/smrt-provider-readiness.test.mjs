@@ -276,3 +276,25 @@ test('preserves explicit operator readiness module overrides', async () => {
   )();
   assert.deepEqual(seen, ['operator-readiness']);
 });
+
+test('magic-link readiness needs the signing secret and SMTP settings, with no network probe', async () => {
+  const environment = {
+    IOLAUS_MAGIC_LINK_SECRET: 'x'.repeat(32),
+    SMTP_FROM: 'noreply@example.invalid',
+    SMTP_HOST: 'smtp.example.invalid',
+    SMTP_PASSWORD: 'private',
+    SMTP_USER: 'user',
+  };
+  const probe = (env) =>
+    createProviderReadinessProbe(
+      'authentication',
+      { profile: 'self-hosted', provider: 'magic-link' },
+      { environment: env },
+    )();
+  await probe(environment);
+  await assert.rejects(probe({ ...environment, SMTP_HOST: '' }), /readiness failed/u);
+  await assert.rejects(
+    probe({ ...environment, IOLAUS_MAGIC_LINK_SECRET: 'short' }),
+    /readiness failed/u,
+  );
+});
