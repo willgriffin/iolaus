@@ -35,6 +35,8 @@
     "invite:resend": "tsx scripts/invite.ts resend",
     "invite:revoke": "tsx scripts/invite.ts revoke",
     "invite:list": "tsx scripts/invite.ts list",
+    "workspace:export": "tsx scripts/workspace-export.ts",
+    "workspace:import": "tsx scripts/workspace-import.ts",
     "account:delete": "tsx scripts/account.ts delete",
     "account:deletions": "tsx scripts/account.ts deletions",
     "jobs:worker": "tsx scripts/jobs-worker.ts",

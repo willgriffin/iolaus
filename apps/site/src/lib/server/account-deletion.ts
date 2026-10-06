@@ -186,7 +186,7 @@ function quoted(table: string): string {
   return `"${table}"`;
 }
 
-class SchemaProbe {
+export class SchemaProbe {
   private readonly cache = new Map<string, Set<string> | null>();
 
   constructor(
