@@ -18,16 +18,23 @@ import {
 
 const usage = `Usage: pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --dry-run
        pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --apply --expected-plan-sha256 DIGEST --receipt FILE
-       pnpm --filter @willgriffin/iolaus-site workspace:import -- --rollback RECEIPT
+       pnpm --filter @willgriffin/iolaus-site workspace:import -- --rollback RECEIPT [--confirm-committed]
 
-Options: --receipt must be a new file outside the bundle directory (the bundle is
+Options: --confirm-committed lets --rollback treat a receipt as committed when the
+process died between the commit and the receipt marker; first confirm with
+--dry-run that the bundle shows 0 inserts. --receipt must be a new file outside the bundle directory (the bundle is
 deleted after the import; the receipt is what --rollback needs).
 --deactivate-sources imports every source inactive (default keeps its
 active state). The address must NOT already have an account with different ids;
 keep it un-invited until the import is done, then run invite:add.`;
 
 const args = process.argv.slice(2).filter((arg) => arg !== '--');
-const flags = new Set(['--apply', '--dry-run', '--deactivate-sources']);
+const flags = new Set([
+  '--apply',
+  '--confirm-committed',
+  '--deactivate-sources',
+  '--dry-run',
+]);
 const values = new Set([
   '--bundle',
   '--email',
@@ -53,6 +60,7 @@ try {
   const rollback = option('--rollback');
   if (rollback) {
     const result = await rollbackWorkspaceImport({
+      confirmCommitted: args.includes('--confirm-committed'),
       database,
       dialect,
       filesystem: await getResumeFilesystem(),

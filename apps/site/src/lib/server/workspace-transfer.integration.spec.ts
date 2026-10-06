@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -798,6 +799,58 @@ function transfer(contract: {
     expect(await fs.exists(seeded.assetKey)).toBe(true);
     expect(await count(db, 'users')).toBe(1);
     expect(await count(db, 'opportunities')).toBe(3);
+  });
+
+  it('refuses a bundle whose asset key is not owned by an imported record', async () => {
+    const { out: shared_ } = await exported();
+    const out = join(tempDir(), 'copy');
+    cpSync(shared_, out, { recursive: true });
+    const key = 'generated-resumes/not-an-imported-record/x.pdf';
+    mkdirSync(
+      join(out, 'assets', 'generated-resumes', 'not-an-imported-record'),
+      {
+        recursive: true,
+      },
+    );
+    writeFileSync(join(out, 'assets', key), 'planted');
+    const manifestPath = join(out, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.assets.push({ path: key, sha256: sha256Hex('planted'), size: 7 });
+    manifest.assets.sort((a: { path: string }, b: { path: string }) =>
+      a.path.localeCompare(b.path),
+    );
+    const { bundleSha256: _old, ...rest } = manifest;
+    manifest.bundleSha256 = computeBundleSha256(rest);
+    writeFileSync(manifestPath, `${canonicalJson(manifest)}\n`);
+    const { db, fs } = await hostedTarget();
+    await expect(run(db, fs, out)).rejects.toMatchObject({ code: 'bundle' });
+    expect(await fs.exists(key)).toBe(false);
+  });
+
+  it('lets an operator confirm a receipt whose commit marker was lost', async () => {
+    const { out } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    const lost = JSON.parse(readFileSync(receipt, 'utf8'));
+    lost.committed = false;
+    const lostPath = join(tempDir(), 'receipt-lost.json');
+    writeFileSync(lostPath, JSON.stringify(lost));
+    const result = await rollbackWorkspaceImport({
+      confirmCommitted: true,
+      database: db as unknown as TransferDatabase,
+      dialect,
+      filesystem: fs,
+      receiptPath: lostPath,
+    });
+    expect(result.databaseRolledBack).toBe(true);
+    expect(Object.keys(result.deleted).length).toBeGreaterThan(0);
+    expect(await count(db, 'users')).toBe(0);
+    expect(await count(db, 'opportunity_recommendation_ranks')).toBe(0);
   });
 
   it('refuses to roll back an account that gained memberships since the import', async () => {

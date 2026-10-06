@@ -197,6 +197,11 @@ rows are inserted only when their id is absent. The receipt (ids only, mode
 `0600`, written before the commit) lets `--rollback` delete exactly what the
 import inserted, never pre-existing catalog rows, and refuses when the account
 gained other data or any row added since (another tenant's, or the crawler's) references an
-imported catalog row. Keep the receipt outside the bundle: the bundle is deleted after the import. Bundle
+imported catalog row. Keep the receipt outside the bundle: the bundle is deleted after the import.
+A receipt carries `committed` only once the database commit succeeded; rollback of an
+unconfirmed receipt never deletes database rows and removes only asset objects that no
+record references. If the process died between the commit and the marker, confirm with
+`--dry-run` that the bundle shows 0 inserts, then pass `--rollback --confirm-committed`.
+An asset key must belong to a resume asset or application the bundle itself imports. Bundle
 and target must use the same engine (PostgreSQL to PostgreSQL, SQLite to
 SQLite).

@@ -651,6 +651,44 @@ async function planAssets(
   return { plan, upload };
 }
 
+/**
+ * A bundle may only write objects under `generated-resumes/<id>/` or
+ * `application-packages/<id>/` where `<id>` is a resume asset or application
+ * the same bundle imports, so a damaged bundle cannot place or overwrite
+ * arbitrary objects in the hosted store.
+ */
+async function assertAssetKeysOwned(
+  bundleDir: string,
+  bundle: BundleManifest,
+): Promise<void> {
+  if (!bundle.assets.length) return;
+  const owners: Record<string, Set<string>> = {
+    'application-packages': new Set(),
+    'generated-resumes': new Set(),
+  };
+  for (const [prefix, table] of [
+    ['generated-resumes', 'resume_assets'],
+    ['application-packages', 'applications'],
+  ] as const) {
+    if (!(table in bundle.tables)) continue;
+    for await (const row of readBundleRows(bundleDir, table)) {
+      owners[prefix].add(text(row.id));
+    }
+  }
+  for (const asset of bundle.assets) {
+    const match =
+      /^(generated-resumes|application-packages)\/([^/]+)\/.+/u.exec(
+        asset.path,
+      );
+    if (!match || !owners[match[1]].has(match[2])) {
+      throw new WorkspaceTransferError(
+        'bundle',
+        'An asset key is not owned by a record in this bundle.',
+      );
+    }
+  }
+}
+
 function dedupeDigest(context: ImportContext): string {
   const pairs: string[] = [];
   for (const [kind, map] of Object.entries(context.maps)) {
@@ -691,6 +729,7 @@ export async function importWorkspace(
       `The bundle was exported from ${bundle.dialect} and cannot be imported into ${options.dialect}.`,
     );
   }
+  await assertAssetKeysOwned(options.bundleDir, bundle);
   const assetPlan = await planAssets(options, bundle);
   const receiptPath = options.receiptPath ?? '';
   if (apply && !receiptPath) {
@@ -919,6 +958,12 @@ async function backfillRankSnapshots(
 }
 
 export interface WorkspaceRollbackOptions {
+  /**
+   * Treat a pending receipt as committed. Only for the crash window between the
+   * commit and the receipt marker: the operator first confirms with --dry-run
+   * that the bundle shows 0 inserts.
+   */
+  confirmCommitted?: boolean;
   database: TransferDatabase;
   dialect: TransferDialect;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
@@ -955,6 +1000,7 @@ export async function rollbackWorkspaceImport(
     );
   }
   const { dialect } = options;
+  const committed = receipt.committed || options.confirmCommitted === true;
   const { tenantId, userId, profileId } = receipt.identity;
   const known = new Set<string>([...catalogTables, ...ownedTables]);
   for (const table of Object.keys(receipt.inserted)) {
@@ -975,7 +1021,7 @@ export async function rollbackWorkspaceImport(
   // A receipt whose commit was never confirmed may belong to an attempt that
   // wrote nothing (or to a retry that has since succeeded): never delete
   // database rows from it, only clean up unreferenced asset objects.
-  if (receipt.committed)
+  if (committed)
     await options.database.transaction(async (tx) => {
       const tables = Object.keys(receipt.inserted);
       const order = (await foreignKeyOrder(tx, dialect, tables)).reverse();
@@ -1119,7 +1165,7 @@ export async function rollbackWorkspaceImport(
       // Keys embed the owning record id. An object is removed only when no such
       // record remains, so a re-run's receipt (or a retry that succeeded) can
       // never delete files the committed import still uses.
-      if (await assetStillReferenced(options.database, key)) {
+      if (await assetStillReferenced(options.database, dialect, key)) {
         assetsKept += 1;
         continue;
       }
@@ -1132,13 +1178,14 @@ export async function rollbackWorkspaceImport(
   return {
     assetsKept,
     assetsRemoved,
-    databaseRolledBack: receipt.committed,
+    databaseRolledBack: committed,
     deleted,
   };
 }
 
 async function assetStillReferenced(
   database: TransferDatabase,
+  dialect: TransferDialect,
   key: string,
 ): Promise<boolean> {
   const match = /^(generated-resumes|application-packages)\/([^/]+)\//u.exec(
@@ -1147,6 +1194,7 @@ async function assetStillReferenced(
   if (!match) return true; // unknown layout: never delete
   const table =
     match[1] === 'generated-resumes' ? 'resume_assets' : 'applications';
+  if (!(await tableColumns(database, dialect, table))) return false;
   const found = rowsOf(
     await database.query(
       `SELECT COUNT(*) AS n FROM ${quoted(table)} WHERE CAST(id AS TEXT) = ?`,
