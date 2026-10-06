@@ -330,6 +330,29 @@ health endpoint or source contract alone does not satisfy those deployed
 checks. Production remains read-only until its separate write checkpoint is
 approved.
 
+## Recurring source crawls in shared hosted mode
+
+Shared mode refuses unbound `Source.crawl` jobs ("requires an explicit operator
+dispatch") and no hosted runner dispatches operator-bound ones, so the schedule
+worker cannot crawl there. Run the operator crawl instead, as a CronJob in the
+private overlay (an explicit operator action):
+
+```bash
+node --import tsx apps/site/scripts/crawl-due-sources.ts --max 10 --budget-minutes 40
+```
+
+It crawls up to `--max` active root sources whose own cadence says they are due
+(most overdue first), stops early after the time budget, and advances each
+source's `nextCheckAt` (a failed crawl cools down for six hours). Output is counts
+only. Run it with `concurrencyPolicy: Forbid`, the web runtime environment and
+labels (egress policy), `IOLAUS_REPO_ROOT`-resolvable working directory `/app`,
+and an `emptyDir` at `/app/.cache` (the crawler's spider cache on a read-only
+root). Board reconciliation (relisting/closing vanished postings) still needs a
+verified workspace subject in shared mode and is reported as an error; new postings
+are ingested. Also set `IOLAUS_WORKSPACE_MODE=shared` on the `migrate` init
+containers: without it, `db:migrate` registers the private-mode score-refresh schedule
+and enables unbound source schedules that fail every run in shared mode.
+
 ## Operational safety
 
 Do not enable provider crawling, paid intelligence, or external submission as
