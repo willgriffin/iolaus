@@ -196,6 +196,7 @@ the imported opportunity when the source predates them. Re-running is a no-op:
 rows are inserted only when their id is absent. The receipt (ids only, mode
 `0600`, written before the commit) lets `--rollback` delete exactly what the
 import inserted, never pre-existing catalog rows, and refuses when the account
-gained other data or another tenant references an imported catalog row. Bundle
+gained other data or any row added since (another tenant's, or the crawler's) references an
+imported catalog row. Keep the receipt outside the bundle: the bundle is deleted after the import. Bundle
 and target must use the same engine (PostgreSQL to PostgreSQL, SQLite to
 SQLite).

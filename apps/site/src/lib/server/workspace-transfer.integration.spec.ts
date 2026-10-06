@@ -180,6 +180,11 @@ async function seedSource(
     });
   }
   await insert(db, 'source_tags', { source_id: source, tag_id: tag });
+  await insert(db, 'opportunity_tags', {
+    opportunity_id: opportunityIds[0],
+    tag_id: tag,
+    tag_role: 'general',
+  });
   await insert(db, 'company_research', { why_interesting: SECRET });
 
   const agentRunKept = randomUUID();
@@ -560,15 +565,39 @@ function transfer(contract: {
       id: existing,
       slug: 'already-there',
     });
+    // The target already has the same tag on that posting: the remapped join
+    // row would violate the (parent, tag, role) unique index if not deduped.
+    const existingTag = randomUUID();
+    await insert(db, 'tags', {
+      _meta_type: 'tag',
+      id: existingTag,
+      name: 'remote',
+      slug: 'remote-x',
+    });
+    await insert(db, 'opportunity_tags', {
+      opportunity_id: existing,
+      tag_id: existingTag,
+      tag_role: 'general',
+    });
     const plan = await run(db, fs, out);
+    expect(plan.plan.eligible).toBe(true);
     expect(plan.plan.tables.opportunities.deduped).toBe(1);
     expect(plan.plan.tables.opportunities.inserted).toBe(2);
+    expect(plan.plan.tables.tags.deduped).toBe(1);
+    expect(plan.plan.tables.opportunity_tags.deduped).toBe(1);
+    // ranks that hash the opportunity id cannot stay current: surfaced, not hidden
+    expect(
+      Object.keys(plan.plan.warnings).filter((key) =>
+        key.startsWith('opportunity_recommendation_ranks'),
+      ),
+    ).toHaveLength(1);
     await run(db, fs, out, {
       expectedPlanSha256: plan.planSha256,
       mode: 'apply',
       receiptPath: receipt,
     });
     expect(await count(db, 'opportunities')).toBe(3);
+    expect(await count(db, 'opportunity_tags')).toBe(1);
     const rank = (
       (await db.query(
         'SELECT opportunity_id FROM opportunity_recommendation_ranks',
@@ -644,12 +673,23 @@ function transfer(contract: {
       canonical_url: 'https://jobs.example.invalid/0',
       slug: 'already-there',
     });
+    const bystander = principal('target-bystander');
+    await seedBystander(db, bystander);
     const plan = await run(db, fs, out);
     await run(db, fs, out, {
       expectedPlanSha256: plan.planSha256,
       mode: 'apply',
       receiptPath: receipt,
     });
+    // A damaged receipt must not reach another tenant's rows.
+    const bystanderDecision = (
+      (await db.query('SELECT id FROM decisions WHERE tenant_id = ?', [
+        bystander.tenantId,
+      ])) as unknown as { rows: Array<{ id: string }> }
+    ).rows[0].id;
+    const edited = JSON.parse(readFileSync(receipt, 'utf8'));
+    edited.inserted.decisions.push(bystanderDecision);
+    writeFileSync(receipt, JSON.stringify(edited));
     const result = await rollbackWorkspaceImport({
       database: db as unknown as TransferDatabase,
       dialect,
@@ -658,14 +698,22 @@ function transfer(contract: {
     });
     expect(result.assetsRemoved).toBe(1);
     expect(await fs.exists(seeded.assetKey)).toBe(false);
-    for (const table of [
-      'users',
-      'tenants',
-      'memberships',
-      'profiles',
-      ...ownedTables,
-    ]) {
+    for (const table of ['users', 'tenants', 'memberships', 'profiles']) {
       expect(await count(db, table), table).toBe(0);
+    }
+    for (const table of ownedTables) {
+      expect(
+        await count(db, table, 'CAST(tenant_id AS TEXT) <> ?', [
+          bystander.tenantId,
+        ]),
+        table,
+      ).toBe(0);
+      expect(
+        await count(db, table, 'CAST(tenant_id AS TEXT) = ?', [
+          bystander.tenantId,
+        ]),
+        table,
+      ).toBe(1);
     }
     expect(await count(db, 'opportunities')).toBe(1);
     expect(await count(db, 'sources')).toBe(0);
@@ -674,6 +722,56 @@ function transfer(contract: {
     const retry = await run(db, fs, out);
     expect(retry.plan.eligible).toBe(true);
     expect(retry.plan.tables.opportunities.deduped).toBe(1);
+  });
+
+  it('refuses to roll back while later rows reference imported catalog rows', async () => {
+    const { out } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    // what the crawler does after import: new postings under an imported source
+    await insert(db, 'opportunities', {
+      canonical_url: 'https://jobs.example.invalid/crawled',
+      slug: 'crawled-later',
+      source_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    });
+    await expect(
+      rollbackWorkspaceImport({
+        database: db as unknown as TransferDatabase,
+        dialect,
+        filesystem: fs,
+        receiptPath: receipt,
+      }),
+    ).rejects.toMatchObject({ code: 'rollback' });
+    // nothing was removed: the refusal rolled the whole transaction back
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'sources')).toBe(2);
+    expect(await count(db, 'opportunity_recommendation_ranks')).toBe(1);
+  });
+
+  it('requires an explicit receipt path for apply and records every asset before uploading', async () => {
+    const { out, seeded } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const plan = await run(db, fs, out);
+    await expect(
+      run(db, fs, out, { expectedPlanSha256: plan.planSha256, mode: 'apply' }),
+    ).rejects.toMatchObject({ code: 'receipt' });
+    expect(await count(db, 'users')).toBe(0);
+    // an existing receipt path is refused before any upload happens
+    writeFileSync(receipt, '{}');
+    await expect(
+      run(db, fs, out, {
+        expectedPlanSha256: plan.planSha256,
+        mode: 'apply',
+        receiptPath: receipt,
+      }),
+    ).rejects.toMatchObject({ code: 'receipt' });
+    expect(await fs.exists(seeded.assetKey)).toBe(false);
+    expect(await count(db, 'users')).toBe(0);
   });
 }
 

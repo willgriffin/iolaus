@@ -17,10 +17,12 @@ import {
 } from '../src/lib/server/workspace-transfer.js';
 
 const usage = `Usage: pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --dry-run
-       pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --apply --expected-plan-sha256 DIGEST [--receipt FILE]
+       pnpm --filter @willgriffin/iolaus-site workspace:import -- --bundle DIR --email ADDRESS --apply --expected-plan-sha256 DIGEST --receipt FILE
        pnpm --filter @willgriffin/iolaus-site workspace:import -- --rollback RECEIPT
 
-Options: --deactivate-sources imports every source inactive (default keeps its
+Options: --receipt must be a new file outside the bundle directory (the bundle is
+deleted after the import; the receipt is what --rollback needs).
+--deactivate-sources imports every source inactive (default keeps its
 active state). The address must NOT already have an account with different ids;
 keep it un-invited until the import is done, then run invite:add.`;
 

@@ -23,9 +23,11 @@ import {
   sanitizeCatalogRow,
   selfReferenceColumns,
   sha256Hex,
+  skippedOwnerTables,
   type TransferDatabase,
   type TransferDialect,
   tableColumns,
+  tablesWithColumns,
   text,
   tupleColumns,
   WorkspaceTransferError,
@@ -60,7 +62,7 @@ export interface WorkspaceImportOptions {
     'delete' | 'exists' | 'read' | 'write'
   >;
   mode: 'apply' | 'dry-run';
-  /** Where `--apply` writes the rollback receipt (ids only, mode 0600). */
+  /** Required for `--apply`: the rollback receipt (ids only, mode 0600). */
   receiptPath?: string;
   /** Test seam: SMRT options bound to the active transaction handle. */
   smrtOptions?: (database: TransferDatabase) => SmrtClassOptions;
@@ -82,6 +84,8 @@ export interface WorkspaceImportPlan {
   identity: { create: boolean };
   /** Problems by table or area; counts only. A non-empty map blocks apply. */
   issues: Record<string, number>;
+  /** Consequences that do not block apply but the operator must see. */
+  warnings: Record<string, number>;
   tables: Record<string, TableImportStats>;
 }
 
@@ -146,6 +150,14 @@ function bindable(value: unknown, dialect: TransferDialect): unknown {
   return value;
 }
 
+function joinKey(row: Record<string, unknown>, parent: string): string | null {
+  const parentId = text(row[parent]);
+  const tagId = text(row.tag_id);
+  return parentId && tagId
+    ? `${parentId}|${tagId}|${text(row.tag_role)}`
+    : null;
+}
+
 function naturalKey(
   table: string,
   row: Record<string, unknown>,
@@ -159,6 +171,14 @@ function naturalKey(
       return `${text(row.slug)}|${text(row.context)}`;
     case 'opportunities':
       return text(row.canonical_url) || null;
+    // Join rows are unique per (parent, tag, role); the unique index would
+    // otherwise abort the import when a deduped parent already has the tag.
+    case 'source_tags':
+      return joinKey(row, 'source_id');
+    case 'company_tags':
+      return joinKey(row, 'company_id');
+    case 'opportunity_tags':
+      return joinKey(row, 'opportunity_id');
     default:
       return null;
   }
@@ -170,6 +190,7 @@ interface ImportContext {
   environment: AppConfigEnvironment;
   identityCreated: boolean;
   issues: Record<string, number>;
+  warnings: Record<string, number>;
   maps: Record<
     'company' | 'opportunity' | 'source' | 'tag',
     Map<string, string>
@@ -194,6 +215,11 @@ async function existingKeys(
     '_meta_type',
     'company_key',
     'canonical_url',
+    'source_id',
+    'company_id',
+    'opportunity_id',
+    'tag_id',
+    'tag_role',
   ]
     .filter((column) => columns.has(column))
     .map(quoted);
@@ -213,13 +239,26 @@ async function existingKeys(
 
 function remapReferences(
   context: ImportContext,
+  table: string,
   row: Record<string, unknown>,
 ): void {
   for (const [column, kind] of Object.entries(catalogReferenceColumns)) {
     const value = text(row[column]);
     if (!value) continue;
     const mapped = context.maps[kind].get(value);
-    if (mapped) row[column] = mapped;
+    if (mapped) {
+      row[column] = mapped;
+      if (
+        mapped !== value &&
+        kind === 'opportunity' &&
+        ownedTables.includes(table)
+      ) {
+        // The screening fingerprints hash the opportunity id, so proofs that
+        // point at a deduped opportunity cannot stay current.
+        const key = `${table}: points at an opportunity deduped to an existing row (screening proofs go stale)`;
+        context.warnings[key] = (context.warnings[key] ?? 0) + 1;
+      }
+    }
   }
 }
 
@@ -296,7 +335,7 @@ async function importTable(
     for (const row of batch) {
       // Catalog references are remapped here, after any parent row of this
       // table has recorded its own dedupe mapping.
-      if (isCatalog) remapReferences(context, row);
+      if (isCatalog) remapReferences(context, table, row);
       const id = text(row.id);
       const present = found.get(id);
       if (present) {
@@ -425,7 +464,7 @@ async function importTable(
           stats.blankedActorReferences += 1;
         }
       }
-      remapReferences(context, row);
+      remapReferences(context, table, row);
     }
     if (selfReferences.length) buffered.push(row);
     else await enqueue(row);
@@ -578,10 +617,10 @@ async function planAssets(
   bundle: BundleManifest,
 ): Promise<{
   plan: WorkspaceImportPlan['assets'];
-  upload: Array<{ bytes: Buffer; key: string }>;
+  upload: string[];
 }> {
   const plan = { conflicts: 0, identical: 0, toUpload: 0 };
-  const upload: Array<{ bytes: Buffer; key: string }> = [];
+  const upload: string[] = [];
   if (!bundle.assets.length) return { plan, upload };
   if (!options.filesystem) {
     throw new WorkspaceTransferError(
@@ -590,7 +629,6 @@ async function planAssets(
     );
   }
   for (const asset of bundle.assets) {
-    const bytes = readFileSync(join(options.bundleDir, 'assets', asset.path));
     if (await options.filesystem.exists(asset.path)) {
       const current = await options.filesystem.read(asset.path, { raw: true });
       const buffer =
@@ -599,7 +637,7 @@ async function planAssets(
       else plan.conflicts += 1;
     } else {
       plan.toUpload += 1;
-      upload.push({ bytes, key: asset.path });
+      upload.push(asset.path);
     }
   }
   return { plan, upload };
@@ -646,9 +684,13 @@ export async function importWorkspace(
     );
   }
   const assetPlan = await planAssets(options, bundle);
-  const receiptPath =
-    options.receiptPath ??
-    join(options.bundleDir, `receipt-${bundle.bundleSha256.slice(0, 12)}.json`);
+  const receiptPath = options.receiptPath ?? '';
+  if (apply && !receiptPath) {
+    throw new WorkspaceTransferError(
+      'receipt',
+      '--apply requires --receipt FILE, outside the bundle directory (the bundle is deleted after the import; the receipt is what --rollback needs).',
+    );
+  }
 
   const tableNames = [
     ...catalogTables.filter((table) => table in bundle.tables),
@@ -673,6 +715,7 @@ export async function importWorkspace(
         identityCreated: false,
         inserted: {},
         issues: {},
+        warnings: {},
         maps: {
           company: new Map(),
           opportunity: new Map(),
@@ -727,6 +770,7 @@ export async function importWorkspace(
         eligible: Object.keys(context.issues).length === 0,
         identity: { create: context.identityCreated },
         issues: context.issues,
+        warnings: context.warnings,
         tables: context.tables,
       };
       const planSha256 = sha256Hex(
@@ -754,28 +798,13 @@ export async function importWorkspace(
           'The plan digest differs from the reviewed dry run; nothing was written.',
         );
       }
-      // Assets first (idempotent, sha256-verified); orphans are harmless if the
-      // commit below fails. The receipt is written before the commit so a
-      // committed import can always be rolled back.
-      const uploaded: string[] = [];
-      for (const { bytes, key } of assetPlan.upload) {
-        await (
-          options.filesystem as NonNullable<typeof options.filesystem>
-        ).write(key, bytes);
-        const back = await (
-          options.filesystem as NonNullable<typeof options.filesystem>
-        ).read(key, { raw: true });
-        const buffer = typeof back === 'string' ? Buffer.from(back) : back;
-        if (sha256Hex(buffer) !== sha256Hex(bytes)) {
-          throw new WorkspaceTransferError(
-            'asset-conflict',
-            'An uploaded asset did not read back identically.',
-          );
-        }
-        uploaded.push(key);
-      }
+      // The receipt is created exclusively BEFORE anything is uploaded, and it
+      // names every bundle asset key (those uploaded now and those already
+      // present from an earlier attempt, all derived from the owner's own record
+      // ids), so a failure at any later point leaves a record that --rollback or
+      // an operator can act on.
       const receipt: WorkspaceImportReceipt = {
-        assets: uploaded,
+        assets: bundle.assets.map((asset) => asset.path),
         bundleSha256: bundle.bundleSha256,
         createdAt: new Date().toISOString(),
         format: RECEIPT_FORMAT,
@@ -795,8 +824,26 @@ export async function importWorkspace(
       } catch {
         throw new WorkspaceTransferError(
           'receipt',
-          'The rollback receipt could not be written (it must not already exist); nothing was committed.',
+          'The rollback receipt could not be created (the path must not already exist); nothing was written.',
         );
+      }
+      // Assets (idempotent, sha256-verified) before the commit. If anything
+      // below fails, the database rolls back and the receipt stays: use it with
+      // --rollback to remove the uploaded objects, or delete it once none exist.
+      const store = options.filesystem as NonNullable<
+        typeof options.filesystem
+      >;
+      for (const key of assetPlan.upload) {
+        const bytes = readFileSync(join(options.bundleDir, 'assets', key));
+        await store.write(key, bytes);
+        const back = await store.read(key, { raw: true });
+        const buffer = typeof back === 'string' ? Buffer.from(back) : back;
+        if (sha256Hex(buffer) !== sha256Hex(bytes)) {
+          throw new WorkspaceTransferError(
+            'asset-conflict',
+            'An uploaded asset did not read back identically (receipt kept for --rollback).',
+          );
+        }
       }
       return { mode: 'applied', plan, planSha256, receiptPath };
     });
@@ -862,50 +909,29 @@ export async function rollbackWorkspaceImport(
     );
   }
   const { dialect } = options;
+  const { tenantId, userId, profileId } = receipt.identity;
+  const known = new Set<string>([...catalogTables, ...ownedTables]);
+  for (const table of Object.keys(receipt.inserted)) {
+    if (!known.has(table)) {
+      throw new WorkspaceTransferError(
+        'receipt',
+        'The receipt names a table this version does not manage.',
+      );
+    }
+  }
+  const catalogKinds: Record<string, string> = {
+    companies: 'company',
+    opportunities: 'opportunity',
+    sources: 'source',
+    tags: 'tag',
+  };
   const deleted: Record<string, number> = {};
   await options.database.transaction(async (tx) => {
     const tables = Object.keys(receipt.inserted);
     const order = (await foreignKeyOrder(tx, dialect, tables)).reverse();
-    const catalogIds = new Map<string, string[]>();
-    for (const [table, ids] of Object.entries(receipt.inserted)) {
-      const kind = (
-        {
-          companies: 'company',
-          opportunities: 'opportunity',
-          sources: 'source',
-          tags: 'tag',
-        } as Record<string, string>
-      )[table];
-      if (kind) catalogIds.set(kind, ids);
-    }
-    // Other tenants must not depend on catalog rows being removed.
-    for (const [column, kind] of Object.entries(catalogReferenceColumns)) {
-      const ids = catalogIds.get(kind) ?? [];
-      if (!ids.length) continue;
-      for (const table of ownedTables) {
-        const columns = await tableColumns(tx, dialect, table);
-        if (!columns?.some((c) => c.name === column)) continue;
-        for (let start = 0; start < ids.length; start += BATCH) {
-          const batch = ids.slice(start, start + BATCH);
-          const referenced = rowsOf(
-            await tx.query(
-              `SELECT COUNT(*) AS n FROM ${quoted(table)}
-                WHERE CAST(${quoted(column)} AS TEXT) IN (${placeholders(batch.length)})
-                  AND CAST(tenant_id AS TEXT) <> ?`,
-              [...batch, receipt.identity.tenantId],
-            ),
-          );
-          if (Number(referenced[0]?.n ?? 0) > 0) {
-            throw new WorkspaceTransferError(
-              'rollback',
-              `Another tenant references imported ${kind} rows; rollback refused.`,
-            );
-          }
-        }
-      }
-    }
     for (const table of order) {
       const ids = receipt.inserted[table];
+      const owned = ownedTables.includes(table);
       let count = 0;
       // Receipt ids are in insertion order (parents first). A table that
       // references itself is deleted children first, one row per statement, so
@@ -915,27 +941,66 @@ export async function rollbackWorkspaceImport(
       const step = tree ? 1 : BATCH;
       for (let start = 0; start < ordered.length; start += step) {
         const batch = ordered.slice(start, start + step);
-        const where = `CAST(id AS TEXT) IN (${placeholders(batch.length)})`;
+        // Owned rows are only ever removed under the receipt's own tuple, so a
+        // damaged or edited receipt cannot reach another tenant's data.
+        const where = `CAST(id AS TEXT) IN (${placeholders(batch.length)})${
+          owned
+            ? ' AND CAST(tenant_id AS TEXT) = ? AND CAST(owner_user_id AS TEXT) = ?'
+            : ''
+        }`;
+        const values = owned ? [...batch, tenantId, userId] : batch;
         const present = rowsOf(
           await tx.query(
             `SELECT COUNT(*) AS n FROM ${quoted(table)} WHERE ${where}`,
-            batch,
+            values,
           ),
         );
         count += Number(present[0]?.n ?? 0);
-        await tx.query(`DELETE FROM ${quoted(table)} WHERE ${where}`, batch);
+        await tx.query(`DELETE FROM ${quoted(table)} WHERE ${where}`, values);
       }
       deleted[table] = count;
     }
+    // Nothing left anywhere may still point at a removed shared catalog row:
+    // the crawler and other tenants keep adding rows that reference them.
+    const referencing = await tablesWithColumns(
+      tx,
+      dialect,
+      Object.keys(catalogReferenceColumns),
+    );
+    for (const [column, kind] of Object.entries(catalogReferenceColumns)) {
+      const ids = Object.entries(catalogKinds)
+        .filter(([, k]) => k === kind)
+        .flatMap(([table]) => receipt.inserted[table] ?? []);
+      if (!ids.length) continue;
+      for (const [table, columns] of referencing) {
+        if (!columns.includes(column)) continue;
+        for (let start = 0; start < ids.length; start += BATCH) {
+          const batch = ids.slice(start, start + BATCH);
+          const remaining = rowsOf(
+            await tx.query(
+              `SELECT COUNT(*) AS n FROM ${quoted(table)}
+                WHERE CAST(${quoted(column)} AS TEXT) IN (${placeholders(batch.length)})`,
+              batch,
+            ),
+          );
+          if (Number(remaining[0]?.n ?? 0) > 0) {
+            throw new WorkspaceTransferError(
+              'rollback',
+              `Rows added after the import still reference imported ${kind} rows (in ${table}); rollback refused and nothing was removed.`,
+            );
+          }
+        }
+      }
+    }
     if (receipt.identity.created) {
-      for (const table of ownedTables) {
+      for (const table of [...ownedTables, ...skippedOwnerTables]) {
         const columns = await tableColumns(tx, dialect, table);
-        if (!columns?.some((c) => c.name === 'owner_user_id')) continue;
+        if (!columns?.some((c) => c.name === 'tenant_id')) continue;
         const left = rowsOf(
           await tx.query(
             `SELECT COUNT(*) AS n FROM ${quoted(table)}
               WHERE CAST(tenant_id AS TEXT) = ?`,
-            [receipt.identity.tenantId],
+            [tenantId],
           ),
         );
         if (Number(left[0]?.n ?? 0) > 0) {
@@ -945,17 +1010,32 @@ export async function rollbackWorkspaceImport(
           );
         }
       }
-      const { userId, profileId, tenantId } = receipt.identity;
       const identityDeletes: Array<[string, string, string]> = [
         ['sessions', 'user_id', userId],
         ['oidc_identities', 'profile_id', profileId],
         ['oidc_profile_email_reservations', 'profile_id', profileId],
-        ['memberships', 'user_id', userId],
+      ];
+      for (const [table, column, value] of identityDeletes) {
+        if (!(await tableColumns(tx, dialect, table))) continue;
+        await tx.query(
+          `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,
+          [value],
+        );
+      }
+      // Only the membership this import created, never one added since.
+      for (const membershipId of receipt.identity.membershipIds) {
+        await tx.query(
+          `DELETE FROM memberships WHERE CAST(id AS TEXT) = ?
+             AND CAST(user_id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?`,
+          [membershipId, userId, tenantId],
+        );
+      }
+      const finalDeletes: Array<[string, string, string]> = [
         ['users', 'id', userId],
         ['tenants', 'id', tenantId],
         ['profiles', 'id', profileId],
       ];
-      for (const [table, column, value] of identityDeletes) {
+      for (const [table, column, value] of finalDeletes) {
         if (!(await tableColumns(tx, dialect, table))) continue;
         await tx.query(
           `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,

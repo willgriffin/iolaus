@@ -386,6 +386,44 @@ export function driverCode(error: unknown): string {
   return parts.size ? [...parts].join(' ') : 'unknown';
 }
 
+/** Tables (outside SMRT bookkeeping) that have any of `names`, with those columns. */
+export async function tablesWithColumns(
+  database: TransferDatabase,
+  dialect: TransferDialect,
+  names: readonly string[],
+): Promise<Map<string, string[]>> {
+  const found = new Map<string, string[]>();
+  const add = (table: string, column: string) => {
+    if (table.startsWith('_smrt') || table.startsWith('sqlite_')) return;
+    found.set(table, [...(found.get(table) ?? []), column]);
+  };
+  if (dialect === 'postgres') {
+    const rows = rowsOf(
+      await database.query(
+        `SELECT table_name AS "table", column_name AS "column"
+           FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND column_name IN (${names.map(() => '?').join(', ')})`,
+        [...names],
+      ),
+    );
+    for (const row of rows) add(text(row.table), text(row.column));
+    return found;
+  }
+  const tables = rowsOf(
+    await database.query(`SELECT name FROM sqlite_master WHERE type = 'table'`),
+  );
+  for (const { name } of tables) {
+    const columns = rowsOf(
+      await database.query(`PRAGMA table_info(${quoted(text(name))})`),
+    );
+    for (const column of columns) {
+      if (names.includes(text(column.name))) add(text(name), text(column.name));
+    }
+  }
+  return found;
+}
+
 export function secureDirectory(path: string): void {
   mkdirSync(path, { mode: 0o700, recursive: true });
 }
