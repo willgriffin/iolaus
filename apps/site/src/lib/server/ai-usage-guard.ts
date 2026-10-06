@@ -194,6 +194,7 @@ export function createAiUserSpendStore(database: SmrtDatabase) {
   if (typeof database.transaction !== 'function') {
     throw new Error('Per-user AI spend accounting requires transactions.');
   }
+  const transact = database.transaction.bind(database);
 
   /**
    * Every spend mutation for one user runs under the same lock: a PostgreSQL
@@ -205,7 +206,7 @@ export function createAiUserSpendStore(database: SmrtDatabase) {
     work: (transaction: SmrtDatabase) => Promise<T>,
   ): Promise<T> => {
     const run = async () =>
-      await database.transaction!(async (transaction) => {
+      await transact(async (transaction) => {
         if (!isSqlite(database)) {
           await transaction.query("SET LOCAL lock_timeout = '15s'");
           await transaction.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
