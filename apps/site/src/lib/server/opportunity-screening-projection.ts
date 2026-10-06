@@ -285,7 +285,7 @@ export async function loadCurrentOpportunityScreeningProjections(
       AND r.output_schema_version IN (${OPPORTUNITY_SCREENING_SUPPORTED_VERSIONS.map(() => '?').join(',')})
       AND r.prompt_version = r.output_schema_version AND r.prepared_payload_version = r.output_schema_version
       AND r.tenant_id = ? AND r.owner_user_id = ? AND r.candidate_profile_id = ?
-      AND a.tenant_id = r.tenant_id AND a.owner_user_id = r.owner_user_id AND a.candidate_profile_id = r.candidate_profile_id
+      AND CAST(a.tenant_id AS TEXT) = r.tenant_id AND a.owner_user_id = r.owner_user_id AND a.candidate_profile_id = r.candidate_profile_id
       AND r.status = 'completed' AND q.status = 'succeeded' AND q.accounting_basis = 'actual' AND q.actual_total_tokens > 0
     LIMIT ?`,
     [
