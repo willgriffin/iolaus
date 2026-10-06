@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
+import { redirect } from '@sveltejs/kit';
 import { version } from '$app/environment';
+import {
+  getAppConfig,
+  getPublicLinks,
+  isSharedHosted,
+} from '$lib/server/app-config';
 import { PUBLIC_RESUME_CACHE_CONTROL } from '$lib/server/public-cache';
 import { getCachedPublishedResume } from '$lib/server/resume-data';
 import type { PageServerLoad } from './$types';
@@ -23,7 +29,22 @@ function pageEtag(contentHash: string): string {
   return `"${digest}"`;
 }
 
-export const load: PageServerLoad = async ({ setHeaders }) => {
+export const load: PageServerLoad = async ({ locals, setHeaders }) => {
+  // A shared hosted deployment serves many users' private workspaces, so the
+  // root must never present one owner's resume: send visitors to the
+  // configured marketing site, or show a neutral sign-in entry.
+  if (isSharedHosted()) {
+    const links = getPublicLinks();
+    if (links.landing) redirect(302, links.landing.href);
+    setHeaders({ 'cache-control': 'private, no-store' });
+    return {
+      appName: getAppConfig().appName,
+      links,
+      mode: 'landing' as const,
+      signedIn: Boolean(locals?.user),
+    };
+  }
+
   const { contentHash, value } = await getCachedPublishedResume();
   setHeaders({
     'cache-control': PUBLIC_RESUME_CACHE_CONTROL,

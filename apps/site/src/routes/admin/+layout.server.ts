@@ -1,7 +1,7 @@
 import { adminResources } from '$lib/admin/resources';
 import { isAdminAssistantEnabled } from '$lib/server/admin-assistant-config';
 import { getAiUsageSummary } from '$lib/server/ai-usage-guard';
-import { getAppConfig } from '$lib/server/app-config';
+import { getAppConfig, getPublicLinks } from '$lib/server/app-config';
 import type { LayoutServerLoad } from './$types';
 
 /** Small remaining-budget indicator; absent when no cap applies. */
@@ -44,6 +44,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
       : null,
     appMark: getAppConfig().appMark,
     appName: getAppConfig().appName,
+    legalLinks: getPublicLinks(),
     permissions: locals.permissions,
     resources: adminResources,
     tenantId: locals.tenantId,

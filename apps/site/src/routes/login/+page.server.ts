@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { getAppConfig } from '$lib/server/app-config';
+import { getAppConfig, getPublicLinks } from '$lib/server/app-config';
 import { applicationRuntime } from '$lib/server/application-runtime';
 import {
   canUseLocalDevLogin,
@@ -18,6 +18,7 @@ export const load: PageServerLoad = async (event) => {
 
   return {
     appName: getAppConfig().appName,
+    links: getPublicLinks(),
     localDevLogin: canUseLocalDevLogin(event),
     next: url.searchParams.get('next') ?? '/admin',
   };

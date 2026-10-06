@@ -6,6 +6,7 @@ import {
   getConfiguredPublicOrigin,
   getConfiguredUserAgent,
   getInviteRequestContact,
+  getPublicLinks,
   isLoopbackAddress,
   isLoopbackHostname,
   isSharedHosted,
@@ -331,5 +332,75 @@ describe('Iolaus application configuration', () => {
     expect(contact('javascript:alert(1)')).toBeNull();
     expect(contact('https://user:pw@example.invalid/')).toBeNull();
     expect(contact('two words@example.invalid')).toBeNull();
+  });
+
+  describe('public landing and legal links', () => {
+    const shared = {
+      IOLAUS_WORKSPACE_MODE: 'shared',
+      SMRT_APP_ID: 'hosted-app',
+      SMRT_RUNTIME_PROFILE: 'cloud',
+    };
+    const links = (extra: Record<string, string>) =>
+      getPublicLinks({ ...shared, ...extra });
+
+    it('is empty for private and local installations even when configured', () => {
+      const configured = {
+        IOLAUS_PRIVACY_URL: 'https://example.invalid/privacy',
+        IOLAUS_PUBLIC_LANDING_URL: 'https://example.invalid/',
+        IOLAUS_TERMS_URL: 'https://example.invalid/terms',
+      };
+      for (const environment of [
+        configured,
+        {
+          ...configured,
+          SMRT_APP_ID: 'hosted-app',
+          SMRT_RUNTIME_PROFILE: 'cloud',
+        },
+      ]) {
+        expect(getPublicLinks(environment)).toEqual({
+          landing: null,
+          privacy: null,
+          support: null,
+          terms: null,
+        });
+      }
+    });
+
+    it('returns configured https links in shared mode and hides the rest', () => {
+      expect(
+        links({
+          IOLAUS_PRIVACY_URL: 'https://example.invalid/privacy',
+          IOLAUS_PUBLIC_LANDING_URL: 'https://example.invalid/',
+          IOLAUS_SUPPORT_URL: 'help@example.invalid',
+          IOLAUS_TERMS_URL: 'https://example.invalid/terms',
+        }),
+      ).toEqual({
+        landing: { href: 'https://example.invalid/', label: 'Home' },
+        privacy: { href: 'https://example.invalid/privacy', label: 'Privacy' },
+        support: { href: 'mailto:help@example.invalid', label: 'Support' },
+        terms: { href: 'https://example.invalid/terms', label: 'Terms' },
+      });
+      expect(links({})).toEqual({
+        landing: null,
+        privacy: null,
+        support: null,
+        terms: null,
+      });
+    });
+
+    it('rejects non-https, credentialed and malformed values', () => {
+      const bad = links({
+        IOLAUS_PRIVACY_URL: 'javascript:alert(1)',
+        IOLAUS_PUBLIC_LANDING_URL: 'http://example.invalid/',
+        IOLAUS_SUPPORT_URL: 'https://user:pw@example.invalid/',
+        IOLAUS_TERMS_URL: 'not a url',
+      });
+      expect(bad).toEqual({
+        landing: null,
+        privacy: null,
+        support: null,
+        terms: null,
+      });
+    });
   });
 });

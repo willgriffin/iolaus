@@ -61,6 +61,12 @@ IOLAUS_OIDC_ADMIN_EMAILS=owner@example.com,backup-admin@example.com
 # Shared mode only: where an uninvited user is told to request an invite. An
 # email address or an https URL; omit for generic "contact the operator" copy.
 IOLAUS_INVITE_REQUEST_CONTACT=invites@example.com
+# Shared mode only: public landing and legal links (https; support may be an
+# email). Omit any to hide it.
+IOLAUS_PUBLIC_LANDING_URL=https://www.example.com/
+IOLAUS_TERMS_URL=https://www.example.com/terms
+IOLAUS_PRIVACY_URL=https://www.example.com/privacy
+IOLAUS_SUPPORT_URL=https://www.example.com/support
 DATABASE_URL=postgresql://career_hub:private-password@localhost:5432/career_hub
 ```
 
@@ -93,6 +99,20 @@ contact is built into the application. A fresh shared deployment starts with no
 invitations, so invite the operator's own address before the first login. Existing
 sessions for users who were never invited are rejected on their next request
 once this version is deployed.
+
+### Public landing and legal links
+
+In `shared` mode the root route never renders an owner's resume. If
+`IOLAUS_PUBLIC_LANDING_URL` is set (an `https:` URL) the root answers `302` to
+it; otherwise it shows a neutral landing page titled with `IOLAUS_APP_NAME`
+and a sign-in button (or "Open your workspace" when already signed in).
+`IOLAUS_TERMS_URL`, `IOLAUS_PRIVACY_URL` and `IOLAUS_SUPPORT_URL` add Terms,
+Privacy and Support links to the landing page, the login page, `/not-invited`
+and the admin sidebar footer. Terms and privacy must be `https:` URLs; support
+may also be an email address (rendered as `mailto:`). Unset or invalid values
+are ignored and the link is hidden. Nothing product-specific is built in. These
+variables have no effect in private or local mode, where the root continues to
+render the published resume.
 
 Use a dedicated PostgreSQL user and database name for every public deployment.
 The legacy/default `iolaus` and `iolaus_dev` database names are refused so a

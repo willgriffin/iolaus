@@ -41,6 +41,7 @@ import AdminActivityTicker from '$lib/components/admin/AdminActivityTicker.svelt
 import AdminAssistantPanel from '$lib/components/admin/AdminAssistantPanel.svelte';
 import AdminSidebarControls from '$lib/components/admin/AdminSidebarControls.svelte';
 import AdminTenantNav from '$lib/components/admin/AdminTenantNav.svelte';
+import LegalLinks from '$lib/components/LegalLinks.svelte';
 
 type BreadcrumbItem = {
   href?: string;
@@ -530,6 +531,7 @@ function currentTenantHref(pathname: string): string {
     />
     </div>
     <AdminSidebarControls id="admin-rail-account" compact email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
+  <div class="admin-legal-links"><LegalLinks links={data.legalLinks} /></div>
   </div>
 {/snippet}
 
@@ -695,6 +697,10 @@ function currentTenantHref(pathname: string): string {
   .admin-ai-budget-low {
     border-color: var(--smrt-color-error, currentColor);
     color: var(--smrt-color-error, inherit);
+  }
+  .admin-legal-links {
+    --legal-links-gap: 8px;
+    padding: 0 12px;
   }
   .admin-brand {
     gap: 10px;

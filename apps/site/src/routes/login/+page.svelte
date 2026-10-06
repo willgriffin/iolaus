@@ -1,5 +1,6 @@
 <script lang="ts">
 import LogIn from '@lucide/svelte/icons/log-in';
+import LegalLinks from '$lib/components/LegalLinks.svelte';
 
 let { data } = $props();
 </script>
@@ -26,6 +27,7 @@ let { data } = $props();
         <span>{data.localDevLogin ? 'Continue locally' : 'Continue securely'}</span>
       </button>
     </form>
+    <LegalLinks links={data.links} />
   </section>
 </main>
 
@@ -35,20 +37,21 @@ let { data } = $props();
     display: grid;
     place-items: center;
     padding: 24px;
-    background: #f7f5ef;
-    color: #1a1814;
+    background: var(--bg, #f7f5ef);
+    color: var(--ink, #1a1814);
   }
 
   .login-panel {
+    --legal-links-gap: 22px;
     width: min(100%, 380px);
-    border: 1px solid #ded8ca;
-    background: #fff;
+    border: 1px solid var(--border-strong, #ded8ca);
+    background: var(--bg-elev, #fff);
     padding: 28px;
   }
 
   .eyebrow {
     margin: 0 0 8px;
-    color: #746f65;
+    color: var(--ink-3, #746f65);
     font: 700 11px/1.2 var(--font-mono, monospace);
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -61,7 +64,7 @@ let { data } = $props();
 
   .copy {
     margin: 12px 0 22px;
-    color: #5d574e;
+    color: var(--ink-2, #5d574e);
   }
 
   button {
@@ -71,9 +74,9 @@ let { data } = $props();
     gap: 8px;
     width: 100%;
     min-height: 42px;
-    border: 1px solid #1a1814;
-    background: #1a1814;
-    color: #fff;
+    border: 1px solid var(--ink, #1a1814);
+    background: var(--ink, #1a1814);
+    color: var(--bg, #fff);
     border-radius: 6px;
     font-weight: 700;
   }
