@@ -34,6 +34,8 @@
     "invite:add": "tsx scripts/invite.ts add",
     "invite:revoke": "tsx scripts/invite.ts revoke",
     "invite:list": "tsx scripts/invite.ts list",
+    "account:delete": "tsx scripts/account.ts delete",
+    "account:deletions": "tsx scripts/account.ts deletions",
     "jobs:worker": "tsx scripts/jobs-worker.ts",
     "deployment:monitor": "tsx scripts/deployment-monitor.ts",
     "opportunities:crawl": "tsx scripts/crawl-opportunity-sources.ts",

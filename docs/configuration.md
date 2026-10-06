@@ -114,6 +114,32 @@ are ignored and the link is hidden. Nothing product-specific is built in. These
 variables have no effect in private or local mode, where the root continues to
 render the published resume.
 
+### Account export and deletion
+
+Every signed-in user can manage their own data at `/admin/account` (linked from
+the workspace overview as **Account**).
+
+- **Download my data** (`GET /api/account/export`) returns one JSON file of the
+  user's own workspace. It is available in `private` and `shared` mode and is
+  always scoped to the verified session's tenant, owner, and selected profile;
+  it takes no id parameter.
+- **Delete my account** is available only in `shared` mode. It needs two
+  deliberate steps: open the confirmation, then tick the acknowledgement and type
+  both the account email and `DELETE MY ACCOUNT`. In `private` mode the page says
+  deletion is disabled, the API refuses it, and `account:delete` refuses to run:
+  a private installation's single workspace is the whole installation, so the
+  operator removes data with database tooling instead.
+
+Deleting an account removes the user's workspace rows, uploaded and generated
+files, sessions, terminal (CLI) and MCP access, queued jobs, assistant turns,
+identity records, and private tenant, and revokes the user's `hosted_invites`
+entry so the address cannot sign back in until an operator reinstates it. What is
+kept, and why, is set out in
+[Account deletion and retention](data-export-import.md#account-deletion-and-retention);
+that section also covers recovering from an interrupted deletion
+(`account:deletions`, `account:delete`). This implements the export and deletion
+promise in the hosted privacy policy.
+
 Use a dedicated PostgreSQL user and database name for every public deployment.
 The legacy/default `iolaus` and `iolaus_dev` database names are refused so a
 new installation cannot silently attach to predecessor or example data.

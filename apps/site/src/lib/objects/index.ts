@@ -1,3 +1,4 @@
+export { AccountDeletionRecord } from './AccountDeletionRecord.js';
 export { Achievement } from './Achievement.js';
 export { AchievementAttachment } from './AchievementAttachment.js';
 export { AchievementTag } from './AchievementTag.js';

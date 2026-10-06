@@ -69,6 +69,7 @@ function dueDate(value: string): string {
     <a href="/admin/career">Resume <span>Editor, profiles and experience</span></a>
     <a href="/admin/research">Research <span>Sources and companies</span></a>
     <a href="/admin/system">System <span>Memory, preferences and activity</span></a>
+    <a href="/admin/account">Account <span>Download or delete your data</span></a>
   </nav>
 </div>
 
@@ -98,7 +99,7 @@ function dueDate(value: string): string {
   .match strong { color: var(--smrt-color-primary); font-size: 1.4rem; }
   .match span { font-size: .7rem; color: var(--smrt-color-on-surface-variant); }
   .empty-state { padding: var(--smrt-spacing-3) 0; }
-  .section-menu { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--smrt-spacing-3); }
+  .section-menu { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--smrt-spacing-3); }
   .section-menu a { display: grid; gap: var(--smrt-spacing-1); padding: var(--smrt-spacing-3); border: 1px solid var(--smrt-color-outline-variant); border-radius: var(--smrt-radius-medium); text-decoration: none; min-height: 44px; font-weight: 600; }
   .section-menu span { font-size: .8rem; font-weight: 400; color: var(--smrt-color-on-surface-variant); }
   @media (max-width: 900px) { .overview-columns { grid-template-columns: minmax(0, 1fr); } }

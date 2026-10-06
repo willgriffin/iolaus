@@ -228,6 +228,8 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     'AiUserSpendEntry',
     // Operator-managed invite allowlist for shared hosted workspaces.
     'HostedInvite',
+    // Non-PII audit trail of hosted account deletions.
+    'AccountDeletionRecord',
   ]) {
     await getCollection(className);
     initialized.push(className);
