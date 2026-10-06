@@ -5,6 +5,8 @@ import {
   UserCollection,
 } from '@happyvertical/smrt-users';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safeNextPath } from '../safe-next';
+import { isConfiguredOidcAdminEmail } from './administrative-auth';
 import { getAuthConfiguration } from './app-config';
 import { addInvite, revokeInvite } from './hosted-invite';
 import type { InviteMessage } from './hosted-invite-email';
@@ -25,6 +27,8 @@ const env = {
   IOLAUS_PUBLIC_URL: 'https://app.example.com',
   IOLAUS_AUTH_MODE: 'magic-link',
   IOLAUS_MAGIC_LINK_SECRET: SECRET,
+  IOLAUS_OIDC_ADMIN_EMAILS: 'Operator@Example.invalid',
+  ADDRESS_HEADER: 'X-Forwarded-For',
   SMTP_HOST: 'smtp.example.com',
   SMTP_USER: 'user',
   SMTP_PASSWORD: 'pw',
@@ -51,13 +55,17 @@ describe('magic-link auth configuration', () => {
   it('is valid only for self-hosted shared installs with secret and SMTP', () => {
     expect(getAuthConfiguration(env)).toMatchObject({
       kind: 'magic-link',
-      magicLink: { tokenExpirySeconds: 900 },
+      magicLink: {
+        adminEmails: ['operator@example.invalid'],
+        tokenExpirySeconds: 900,
+      },
     });
     for (const broken of [
       { IOLAUS_WORKSPACE_MODE: 'private' },
       { SMRT_RUNTIME_PROFILE: 'cloud' },
       { IOLAUS_MAGIC_LINK_SECRET: 'short' },
       { SMTP_HOST: '' },
+      { ADDRESS_HEADER: '' },
       { IOLAUS_PUBLIC_URL: '' },
     ]) {
       expect(getAuthConfiguration({ ...env, ...broken })).toMatchObject({
@@ -279,5 +287,35 @@ describe('magic-link provisioning with released SMRT', () => {
     await expect(
       provisionHostedMagicLinkUser('  ', collection),
     ).rejects.toThrow();
+  });
+});
+
+describe('post-login destination', () => {
+  it('keeps redirects on this origin', () => {
+    expect(safeNextPath('/admin/jobs?x=1')).toBe('/admin/jobs?x=1');
+    for (const hostile of [
+      'https://evil.example',
+      '//evil.example',
+      '/\\evil.example',
+      'javascript:alert(1)',
+      '/ok\nSet-Cookie: x',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect(safeNextPath(hostile)).toBe('/admin');
+    }
+  });
+});
+
+describe('operator gating in magic-link mode', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps IOLAUS_OIDC_ADMIN_EMAILS operators', () => {
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    expect(isConfiguredOidcAdminEmail(' OPERATOR@example.invalid ')).toBe(true);
+    expect(isConfiguredOidcAdminEmail('friend@example.invalid')).toBe(false);
   });
 });

@@ -63,6 +63,8 @@ export interface OidcOwnerBinding {
 export interface MagicLinkConfiguration {
   /** Secret that signs sign-in links (IOLAUS_MAGIC_LINK_SECRET). */
   secret: string;
+  /** Operator emails (IOLAUS_OIDC_ADMIN_EMAILS) for operator-only actions. */
+  adminEmails: string[];
   /** Sign-in link lifetime. Fixed at fifteen minutes. */
   tokenExpirySeconds: number;
 }
@@ -468,16 +470,23 @@ function magicLinkConfiguration(
     app.workspaceMode !== 'shared' ||
     !configuredPublicUrl(environment) ||
     secret.length < MAGIC_LINK_MIN_SECRET_LENGTH ||
-    MAGIC_LINK_SMTP_KEYS.some((key) => !stringValue(environment[key]))
+    MAGIC_LINK_SMTP_KEYS.some((key) => !stringValue(environment[key])) ||
+    // Behind the ingress the per-IP limit needs the real client address;
+    // adapter-node only trusts it when ADDRESS_HEADER names the proxy header.
+    !stringValue(environment.ADDRESS_HEADER)
   ) {
     return {
       kind: 'invalid',
-      message: `${app.appName} magic-link authentication is incomplete. It requires the self-hosted profile, shared workspace mode, a public URL, an IOLAUS_MAGIC_LINK_SECRET of at least ${MAGIC_LINK_MIN_SECRET_LENGTH} characters, and the SMTP_* mailer settings.`,
+      message: `${app.appName} magic-link authentication is incomplete. It requires the self-hosted profile, shared workspace mode, a public URL, an IOLAUS_MAGIC_LINK_SECRET of at least ${MAGIC_LINK_MIN_SECRET_LENGTH} characters, the SMTP_* mailer settings, and ADDRESS_HEADER (the trusted proxy header carrying the client address).`,
     };
   }
   return {
     kind: 'magic-link',
-    magicLink: { secret, tokenExpirySeconds: MAGIC_LINK_TOKEN_EXPIRY_SECONDS },
+    magicLink: {
+      adminEmails: configuredAdminEmails(environment),
+      secret,
+      tokenExpirySeconds: MAGIC_LINK_TOKEN_EXPIRY_SECONDS,
+    },
   };
 }
 

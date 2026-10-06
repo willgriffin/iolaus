@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { safeNextPath } from '$lib/safe-next';
 import {
   getAppConfig,
   getAuthConfiguration,
@@ -18,7 +19,7 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async (event) => {
   const { locals, url } = event;
   if (locals.user) {
-    redirect(303, url.searchParams.get('next') ?? '/admin');
+    redirect(303, safeNextPath(url.searchParams.get('next')));
   }
 
   return {
@@ -26,14 +27,14 @@ export const load: PageServerLoad = async (event) => {
     links: getPublicLinks(),
     localDevLogin: canUseLocalDevLogin(event),
     magicLink: getAuthConfiguration().kind === 'magic-link',
-    next: url.searchParams.get('next') ?? '/admin',
+    next: safeNextPath(url.searchParams.get('next')),
   };
 };
 
 export const actions: Actions = {
   default: async (event) => {
     const form = await event.request.formData();
-    const next = String(form.get('next') ?? '/admin');
+    const next = safeNextPath(String(form.get('next') ?? ''));
     event.cookies.set(loginNextCookieName, next, {
       httpOnly: true,
       maxAge: 10 * 60,
@@ -53,9 +54,17 @@ export const actions: Actions = {
       // Answer identically for every well-formed address and do the work after
       // responding, so neither the body nor the latency reveals whether the
       // address is invited. Failures are logged without the address or link.
-      void requestMagicLink(email, event.getClientAddress()).catch(() => {
-        console.error('Magic-link request failed.');
-      });
+      void requestMagicLink(email, event.getClientAddress())
+        .then((outcome) => {
+          if (outcome === 'rate-limited') {
+            console.warn('Magic-link request rate limited.');
+          } else if (outcome === 'delivery-failed') {
+            console.error('Magic-link email delivery failed.');
+          }
+        })
+        .catch(() => {
+          console.error('Magic-link request failed.');
+        });
       return { sent: true };
     }
 

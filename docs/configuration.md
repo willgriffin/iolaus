@@ -82,7 +82,15 @@ IOLAUS_AUTH_MODE=magic-link
 IOLAUS_MAGIC_LINK_SECRET=
 # Plus IOLAUS_PUBLIC_URL and the SMTP_* mailer settings below. Startup is
 # refused when any is missing.
+# adapter-node reads the visitor address from this proxy header; without it
+# every visitor shares the ingress address and the per-address limit would
+# throttle everyone together. Set XFF_DEPTH to your trusted proxy count too.
+ADDRESS_HEADER=X-Forwarded-For
 ```
+
+`IOLAUS_OIDC_ADMIN_EMAILS` still names the operators in this mode (operator-only
+actions such as global source crawls), and `next` redirects after sign-in are
+limited to paths on this site.
 
 The link is a single-use, signed token (SMRT `MagicLinkService`, stored in
 `users_magic_link_tokens`) that expires after 15 minutes, delivered through the

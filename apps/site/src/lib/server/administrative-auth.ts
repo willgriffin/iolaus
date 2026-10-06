@@ -40,12 +40,16 @@ export function isConfiguredOidcAdminEmail(
   email: string | null | undefined,
 ): boolean {
   const configuration = getAuthConfiguration();
-  if (configuration.kind !== 'self-hosted') return false;
+  const adminEmails =
+    configuration.kind === 'self-hosted'
+      ? configuration.oidc.adminEmails
+      : configuration.kind === 'magic-link'
+        ? configuration.magicLink.adminEmails
+        : null;
+  if (!adminEmails) return false;
 
   const candidate = normalizedEmail(email);
-  return (
-    Boolean(candidate) && configuration.oidc.adminEmails.includes(candidate)
-  );
+  return Boolean(candidate) && adminEmails.includes(candidate);
 }
 
 /**

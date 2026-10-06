@@ -1,4 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
+import { safeNextPath } from '$lib/safe-next';
 import { getAppConfig, getAuthConfiguration } from '$lib/server/app-config';
 import { completeMagicLinkLogin, loginNextCookieName } from '$lib/server/auth';
 import type { Actions, PageServerLoad } from './$types';
@@ -36,7 +37,7 @@ export const actions: Actions = {
       return { invalid: true as const };
     }
 
-    const next = event.cookies.get(loginNextCookieName) ?? '/admin';
+    const next = safeNextPath(event.cookies.get(loginNextCookieName));
     event.cookies.delete(loginNextCookieName, { path: '/' });
     redirect(303, next);
   },
