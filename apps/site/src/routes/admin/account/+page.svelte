@@ -38,7 +38,7 @@ const matches = $derived(
       File download links need you to be signed in and stop working after your account is
       deleted, so save any files you want to keep first.
     </p>
-    <a class="button" href="/api/account/export" download>Download my data (JSON)</a>
+    <a class="button" href="/api/admin/account/export" download>Download my data (JSON)</a>
   </div>
 
   <div class="panel danger">

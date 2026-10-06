@@ -53,6 +53,7 @@ const locals = {
     tenantId: 'tenant-a',
     userId: 'user-a',
   },
+  sessionId: 'sess-1',
   tenantId: 'tenant-a',
   user: { email: 'alice@example.invalid', id: 'user-a' },
   workspaceSubject: subject,
@@ -61,7 +62,10 @@ const locals = {
 function event(fields: Record<string, string>, overrides = {}) {
   const body = new FormData();
   for (const [key, value] of Object.entries(fields)) body.set(key, value);
-  const cookies = { delete: vi.fn() };
+  const cookies = {
+    delete: vi.fn(),
+    get: vi.fn(() => 'sess-1'),
+  };
   return {
     cookies,
     locals,
@@ -142,6 +146,17 @@ describe('account page deletion action', () => {
     expect(result.status).toBe(500);
     expect(result.data.error).toMatch(/locked/u);
     expect(input.cookies.delete).not.toHaveBeenCalled();
+  });
+
+  it('refuses a terminal bearer token: only the cookie session may delete', async () => {
+    const input = event(good);
+    input.cookies.get.mockReturnValue(undefined as never);
+    const result = (await run(input)) as { status: number };
+    expect(result.status).toBe(403);
+    const other = event(good);
+    other.cookies.get.mockReturnValue('a-different-session' as never);
+    expect(((await run(other)) as { status: number }).status).toBe(403);
+    expect(state.deleteAccount).not.toHaveBeenCalled();
   });
 
   it('refuses an unverified session', async () => {

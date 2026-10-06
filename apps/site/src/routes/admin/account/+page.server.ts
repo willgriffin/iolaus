@@ -43,6 +43,16 @@ export const actions: Actions = {
     if (accountDeletionMode() !== 'enabled') {
       return fail(403, { error: ACCOUNT_DELETION_DISABLED_MESSAGE });
     }
+    // Irreversible, so only the interactive browser session may do it. A
+    // terminal (CLI) bearer token or an agent acting through one must never
+    // carry this authority: require the session to be the one in the cookie.
+    const cookieSessionId = event.cookies.get(sessionCookieName);
+    if (!cookieSessionId || event.locals.sessionId !== cookieSessionId) {
+      return fail(403, {
+        error:
+          'Account deletion is only available from a signed-in browser session.',
+      });
+    }
     let subject: ReturnType<typeof workspaceSubjectFromLocals>;
     try {
       subject = workspaceSubjectFromLocals(event.locals);

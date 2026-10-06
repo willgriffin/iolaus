@@ -119,13 +119,14 @@ render the published resume.
 Every signed-in user can manage their own data at `/admin/account` (linked from
 the workspace overview as **Account**).
 
-- **Download my data** (`GET /api/account/export`) returns one JSON file of the
+- **Download my data** (`GET /api/admin/account/export`) returns one JSON file of the
   user's own workspace. It is available in `private` and `shared` mode and is
   always scoped to the verified session's tenant, owner, and selected profile;
   it takes no id parameter.
 - **Delete my account** is available only in `shared` mode. It needs two
   deliberate steps: open the confirmation, then tick the acknowledgement and type
-  both the account email and `DELETE MY ACCOUNT`. In `private` mode the page says
+  both the account email and `DELETE MY ACCOUNT`. It works only from the
+  signed-in browser session: terminal (CLI) bearer tokens are refused. In `private` mode the page says
   deletion is disabled, the API refuses it, and `account:delete` refuses to run:
   a private installation's single workspace is the whole installation, so the
   operator removes data with database tooling instead.

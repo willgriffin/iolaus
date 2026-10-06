@@ -40,12 +40,12 @@ const call = async (overrides: Record<string, unknown> = {}) =>
   await (GET as unknown as (e: unknown) => Promise<Response>)({
     locals,
     url: new URL(
-      'https://app.example/api/account/export?userId=user-b&tenantId=tenant-b',
+      'https://app.example/api/admin/account/export?userId=user-b&tenantId=tenant-b',
     ),
     ...overrides,
   });
 
-describe('GET /api/account/export', () => {
+describe('GET /api/admin/account/export', () => {
   beforeEach(() => state.build.mockClear());
 
   it('exports the verified subject as a private attachment, ignoring query ids', async () => {

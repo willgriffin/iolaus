@@ -34,7 +34,7 @@ the request.
 ### Self-service export
 
 `/admin/account` offers **Download my data**, backed by
-`GET /api/account/export`. The response is an `attachment` named
+`GET /api/admin/account/export`. The response is an `attachment` named
 `iolaus-export-YYYY-MM-DD.json` (no personal data in the filename) with
 `cache-control: no-store`. It is available in `private` mode (the owner exports
 their own workspace) and `shared` mode.
