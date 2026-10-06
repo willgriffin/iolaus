@@ -1,4 +1,8 @@
-import { getAppConfig, getInviteRequestContact } from '$lib/server/app-config';
+import {
+  getAppConfig,
+  getInviteRequestContact,
+  getPublicLinks,
+} from '$lib/server/app-config';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -10,5 +14,6 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
   return {
     appName: getAppConfig().appName,
     contact: getInviteRequestContact(),
+    links: getPublicLinks(),
   };
 };

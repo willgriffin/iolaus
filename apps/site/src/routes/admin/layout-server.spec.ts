@@ -10,6 +10,12 @@ vi.mock('$lib/server/ai-usage-guard', () => ({
 }));
 vi.mock('$lib/server/app-config', () => ({
   getAppConfig: () => ({ appMark: 'I', appName: 'Iolaus' }),
+  getPublicLinks: () => ({
+    landing: null,
+    privacy: { href: 'https://example.invalid/privacy', label: 'Privacy' },
+    support: null,
+    terms: null,
+  }),
 }));
 
 import { load } from './+layout.server';
@@ -26,6 +32,15 @@ async function read(locals: Record<string, unknown>) {
     }) => Promise<Record<string, unknown>>
   )({ locals });
 }
+describe('admin legal links', () => {
+  it('exposes the configured public links to the footer', async () => {
+    const data = await read({});
+    expect(data.legalLinks).toMatchObject({
+      privacy: { href: 'https://example.invalid/privacy' },
+    });
+  });
+});
+
 describe('admin activity scope disposal key', () => {
   it('is derived only from the hook-verified complete owned tuple', async () => {
     const data = await read({

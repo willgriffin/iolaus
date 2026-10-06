@@ -1,4 +1,6 @@
 <script lang="ts">
+import LegalLinks from '$lib/components/LegalLinks.svelte';
+
 let { data } = $props();
 </script>
 
@@ -24,6 +26,7 @@ let { data } = $props();
       <p class="copy">To request an invite, contact the site operator.</p>
     {/if}
     <p class="copy"><a href="/">Back to the homepage</a></p>
+    <LegalLinks links={data.links} />
   </section>
 </main>
 
@@ -33,20 +36,21 @@ let { data } = $props();
     display: grid;
     place-items: center;
     padding: 24px;
-    background: #f7f5ef;
-    color: #1a1814;
+    background: var(--bg, #f7f5ef);
+    color: var(--ink, #1a1814);
   }
 
   .invite-panel {
+    --legal-links-gap: 22px;
     width: min(100%, 420px);
-    border: 1px solid #ded8ca;
-    background: #fff;
+    border: 1px solid var(--border-strong, #ded8ca);
+    background: var(--bg-elev, #fff);
     padding: 28px;
   }
 
   .eyebrow {
     margin: 0 0 8px;
-    color: #746f65;
+    color: var(--ink-3, #746f65);
     font: 700 11px/1.2 var(--font-mono, monospace);
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -59,7 +63,7 @@ let { data } = $props();
 
   .copy {
     margin: 12px 0 0;
-    color: #5d574e;
+    color: var(--ink-2, #5d574e);
   }
 
   a {

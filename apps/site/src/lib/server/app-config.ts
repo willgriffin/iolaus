@@ -7,6 +7,8 @@
  * must opt into a complete, explicit OIDC configuration.
  */
 
+import type { PublicLink, PublicLinks } from '$lib/public-links';
+
 export type RuntimeProfile = 'cloud' | 'local' | 'self-hosted';
 export type WorkspaceMode = 'private' | 'shared';
 
@@ -197,6 +199,71 @@ export function getInviteRequestContact(
   } catch {
     return null;
   }
+}
+
+export type { PublicLink, PublicLinks } from '$lib/public-links';
+
+function httpsHref(raw: string): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== 'https:' ||
+      !url.hostname ||
+      url.username ||
+      url.password
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function publicLink(
+  raw: string,
+  label: string,
+  allowEmail = false,
+): PublicLink | null {
+  if (allowEmail && /^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/u.test(raw)) {
+    return { href: `mailto:${raw}`, label };
+  }
+  const href = httpsHref(raw);
+  return href ? { href, label } : null;
+}
+
+const NO_PUBLIC_LINKS: PublicLinks = {
+  landing: null,
+  privacy: null,
+  support: null,
+  terms: null,
+};
+
+/**
+ * Operator-configured public landing and legal/support destinations for shared
+ * hosted deployments. Only `https:` URLs are accepted (support may also be an
+ * email address); anything else is ignored so a surface hides the link rather
+ * than rendering an unsafe one. Private and local installations always get
+ * none, leaving their behavior unchanged.
+ */
+export function getPublicLinks(
+  environment: AppConfigEnvironment = process.env,
+): PublicLinks {
+  if (!isSharedHosted(environment)) return NO_PUBLIC_LINKS;
+  return {
+    landing: publicLink(
+      stringValue(environment.IOLAUS_PUBLIC_LANDING_URL),
+      'Home',
+    ),
+    privacy: publicLink(stringValue(environment.IOLAUS_PRIVACY_URL), 'Privacy'),
+    support: publicLink(
+      stringValue(environment.IOLAUS_SUPPORT_URL),
+      'Support',
+      true,
+    ),
+    terms: publicLink(stringValue(environment.IOLAUS_TERMS_URL), 'Terms'),
+  };
 }
 
 /** Whether this deployed application provisions one workspace per user. */
