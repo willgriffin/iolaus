@@ -17,7 +17,10 @@ export const load: PageServerLoad = async ({ setHeaders, url }) => {
   requireMagicLinkMode();
   setHeaders({
     'cache-control': 'no-store',
-    'referrer-policy': 'no-referrer',
+    // same-origin, not no-referrer: no-referrer makes Chromium send
+    // `Origin: null` on this page's own form POST, which SvelteKit's CSRF
+    // check rejects. The token still never leaves the origin via Referer.
+    'referrer-policy': 'same-origin',
   });
   return {
     appName: getAppConfig().appName,
