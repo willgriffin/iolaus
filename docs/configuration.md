@@ -126,7 +126,7 @@ the workspace overview as **Account**).
 - **Delete my account** is available only in `shared` mode. It needs two
   deliberate steps: open the confirmation, then tick the acknowledgement and type
   both the account email and `DELETE MY ACCOUNT`. It works only from the
-  signed-in browser session: terminal (CLI) bearer tokens are refused. In `private` mode the page says
+  signed-in browser session: terminal (CLI) sessions are refused however the token is presented. In `private` mode the page says
   deletion is disabled, the API refuses it, and `account:delete` refuses to run:
   a private installation's single workspace is the whole installation, so the
   operator removes data with database tooling instead.

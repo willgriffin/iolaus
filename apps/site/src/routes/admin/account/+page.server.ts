@@ -13,6 +13,7 @@ import { getAppConfig } from '$lib/server/app-config';
 import { sessionCookieName } from '$lib/server/auth';
 import { getDbConfig } from '$lib/server/db';
 import { getResumeFilesystem } from '$lib/server/resume-files';
+import { isTerminalSession } from '$lib/server/terminal-auth';
 import {
   WorkspaceSubjectError,
   workspaceSubjectFromLocals,
@@ -43,15 +44,22 @@ export const actions: Actions = {
     if (accountDeletionMode() !== 'enabled') {
       return fail(403, { error: ACCOUNT_DELETION_DISABLED_MESSAGE });
     }
-    // Irreversible, so only the interactive browser session may do it. A
-    // terminal (CLI) bearer token or an agent acting through one must never
-    // carry this authority: require the session to be the one in the cookie.
+    // Irreversible, so only an interactive browser login may do it. A terminal
+    // (CLI) token is an ordinary session id that is accepted from a cookie as
+    // well as a bearer header, so check both the transport and the session's
+    // own `kind`. Fail closed if the session cannot be inspected.
+    const refused = fail(403, {
+      error:
+        'Account deletion is only available from a signed-in browser session.',
+    });
     const cookieSessionId = event.cookies.get(sessionCookieName);
     if (!cookieSessionId || event.locals.sessionId !== cookieSessionId) {
-      return fail(403, {
-        error:
-          'Account deletion is only available from a signed-in browser session.',
-      });
+      return refused;
+    }
+    try {
+      if (await isTerminalSession(cookieSessionId)) return refused;
+    } catch {
+      return refused;
     }
     let subject: ReturnType<typeof workspaceSubjectFromLocals>;
     try {

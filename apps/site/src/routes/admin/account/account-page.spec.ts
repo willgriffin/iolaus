@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   mode: 'enabled' as 'disabled' | 'enabled',
+  terminal: false,
+  terminalFails: false,
   deleteAccount: vi.fn(async (..._args: unknown[]) => ({
     deletionId: 'deletion-1',
     status: 'deleted',
@@ -35,6 +37,12 @@ vi.mock('$lib/server/app-config', () => ({
 }));
 vi.mock('$lib/server/auth', () => ({ sessionCookieName: 'session_cookie' }));
 vi.mock('$lib/server/db', () => ({ getDbConfig: () => ({ type: 'sqlite' }) }));
+vi.mock('$lib/server/terminal-auth', () => ({
+  isTerminalSession: async () => {
+    if (state.terminalFails) throw new Error('session store down');
+    return state.terminal;
+  },
+}));
 vi.mock('$lib/server/resume-files', () => ({
   getResumeFilesystem: async () => ({ delete: vi.fn(), exists: vi.fn() }),
 }));
@@ -86,6 +94,8 @@ const good = {
 describe('account page deletion action', () => {
   beforeEach(() => {
     state.mode = 'enabled';
+    state.terminal = false;
+    state.terminalFails = false;
     state.deleteAccount.mockClear();
   });
 
@@ -156,6 +166,20 @@ describe('account page deletion action', () => {
     const other = event(good);
     other.cookies.get.mockReturnValue('a-different-session' as never);
     expect(((await run(other)) as { status: number }).status).toBe(403);
+    expect(state.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('refuses a terminal-kind session even when its id arrives as the cookie', async () => {
+    state.terminal = true;
+    const result = (await run(event(good))) as { status: number };
+    expect(result.status).toBe(403);
+    expect(state.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the session kind cannot be read', async () => {
+    state.terminalFails = true;
+    const result = (await run(event(good))) as { status: number };
+    expect(result.status).toBe(403);
     expect(state.deleteAccount).not.toHaveBeenCalled();
   });
 

@@ -238,3 +238,17 @@ export async function destroyBearerSession(token: string): Promise<boolean> {
   const sessionService = await createSessionService();
   return await sessionService.destroySession(token);
 }
+
+/**
+ * Whether a session id belongs to a terminal (CLI device-login) session. Such a
+ * token is an ordinary session id and is accepted from a cookie as well as a
+ * bearer header, so transport alone cannot tell it apart from a browser login;
+ * its `kind` data (set at approval) can.
+ */
+export async function isTerminalSession(sessionId: string): Promise<boolean> {
+  const sessionService = await createSessionService();
+  return (
+    (await sessionService.getSessionData<string>(sessionId, 'kind')) ===
+    'terminal'
+  );
+}
