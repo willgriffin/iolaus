@@ -42,6 +42,7 @@
     "jobs:worker": "tsx scripts/jobs-worker.ts",
     "deployment:monitor": "tsx scripts/deployment-monitor.ts",
     "opportunities:crawl": "tsx scripts/crawl-opportunity-sources.ts",
+    "sources:crawl-due": "tsx scripts/crawl-due-sources.ts",
     "opportunities:crawl-status": "tsx scripts/source-crawl-status.ts",
     "opportunities:intelligence-canary": "tsx scripts/opportunity-intelligence-canary.ts",
     "opportunities:intelligence-control": "tsx scripts/opportunity-intelligence-control.ts",
