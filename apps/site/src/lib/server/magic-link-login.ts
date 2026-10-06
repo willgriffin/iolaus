@@ -12,6 +12,7 @@ import {
   sendMagicLinkEmail,
 } from './hosted-invite-email.js';
 import {
+  clientAddressKey,
   defaultMagicLinkLimiters,
   type MagicLinkLimiters,
 } from './login-rate-limit.js';
@@ -77,11 +78,14 @@ export async function requestMagicLink(
   // Charge the client address first: a throttled address must not keep
   // inserting mailbox keys. Both limits apply before the invite is read, so
   // limiting cannot distinguish invited from uninvited addresses.
-  if (!limiters.ip.allow(`ip:${clientAddress}`)) return 'rate-limited';
-  if (!limiters.email.allow(`email:${email}`)) return 'rate-limited';
+  if (!limiters.ip.allow(`ip:${clientAddressKey(clientAddress)}`)) {
+    return 'rate-limited';
+  }
+  // Only well-formed addresses are tracked, so junk cannot fill the mailbox map.
   if (!email || email.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(email)) {
     return 'invalid-email';
   }
+  if (!limiters.email.allow(`email:${email}`)) return 'rate-limited';
   const smrtOptions = context.smrtOptions;
   if (!(await isEmailInvited(email, smrtOptions as { db?: unknown }))) {
     return 'not-invited';

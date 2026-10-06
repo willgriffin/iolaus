@@ -15,6 +15,7 @@ import {
   provisionHostedOidcUser,
 } from './hosted-oidc-provisioning';
 import {
+  clientAddressKey,
   createMagicLinkLimiters,
   MAX_TRACKED_KEYS,
   WindowRateLimiter,
@@ -325,7 +326,7 @@ describe('operator gating in magic-link mode', () => {
 });
 
 describe('rate limiter bounds', () => {
-  it('never evicts a live counter to admit a new key', () => {
+  it('never evicts a live counter and never locks out new keys when full', () => {
     const limiter = new WindowRateLimiter(2, 60_000);
     const now = 1_000;
     expect(limiter.allow('victim', now)).toBe(true);
@@ -333,11 +334,38 @@ describe('rate limiter bounds', () => {
     for (let i = 0; i < MAX_TRACKED_KEYS; i += 1)
       limiter.allow(`junk:${i}`, now);
     // The map is full of live windows: the victim stays limited, and a new key
-    // is refused rather than displacing anyone.
+    // is admitted untracked rather than displacing anyone or being refused.
     expect(limiter.allow('victim', now)).toBe(false);
-    expect(limiter.allow('brand-new', now)).toBe(false);
-    // Once windows expire the map admits new keys again.
+    expect(limiter.allow('brand-new', now)).toBe(true);
+    // Once windows expire the map tracks new keys again.
     expect(limiter.allow('brand-new', now + 61_000)).toBe(true);
+    expect(limiter.allow('brand-new', now + 61_000)).toBe(true);
+    expect(limiter.allow('brand-new', now + 61_000)).toBe(false);
+  });
+
+  it('keys IPv6 clients by /64 and leaves IPv4 alone', () => {
+    expect(clientAddressKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(clientAddressKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    const a = clientAddressKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd');
+    expect(a).toBe('2001:0db8:0001:0002::/64');
+    expect(clientAddressKey('2001:DB8:1:2::1')).toBe(a);
+    expect(clientAddressKey('2001:db8:1:3::1')).not.toBe(a);
+    expect(clientAddressKey('::1')).toBe('0000:0000:0000:0000::/64');
+  });
+
+  it('does not track malformed addresses in the mailbox limiter', async () => {
+    const limiters = createMagicLinkLimiters();
+    const outcomes = [];
+    for (let i = 0; i < 6; i += 1) {
+      outcomes.push(
+        await requestMagicLink('not-an-email', `192.0.2.${i}`, {
+          environment: env,
+          limiters,
+        } as never),
+      );
+    }
+    expect(outcomes).toEqual(Array(6).fill('invalid-email'));
+    expect(limiters.email.allow('email:not-an-email')).toBe(true);
   });
 
   it('does not charge the mailbox when the client address is throttled', async () => {
