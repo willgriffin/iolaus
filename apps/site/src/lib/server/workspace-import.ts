@@ -1,4 +1,10 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { FilesystemInterface } from '@happyvertical/files';
 import type { SmrtClassOptions } from '@happyvertical/smrt-core';
@@ -98,6 +104,8 @@ export interface WorkspaceImportResult {
 
 export interface WorkspaceImportReceipt {
   assets: string[];
+  /** False until the database commit succeeded; only then may rollback remove rows. */
+  committed: boolean;
   bundleSha256: string;
   createdAt: string;
   format: typeof RECEIPT_FORMAT;
@@ -707,7 +715,8 @@ export async function importWorkspace(
   }
 
   try {
-    return await options.database.transaction(async (tx) => {
+    let written: WorkspaceImportReceipt | undefined;
+    const result = await options.database.transaction(async (tx) => {
       const context: ImportContext = {
         bundle,
         email,
@@ -806,6 +815,7 @@ export async function importWorkspace(
       const receipt: WorkspaceImportReceipt = {
         assets: bundle.assets.map((asset) => asset.path),
         bundleSha256: bundle.bundleSha256,
+        committed: false,
         createdAt: new Date().toISOString(),
         format: RECEIPT_FORMAT,
         identity: receiptIdentity,
@@ -845,11 +855,42 @@ export async function importWorkspace(
           );
         }
       }
-      return { mode: 'applied', plan, planSha256, receiptPath };
+      written = receipt;
+      return {
+        mode: 'applied' as const,
+        plan,
+        planSha256,
+        receiptPath,
+      };
     });
+    // Only after the commit: a receipt that never reached this point belongs to
+    // an attempt that may not have written anything, so rollback treats it as
+    // pending and never deletes database rows from it.
+    if (written) markReceiptCommitted(receiptPath, written);
+    return result;
   } catch (error) {
     if (error instanceof DryRunComplete) return error.result;
     throw error;
+  }
+}
+
+function markReceiptCommitted(
+  path: string,
+  receipt: WorkspaceImportReceipt,
+): void {
+  try {
+    const temporary = `${path}.committed`;
+    writeFileSync(
+      temporary,
+      `${JSON.stringify({ ...receipt, committed: true })}\n`,
+      { mode: 0o600 },
+    );
+    renameSync(temporary, path);
+  } catch {
+    throw new WorkspaceTransferError(
+      'receipt',
+      'The import COMMITTED but its receipt could not be marked committed. Do not retry blindly: run --dry-run (0 inserts means it committed) and keep the receipt; rollback of a pending receipt only cleans unreferenced assets.',
+    );
   }
 }
 
@@ -892,7 +933,12 @@ export interface WorkspaceRollbackOptions {
  */
 export async function rollbackWorkspaceImport(
   options: WorkspaceRollbackOptions,
-): Promise<{ deleted: Record<string, number>; assetsRemoved: number }> {
+): Promise<{
+  assetsRemoved: number;
+  assetsKept: number;
+  databaseRolledBack: boolean;
+  deleted: Record<string, number>;
+}> {
   if (!existsSync(options.receiptPath)) {
     throw new WorkspaceTransferError('receipt', 'The receipt file is missing.');
   }
@@ -926,132 +972,186 @@ export async function rollbackWorkspaceImport(
     tags: 'tag',
   };
   const deleted: Record<string, number> = {};
-  await options.database.transaction(async (tx) => {
-    const tables = Object.keys(receipt.inserted);
-    const order = (await foreignKeyOrder(tx, dialect, tables)).reverse();
-    for (const table of order) {
-      const ids = receipt.inserted[table];
-      const owned = ownedTables.includes(table);
-      let count = 0;
-      // Receipt ids are in insertion order (parents first). A table that
-      // references itself is deleted children first, one row per statement, so
-      // parent/child guards never see a parent removed before its children.
-      const tree = (await selfReferenceColumns(tx, dialect, table)).length > 0;
-      const ordered = tree ? [...ids].reverse() : ids;
-      const step = tree ? 1 : BATCH;
-      for (let start = 0; start < ordered.length; start += step) {
-        const batch = ordered.slice(start, start + step);
-        // Owned rows are only ever removed under the receipt's own tuple, so a
-        // damaged or edited receipt cannot reach another tenant's data.
-        const where = `CAST(id AS TEXT) IN (${placeholders(batch.length)})${
-          owned
-            ? ' AND CAST(tenant_id AS TEXT) = ? AND CAST(owner_user_id AS TEXT) = ?'
-            : ''
-        }`;
-        const values = owned ? [...batch, tenantId, userId] : batch;
-        const present = rowsOf(
-          await tx.query(
-            `SELECT COUNT(*) AS n FROM ${quoted(table)} WHERE ${where}`,
-            values,
-          ),
-        );
-        count += Number(present[0]?.n ?? 0);
-        await tx.query(`DELETE FROM ${quoted(table)} WHERE ${where}`, values);
-      }
-      deleted[table] = count;
-    }
-    // Nothing left anywhere may still point at a removed shared catalog row:
-    // the crawler and other tenants keep adding rows that reference them.
-    const referencing = await tablesWithColumns(
-      tx,
-      dialect,
-      Object.keys(catalogReferenceColumns),
-    );
-    for (const [column, kind] of Object.entries(catalogReferenceColumns)) {
-      const ids = Object.entries(catalogKinds)
-        .filter(([, k]) => k === kind)
-        .flatMap(([table]) => receipt.inserted[table] ?? []);
-      if (!ids.length) continue;
-      for (const [table, columns] of referencing) {
-        if (!columns.includes(column)) continue;
-        for (let start = 0; start < ids.length; start += BATCH) {
-          const batch = ids.slice(start, start + BATCH);
-          const remaining = rowsOf(
+  // A receipt whose commit was never confirmed may belong to an attempt that
+  // wrote nothing (or to a retry that has since succeeded): never delete
+  // database rows from it, only clean up unreferenced asset objects.
+  if (receipt.committed)
+    await options.database.transaction(async (tx) => {
+      const tables = Object.keys(receipt.inserted);
+      const order = (await foreignKeyOrder(tx, dialect, tables)).reverse();
+      for (const table of order) {
+        const ids = receipt.inserted[table];
+        const owned = ownedTables.includes(table);
+        let count = 0;
+        // Receipt ids are in insertion order (parents first). A table that
+        // references itself is deleted children first, one row per statement, so
+        // parent/child guards never see a parent removed before its children.
+        const tree =
+          (await selfReferenceColumns(tx, dialect, table)).length > 0;
+        const ordered = tree ? [...ids].reverse() : ids;
+        const step = tree ? 1 : BATCH;
+        for (let start = 0; start < ordered.length; start += step) {
+          const batch = ordered.slice(start, start + step);
+          // Owned rows are only ever removed under the receipt's own tuple, so a
+          // damaged or edited receipt cannot reach another tenant's data.
+          const where = `CAST(id AS TEXT) IN (${placeholders(batch.length)})${
+            owned
+              ? ' AND CAST(tenant_id AS TEXT) = ? AND CAST(owner_user_id AS TEXT) = ?'
+              : ''
+          }`;
+          const values = owned ? [...batch, tenantId, userId] : batch;
+          const present = rowsOf(
             await tx.query(
-              `SELECT COUNT(*) AS n FROM ${quoted(table)}
-                WHERE CAST(${quoted(column)} AS TEXT) IN (${placeholders(batch.length)})`,
-              batch,
+              `SELECT COUNT(*) AS n FROM ${quoted(table)} WHERE ${where}`,
+              values,
             ),
           );
-          if (Number(remaining[0]?.n ?? 0) > 0) {
-            throw new WorkspaceTransferError(
-              'rollback',
-              `Rows added after the import still reference imported ${kind} rows (in ${table}); rollback refused and nothing was removed.`,
+          count += Number(present[0]?.n ?? 0);
+          await tx.query(`DELETE FROM ${quoted(table)} WHERE ${where}`, values);
+        }
+        deleted[table] = count;
+      }
+      // Nothing left anywhere may still point at a removed shared catalog row:
+      // the crawler and other tenants keep adding rows that reference them.
+      const referencing = await tablesWithColumns(
+        tx,
+        dialect,
+        Object.keys(catalogReferenceColumns),
+      );
+      for (const [column, kind] of Object.entries(catalogReferenceColumns)) {
+        const ids = Object.entries(catalogKinds)
+          .filter(([, k]) => k === kind)
+          .flatMap(([table]) => receipt.inserted[table] ?? []);
+        if (!ids.length) continue;
+        for (const [table, columns] of referencing) {
+          if (!columns.includes(column)) continue;
+          for (let start = 0; start < ids.length; start += BATCH) {
+            const batch = ids.slice(start, start + BATCH);
+            const remaining = rowsOf(
+              await tx.query(
+                `SELECT COUNT(*) AS n FROM ${quoted(table)}
+                WHERE CAST(${quoted(column)} AS TEXT) IN (${placeholders(batch.length)})`,
+                batch,
+              ),
             );
+            if (Number(remaining[0]?.n ?? 0) > 0) {
+              throw new WorkspaceTransferError(
+                'rollback',
+                `Rows added after the import still reference imported ${kind} rows (in ${table}); rollback refused and nothing was removed.`,
+              );
+            }
           }
         }
       }
-    }
-    if (receipt.identity.created) {
-      for (const table of [...ownedTables, ...skippedOwnerTables]) {
-        const columns = await tableColumns(tx, dialect, table);
-        if (!columns?.some((c) => c.name === 'tenant_id')) continue;
-        const left = rowsOf(
-          await tx.query(
-            `SELECT COUNT(*) AS n FROM ${quoted(table)}
+      if (receipt.identity.created) {
+        for (const table of [...ownedTables, ...skippedOwnerTables]) {
+          const columns = await tableColumns(tx, dialect, table);
+          if (!columns?.some((c) => c.name === 'tenant_id')) continue;
+          const left = rowsOf(
+            await tx.query(
+              `SELECT COUNT(*) AS n FROM ${quoted(table)}
               WHERE CAST(tenant_id AS TEXT) = ?`,
-            [tenantId],
+              [tenantId],
+            ),
+          );
+          if (Number(left[0]?.n ?? 0) > 0) {
+            throw new WorkspaceTransferError(
+              'rollback',
+              'The account holds data that is not in the receipt; rollback refused.',
+            );
+          }
+        }
+        const identityDeletes: Array<[string, string, string]> = [
+          ['sessions', 'user_id', userId],
+          ['oidc_identities', 'profile_id', profileId],
+          ['oidc_profile_email_reservations', 'profile_id', profileId],
+        ];
+        for (const [table, column, value] of identityDeletes) {
+          if (!(await tableColumns(tx, dialect, table))) continue;
+          await tx.query(
+            `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,
+            [value],
+          );
+        }
+        // Memberships added since the import (the user invited elsewhere) keep the
+        // account alive: refuse instead of orphaning them.
+        const others = rowsOf(
+          await tx.query(
+            `SELECT CAST(id AS TEXT) AS id FROM memberships
+            WHERE CAST(user_id AS TEXT) = ?`,
+            [userId],
           ),
+        ).filter(
+          (row) => !receipt.identity.membershipIds.includes(text(row.id)),
         );
-        if (Number(left[0]?.n ?? 0) > 0) {
+        if (others.length) {
           throw new WorkspaceTransferError(
             'rollback',
-            'The account holds data that is not in the receipt; rollback refused.',
+            'The user has memberships that the import did not create; rollback refused.',
+          );
+        }
+        // Only the membership this import created, never one added since.
+        for (const membershipId of receipt.identity.membershipIds) {
+          await tx.query(
+            `DELETE FROM memberships WHERE CAST(id AS TEXT) = ?
+             AND CAST(user_id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?`,
+            [membershipId, userId, tenantId],
+          );
+        }
+        const finalDeletes: Array<[string, string, string]> = [
+          ['users', 'id', userId],
+          ['tenants', 'id', tenantId],
+          ['profiles', 'id', profileId],
+        ];
+        for (const [table, column, value] of finalDeletes) {
+          if (!(await tableColumns(tx, dialect, table))) continue;
+          await tx.query(
+            `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,
+            [value],
           );
         }
       }
-      const identityDeletes: Array<[string, string, string]> = [
-        ['sessions', 'user_id', userId],
-        ['oidc_identities', 'profile_id', profileId],
-        ['oidc_profile_email_reservations', 'profile_id', profileId],
-      ];
-      for (const [table, column, value] of identityDeletes) {
-        if (!(await tableColumns(tx, dialect, table))) continue;
-        await tx.query(
-          `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,
-          [value],
-        );
-      }
-      // Only the membership this import created, never one added since.
-      for (const membershipId of receipt.identity.membershipIds) {
-        await tx.query(
-          `DELETE FROM memberships WHERE CAST(id AS TEXT) = ?
-             AND CAST(user_id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?`,
-          [membershipId, userId, tenantId],
-        );
-      }
-      const finalDeletes: Array<[string, string, string]> = [
-        ['users', 'id', userId],
-        ['tenants', 'id', tenantId],
-        ['profiles', 'id', profileId],
-      ];
-      for (const [table, column, value] of finalDeletes) {
-        if (!(await tableColumns(tx, dialect, table))) continue;
-        await tx.query(
-          `DELETE FROM ${quoted(table)} WHERE CAST(${quoted(column)} AS TEXT) = ?`,
-          [value],
-        );
-      }
-    }
-  });
+    });
   let assetsRemoved = 0;
+  let assetsKept = 0;
   if (options.filesystem) {
     for (const key of receipt.assets) {
+      // Keys embed the owning record id. An object is removed only when no such
+      // record remains, so a re-run's receipt (or a retry that succeeded) can
+      // never delete files the committed import still uses.
+      if (await assetStillReferenced(options.database, key)) {
+        assetsKept += 1;
+        continue;
+      }
       if (await options.filesystem.exists(key)) {
         await options.filesystem.delete(key);
         assetsRemoved += 1;
       }
     }
   }
-  return { assetsRemoved, deleted };
+  return {
+    assetsKept,
+    assetsRemoved,
+    databaseRolledBack: receipt.committed,
+    deleted,
+  };
+}
+
+async function assetStillReferenced(
+  database: TransferDatabase,
+  key: string,
+): Promise<boolean> {
+  const match = /^(generated-resumes|application-packages)\/([^/]+)\//u.exec(
+    key,
+  );
+  if (!match) return true; // unknown layout: never delete
+  const table =
+    match[1] === 'generated-resumes' ? 'resume_assets' : 'applications';
+  const found = rowsOf(
+    await database.query(
+      `SELECT COUNT(*) AS n FROM ${quoted(table)} WHERE CAST(id AS TEXT) = ?`,
+      [match[2]],
+    ),
+  );
+  return Number(found[0]?.n ?? 0) > 0;
 }

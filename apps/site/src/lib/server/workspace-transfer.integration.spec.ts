@@ -753,6 +753,95 @@ function transfer(contract: {
     expect(await count(db, 'opportunity_recommendation_ranks')).toBe(1);
   });
 
+  it('never lets a re-run or pending receipt delete files the committed import uses', async () => {
+    const { out, seeded } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    expect(JSON.parse(readFileSync(receipt, 'utf8')).committed).toBe(true);
+    // idempotent re-run with its own receipt: nothing inserted, assets identical
+    const again = await run(db, fs, out);
+    const receipt2 = join(tempDir(), 'receipt-rerun.json');
+    await run(db, fs, out, {
+      expectedPlanSha256: again.planSha256,
+      mode: 'apply',
+      receiptPath: receipt2,
+    });
+    const rerun = await rollbackWorkspaceImport({
+      database: db as unknown as TransferDatabase,
+      dialect,
+      filesystem: fs,
+      receiptPath: receipt2,
+    });
+    expect(rerun.assetsRemoved).toBe(0);
+    expect(rerun.assetsKept).toBe(1);
+    expect(await fs.exists(seeded.assetKey)).toBe(true);
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'opportunity_recommendation_ranks')).toBe(1);
+    // a receipt whose commit was never confirmed only cleans unreferenced objects
+    const pending = JSON.parse(readFileSync(receipt, 'utf8'));
+    pending.committed = false;
+    const receipt3 = join(tempDir(), 'receipt-pending.json');
+    writeFileSync(receipt3, JSON.stringify(pending));
+    const result = await rollbackWorkspaceImport({
+      database: db as unknown as TransferDatabase,
+      dialect,
+      filesystem: fs,
+      receiptPath: receipt3,
+    });
+    expect(result.databaseRolledBack).toBe(false);
+    expect(result.assetsRemoved).toBe(0);
+    expect(await fs.exists(seeded.assetKey)).toBe(true);
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'opportunities')).toBe(3);
+  });
+
+  it('refuses to roll back an account that gained memberships since the import', async () => {
+    const { out } = await exported();
+    const { db, fs, receipt } = await hostedTarget();
+    const plan = await run(db, fs, out);
+    await run(db, fs, out, {
+      expectedPlanSha256: plan.planSha256,
+      mode: 'apply',
+      receiptPath: receipt,
+    });
+    const manifest = JSON.parse(
+      readFileSync(join(out, 'manifest.json'), 'utf8'),
+    );
+    const otherTenant = randomUUID();
+    await insert(db, 'tenants', {
+      _meta_type: 'tenant',
+      id: otherTenant,
+      name: 'shared team',
+      status: 'active',
+    });
+    const roleId = (
+      (await db.query('SELECT role_id FROM memberships WHERE user_id = ?', [
+        manifest.identity.userId,
+      ])) as unknown as { rows: Array<{ role_id: string }> }
+    ).rows[0].role_id;
+    await insert(db, 'memberships', {
+      role_id: roleId,
+      status: 'active',
+      tenant_id: otherTenant,
+      user_id: manifest.identity.userId,
+    });
+    await expect(
+      rollbackWorkspaceImport({
+        database: db as unknown as TransferDatabase,
+        dialect,
+        filesystem: fs,
+        receiptPath: receipt,
+      }),
+    ).rejects.toMatchObject({ code: 'rollback' });
+    expect(await count(db, 'users')).toBe(1);
+    expect(await count(db, 'opportunity_recommendation_ranks')).toBe(1);
+  });
+
   it('requires an explicit receipt path for apply and records every asset before uploading', async () => {
     const { out, seeded } = await exported();
     const { db, fs, receipt } = await hostedTarget();

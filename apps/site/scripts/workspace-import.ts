@@ -58,7 +58,7 @@ try {
       filesystem: await getResumeFilesystem(),
       receiptPath: rollback,
     });
-    console.log(JSON.stringify({ mode: 'rolled-back', ...result }, null, 2));
+    console.log(JSON.stringify({ mode: result.databaseRolledBack ? 'rolled-back' : 'assets-only', ...result }, null, 2));
     process.exit(0);
   }
   const bundleDir = option('--bundle');
