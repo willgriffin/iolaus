@@ -16,6 +16,7 @@ const originalEnvironment = Object.fromEntries(
 );
 
 const mocks = vi.hoisted(() => ({
+  candidateProfileOnboardingRedirect: vi.fn((): string | null => null),
   contextActive: false,
   ensureApplicationRuntimeReady: vi.fn(),
   verifyWorkspaceSubject: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock('$lib/server/terminal-auth', () => ({
 }));
 
 vi.mock('$lib/server/workspace-subject', () => ({
+  candidateProfileOnboardingRedirect: mocks.candidateProfileOnboardingRedirect,
   verifyWorkspaceSubject: mocks.verifyWorkspaceSubject,
 }));
 
@@ -383,6 +385,40 @@ describe('server bearer-session handling', () => {
     } as never);
 
     expect(response.status).toBe(401);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('sends an authorized hosted user without a candidate profile to onboarding, not a 500', async () => {
+    const requestEvent = event(null, '/admin');
+    requestEvent.locals.user = {
+      email: 'owner@example.invalid',
+      id: 'owner-1',
+      status: 'active',
+    };
+    requestEvent.locals.tenantId = 'tenant-1';
+    requestEvent.locals.permissions = ['opportunities.read'];
+    requestEvent.locals.membership = {
+      id: 'membership-1',
+      roleId: 'admin-role',
+      status: 'active',
+      tenantId: 'tenant-1',
+      userId: 'owner-1',
+    };
+    mocks.candidateProfileOnboardingRedirect.mockReturnValueOnce(
+      '/admin/onboarding',
+    );
+    const resolve = vi.fn(async () => new Response('unexpected'));
+    const { handle } = await import('./hooks.server');
+    let outcome: unknown = null;
+    try {
+      await handle({ event: requestEvent, resolve } as never);
+    } catch (thrown) {
+      outcome = thrown;
+    }
+    expect(outcome).toMatchObject({
+      location: '/admin/onboarding',
+      status: 303,
+    });
     expect(resolve).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,7 @@ import {
   ownerPrincipalOptions,
 } from '$lib/server/owner-principal';
 import {
+  CandidateProfileRequiredError,
   requireCandidateWorkspaceSubject,
   workspaceSubjectFromLocals,
 } from '$lib/server/workspace-subject.js';
@@ -232,6 +233,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     // still an answer to the caller, not a transport failure.
     if (caught instanceof OpportunitySelectionError) {
       return answer(refusal(body, phase, caught.reason));
+    }
+    if (caught instanceof CandidateProfileRequiredError) {
+      return json({ error: 'Candidate profile required.' }, { status: 409 });
     }
     if (isOwnerAuthorityDenial(caught)) {
       return json({ error: 'Forbidden' }, { status: 403 });

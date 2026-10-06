@@ -5,6 +5,7 @@ import {
 } from '$lib/server/owner-principal.js';
 import { loadWorkspaceActivity } from '$lib/server/workspace-activity.js';
 import {
+  CandidateProfileRequiredError,
   requireCandidateWorkspaceSubject,
   WorkspaceSubjectError,
   workspaceSubjectFromLocals,
@@ -31,6 +32,11 @@ export const GET: RequestHandler = async ({ locals }) => {
     );
     return json(snapshot, { headers });
   } catch (cause) {
+    if (cause instanceof CandidateProfileRequiredError)
+      return json(
+        { error: 'Candidate profile required.' },
+        { status: 409, headers },
+      );
     if (cause instanceof WorkspaceSubjectError || isOwnerAuthorityDenial(cause))
       return json({ error: 'Forbidden' }, { status: 403, headers });
     return json({ error: 'Activity unavailable' }, { status: 503, headers });

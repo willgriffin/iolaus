@@ -48,12 +48,27 @@ export interface WorkspaceSubjectLocals {
 }
 
 export class WorkspaceSubjectError extends Error {
-  readonly status: 401 | 403;
+  readonly status: 401 | 403 | 409;
 
-  constructor(status: 401 | 403, message: string) {
+  constructor(status: 401 | 403 | 409, message: string) {
     super(message);
     this.name = 'WorkspaceSubjectError';
     this.status = status;
+  }
+}
+
+/**
+ * A verified identity that has not created its candidate profile yet (a newly
+ * invited hosted user). A client conflict to resolve through onboarding, never
+ * a server fault.
+ */
+export class CandidateProfileRequiredError extends WorkspaceSubjectError {
+  constructor() {
+    super(
+      409,
+      'A candidate profile is required. Complete onboarding to create one.',
+    );
+    this.name = 'CandidateProfileRequiredError';
   }
 }
 
@@ -76,6 +91,9 @@ export function requireCandidateWorkspaceSubject(
   const tenantId = identifier(subject?.tenantId);
   const userId = identifier(subject?.userId);
   const profileId = identifier(subject?.profileId);
+  if (tenantId && userId && !profileId) {
+    throw new CandidateProfileRequiredError();
+  }
   if (!tenantId || !userId || !profileId) {
     throw new WorkspaceSubjectError(
       403,
@@ -425,4 +443,40 @@ export function workspaceSubjectFromLocals(
     throw new WorkspaceSubjectError(403, 'Workspace session is not verified.');
   }
   return subject;
+}
+
+/** Admin pages a verified user may open before a candidate profile exists. */
+const PROFILE_OPTIONAL_ADMIN_PATHS = [
+  '/admin/onboarding',
+  '/admin/account',
+  '/admin/terminal-login',
+];
+
+/**
+ * Where to send a signed-in hosted user who has no candidate profile yet, or
+ * null when the request may proceed. Only shared hosted mode is affected:
+ * private and local installs keep their existing behaviour. The subject is the
+ * hook-verified one, so a profile is never inferred across users.
+ */
+export function candidateProfileOnboardingRedirect(
+  locals: Pick<WorkspaceSubjectLocals, 'workspaceSubject'>,
+  pathname: string,
+): string | null {
+  const configuration = getAppConfig();
+  if (
+    configuration.runtimeProfile === 'local' ||
+    configuration.workspaceMode !== 'shared'
+  ) {
+    return null;
+  }
+  const subject = locals.workspaceSubject;
+  if (!subject || subject.profileId) return null;
+  if (
+    PROFILE_OPTIONAL_ADMIN_PATHS.some(
+      (path) => pathname === path || pathname.startsWith(`${path}/`),
+    )
+  ) {
+    return null;
+  }
+  return '/admin/onboarding';
 }

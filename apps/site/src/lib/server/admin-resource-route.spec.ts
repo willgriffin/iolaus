@@ -641,7 +641,7 @@ describe('admin-resource-route', () => {
           userId: workspaceSubject.userId,
         },
       }),
-    ).rejects.toMatchObject({ status: 403 });
+    ).rejects.toMatchObject({ status: 409 });
     expect(mocks.enqueueOpportunityIntelligence).not.toHaveBeenCalled();
   });
 

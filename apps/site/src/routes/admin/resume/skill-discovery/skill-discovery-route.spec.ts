@@ -108,6 +108,16 @@ describe('private skill discovery route', () => {
       expectedRevision: 'opaque-revision',
     });
   });
+  it('answers 409 profile-required when no profile exists yet', async () => {
+    const noProfile = {
+      ...locals,
+      workspaceSubject: { ...subject, profileId: '' },
+    };
+    expect(
+      await actions.discover(event({}, noProfile as App.Locals) as never),
+    ).toMatchObject({ status: 409, data: { ok: false } });
+    expect(mocks.discover).not.toHaveBeenCalled();
+  });
   it.each([
     'discover',
     'confirm',
@@ -116,7 +126,6 @@ describe('private skill discovery route', () => {
     for (const invalid of [
       { ...locals, membership: null },
       { ...locals, tenantId: 'foreign' },
-      { ...locals, workspaceSubject: { ...subject, profileId: '' } },
       { ...locals, membership: { ...locals.membership, status: 'inactive' } },
     ]) {
       expect(
