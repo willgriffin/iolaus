@@ -10,8 +10,10 @@ import {
   canonicalJson,
   catalogReferenceColumns,
   catalogTables,
+  driverCode,
   foreignKeyOrder,
   loadBundle,
+  orderParentsFirst,
   ownedTables,
   PLAN_VERSION,
   quoted,
@@ -19,6 +21,7 @@ import {
   readBundleRows,
   rowsOf,
   sanitizeCatalogRow,
+  selfReferenceColumns,
   sha256Hex,
   type TransferDatabase,
   type TransferDialect,
@@ -141,13 +144,6 @@ function bindable(value: unknown, dialect: TransferDialect): unknown {
   if (value && typeof value === 'object') return JSON.stringify(value);
   if (typeof value === 'boolean' && dialect === 'sqlite') return value ? 1 : 0;
   return value;
-}
-
-function driverCode(error: unknown): string {
-  const code = (error as { code?: unknown })?.code;
-  return typeof code === 'string' || typeof code === 'number'
-    ? String(code)
-    : 'unknown';
 }
 
 function naturalKey(
@@ -298,6 +294,9 @@ async function importTable(
     );
     const fresh: Array<Record<string, unknown>> = [];
     for (const row of batch) {
+      // Catalog references are remapped here, after any parent row of this
+      // table has recorded its own dedupe mapping.
+      if (isCatalog) remapReferences(context, row);
       const id = text(row.id);
       const present = found.get(id);
       if (present) {
@@ -379,6 +378,16 @@ async function importTable(
   };
 
   let batch: Array<Record<string, unknown>> = [];
+  // Self-referencing tables (source trees) are inserted parents first.
+  const selfReferences = await selfReferenceColumns(tx, dialect, table);
+  const buffered: Array<Record<string, unknown>> = [];
+  const enqueue = async (row: Record<string, unknown>) => {
+    batch.push(row);
+    if (batch.length >= BATCH) {
+      await flush(batch);
+      batch = [];
+    }
+  };
   for await (const raw of readBundleRows(options.bundleDir, table)) {
     stats.rows += 1;
     let row: Record<string, unknown> = raw;
@@ -391,7 +400,6 @@ async function importTable(
           next_check_at: null,
         };
       }
-      remapReferences(context, row);
     } else {
       row = { ...row };
       const expected: Record<string, string> = {
@@ -419,11 +427,11 @@ async function importTable(
       }
       remapReferences(context, row);
     }
-    batch.push(row);
-    if (batch.length >= BATCH) {
-      await flush(batch);
-      batch = [];
-    }
+    if (selfReferences.length) buffered.push(row);
+    else await enqueue(row);
+  }
+  for (const row of orderParentsFirst(buffered, selfReferences)) {
+    await enqueue(row);
   }
   await flush(batch);
 }
@@ -899,8 +907,14 @@ export async function rollbackWorkspaceImport(
     for (const table of order) {
       const ids = receipt.inserted[table];
       let count = 0;
-      for (let start = 0; start < ids.length; start += BATCH) {
-        const batch = ids.slice(start, start + BATCH);
+      // Receipt ids are in insertion order (parents first). A table that
+      // references itself is deleted children first, one row per statement, so
+      // parent/child guards never see a parent removed before its children.
+      const tree = (await selfReferenceColumns(tx, dialect, table)).length > 0;
+      const ordered = tree ? [...ids].reverse() : ids;
+      const step = tree ? 1 : BATCH;
+      for (let start = 0; start < ordered.length; start += step) {
+        const batch = ordered.slice(start, start + step);
         const where = `CAST(id AS TEXT) IN (${placeholders(batch.length)})`;
         const present = rowsOf(
           await tx.query(

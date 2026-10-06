@@ -4,6 +4,7 @@ import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
 import { getResumeFilesystem } from '../src/lib/server/resume-files.js';
 import { exportWorkspace } from '../src/lib/server/workspace-export.js';
 import {
+  driverCode,
   type TransferDatabase,
   WorkspaceTransferError,
 } from '../src/lib/server/workspace-transfer.js';
@@ -62,7 +63,7 @@ try {
   console.error(
     error instanceof WorkspaceTransferError
       ? `${error.code}: ${error.message}`
-      : 'export failed',
+      : `export failed (${driverCode(error)})`,
   );
   process.exit(1);
 }

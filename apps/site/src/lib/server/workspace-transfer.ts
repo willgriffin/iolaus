@@ -7,7 +7,6 @@ import {
   statSync,
 } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import { createInterface } from 'node:readline';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
 
 /**
@@ -226,19 +225,22 @@ export async function tableColumns(
 ): Promise<ColumnInfo[] | null> {
   const found =
     dialect === 'sqlite'
-      ? rowsOf(await database.query(`PRAGMA table_info(${quoted(table)})`)).map(
-          (row) => ({
+      ? rowsOf(await database.query(`PRAGMA table_xinfo(${quoted(table)})`))
+          // hidden 2/3 are generated columns: they cannot be written.
+          .filter((row) => Number(row.hidden ?? 0) === 0)
+          .map((row) => ({
             hasDefault: row.dflt_value != null,
             name: text(row.name),
             notNull: Number(row.notnull) === 1,
-          }),
-        )
+          }))
       : rowsOf(
           await database.query(
             `SELECT column_name AS name, is_nullable AS nullable,
                     column_default AS dflt
                FROM information_schema.columns
               WHERE table_schema = current_schema() AND table_name = ?
+                AND is_generated = 'NEVER'
+                AND NOT (is_identity = 'YES' AND identity_generation = 'ALWAYS')
               ORDER BY ordinal_position`,
             [table],
           ),
@@ -303,6 +305,85 @@ export async function foreignKeyOrder(
     order.push(next);
   }
   return order;
+}
+
+/** Columns of `table` that reference the table itself (parent/child trees). */
+export async function selfReferenceColumns(
+  database: TransferDatabase,
+  dialect: TransferDialect,
+  table: string,
+): Promise<string[]> {
+  if (dialect === 'postgres') {
+    return rowsOf(
+      await database.query(
+        `SELECT DISTINCT a.attname AS name
+           FROM pg_constraint c
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+          WHERE c.contype = 'f' AND c.conrelid = c.confrelid
+            AND c.conrelid = to_regclass(?)`,
+        [quoted(table)],
+      ),
+    ).map((row) => text(row.name));
+  }
+  return rowsOf(
+    await database.query(`PRAGMA foreign_key_list(${quoted(table)})`),
+  )
+    .filter((row) => text(row.table) === table)
+    .map((row) => text(row.from));
+}
+
+/** Parents before children so a self-referencing foreign key never dangles. */
+export function orderParentsFirst(
+  rows: Array<Record<string, unknown>>,
+  columns: readonly string[],
+): Array<Record<string, unknown>> {
+  if (!columns.length) return rows;
+  const byId = new Map(rows.map((row) => [text(row.id), row]));
+  const done = new Set<string>();
+  const visiting = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  const visit = (row: Record<string, unknown>) => {
+    const id = text(row.id);
+    if (done.has(id) || visiting.has(id)) return;
+    visiting.add(id);
+    for (const column of columns) {
+      const parent = byId.get(text(row[column]));
+      if (parent) visit(parent);
+    }
+    visiting.delete(id);
+    done.add(id);
+    out.push(row);
+  };
+  for (const row of rows) visit(row);
+  return out;
+}
+
+/**
+ * SQLSTATE plus the schema object (constraint/column names, never values) from a
+ * driver error or its cause chain. Driver messages and `detail` quote row values,
+ * so they are never surfaced.
+ */
+export function driverCode(error: unknown): string {
+  const parts = new Set<string>();
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    depth < 4 && current && typeof current === 'object';
+    depth++
+  ) {
+    const record = current as Record<string, unknown>;
+    for (const key of ['code', 'constraint', 'column']) {
+      const value = record[key];
+      if (
+        (typeof value === 'string' || typeof value === 'number') &&
+        /^[A-Za-z0-9_]{1,64}$/u.test(String(value))
+      ) {
+        parts.add(`${key}=${value}`);
+      }
+    }
+    current = record.cause;
+  }
+  return parts.size ? [...parts].join(' ') : 'unknown';
 }
 
 export function secureDirectory(path: string): void {
@@ -410,17 +491,29 @@ export function loadBundle(directory: string): BundleManifest {
   return manifest;
 }
 
+/**
+ * Rows are one JSON document per `\n`-terminated line. Split on `\n` only:
+ * readline also splits on U+2028/U+2029, which JSON allows inside strings.
+ */
 export async function* readBundleRows(
   directory: string,
   table: string,
 ): AsyncGenerator<Record<string, unknown>> {
-  const lines = createInterface({
-    crlfDelay: Number.POSITIVE_INFINITY,
-    input: createReadStream(bundleTablePath(directory, table), 'utf8'),
+  let pending = '';
+  const stream = createReadStream(bundleTablePath(directory, table), {
+    encoding: 'utf8',
   });
-  for await (const line of lines) {
-    if (line.trim()) yield JSON.parse(line) as Record<string, unknown>;
+  for await (const chunk of stream) {
+    pending += chunk as string;
+    let newline = pending.indexOf('\n');
+    while (newline >= 0) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      if (line.trim()) yield JSON.parse(line) as Record<string, unknown>;
+      newline = pending.indexOf('\n');
+    }
   }
+  if (pending.trim()) yield JSON.parse(pending) as Record<string, unknown>;
 }
 
 /** Blank the private fields of one shared catalog row (a copy is returned). */

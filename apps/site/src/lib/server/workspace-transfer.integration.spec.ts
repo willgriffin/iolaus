@@ -145,7 +145,9 @@ async function seedSource(
     name: 'Acme',
     slug: 'acme',
   });
-  const source = randomUUID();
+  // The parent sorts after its child, so id order alone would insert the child
+  // first and violate the self-referencing foreign key.
+  const source = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
   await insert(db, 'sources', {
     account_notes: SECRET,
     id: source,
@@ -155,10 +157,19 @@ async function seedSource(
     slug: 'board-x',
     warden_reference: SECRET,
   });
+  await insert(db, 'sources', {
+    account_notes: SECRET,
+    id: '00000000-0000-4000-8000-000000000001',
+    is_active: bool(false),
+    parent_source_id: source,
+    slug: 'board-child',
+  });
   const opportunityIds = [randomUUID(), randomUUID(), randomUUID()];
   for (const [index, id] of opportunityIds.entries()) {
     await insert(db, 'opportunities', {
       canonical_url: `https://jobs.example.invalid/${index}`,
+      // U+2028 is legal inside JSON strings but splits lines in readline.
+      title: `Engineer\u2028${index}`,
       company_id: company,
       id,
       preferred_skills: 'sql',
@@ -345,6 +356,7 @@ function transfer(contract: {
     // only the referenced agent run travels
     expect(result.tables.agent_runs).toBe(1);
     expect(result.tables.opportunities).toBe(3);
+    expect(result.tables.sources).toBe(2);
     expect(result.tables.company_research).toBeUndefined();
     expect(result.assets).toBe(1);
     const everything = readdirDeep(out)
@@ -657,6 +669,7 @@ function transfer(contract: {
     }
     expect(await count(db, 'opportunities')).toBe(1);
     expect(await count(db, 'sources')).toBe(0);
+    expect(await count(db, 'tags')).toBe(0);
     // and the import can be run again after a rollback
     const retry = await run(db, fs, out);
     expect(retry.plan.eligible).toBe(true);

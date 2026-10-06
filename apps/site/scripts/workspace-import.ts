@@ -11,6 +11,7 @@ import {
   rollbackWorkspaceImport,
 } from '../src/lib/server/workspace-import.js';
 import {
+  driverCode,
   type TransferDatabase,
   WorkspaceTransferError,
 } from '../src/lib/server/workspace-transfer.js';
@@ -82,7 +83,7 @@ try {
   console.error(
     error instanceof WorkspaceTransferError
       ? `${error.code}: ${error.message}`
-      : 'import failed',
+      : `import failed (${driverCode(error)})`,
   );
   process.exit(1);
 }
