@@ -10,6 +10,24 @@ import {
 import { canonicalSkillSlug, skillLabelFromSlug } from './skill-vocabulary.js';
 import { getCollection } from './smrt.js';
 
+export type OpportunityAnalysisEnrichment = Pick<
+  OpportunityAnalysisSnapshot,
+  'skills' | 'requirements' | 'summaryBullets' | 'eligibility'
+>;
+export type OpportunityAnalysisGateway = (input: {
+  opportunityId: string;
+  sourceContentFingerprint: string;
+  title: string;
+  description: string;
+}) => Promise<OpportunityAnalysisEnrichment>;
+let enrichmentGateway: OpportunityAnalysisGateway | null = null;
+/** Test/operator seam. Production wiring must provide a governed gateway. */
+export function setOpportunityAnalysisGatewayForTest(
+  gateway: OpportunityAnalysisGateway | null,
+): void {
+  enrichmentGateway = gateway;
+}
+
 export interface EnsureOpportunityAnalysisOptions {
   enrich?: boolean;
   budgetMicros?: number;
@@ -149,6 +167,34 @@ function snapshot(row: OpportunityAnalysis): OpportunityAnalysisSnapshot {
   };
 }
 
+/** Reject hallucinated source citations before they can enter the shared
+ * catalog. Model input contains only source posting fields, never candidates. */
+export function validateOpportunityAnalysisEnrichment(
+  value: OpportunityAnalysisEnrichment,
+  description: string,
+): OpportunityAnalysisEnrichment {
+  for (const skill of value.skills) {
+    for (const evidence of skill.evidence) {
+      if (
+        !Number.isInteger(evidence.start) ||
+        !Number.isInteger(evidence.end) ||
+        evidence.start < 0 ||
+        evidence.end < evidence.start ||
+        evidence.end > description.length
+      )
+        throw new Error('Opportunity analysis evidence span is out of bounds.');
+      if (
+        evidence.quote &&
+        description.slice(evidence.start, evidence.end) !== evidence.quote
+      )
+        throw new Error(
+          'Opportunity analysis evidence quote does not match source text.',
+        );
+    }
+  }
+  return value;
+}
+
 /** Return the current source-version analysis without invoking a provider. */
 export async function getCurrentOpportunityAnalysis(
   opportunityId: string,
@@ -230,5 +276,51 @@ export async function ensureOpportunityAnalysis(
       }),
     ),
   );
+  // Do not publish an analysis against a posting version that changed while
+  // it was being materialized. A later ensure call will create the new row.
+  const latest = await opportunities.get(opportunityId);
+  if (
+    latest &&
+    latest.sourceContentFingerprint === opportunity.sourceContentFingerprint &&
+    latest.sourceContentVersion === opportunity.sourceContentVersion
+  ) {
+    latest.currentAnalysisId = analysisId;
+    await latest.save();
+  }
+  if (
+    options.enrich &&
+    options.budgetMicros &&
+    options.budgetMicros > 0 &&
+    enrichmentGateway
+  ) {
+    try {
+      const enriched = validateOpportunityAnalysisEnrichment(
+        await enrichmentGateway({
+          opportunityId,
+          sourceContentFingerprint: opportunity.sourceContentFingerprint,
+          title: opportunity.title,
+          description: opportunity.descriptionRaw,
+        }),
+        opportunity.descriptionRaw,
+      );
+      created.status = 'enriched';
+      created.skillsJson = JSON.stringify(enriched.skills);
+      created.requirementsJson = JSON.stringify(enriched.requirements);
+      created.summaryJson = JSON.stringify(enriched.summaryBullets.slice(0, 5));
+      created.eligibilityJson = JSON.stringify(enriched.eligibility);
+      created.skillSlugsJson = JSON.stringify(
+        enriched.skills.map((skill) => skill.slug).sort(),
+      );
+      await created.save();
+    } catch (cause) {
+      // Deterministic analysis remains current and searchable after any model
+      // failure; the scheduled backfill may retry this version later.
+      created.errorCode =
+        cause instanceof Error
+          ? 'enrichment_failed'
+          : 'enrichment_unknown_failure';
+      await created.save();
+    }
+  }
   return snapshot(created);
 }
