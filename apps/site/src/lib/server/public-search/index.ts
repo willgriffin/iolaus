@@ -5,7 +5,6 @@ import {
   type PublicOpportunityDetail,
   type PublicSearchInput,
   type PublicSearchPage,
-  publicFacetsSchema,
   publicOpportunityDetailSchema,
   publicOpportunitySchema,
   publicSearchInputSchema,
