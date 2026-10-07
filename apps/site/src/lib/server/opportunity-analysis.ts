@@ -7,6 +7,7 @@ import {
   type OpportunityAnalysisSkill,
   type OpportunityAnalysisSnapshot,
 } from '$lib/opportunity-analysis-contract.js';
+import { executeGovernedOpportunityIntelligenceRequest } from './opportunity-intelligence-governance.js';
 import { canonicalSkillSlug, skillLabelFromSlug } from './skill-vocabulary.js';
 import { getCollection } from './smrt.js';
 
@@ -294,13 +295,49 @@ export async function ensureOpportunityAnalysis(
     enrichmentGateway
   ) {
     try {
+      const gateway = enrichmentGateway;
+      if (!gateway)
+        throw new Error(
+          'Opportunity analysis enrichment gateway is unavailable.',
+        );
+      const sourceInput = `${opportunity.title}\n${opportunity.descriptionRaw}`;
+      const estimatedInputTokens = Math.max(
+        1,
+        Math.ceil(sourceInput.length / 4),
+      );
+      // The governance ledger owns retries, idempotency and circuit/provider
+      // limits. The gateway is injected only to keep unit tests token-free.
+      const governed =
+        await executeGovernedOpportunityIntelligenceRequest<OpportunityAnalysisEnrichment>(
+          {
+            estimatedInputTokens,
+            inputTokenCeiling: Math.min(30_000, estimatedInputTokens),
+            maxOutputTokens: 4_000,
+            identity: {
+              agentRunId: 'opportunity-analysis',
+              opportunityId,
+              contentFingerprint: opportunity.sourceContentFingerprint,
+              inputFingerprint:
+                opportunityAnalysisInputFingerprint(opportunity),
+              feature: 'opportunity-analysis',
+              profile: 'opportunity-intelligence-extraction',
+              model: 'openai/gpt-6-luna',
+              promptVersion: OPPORTUNITY_ANALYSIS_VERSION,
+              outputSchemaVersion: OPPORTUNITY_ANALYSIS_VERSION,
+              preparedPayloadVersion: OPPORTUNITY_ANALYSIS_VERSION,
+            },
+            invoke: async () => ({
+              output: await gateway({
+                opportunityId,
+                sourceContentFingerprint: opportunity.sourceContentFingerprint,
+                title: opportunity.title,
+                description: opportunity.descriptionRaw,
+              }),
+            }),
+          },
+        );
       const enriched = validateOpportunityAnalysisEnrichment(
-        await enrichmentGateway({
-          opportunityId,
-          sourceContentFingerprint: opportunity.sourceContentFingerprint,
-          title: opportunity.title,
-          description: opportunity.descriptionRaw,
-        }),
+        governed.output,
         opportunity.descriptionRaw,
       );
       created.status = 'enriched';
@@ -308,6 +345,7 @@ export async function ensureOpportunityAnalysis(
       created.requirementsJson = JSON.stringify(enriched.requirements);
       created.summaryJson = JSON.stringify(enriched.summaryBullets.slice(0, 5));
       created.eligibilityJson = JSON.stringify(enriched.eligibility);
+      created.requestId = governed.requestId;
       created.skillSlugsJson = JSON.stringify(
         enriched.skills.map((skill) => skill.slug).sort(),
       );
