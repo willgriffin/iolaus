@@ -2,9 +2,6 @@
 let { data } = $props();
 </script>
 
-<svelte:head><title>Opportunities</title><meta name="description" content="Search public job opportunities." /></svelte:head>
-<main><h1>Opportunities</h1><form method="GET"><label>Search <input name="q" value={data.input.q} /></label><button>Search</button></form>
-  <p>{data.page.items.length} opportunities</p>
-  <ul>{#each data.page.items as item}<li><a href={`/opportunities/${item.id}`}>{item.title}</a> at {item.company} · {item.workMode}</li>{/each}</ul>
-  {#if data.page.nextCursor}<a href={`?q=${encodeURIComponent(data.input.q)}&cursor=${encodeURIComponent(data.page.nextCursor)}`}>Next page</a>{/if}
-</main>
+<svelte:head><title>Opportunity search</title><meta name="description" content="Search public job opportunities." /></svelte:head>
+<main class="shell"><a href="/">Iolaus</a><h1>Find opportunities</h1><form method="GET" class="search"><label>Keywords<input name="q" value={data.input.q} placeholder="Role, skill, or company" /></label><label>Work mode<select name="work_mode"><option value="">Any</option><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label><button>Search</button></form><p>{data.page.total_estimate} opportunities</p><ol>{#each data.page.items as item}<li><article><p>{item.company?.name ?? 'Company'} · {item.work_mode}</p><h2><a href={`/opportunities/${item.id}`}>{item.title}</a></h2><p>{item.location.text}</p><ul>{#each [...item.skills.required,...item.skills.preferred].slice(0,6) as skill}<li>{skill.label}</li>{/each}</ul></article></li>{/each}</ol>{#if data.page.next_cursor}<a href={`?q=${encodeURIComponent(data.input.q)}&cursor=${encodeURIComponent(data.page.next_cursor)}`}>Next page</a>{/if}</main>
+<style>.shell{max-width:70rem;margin:auto;padding:1rem}.search{display:grid;gap:.75rem}.search label{display:grid;gap:.25rem}.search input,.search select,.search button{min-height:44px;padding:.5rem}ol{padding:0;list-style:none;display:grid;gap:1rem}article{border:1px solid #ddd;padding:1rem;border-radius:.5rem}article p{color:#655f57}article ul{display:flex;gap:.5rem;flex-wrap:wrap;padding:0;list-style:none}article li li{background:#eee;padding:.2rem .4rem;border-radius:2rem}@media(min-width:42rem){.shell{padding:2rem}.search{grid-template-columns:1fr 14rem auto;align-items:end}}</style>

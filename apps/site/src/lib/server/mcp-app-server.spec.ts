@@ -383,6 +383,8 @@ describe('Iolaus MCP Apps server', () => {
       'job_search_inspect_opportunity',
       'job_search_open_application',
       'list_facets',
+      'match_my_profile',
+      'refresh_my_matches',
       'search_opportunities',
     ]);
     expect(secondCatalog.result.tools).toEqual(firstCatalog.result.tools);
@@ -438,6 +440,8 @@ describe('Iolaus MCP Apps server', () => {
       'job_search_inspect_opportunity',
       'job_search_open_application',
       'list_facets',
+      'match_my_profile',
+      'refresh_my_matches',
       'search_opportunities',
     ]);
     expect(

@@ -7,6 +7,16 @@ import {
 import { listMcpTools } from './mcp-tools.js';
 
 /**
+ * Application-owned workflow tools are not generated from a SMRT object, but
+ * must still enter the owner-principal's derived allow-list before their
+ * private service can run under `executeAsPrincipal`.
+ */
+const appMcpWorkflowToolNames = [
+  'match_my_profile',
+  'refresh_my_matches',
+] as const;
+
+/**
  * Every tool name the signed-in owner can reach through this application:
  * the authenticated generated server-MCP catalog (plus its bounded
  * source-read extensions), the browser command-center WebMCP surface, and the
@@ -30,6 +40,7 @@ export async function listOwnerToolNames(): Promise<string[]> {
 
   const names = new Set<string>();
   for (const tool of mcpTools) names.add(tool.name);
+  for (const name of appMcpWorkflowToolNames) names.add(name);
   for (const name of opportunityDataSurfaceToolNames) names.add(name);
   for (const definition of webMcpTools) {
     if ('name' in definition && typeof definition.name === 'string') {

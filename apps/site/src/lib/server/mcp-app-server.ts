@@ -25,6 +25,10 @@ import {
   inspectJobOpportunity,
   openJobApplication,
 } from './job-search-webmcp.js';
+import {
+  getMyOpportunityMatches,
+  refreshOpportunityMatches,
+} from './opportunity-matching.js';
 import { runAsOwner } from './owner-principal.js';
 import {
   getPublicOpportunity,
@@ -221,6 +225,83 @@ const publicFacetsWorkflow: McpWorkflowToolDefinition = {
   openWorld: true,
   outputSchema,
   title: 'List public opportunity facets',
+};
+
+function matchLimit(input: Record<string, unknown>): number | undefined {
+  const value = input.limit;
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 25
+  ) {
+    throw new McpAccessError(
+      400,
+      'Match limit must be an integer from 1 to 25.',
+    );
+  }
+  return value;
+}
+
+const privateMatchInputSchema = {
+  additionalProperties: false,
+  properties: { limit: { maximum: 25, minimum: 1, type: 'integer' } },
+  type: 'object' as const,
+};
+
+const privateMatchesWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Read the signed-in owner’s private opportunity matches. It rechecks the live workspace subject and never accepts an owner, profile, or tenant argument.',
+  effect: 'read',
+  execute: async ({ arguments: input, principal }) =>
+    jsonResult(
+      await runOwnerWorkflow({
+        execute: async (owner) => ({
+          items: await getMyOpportunityMatches(
+            workspaceSubjectForOwner(owner),
+            {
+              limit: matchLimit(input),
+            },
+          ),
+        }),
+        operations: [workspaceWorkflowOperation('application.inspect')],
+        principal,
+        profileRequired: true,
+        tool: 'match_my_profile',
+      }),
+    ),
+  idempotent: true,
+  inputSchema: privateMatchInputSchema,
+  name: 'match_my_profile',
+  openWorld: false,
+  outputSchema,
+  title: 'Read my opportunity matches',
+};
+
+const refreshPrivateMatchesWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Refresh the signed-in owner’s bounded private opportunity matches without approving or submitting an application.',
+  effect: 'write',
+  execute: async ({ arguments: input, principal }) =>
+    jsonResult(
+      await runOwnerWorkflow({
+        execute: async (owner) =>
+          await refreshOpportunityMatches(workspaceSubjectForOwner(owner), {
+            limit: matchLimit(input),
+          }),
+        operations: [workspaceWorkflowOperation('application.inspect')],
+        principal,
+        profileRequired: true,
+        tool: 'refresh_my_matches',
+      }),
+    ),
+  idempotent: false,
+  inputSchema: privateMatchInputSchema,
+  name: 'refresh_my_matches',
+  openWorld: false,
+  outputSchema,
+  title: 'Refresh my opportunity matches',
 };
 
 function asOwnerPrincipal(
@@ -548,6 +629,8 @@ export const mcpAppServer = createMcpAppServer({
     publicSearchWorkflow,
     publicOpportunityWorkflow,
     publicFacetsWorkflow,
+    privateMatchesWorkflow,
+    refreshPrivateMatchesWorkflow,
     browseWorkflow,
     opportunityBoardEntrypoint,
     inspectWorkflow,
