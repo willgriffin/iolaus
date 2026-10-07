@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { redirect } from '@sveltejs/kit';
 import { version } from '$app/environment';
+import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
 import {
   getAppConfig,
   getPublicLinks,
   isSharedHosted,
 } from '$lib/server/app-config';
 import { PUBLIC_RESUME_CACHE_CONTROL } from '$lib/server/public-cache';
+import { searchPublicOpportunities } from '$lib/server/public-search/index.js';
 import { getCachedPublishedResume } from '$lib/server/resume-data';
 import type { PageServerLoad } from './$types';
 
@@ -35,12 +36,32 @@ export const load: PageServerLoad = async ({ locals, setHeaders }) => {
   // configured marketing site, or show a neutral sign-in entry.
   if (isSharedHosted()) {
     const links = getPublicLinks();
-    if (links.landing) redirect(302, links.landing.href);
-    setHeaders({ 'cache-control': 'private, no-store' });
+    setHeaders({
+      'cache-control': 'public, max-age=0, s-maxage=60, must-revalidate',
+    });
+    let opportunities: PublicOpportunity[] = [];
+    try {
+      opportunities = (
+        await searchPublicOpportunities({
+          q: '',
+          skills: [],
+          seniority: [],
+          function: [],
+          workMode: [],
+          employmentType: [],
+          country: [],
+          limit: 12,
+          sort: 'newest',
+        })
+      ).items;
+    } catch {
+      // The page remains a safe neutral landing during a staged read-role rollout.
+    }
     return {
       appName: getAppConfig().appName,
       links,
       mode: 'landing' as const,
+      opportunities,
       signedIn: Boolean(locals?.user),
     };
   }
