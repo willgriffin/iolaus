@@ -1,12 +1,14 @@
 # Iolaus MCP App package
 
-This is the portable package for Iolaus's Streamable HTTP MCP endpoint. It is
-configured for a local development server at `http://127.0.0.1:5173/api/mcp`.
+This is the portable package for Iolaus's public Streamable HTTP MCP endpoint
+at `https://jobgeni.us/api/mcp`. Anonymous clients can search the shared
+opportunity catalog; account-linked tools always require an Iolaus grant.
 
-For a private self-hosted installation or a shared hosted deployment, copy the
-package and set `mcp.json` to the deployment's HTTPS `/api/mcp` URL. The server
-binds the verified session and workspace on each request; do not add a user,
-tenant, profile, or credential to the manifest.
+For local development, copy the package and replace the endpoint with
+`http://127.0.0.1:5173/api/mcp`. For a private self-hosted installation, copy
+the package and use that deployment's HTTPS `/api/mcp` URL. Do not add a user,
+tenant, profile, or credential to a manifest: the server binds the verified
+session and workspace on each request.
 
 Private installs retain their configured administrative workspace boundary.
 Shared hosted deployments use `IOLAUS_WORKSPACE_MODE=shared`: each account
@@ -31,11 +33,11 @@ Host acceptance remains pending until an operator can complete that controlled
 tunnel and login flow; the package's HTTP and simulated-DOM checks are not a
 claim of external-host acceptance.
 
-For an account-bound remote host, configure Iolaus's optional OAuth MCP
-settings on the deployment. The authenticated endpoint then advertises RFC 9728
-protected-resource metadata and maps a validated token only to an existing,
-active Iolaus workspace. Browser cookies and terminal CLI Bearers remain
-separate compatibility paths.
+For an account-bound remote host, configure Iolaus's OAuth authorization
+service on the deployment. The authenticated endpoint advertises protected
+resource metadata and maps a validated grant only to an existing, active
+Iolaus workspace. Browser cookies and terminal CLI Bearers remain separate
+compatibility paths.
 
 The app can browse and inspect the authenticated workspace, and create or reopen
 a local application workspace. Its human-review link opens Iolaus's dedicated

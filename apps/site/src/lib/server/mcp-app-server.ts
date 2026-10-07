@@ -11,6 +11,12 @@ import {
 import workspaceCss from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.css?raw';
 import workspaceScript from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.iife.js?raw';
 import { jobSearchToolContracts } from '$lib/job-search-tool-schemas';
+import {
+  publicFacetsSchema,
+  publicOpportunityDetailSchema,
+  publicSearchInputSchema,
+  publicSearchPageSchema,
+} from '$lib/public-opportunity-contract.js';
 import { administrativeSessionFailure } from './administrative-auth.js';
 import { getConfiguredMcpServerName } from './app-config.js';
 import { inspectJobApplication } from './application-inspect-webmcp.js';
@@ -20,6 +26,11 @@ import {
   openJobApplication,
 } from './job-search-webmcp.js';
 import { runAsOwner } from './owner-principal.js';
+import {
+  getPublicOpportunity,
+  listPublicFacets,
+  searchPublicOpportunities,
+} from './public-search/index.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import {
   withVerifiedWorkspaceSubject,
@@ -80,12 +91,137 @@ const outputSchema = {
   type: 'object' as const,
 };
 
+const PUBLIC_MCP_TOOL_NAMES = new Set([
+  'get_opportunity',
+  'list_facets',
+  'search_opportunities',
+]);
+
+const publicSearchInputJsonSchema = {
+  additionalProperties: false,
+  properties: {
+    company: { maxLength: 120, type: 'string' },
+    country: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+    cursor: { maxLength: 1000, type: 'string' },
+    employmentType: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+    function: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+    limit: { maximum: 50, minimum: 1, type: 'integer' },
+    q: { maxLength: 200, type: 'string' },
+    salaryMin: { minimum: 0, type: 'number' },
+    seniority: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+    skills: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+    sort: { enum: ['relevance', 'newest', 'salary'], type: 'string' },
+    workMode: {
+      items: { maxLength: 80, type: 'string' },
+      maxItems: 12,
+      type: 'array',
+    },
+  },
+  type: 'object' as const,
+};
+
 function jsonResult(data: Record<string, unknown>) {
   return {
     content: [{ text: JSON.stringify(data), type: 'text' as const }],
     structuredContent: data,
   };
 }
+
+function parsePublicSearchInput(input: unknown) {
+  try {
+    return publicSearchInputSchema.parse(input);
+  } catch {
+    throw new McpAccessError(400, 'Invalid public search arguments.');
+  }
+}
+
+const publicSearchWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Search the shared public opportunity catalog. It never reads a profile, workspace, application, or private evidence.',
+  effect: 'read',
+  execute: async ({ arguments: input }) =>
+    jsonResult(
+      publicSearchPageSchema.parse(
+        await searchPublicOpportunities(parsePublicSearchInput(input)),
+      ),
+    ),
+  idempotent: true,
+  inputSchema: publicSearchInputJsonSchema,
+  name: 'search_opportunities',
+  openWorld: true,
+  outputSchema,
+  title: 'Search public opportunities',
+};
+
+const publicOpportunityWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Read one allowlisted public opportunity summary and its original posting link. It never returns a raw posting or workspace data.',
+  effect: 'read',
+  execute: async ({ arguments: input }) => {
+    const id =
+      input && typeof input === 'object' && !Array.isArray(input)
+        ? (input as Record<string, unknown>).id
+        : null;
+    if (typeof id !== 'string' || id.length > 128) {
+      throw new McpAccessError(
+        400,
+        'A valid public opportunity ID is required.',
+      );
+    }
+    const opportunity = await getPublicOpportunity(id);
+    if (!opportunity) throw new McpAccessError(404, 'Opportunity not found.');
+    return jsonResult(publicOpportunityDetailSchema.parse(opportunity));
+  },
+  idempotent: true,
+  inputSchema: {
+    additionalProperties: false,
+    properties: { id: { maxLength: 128, minLength: 1, type: 'string' } },
+    required: ['id'],
+    type: 'object',
+  },
+  name: 'get_opportunity',
+  openWorld: true,
+  outputSchema,
+  title: 'Get public opportunity',
+};
+
+const publicFacetsWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'List bounded filter facets for the shared public opportunity catalog. It does not access linked-account or workspace data.',
+  effect: 'read',
+  execute: async ({ arguments: input }) =>
+    jsonResult(
+      publicFacetsSchema.parse(
+        await listPublicFacets(parsePublicSearchInput(input)),
+      ),
+    ),
+  idempotent: true,
+  inputSchema: publicSearchInputJsonSchema,
+  name: 'list_facets',
+  openWorld: true,
+  outputSchema,
+  title: 'List public opportunity facets',
+};
 
 function asOwnerPrincipal(
   principal: McpAppPrincipal | null,
@@ -381,6 +517,7 @@ function canUseIolausMcp(
  */
 export const mcpAppServer = createMcpAppServer({
   allowedClassNames: [],
+  publicToolPatterns: () => [...PUBLIC_MCP_TOOL_NAMES],
   resourcePolicy: ({ principal }) => canUseIolausMcp(principal),
   resources: [
     {
@@ -401,8 +538,16 @@ export const mcpAppServer = createMcpAppServer({
   },
   smrtOptions: () =>
     getRequestScopedSmrtOptions() as unknown as Record<string, unknown>,
-  toolPolicy: ({ principal }) => canUseIolausMcp(principal),
+  // Keep the anonymous surface exact. A null principal can discover and call
+  // only the catalog tools declared above; it never makes generated CRUD,
+  // private workflows, or the embedded resource public.
+  toolPolicy: ({ principal, tool }) =>
+    (principal == null && PUBLIC_MCP_TOOL_NAMES.has(tool.name)) ||
+    canUseIolausMcp(principal),
   workflowTools: [
+    publicSearchWorkflow,
+    publicOpportunityWorkflow,
+    publicFacetsWorkflow,
     browseWorkflow,
     opportunityBoardEntrypoint,
     inspectWorkflow,

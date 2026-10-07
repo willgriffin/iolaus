@@ -375,12 +375,15 @@ describe('Iolaus MCP Apps server', () => {
       result: { tools: Array<{ name: string }> };
     };
     expect(firstCatalog.result.tools.map((tool) => tool.name)).toEqual([
+      'get_opportunity',
       'iolaus_open_human_review',
       'iolaus_open_opportunity_board',
       'job_search_browse_opportunities',
       'job_search_inspect_application',
       'job_search_inspect_opportunity',
       'job_search_open_application',
+      'list_facets',
+      'search_opportunities',
     ]);
     expect(secondCatalog.result.tools).toEqual(firstCatalog.result.tools);
     const forged = {
@@ -395,10 +398,23 @@ describe('Iolaus MCP Apps server', () => {
     expect(resolveMcpAppPrincipal(forged)).toBeNull();
   });
 
-  it('keeps the catalog and portable resource private by default', async () => {
-    await expect(mcpAppServer.listTools({ principal: null })).resolves.toEqual(
-      [],
-    );
+  it('exposes exactly the public catalog tools without exposing a workspace resource', async () => {
+    await expect(
+      mcpAppServer.listTools({ principal: null }),
+    ).resolves.toMatchObject([
+      {
+        name: 'get_opportunity',
+        annotations: { openWorldHint: true, readOnlyHint: true },
+      },
+      {
+        name: 'list_facets',
+        annotations: { openWorldHint: true, readOnlyHint: true },
+      },
+      {
+        name: 'search_opportunities',
+        annotations: { openWorldHint: true, readOnlyHint: true },
+      },
+    ]);
     await expect(
       mcpAppServer.listResources?.({ principal: null }),
     ).resolves.toEqual([]);
@@ -414,12 +430,15 @@ describe('Iolaus MCP Apps server', () => {
     const tools = await mcpAppServer.listTools({ principal: owner });
 
     expect(tools.map((tool) => tool.name)).toEqual([
+      'get_opportunity',
       'iolaus_open_human_review',
       'iolaus_open_opportunity_board',
       'job_search_browse_opportunities',
       'job_search_inspect_application',
       'job_search_inspect_opportunity',
       'job_search_open_application',
+      'list_facets',
+      'search_opportunities',
     ]);
     expect(
       tools.find((tool) => tool.name === 'job_search_browse_opportunities')
