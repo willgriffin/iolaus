@@ -84,11 +84,12 @@ export function matchPublicSkills(
         (requirement) => {
           const requiredSkills = requirement.skills ?? [];
           const known = requiredSkills.length > 0;
-          const status = !known
-            ? 'unknown'
-            : intersect(submitted, requiredSkills).length > 0
-              ? 'matched'
-              : 'missing';
+          const status: PublicMatchExplanation['requirements'][number]['status'] =
+            !known
+              ? 'unknown'
+              : intersect(submitted, requiredSkills).length > 0
+                ? 'matched'
+                : 'missing';
           return {
             requirement: requirement.text ?? requirement.hash ?? 'Requirement',
             status,
