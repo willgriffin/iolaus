@@ -140,15 +140,18 @@ function twoJobBarrier(): () => Promise<void> {
     release = resolve;
     reject = rejectPromise;
   });
-  const timeout = setTimeout(() => {
-    reject(
-      new Error(
-        'Concurrent TaskRunner jobs did not both enter within one second.',
-      ),
-    );
-  }, 1_000);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   return async () => {
     entered += 1;
+    if (entered === 1) {
+      timeout = setTimeout(() => {
+        reject(
+          new Error(
+            'Concurrent TaskRunner jobs did not both enter within one second.',
+          ),
+        );
+      }, 1_000);
+    }
     if (entered === 2) {
       clearTimeout(timeout);
       release();
@@ -160,12 +163,26 @@ function twoJobBarrier(): () => Promise<void> {
 async function waitForTerminalJob(
   runner: TaskRunner,
   jobId: string,
+  started: Promise<void>,
 ): Promise<{ error?: Error; job: SmrtJob; result?: unknown }> {
   return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Timed out waiting for queued job ${jobId}.`));
-    }, 3_000);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    // Native TaskRunner startup permits a 10s liveness-thread handshake.
+    // Keep the existing execution budget separate from that startup budget.
+    void started.then(
+      () => {
+        if (settled) return;
+        timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error(`Timed out waiting for queued job ${jobId}.`));
+        }, 3_000);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
     const complete = (job: SmrtJob, result: unknown) => {
       if (job.id !== jobId) return;
       cleanup();
@@ -177,6 +194,7 @@ async function waitForTerminalJob(
       resolve({ error, job });
     };
     const cleanup = () => {
+      settled = true;
       clearTimeout(timeout);
       runner.off('job:completed', complete);
       runner.off('job:failed', fail);
@@ -186,7 +204,9 @@ async function waitForTerminalJob(
   });
 }
 
-describe('TaskRunner workspace-subject dispatch (SQLite)', () => {
+describe('TaskRunner workspace-subject dispatch (SQLite)', {
+  timeout: 20_000,
+}, () => {
   let database: DatabaseInterface | undefined;
   let directory: string | undefined;
   let jobs: SmrtJobCollection | undefined;
@@ -427,9 +447,10 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', () => {
   async function startAndWait(job: SmrtJob) {
     if (!runner) throw new Error('TaskRunner fixture is unavailable.');
     const jobId = requiredId(job, 'Queued job');
-    const terminal = waitForTerminalJob(runner, jobId);
-    await runner.start();
-    return await terminal;
+    const started = runner.start();
+    const terminal = waitForTerminalJob(runner, jobId, started);
+    const [, result] = await Promise.all([started, terminal]);
+    return result;
   }
 
   async function enqueueAutoSubmit(
@@ -744,18 +765,21 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', () => {
       await createOpportunity('second'),
     );
     if (!runner) throw new Error('TaskRunner fixture is unavailable.');
+    const started = runner.start();
     const firstTerminal = waitForTerminalJob(
       runner,
       requiredId(firstJob, 'First job'),
+      started,
     );
     const secondTerminal = waitForTerminalJob(
       runner,
       requiredId(secondJob, 'Second job'),
+      started,
     );
-    await runner.start();
     const [firstResult, secondResult] = await Promise.all([
       firstTerminal,
       secondTerminal,
+      started,
     ]);
 
     expect(firstResult.error).toBeUndefined();
@@ -791,18 +815,21 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', () => {
       await createOpportunity('same-user-second'),
     );
     if (!runner) throw new Error('TaskRunner fixture is unavailable.');
+    const started = runner.start();
     const firstTerminal = waitForTerminalJob(
       runner,
       requiredId(firstJob, 'First job'),
+      started,
     );
     const secondTerminal = waitForTerminalJob(
       runner,
       requiredId(secondJob, 'Second job'),
+      started,
     );
-    await runner.start();
     const [firstResult, secondResult] = await Promise.all([
       firstTerminal,
       secondTerminal,
+      started,
     ]);
 
     expect(firstResult.error).toBeUndefined();

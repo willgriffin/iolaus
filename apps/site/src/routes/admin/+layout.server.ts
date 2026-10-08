@@ -34,6 +34,8 @@ export const load: LayoutServerLoad = async ({ locals }) => {
   return {
     aiBudget: await aiBudgetIndicator(locals),
     assistantEnabled: isAdminAssistantEnabled(),
+    accountConnectionsEnabled:
+      process.env.IOLAUS_MCP_LOCAL_OAUTH_ENABLED === 'true',
     // A client disposal key only; activity reads independently verify ownership.
     activityScopeKey: locals.workspaceSubject?.profileId
       ? JSON.stringify([

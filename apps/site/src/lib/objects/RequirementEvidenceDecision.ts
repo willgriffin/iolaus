@@ -10,6 +10,8 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
     'candidate_profile_id',
     'requirement_hash',
     'candidate_material_fingerprint',
+    'evidence_hash',
+    'model',
     'decision_version',
   ],
   indexes: [
@@ -40,6 +42,9 @@ export class RequirementEvidenceDecision extends SmrtObject {
   @field({ type: 'text', required: true, sensitive: true })
   candidateMaterialFingerprint = '';
   @field({ type: 'text' }) decisionVersion = 'requirement-evidence-decision/v1';
+  @field({ type: 'text', sensitive: true }) evidenceHash = '';
+  @field({ type: 'text' }) model = '';
+  @field({ type: 'text', sensitive: true }) quote = '';
   @field({ type: 'decimal' }) coverage = 0;
   @field({ type: 'text' }) decision = 'unknown';
   @field({ type: 'decimal' }) confidence = 0;

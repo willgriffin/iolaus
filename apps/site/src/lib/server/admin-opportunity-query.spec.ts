@@ -1,3 +1,7 @@
+vi.mock('./opportunity-matching.js', () => ({
+  refreshOpportunityMatches: async () => ({ materialFingerprint: '' }),
+}));
+
 import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
@@ -725,6 +729,82 @@ describe('admin-opportunity-query', () => {
             offset: 0,
           }),
         ).toEqual(['a', 'unknown', 'c', 'b']);
+        // v3 retains the same owner/source/skill fence, and adds analysis/source visibility.
+        await executor.query(
+          'ALTER TABLE opportunities ADD COLUMN current_analysis_id TEXT',
+        );
+        await executor.query(
+          'ALTER TABLE opportunities ADD COLUMN source_id TEXT',
+        );
+        await executor.query(
+          'ALTER TABLE opportunity_recommendation_ranks ADD COLUMN assessment_id TEXT',
+        );
+        await executor.query(
+          `CREATE ${temporary}TABLE sources (id TEXT PRIMARY KEY, is_active BOOLEAN, public_listing BOOLEAN)`,
+        );
+        await executor.query(
+          'INSERT INTO sources VALUES (?, TRUE, TRUE)',
+          'source',
+        );
+        await executor.query(
+          'UPDATE opportunities SET current_analysis_id = ?, source_id = ? WHERE id = ?',
+          'analysis-a',
+          'source',
+          'a',
+        );
+        await executor.query(
+          "UPDATE opportunity_recommendation_ranks SET candidate_material_fingerprint = ?, question_set_fingerprint = 'opportunity-match/v1', contract_version = 'opportunity-match/v1', model = 'staged-private/v1', projection_version = 'opportunity-recommendation-rank/v3', assessment_id = ? WHERE opportunity_id = ?",
+          'match-candidate',
+          'analysis-a',
+          'a',
+        );
+        const matchingQuery = {
+          ...base,
+          questionRecommendationScope: {
+            questionScreeningEnabled: true,
+            matchingMaterialFingerprint: 'match-candidate',
+          },
+          filters: {
+            ...DEFAULT_OPPORTUNITY_FILTERS,
+            sort: 'recommendation' as const,
+            minScore: 1,
+          },
+          limit: 4,
+          offset: 0,
+        };
+        expect(await listOpportunityPageIds(matchingQuery)).toEqual(['a']);
+        expect(
+          await listOpportunityPageIds({
+            ...matchingQuery,
+            workspaceSubject: { ...WORKSPACE_SUBJECT, userId: 'foreign-user' },
+          }),
+        ).toEqual([]);
+        expect(
+          await listOpportunityPageIds({
+            ...matchingQuery,
+            questionRecommendationScope: {
+              ...matchingQuery.questionRecommendationScope,
+              matchingMaterialFingerprint: 'changed-profile',
+            },
+          }),
+        ).toEqual([]);
+        await executor.query(
+          'UPDATE opportunities SET current_analysis_id = ? WHERE id = ?',
+          'new-analysis',
+          'a',
+        );
+        expect(await listOpportunityPageIds(matchingQuery)).toEqual([]);
+        await executor.query(
+          'UPDATE opportunities SET current_analysis_id = ? WHERE id = ?',
+          'analysis-a',
+          'a',
+        );
+        await executor.query('UPDATE sources SET public_listing = FALSE');
+        expect(await listOpportunityPageIds(matchingQuery)).toEqual([]);
+        await executor.query(
+          'UPDATE sources SET public_listing = TRUE, is_active = FALSE',
+        );
+        expect(await listOpportunityPageIds(matchingQuery)).toEqual([]);
         expect(mocks.privatePartials).not.toHaveBeenCalled();
         expect(mocks.questionProjections).not.toHaveBeenCalled();
       } finally {

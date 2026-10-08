@@ -9,6 +9,7 @@ export class OpportunityAnalysis extends SmrtObject {
   @foreignKey('Opportunity', { onDelete: 'CASCADE' }) opportunityId = '';
   @field({ type: 'text' }) sourceContentFingerprint = '';
   @field({ type: 'integer' }) sourceContentVersion = 0;
+  @field({ type: 'text' }) sourceContentDigest = '';
   @field({ type: 'text' }) analysisVersion = 'opportunity-analysis/v1';
   @field({ type: 'text' }) status = 'pending';
   @field({ type: 'text' }) normalizedTitle = '';
@@ -25,6 +26,7 @@ export class OpportunityAnalysis extends SmrtObject {
   @field({ type: 'text' }) skillSlugsJson = '[]';
   @field({ type: 'text' }) model = '';
   @field({ type: 'text' }) promptVersion = '';
+  @field({ type: 'text' }) outputSchemaVersion = 'opportunity-analysis/v1';
   @field({ type: 'integer' }) inputTokens = 0;
   @field({ type: 'integer' }) outputTokens = 0;
   @field({ type: 'integer' }) costMicros = 0;

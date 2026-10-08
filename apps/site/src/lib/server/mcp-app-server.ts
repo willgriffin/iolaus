@@ -8,12 +8,16 @@ import {
   openAiDisplayMetadata,
   withOpenAiEntrypoints,
 } from '@happyvertical/smrt-mcp-openai';
+import { z } from 'zod';
 import workspaceCss from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.css?raw';
 import workspaceScript from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.iife.js?raw';
 import { jobSearchToolContracts } from '$lib/job-search-tool-schemas';
 import {
   publicFacetsSchema,
+  publicMatchInputSchema,
+  publicMatchResultSchema,
   publicOpportunityDetailSchema,
+  publicOpportunityInputSchema,
   publicSearchInputSchema,
   publicSearchPageSchema,
 } from '$lib/public-opportunity-contract.js';
@@ -31,8 +35,10 @@ import {
 } from './opportunity-matching.js';
 import { runAsOwner } from './owner-principal.js';
 import {
+  consumePublicSearchBudget,
   getPublicOpportunity,
   listPublicFacets,
+  matchPublicSkills,
   searchPublicOpportunities,
 } from './public-search/index.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
@@ -97,52 +103,18 @@ const outputSchema = {
 
 const PUBLIC_MCP_TOOL_NAMES = new Set([
   'get_opportunity',
+  'explain_match',
   'list_facets',
   'search_opportunities',
 ]);
 
-const publicSearchInputJsonSchema = {
-  additionalProperties: false,
-  properties: {
-    company: { maxLength: 120, type: 'string' },
-    country: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-    cursor: { maxLength: 1000, type: 'string' },
-    employmentType: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-    function: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-    limit: { maximum: 50, minimum: 1, type: 'integer' },
-    q: { maxLength: 200, type: 'string' },
-    salaryMin: { minimum: 0, type: 'number' },
-    seniority: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-    skills: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-    sort: { enum: ['relevance', 'newest', 'salary'], type: 'string' },
-    workMode: {
-      items: { maxLength: 80, type: 'string' },
-      maxItems: 12,
-      type: 'array',
-    },
-  },
-  type: 'object' as const,
-};
+/** MCP advertises the same object contracts used by REST parsing and serialization.
+ * Input mode preserves optional/defaulted filters instead of requiring defaults.
+ * Refinements that JSON Schema cannot express remain enforced by Zod at execution.
+ */
+function publicObjectJsonSchema(schema: z.ZodType, io: 'input' | 'output') {
+  return { ...z.toJSONSchema(schema, { io }), type: 'object' as const };
+}
 
 function jsonResult(data: Record<string, unknown>) {
   return {
@@ -165,15 +137,18 @@ const publicSearchWorkflow: McpWorkflowToolDefinition = {
   effect: 'read',
   execute: async ({ arguments: input }) =>
     jsonResult(
-      publicSearchPageSchema.parse(
-        await searchPublicOpportunities(parsePublicSearchInput(input)),
-      ),
+      await (async () => {
+        await consumePublicSearchBudget(3);
+        return publicSearchPageSchema.parse(
+          await searchPublicOpportunities(parsePublicSearchInput(input)),
+        );
+      })(),
     ),
   idempotent: true,
-  inputSchema: publicSearchInputJsonSchema,
+  inputSchema: publicObjectJsonSchema(publicSearchInputSchema, 'input'),
   name: 'search_opportunities',
   openWorld: true,
-  outputSchema,
+  outputSchema: publicObjectJsonSchema(publicSearchPageSchema, 'output'),
   title: 'Search public opportunities',
 };
 
@@ -182,30 +157,23 @@ const publicOpportunityWorkflow: McpWorkflowToolDefinition = {
     'Read one allowlisted public opportunity summary and its original posting link. It never returns a raw posting or workspace data.',
   effect: 'read',
   execute: async ({ arguments: input }) => {
-    const id =
-      input && typeof input === 'object' && !Array.isArray(input)
-        ? (input as Record<string, unknown>).id
-        : null;
-    if (typeof id !== 'string' || id.length > 128) {
+    const parsed = publicOpportunityInputSchema.safeParse(input);
+    if (!parsed.success)
       throw new McpAccessError(
         400,
         'A valid public opportunity ID is required.',
       );
-    }
+    const { id } = parsed.data;
+    await consumePublicSearchBudget(1);
     const opportunity = await getPublicOpportunity(id);
     if (!opportunity) throw new McpAccessError(404, 'Opportunity not found.');
     return jsonResult(publicOpportunityDetailSchema.parse(opportunity));
   },
   idempotent: true,
-  inputSchema: {
-    additionalProperties: false,
-    properties: { id: { maxLength: 128, minLength: 1, type: 'string' } },
-    required: ['id'],
-    type: 'object',
-  },
+  inputSchema: publicObjectJsonSchema(publicOpportunityInputSchema, 'input'),
   name: 'get_opportunity',
   openWorld: true,
-  outputSchema,
+  outputSchema: publicObjectJsonSchema(publicOpportunityDetailSchema, 'output'),
   title: 'Get public opportunity',
 };
 
@@ -215,16 +183,39 @@ const publicFacetsWorkflow: McpWorkflowToolDefinition = {
   effect: 'read',
   execute: async ({ arguments: input }) =>
     jsonResult(
-      publicFacetsSchema.parse(
-        await listPublicFacets(parsePublicSearchInput(input)),
-      ),
+      await (async () => {
+        await consumePublicSearchBudget(6);
+        return publicFacetsSchema.parse(
+          await listPublicFacets(parsePublicSearchInput(input)),
+        );
+      })(),
     ),
   idempotent: true,
-  inputSchema: publicSearchInputJsonSchema,
+  inputSchema: publicObjectJsonSchema(publicSearchInputSchema, 'input'),
   name: 'list_facets',
   openWorld: true,
-  outputSchema,
+  outputSchema: publicObjectJsonSchema(publicFacetsSchema, 'output'),
   title: 'List public opportunity facets',
+};
+
+const publicMatchWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Explain zero-model coverage against shared public opportunities using submitted skills and optional experience and eligibility constraints.',
+  effect: 'read',
+  execute: async ({ arguments: input }) => {
+    await consumePublicSearchBudget(10);
+    return jsonResult(
+      publicMatchResultSchema.parse(
+        await matchPublicSkills(publicMatchInputSchema.parse(input)),
+      ),
+    );
+  },
+  idempotent: true,
+  inputSchema: publicObjectJsonSchema(publicMatchInputSchema, 'input'),
+  name: 'explain_match',
+  openWorld: true,
+  outputSchema: publicObjectJsonSchema(publicMatchResultSchema, 'output'),
+  title: 'Explain public skill match',
 };
 
 function matchLimit(input: Record<string, unknown>): number | undefined {
@@ -290,7 +281,7 @@ const refreshPrivateMatchesWorkflow: McpWorkflowToolDefinition = {
           await refreshOpportunityMatches(workspaceSubjectForOwner(owner), {
             limit: matchLimit(input),
           }),
-        operations: [workspaceWorkflowOperation('application.inspect')],
+        operations: [workspaceWorkflowOperation('assessment.execute')],
         principal,
         profileRequired: true,
         tool: 'refresh_my_matches',
@@ -335,6 +326,18 @@ async function runOwnerWorkflow<T>(options: {
   }) => Promise<T>;
 }): Promise<T> {
   const owner = asOwnerPrincipal(options.principal, options.profileRequired);
+  for (const operation of options.operations) {
+    if (
+      !owner.permissions?.includes(
+        `${operation.collection}.${operation.action}`,
+      )
+    ) {
+      throw new McpAccessError(
+        403,
+        'The granted scope does not permit this operation.',
+      );
+    }
+  }
   return await runAsOwner(
     {
       permissions: owner.permissions,
@@ -554,7 +557,7 @@ const reviewNavigationWorkflow: McpWorkflowToolDefinition = {
     const applicationId = reviewApplicationId(input.url);
     const inspection = await runOwnerWorkflow({
       execute: async () => await inspectJobApplication({ applicationId }),
-      operations: [workspaceWorkflowOperation('application.review')],
+      operations: [workspaceWorkflowOperation('application.inspect')],
       principal,
       profileRequired: true,
       tool: 'job_search_inspect_application',
@@ -629,6 +632,7 @@ export const mcpAppServer = createMcpAppServer({
     publicSearchWorkflow,
     publicOpportunityWorkflow,
     publicFacetsWorkflow,
+    publicMatchWorkflow,
     privateMatchesWorkflow,
     refreshPrivateMatchesWorkflow,
     browseWorkflow,

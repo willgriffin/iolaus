@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { redirect } from '@sveltejs/kit';
 import { version } from '$app/environment';
 import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
 import {
@@ -7,7 +8,10 @@ import {
   isSharedHosted,
 } from '$lib/server/app-config';
 import { PUBLIC_RESUME_CACHE_CONTROL } from '$lib/server/public-cache';
-import { searchPublicOpportunities } from '$lib/server/public-search/index.js';
+import {
+  consumePublicSearchBudget,
+  searchPublicOpportunities,
+} from '$lib/server/public-search/index.js';
 import { getCachedPublishedResume } from '$lib/server/resume-data';
 import type { PageServerLoad } from './$types';
 
@@ -37,23 +41,29 @@ export const load: PageServerLoad = async ({ locals, setHeaders }) => {
   if (isSharedHosted()) {
     const links = getPublicLinks();
     setHeaders({
-      'cache-control': 'public, max-age=0, s-maxage=60, must-revalidate',
+      'cache-control': 'private, no-store',
     });
+    if (process.env.IOLAUS_PUBLIC_SEARCH_ENABLED !== 'true' && links.landing)
+      redirect(302, links.landing.href);
     let opportunities: PublicOpportunity[] = [];
+    let skillOptions: { value: string; label: string; count: number }[] = [];
     try {
-      opportunities = (
-        await searchPublicOpportunities({
-          q: '',
-          skills: [],
-          seniority: [],
-          function: [],
-          workMode: [],
-          employmentType: [],
-          country: [],
-          limit: 12,
-          sort: 'newest',
-        })
-      ).items;
+      if (process.env.IOLAUS_PUBLIC_SEARCH_ENABLED !== 'true')
+        throw new Error('Public catalog disabled');
+      await consumePublicSearchBudget(3);
+      const catalog = await searchPublicOpportunities({
+        q: '',
+        skills: [],
+        seniority: [],
+        function: [],
+        work_mode: [],
+        employment_type: [],
+        country: [],
+        limit: 12,
+        sort: 'newest',
+      });
+      opportunities = catalog.items;
+      skillOptions = catalog.facets.skills;
     } catch {
       // The page remains a safe neutral landing during a staged read-role rollout.
     }
@@ -62,6 +72,8 @@ export const load: PageServerLoad = async ({ locals, setHeaders }) => {
       links,
       mode: 'landing' as const,
       opportunities,
+      skillOptions,
+      publicCatalogEnabled: process.env.IOLAUS_PUBLIC_SEARCH_ENABLED === 'true',
       signedIn: Boolean(locals?.user),
     };
   }

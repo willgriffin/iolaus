@@ -19,6 +19,17 @@ import {
 } from '@happyvertical/smrt-users';
 import type { DatabaseInterface } from '@happyvertical/sql';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import {
+  publicFacetsSchema,
+  publicMatchInputSchema,
+  publicMatchResultSchema,
+  publicOpportunityDetailSchema,
+  publicOpportunityInputSchema,
+  publicOpportunityOpenApi,
+  publicSearchInputSchema,
+  publicSearchPageSchema,
+} from '$lib/public-opportunity-contract.js';
 import { requireCurrentPrivateWorkspaceSubject } from './agent-audit-subject.js';
 import {
   IOLAUS_MCP_APP_RESOURCE,
@@ -28,6 +39,11 @@ import {
 
 const workflows = vi.hoisted(() => ({
   database: undefined as DatabaseInterface | undefined,
+  publicSearch: vi.fn(),
+  publicFacets: vi.fn(),
+  publicMatch: vi.fn(),
+  publicGet: vi.fn(),
+  publicBudget: vi.fn(async () => 599),
   getProfile: vi.fn(),
   inspectApplication: vi.fn(),
 }));
@@ -42,6 +58,15 @@ vi.mock('./smrt.js', () => ({
 vi.mock('./db.js', () => ({
   getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),
   getSmrtOptions: () => ({ db: workflows.database }),
+}));
+
+vi.mock('./public-search/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./public-search/index.js')>()),
+  searchPublicOpportunities: workflows.publicSearch,
+  listPublicFacets: workflows.publicFacets,
+  matchPublicSkills: workflows.publicMatch,
+  getPublicOpportunity: workflows.publicGet,
+  consumePublicSearchBudget: workflows.publicBudget,
 }));
 
 vi.mock('./application-inspect-webmcp.js', () => ({
@@ -97,6 +122,40 @@ function toolsListRequest() {
   });
 }
 
+async function callPublicToolOverHttp(
+  name: string,
+  input: Record<string, unknown>,
+) {
+  const base = toolsListRequest();
+  const headers = new Headers(base.headers);
+  headers.set('mcp-method', 'tools/call');
+  headers.set('mcp-name', name);
+  const request = new Request(base, {
+    headers,
+    body: JSON.stringify({
+      id: 'public-tool-call',
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: input,
+        _meta: {
+          'io.modelcontextprotocol/clientCapabilities': {},
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        },
+      },
+    }),
+  });
+  const route = mountMcpRoute(mcpAppServer, { resolvePrincipal: () => null });
+  const response = await route({ request, url: new URL(request.url) });
+  const body = await response.json();
+  expect(response.status, JSON.stringify(body)).toBe(200);
+  return body as {
+    result: { structuredContent: unknown };
+    error?: unknown;
+  };
+}
+
 describe('Iolaus MCP Apps server', () => {
   let nativeSubject: { profileId: string; tenantId: string; userId: string };
   let membershipId: string;
@@ -106,6 +165,11 @@ describe('Iolaus MCP Apps server', () => {
   beforeEach(async () => {
     workflows.getProfile.mockReset();
     workflows.inspectApplication.mockReset();
+    workflows.publicSearch.mockReset();
+    workflows.publicFacets.mockReset();
+    workflows.publicMatch.mockReset();
+    workflows.publicGet.mockReset();
+    workflows.publicBudget.mockClear();
     workflows.database = await getTestDatabase({
       classes: [
         'Group',
@@ -209,6 +273,58 @@ describe('Iolaus MCP Apps server', () => {
     expect(result.isError).not.toBe(true);
     expect(workflows.getProfile).toHaveBeenCalledWith(subject.profileId);
     expect(workflows.inspectApplication).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      'job_search_open_application',
+      { opportunityId: '11111111-1111-4111-8111-111111111111' },
+    ],
+    ['refresh_my_matches', {}],
+  ])('does not expand a linked read grant into %s', async (name, input) => {
+    const principal = resolveMcpAppPrincipal({
+      ...subjectLocals(nativeSubject),
+      permissions: ['workflow.application.inspect'],
+    });
+    await expect(
+      mcpAppServer.callTool({
+        name: String(name),
+        arguments: input as Record<string, unknown>,
+        principal,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: 'The granted scope does not permit this operation.',
+    });
+    expect(workflows.inspectApplication).not.toHaveBeenCalled();
+  });
+
+  it('resolves a human-review destination with read authority without approving it', async () => {
+    workflows.getProfile.mockResolvedValue({
+      active: true,
+      id: nativeSubject.profileId,
+      ownerUserId: nativeSubject.userId,
+      tenantId: nativeSubject.tenantId,
+    });
+    const reviewUrl =
+      '/admin/applications/11111111-1111-4111-8111-111111111111/review';
+    workflows.inspectApplication.mockResolvedValue({
+      application: { reviewUrl },
+      approval: { approved: false },
+      submission: { submitted: false },
+    });
+    const result = await mcpAppServer.callTool({
+      name: 'iolaus_open_human_review',
+      arguments: { url: reviewUrl },
+      principal: resolveMcpAppPrincipal({
+        ...subjectLocals(nativeSubject),
+        permissions: ['workflow.application.inspect'],
+      }),
+    });
+    expect(result.isError).not.toBe(true);
+    expect(JSON.stringify(result)).toContain(reviewUrl);
+    expect(JSON.stringify(result)).toContain('"approved":false');
+    expect(workflows.inspectApplication).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -375,6 +491,7 @@ describe('Iolaus MCP Apps server', () => {
       result: { tools: Array<{ name: string }> };
     };
     expect(firstCatalog.result.tools.map((tool) => tool.name)).toEqual([
+      'explain_match',
       'get_opportunity',
       'iolaus_open_human_review',
       'iolaus_open_opportunity_board',
@@ -405,6 +522,10 @@ describe('Iolaus MCP Apps server', () => {
       mcpAppServer.listTools({ principal: null }),
     ).resolves.toMatchObject([
       {
+        name: 'explain_match',
+        annotations: { openWorldHint: true, readOnlyHint: true },
+      },
+      {
         name: 'get_opportunity',
         annotations: { openWorldHint: true, readOnlyHint: true },
       },
@@ -432,6 +553,7 @@ describe('Iolaus MCP Apps server', () => {
     const tools = await mcpAppServer.listTools({ principal: owner });
 
     expect(tools.map((tool) => tool.name)).toEqual([
+      'explain_match',
       'get_opportunity',
       'iolaus_open_human_review',
       'iolaus_open_opportunity_board',
@@ -463,5 +585,173 @@ describe('Iolaus MCP Apps server', () => {
       frameDomains: [],
       resourceDomains: [],
     });
+  });
+});
+
+// Catalog contract tests do not construct private identity tables; native auth
+// and revocation fixtures remain in the independent describe above.
+describe('public MCP contract parity', () => {
+  beforeEach(() => {
+    workflows.publicSearch.mockReset();
+    workflows.publicFacets.mockReset();
+    workflows.publicMatch.mockReset();
+    workflows.publicGet.mockReset();
+    workflows.publicBudget.mockClear();
+  });
+  it('advertises public REST Zod contracts verbatim through tools/list', async () => {
+    const route = mountMcpRoute(mcpAppServer, { resolvePrincipal: () => null });
+    const response = await route({
+      request: toolsListRequest(),
+      url: new URL('https://jobs.example.test/api/mcp'),
+    });
+    const catalog = (await response.json()) as {
+      result: {
+        tools: Array<{
+          name: string;
+          inputSchema: unknown;
+          outputSchema: unknown;
+        }>;
+      };
+    };
+    for (const [name, input, output] of [
+      ['search_opportunities', publicSearchInputSchema, publicSearchPageSchema],
+      ['list_facets', publicSearchInputSchema, publicFacetsSchema],
+      [
+        'get_opportunity',
+        publicOpportunityInputSchema,
+        publicOpportunityDetailSchema,
+      ],
+      ['explain_match', publicMatchInputSchema, publicMatchResultSchema],
+    ] as const) {
+      const tool = catalog.result.tools.find((tool) => tool.name === name);
+      expect(tool?.inputSchema).toEqual(z.toJSONSchema(input, { io: 'input' }));
+      expect(tool?.outputSchema).toEqual(
+        z.toJSONSchema(output, { io: 'output' }),
+      );
+    }
+    expect(
+      publicOpportunityOpenApi.paths['/api/public/v1/opportunities/{id}'].get
+        .parameters[0].schema,
+    ).toEqual(
+      z.toJSONSchema(publicOpportunityInputSchema, { io: 'input' }).properties
+        ?.id,
+    );
+  });
+
+  it('executes all advertised snake_case search filters and defaulted input without a second contract', async () => {
+    const facets = {
+      skills: [],
+      seniority: [],
+      function: [],
+      work_mode: [],
+      employment_type: [],
+      country: [],
+    };
+    const page = { items: [], next_cursor: null, total_estimate: 0, facets };
+    workflows.publicSearch.mockResolvedValue(page);
+    workflows.publicFacets.mockResolvedValue(facets);
+    const input = {
+      q: 'software engineer',
+      skills: ['typescript'],
+      seniority: ['senior'],
+      function: ['engineering'],
+      work_mode: ['remote'],
+      employment_type: ['full-time'],
+      country: ['CA'],
+      remote_ok: true,
+      company: 'example',
+      source: 'source-1',
+      posted_since: '2026-01-01T00:00:00Z',
+      salary_min: 100000,
+      salary_currency: 'CAD',
+      salary_period: 'year',
+      cursor: 'cursor',
+      limit: 10,
+      sort: 'salary',
+    };
+    expect(
+      (await callPublicToolOverHttp('search_opportunities', input)).result
+        .structuredContent,
+    ).toEqual(page);
+    expect(workflows.publicSearch).toHaveBeenLastCalledWith(
+      publicSearchInputSchema.parse(input),
+    );
+    expect(
+      (
+        await mcpAppServer.callTool({
+          name: 'list_facets',
+          arguments: input,
+          principal: null,
+        })
+      ).structuredContent,
+    ).toEqual(facets);
+    expect(workflows.publicFacets).toHaveBeenLastCalledWith(
+      publicSearchInputSchema.parse(input),
+    );
+    await mcpAppServer.callTool({
+      name: 'search_opportunities',
+      arguments: {},
+      principal: null,
+    });
+    expect(workflows.publicSearch).toHaveBeenLastCalledWith(
+      publicSearchInputSchema.parse({}),
+    );
+    await expect(
+      mcpAppServer.callTool({
+        name: 'search_opportunities',
+        arguments: { workMode: ['remote'] },
+        principal: null,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    {},
+    { id: '' },
+    { id: 'x'.repeat(129) },
+    { id: 'opportunity-1', private: true },
+  ])('rejects invalid get_opportunity input before reading catalog data: %j', async (input) => {
+    await expect(
+      mcpAppServer.callTool({
+        name: 'get_opportunity',
+        arguments: input,
+        principal: null,
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(workflows.publicGet).not.toHaveBeenCalled();
+  });
+
+  it('accepts all optional match inputs and advertises bounded required skills', async () => {
+    workflows.publicMatch.mockResolvedValue({ items: [], model_calls: 0 });
+    const input = {
+      skills: ['typescript'],
+      seniority: 'senior',
+      countries: ['CA'],
+      remote_ok: true,
+      years: 8,
+      opportunity_ids: ['opportunity-1'],
+    };
+    const result = await callPublicToolOverHttp('explain_match', input);
+    expect(result.result.structuredContent).toEqual({
+      items: [],
+      model_calls: 0,
+    });
+    expect(workflows.publicMatch).toHaveBeenLastCalledWith(
+      publicMatchInputSchema.parse(input),
+    );
+    await expect(
+      mcpAppServer.callTool({
+        name: 'explain_match',
+        arguments: { skills: [], years: 101 },
+        principal: null,
+      }),
+    ).resolves.toMatchObject({ isError: true });
+    await expect(
+      mcpAppServer.callTool({
+        name: 'explain_match',
+        arguments: { countries: ['CA'] },
+        principal: null,
+      }),
+    ).resolves.toMatchObject({ isError: true });
   });
 });

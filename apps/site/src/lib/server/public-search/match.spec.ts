@@ -13,9 +13,21 @@ describe('public skill matching', () => {
     ]);
     expect(result.map((row) => row.id)).toEqual(['near', 'far']);
     expect(result[0]).toMatchObject({
-      score: 100,
+      score: 55,
       explanation: {
-        requirements: [{ requirement: 'degree', status: 'unknown' }],
+        requirements: expect.arrayContaining([
+          {
+            requirement: 'degree',
+            status: 'unknown',
+            hash: 'requirement:0',
+            kind: 'must',
+            decision: 'unknown',
+            confidence: 0,
+            coverage: 0,
+            submittedSkillIndices: [],
+            evidenceRefs: [],
+          },
+        ]),
       },
     });
   });
@@ -30,6 +42,14 @@ describe('public skill matching', () => {
     });
   });
 
+  it('resolves public aliases without collapsing C++ and C#', () => {
+    const results = matchPublicSkills({ skills: ['Postgres', 'C++'] }, [
+      { id: 'postgres', skills: { required: ['PostgreSQL'] } },
+      { id: 'sharp', skills: { required: ['C#'] } },
+    ]);
+    expect(results[0].score).toBe(100);
+    expect(results[1].score).toBe(0);
+  });
   it('does not create a match for an empty anonymous payload', () => {
     expect(matchPublicSkills({ skills: [] }, [{ id: 'posting' }])).toEqual([]);
   });

@@ -1,122 +1,214 @@
-/**
- * Stateless, zero-model matching for the public catalog.
- *
- * This module deliberately accepts its catalog as an argument.  That keeps the
- * public boundary explicit: callers may supply only fields produced by the
- * shared opportunity analysis, never a workspace profile or private evidence.
- */
-import { normalizeSkill } from '../../skill-matching.js';
+/** Stateless public matching. Inputs contain only submitted facts and public analysis. */
+import { canonicalSkillSlug } from '../../skill-canonical.js';
 
 export type PublicMatchRequirement = {
   hash?: string;
   kind?: 'must' | 'nice' | 'should';
+  category?: string;
+  years?: number;
   skills?: readonly string[];
   text?: string;
 };
-
 export type PublicMatchOpportunity = {
   id: string;
+  seniority?: string;
   eligibility?: {
     flags?: number;
     countries?: readonly string[];
     remote?: boolean | null;
+    workAuthorization?: { required: readonly string[]; sponsorship: string };
   };
   requirements?: readonly PublicMatchRequirement[];
   skills?: { preferred?: readonly string[]; required?: readonly string[] };
 };
-
 export type PublicMatchInput = {
   countries?: readonly string[];
   remoteOk?: boolean;
+  seniority?: string;
+  years?: number;
   skills: readonly string[];
 };
-
+export type RequirementMatch = {
+  hash: string;
+  requirement: string;
+  kind: 'must' | 'should' | 'nice';
+  status: 'matched' | 'missing' | 'unknown';
+  decision: 'meets' | 'partial' | 'no' | 'unknown';
+  confidence: number;
+  coverage: number;
+  submittedSkillIndices: number[];
+  evidenceRefs: string[];
+};
 export type PublicMatchExplanation = {
   matchedSkills: string[];
   missingSkills: string[];
-  requirements: Array<{
-    requirement: string;
-    status: 'matched' | 'missing' | 'unknown';
-  }>;
+  eligibilityNotes: string[];
+  requirements: RequirementMatch[];
 };
-
 export type PublicMatchResult = {
   explanation: PublicMatchExplanation;
   id: string;
   score: number;
+  mustHaveConflictCount: number;
+  seniorityDelta: number;
 };
-
-function terms(values: Iterable<string>): Set<string> {
-  const result = new Set<string>();
-  for (const value of values) {
-    const normalized = normalizeSkill(value);
-    if (normalized) result.add(normalized);
-  }
-  return result;
+const weights = { must: 1, should: 0.5, nice: 0.2 };
+export function seniorityLevel(value?: string): number | undefined {
+  const levels: Record<string, number> = {
+    intern: 0,
+    junior: 1,
+    mid: 2,
+    senior: 3,
+    staff: 4,
+    principal: 5,
+    manager: 4,
+    director: 5,
+    exec: 6,
+  };
+  return value ? levels[value] : undefined;
 }
-
-function intersect(left: Set<string>, right: Iterable<string>): string[] {
-  return [...terms(right)].filter((value) => left.has(value)).sort();
+export function requirementCoverageScore(
+  rows: readonly RequirementMatch[],
+): number {
+  const denominator = rows.reduce((sum, row) => sum + weights[row.kind], 0);
+  return denominator
+    ? (100 *
+        rows.reduce((sum, row) => sum + weights[row.kind] * row.coverage, 0)) /
+        denominator
+    : 0;
 }
-
-function missing(left: Set<string>, right: Iterable<string>): string[] {
-  return [...terms(right)].filter((value) => !left.has(value)).sort();
-}
-
-/**
- * Matches only caller-submitted skills.  A missing skill reduces coverage but
- * is not a hard conflict; unknown requirements stay visible as unknown.
- */
 export function matchPublicSkills(
   input: PublicMatchInput,
   opportunities: readonly PublicMatchOpportunity[],
+  options: { allowEmptySkills?: boolean } = {},
 ): PublicMatchResult[] {
-  const submitted = terms(input.skills);
-  if (submitted.size === 0) return [];
+  const canonical = new Map<string, string>();
+  const normalizeSkill = (value: string): string => {
+    let term = canonical.get(value);
+    if (term === undefined) {
+      term = canonicalSkillSlug(value);
+      canonical.set(value, term);
+    }
+    return term;
+  };
+  const submitted = input.skills.map(normalizeSkill);
+  const submittedSet = new Set(submitted);
+  const indicesBySkill = new Map<string, number[]>();
+  submitted.forEach((skill, index) => {
+    indicesBySkill.set(skill, [...(indicesBySkill.get(skill) ?? []), index]);
+  });
+  if (!submitted.some(Boolean) && !options.allowEmptySkills) return [];
+  const contains = (skill: string) => submittedSet.has(normalizeSkill(skill));
   return opportunities
     .map((opportunity) => {
-      const required = opportunity.skills?.required ?? [];
-      const preferred = opportunity.skills?.preferred ?? [];
-      const matchedRequired = intersect(submitted, required);
-      const matchedPreferred = intersect(submitted, preferred);
-      const missingRequired = missing(submitted, required);
-      const requirementRows = (opportunity.requirements ?? []).map(
-        (requirement) => {
-          const requiredSkills = requirement.skills ?? [];
-          const known = requiredSkills.length > 0;
-          const status: PublicMatchExplanation['requirements'][number]['status'] =
-            !known
-              ? 'unknown'
-              : intersect(submitted, requiredSkills).length > 0
-                ? 'matched'
-                : 'missing';
-          return {
-            requirement: requirement.text ?? requirement.hash ?? 'Requirement',
-            status,
-          };
-        },
-      );
-      const requiredWeight = required.length * 2;
-      const preferredWeight = preferred.length;
-      const coveredWeight =
-        matchedRequired.length * 2 + matchedPreferred.length;
-      const score = Math.round(
-        (100 * coveredWeight) / Math.max(1, requiredWeight + preferredWeight),
-      );
+      const required = [...new Set(opportunity.skills?.required ?? [])];
+      const preferred = [...new Set(opportunity.skills?.preferred ?? [])];
+      const requirements: PublicMatchRequirement[] = [
+        ...(opportunity.requirements ?? []),
+      ];
+      // Keep public skill coverage when an analysis lacks atomized requirements.
+      for (const [skills, kind] of [
+        [required, 'must'],
+        [preferred, 'nice'],
+      ] as const) {
+        for (const skill of skills)
+          if (
+            !requirements.some((r) =>
+              r.skills?.some(
+                (s) => normalizeSkill(s) === normalizeSkill(skill),
+              ),
+            )
+          )
+            requirements.push({
+              hash: `skill:${normalizeSkill(skill)}`,
+              text: skill,
+              kind,
+              skills: [skill],
+            });
+      }
+      const rows = requirements.map((r, index): RequirementMatch => {
+        const skills = [...new Set(r.skills ?? [])];
+        const indices = [
+          ...new Set(
+            skills.flatMap(
+              (skill) => indicesBySkill.get(normalizeSkill(skill)) ?? [],
+            ),
+          ),
+        ].sort((a, b) => a - b);
+        let coverage = skills.length
+          ? skills.filter(contains).length / skills.length
+          : 0;
+        let known = skills.length > 0;
+        if (r.years !== undefined && Number.isFinite(r.years) && r.years > 0) {
+          // A total-years answer is not proof of years in a particular technology.
+          const yearsCoverage =
+            input.years !== undefined && !skills.length
+              ? Math.min(1, Math.max(0, input.years) / r.years)
+              : undefined;
+          if (yearsCoverage !== undefined) {
+            coverage = yearsCoverage;
+            known = true;
+          } else coverage = Math.min(coverage, 0.5);
+        }
+        return {
+          hash: r.hash ?? `requirement:${index}`,
+          requirement: r.text ?? 'Requirement',
+          kind: r.kind ?? 'should',
+          status: !known ? 'unknown' : coverage === 1 ? 'matched' : 'missing',
+          decision:
+            coverage === 1 ? 'meets' : coverage > 0 ? 'partial' : 'unknown',
+          confidence: coverage > 0 ? 1 : 0,
+          coverage,
+          submittedSkillIndices: indices,
+          evidenceRefs: [],
+        };
+      });
+      const eligibilityNotes: string[] = [];
+      const countries = opportunity.eligibility?.countries ?? [];
+      if (
+        countries.length &&
+        input.countries?.length &&
+        !countries.some((c) =>
+          input.countries?.some((i) => i.toUpperCase() === c.toUpperCase()),
+        )
+      )
+        eligibilityNotes.push(
+          'Posted countries do not overlap submitted countries; relocation and work authorization are unverified.',
+        );
+      if (input.remoteOk === true && opportunity.eligibility?.remote === false)
+        eligibilityNotes.push('This posting is not marked remote.');
+      if (!opportunity.eligibility || !input.countries?.length)
+        eligibilityNotes.push(
+          'Eligibility is not fully established by submitted facts.',
+        );
+      const candidateLevel = seniorityLevel(input.seniority);
+      const postingLevel = seniorityLevel(opportunity.seniority);
+      const seniorityDelta =
+        candidateLevel !== undefined && postingLevel !== undefined
+          ? Math.abs(candidateLevel - postingLevel)
+          : 0;
       return {
+        id: opportunity.id,
+        score: Math.round(
+          requirementCoverageScore(rows) *
+            Math.max(0, 1 - seniorityDelta * 0.15),
+        ),
+        mustHaveConflictCount: 0,
+        seniorityDelta,
         explanation: {
           matchedSkills: [
-            ...new Set([...matchedRequired, ...matchedPreferred]),
+            ...new Set(
+              [...required, ...preferred].filter(contains).map(normalizeSkill),
+            ),
           ].sort(),
-          missingSkills: [...new Set(missingRequired)].sort(),
-          requirements: requirementRows,
+          missingSkills: required
+            .filter((s) => !contains(s))
+            .map(normalizeSkill)
+            .sort(),
+          eligibilityNotes,
+          requirements: rows,
         },
-        id: opportunity.id,
-        score,
       };
     })
-    .sort(
-      (left, right) =>
-        right.score - left.score || left.id.localeCompare(right.id),
-    );
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }

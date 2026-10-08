@@ -22,6 +22,10 @@ import type { WorkspaceSubject } from './private-workspace.js';
 import type { CandidateEvidenceSource } from './resume-data.js';
 import { canonicalSkill } from './skill-matching.js';
 
+export { CAREER_SKILL_TERMS } from '$lib/skill-vocabulary-data.js';
+
+import { CAREER_SKILL_TERMS } from '$lib/skill-vocabulary-data.js';
+
 export const SKILL_DISCOVERY_VERSION =
   'candidate-skill-discovery/v1-named-capability';
 export const SKILL_DISCOVERY_FEATURE = 'candidate-skill-discovery';
@@ -29,66 +33,6 @@ export const SKILL_DISCOVERY_PROFILE = 'typesafe-candidate-skill-discovery';
 const MODEL = 'jev-1.13.0';
 export const discoveryHash = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
-// This is a finite alias vocabulary, not a technology-to-proficiency inference.
-export const CAREER_SKILL_TERMS = [
-  'TypeScript',
-  'JavaScript',
-  'Node.js',
-  'NodeJS',
-  'Python',
-  'Java',
-  'React',
-  'React.js',
-  'Svelte',
-  'SvelteKit',
-  'Vue',
-  'Angular',
-  'PostgreSQL',
-  'Postgres',
-  'MySQL',
-  'SQLite',
-  'Redis',
-  'MongoDB',
-  'ClickHouse',
-  'Docker',
-  'Kubernetes',
-  'K8s',
-  'AWS',
-  'Amazon Web Services',
-  'Azure',
-  'Google Cloud',
-  'GraphQL',
-  'REST',
-  'Go',
-  'Golang',
-  'Rust',
-  'C++',
-  'C#',
-  '.NET',
-  'PHP',
-  'Ruby',
-  'Rails',
-  'Swift',
-  'Kotlin',
-  'Terraform',
-  'Ansible',
-  'Linux',
-  'Git',
-  'GitHub Actions',
-  'CI/CD',
-  'MCP',
-  'LLM',
-  'HTML',
-  'CSS',
-  'Tailwind',
-  'Playwright',
-  'Vitest',
-  'Jest',
-  'Express',
-  'Sails',
-  'API design',
-  'Service architecture',
-] as const;
 export function discoveryVocabulary(
   evidence: CandidateEvidenceSource[],
   postingLabels: string[],

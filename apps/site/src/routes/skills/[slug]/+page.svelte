@@ -1,0 +1,2 @@
+<script lang="ts">let { data } = $props();
+</script><svelte:head><title>{data.skill} opportunities</title><meta name="description" content="Public opportunities requiring this skill." /></svelte:head><main><a href="/opportunities">All opportunities</a><h1>{data.skill} opportunities</h1><ul>{#each data.page.items as item}<li><a href={`/opportunities/${item.id}`}>{item.title}</a> at {item.company?.name}</li>{/each}</ul></main>

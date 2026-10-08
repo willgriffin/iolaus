@@ -19,3 +19,4 @@ src/types/virtual-modules.d.ts
 
 !src/routes/api/_events/**/+server.ts
 !src/routes/api/mcp/**/+server.ts
+!src/routes/api/public/v1/**/+server.ts

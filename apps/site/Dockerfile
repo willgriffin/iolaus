@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS base
+FROM node:26.10.0-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH="${PNPM_HOME}:${PATH}"
-RUN corepack enable
+RUN npm install --global pnpm@11.25.0 \
+  && pnpm --version | grep -Fx '11.25.0'
 WORKDIR /app
 
 FROM base AS deps
@@ -11,10 +12,9 @@ FROM base AS deps
 # into the image. Never add credentials to it: pass them with a BuildKit
 # secret mount. `pnpm lint` fails on credential keys (scripts/check-npmrc-credentials.mjs).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json .npmrc ./
-# The frozen lockfile resolves local SMRT archives and a declaration patch.
+# The frozen lockfile resolves the coordinated release's local archives.
 # Copy them before installation so cold builds have every file-backed input.
-COPY vendor/smrt vendor/smrt
-COPY patches patches
+COPY vendor vendor
 COPY apps/site/package.json apps/site/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/resume/package.json packages/resume/package.json
@@ -50,7 +50,6 @@ ENV TSX_TSCONFIG_PATH=/app/apps/site/tsconfig.runtime.json
 ENV HOST=0.0.0.0
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV COREPACK_HOME=/opt/corepack
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
@@ -59,14 +58,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && useradd --uid 10001 --gid iolaus --create-home --home-dir /home/iolaus \
     --shell /usr/sbin/nologin iolaus \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack install --global pnpm@11.24.0 \
-  && pnpm --version | grep -Fx '11.24.0'
+RUN pnpm --version | grep -Fx '11.25.0'
 COPY --from=build --chown=iolaus:iolaus /app /app
 # Runtime entrypoints use this lockfile-pinned loader directly. This build-time
-# smoke prevents a released image from falling back to Corepack/pnpm downloads.
+# smoke prevents a released image from downloading a runtime loader at startup.
 RUN test -x /app/node_modules/.bin/tsx \
   && node --import tsx --eval "import('./apps/site/scripts/jobs-worker-bootstrap.ts')"
 USER 10001:10001
-RUN HOME=/tmp pnpm --version | grep -Fx '11.24.0'
+RUN HOME=/tmp pnpm --version | grep -Fx '11.25.0'
 EXPOSE 3000
 CMD ["node", "apps/site/build"]

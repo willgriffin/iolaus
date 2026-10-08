@@ -1,5 +1,6 @@
 import { AUTO_SUBMIT_APPLICATION_QUEUE } from '../src/lib/server/auto-submit-application-job-schema.js';
 import { OPPORTUNITY_INTELLIGENCE_QUEUE } from '../src/lib/server/opportunity-intelligence-job-schema.js';
+import { OPPORTUNITY_ANALYSIS_QUEUE } from '../src/lib/server/opportunity-analysis-job-schema.js';
 import {
   SCHEDULED_SOURCE_QUEUE,
   SOURCE_CRAWL_QUEUE,
@@ -11,6 +12,7 @@ export const taskWorkerQueues = [
   SOURCE_CRAWL_QUEUE,
   SCHEDULED_SOURCE_QUEUE,
   OPPORTUNITY_INTELLIGENCE_QUEUE,
+  OPPORTUNITY_ANALYSIS_QUEUE,
   AUTO_SUBMIT_APPLICATION_QUEUE,
 ] as const;
 

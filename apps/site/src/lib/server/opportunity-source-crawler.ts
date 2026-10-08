@@ -7421,6 +7421,16 @@ async function persistSourceOpportunity(
       );
       if (updated) existing.applyMethod = applyMethodBackfill;
     }
+    if (materiallyChanged || !existing.currentAnalysisId) {
+      const { ensureOpportunityAnalysis } = await import(
+        './opportunity-analysis.js'
+      );
+      const { enqueueOpportunityAnalysis } = await import(
+        './opportunity-analysis-job.js'
+      );
+      await enqueueOpportunityAnalysis(stringValue(existing.id));
+      await ensureOpportunityAnalysis(stringValue(existing.id));
+    }
     return {
       contentFingerprint,
       contentVersion,
@@ -7534,6 +7544,14 @@ async function persistSourceOpportunity(
       'Opportunity persistence completed without a durable opportunity ID.',
     );
   }
+  const { ensureOpportunityAnalysis } = await import(
+    './opportunity-analysis.js'
+  );
+  const { enqueueOpportunityAnalysis } = await import(
+    './opportunity-analysis-job.js'
+  );
+  await enqueueOpportunityAnalysis(opportunityId);
+  await ensureOpportunityAnalysis(opportunityId);
   return {
     contentFingerprint,
     contentVersion: 1,

@@ -11,6 +11,7 @@ describe('deployed TaskRunner entrypoint', () => {
       expect.arrayContaining([
         'source-crawls',
         'agents',
+        'opportunity-analysis',
         OPPORTUNITY_INTELLIGENCE_QUEUE,
         AUTO_SUBMIT_APPLICATION_QUEUE,
       ]),

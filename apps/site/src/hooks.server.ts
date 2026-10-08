@@ -6,7 +6,9 @@ import { administrativeSessionFailure } from '$lib/server/administrative-auth';
 import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
+import { getLocalOAuth } from '$lib/server/local-oauth';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
+import { refreshSkillVocabularyLookup } from '$lib/server/skill-vocabulary';
 import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
 import { withBearerSessionContext } from '$lib/server/terminal-auth';
 import {
@@ -24,8 +26,12 @@ export const init: ServerInit = async () => {
   // Runtime initialisation retries with backoff (#100): a transient provider
   // failure at boot must not leave the pod unready until kubelet restarts it.
   void startRuntimeThenPrime({
-    ensureRuntime: ensureApplicationRuntimeReady,
-    prime: () => startPublishedResumePrime(),
+    ensureRuntime: async () => {
+      await ensureApplicationRuntimeReady();
+      await getLocalOAuth();
+      await refreshSkillVocabularyLookup();
+    },
+    prime: startPublishedResumePrime,
   });
 };
 
@@ -42,13 +48,17 @@ const authGuard: Handle = async ({ event, resolve }) => {
   const pathname = event.url.pathname;
   const protectedAdmin = pathname.startsWith('/admin');
   const protectedApi = pathname.startsWith('/api');
+  const publicCatalogApi =
+    pathname.startsWith('/api/public/v1/') &&
+    !pathname.startsWith('/api/public/v1/me/');
   const publicApi =
     pathname === '/api/cli/auth/start' ||
     pathname === '/api/cli/auth/token' ||
     pathname === '/api/_runtime/health' ||
     pathname === '/api/mcp' ||
     pathname === '/api/mcp/tools' ||
-    pathname === '/api/mcp/call';
+    pathname === '/api/mcp/call' ||
+    publicCatalogApi;
 
   if (protectedAdmin || (protectedApi && !publicApi)) {
     const failure = administrativeSessionFailure(event.locals);
@@ -56,7 +66,10 @@ const authGuard: Handle = async ({ event, resolve }) => {
       if (protectedApi) {
         return new Response(
           failure === 'unauthenticated' ? 'Unauthorized' : 'Forbidden',
-          { status: failure === 'unauthenticated' ? 401 : 403 },
+          {
+            status: failure === 'unauthenticated' ? 401 : 403,
+            headers: { 'cache-control': 'private, no-store' },
+          },
         );
       }
 
@@ -95,25 +108,30 @@ function isMcpOAuthJwt(pathname: string, token: string): boolean {
 }
 
 const bearerSessionHandler: Handle = async ({ event, resolve }) => {
-  if (!event.locals.user) {
-    const authorization = event.request.headers.get('authorization');
-    const match = authorization?.match(/^Bearer\s+(.+)$/iu);
+  const authorization = event.request.headers.get('authorization');
+  const match = authorization?.match(/^Bearer\s+(.+)$/iu);
+  if (authorization !== null && !match)
+    return new Response('Unauthorized', {
+      status: 401,
+      headers: { 'cache-control': 'private, no-store' },
+    });
 
-    if (match && !isMcpOAuthJwt(event.url.pathname, match[1].trim())) {
-      return await withBearerSessionContext(
-        match[1].trim(),
-        async (context) => {
-          if (context.session && context.user) {
-            event.locals.user = context.user;
-            event.locals.membership = context.membership ?? null;
-            event.locals.permissions = context.permissions;
-            event.locals.tenantId = context.tenantId;
-            event.locals.sessionId = context.sessionId;
-          }
-          return resolve(event);
-        },
-      );
-    }
+  if (match && !isMcpOAuthJwt(event.url.pathname, match[1].trim())) {
+    return await withBearerSessionContext(match[1].trim(), async (context) => {
+      if (context.session && context.user) {
+        event.locals.user = context.user;
+        event.locals.membership = context.membership ?? null;
+        event.locals.permissions = context.permissions;
+        event.locals.tenantId = context.tenantId;
+        event.locals.sessionId = context.sessionId;
+      }
+      if (!context.session || !context.user)
+        return new Response('Unauthorized', {
+          status: 401,
+          headers: { 'cache-control': 'private, no-store' },
+        });
+      return resolve(event);
+    });
   }
 
   return resolve(event);

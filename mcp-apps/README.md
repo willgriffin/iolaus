@@ -4,8 +4,10 @@ This is the portable package for Iolaus's public Streamable HTTP MCP endpoint
 at `https://jobgeni.us/api/mcp`. Anonymous clients can search the shared
 opportunity catalog; account-linked tools always require an Iolaus grant.
 
-For local development, copy the package and replace the endpoint with
-`http://127.0.0.1:5173/api/mcp`. For a private self-hosted installation, copy
+For local development, copy the package and replace `mcp.json` with the checked-in
+`mcp.local.json`, which targets `http://127.0.0.1:5173/api/mcp` under a distinct
+`iolaus-local` server name. Local sessions and tokens must never be copied to the
+public profile. For a private self-hosted installation, copy
 the package and use that deployment's HTTPS `/api/mcp` URL. Do not add a user,
 tenant, profile, or credential to a manifest: the server binds the verified
 session and workspace on each request.
@@ -42,3 +44,6 @@ compatibility paths.
 The app can browse and inspect the authenticated workspace, and create or reopen
 a local application workspace. Its human-review link opens Iolaus's dedicated
 review page; it never approves or submits an application.
+
+Deployment signing settings, scope policy and account revocation are documented in
+[`docs/oauth-account-linking.md`](../docs/oauth-account-linking.md).

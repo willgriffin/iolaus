@@ -1,93 +1,197 @@
 import { createHash } from 'node:crypto';
+import { resolveDatabase } from '@happyvertical/smrt-core';
+import { z } from 'zod';
 import type { Opportunity } from '$lib/objects/Opportunity.js';
-import type { OpportunityAnalysis } from '$lib/objects/OpportunityAnalysis.js';
-import type { OpportunitySkill } from '$lib/objects/OpportunitySkill.js';
 import {
   OPPORTUNITY_ANALYSIS_VERSION,
-  type OpportunityAnalysisSkill,
   type OpportunityAnalysisSnapshot,
 } from '$lib/opportunity-analysis-contract.js';
-import { executeGovernedOpportunityIntelligenceRequest } from './opportunity-intelligence-governance.js';
-import { canonicalSkillSlug, skillLabelFromSlug } from './skill-vocabulary.js';
+import { getDbConfig } from './db.js';
+import {
+  ANALYSIS_MODEL,
+  ANALYSIS_OUTPUT_VERSION,
+  ANALYSIS_PROMPT_VERSION,
+  enrichOpportunityAnalysis,
+} from './opportunity-analysis-enrichment.js';
+import {
+  deterministicOpportunityAnalysis,
+  hasAnalysisPII,
+  negatedSkillEvidence,
+  sourceText,
+  verifiedAnalysisSource,
+} from './opportunity-analysis-source.js';
+import {
+  publishOpportunityAnalysis,
+  readCurrentAnalysis,
+} from './opportunity-analysis-store.js';
+import {
+  canonicalSkillSlug,
+  refreshSkillVocabularyLookup,
+} from './skill-vocabulary.js';
 import { getCollection } from './smrt.js';
-
 export type OpportunityAnalysisEnrichment = Pick<
   OpportunityAnalysisSnapshot,
   'skills' | 'requirements' | 'summaryBullets' | 'eligibility'
 >;
-export type OpportunityAnalysisGateway = (input: {
-  opportunityId: string;
-  sourceContentFingerprint: string;
-  title: string;
-  description: string;
-}) => Promise<OpportunityAnalysisEnrichment>;
-let enrichmentGateway: OpportunityAnalysisGateway | null = null;
-/** Test/operator seam. Production wiring must provide a governed gateway. */
-export function setOpportunityAnalysisGatewayForTest(
-  gateway: OpportunityAnalysisGateway | null,
-): void {
-  enrichmentGateway = gateway;
-}
-
 export interface EnsureOpportunityAnalysisOptions {
   enrich?: boolean;
   budgetMicros?: number;
+  windowId?: string;
 }
-const splitTerms = (value: string) =>
-  value
-    .split(/[\n,;]/)
-    .map((term) => term.trim())
-    .filter(Boolean);
-const safeJson = <T>(value: string, fallback: T): T => {
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
-};
-
-function deterministic(opportunity: Opportunity) {
-  const skills: OpportunityAnalysisSkill[] = [];
-  for (const [value, kind] of [
-    [opportunity.requiredSkills, 'required'],
-    [opportunity.preferredSkills, 'preferred'],
-  ] as const) {
-    for (const raw of splitTerms(value)) {
-      const slug = canonicalSkillSlug(raw);
-      if (
-        slug &&
-        !skills.some((skill) => skill.slug === slug && skill.kind === kind)
+const span = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().positive(),
+  })
+  .strict();
+const bounded = z.string().min(1).max(600);
+export const opportunityAnalysisEnrichmentSchema = z
+  .object({
+    skills: z
+      .array(
+        z
+          .object({
+            slug: z.string().min(1).max(100),
+            label: z.string().min(1).max(100),
+            kind: z.enum(['required', 'preferred']),
+            confidence: z.number().min(0).max(1),
+            evidence: z
+              .array(span.extend({ quote: bounded }))
+              .min(1)
+              .max(5),
+          })
+          .strict(),
       )
-        skills.push({
-          slug,
-          label: skillLabelFromSlug(slug),
-          kind,
-          confidence: 1,
-          evidence: [],
-        });
-    }
-  }
-  const compensation =
-    opportunity.currency &&
-    (opportunity.salaryMin !== null || opportunity.salaryMax !== null)
-      ? {
-          currency: opportunity.currency,
-          min: opportunity.salaryMin ?? undefined,
-          max: opportunity.salaryMax ?? undefined,
-          period: 'year',
-          source: 'posted' as const,
-        }
-      : null;
-  return {
-    skills,
-    compensation,
-    summary: opportunity.descriptionSummary
-      ? [opportunity.descriptionSummary.slice(0, 600)]
-      : [],
-    countries: [] as string[],
+      .max(100),
+    requirements: z
+      .array(
+        z
+          .object({
+            hash: z.string().max(100),
+            text: bounded,
+            kind: z.enum(['must', 'should', 'nice']),
+            category: z.enum([
+              'skill',
+              'experience',
+              'education',
+              'credential',
+              'location',
+              'authorization',
+              'other',
+            ]),
+            years: z.number().min(0).max(80).optional(),
+            skills: z.array(z.string().max(100)).max(30),
+            evidence: z.array(span).min(1).max(5),
+          })
+          .strict(),
+      )
+      .max(100),
+    summaryBullets: z.array(bounded).max(5),
+    eligibility: z
+      .object({
+        remote: z.boolean().nullable(),
+        countries: z.array(z.string().max(80)).max(30),
+        regions: z.array(z.string().max(100)).max(30),
+        timezones: z.array(z.string().max(80)).max(30),
+        flags: z.number().int().nonnegative(),
+        workAuthorization: z
+          .object({
+            required: z.array(z.string().max(100)).max(30),
+            sponsorship: z.enum(['yes', 'no', 'unknown']),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+/** All citations refer to exact canonical raw description offsets, never a human overlay. */
+export function validateOpportunityAnalysisEnrichment(
+  value: OpportunityAnalysisEnrichment,
+  description: string,
+): OpportunityAnalysisEnrichment {
+  const parsed = opportunityAnalysisEnrichmentSchema.parse(value);
+  if (
+    [
+      ...parsed.skills.flatMap((skill) => [
+        skill.label,
+        ...skill.evidence.map((e) => e.quote),
+      ]),
+      ...parsed.requirements.map((r) => r.text),
+      ...parsed.summaryBullets,
+      ...parsed.eligibility.countries,
+      ...parsed.eligibility.regions,
+      ...parsed.eligibility.timezones,
+      ...parsed.eligibility.workAuthorization.required,
+    ].some(hasAnalysisPII)
+  )
+    throw new Error('Analysis contains contact PII.');
+  const validateSpan = (e: { start: number; end: number; quote?: string }) => {
+    if (
+      e.end <= e.start ||
+      e.end > description.length ||
+      ('quote' in e && description.slice(e.start, e.end) !== e.quote)
+    )
+      throw new Error('Analysis source evidence does not match.');
   };
+  for (const skill of parsed.skills) {
+    if (canonicalSkillSlug(skill.slug) !== skill.slug)
+      throw new Error('Unknown canonical skill.');
+    skill.evidence.forEach(validateSpan);
+    if (
+      skill.evidence.some((e) =>
+        negatedSkillEvidence(description, e.start, e.end),
+      )
+    )
+      throw new Error('Negated skill cannot establish proficiency.');
+    if (!skill.evidence.some((e) => canonicalSkillSlug(e.quote) === skill.slug))
+      throw new Error('Skill citation does not establish the skill.');
+  }
+  for (const summary of parsed.summaryBullets)
+    if (!description.includes(summary))
+      throw new Error('Summary is not grounded in source text.');
+  for (const term of [
+    ...parsed.eligibility.countries,
+    ...parsed.eligibility.regions,
+    ...parsed.eligibility.timezones,
+    ...parsed.eligibility.workAuthorization.required,
+  ])
+    if (!description.toLowerCase().includes(term.toLowerCase()))
+      throw new Error('Eligibility is not grounded in source text.');
+  if (parsed.eligibility.remote === true && !/\bremote\b/i.test(description))
+    throw new Error('Remote eligibility is unsupported.');
+  if (
+    parsed.eligibility.remote === false &&
+    !/\b(on[ -]?site|in[ -]?office)\b/i.test(description)
+  )
+    throw new Error('Onsite eligibility is unsupported.');
+  if (
+    parsed.eligibility.workAuthorization.sponsorship !== 'unknown' &&
+    !/\bsponsor(ship|ing)?\b/i.test(description)
+  )
+    throw new Error('Sponsorship eligibility is unsupported.');
+  parsed.eligibility.flags = 0;
+  for (const requirement of parsed.requirements) {
+    requirement.evidence.forEach(validateSpan);
+    if (
+      !requirement.evidence.some(
+        (e) => description.slice(e.start, e.end) === requirement.text,
+      )
+    )
+      throw new Error('Requirement is not an exact source quotation.');
+    requirement.hash = createHash('sha256')
+      .update(
+        requirement.text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' '),
+      )
+      .digest('hex');
+    if (
+      requirement.skills.some(
+        (slug) => !parsed.skills.some((s) => s.slug === slug),
+      )
+    )
+      throw new Error('Requirement references an unsupported skill.');
+  }
+  return parsed;
 }
-
 export function opportunityAnalysisInputFingerprint(
   opportunity: Pick<
     Opportunity,
@@ -100,265 +204,92 @@ export function opportunityAnalysisInputFingerprint(
     )
     .digest('hex');
 }
-
-function snapshot(row: OpportunityAnalysis): OpportunityAnalysisSnapshot {
-  const compensation = safeJson<OpportunityAnalysisSnapshot['compensation']>(
-    row.compensationJson,
-    null,
-  );
-  const eligibility = safeJson<Record<string, unknown>>(
-    row.eligibilityJson,
-    {},
-  );
-  return {
-    id: row.id ?? '',
-    opportunityId: row.opportunityId,
-    sourceContentFingerprint: row.sourceContentFingerprint,
-    sourceContentVersion: row.sourceContentVersion,
-    analysisVersion: OPPORTUNITY_ANALYSIS_VERSION,
-    status: row.status as OpportunityAnalysisSnapshot['status'],
-    normalizedTitle: row.normalizedTitle,
-    seniority: row.seniority,
-    function: row.function,
-    workMode: row.workMode,
-    employmentType: row.employmentType,
-    skills: safeJson(row.skillsJson, []),
-    requirements: safeJson(row.requirementsJson, []),
-    skillSlugs: safeJson(row.skillSlugsJson, []),
-    summaryBullets: safeJson(row.summaryJson, []),
-    eligibility: {
-      remote:
-        typeof eligibility.remote === 'boolean' ? eligibility.remote : null,
-      countries: safeJson(row.countriesJson, []),
-      regions: Array.isArray(eligibility.regions)
-        ? (eligibility.regions as string[])
-        : [],
-      timezones: Array.isArray(eligibility.timezones)
-        ? (eligibility.timezones as string[])
-        : [],
-      flags: typeof eligibility.flags === 'number' ? eligibility.flags : 0,
-      workAuthorization: {
-        required: Array.isArray(
-          (eligibility.workAuthorization as Record<string, unknown> | undefined)
-            ?.required,
-        )
-          ? (eligibility.workAuthorization as { required: string[] }).required
-          : [],
-        sponsorship: ['yes', 'no', 'unknown'].includes(
-          String(
-            (
-              eligibility.workAuthorization as
-                | Record<string, unknown>
-                | undefined
-            )?.sponsorship,
-          ),
-        )
-          ? (String(
-              (
-                eligibility.workAuthorization as
-                  | Record<string, unknown>
-                  | undefined
-              )?.sponsorship,
-            ) as 'yes' | 'no' | 'unknown')
-          : 'unknown',
-      },
-    },
-    compensation: compensation?.source === 'posted' ? compensation : null,
-    errorCode: row.errorCode || undefined,
-  };
-}
-
-/** Reject hallucinated source citations before they can enter the shared
- * catalog. Model input contains only source posting fields, never candidates. */
-export function validateOpportunityAnalysisEnrichment(
-  value: OpportunityAnalysisEnrichment,
-  description: string,
-): OpportunityAnalysisEnrichment {
-  for (const skill of value.skills) {
-    for (const evidence of skill.evidence) {
-      if (
-        !Number.isInteger(evidence.start) ||
-        !Number.isInteger(evidence.end) ||
-        evidence.start < 0 ||
-        evidence.end < evidence.start ||
-        evidence.end > description.length
-      )
-        throw new Error('Opportunity analysis evidence span is out of bounds.');
-      if (
-        evidence.quote &&
-        description.slice(evidence.start, evidence.end) !== evidence.quote
-      )
-        throw new Error(
-          'Opportunity analysis evidence quote does not match source text.',
-        );
-    }
-  }
-  return value;
-}
-
-/** Return the current source-version analysis without invoking a provider. */
 export async function getCurrentOpportunityAnalysis(
   opportunityId: string,
 ): Promise<OpportunityAnalysisSnapshot | null> {
-  const opportunities = await getCollection<Opportunity>('Opportunity');
-  const opportunity = await opportunities.get(opportunityId);
-  if (!opportunity) return null;
-  const analyses = await getCollection<OpportunityAnalysis>(
-    'OpportunityAnalysis',
+  return readCurrentAnalysis(
+    await resolveDatabase(getDbConfig()),
+    opportunityId,
   );
-  const [current] = await analyses.list({
-    limit: 1,
-    where: {
-      opportunityId,
-      sourceContentFingerprint: opportunity.sourceContentFingerprint,
-      analysisVersion: OPPORTUNITY_ANALYSIS_VERSION,
-    },
-  });
-  return current ? snapshot(current) : null;
 }
-
-/** Deterministically materialize the artifact once for the current source version.
- * Enrichment is intentionally not invoked until the governed provider adapter is wired. */
 export async function ensureOpportunityAnalysis(
   opportunityId: string,
   options: EnsureOpportunityAnalysisOptions = {},
 ): Promise<OpportunityAnalysisSnapshot> {
-  const existing = await getCurrentOpportunityAnalysis(opportunityId);
-  if (existing) return existing;
+  await refreshSkillVocabularyLookup();
   const opportunities = await getCollection<Opportunity>('Opportunity');
   const opportunity = await opportunities.get(opportunityId);
-  if (!opportunity)
-    throw new Error(`Opportunity ${opportunityId} was not found.`);
-  if (!opportunity.sourceContentFingerprint)
-    throw new Error(
-      `Opportunity ${opportunityId} has no source content fingerprint.`,
-    );
-  const analysis = deterministic(opportunity);
-  const analyses = await getCollection<OpportunityAnalysis>(
-    'OpportunityAnalysis',
-  );
-  const created = await analyses.create({
-    opportunityId,
+  if (!opportunity?.id) throw new Error('Opportunity not found.');
+  const identity = {
+    id: opportunity.id,
+    sourceContentJson: opportunity.sourceContentJson,
     sourceContentFingerprint: opportunity.sourceContentFingerprint,
     sourceContentVersion: opportunity.sourceContentVersion,
-    analysisVersion: OPPORTUNITY_ANALYSIS_VERSION,
-    status: 'deterministic',
-    normalizedTitle: opportunity.title.trim(),
-    seniority: opportunity.seniority,
-    function: 'unknown',
-    workMode: opportunity.workMode,
-    employmentType: opportunity.employmentType,
-    skillsJson: JSON.stringify(analysis.skills),
-    requirementsJson: '[]',
-    eligibilityJson: opportunity.postingEligibilityJson || '{}',
-    compensationJson: JSON.stringify(analysis.compensation ?? {}),
-    summaryJson: JSON.stringify(analysis.summary),
-    countriesJson: JSON.stringify(analysis.countries),
-    skillSlugsJson: JSON.stringify(
-      analysis.skills.map((skill) => skill.slug).sort(),
-    ),
-    errorCode:
-      options.enrich && (options.budgetMicros ?? 0) <= 0
-        ? 'enrichment_budget_required'
-        : '',
-  });
-  const opportunitySkills =
-    await getCollection<OpportunitySkill>('OpportunitySkill');
-  if (!created.id) throw new Error('Created opportunity analysis has no id.');
-  const analysisId = created.id;
-  await Promise.all(
-    analysis.skills.map((skill) =>
-      opportunitySkills.create({
+  };
+  const source = verifiedAnalysisSource(identity);
+  const db = await resolveDatabase(getDbConfig());
+  let current = await readCurrentAnalysis(db, opportunityId);
+  if (!current)
+    current = await publishOpportunityAnalysis(
+      db,
+      identity,
+      deterministicOpportunityAnalysis(identity),
+    );
+  if (!options.enrich || !(options.budgetMicros && options.budgetMicros > 0))
+    return current;
+  if (current.status === 'enriched') {
+    const identityRow = (
+      await db.query(
+        'SELECT model,prompt_version,output_schema_version FROM opportunity_analyses WHERE id=?',
+        [current.id],
+      )
+    ).rows[0];
+    if (
+      identityRow?.model === ANALYSIS_MODEL &&
+      identityRow.prompt_version === ANALYSIS_PROMPT_VERSION &&
+      identityRow.output_schema_version === ANALYSIS_OUTPUT_VERSION
+    )
+      return current;
+  }
+  try {
+    const enriched = await enrichOpportunityAnalysis(
+      {
         opportunityId,
-        analysisId,
-        skillSlug: skill.slug,
-        kind: skill.kind,
-        confidence: skill.confidence,
-      }),
-    ),
-  );
-  // Do not publish an analysis against a posting version that changed while
-  // it was being materialized. A later ensure call will create the new row.
-  const latest = await opportunities.get(opportunityId);
-  if (
-    latest &&
-    latest.sourceContentFingerprint === opportunity.sourceContentFingerprint &&
-    latest.sourceContentVersion === opportunity.sourceContentVersion
-  ) {
-    latest.currentAnalysisId = analysisId;
-    await latest.save();
+        sourceContentFingerprint: identity.sourceContentFingerprint,
+        sourceContentVersion: identity.sourceContentVersion,
+        title: sourceText(source.title),
+        description: sourceText(source.descriptionRaw),
+        deterministic: current,
+      },
+      { budgetMicros: options.budgetMicros, windowId: options.windowId },
+    );
+    const fields = validateOpportunityAnalysisEnrichment(
+      {
+        skills: enriched.snapshot.skills,
+        requirements: enriched.snapshot.requirements,
+        summaryBullets: enriched.snapshot.summaryBullets,
+        eligibility: enriched.snapshot.eligibility,
+      },
+      sourceText(source.descriptionRaw),
+    );
+    return await publishOpportunityAnalysis(
+      db,
+      identity,
+      {
+        ...current,
+        ...fields,
+        status: 'enriched',
+        skillSlugs: fields.skills.map((s) => s.slug).sort(),
+      },
+      { ...enriched, outputSchemaVersion: ANALYSIS_OUTPUT_VERSION },
+    );
+  } catch {
+    // Provider refusal, malformed output and obsolete workers never mutate the
+    // immutable deterministic artifact. A later bounded job may retry.
+    const latest = await readCurrentAnalysis(db, opportunityId);
+    if (latest) return latest;
+    throw new Error(
+      'Opportunity source changed during analysis; retry current version.',
+    );
   }
-  if (
-    options.enrich &&
-    options.budgetMicros &&
-    options.budgetMicros > 0 &&
-    enrichmentGateway
-  ) {
-    try {
-      const gateway = enrichmentGateway;
-      if (!gateway)
-        throw new Error(
-          'Opportunity analysis enrichment gateway is unavailable.',
-        );
-      const sourceInput = `${opportunity.title}\n${opportunity.descriptionRaw}`;
-      const estimatedInputTokens = Math.max(
-        1,
-        Math.ceil(sourceInput.length / 4),
-      );
-      // The governance ledger owns retries, idempotency and circuit/provider
-      // limits. The gateway is injected only to keep unit tests token-free.
-      const governed =
-        await executeGovernedOpportunityIntelligenceRequest<OpportunityAnalysisEnrichment>(
-          {
-            estimatedInputTokens,
-            inputTokenCeiling: Math.min(30_000, estimatedInputTokens),
-            maxOutputTokens: 4_000,
-            identity: {
-              agentRunId: 'opportunity-analysis',
-              opportunityId,
-              contentFingerprint: opportunity.sourceContentFingerprint,
-              inputFingerprint:
-                opportunityAnalysisInputFingerprint(opportunity),
-              feature: 'opportunity-analysis',
-              profile: 'opportunity-intelligence-extraction',
-              model: 'openai/gpt-6-luna',
-              promptVersion: OPPORTUNITY_ANALYSIS_VERSION,
-              outputSchemaVersion: OPPORTUNITY_ANALYSIS_VERSION,
-              preparedPayloadVersion: OPPORTUNITY_ANALYSIS_VERSION,
-            },
-            invoke: async () => ({
-              output: await gateway({
-                opportunityId,
-                sourceContentFingerprint: opportunity.sourceContentFingerprint,
-                title: opportunity.title,
-                description: opportunity.descriptionRaw,
-              }),
-            }),
-          },
-        );
-      const enriched = validateOpportunityAnalysisEnrichment(
-        governed.output,
-        opportunity.descriptionRaw,
-      );
-      created.status = 'enriched';
-      created.skillsJson = JSON.stringify(enriched.skills);
-      created.requirementsJson = JSON.stringify(enriched.requirements);
-      created.summaryJson = JSON.stringify(enriched.summaryBullets.slice(0, 5));
-      created.eligibilityJson = JSON.stringify(enriched.eligibility);
-      created.requestId = governed.requestId;
-      created.skillSlugsJson = JSON.stringify(
-        enriched.skills.map((skill) => skill.slug).sort(),
-      );
-      await created.save();
-    } catch (cause) {
-      // Deterministic analysis remains current and searchable after any model
-      // failure; the scheduled backfill may retry this version later.
-      created.errorCode =
-        cause instanceof Error
-          ? 'enrichment_failed'
-          : 'enrichment_unknown_failure';
-      await created.save();
-    }
-  }
-  return snapshot(created);
 }

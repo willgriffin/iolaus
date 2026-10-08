@@ -28,3 +28,29 @@ describe('magic-link confirm page', () => {
     expect(headers['cache-control']).toBe('no-store');
   });
 });
+
+describe('OAuth return after magic-link sign in', () => {
+  it.each([
+    [
+      '/oauth/authorize?client_id=client&state=opaque',
+      '/oauth/authorize?client_id=client&state=opaque',
+    ],
+    ['https://attacker.test/', '/admin'],
+    ['//attacker.test/', '/admin'],
+  ])('returns only to a safe local consent path: %s', async (next, destination) => {
+    const auth = await import('$lib/server/auth');
+    vi.mocked(auth.completeMagicLinkLogin).mockResolvedValueOnce('signed-in');
+    const { actions } = await import('./+page.server');
+    const cookies = { get: vi.fn(() => next), delete: vi.fn() };
+    const request = new Request('https://example.test/auth/magic-link', {
+      method: 'POST',
+      body: new URLSearchParams({ token: 'one-use-fixture' }),
+    });
+    await expect(
+      actions.default({ request, cookies } as never),
+    ).rejects.toMatchObject({ status: 303, location: destination });
+    expect(cookies.delete).toHaveBeenCalledWith('iolaus_login_next_test', {
+      path: '/',
+    });
+  });
+});

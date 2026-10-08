@@ -530,7 +530,7 @@ function currentTenantHref(pathname: string): string {
       onNavigate={handleTenantNavigate}
     />
     </div>
-    <AdminSidebarControls id="admin-rail-account" compact email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
+    <AdminSidebarControls accountConnectionsEnabled={data.accountConnectionsEnabled} id="admin-rail-account" compact email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
   </div>
 {/snippet}
 
@@ -544,7 +544,7 @@ function currentTenantHref(pathname: string): string {
 {/snippet}
 
 {#snippet tenantFooter()}
-  <AdminSidebarControls id="admin-panel-account" email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
+  <AdminSidebarControls accountConnectionsEnabled={data.accountConnectionsEnabled} id="admin-panel-account" email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
   <div class="admin-legal-links"><LegalLinks links={data.legalLinks} /></div>
 {/snippet}
 

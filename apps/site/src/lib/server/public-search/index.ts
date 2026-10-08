@@ -1,276 +1,632 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import {
   type PublicFacets,
+  type PublicOpportunity,
   type PublicOpportunityDetail,
   type PublicSearchInput,
   type PublicSearchPage,
+  publicMatchInputSchema,
+  publicMatchResultSchema,
   publicOpportunityDetailSchema,
   publicOpportunitySchema,
   publicSearchInputSchema,
   publicSearchPageSchema,
 } from '$lib/public-opportunity-contract.js';
 import {
+  canonicalSkillSlug,
+  SKILL_CANONICAL_ALIASES,
+} from '../../skill-canonical.js';
+import {
   applicationRuntime,
   hostedDatabasePoolMax,
 } from '../application-runtime.js';
 import { getDbConfig } from '../db.js';
-
-export { matchPublicSkills } from './match.js';
-
-type Row = Record<string, unknown>;
-type Database = {
+import { matchPublicSkills as matchSkills } from './match.js';
+export type Row = Record<string, unknown>;
+export type PublicDatabase = {
   query(
     statement: string,
     ...values: unknown[]
   ): Promise<{ rows?: Row[] } | Row[]>;
 };
-const EMPTY_FACETS: PublicFacets = {
-  skills: [],
-  seniority: [],
-  function: [],
-  workMode: [],
-  employmentType: [],
-  country: [],
-};
-
-function rows(value: { rows?: Row[] } | Row[]): Row[] {
-  return Array.isArray(value) ? value : (value.rows ?? []);
-}
-function string(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-function jsonArray(value: unknown): string[] {
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed)
-      ? parsed
-          .filter((item): item is string => typeof item === 'string')
-          .slice(0, 30)
-      : [];
-  } catch {
-    return [];
+export class PublicSearchError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
   }
 }
-function jsonObject(value: unknown): Record<string, unknown> {
+const rows = (r: { rows?: Row[] } | Row[]) =>
+  Array.isArray(r) ? r : (r.rows ?? []);
+const text = (v: unknown) => (typeof v === 'string' ? v : '');
+function object(v: unknown): Row {
   try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    const p = typeof v === 'string' ? JSON.parse(v) : v;
+    return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
   } catch {
     return {};
   }
 }
-function safeUrl(value: unknown): string | null {
+function array(v: unknown): unknown[] {
   try {
-    const url = new URL(string(value));
-    return url.protocol === 'https:' || url.protocol === 'http:'
-      ? url.href
-      : null;
+    const p = typeof v === 'string' ? JSON.parse(v) : v;
+    return Array.isArray(p) ? p : [];
   } catch {
-    return null;
+    return [];
   }
 }
-function date(value: unknown): string | null {
-  const parsed = new Date(string(value));
-  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+const strings = (v: unknown) =>
+  array(v).filter((x): x is string => typeof x === 'string');
+function date(v: unknown): string | null {
+  if (v === null || v === undefined || v === '') return null;
+  const d = new Date(v instanceof Date ? v : text(v));
+  return Number.isNaN(+d) ? null : d.toISOString();
 }
-function opportunity(row: Row, detail = false) {
-  const compensation = jsonObject(row.compensation_json);
-  const source = string(compensation.source);
-  const originalUrl =
-    safeUrl(row.posting_url) ??
-    safeUrl(row.canonical_url) ??
-    safeUrl(row.apply_url);
-  const value = {
-    id: string(row.id),
-    title: string(row.normalized_title) || string(row.title),
-    company: string(row.company_name) || 'Unknown company',
-    locations: jsonArray(row.locations_json).length
-      ? jsonArray(row.locations_json)
-      : string(row.locations)
-          .split(/[\n,]/u)
-          .map((item) => item.trim())
-          .filter(Boolean)
-          .slice(0, 10),
-    workMode: string(row.work_mode) || 'unknown',
-    employmentType: string(row.employment_type) || 'unknown',
-    seniority: string(row.seniority) || 'unknown',
-    function: string(row.function) || 'unknown',
-    skills: jsonArray(row.skill_slugs_json),
-    summary: jsonArray(jsonObject(row.summary_json).bullets),
-    compensation:
-      source === 'posted'
-        ? {
-            currency: string(compensation.currency) || undefined,
-            min:
-              typeof compensation.min === 'number'
-                ? compensation.min
-                : undefined,
-            max:
-              typeof compensation.max === 'number'
-                ? compensation.max
-                : undefined,
-            period: string(compensation.period) || undefined,
-          }
-        : undefined,
-    postedAt: date(row.posted_at),
-    originalUrl: originalUrl ?? 'https://invalid.example/',
-  };
-  if (!originalUrl) return null;
-  return detail
-    ? (publicOpportunityDetailSchema.safeParse({
-        ...value,
-        countries: jsonArray(row.countries_json),
-      }).data ?? null)
-    : (publicOpportunitySchema.safeParse(value).data ?? null);
-}
-function secret(): string {
-  return (
-    process.env.IOLAUS_PUBLIC_CURSOR_SECRET ||
-    'local-public-search-cursor-secret'
-  );
-}
-function encodeCursor(value: Row): string {
-  const body = Buffer.from(JSON.stringify(value)).toString('base64url');
-  const signature = createHmac('sha256', secret())
-    .update(body)
-    .digest('base64url');
-  return `${body}.${signature}`;
-}
-function decodeCursor(cursor: string | undefined): Row | null {
-  if (!cursor) return null;
-  const [body, signature] = cursor.split('.');
-  if (!body || !signature) return null;
-  const expected = createHmac('sha256', secret())
-    .update(body)
-    .digest('base64url');
-  if (
-    signature.length !== expected.length ||
-    !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-  )
-    return null;
-  try {
-    return JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Row;
-  } catch {
-    return null;
-  }
-}
-/** Anonymous traffic is deliberately isolated from the catalog writer role. */
-async function db(): Promise<Database> {
-  if (applicationRuntime.profile === 'local')
-    return (await resolveDatabase(getDbConfig())) as unknown as Database;
-  const url = process.env.IOLAUS_PUBLIC_READ_DATABASE_URL;
-  const configuredMax = Number(
-    process.env.IOLAUS_PUBLIC_READ_MAX_CONNECTIONS ?? 5,
-  );
-  if (
-    process.env.IOLAUS_PUBLIC_SEARCH_ENABLED !== 'true' ||
-    !url ||
-    !Number.isInteger(configuredMax) ||
-    configuredMax < 1
-  )
-    throw new Error(
-      'Public search is unavailable until its isolated read connection is configured.',
-    );
-  return (await resolveDatabase({
-    type: 'postgres',
-    url,
-    max: Math.min(hostedDatabasePoolMax(), configuredMax, 5),
-  })) as unknown as Database;
-}
-function where(input: PublicSearchInput, values: unknown[]): string {
-  const add = (value: unknown) => {
-    values.push(value);
-    return `$${values.length}`;
-  };
-  const predicates = ['1 = 1'];
-  if (input.q) {
-    const term = `%${input.q.replace(/[\\%_]/gu, '\\$&')}%`;
-    predicates.push(
-      `(lower(coalesce(normalized_title, title)) LIKE lower(${add(term)}) OR lower(coalesce(company_name, '')) LIKE lower(${add(term)}) OR lower(coalesce(skill_slugs_json, '')) LIKE lower(${add(term)}))`,
-    );
-  }
-  if (input.company)
-    predicates.push(
-      `lower(coalesce(company_name, '')) LIKE lower(${add(`%${input.company.replace(/[\\%_]/gu, '\\$&')}%`)})`,
-    );
-  for (const [column, valuesFor] of [
-    ['seniority', input.seniority],
-    ['function', input.function],
-    ['work_mode', input.workMode],
-    ['employment_type', input.employmentType],
-  ] as const)
-    if (valuesFor.length)
-      predicates.push(`${column} IN (${valuesFor.map(add).join(', ')})`);
-  if (input.skills.length)
-    predicates.push(
-      `(${input.skills.map((skill) => `skill_slugs_json LIKE ${add(`%"${skill}"%`)}`).join(' OR ')})`,
-    );
-  if (input.country.length)
-    predicates.push(
-      `(${input.country.map((country) => `countries_json LIKE ${add(`%"${country}"%`)}`).join(' OR ')})`,
-    );
-  if (input.postedSince)
-    predicates.push(`posted_at >= ${add(input.postedSince.toISOString())}`);
-  if (input.salaryMin !== undefined)
-    predicates.push(
-      `coalesce(compensation_max, compensation_min, 0) >= ${add(input.salaryMin)}`,
-    );
-  return predicates.join(' AND ');
-}
-/** Security-barrier view is the only production anonymous database grant. */
-const SELECT = `SELECT id, title, locations, posting_url, canonical_url, apply_url, posted_at, company_name, normalized_title, seniority, function, work_mode, employment_type, skill_slugs_json, summary_json, compensation_json, countries_json, compensation_min, compensation_max FROM public.jobgeni_public_catalog_v1`;
-
-export async function searchPublicOpportunities(
-  raw: PublicSearchInput,
-): Promise<PublicSearchPage> {
-  const input = publicSearchInputSchema.parse(raw);
-  const values: unknown[] = [];
-  const predicate = where(input, values);
-  const cursor = decodeCursor(input.cursor);
-  if (cursor?.postedAt) {
-    values.push(cursor.postedAt, cursor.id);
-  }
-  const cursorClause = cursor?.postedAt
-    ? ` AND (coalesce(posted_at, '1970-01-01') < $${values.length - 1} OR (coalesce(posted_at, '1970-01-01') = $${values.length - 1} AND id < $${values.length}))`
-    : '';
-  values.push(input.limit + 1);
-  const result = rows(
-    await (await db()).query(
-      `${SELECT} WHERE ${predicate}${cursorClause} ORDER BY coalesce(posted_at, '1970-01-01') DESC, id DESC LIMIT $${values.length}`,
-      ...values,
-    ),
-  )
-    .map((row) => opportunity(row))
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-  const hasNext = result.length > input.limit;
-  const items = result.slice(0, input.limit);
-  const tail = items.at(-1);
-  return publicSearchPageSchema.parse({
-    items,
-    nextCursor:
-      hasNext && tail
-        ? encodeCursor({ id: tail.id, postedAt: tail.postedAt ?? '1970-01-01' })
-        : null,
-    facets: EMPTY_FACETS,
+export function projectPublicOpportunity(
+  row: Row,
+  detail: true,
+): PublicOpportunityDetail | null;
+export function projectPublicOpportunity(
+  row: Row,
+  detail?: false,
+): PublicOpportunity | null;
+export function projectPublicOpportunity(row: Row, detail = false) {
+  const eligibility = object(row.eligibility_json);
+  const salary = object(row.compensation_json);
+  const summary = object(row.summary_json);
+  const skills = array(row.skills_json).map(object);
+  const skill = (s: Row) => ({
+    slug: text(s.slug),
+    label: text(s.label) || text(s.slug),
   });
+  let url: URL;
+  try {
+    url = new URL(
+      text(row.posting_url) || text(row.canonical_url) || text(row.apply_url),
+    );
+    if (!['https:', 'http:'].includes(url.protocol)) return null;
+  } catch {
+    return null;
+  }
+  const companyName = text(row.company_name);
+  const value = {
+    id: text(row.id),
+    title: text(row.title) || text(row.normalized_title),
+    normalized_title: text(row.normalized_title),
+    company: companyName
+      ? {
+          id: text(row.company_id),
+          name: companyName,
+          slug: text(row.company_id),
+        }
+      : null,
+    location: {
+      text: text(row.locations),
+      countries: strings(row.countries_json),
+      remote:
+        typeof eligibility.remote === 'boolean' ? eligibility.remote : null,
+      timezones: strings(eligibility.timezones),
+    },
+    seniority: text(row.seniority) || 'unknown',
+    function: text(row.function),
+    employment_type: text(row.employment_type),
+    work_mode: text(row.work_mode),
+    skills: {
+      required: skills.filter((s) => s.kind === 'required').map(skill),
+      preferred: skills.filter((s) => s.kind === 'preferred').map(skill),
+    },
+    compensation:
+      salary.source === 'posted'
+        ? {
+            currency: text(salary.currency),
+            min: typeof salary.min === 'number' ? salary.min : null,
+            max: typeof salary.max === 'number' ? salary.max : null,
+            period: text(salary.period),
+            equity: typeof salary.equity === 'boolean' ? salary.equity : null,
+            source: 'posted',
+          }
+        : null,
+    posted_at: date(row.posted_at),
+    updated_at: date(row.updated_at) || '',
+    expires_at: date(row.expires_at),
+    analysis_version: text(row.analysis_version),
+    source_content_version: Number(row.source_content_version) || 0,
+    posting_url: url.href,
+    url: `/opportunities/${encodeURIComponent(text(row.id))}`,
+  };
+  if (!detail) return publicOpportunitySchema.safeParse(value).data ?? null;
+  const auth = object(eligibility.workAuthorization);
+  return (
+    publicOpportunityDetailSchema.safeParse({
+      ...value,
+      summary_bullets: strings(summary.bullets).slice(0, 5),
+      requirements: array(row.requirements_json).map((r) => {
+        const s = object(r);
+        return {
+          hash: text(s.hash),
+          text: text(s.text),
+          kind: s.kind,
+          category: text(s.category),
+          years: typeof s.years === 'number' ? s.years : undefined,
+          skills: strings(s.skills),
+        };
+      }),
+      eligibility: {
+        remote: value.location.remote,
+        countries: strings(eligibility.countries),
+        regions: strings(eligibility.regions),
+        timezones: strings(eligibility.timezones),
+        flags: Number(eligibility.flags) || 0,
+        workAuthorization: {
+          required: strings(auth.required),
+          sponsorship: ['yes', 'no'].includes(text(auth.sponsorship))
+            ? auth.sponsorship
+            : 'unknown',
+        },
+      },
+    }).data ?? null
+  );
 }
-export async function getPublicOpportunity(
-  id: string,
-): Promise<PublicOpportunityDetail | null> {
-  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) return null;
-  const result = rows(
-    await (await db()).query(`${SELECT} WHERE id = $1 LIMIT 1`, id),
-  )[0];
-  return result
-    ? (opportunity(result, true) as PublicOpportunityDetail | null)
-    : null;
+const EMPTY: PublicFacets = {
+  skills: [],
+  seniority: [],
+  function: [],
+  work_mode: [],
+  employment_type: [],
+  country: [],
+};
+function expandedSkill(value: string): string[] {
+  const canonical = canonicalSkillSlug(value);
+  return [
+    ...new Set([
+      value.toLowerCase(),
+      canonical,
+      ...Object.entries(SKILL_CANONICAL_ALIASES)
+        .filter(([, slug]) => slug === canonical)
+        .map(([alias]) => alias),
+    ]),
+  ];
 }
-export async function listPublicFacets(
-  raw: PublicSearchInput,
-): Promise<PublicFacets> {
-  publicSearchInputSchema.parse(raw);
-  return EMPTY_FACETS;
+
+function terms(q: string) {
+  return q
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean)
+    .map((t) =>
+      expandedSkill(t)
+        .map((v) => `"${v.replaceAll('"', '""')}"`)
+        .join(' OR '),
+    )
+    .map((t) => `(${t})`)
+    .join(' AND ');
+}
+function cursorSecret() {
+  const s = process.env.IOLAUS_PUBLIC_CURSOR_SECRET;
+  if (!s || s.length < 32)
+    throw new PublicSearchError(
+      503,
+      'Public search requires a stable cursor secret of at least 32 characters.',
+    );
+  return s;
+}
+function sign(v: Row, secret: string) {
+  const b = Buffer.from(JSON.stringify(v)).toString('base64url');
+  return `${b}.${createHmac('sha256', secret).update(b).digest('base64url')}`;
+}
+function cursor(raw: string | undefined, secret: string): Row | null {
+  if (!raw) return null;
+  const [b, s, ...extra] = raw.split('.');
+  const h = createHmac('sha256', secret)
+    .update(b || '')
+    .digest('base64url');
+  if (
+    extra.length ||
+    !s ||
+    s.length !== h.length ||
+    !timingSafeEqual(Buffer.from(s), Buffer.from(h))
+  )
+    throw new PublicSearchError(400, 'Invalid cursor');
+  try {
+    return JSON.parse(Buffer.from(b, 'base64url').toString());
+  } catch {
+    throw new PublicSearchError(400, 'Invalid cursor');
+  }
+}
+function key(input: PublicSearchInput) {
+  const { cursor: _, ...rest } = input;
+  rest.q = terms(rest.q);
+  rest.skills = [...new Set(rest.skills.flatMap(expandedSkill))];
+  for (const k of [
+    'skills',
+    'seniority',
+    'function',
+    'work_mode',
+    'employment_type',
+    'country',
+  ] as const)
+    rest[k] = [...rest[k]].sort();
+  return createHash('sha256').update(JSON.stringify(rest)).digest('hex');
+}
+const searchCaches = new WeakMap<
+  PublicDatabase,
+  Map<string, { at: number; value: PublicSearchPage }>
+>();
+const facetCaches = new WeakMap<
+  PublicDatabase,
+  Map<string, { at: number; value: PublicFacets }>
+>();
+export function createPublicSearchReader(
+  db: PublicDatabase,
+  dialect: 'sqlite' | 'postgres',
+  secret: string,
+) {
+  const query = async (sql: string, values: unknown[] = []) =>
+    rows(await db.query(sql, ...values));
+  function predicate(input: PublicSearchInput) {
+    const values: unknown[] = [];
+    const add = (v: unknown) => {
+      values.push(v);
+      return `$${values.length}`;
+    };
+    const parts = ['1=1'];
+    let rank = '0.0';
+    if (input.q) {
+      const term = terms(input.q);
+      if (dialect === 'sqlite') {
+        const p = add(term);
+        parts.push(
+          `c.id IN (SELECT id FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH ${p})`,
+        );
+        rank = 'fts.fts_rank';
+      } else {
+        const tsquery = input.q
+          .split(/\s+/u)
+          .filter(Boolean)
+          .map(
+            (word) =>
+              `(${expandedSkill(word)
+                .map((alias) => `plainto_tsquery('english',${add(alias)})`)
+                .join(' || ')})`,
+          )
+          .join(' && ');
+
+        // Keep a hashed membership subplan: cross-table version predicates can
+        // underestimate the barrier view and otherwise choose a quadratic semi-join.
+        parts.push(
+          `(CAST(c.id AS TEXT) IN (SELECT id FROM public.search_public_catalog((${tsquery})))) IS TRUE`,
+        );
+        rank = `ts_rank_cd(c.search_vector,(${tsquery}))`;
+      }
+    }
+    for (const col of [
+      'seniority',
+      'function',
+      'work_mode',
+      'employment_type',
+    ] as const)
+      if (input[col].length)
+        parts.push(`c.${col} IN (${input[col].map(add).join(',')})`);
+    const jsonHas = (col: string, items: string[]) => {
+      if (!items.length) return;
+      parts.push(
+        dialect === 'sqlite'
+          ? `EXISTS(SELECT 1 FROM json_each(c.${col}) j WHERE j.value IN (${items.map(add).join(',')}))`
+          : `EXISTS(SELECT 1 FROM jsonb_array_elements_text(c.${col}::jsonb) j(value) WHERE j.value IN (${items.map(add).join(',')}))`,
+      );
+    };
+    jsonHas('skill_slugs_json', [
+      ...new Set(input.skills.flatMap((s) => expandedSkill(s))),
+    ]);
+    jsonHas('countries_json', input.country);
+    if (input.company) parts.push(`c.company_id=${add(input.company)}`);
+    if (input.source) parts.push(`c.source_id=${add(input.source)}`);
+    if (input.posted_since)
+      parts.push(`c.posted_at>=${add(input.posted_since)}`);
+    const json = (field: string) =>
+      dialect === 'sqlite'
+        ? `json_extract(c.compensation_json,'$.${field}')`
+        : `(c.compensation_json::jsonb->>'${field}')`;
+    if (input.salary_min !== undefined || input.sort === 'salary') {
+      parts.push(
+        `${json('source')}='posted'`,
+        `${json('currency')}=${add(input.salary_currency)}`,
+        `${json('period')}=${add(input.salary_period)}`,
+      );
+      if (input.salary_min !== undefined)
+        parts.push(
+          `CAST(coalesce(${json('max')},${json('min')}) AS REAL)>=${add(input.salary_min)}`,
+        );
+    }
+    if (input.remote_ok !== undefined)
+      parts.push(
+        dialect === 'sqlite'
+          ? `json_extract(c.eligibility_json,'$.remote')=${add(input.remote_ok ? 1 : 0)}`
+          : `(c.eligibility_json::jsonb->>'remote')=${add(String(input.remote_ok))}`,
+      );
+    if (input.sort === 'newest') rank = '0.0';
+    if (input.sort === 'salary')
+      rank = `CAST(coalesce(${json('max')},${json('min')},'0') AS REAL)`;
+    return { values, where: parts.join(' AND '), rank };
+  }
+  async function state() {
+    const r = (
+      await query(
+        'SELECT coalesce(max(generation),0) AS generation,count(*) AS visible FROM jobgeni_public_search_v1',
+      )
+    )[0];
+    return `${r?.generation ?? 0}:${r?.visible ?? 0}`;
+  }
+  async function facets(
+    input: PublicSearchInput,
+    visibility?: string,
+  ): Promise<PublicFacets> {
+    let cache = facetCaches.get(db);
+    if (!cache) {
+      cache = new Map();
+      facetCaches.set(db, cache);
+    }
+    const cacheKey = `${visibility ?? (await state())}:${key({ ...input, cursor: undefined, limit: 20 })}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) return cached.value;
+
+    const p = predicate(input);
+    const out: PublicFacets = { ...EMPTY };
+    for (const col of [
+      'skills',
+      'seniority',
+      'function',
+      'work_mode',
+      'employment_type',
+      'country',
+    ] as const) {
+      const jsonCol =
+        col === 'skills'
+          ? 'skill_slugs_json'
+          : col === 'country'
+            ? 'countries_json'
+            : null;
+      const source = jsonCol
+        ? dialect === 'sqlite'
+          ? `json_each(c.${jsonCol}) j`
+          : `jsonb_array_elements_text(c.${jsonCol}::jsonb) j(value)`
+        : null;
+      const val = source ? 'j.value' : `c.${col}`;
+      out[col] = (
+        await query(
+          `SELECT ${val} AS value,count(DISTINCT c.id) AS count FROM jobgeni_public_search_v1 c ${source ? `CROSS JOIN ${source}` : ''} WHERE ${p.where} AND ${val} IS NOT NULL AND ${val} <> '' GROUP BY ${val} ORDER BY count DESC,value ASC LIMIT 50`,
+          p.values,
+        )
+      ).map((r) => ({
+        value: text(r.value),
+        label: text(r.value),
+        count: Number(r.count),
+      }));
+    }
+    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
+    cache.set(cacheKey, { at: Date.now(), value: out });
+    return out;
+  }
+  async function search(raw: unknown) {
+    const input = publicSearchInputSchema.parse(raw);
+    const p = predicate(input);
+    const generation = await state();
+    const fingerprint = key(input);
+    let cache = searchCaches.get(db);
+    if (!cache) {
+      cache = new Map();
+      searchCaches.set(db, cache);
+    }
+    const cacheKey = `${generation}:${fingerprint}:${input.cursor ?? ''}`;
+    const cur = cursor(input.cursor, secret);
+    if (
+      cur &&
+      (cur.key !== fingerprint ||
+        cur.generation !== generation ||
+        Number(cur.expires) < Date.now() ||
+        !Number.isInteger(cur.depth) ||
+        Number(cur.depth) > 20)
+    )
+      throw new PublicSearchError(
+        400,
+        'Expired cursor or changed search. Restart pagination.',
+      );
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 60000) return cached.value;
+    const add = (v: unknown) => {
+      p.values.push(v);
+      return `$${p.values.length}`;
+    };
+    const tail = cur
+      ? `WHERE (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))`
+      : '';
+    let result = await query(
+      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT ${dialect === 'postgres' ? 'c.id' : 'c.*'},${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : 'jobgeni_public_search_v1 c'} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
+      p.values,
+    );
+    if (dialect === 'postgres' && result.length) {
+      const ids = result.map((r) => r.id);
+      const detailRows = await query(
+        `SELECT * FROM jobgeni_public_search_v1 WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})`,
+        ids,
+      );
+      const byId = new Map(detailRows.map((r) => [r.id, r]));
+      result = result
+        .filter((r) => byId.has(r.id))
+        .map((r) => ({ ...byId.get(r.id), ...r }));
+    }
+    const more = result.length > input.limit;
+    const page = result.slice(0, input.limit);
+    const last = page.at(-1);
+    const count = await query(
+      `SELECT count(*) AS total FROM jobgeni_public_search_v1 c WHERE ${p.where}`,
+      p.values.slice(0, predicate(input).values.length),
+    );
+    const pageResult = publicSearchPageSchema.parse({
+      items: page.map((r) => projectPublicOpportunity(r)).filter(Boolean),
+      next_cursor:
+        more && last
+          ? sign(
+              {
+                key: fingerprint,
+                generation,
+                expires: cur?.expires ?? Date.now() + 3600000,
+                depth: Number(cur?.depth ?? 0) + 1,
+                rank: Number(last.sort_rank),
+                date: last.sort_date,
+                id: last.id,
+              },
+              secret,
+            )
+          : null,
+      total_estimate: Number(count[0]?.total ?? 0),
+      facets: await facets(input, generation),
+    });
+    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
+    cache.set(cacheKey, { at: Date.now(), value: pageResult });
+    return pageResult;
+  }
+  async function get(id: string) {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) return null;
+    const r = (
+      await query(
+        `SELECT * FROM jobgeni_public_search_v1 WHERE id=$1 LIMIT 1`,
+        [id],
+      )
+    )[0];
+    return r ? projectPublicOpportunity(r, true) : null;
+  }
+  async function match(raw: unknown) {
+    const input = publicMatchInputSchema.parse(raw);
+    const ids = input.opportunity_ids;
+    const records = await query(
+      `SELECT * FROM jobgeni_public_search_v1 ${ids?.length ? `WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})` : ''} ORDER BY posted_at DESC,id DESC LIMIT 500`,
+      ids ?? [],
+    );
+    const details = records
+      .map(
+        (r) =>
+          publicOpportunityDetailSchema.safeParse(
+            projectPublicOpportunity(r, true),
+          ).data,
+      )
+      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+    const scores = matchSkills(
+      { ...input, remoteOk: input.remote_ok },
+      details.map((o) => ({
+        id: o.id,
+        seniority: o.seniority,
+        eligibility: o.eligibility,
+        requirements: o.requirements,
+        skills: {
+          required: o.skills.required.map((s) => s.slug),
+          preferred: o.skills.preferred.map((s) => s.slug),
+        },
+      })),
+    );
+    return publicMatchResultSchema.parse({
+      items: scores.slice(0, 50).map((s) => ({
+        opportunity: details.find((o) => o.id === s.id),
+        score: s.score,
+        matched_skills: s.explanation.matchedSkills,
+        missing_skills: s.explanation.missingSkills,
+        eligibility_notes: s.explanation.eligibilityNotes,
+        requirements: s.explanation.requirements.map((r) => ({
+          hash: r.hash,
+          decision: r.decision,
+          confidence: r.confidence,
+          submitted_skill_indices: r.submittedSkillIndices,
+        })),
+      })),
+      model_calls: 0,
+    });
+  }
+  async function sitemap() {
+    return (
+      await query(
+        'SELECT id,updated_at,company_id,skill_slugs_json FROM jobgeni_public_search_v1 ORDER BY id LIMIT 50000',
+      )
+    ).map((row) => ({
+      id: text(row.id),
+      updated_at: date(row.updated_at),
+      company_id: text(row.company_id),
+      skills: strings(row.skill_slugs_json),
+    }));
+  }
+  return {
+    search,
+    get,
+    sitemap,
+    facets: (raw: unknown) => facets(publicSearchInputSchema.parse(raw)),
+    match,
+  };
+}
+async function connection() {
+  const config = getDbConfig();
+  if (applicationRuntime.profile === 'local')
+    return {
+      db: (await resolveDatabase(config)) as unknown as PublicDatabase,
+      dialect: config.type,
+    };
+  const url = process.env.IOLAUS_PUBLIC_READ_DATABASE_URL;
+  if (process.env.IOLAUS_PUBLIC_SEARCH_ENABLED !== 'true' || !url)
+    throw new PublicSearchError(503, 'Public catalog is unavailable.');
+  const publicUrl = new URL(url);
+  publicUrl.searchParams.set('statement_timeout', '500');
+  return {
+    db: (await resolveDatabase({
+      type: 'postgres',
+      url: publicUrl.href,
+      max: Math.min(5, hostedDatabasePoolMax()),
+    })) as unknown as PublicDatabase,
+    dialect: 'postgres' as const,
+  };
+}
+async function reader() {
+  const c = await connection();
+  return createPublicSearchReader(c.db, c.dialect, cursorSecret());
+}
+export async function searchPublicOpportunities(input: unknown) {
+  return (await reader()).search(input);
+}
+export async function getPublicOpportunity(id: string) {
+  return (await reader()).get(id);
+}
+export async function listPublicFacets(input: unknown) {
+  return (await reader()).facets(input);
+}
+export async function matchPublicSkills(input: unknown) {
+  return (await reader()).match(input);
+}
+/** Atomic shared budget. No caller IP header is accepted until trusted ingress is deployed. */
+export async function consumePublicSearchBudget(cost = 1) {
+  const { db, dialect } = await connection();
+  const result =
+    dialect === 'postgres'
+      ? rows(
+          await db.query(
+            `SELECT public.consume_public_search_quota($1) AS remaining`,
+            cost,
+          ),
+        )
+      : rows(
+          await db.query(
+            `INSERT INTO public_search_quotas(bucket,window_start,spent) VALUES('anonymous-global',$1,$2) ON CONFLICT(bucket) DO UPDATE SET window_start=$1,spent=CASE WHEN public_search_quotas.window_start=$1 THEN public_search_quotas.spent+$2 ELSE $2 END RETURNING max(0,601-spent) AS remaining`,
+            Math.floor(Date.now() / 60000),
+            cost,
+          ),
+        );
+  const remaining = Number(result[0]?.remaining ?? 0);
+  if (!remaining)
+    throw new PublicSearchError(
+      429,
+      'Public query budget exceeded. Retry in one minute.',
+    );
+  return remaining - 1;
+}
+
+export async function listPublicSitemapEntries() {
+  return (await reader()).sitemap();
 }

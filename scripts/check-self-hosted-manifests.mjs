@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const base = resolve(root, 'deploy/self-hosted/base');
@@ -35,34 +35,45 @@ function count(rendered, text) {
 const baseRendered = render(base);
 const productionRendered = render(production);
 const dependencyManifests = [
-  JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
-  JSON.parse(readFileSync(resolve(root, 'apps/site/package.json'), 'utf8')),
-];
-const qualifiedEmbeddedSmrtTooling = new Map([
-  [
-    '@happyvertical/smrt-cli',
-    'file:vendor/smrt/happyvertical-smrt-cli-0.52.0-c6e5cdf2.tgz',
-  ],
-  [
-    '@happyvertical/smrt-dev-mcp',
-    'file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz',
-  ],
-]);
+  resolve(root, 'package.json'),
+  resolve(root, 'apps/site/package.json'),
+].map((path) => ({ path, manifest: JSON.parse(readFileSync(path, 'utf8')) }));
+const releaseClosurePath = resolve(
+  root,
+  'vendor/release/release-closure.json',
+);
+const qualifiedReleaseClosure = existsSync(releaseClosurePath)
+  ? new Map(
+      JSON.parse(readFileSync(releaseClosurePath, 'utf8')).packages.map(
+        (pkg) => [
+          pkg.name,
+          `file:vendor/release/${pkg.tarball}`,
+        ],
+      ),
+    )
+  : new Map();
 
-for (const manifest of dependencyManifests) {
+for (const { path: manifestPath, manifest } of dependencyManifests) {
   for (const [name, version] of Object.entries({
     ...manifest.dependencies,
     ...manifest.devDependencies,
   })) {
-    if (!name.startsWith('@happyvertical/smrt')) continue;
-    const embeddedArchive = qualifiedEmbeddedSmrtTooling.get(name);
-    if (embeddedArchive === version) {
+    const embeddedArchive = qualifiedReleaseClosure.get(name);
+    if (typeof version === 'string' && version.startsWith('file:')) {
+      const expectedArchive = embeddedArchive && resolve(root, embeddedArchive.slice('file:'.length));
+      const declaredArchive = resolve(dirname(manifestPath), version.slice('file:'.length));
+      if (!expectedArchive || expectedArchive !== declaredArchive) {
+        throw new Error(
+          `${name} must use the tarball recorded in vendor/release/release-closure.json.`,
+        );
+      }
       const archivePath = resolve(root, embeddedArchive.slice('file:'.length));
       if (!existsSync(archivePath)) {
         throw new Error(`${name} qualified embedded archive is missing.`);
       }
       continue;
     }
+    if (!name.startsWith('@happyvertical/smrt')) continue;
     if (!/^\d+\.\d+\.\d+$/u.test(version)) {
       throw new Error(`${name} must be pinned to a released semantic version.`);
     }
@@ -120,7 +131,7 @@ if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
   throw new Error('The released image must smoke its direct worker bootstrap without pnpm.');
 }
 if (
-  !/corepack install --global pnpm@11\.24\.0/u.test(runnerDockerfile) ||
+  !/npm install --global pnpm@11\.25\.0/u.test(runnerDockerfile) ||
   !/USER 10001:10001[\s\S]*HOME=\/tmp pnpm --version/u.test(runnerDockerfile)
 ) {
   throw new Error('The released image must carry and smoke its pinned offline pnpm runtime.');
@@ -133,7 +144,12 @@ if (
 ) {
   throw new Error('The task worker must claim tasks only and retain its required heartbeat through task drain.');
 }
-if (/await ensureApplicationRuntimeReady\(\)/u.test(serverHooks)) {
+// The retry callback may await readiness and vocabulary loading; only awaiting
+// the retry loop itself from ServerInit would block the liveness endpoint.
+if (
+  !/void startRuntimeThenPrime\(/u.test(serverHooks) ||
+  /await startRuntimeThenPrime\(/u.test(serverHooks)
+) {
   throw new Error('Server initialization must not block liveness on provider readiness.');
 }
 if (

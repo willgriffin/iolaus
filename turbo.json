@@ -23,6 +23,18 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      "env": [
+        "ANALYSIS_TEST_POSTGRES_URL",
+        "ANALYSIS_LEDGER_TEST_DATABASE_URL",
+        "PUBLIC_SEARCH_TEST_DATABASE_URL",
+        "MATCH_POSTGRES_TEST_DATABASE_URL",
+        "VOCABULARY_POSTGRES_TEST_DATABASE_URL",
+        "OPPORTUNITY_QUERY_TEST_POSTGRES_URL",
+        "TRIAGE_TEST_POSTGRES_URL",
+        "APPLICATION_CAS_TEST_POSTGRES_URL",
+        "DATA_SURFACE_STORE_TEST_DATABASE_URL",
+        "VITEST_MAX_WORKERS"
+      ],
       "outputs": []
     },
     "clean": {
