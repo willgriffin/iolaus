@@ -411,7 +411,7 @@ export async function refreshOpportunityMatches(
   }
   return withVerifiedWorkspaceSubject(owned, async (verified) => {
     await refreshSkillVocabularyLookup();
-    const [candidate, postings, _graph] = await Promise.all([
+    const [candidate, postings, graph] = await Promise.all([
       loadWorkspaceCandidateEvidence(
         requireCandidateWorkspaceSubject(verified),
       ),
@@ -422,6 +422,8 @@ export async function refreshOpportunityMatches(
     let matches: OpportunityMatch[] = matchCandidateEvidence(
       candidate,
       postings,
+      undefined,
+      graph,
     ).slice(0, 300);
     const stageThree = await enrichMatchEvidence(
       verified,

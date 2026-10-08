@@ -75,7 +75,7 @@ export function projectPublicOpportunity(
 export function projectPublicOpportunity(row: Row, detail = false) {
   const eligibility = object(row.eligibility_json);
   const salary = object(row.compensation_json);
-  const summary = object(row.summary_json);
+  const summary = strings(row.summary_json);
   const skills = array(row.skills_json).map(object);
   const skill = (s: Row) => ({
     slug: text(s.slug),
@@ -141,7 +141,7 @@ export function projectPublicOpportunity(row: Row, detail = false) {
   return (
     publicOpportunityDetailSchema.safeParse({
       ...value,
-      summary_bullets: strings(summary.bullets).slice(0, 5),
+      summary_bullets: summary.slice(0, 5),
       requirements: array(row.requirements_json).map((r) => {
         const s = object(r);
         return {

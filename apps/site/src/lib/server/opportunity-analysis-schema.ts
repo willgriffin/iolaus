@@ -57,6 +57,8 @@ export async function ensureOpportunityAnalysisSchema(
   const requirements = sqlite
     ? `(SELECT COALESCE(json_group_array(json_object('hash', json_extract(value, '$.hash'), 'text', json_extract(value, '$.text'), 'kind', json_extract(value, '$.kind'), 'category', json_extract(value, '$.category'), 'years', json_extract(value, '$.years'), 'skills', json(COALESCE(json_extract(value, '$.skills'), '[]')))), '[]') FROM json_each(a.requirements_json))`
     : `(SELECT COALESCE(jsonb_agg(jsonb_build_object('hash', value->>'hash', 'text', value->>'text', 'kind', value->>'kind', 'category', value->>'category', 'years', value->'years', 'skills', COALESCE(value->'skills', '[]'::jsonb))), '[]'::jsonb)::text FROM jsonb_array_elements(a.requirements_json::jsonb))`;
+  // Public catalog membership fails closed outside known live lifecycle stages.
+  // `active` and `new` are retained for imported catalog records.
   const view = `SELECT o.id, o.id AS opportunity_id, o.source_id, o.company_id, c.name AS company_name, o.posting_url, o.canonical_url, o.apply_url, a.normalized_title AS title, '' AS locations, o.posted_at, o.expires_at, o.updated_at, o.status AS opportunity_status, o.freshness,
     CAST(NULL AS DOUBLE PRECISION) AS compensation_min, CAST(NULL AS DOUBLE PRECISION) AS compensation_max, '' AS compensation_currency,
     a.id AS analysis_id, a.source_content_fingerprint, a.source_content_version, a.analysis_version, a.status AS analysis_status, a.normalized_title, a.seniority, a.function, a.work_mode, a.employment_type,
@@ -64,7 +66,7 @@ export async function ensureOpportunityAnalysisSchema(
     LOWER(COALESCE(a.normalized_title, '') || ' ' || COALESCE(c.name, '') || ' ' || COALESCE(a.summary_json, '') || ' ' || COALESCE(a.skill_slugs_json, '') || ' ' || COALESCE(a.countries_json, '')) AS search_document, ${requirements} AS requirements_json
     FROM opportunities o JOIN sources s ON s.id = o.source_id LEFT JOIN companies c ON CAST(c.id AS TEXT) = o.company_id JOIN opportunity_analyses a ON a.id = o.current_analysis_id AND a.opportunity_id = o.id AND a.source_content_fingerprint = o.source_content_fingerprint AND a.source_content_version = o.source_content_version AND a.analysis_version = 'opportunity-analysis/v1'
     WHERE s.public_listing = TRUE AND s.is_active = TRUE
-      AND o.status NOT IN ('archived', 'rejected', 'deleted')
+      AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')
       AND (o.expires_at IS NULL OR o.expires_at > CURRENT_TIMESTAMP)
       AND a.status IN ('deterministic', 'enriched')`;
   if (sqlite) {

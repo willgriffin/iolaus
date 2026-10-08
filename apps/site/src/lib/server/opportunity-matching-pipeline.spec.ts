@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   staleSource: false,
+  relatedOnly: false,
+  graphEnabled: false,
   changedCandidate: false,
   candidateReads: 0,
   save: vi.fn(),
@@ -32,7 +34,12 @@ vi.mock('./resume-data.js', () => ({
       sponsorshipRequired: 'unknown',
     },
     evidence: [
-      { id: 'skill', kind: 'skill', title: 'TypeScript', text: 'TypeScript' },
+      {
+        id: 'skill',
+        kind: 'skill',
+        title: state.relatedOnly ? 'JavaScript' : 'TypeScript',
+        text: state.relatedOnly ? 'JavaScript' : 'TypeScript',
+      },
     ],
     fingerprint:
       state.changedCandidate && state.candidateReads++ > 0
@@ -80,12 +87,23 @@ vi.mock('./smrt.js', () => ({
                   sourceContentFingerprint: 'source-fingerprint',
                   sourceContentVersion: 1,
                   skillsJson: '[{"slug":"typescript","kind":"required"}]',
-                  requirementsJson: '[]',
+                  requirementsJson: state.relatedOnly
+                    ? JSON.stringify([
+                        {
+                          hash: 'typescript-required',
+                          text: 'TypeScript',
+                          kind: 'must',
+                          skills: ['typescript'],
+                        },
+                      ])
+                    : '[]',
                 },
               ]
-            : name === 'Source'
-              ? [{ id: 'source', isActive: true, publicListing: true }]
-              : [];
+            : name === 'SkillTerm' && state.graphEnabled
+              ? [{ skillSlug: 'typescript', relatedJson: '["javascript"]' }]
+              : name === 'Source'
+                ? [{ id: 'source', isActive: true, publicListing: true }]
+                : [];
       return rows.map((row) => ({ ...row, toJSON: () => row }));
     },
   }),
@@ -96,6 +114,8 @@ import { refreshOpportunityMatches } from './opportunity-matching.js';
 describe('private matching publication pipeline', () => {
   beforeEach(() => {
     state.staleSource = false;
+    state.relatedOnly = false;
+    state.graphEnabled = false;
     state.changedCandidate = false;
     state.candidateReads = 0;
     state.save.mockClear();
@@ -122,6 +142,29 @@ describe('private matching publication pipeline', () => {
         preferredSkillsSnapshot: '',
       }),
       expect.anything(),
+    );
+  });
+  it('uses public adjacency for partial coverage without claiming direct skill proof and refreshes after graph changes', async () => {
+    state.relatedOnly = true;
+    const withoutGraph = await refreshOpportunityMatches(owner);
+    expect(withoutGraph.matches[0].score).toBe(0);
+    state.graphEnabled = true;
+    const withGraph = await refreshOpportunityMatches(owner);
+    expect(withGraph.matches[0].score).toBe(35);
+    expect(withGraph.matches[0].explanation.requirements[0]).toMatchObject({
+      decision: 'partial',
+      status: 'missing',
+      coverage: 0.35,
+      evidenceRefs: ['skill'],
+    });
+    expect(withGraph.materialFingerprint).not.toBe(
+      withoutGraph.materialFingerprint,
+    );
+    state.graphEnabled = false;
+    const removedGraph = await refreshOpportunityMatches(owner);
+    expect(removedGraph.matches[0].score).toBe(0);
+    expect(removedGraph.materialFingerprint).toBe(
+      withoutGraph.materialFingerprint,
     );
   });
   it('excludes a source that changes before the transactional publication fence', async () => {

@@ -13,7 +13,11 @@ vi.mock('../db.js', () => ({
   getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),
 }));
 
+import { publicJobPosting } from '../../public-job-posting.js';
 import { ensureOpportunityAnalysisSchema } from '../opportunity-analysis-schema.js';
+import { deterministicOpportunityAnalysis } from '../opportunity-analysis-source.js';
+import { publishOpportunityAnalysis } from '../opportunity-analysis-store.js';
+import { fingerprintOpportunitySourceContent } from '../opportunity-source-content.js';
 import { createPublicSearchReader, type PublicDatabase } from './index.js';
 import { ensurePublicSearchSchema } from './schema.js';
 
@@ -37,7 +41,24 @@ async function fixture(dialect: 'sqlite' | 'postgres') {
         return stmt.all(bindings as never);
       },
     };
-    Object.assign(db, { url: ':memory:' });
+    Object.assign(db, {
+      url: ':memory:',
+      transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
+        sqlite.exec('BEGIN');
+        try {
+          const result = await callback({
+            query: async (sql: string, values: unknown[] = []) => ({
+              rows: sqlite.prepare(sql).all(...(values as never[])),
+            }),
+          });
+          sqlite.exec('COMMIT');
+          return result;
+        } catch (error) {
+          sqlite.exec('ROLLBACK');
+          throw error;
+        }
+      },
+    });
   } else
     db = (await resolveDatabase({
       type: 'postgres',
@@ -61,9 +82,9 @@ async function fixture(dialect: 'sqlite' | 'postgres') {
     opportunities:
       'id TEXT PRIMARY KEY,source_id TEXT,company_id TEXT,title TEXT,locations TEXT,posting_url TEXT,canonical_url TEXT,apply_url TEXT,posted_at TEXT,expires_at TEXT,updated_at TEXT,status TEXT,freshness TEXT,salary_min REAL,salary_max REAL,currency TEXT,current_analysis_id TEXT,source_content_fingerprint TEXT,source_content_version INTEGER,human_notes TEXT,source_content_json TEXT',
     opportunity_analyses:
-      'id TEXT PRIMARY KEY,opportunity_id TEXT,source_content_fingerprint TEXT,source_content_version INTEGER,analysis_version TEXT,status TEXT,normalized_title TEXT,seniority TEXT,function TEXT,work_mode TEXT,employment_type TEXT,skills_json TEXT,eligibility_json TEXT,compensation_json TEXT,summary_json TEXT,countries_json TEXT,skill_slugs_json TEXT,requirements_json TEXT,source_content_digest TEXT,model TEXT,prompt_version TEXT,output_schema_version TEXT,updated_at TEXT',
+      'id TEXT PRIMARY KEY,opportunity_id TEXT,source_content_fingerprint TEXT,source_content_version INTEGER,analysis_version TEXT,status TEXT,normalized_title TEXT,seniority TEXT,function TEXT,work_mode TEXT,employment_type TEXT,skills_json TEXT,eligibility_json TEXT,compensation_json TEXT,summary_json TEXT,countries_json TEXT,skill_slugs_json TEXT,requirements_json TEXT,source_content_digest TEXT,model TEXT,prompt_version TEXT,output_schema_version TEXT,updated_at TEXT,slug TEXT,context TEXT,created_at TEXT,request_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cost_micros INTEGER,error_code TEXT',
     opportunity_skills:
-      'id TEXT,analysis_id TEXT,skill_slug TEXT,kind TEXT,opportunity_id TEXT',
+      'id TEXT,analysis_id TEXT,skill_slug TEXT,kind TEXT,opportunity_id TEXT,slug TEXT,context TEXT,created_at TEXT,updated_at TEXT,confidence REAL',
     users: 'id TEXT PRIMARY KEY, email TEXT',
     opportunity_recommendation_ranks:
       'id TEXT,user_id TEXT,tenant_id TEXT,opportunity_id TEXT,score INTEGER',
@@ -109,7 +130,7 @@ async function fixture(dialect: 'sqlite' | 'postgres') {
         { slug: 'postgresql', label: 'PostgreSQL', kind: 'required' },
       ]);
       await db.query(
-        `INSERT INTO opportunity_analyses(id,opportunity_id,source_content_fingerprint,source_content_version,analysis_version,status,normalized_title,seniority,function,work_mode,employment_type,skills_json,eligibility_json,compensation_json,summary_json,countries_json,skill_slugs_json,requirements_json,updated_at) VALUES($1,$2,'fp',1,'opportunity-analysis/v1','deterministic','PostgreSQL Engineer','senior','engineering','remote','full-time',$3,'{"remote":true,"countries":["CA"]}','{"source":"posted","currency":"CAD","min":100000,"max":150000,"period":"year"}','{"bullets":["Build reliable services"]}','["CA"]','["postgresql"]','[{"hash":"requirement-1","text":"Use PostgreSQL","kind":"must","category":"skill","skills":["postgresql"],"evidence":[{"quote":"PRIVATE_SENTINEL_NEVER_PUBLIC"}]}]','2026-10-07T00:00:00Z')`,
+        `INSERT INTO opportunity_analyses(id,opportunity_id,source_content_fingerprint,source_content_version,analysis_version,status,normalized_title,seniority,function,work_mode,employment_type,skills_json,eligibility_json,compensation_json,summary_json,countries_json,skill_slugs_json,requirements_json,updated_at) VALUES($1,$2,'fp',1,'opportunity-analysis/v1','deterministic','PostgreSQL Engineer','senior','engineering','remote','full-time',$3,'{"remote":true,"countries":["CA"]}','{"source":"posted","currency":"CAD","min":100000,"max":150000,"period":"year"}','["Build reliable services"]','["CA"]','["postgresql"]','[{"hash":"requirement-1","text":"Use PostgreSQL","kind":"must","category":"skill","skills":["postgresql"],"evidence":[{"quote":"PRIVATE_SENTINEL_NEVER_PUBLIC"}]}]','2026-10-07T00:00:00Z')`,
         analysisId,
         id,
         skills,
@@ -253,6 +274,11 @@ for (const dialect of ['sqlite', 'postgres'] as const)
         );
         expect((await reader.search({ q: 'postgres' })).items).toHaveLength(0);
         expect(await reader.get(jobId(0, dialect))).toBeNull();
+        expect((await reader.facets({})).skills).toEqual([]);
+        expect((await reader.match({ skills: ['postgres'] })).items).toEqual(
+          [],
+        );
+        expect(await reader.sitemap()).toEqual([]);
         await expect(
           reader.search({
             q: 'postgres',
@@ -271,8 +297,94 @@ for (const dialect of ['sqlite', 'postgres'] as const)
         expect((await reader.search({ q: 'postgres' })).total_estimate).toBe(
           55,
         );
+        // Terminal status changes must invalidate every shared public surface, even without expires_at.
+        for (const status of [
+          'closed',
+          'expired',
+          'archived',
+          'reject',
+          'rejected',
+          'deleted',
+          'unrecognized',
+          null,
+        ]) {
+          await db.query(
+            'UPDATE opportunities SET status=$1,expires_at=NULL',
+            status,
+          );
+          expect((await reader.search({ q: 'postgres' })).items).toHaveLength(
+            0,
+          );
+          expect(await reader.get(jobId(0, dialect))).toBeNull();
+          expect((await reader.facets({})).skills).toEqual([]);
+          expect((await reader.match({ skills: ['postgres'] })).items).toEqual(
+            [],
+          );
+          expect(await reader.sitemap()).toEqual([]);
+          await db.query("UPDATE opportunities SET status='found'");
+          expect((await reader.search({ q: 'postgres' })).total_estimate).toBe(
+            55,
+          );
+        }
+        for (const status of [
+          'found',
+          'recommended',
+          'apply',
+          'applied',
+          'interviewing',
+          'offer',
+          'maybe',
+          'needs_input',
+          'active',
+          'new',
+        ]) {
+          await db.query('UPDATE opportunities SET status=$1', status);
+          expect((await reader.search({ q: 'postgres' })).total_estimate).toBe(
+            55,
+          );
+        }
+        // Use the production CAS writer: summaries persist as arrays, not fixture-only objects.
+        const sourceContent = {
+          title: 'PostgreSQL Engineer',
+          descriptionRaw: 'PostgreSQL is required.',
+          requiredSkills: 'PostgreSQL',
+        };
+        const identity = {
+          id: jobId(0, dialect),
+          sourceContentJson: JSON.stringify(sourceContent),
+          sourceContentFingerprint:
+            fingerprintOpportunitySourceContent(sourceContent),
+          sourceContentVersion: 2,
+        };
         await db.query(
-          `UPDATE opportunity_analyses SET normalized_title='Rust Developer',skill_slugs_json='["rust"]',summary_json='{}' WHERE opportunity_id='${jobId(0, dialect)}'`,
+          'UPDATE opportunities SET source_content_json=$1,source_content_fingerprint=$2,source_content_version=2 WHERE id=$3',
+          identity.sourceContentJson,
+          identity.sourceContentFingerprint,
+          identity.id,
+        );
+        const published = await publishOpportunityAnalysis(
+          db as never,
+          identity,
+          {
+            ...deterministicOpportunityAnalysis(identity),
+            status: 'enriched',
+            summaryBullets: [
+              'Build reliable services',
+              'Maintain PostgreSQL systems',
+            ],
+          },
+        );
+        expect(published.summaryBullets).toEqual([
+          'Build reliable services',
+          'Maintain PostgreSQL systems',
+        ]);
+        const detail = await reader.get(identity.id);
+        expect(detail?.summary_bullets).toEqual(published.summaryBullets);
+        expect(
+          publicJobPosting(detail!, 'https://example.test').description,
+        ).toBe('Build reliable services\nMaintain PostgreSQL systems');
+        await db.query(
+          `UPDATE opportunity_analyses SET normalized_title='Rust Developer',skill_slugs_json='["rust"]',summary_json='[]' WHERE opportunity_id='${jobId(0, dialect)}'`,
         );
         expect((await reader.search({ q: 'rust' })).items[0]?.id).toBe(
           jobId(0, dialect),
