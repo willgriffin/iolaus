@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { FilesystemInterface } from '@happyvertical/files';
 import { type AppConfigEnvironment, isSharedHosted } from './app-config.js';
+import {
+  purgeTombstonedPublicProfileRevisions,
+  tombstonePublicProfile,
+} from './public-profile-store.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
 
 /**
@@ -129,6 +133,9 @@ export const accountOwnedTables: readonly string[] = [
     // Tenant-scoped, owner-keyed records outside the ownership manifest.
     'opportunity_recommendation_ranks',
     'admin_assistant_turns',
+    // Account-wide shortlist data does not require a candidate profile.
+    'shortlist_entries',
+    'shortlist_mutation_receipts',
     // Operator cap override for this user; the spend ledger is anonymized.
     'ai_user_budgets',
   ]),
@@ -151,6 +158,7 @@ export const accountTenantTables: readonly string[] = [
 const LEDGER_TABLE = 'ai_user_spend_entries';
 const LEDGER_TENANT_TOMBSTONE = 'deleted';
 const FILE_PREFIXES = ['generated-resumes', 'application-packages'] as const;
+const PUBLIC_PROFILE_FILE_PREFIX = 'public-profiles';
 
 function rowsOf(result: QueryResult): Array<Record<string, unknown>> {
   return Array.isArray(result) ? result : (result.rows ?? []);
@@ -272,6 +280,15 @@ function safeRelativePath(path: string): string | null {
     return null;
   }
   return trimmed;
+}
+
+function safePublicProfilePath(
+  path: string,
+  identityId: string,
+): string | null {
+  const safe = safeRelativePath(path);
+  const prefix = `${PUBLIC_PROFILE_FILE_PREFIX}/${identityId}/`;
+  return safe?.startsWith(prefix) ? safe : null;
 }
 
 /**
@@ -462,6 +479,38 @@ export async function deleteAccount(
   }
   await dependencies.afterPhase?.('record');
 
+  // Tombstone before the account is disabled or any artifacts are removed. The
+  // store takes the same native lock used by prepare/publish, captures every
+  // revision path under that lock, clears the pointer, and keeps the handle
+  // reservation. On installations predating public profiles both tables are
+  // absent, so this remains a no-op.
+  let publicProfilePaths: string[] = [];
+  const publicIdentityColumns = await probe.columns(
+    'public_profile_identities',
+  );
+  const publicRevisionColumns = await probe.columns('public_profile_revisions');
+  if (publicIdentityColumns || publicRevisionColumns) {
+    if (!publicIdentityColumns || !publicRevisionColumns) {
+      throw new AccountDeletionError(
+        'schema',
+        'Public-profile tables are incomplete; run db:migrate and retry.',
+      );
+    }
+    const tombstoned = await tombstonePublicProfile(database as never, target);
+    if (tombstoned) {
+      const invalid = tombstoned.artifactPaths.find(
+        (path) => !safePublicProfilePath(path, tombstoned.identity.id),
+      );
+      if (invalid) {
+        throw new AccountDeletionError(
+          'schema',
+          'Public-profile artifact manifest contains an invalid path; account rows were not removed.',
+        );
+      }
+      publicProfilePaths = [...new Set(tombstoned.artifactPaths)].sort();
+    }
+  }
+
   // Phase 1: make the account unusable before touching any data.
   const summary: Record<string, number> = {};
   const count = (
@@ -538,7 +587,10 @@ export async function deleteAccount(
   // Phase 2: files. The rows that name them still exist, so a failure here is
   // retried from the same manifest.
   if (dependencies.filesystem) {
-    const paths = await collectOwnedFilePaths(database, probe, target);
+    const paths = [
+      ...(await collectOwnedFilePaths(database, probe, target)),
+      ...publicProfilePaths,
+    ];
     const failures: string[] = [];
     let removed = 0;
     for (const path of paths) {
@@ -560,6 +612,17 @@ export async function deleteAccount(
     count(summary, 'files', removed);
   }
   await dependencies.afterPhase?.('files');
+
+  // Revision rows are the publication snapshot and file manifest. Remove them
+  // only after every captured private object is gone; the retained identity is
+  // the handle reservation that prevents a deleted handle being reused.
+  if (publicIdentityColumns && publicRevisionColumns) {
+    count(
+      summary,
+      'public_profile_revisions',
+      await purgeTombstonedPublicProfileRevisions(database as never, target),
+    );
+  }
 
   // Phase 3: every row, plus the audit record, in one transaction. Schemas are
   // probed first so the transaction never waits on a second connection.

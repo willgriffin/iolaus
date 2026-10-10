@@ -32,6 +32,10 @@ const classes = [
   'AccountDeletionRecord',
   'CliAuthRequest',
   'DataSurfacePreviewToken',
+  'ShortlistEntryRecord',
+  'ShortlistMutationReceipt',
+  'PublicProfileIdentity',
+  'PublicProfileRevision',
   'User',
   'Tenant',
   'Membership',
@@ -215,7 +219,11 @@ async function seedUser(db: TestDatabase, who: Principal): Promise<void> {
   for (const table of accountOwnedTables) {
     if (['ai_user_budgets'].includes(table)) continue;
     await insert(db, table, {
-      ...(table === 'candidate_profiles'
+      ...([
+        'candidate_profiles',
+        'shortlist_entries',
+        'shortlist_mutation_receipts',
+      ].includes(table)
         ? {}
         : { candidate_profile_id: who.profileId }),
       owner_user_id: who.userId,
@@ -258,6 +266,51 @@ function deletionContract(
     dialect,
     environment: shared,
     ...extra,
+  });
+
+  it('deletes account-wide shortlist without a candidate profile and preserves foreign owner tuples', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    const bob = principal('bob');
+    await seedUser(database, alice);
+    await database.query(
+      'DELETE FROM candidate_profiles WHERE tenant_id = ? AND owner_user_id = ?',
+      [alice.tenantId, alice.userId],
+    );
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts']) {
+      await insert(database, table, {
+        tenant_id: alice.tenantId,
+        owner_user_id: bob.userId,
+      });
+      await insert(database, table, {
+        tenant_id: bob.tenantId,
+        owner_user_id: alice.userId,
+      });
+    }
+    await deleteAccount(
+      { tenantId: alice.tenantId, userId: alice.userId },
+      deps(database),
+    );
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts']) {
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(0);
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          bob.userId,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          bob.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(1);
+    }
   });
 
   it("deletes one user's data across every owned table and leaves the other user untouched", async () => {
@@ -325,6 +378,70 @@ function deletionContract(
         [b.userId],
       ),
     ).toBe(1);
+  });
+
+  it('tombstones a public profile before deleting its private revision artifact', async () => {
+    const database = await setup();
+    const a = principal('alice');
+    const b = principal('bob');
+    await seedUser(database, a);
+    await seedUser(database, b);
+    const publicationId = randomUUID();
+    const revisionId = randomUUID();
+    const path = `public-profiles/${publicationId}/${revisionId}/resume.pdf`;
+    await insert(database, 'public_profile_identities', {
+      candidate_profile_id: a.profileId,
+      handle: `alice-${publicationId.slice(0, 8)}`,
+      id: publicationId,
+      owner_user_id: a.userId,
+      revision: 1,
+      tenant_id: a.tenantId,
+    });
+    await insert(database, 'public_profile_revisions', {
+      base_revision: 0,
+      pdf_bytes: 4,
+      pdf_path: path,
+      pdf_sha256: 'a'.repeat(64),
+      publication_id: publicationId,
+      revision_id: revisionId,
+      snapshot: JSON.stringify({ version: 1, name: 'Alice', sections: [] }),
+      source_profile_id: a.profileId,
+      status: 'published',
+    });
+    const removed: string[] = [];
+
+    await deleteAccount(
+      { tenantId: a.tenantId, userId: a.userId },
+      deps(database, {
+        filesystem: {
+          delete: async (key: string) => {
+            removed.push(key);
+          },
+          exists: async () => true,
+        },
+      }),
+    );
+
+    expect(removed).toContain(path);
+    const tombstone = await database.query(
+      'SELECT deleted_at, current_revision_id FROM public_profile_identities WHERE id = ?',
+      [publicationId],
+    );
+    expect(tombstone.rows).toHaveLength(1);
+    expect(tombstone.rows[0]).toMatchObject({ current_revision_id: null });
+    expect(
+      (tombstone.rows[0] as { deleted_at?: unknown }).deleted_at,
+    ).toBeTruthy();
+    expect(
+      await count(database, 'public_profile_revisions', 'publication_id = ?', [
+        publicationId,
+      ]),
+    ).toBe(0);
+    expect(
+      await count(database, 'public_profile_identities', 'owner_user_id = ?', [
+        b.userId,
+      ]),
+    ).toBe(0);
   });
 
   it('revokes the hosted invite instead of deleting it', async () => {
@@ -498,7 +615,24 @@ function deletionContract(
     await seedUser(database, a);
     const failing = {
       ...database,
-      query: database.query.bind(database),
+      url: database.url,
+      // This case is narrowly about the final account-row transaction. Keep
+      // the publication tables absent to avoid forwarding their nested native
+      // transaction through this deliberately incomplete fault-injection
+      // wrapper; publication deletion is covered by its own SQLite/Postgres
+      // case above.
+      query: async (sql: string, values?: unknown[]) => {
+        if (
+          sql.includes('information_schema.columns') &&
+          (values?.[0] === 'public_profile_identities' ||
+            values?.[0] === 'public_profile_revisions')
+        ) {
+          return { rows: [] };
+        }
+        return values === undefined
+          ? await database.query(sql)
+          : await database.query(sql, values);
+      },
       transaction: async <T>(
         work: (tx: AccountDeletionDatabase) => Promise<T>,
       ) =>
@@ -508,7 +642,20 @@ function deletionContract(
               query: async (sql: string, values?: unknown[]) => {
                 if (/DELETE FROM "users"/u.test(sql))
                   throw new Error('simulated storage failure');
-                return await tx.query(sql, values);
+                // This fault-injection wrapper talks directly to the native
+                // PostgreSQL transaction, below the normal SQL adapter that
+                // rewrites `?` placeholders. Keep the publication advisory
+                // lock executable while preserving the intended final-row
+                // failure.
+                let parameter = 0;
+                const nativeSql =
+                  sql.includes('pg_advisory_xact_lock') ||
+                  sql.includes('public_profile_')
+                    ? sql.replace(/\?/gu, () => `$${++parameter}`)
+                    : sql;
+                return values === undefined
+                  ? await tx.query(nativeSql)
+                  : await tx.query(nativeSql, values);
               },
             }),
         ),
