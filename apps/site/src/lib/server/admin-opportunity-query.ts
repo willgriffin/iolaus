@@ -882,7 +882,7 @@ function recommendationRankJoinSql(
     AND rank.contract_version = 'opportunity-match/v1'
     AND rank.model = 'staged-private/v1'
     AND rank.projection_version = 'opportunity-recommendation-rank/v3'
-    AND rank.assessment_id = o.current_analysis_id
+    AND rank.assessment_id = CAST(o.current_analysis_id AS TEXT)
     AND o.status NOT IN ('closed', 'archived', 'expired')
     AND EXISTS (SELECT 1 FROM sources match_source WHERE match_source.id = o.source_id AND match_source.is_active = TRUE AND match_source.public_listing = TRUE))`
     : '';

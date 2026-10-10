@@ -731,7 +731,7 @@ describe('admin-opportunity-query', () => {
         ).toEqual(['a', 'unknown', 'c', 'b']);
         // v3 retains the same owner/source/skill fence, and adds analysis/source visibility.
         await executor.query(
-          'ALTER TABLE opportunities ADD COLUMN current_analysis_id TEXT',
+          `ALTER TABLE opportunities ADD COLUMN current_analysis_id ${dialect === 'postgres' ? 'UUID' : 'TEXT'}`,
         );
         await executor.query(
           'ALTER TABLE opportunities ADD COLUMN source_id TEXT',
@@ -748,14 +748,14 @@ describe('admin-opportunity-query', () => {
         );
         await executor.query(
           'UPDATE opportunities SET current_analysis_id = ?, source_id = ? WHERE id = ?',
-          'analysis-a',
+          '00000000-0000-4000-8000-000000000001',
           'source',
           'a',
         );
         await executor.query(
           "UPDATE opportunity_recommendation_ranks SET candidate_material_fingerprint = ?, question_set_fingerprint = 'opportunity-match/v1', contract_version = 'opportunity-match/v1', model = 'staged-private/v1', projection_version = 'opportunity-recommendation-rank/v3', assessment_id = ? WHERE opportunity_id = ?",
           'match-candidate',
-          'analysis-a',
+          '00000000-0000-4000-8000-000000000001',
           'a',
         );
         const matchingQuery = {
@@ -790,13 +790,13 @@ describe('admin-opportunity-query', () => {
         ).toEqual([]);
         await executor.query(
           'UPDATE opportunities SET current_analysis_id = ? WHERE id = ?',
-          'new-analysis',
+          '00000000-0000-4000-8000-000000000002',
           'a',
         );
         expect(await listOpportunityPageIds(matchingQuery)).toEqual([]);
         await executor.query(
           'UPDATE opportunities SET current_analysis_id = ? WHERE id = ?',
-          'analysis-a',
+          '00000000-0000-4000-8000-000000000001',
           'a',
         );
         await executor.query('UPDATE sources SET public_listing = FALSE');
