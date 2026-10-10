@@ -22,6 +22,7 @@ import {
   hostedDatabasePoolMax,
 } from '../application-runtime.js';
 import { getDbConfig } from '../db.js';
+import { sanitizePublicOpportunityText } from './content.js';
 import { matchPublicSkills as matchSkills } from './match.js';
 export type Row = Record<string, unknown>;
 export type PublicDatabase = {
@@ -30,6 +31,30 @@ export type PublicDatabase = {
     ...values: unknown[]
   ): Promise<{ rows?: Row[] } | Row[]>;
 };
+const listColumns = [
+  'id',
+  'company_id',
+  'company_name',
+  'posting_url',
+  'canonical_url',
+  'apply_url',
+  'title',
+  'normalized_title',
+  'locations',
+  'posted_at',
+  'expires_at',
+  'updated_at',
+  'analysis_version',
+  'source_content_version',
+  'seniority',
+  'function',
+  'employment_type',
+  'work_mode',
+  'skills_json',
+  'eligibility_json',
+  'compensation_json',
+  'countries_json',
+].join(',');
 export class PublicSearchError extends Error {
   constructor(
     public status: number,
@@ -116,6 +141,7 @@ export function projectPublicOpportunity(row: Row, detail = false) {
     skills: {
       required: skills.filter((s) => s.kind === 'required').map(skill),
       preferred: skills.filter((s) => s.kind === 'preferred').map(skill),
+      mentioned: skills.filter((s) => s.kind === 'mentioned').map(skill),
     },
     compensation:
       salary.source === 'posted'
@@ -141,6 +167,14 @@ export function projectPublicOpportunity(row: Row, detail = false) {
   return (
     publicOpportunityDetailSchema.safeParse({
       ...value,
+      description_text: sanitizePublicOpportunityText(
+        row.description_text,
+        30_000,
+      ),
+      qualifications_text: sanitizePublicOpportunityText(
+        row.qualifications_text,
+        12_000,
+      ),
       summary_bullets: summary.slice(0, 5),
       requirements: array(row.requirements_json).map((r) => {
         const s = object(r);
@@ -189,6 +223,9 @@ function expandedSkill(value: string): string[] {
     ]),
   ];
 }
+function canonicalSkills(values: readonly string[]): string[] {
+  return [...new Set(values.map(canonicalSkillSlug).filter(Boolean))];
+}
 
 function terms(q: string) {
   return q
@@ -202,6 +239,13 @@ function terms(q: string) {
     )
     .map((t) => `(${t})`)
     .join(' AND ');
+}
+/** Escape a literal LIKE substring so public location input cannot widen it. */
+function literalLikeSubstring(value: string) {
+  return `%${value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('%', '\\%')
+    .replaceAll('_', '\\_')}%`;
 }
 function cursorSecret() {
   const s = process.env.IOLAUS_PUBLIC_CURSOR_SECRET;
@@ -238,7 +282,7 @@ function cursor(raw: string | undefined, secret: string): Row | null {
 function key(input: PublicSearchInput) {
   const { cursor: _, ...rest } = input;
   rest.q = terms(rest.q);
-  rest.skills = [...new Set(rest.skills.flatMap(expandedSkill))];
+  rest.skills = canonicalSkills(rest.skills);
   for (const k of [
     'skills',
     'seniority',
@@ -265,7 +309,7 @@ export function createPublicSearchReader(
 ) {
   const query = async (sql: string, values: unknown[] = []) =>
     rows(await db.query(sql, ...values));
-  function predicate(input: PublicSearchInput) {
+  function predicate(input: PublicSearchInput, includeSkillRank = true) {
     const values: unknown[] = [];
     const add = (v: unknown) => {
       values.push(v);
@@ -317,10 +361,29 @@ export function createPublicSearchReader(
           : `EXISTS(SELECT 1 FROM jsonb_array_elements_text(c.${col}::jsonb) j(value) WHERE j.value IN (${items.map(add).join(',')}))`,
       );
     };
+    const selectedSkills = canonicalSkills(input.skills);
     jsonHas('skill_slugs_json', [
-      ...new Set(input.skills.flatMap((s) => expandedSkill(s))),
+      ...new Set(selectedSkills.flatMap(expandedSkill)),
     ]);
+    const skillRank =
+      input.sort === 'relevance' && includeSkillRank
+        ? selectedSkills
+            .map((skill) => {
+              const aliases = expandedSkill(skill);
+              const values = aliases.map(add).join(',');
+              const source =
+                dialect === 'sqlite'
+                  ? `json_each(c.skill_slugs_json) j`
+                  : `jsonb_array_elements_text(c.skill_slugs_json::jsonb) j(value)`;
+              return `CASE WHEN EXISTS(SELECT 1 FROM ${source} WHERE j.value IN (${values})) THEN 1 ELSE 0 END`;
+            })
+            .join(' + ') || '0'
+        : '0';
     jsonHas('countries_json', input.country);
+    if (input.location) {
+      const location = add(literalLikeSubstring(input.location));
+      parts.push(`lower(c.locations) LIKE lower(${location}) ESCAPE '\\'`);
+    }
     if (input.company) parts.push(`c.company_id=${add(input.company)}`);
     if (input.source) parts.push(`c.source_id=${add(input.source)}`);
     if (input.posted_since)
@@ -349,7 +412,7 @@ export function createPublicSearchReader(
     if (input.sort === 'newest') rank = '0.0';
     if (input.sort === 'salary')
       rank = `CAST(coalesce(${json('max')},${json('min')},'0') AS REAL)`;
-    return { values, where: parts.join(' AND '), rank };
+    return { values, where: parts.join(' AND '), rank, skillRank };
   }
   async function state() {
     const r = (
@@ -372,7 +435,7 @@ export function createPublicSearchReader(
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.at < 300000) return cached.value;
 
-    const p = predicate(input);
+    const p = predicate(input, false);
     const out: PublicFacets = { ...EMPTY };
     for (const col of [
       'skills',
@@ -427,7 +490,8 @@ export function createPublicSearchReader(
         cur.generation !== generation ||
         Number(cur.expires) < Date.now() ||
         !Number.isInteger(cur.depth) ||
-        Number(cur.depth) > 20)
+        Number(cur.depth) > 20 ||
+        !Number.isFinite(Number(cur.skill_rank)))
     )
       throw new PublicSearchError(
         400,
@@ -440,16 +504,16 @@ export function createPublicSearchReader(
       return `$${p.values.length}`;
     };
     const tail = cur
-      ? `WHERE (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))`
+      ? `WHERE (skill_rank<${add(cur.skill_rank)} OR (skill_rank=${add(cur.skill_rank)} AND (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))))`
       : '';
     let result = await query(
-      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT ${dialect === 'postgres' ? 'c.id' : 'c.*'},${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : 'jobgeni_public_search_v1 c'} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
+      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT c.id,${p.skillRank} AS skill_rank,${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : 'jobgeni_public_search_v1 c'} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
       p.values,
     );
-    if (dialect === 'postgres' && result.length) {
+    if (result.length) {
       const ids = result.map((r) => r.id);
       const detailRows = await query(
-        `SELECT * FROM jobgeni_public_search_v1 WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})`,
+        `SELECT ${listColumns} FROM jobgeni_public_search_v1 WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})`,
         ids,
       );
       const byId = new Map(detailRows.map((r) => [r.id, r]));
@@ -460,9 +524,10 @@ export function createPublicSearchReader(
     const more = result.length > input.limit;
     const page = result.slice(0, input.limit);
     const last = page.at(-1);
+    const countPredicate = predicate(input, false);
     const count = await query(
-      `SELECT count(*) AS total FROM jobgeni_public_search_v1 c WHERE ${p.where}`,
-      p.values.slice(0, predicate(input).values.length),
+      `SELECT count(*) AS total FROM jobgeni_public_search_v1 c WHERE ${countPredicate.where}`,
+      countPredicate.values,
     );
     const pageResult = publicSearchPageSchema.parse({
       items: page.map((r) => projectPublicOpportunity(r)).filter(Boolean),
@@ -474,6 +539,7 @@ export function createPublicSearchReader(
                 generation,
                 expires: cur?.expires ?? Date.now() + 3600000,
                 depth: Number(cur?.depth ?? 0) + 1,
+                skill_rank: Number(last.skill_rank),
                 rank: Number(last.sort_rank),
                 date: last.sort_date,
                 id: last.id,
@@ -498,11 +564,27 @@ export function createPublicSearchReader(
     )[0];
     return r ? projectPublicOpportunity(r, true) : null;
   }
+  async function getMany(ids: readonly string[]) {
+    const unique = [...new Set(ids)];
+    if (
+      unique.length > 500 ||
+      unique.some((id) => !/^[A-Za-z0-9_-]{1,128}$/u.test(id))
+    )
+      throw new PublicSearchError(400, 'Invalid opportunity selection.');
+    if (!unique.length) return [];
+    const records = await query(
+      `SELECT ${listColumns} FROM jobgeni_public_search_v1 WHERE id IN (${unique.map((_, index) => `$${index + 1}`).join(',')})`,
+      unique,
+    );
+    return records
+      .map((row) => projectPublicOpportunity(row))
+      .filter((item): item is PublicOpportunity => item !== null);
+  }
   async function match(raw: unknown) {
     const input = publicMatchInputSchema.parse(raw);
     const ids = input.opportunity_ids;
     const records = await query(
-      `SELECT * FROM jobgeni_public_search_v1 ${ids?.length ? `WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})` : ''} ORDER BY posted_at DESC,id DESC LIMIT 500`,
+      `SELECT ${listColumns} FROM jobgeni_public_search_v1 ${ids?.length ? `WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(',')})` : ''} ORDER BY posted_at DESC,id DESC LIMIT 500`,
       ids ?? [],
     );
     const details = records
@@ -559,6 +641,7 @@ export function createPublicSearchReader(
     search,
     get,
     sitemap,
+    getMany,
     facets: (raw: unknown) => facets(publicSearchInputSchema.parse(raw)),
     match,
   };
@@ -593,6 +676,10 @@ export async function searchPublicOpportunities(input: unknown) {
 }
 export async function getPublicOpportunity(id: string) {
   return (await reader()).get(id);
+}
+/** Bounded internal batch read through the same sanitized catalog projection. */
+export async function getPublicOpportunities(ids: readonly string[]) {
+  return (await reader()).getMany(ids);
 }
 export async function listPublicFacets(input: unknown) {
   return (await reader()).facets(input);

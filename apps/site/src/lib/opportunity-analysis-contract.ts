@@ -9,7 +9,8 @@ export type OpportunityAnalysisStatus =
 export type OpportunityAnalysisSkill = {
   slug: string;
   label: string;
-  kind: 'required' | 'preferred';
+  /** `mentioned` is source evidence, not a requirement classification. */
+  kind: 'required' | 'preferred' | 'mentioned';
   confidence: number;
   evidence: Array<{ start: number; end: number; quote?: string }>;
 };

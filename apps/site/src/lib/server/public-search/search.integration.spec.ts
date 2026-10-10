@@ -148,9 +148,263 @@ for (const dialect of ['sqlite', 'postgres'] as const)
   describe.runIf(dialect === 'sqlite' || Boolean(pgUrl))(
     `public native search ${dialect}`,
     () => {
+      it('keeps skill filters ORed while ranking distinct canonical skill matches before text relevance', async () => {
+        const { db, seed, reader } = await fixture(dialect);
+        await seed(7);
+        const setSkills = async (
+          index: number,
+          skills: Array<{ slug: string; label: string; kind: string }>,
+        ) => {
+          await db.query(
+            `UPDATE opportunity_analyses SET skills_json=$1,skill_slugs_json=$2,normalized_title='Engineer',updated_at='2026-10-07T00:00:00Z' WHERE opportunity_id=$3`,
+            JSON.stringify(skills),
+            JSON.stringify(skills.map((skill) => skill.slug)),
+            jobId(index, dialect),
+          );
+        };
+        await setSkills(0, [
+          { slug: 'postgresql', label: 'PostgreSQL', kind: 'required' },
+          { slug: 'typescript', label: 'TypeScript', kind: 'preferred' },
+          { slug: 'svelte', label: 'Svelte', kind: 'mentioned' },
+        ]);
+        await setSkills(1, [
+          { slug: 'typescript', label: 'TypeScript', kind: 'required' },
+        ]);
+        await setSkills(2, [{ slug: 'rust', label: 'Rust', kind: 'required' }]);
+        await setSkills(3, [
+          { slug: 'typescript', label: 'TypeScript', kind: 'required' },
+        ]);
+        await setSkills(4, [
+          { slug: 'typescript', label: 'TypeScript', kind: 'required' },
+        ]);
+        await setSkills(5, [
+          { slug: 'postgresql', label: 'PostgreSQL', kind: 'required' },
+        ]);
+        await setSkills(6, [
+          { slug: 'typescript', label: 'TypeScript', kind: 'required' },
+        ]);
+
+        const filtered = await reader.search({
+          skills: ['typescript', 'rust'],
+          limit: 10,
+        });
+        expect(filtered.items.map((item) => item.id)).toEqual([
+          jobId(6, dialect),
+          jobId(4, dialect),
+          jobId(3, dialect),
+          jobId(2, dialect),
+          jobId(1, dialect),
+          jobId(0, dialect),
+        ]);
+
+        const ranked = await reader.search({
+          q: 'postgres',
+          skills: ['postgres', 'postgresql', 'ts', 'typescript'],
+          limit: 10,
+        });
+        expect(ranked.items.map((item) => item.id).slice(0, 2)).toEqual([
+          jobId(0, dialect),
+          jobId(5, dialect),
+        ]);
+        expect(ranked.items[0]?.skills.mentioned).toEqual([
+          { slug: 'svelte', label: 'Svelte' },
+        ]);
+
+        const tied = await reader.search({ skills: ['typescript'], limit: 2 });
+        const next = await reader.search({
+          skills: ['typescript'],
+          limit: 2,
+          cursor: tied.next_cursor ?? undefined,
+        });
+        const last = await reader.search({
+          skills: ['typescript'],
+          limit: 2,
+          cursor: next.next_cursor ?? undefined,
+        });
+        const ids = [...tied.items, ...next.items, ...last.items].map(
+          (item) => item.id,
+        );
+        expect(ids).toHaveLength(5);
+        expect(new Set(ids).size).toBe(5);
+        expect(ids).toEqual([
+          jobId(6, dialect),
+          jobId(4, dialect),
+          jobId(3, dialect),
+          jobId(1, dialect),
+          jobId(0, dialect),
+        ]);
+      });
+      it('exposes only bounded sanitized canonical posting text on detail and falls back to canonical location notes', async () => {
+        const { db, seed, reader } = await fixture(dialect);
+        await seed(1);
+        const id = jobId(0, dialect);
+        const analysisId =
+          dialect === 'postgres'
+            ? id.replace('00000000-', '00000001-')
+            : `analysis${id}`;
+        const source = JSON.stringify({
+          descriptionRaw:
+            '<p>Build public services.</p><script>PRIVATE_SCRIPT_SENTINEL</script> Contact jobs@example.invalid or +1 403 555 0100.',
+          qualifications: `<p>${'Q'.repeat(12_100)}</p>`,
+          locationNotes: 'Remote in Canada',
+          privateNotes: 'PRIVATE_NOTE_SENTINEL',
+          candidateEmail: 'candidate@example.invalid',
+        });
+        await db.query(
+          "UPDATE opportunities SET locations='',source_content_json=$1 WHERE id=$2",
+          source,
+          id,
+        );
+        await db.query(
+          'UPDATE opportunities SET current_analysis_id=$1 WHERE id=$2',
+          analysisId,
+          id,
+        );
+
+        const detail = await reader.get(id);
+        expect(detail?.description_text).toBe(
+          'Build public services.\nContact [contact removed] or [contact removed].',
+        );
+        expect(detail?.qualifications_text).toHaveLength(12_000);
+        expect(detail?.location.text).toBe('Remote in Canada');
+        expect(
+          (await reader.search({ location: 'canada', limit: 10 })).items.map(
+            (item) => item.id,
+          ),
+        ).toEqual([id]);
+        expect(
+          JSON.stringify(
+            await db.query('SELECT * FROM jobgeni_public_catalog_v1'),
+          ),
+        ).not.toMatch(
+          /source_content_json|PRIVATE_NOTE_SENTINEL|candidate@example/i,
+        );
+        expect(
+          JSON.stringify(await reader.search({ limit: 10 })),
+        ).not.toContain('description_text');
+
+        await db.query(
+          'UPDATE opportunities SET source_content_json=$1 WHERE id=$2',
+          'not valid json',
+          id,
+        );
+        await db.query(
+          'UPDATE opportunities SET current_analysis_id=$1 WHERE id=$2',
+          analysisId,
+          id,
+        );
+        const malformed = await reader.get(id);
+        expect(malformed?.description_text).toBeUndefined();
+        expect(malformed?.qualifications_text).toBeUndefined();
+      });
+      it('upgrades an existing PostgreSQL search view without reordering dependent columns', async () => {
+        if (dialect !== 'postgres') return;
+        const { db } = await fixture(dialect);
+        const oldColumns = [
+          'id',
+          'opportunity_id',
+          'source_id',
+          'company_id',
+          'company_name',
+          'posting_url',
+          'canonical_url',
+          'apply_url',
+          'title',
+          'locations',
+          'posted_at',
+          'expires_at',
+          'updated_at',
+          'opportunity_status',
+          'freshness',
+          'compensation_min',
+          'compensation_max',
+          'compensation_currency',
+          'analysis_id',
+          'source_content_fingerprint',
+          'source_content_version',
+          'analysis_version',
+          'analysis_status',
+          'normalized_title',
+          'seniority',
+          'function',
+          'work_mode',
+          'employment_type',
+          'skills_json',
+          'eligibility_json',
+          'compensation_json',
+          'summary_json',
+          'countries_json',
+          'skill_slugs_json',
+          'search_document',
+          'requirements_json',
+        ].map((column) => `c.${column}`);
+        await db.query(
+          'DROP FUNCTION IF EXISTS public.search_public_catalog(tsquery)',
+        );
+        await db.query('DROP VIEW public.jobgeni_public_search_v1');
+        await db.query(
+          `CREATE VIEW public.jobgeni_public_search_v1 AS SELECT ${oldColumns.join(',')},d.search_vector,g.generation FROM public.jobgeni_public_catalog_v1 c JOIN public.public_opportunity_search_documents d ON d.id=CAST(c.id AS TEXT) CROSS JOIN public.public_search_generation g WHERE g.id=1`,
+        );
+        await db.query(
+          'CREATE VIEW public.public_search_upgrade_dependency AS SELECT search_vector,generation FROM public.jobgeni_public_search_v1',
+        );
+        await db.query(
+          'GRANT SELECT ON public.jobgeni_public_search_v1 TO PUBLIC',
+        );
+        const aclBefore = await db.query(
+          "SELECT relacl::text AS acl FROM pg_class WHERE oid='public.jobgeni_public_search_v1'::regclass",
+        );
+        const aclBeforeRows = Array.isArray(aclBefore)
+          ? aclBefore
+          : (aclBefore.rows ?? []);
+
+        await ensurePublicSearchSchema(db, dialect);
+        await ensurePublicSearchSchema(db, dialect);
+
+        const upgraded = await db.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='jobgeni_public_search_v1' ORDER BY ordinal_position",
+        );
+        const columnRows = Array.isArray(upgraded)
+          ? upgraded
+          : (upgraded.rows ?? []);
+        expect(columnRows.slice(-2).map((row) => row.column_name)).toEqual([
+          'description_text',
+          'qualifications_text',
+        ]);
+        expect(
+          await db.query(
+            'SELECT * FROM public.public_search_upgrade_dependency',
+          ),
+        ).toBeDefined();
+        const aclAfter = await db.query(
+          "SELECT relacl::text AS acl FROM pg_class WHERE oid='public.jobgeni_public_search_v1'::regclass",
+        );
+        const aclAfterRows = Array.isArray(aclAfter)
+          ? aclAfter
+          : (aclAfter.rows ?? []);
+        expect(aclAfterRows[0]?.acl).toBe(aclBeforeRows[0]?.acl);
+      });
       it('FTS, filters, facets, cursors, live visibility, private golden isolation, role ACL and benchmark', async () => {
         const { db, seed, reader } = await fixture(dialect);
         await seed(55);
+        const batch = await reader.getMany([
+          jobId(0, dialect),
+          jobId(1, dialect),
+          jobId(0, dialect),
+        ]);
+        expect(batch).toHaveLength(2);
+        expect(JSON.stringify(batch)).not.toContain(
+          'PRIVATE_SENTINEL_NEVER_PUBLIC',
+        );
+        expect(await reader.getMany([])).toEqual([]);
+        await expect(reader.getMany(['invalid/id'])).rejects.toThrow(
+          'Invalid opportunity selection',
+        );
+        await expect(
+          reader.getMany(
+            Array.from({ length: 501 }, (_, i) => jobId(i, dialect)),
+          ),
+        ).rejects.toThrow('Invalid opportunity selection');
         const first = await reader.search({ q: 'postgres', limit: 20 });
         expect(first.items).toHaveLength(20);
         expect(first.total_estimate).toBe(55);
@@ -204,6 +458,19 @@ for (const dialect of ['sqlite', 'postgres'] as const)
         expect((await reader.search({ country: ['US'] })).items).toHaveLength(
           0,
         );
+        await db.query(
+          `UPDATE opportunities SET locations='MONTREAL 100%_\\ district' WHERE id=$1`,
+          jobId(0, dialect),
+        );
+        expect(
+          (await reader.search({ location: 'montreal 100%_\\' })).items.map(
+            (item) => item.id,
+          ),
+        ).toEqual([jobId(0, dialect)]);
+        expect(
+          (await reader.search({ location: 'montreal 100' })).items,
+        ).toHaveLength(1);
+        expect((await reader.search({ location: '%' })).items).toHaveLength(1);
         await expect(reader.search({ salary_min: 1 })).rejects.toThrow();
         expect(
           (

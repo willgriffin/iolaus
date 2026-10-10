@@ -140,7 +140,7 @@ export function buildAdminNavigation(
 ): ShellNavItem[] {
   return [
     { href: '/admin', label: 'Overview', icon: 'home' },
-    ...['tasks', 'opportunities', 'applications']
+    ...['applications']
       .map((slug) => resourceItem(slug, resources))
       .filter((item): item is ShellNavItem => Boolean(item)),
     ...adminCategories

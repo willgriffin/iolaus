@@ -149,7 +149,7 @@ P3: dedicated queue/window and operator `opportunities:analyze --backfill --max 
 
 P4: PostgreSQL materialized safe document + tsvector GIN and SQLite FTS5 equivalent. Safe dialect-aware query parser (phrases, punctuation, aliases); no unescaped user SQL/FTS operators. All filters, ranking/recency, facets, pagination, public OpenAPI 3.1 and RFC9457 errors. Read-only DB connection required in hosted public paths, pool max five, 500ms statement timeout and no parallel query workers. Shared cost limiter plus bounded concurrency; bounded 60-second server response caching and five-minute facet caching, both fenced by live visibility generation. Public GET ETags require HTTP revalidation (`max-age=0, must-revalidate`) so source opt-out cannot remain visible in an unvalidated downstream cache; public SSR stays private/no-store because the shared layout carries session state. Anonymous match contains user-submitted input: no shared HTTP cache, request logs or durable profile; any 60-second in-memory keyed result must remain bounded and avoid recording input. Public responses independent of cookies/private data. API-key onboarding, if included, reuses verified identity and stored revocable credential primitives; never assume it exists to claim quota coverage.
 
-P5: shared home listing/facets/typeahead/match panel, detail and company/skill landings, sitemap/OpenSearch/robots. Original links use `_blank` and `noopener noreferrer`; safe HTTP(S) URLs, no description republication. JSON-LD only grounded values and escaped derived summaries. Preserve private home and authenticated board; responsive browser tests. Source opt-out removes pages/API/MCP/sitemap and invalidates caches.
+P5: shared home and results use one search field with additive, removable skill filters chosen through a searchable, categorized modal catalog spanning multiple industries; no separate keyword, skill-search or matching forms. Detail and company/skill landings, sitemap/OpenSearch/robots. Anonymous matching remains available through the API/MCP contract. Shared listing cards show available location, work arrangement, employment type, level, posted compensation, date, skills, and direct original-posting links; missing facts are omitted. Original links use `_blank` and `noopener noreferrer`; safe HTTP(S) URLs. The detail/triage view includes normalized plain-text posting descriptions and qualifications from source-enabled public postings. JSON-LD only grounded values and escaped derived summaries. Preserve private home and authenticated board; responsive browser tests. Source opt-out removes pages/API/MCP/sitemap and invalidates caches.
 
 P6: Stage 0 authoritative eligibility/preferences; retain unknown/conflicting states for explanation instead of accidental exclusion. Stage 1 bounded union of skill/FTS/configured vector candidates (top 300); Stage 2 per-requirement weighted coverage including dated experience, education and seniority; Stage 4 private regularized model using only owner's labels and held-out time split. Persist rank v3 with source/candidate/contract/model provenance; update existing query freshness fences without pretending deterministic ranks have assessment receipts. Incremental analysis/profile refresh must invalidate all affected users, including no-overlap candidates whose previous rank becomes stale. Anonymous path has zero AI calls and no persistence. Owner-scoped `match:evaluate` outputs aggregates only: NDCG@10, P@10, apply recall@50, Brier, Spearman, spend/cache hit rate. Quality targets: S2 >= 0.8 baseline NDCG@10; S2+3 >= baseline; S4 improves held-out P@10; these remain unverified until owner evaluation.
 
@@ -240,3 +240,33 @@ tarballs, then repeat the frozen-install and import/build checks. Never commit
 ## Pending acceptance ledger
 
 The following cannot be claimed from this plan or unit fixtures: real ChatGPT host/version/auth/resource render and human-review flow; Google rich-results result; production source opt-out/cache rollout; public-role secret provisioning and real deny query; end-to-end nginx real-IP verification; live Luna cost per posting; 10k p95 <100ms search and <500ms registered refresh on declared hardware; owner's NDCG/P@10/Brier evaluation; production budget/traffic behavior. Record each actual command, date, revision, actor and redacted aggregate outcome when executed. Host login/workspace restrictions require a concrete blocked step. Directory submission and production change acceptance remain distinct from a reviewable implementation PR.
+
+### Search-first triage extension — #200
+
+The shared catalog starts with one search. A submitted natural-language search
+becomes editable role, skill and supported preference filters, then opens a
+triage deck. Interpretation is deterministic and exposes unsupported constraints;
+it never adds skills to the candidate's profile. Explicit public API queries
+retain their existing contract.
+
+Pass, Later and Save persist independent shortlist decisions. Save does not
+queue intelligence, research, tailoring or applications. Saved and All shown
+views retain delivered opportunities; opening an original posting is distinct
+from manually marking Applied. Guests retain bounded, versioned browser storage
+with visible storage-failure handling. An account shortlist belongs to the
+verified tenant/user identity, independent of candidate profile onboarding.
+Guest import preserves existing account decisions and only clears acknowledged
+browser entries. Stale postings remain in history with availability indicated.
+
+Email-to-self opens an explicit email draft containing bounded public posting
+links. No message is automatically sent and guest access does not introduce an
+anonymous SMTP relay. Interactive cross-device guest restore remains a separate
+feature requiring protected, expiring server snapshots.
+
+Validation includes deterministic interpretation, browser storage failure and
+cross-tab behavior, native SQLite/PostgreSQL revision/import atomicity and
+ownership tests, and served Chromium checks at narrow and desktop sizes. The
+owner authorized PR publication on 2026-10-10 after local testing. Merge,
+package publication, and deployment remain separate steps. Release validation
+and independent review must cover this extension, hosted resume profiles
+(#201–#206), and the subsequent catalog/workspace UI work (#207–#209).

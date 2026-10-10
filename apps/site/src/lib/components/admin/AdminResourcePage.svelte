@@ -3,15 +3,27 @@ import Archive from '@lucide/svelte/icons/archive';
 import BriefcaseBusiness from '@lucide/svelte/icons/briefcase-business';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
 import ChevronRight from '@lucide/svelte/icons/chevron-right';
+import CircleCheck from '@lucide/svelte/icons/circle-check';
+import CircleHelp from '@lucide/svelte/icons/circle-help';
+import CirclePause from '@lucide/svelte/icons/circle-pause';
+import Clock from '@lucide/svelte/icons/clock';
 import Columns3 from '@lucide/svelte/icons/columns-3';
 import Eye from '@lucide/svelte/icons/eye';
 import EyeOff from '@lucide/svelte/icons/eye-off';
 import FileText from '@lucide/svelte/icons/file-text';
+import Heart from '@lucide/svelte/icons/heart';
+import KeyRound from '@lucide/svelte/icons/key-round';
 import List from '@lucide/svelte/icons/list';
+import MessagesSquare from '@lucide/svelte/icons/messages-square';
 import Pencil from '@lucide/svelte/icons/pencil';
+import Plus from '@lucide/svelte/icons/plus';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import Search from '@lucide/svelte/icons/search';
+import Send from '@lucide/svelte/icons/send';
+import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Sparkles from '@lucide/svelte/icons/sparkles';
+import Trophy from '@lucide/svelte/icons/trophy';
+import X from '@lucide/svelte/icons/x';
 import { getContext, onDestroy, onMount, untrack } from 'svelte';
 import { enhance } from '$app/forms';
 import { goto } from '$app/navigation';
@@ -22,6 +34,10 @@ import {
   type AdminRecord,
 } from '$lib/admin/dock';
 import { keepFormValues } from '$lib/admin/form-enhance';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
 import type { AdminListPagination } from '$lib/admin/pagination';
 import type {
   AdminResource,
@@ -142,7 +158,37 @@ let bulkPreview = $state<{
 let bulkBusy = $state(false);
 let bulkError = $state('');
 let taskViewMode = $state<TaskViewMode>('kanban');
-let taskSearchQuery = $state('');
+let taskSearchQuery = $state(
+  untrack(() => page.url.searchParams.get('task_search') ?? ''),
+);
+let taskFilterDialog = $state<HTMLDialogElement>();
+let draftTaskOwner = $state('all');
+let draftTaskStatus = $state('all');
+let draftTaskSearch = $state('');
+const taskHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+onMount(() => {
+  if (isTaskResource) return taskHeader?.register(taskHeaderControls);
+});
+function openTaskFilters() {
+  draftTaskOwner = data.activeTaskOwnerFilter ?? 'all';
+  draftTaskStatus = data.activeTaskStatusFilter ?? 'all';
+  draftTaskSearch = taskSearchQuery;
+  taskFilterDialog?.showModal();
+}
+function applyTaskFilters(event: SubmitEvent) {
+  event.preventDefault();
+  taskFilterDialog?.close();
+  taskSearchQuery = draftTaskSearch;
+  void goto(
+    taskFilterHref({
+      owner: draftTaskOwner,
+      status: draftTaskStatus,
+      search: draftTaskSearch,
+    }),
+  );
+}
 let collapsedTaskKanbanLanes = $state<Set<string>>(new Set());
 let taskPreferencesLoaded = $state(false);
 let autoOpenedSelectionKey = $state('');
@@ -308,7 +354,7 @@ const taskRecordsByLane = $derived.by((): Map<string, AdminRecord[]> => {
 
   const entries = taskKanbanLaneDefinitions.map((lane) => {
     const laneColumns = new Set<string>(lane.columns);
-    const records = filteredTaskRecords
+    const records = visibleTaskListRecords
       .filter((record: AdminRecord) =>
         laneColumns.has(normalizedTaskKanbanColumn(record)),
       )
@@ -1022,12 +1068,18 @@ function opportunityScoreValue(record: AdminRecord): number | null {
   return numericValue(record, 'latestScore');
 }
 
-function taskFilterHref(next: { owner?: string; status?: string }): string {
+function taskFilterHref(next: {
+  owner?: string;
+  status?: string;
+  search?: string;
+}): string {
   const owner = next.owner ?? data.activeTaskOwnerFilter ?? 'all';
   const status = next.status ?? data.activeTaskStatusFilter ?? 'all';
   const params = new URLSearchParams();
   if (owner !== 'all') params.set('owner', owner);
   if (status !== 'all') params.set('status', status);
+  const search = next.search ?? taskSearchQuery;
+  if (search.trim()) params.set('task_search', search.trim());
   const query = params.toString();
   const basePath = '/admin/tasks';
   return query ? `${basePath}?${query}` : basePath;
@@ -1060,6 +1112,32 @@ function normalizedTaskKanbanColumn(record: AdminRecord): string {
 
 function taskKanbanColumnSortValue(record: AdminRecord): number {
   return taskKanbanColumnOrder.get(normalizedTaskKanbanColumn(record)) ?? 0;
+}
+
+const taskStagePresentation = {
+  inbox: { icon: Heart, tone: 'shortlist' },
+  recommended: { icon: Sparkles, tone: 'shortlist' },
+  needs_user_decision: { icon: CircleHelp, tone: 'attention' },
+  accepted_apply: { icon: CircleCheck, tone: 'active' },
+  researching: { icon: Search, tone: 'active' },
+  materials_drafting: { icon: Pencil, tone: 'active' },
+  needs_account_credentials: { icon: KeyRound, tone: 'attention' },
+  ready_for_user_review: { icon: Eye, tone: 'attention' },
+  approved_to_submit: { icon: CircleCheck, tone: 'success' },
+  submitting: { icon: Send, tone: 'active' },
+  manual_submission: { icon: Send, tone: 'attention' },
+  submitted: { icon: CircleCheck, tone: 'success' },
+  follow_up: { icon: Clock, tone: 'active' },
+  interviewing: { icon: MessagesSquare, tone: 'active' },
+  offer_negotiation: { icon: Trophy, tone: 'success' },
+  rejected_archived: { icon: Archive, tone: 'muted' },
+  blocked: { icon: CirclePause, tone: 'danger' },
+} as const;
+
+function taskStage(record: AdminRecord) {
+  return taskStagePresentation[
+    normalizedTaskKanbanColumn(record) as keyof typeof taskStagePresentation
+  ];
 }
 
 function taskKanbanColumnLabel(record: AdminRecord): string {
@@ -1132,6 +1210,29 @@ function taskMeta(record: AdminRecord): string {
     .join(' / ');
 }
 </script>
+{#snippet taskHeaderControls()}
+  <div class="task-header-controls">
+    <a class="task-header-action" href="/admin/tasks/new" aria-label="New Task" title="New Task"><Plus size={22} aria-hidden="true"/></a>
+    <form use:enhance method="POST" action="?/syncRecommendationTasks"><button class="task-header-action" type="submit" aria-label="Sync recommendations" title="Sync recommendations"><RefreshCw size={21} aria-hidden="true"/></button></form>
+  <button class="task-header-action" type="button" aria-label="Filters" title="Filters" aria-haspopup="dialog" onclick={openTaskFilters}><SlidersHorizontal size={21} aria-hidden="true"/></button>
+  <div class="task-header-views" role="group" aria-label="Task view">
+    <button type="button" aria-label="Board view" title="Board view" aria-pressed={taskViewMode === 'kanban'} onclick={() => setTaskViewMode('kanban')}><Columns3 size={20} aria-hidden="true"/></button>
+    <button type="button" aria-label="List view" title="List view" aria-pressed={taskViewMode === 'list'} onclick={() => setTaskViewMode('list')}><List size={20} aria-hidden="true"/></button>
+  </div>
+  </div>
+{/snippet}
+{#if isTaskResource}
+<dialog class="task-filter-dialog" bind:this={taskFilterDialog} aria-labelledby="task-filters-title">
+  <header><div><h2 id="task-filters-title">Filter tasks</h2><p>Choose which tasks to show.</p></div><button type="button" aria-label="Close filters" onclick={() => taskFilterDialog?.close()}><X size={22} aria-hidden="true"/></button></header>
+  <form onsubmit={applyTaskFilters}>
+    <label>Search tasks<input type="search" bind:value={draftTaskSearch} placeholder="Search this page of tasks"/></label>
+    <label>Assignee<select bind:value={draftTaskOwner}>{#each [{label:'All',value:'all'}, ...taskAssigneeRoleDefinitions] as owner}<option value={owner.value}>{owner.label}</option>{/each}</select></label>
+    <label>Status<select bind:value={draftTaskStatus}>{#each [{label:'All',value:'all'}, ...taskStatusDefinitions] as status}<option value={status.value}>{status.label}</option>{/each}</select></label>
+    <footer><button type="button" onclick={() => { draftTaskOwner = 'all'; draftTaskStatus = 'all'; draftTaskSearch = ''; }}>Clear all filters</button><button class="apply-task-filters" type="submit">Apply filters</button></footer>
+  </form>
+</dialog>
+{/if}
+
 
 {#snippet opportunityBulkToolbar()}
   {#if isOpportunityResource}
@@ -1327,7 +1428,7 @@ function taskMeta(record: AdminRecord): string {
   class:task-page={isTaskResource}
   class:task-kanban-page={isTaskKanbanView}
 >
-  {#if !isOpportunityResource}
+  {#if !isOpportunityResource && !isTaskResource}
     <header class="page-header">
       <div>
         <h1>{data.resource.label}</h1>
@@ -1335,7 +1436,7 @@ function taskMeta(record: AdminRecord): string {
       </div>
       {#if data.resource.slug === 'preferences'}<a class="new-record-link" href="/admin/preferences/screening-questions">Screening Questions</a>{/if}
       {#if isSourceResource}<AddUrlIntake />{/if}
-      {#if (data.resource.rowAction ?? 'edit') === 'edit'}
+      {#if !isTaskResource && (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
           {isSourceResource ? 'Add a job source' : `New ${data.resource.singularLabel}`}
         </a>
@@ -1343,77 +1444,8 @@ function taskMeta(record: AdminRecord): string {
     </header>
   {/if}
 
-  {#if data.resource.slug === 'tasks'}
+  {#if isTaskResource && (taskViewMode === 'kanban' || data.error)}
     <section class="task-workspace" aria-label="Application workflow task board">
-      <div class="task-toolbar">
-        <div class="task-filter-cluster">
-          <div class="task-filter-group" aria-label="Task assignee filters">
-            {#each [{ label: 'All', value: 'all' }, ...taskAssigneeRoleDefinitions] as owner}
-              <a
-                class:active={data.activeTaskOwnerFilter === owner.value}
-                href={taskFilterHref({ owner: owner.value })}
-              >
-                {owner.label}
-              </a>
-            {/each}
-          </div>
-          <div class="task-filter-group" aria-label="Task status filters">
-            {#each [{ label: 'All', value: 'all' }, ...taskStatusDefinitions] as status}
-              <a
-                class:active={data.activeTaskStatusFilter === status.value}
-                href={taskFilterHref({ status: status.value })}
-              >
-                {status.label}
-              </a>
-            {/each}
-          </div>
-        </div>
-
-        <div class="task-actions">
-          <div class="task-view-toggle" role="group" aria-label="Task view">
-            <button
-              type="button"
-              class:active={taskViewMode === 'kanban'}
-              aria-pressed={taskViewMode === 'kanban'}
-              title="Kanban board"
-              onclick={() => setTaskViewMode('kanban')}
-            >
-              <Columns3 size={15} strokeWidth={2.2} />
-              <span>Board</span>
-            </button>
-            <button
-              type="button"
-              class:active={taskViewMode === 'list'}
-              aria-pressed={taskViewMode === 'list'}
-              title="List"
-              onclick={() => setTaskViewMode('list')}
-            >
-              <List size={15} strokeWidth={2.2} />
-              <span>List</span>
-            </button>
-          </div>
-
-          <form use:enhance method="POST" action="?/syncRecommendationTasks">
-            <button type="submit" class="sync-button">
-              <RefreshCw size={14} strokeWidth={2.2} />
-              <span>Sync recommendations</span>
-            </button>
-          </form>
-        </div>
-
-        {#if taskViewMode === 'list'}
-          <label class="task-search">
-            <Search size={15} strokeWidth={2.2} />
-            <span class="sr-only">Filter tasks</span>
-            <input
-              type="search"
-              placeholder="Filter tasks"
-              bind:value={taskSearchQuery}
-            />
-          </label>
-        {/if}
-      </div>
-
       {#if data.error}
         <div class="resource-action-feedback error task-load-error" role="alert">
           <span>{data.error}</span>
@@ -1450,6 +1482,13 @@ function taskMeta(record: AdminRecord): string {
                   {:else}
                     <ChevronDown size={14} strokeWidth={2.3} />
                   {/if}
+                  {#if lane.value === 'shortlist'}
+                    <Heart size={16} class="stage-icon stage-shortlist" aria-hidden="true" />
+                  {:else if lane.value === 'applying'}
+                    <Pencil size={16} class="stage-icon stage-active" aria-hidden="true" />
+                  {:else}
+                    <CircleCheck size={16} class="stage-icon stage-success" aria-hidden="true" />
+                  {/if}
                   <span class="kanban-column-title">{lane.label}</span>
                   <span class="kanban-column-count">{laneTasks.length}</span>
                 </button>
@@ -1458,6 +1497,8 @@ function taskMeta(record: AdminRecord): string {
                 <div class="task-card-list">
                   {#each laneTasks as task (task.id)}
                     {@const subjectLinks = taskSubjectLinks(task)}
+                    {@const stage = taskStage(task)}
+                    {@const StageIcon = stage.icon}
                     <article
                       class="task-card"
                       class:blocked={valueFor(task, 'status') === 'blocked'}
@@ -1493,7 +1534,7 @@ function taskMeta(record: AdminRecord): string {
                         </nav>
                       {/if}
                       <div class="task-card-footer">
-                        <span class="workflow-state-chip">{taskKanbanColumnLabel(task)}</span>
+                        <span class="workflow-state-chip" title={taskKanbanColumnLabel(task)}><StageIcon size={14} strokeWidth={2.2} class={`stage-icon stage-${stage.tone}`} aria-hidden="true" />{taskKanbanColumnLabel(task)}</span>
                         <span>{workflowLabel(valueFor(task, 'assigneeRole') || 'unassigned')}</span>
                         <span>{workflowLabel(valueFor(task, 'status') || 'open')}</span>
                       </div>
@@ -1573,6 +1614,34 @@ function taskMeta(record: AdminRecord): string {
       />
     {:else if isSourceResource}
       <SourceControlList records={data.records} onRefresh={() => onRetry?.()} />
+    {:else if isTaskResource}
+      <div class="task-list" aria-label="Tasks">
+        {#if data.refreshing || data.stale}<p class="task-list-message" role="status">Refreshing tasks…</p>{/if}
+        {#each displayRecords as task (task.id)}
+          {@const stage = taskStage(task)}
+          {@const StageIcon = stage.icon}
+          <article class="task-list-card" class:selected={task.id === selectedRecordId}>
+            <button class="task-list-open" type="button" onclick={() => openPrimaryTool(task)} aria-label={`Open ${valueFor(task, 'title') || 'task'}`}>
+              <span class="task-list-content">
+                <span class="task-list-stage"><StageIcon size={15} class={`stage-icon stage-${stage.tone}`} aria-hidden="true" />{taskKanbanColumnLabel(task)}</span>
+                <strong>{valueFor(task, 'title') || 'Untitled task'}</strong>
+                {#if taskMeta(task)}<span class="task-list-meta">{taskMeta(task)}</span>{/if}
+                <span class="task-list-meta">{workflowLabel(valueFor(task, 'assigneeRole') || 'unassigned')} · {workflowLabel(valueFor(task, 'status') || 'open')}</span>
+                {#if valueFor(task, 'dueAt')}<span class="task-list-meta">Due {displayValue(task, 'dueAt')}</span>{/if}
+                {#if valueFor(task, 'blockerReason')}<span class="task-list-blocker">{valueFor(task, 'blockerReason')}</span>{/if}
+              </span>
+              <ChevronRight size={20} aria-hidden="true" />
+            </button>
+            <div class="task-list-actions">
+              {#each taskSubjectLinks(task) as link (link.href)}<a href={link.href} title={link.title} aria-label={link.title}>{#if link.icon === 'opportunity'}<BriefcaseBusiness size={18} aria-hidden="true" />{:else if link.icon === 'application'}<FileText size={18} aria-hidden="true" />{:else}{link.label}{/if}</a>{/each}
+              <a href={recordHref(task)} aria-label={`View ${valueFor(task, 'title') || 'task'}`} title="View task"><Eye size={18} aria-hidden="true" /></a>
+              <a href={editHref(task)} aria-label={`Edit ${valueFor(task, 'title') || 'task'}`} title="Edit task"><Pencil size={18} aria-hidden="true" /></a>
+            </div>
+          </article>
+        {:else}
+          {#if !data.error}<p class="task-list-message" role="status">{data.loading ? 'Loading tasks…' : taskSearchQuery.trim() ? 'No tasks match these filters.' : 'No tasks yet.'}</p>{/if}
+        {/each}
+      </div>
     {:else}
     <div class="section-heading">
       <div class="section-title-stack">
@@ -1710,6 +1779,44 @@ function taskMeta(record: AdminRecord): string {
 </section>
 
 <style>
+.task-list { display:grid; gap:.75rem; }
+.task-list-card { border:1px solid var(--border-strong); border-radius:.65rem; background:var(--bg-elev); color:var(--ink); overflow:hidden; }
+.task-list-card:hover, .task-list-card.selected { border-color:var(--accent); }
+.task-list-open { display:flex; align-items:center; justify-content:space-between; gap:1rem; width:100%; padding:1rem 1rem .3rem; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.task-list-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.task-list-content { display:grid; gap:.35rem; min-width:0; overflow-wrap:anywhere; }
+.task-list-content strong { font-size:1.05rem; line-height:1.35; }
+.task-list-stage { display:flex; align-items:center; gap:.4rem; font-size:.85rem; color:var(--ink-3); }
+.task-list-meta, .task-list-message { font-size:.85rem; color:var(--ink-3); }
+.task-list-blocker { font-size:.85rem; color:var(--smrt-color-error); }
+.task-list-actions { display:flex; justify-content:flex-end; align-items:center; gap:.1rem; padding:0 .5rem .35rem; }
+.task-list-actions a { display:flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; padding:0 .5rem; border-radius:50%; color:var(--ink-3); text-decoration:none; font-size:.85rem; }
+.task-list-actions a:hover { background:var(--tag-bg); color:var(--ink); }
+.task-list-actions a:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+.task-header-controls { display:flex; align-items:center; gap:.25rem; }
+.task-header-controls form { margin:0; }
+.task-header-action { display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--ink); cursor:pointer; }
+.task-header-action:hover { background:var(--tag-bg); }
+.task-header-action:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+@media(max-width:48rem) { .task-header-controls { position:absolute; right:.75rem; bottom:10px; } }
+
+.task-header-views { display:flex; border:1px solid var(--border-strong); border-radius:.5rem; overflow:hidden; }
+.task-header-views button { display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:0; background:var(--bg-elev); color:var(--ink); cursor:pointer; }
+.task-header-views button + button { border-left:1px solid var(--border-strong); }
+.task-header-views button[aria-pressed="true"] { background:var(--accent); color:var(--bg); }
+.task-header-views button:focus-visible { outline:2px solid var(--ink); outline-offset:-4px; }
+.task-filter-dialog { width:min(42rem,calc(100vw - 1.5rem)); max-height:calc(100dvh - 1.5rem); margin:auto; padding:1.25rem; box-sizing:border-box; border:1px solid var(--border-strong); border-radius:1rem; background:var(--bg-elev); color:var(--ink); overflow:auto; }
+.task-filter-dialog::backdrop { background:#0008; }
+.task-filter-dialog header, .task-filter-dialog footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.task-filter-dialog h2 { margin:0; }
+.task-filter-dialog p { color:var(--ink-3); }
+.task-filter-dialog form, .task-filter-dialog label { display:grid; gap:.5rem; }
+.task-filter-dialog form { gap:1rem; }
+.task-filter-dialog input, .task-filter-dialog select, .task-filter-dialog button { min-height:44px; padding:.5rem .75rem; font:inherit; border:1px solid var(--border-strong); border-radius:.5rem; background:var(--bg); color:var(--ink); }
+.task-filter-dialog button { cursor:pointer; }
+.task-filter-dialog .apply-task-filters { background:var(--accent); color:var(--bg); font-weight:700; }
+
   .resource-page {
     display: grid;
     gap: 22px;
@@ -1728,7 +1835,7 @@ function taskMeta(record: AdminRecord): string {
     overflow: hidden;
   }
 
-  :global(.admin-content:has(.task-kanban-page) .smrt-breadcrumbs) {
+  :global(.admin-content:has(.task-page) .smrt-breadcrumbs) {
     display: none;
   }
 
@@ -1741,7 +1848,7 @@ function taskMeta(record: AdminRecord): string {
   }
 
   .task-kanban-page {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     height: 100%;
     min-height: 0;
     overflow: hidden;
@@ -1786,113 +1893,8 @@ function taskMeta(record: AdminRecord): string {
   }
 
   .task-kanban-page .task-workspace {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
-  }
-
-  .task-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .task-filter-cluster,
-  .task-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .task-filter-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .task-filter-group a,
-  .task-view-toggle button,
-  .sync-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 30px;
-    padding: 0 9px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    color: var(--smrt-color-on-surface);
-    font-size: 12px;
-    font-weight: 800;
-    text-decoration: none;
-  }
-
-  .task-view-toggle {
-    display: inline-flex;
-    overflow: hidden;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-  }
-
-  .task-view-toggle button {
-    min-height: 28px;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    cursor: pointer;
-  }
-
-  .task-view-toggle button + button {
-    border-left: 1px solid var(--smrt-color-outline-variant);
-  }
-
-  .task-filter-group a.active,
-  .task-view-toggle button.active,
-  .task-view-toggle button:hover,
-  .task-view-toggle button:focus-visible,
-  .sync-button:hover,
-  .sync-button:focus-visible {
-    border-color: var(--smrt-color-on-surface);
-    background: var(--smrt-color-on-surface);
-    color: var(--smrt-color-surface);
-  }
-
-  .sync-button {
-    cursor: pointer;
-  }
-
-  .task-search {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1 1 320px;
-    max-width: 440px;
-    min-height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    color: var(--smrt-color-on-surface-variant);
-  }
-
-  .task-search input {
-    min-width: 0;
-    flex: 1 1 auto;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: var(--smrt-color-on-surface);
-    font: inherit;
-    font-size: 13px;
-  }
-
-  .task-search:focus-within {
-    border-color: var(--smrt-color-on-surface);
-    box-shadow: 0 0 0 1px var(--smrt-color-on-surface);
   }
 
   .kanban-board {
@@ -1929,7 +1931,7 @@ function taskMeta(record: AdminRecord): string {
 
   .kanban-column-toggle {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 7px;
     width: 100%;
@@ -1963,7 +1965,7 @@ function taskMeta(record: AdminRecord): string {
 
   .kanban-column.collapsed .kanban-column-toggle {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     justify-items: center;
     align-items: center;
     height: 100%;
@@ -2234,9 +2236,18 @@ function taskMeta(record: AdminRecord): string {
   }
 
   .task-card-footer .workflow-state-chip {
+    gap: 5px;
     background: var(--task-chip-bg);
     color: var(--task-chip-fg);
   }
+
+  :global(.stage-icon) { flex-shrink: 0; }
+  :global(.stage-shortlist) { color: var(--smrt-color-tertiary, #c084fc); }
+  :global(.stage-active) { color: var(--smrt-color-primary, #60a5fa); }
+  :global(.stage-attention) { color: var(--smrt-color-warning, #d99a22); }
+  :global(.stage-success) { color: var(--smrt-color-success, #22a56f); }
+  :global(.stage-danger) { color: var(--smrt-color-error, #f87171); }
+  :global(.stage-muted) { color: var(--smrt-color-on-surface-variant, #94a3b8); }
 
   .sr-only {
     position: absolute;

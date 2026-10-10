@@ -1,10 +1,17 @@
 import { error } from '@sveltejs/kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ load: vi.fn(), save: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  save: vi.fn(),
+  shared: false,
+}));
 vi.mock('$lib/server/career-management', () => ({
   loadCareerManagement: mocks.load,
   saveCareerSection: mocks.save,
+}));
+vi.mock('$lib/server/app-config', () => ({
+  isSharedHosted: () => mocks.shared,
 }));
 
 import { actions, load } from './+page.server';
@@ -24,7 +31,10 @@ describe('Career route', () => {
       sections: [],
     };
     mocks.load.mockResolvedValueOnce(data);
-    expect(await load({ locals } as never)).toBe(data);
+    expect(await load({ locals } as never)).toEqual({
+      ...data,
+      publicProfilesEnabled: false,
+    });
     expect(mocks.load).toHaveBeenCalledWith(locals);
   });
   it('returns an actual save result for visible feedback', async () => {

@@ -23,6 +23,14 @@ jobs:
       TRIAGE_TEST_POSTGRES_URL: postgresql://postgres@127.0.0.1:5432/postgres
       APPLICATION_CAS_TEST_POSTGRES_URL: >-
         postgresql://postgres@127.0.0.1:5432/postgres
+      PUBLIC_PROFILE_POSTGRES_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/public_profile_store_test
+      SHORTLIST_POSTGRES_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/shortlist_store_test
+      ACCOUNT_DELETION_POSTGRES_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/profiles_lifecycle_test
+      OPPORTUNITY_RECOMMENDATION_RANK_POSTGRES_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/rank_schema_test
     services:
       postgres-workspace-transfer:
         image: postgres:16-alpine
@@ -44,7 +52,8 @@ jobs:
       - name: Prepare isolated native database fixtures
         run: |
           for database in analysis_store analysis_ledger public_search \
-            matching vocabulary match_query; do
+            matching vocabulary match_query public_profile_store_test \
+            shortlist_store_test profiles_lifecycle_test rank_schema_test; do
             docker exec \
               '${{ job.services.postgres-workspace-transfer.id }}' \
               createdb -U postgres "$database"

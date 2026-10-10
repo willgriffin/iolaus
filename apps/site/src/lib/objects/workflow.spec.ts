@@ -13,9 +13,11 @@ describe('task workflow board lanes', () => {
       ...lane.columns,
     ]);
 
-    expect(taskKanbanLaneDefinitions.length).toBeLessThan(
-      taskKanbanColumnDefinitions.length,
-    );
+    expect(taskKanbanLaneDefinitions.map((lane) => lane.label)).toEqual([
+      'Shortlist',
+      'Applying',
+      'Applied',
+    ]);
     expect(laneColumns).toHaveLength(new Set(laneColumns).size);
     expect([...laneColumns].sort()).toEqual([...detailedColumns].sort());
   });

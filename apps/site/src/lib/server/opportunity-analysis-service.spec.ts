@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   enrich: vi.fn(),
 }));
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: async () => ({}),
 }));
 vi.mock('./db.js', () => ({ getDbConfig: () => ({}) }));

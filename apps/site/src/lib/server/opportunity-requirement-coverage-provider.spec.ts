@@ -71,7 +71,8 @@ vi.mock('@happyvertical/ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@happyvertical/ai')>()),
   getAI: mocks.getAI,
 }));
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: async () => ({ query: mocks.query }),
 }));
 vi.mock('./opportunity-requirement-coverage-repair-job.js', () => ({

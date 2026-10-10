@@ -57,13 +57,23 @@ export async function ensureOpportunityAnalysisSchema(
   const requirements = sqlite
     ? `(SELECT COALESCE(json_group_array(json_object('hash', json_extract(value, '$.hash'), 'text', json_extract(value, '$.text'), 'kind', json_extract(value, '$.kind'), 'category', json_extract(value, '$.category'), 'years', json_extract(value, '$.years'), 'skills', json(COALESCE(json_extract(value, '$.skills'), '[]')))), '[]') FROM json_each(a.requirements_json))`
     : `(SELECT COALESCE(jsonb_agg(jsonb_build_object('hash', value->>'hash', 'text', value->>'text', 'kind', value->>'kind', 'category', value->>'category', 'years', value->'years', 'skills', COALESCE(value->'skills', '[]'::jsonb))), '[]'::jsonb)::text FROM jsonb_array_elements(a.requirements_json::jsonb))`;
+  const sourceText = (field: string) =>
+    sqlite
+      ? `CASE WHEN json_valid(o.source_content_json) THEN CASE WHEN json_type(o.source_content_json, '$.${field}') = 'text' THEN json_extract(o.source_content_json, '$.${field}') END END`
+      : `CASE WHEN o.source_content_json IS JSON OBJECT THEN CASE WHEN jsonb_typeof(o.source_content_json::jsonb->'${field}') = 'string' THEN o.source_content_json::jsonb->>'${field}' END END`;
+  const sourceLocation = sourceText('locationNotes');
+  // Read enough extra text to redact a contact token crossing the public cap;
+  // the response sanitizer applies the actual 30k/12k contract limits.
+  const sourceExcerpt = (field: string, maximum: number) =>
+    `substr(${sourceText(field)}, 1, ${maximum + 512})`;
   // Public catalog membership fails closed outside known live lifecycle stages.
   // `active` and `new` are retained for imported catalog records.
-  const view = `SELECT o.id, o.id AS opportunity_id, o.source_id, o.company_id, c.name AS company_name, o.posting_url, o.canonical_url, o.apply_url, a.normalized_title AS title, '' AS locations, o.posted_at, o.expires_at, o.updated_at, o.status AS opportunity_status, o.freshness,
+  const view = `SELECT o.id, o.id AS opportunity_id, o.source_id, o.company_id, c.name AS company_name, o.posting_url, o.canonical_url, o.apply_url, a.normalized_title AS title, COALESCE(NULLIF(TRIM(o.locations), ''), NULLIF(TRIM(${sourceLocation}), '')) AS locations, o.posted_at, o.expires_at, o.updated_at, o.status AS opportunity_status, o.freshness,
     CAST(NULL AS DOUBLE PRECISION) AS compensation_min, CAST(NULL AS DOUBLE PRECISION) AS compensation_max, '' AS compensation_currency,
     a.id AS analysis_id, a.source_content_fingerprint, a.source_content_version, a.analysis_version, a.status AS analysis_status, a.normalized_title, a.seniority, a.function, a.work_mode, a.employment_type,
     ${skills} AS skills_json, a.eligibility_json, a.compensation_json, a.summary_json, a.countries_json, a.skill_slugs_json,
-    LOWER(COALESCE(a.normalized_title, '') || ' ' || COALESCE(c.name, '') || ' ' || COALESCE(a.summary_json, '') || ' ' || COALESCE(a.skill_slugs_json, '') || ' ' || COALESCE(a.countries_json, '')) AS search_document, ${requirements} AS requirements_json
+    LOWER(COALESCE(a.normalized_title, '') || ' ' || COALESCE(c.name, '') || ' ' || COALESCE(a.summary_json, '') || ' ' || COALESCE(a.skill_slugs_json, '') || ' ' || COALESCE(a.countries_json, '')) AS search_document, ${requirements} AS requirements_json,
+    ${sourceExcerpt('descriptionRaw', 30_000)} AS description_text, ${sourceExcerpt('qualifications', 12_000)} AS qualifications_text
     FROM opportunities o JOIN sources s ON s.id = o.source_id LEFT JOIN companies c ON CAST(c.id AS TEXT) = o.company_id JOIN opportunity_analyses a ON a.id = o.current_analysis_id AND a.opportunity_id = o.id AND a.source_content_fingerprint = o.source_content_fingerprint AND a.source_content_version = o.source_content_version AND a.analysis_version = 'opportunity-analysis/v1'
     WHERE s.public_listing = TRUE AND s.is_active = TRUE
       AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')

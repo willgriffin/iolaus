@@ -1,5 +1,5 @@
 /** Browser-safe fixed baseline for shared skill canonicalization. */
-export const CAREER_SKILL_TERMS = [
+const TECHNOLOGY_SKILLS = [
   'TypeScript',
   'JavaScript',
   'Node.js',
@@ -58,3 +58,174 @@ export const CAREER_SKILL_TERMS = [
   'API design',
   'Service architecture',
 ] as const;
+
+/** Curated starting catalog, not an exhaustive occupational taxonomy. */
+export const CAREER_SKILL_CATEGORIES = [
+  {
+    id: 'business',
+    label: 'Business & operations',
+    skills: [
+      'Project management',
+      'Operations management',
+      'Budgeting',
+      'Strategic planning',
+      'Process improvement',
+      'Procurement',
+      'Supply chain management',
+      'Inventory management',
+    ],
+  },
+  {
+    id: 'care',
+    label: 'Healthcare & care',
+    skills: [
+      'Patient care',
+      'Clinical documentation',
+      'Infection prevention',
+      'Medication administration',
+      'First aid',
+      'Care planning',
+      'Patient education',
+      'Medical coding',
+    ],
+  },
+  {
+    id: 'trades',
+    label: 'Trades & construction',
+    skills: [
+      'Carpentry',
+      'Welding',
+      'Electrical installation',
+      'Plumbing',
+      'Blueprint reading',
+      'Equipment maintenance',
+      'Site safety',
+      'HVAC maintenance',
+    ],
+  },
+  {
+    id: 'manufacturing',
+    label: 'Manufacturing & logistics',
+    skills: [
+      'Quality control',
+      'CNC machining',
+      'Production planning',
+      'Warehouse operations',
+      'Forklift operation',
+      'Shipping and receiving',
+      'Lean manufacturing',
+      'Route planning',
+    ],
+  },
+  {
+    id: 'education',
+    label: 'Education & training',
+    skills: [
+      'Lesson planning',
+      'Classroom management',
+      'Curriculum development',
+      'Instructional design',
+      'Student assessment',
+      'Tutoring',
+      'Special education',
+      'Staff training',
+    ],
+  },
+  {
+    id: 'finance',
+    label: 'Finance & administration',
+    skills: [
+      'Bookkeeping',
+      'Financial reporting',
+      'Payroll',
+      'Accounts payable',
+      'Accounts receivable',
+      'Tax preparation',
+      'Auditing',
+      'Records management',
+    ],
+  },
+  {
+    id: 'service',
+    label: 'Hospitality & customer service',
+    skills: [
+      'Customer service',
+      'Food safety',
+      'Food preparation',
+      'Restaurant management',
+      'Event planning',
+      'Housekeeping',
+      'Front desk operations',
+      'Conflict resolution',
+    ],
+  },
+  {
+    id: 'sales',
+    label: 'Sales & marketing',
+    skills: [
+      'Sales',
+      'Account management',
+      'Negotiation',
+      'Lead generation',
+      'Market research',
+      'Copywriting',
+      'Digital marketing',
+      'Merchandising',
+    ],
+  },
+  {
+    id: 'people',
+    label: 'People & communication',
+    skills: [
+      'Team leadership',
+      'Recruitment',
+      'Employee relations',
+      'Coaching',
+      'Public speaking',
+      'Technical writing',
+      'Stakeholder management',
+      'Accessibility',
+    ],
+  },
+  {
+    id: 'environment',
+    label: 'Agriculture & environment',
+    skills: [
+      'Crop management',
+      'Animal care',
+      'Soil sampling',
+      'Irrigation',
+      'Environmental monitoring',
+      'Conservation',
+      'Landscape maintenance',
+      'Pest management',
+    ],
+  },
+  {
+    id: 'creative',
+    label: 'Design & creative work',
+    skills: [
+      'Graphic design',
+      'Photography',
+      'Video editing',
+      'Illustration',
+      'Interior design',
+      'Content production',
+      'Art direction',
+      'Audio production',
+    ],
+  },
+  { id: 'technology', label: 'Technology & data', skills: TECHNOLOGY_SKILLS },
+] as const;
+export const CAREER_SKILL_TERMS = CAREER_SKILL_CATEGORIES.flatMap(
+  (category) => [...category.skills],
+);
+export function careerSkillCategory(label: string): string {
+  return (
+    CAREER_SKILL_CATEGORIES.find((category) =>
+      category.skills.some(
+        (skill) => skill.toLowerCase() === label.toLowerCase(),
+      ),
+    )?.id ?? 'general'
+  );
+}

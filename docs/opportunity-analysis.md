@@ -2,7 +2,7 @@
 
 Analysis uses the canonical `sourceContentJson` snapshot only, after recomputing its source fingerprint. Human edits, candidate profiles, application decisions and owner skill labels are not extraction inputs. A separate digest binds exact raw text to citation offsets even when whitespace normalization leaves the source fingerprint unchanged.
 
-The deterministic path publishes a source-derived title, seniority, posted compensation with its original hourly/yearly unit, explicitly cited skills, and quoted requirements. Unknown values remain unknown. Negated skill mentions do not prove a requirement. Source descriptions and citation spans are not exposed by the public catalog view; requirement projections include only their semantic fields.
+The deterministic path publishes a source-derived title, seniority, posted compensation with its original hourly/yearly unit, explicitly cited skills, and quoted requirements. Catalog names and unambiguous aliases are extracted from visible canonical descriptions across professions. Description-only matches are `mentioned`; only evidenced structured source fields establish `required` or `preferred`. Markup, URLs, negation and word boundaries are checked, with exact source offsets retained. Ambiguous prose aliases such as “go”, “JS” and “TS” are deliberately excluded unless supported by explicit structured skills. Unknown values remain unknown. Negated skill mentions do not prove a requirement. Public detail responses include bounded plain-text descriptions and qualifications from the current canonical posting, with markup and contact details removed. Search/list responses omit that text. Raw canonical payloads, citation spans and private candidate/review fields remain excluded; requirement projections include only their semantic fields. Canonical location notes fill an empty location field.
 
 `ensureOpportunityAnalysis(id, { enrich, budgetMicros, windowId })` always establishes deterministic coverage first. Optional enrichment is pinned to `openai/gpt-6-luna`, consumes the existing global/provider governor and a bounded analysis window, and accepts only bounded structured source citations. Invalid quotes, contact PII, unsupported summaries, provider refusal and exhausted budgets retain the deterministic artifact. A live paid sample is still required before claiming the target cost per posting.
 
@@ -20,6 +20,23 @@ pnpm --filter @willgriffin/iolaus-site opportunities:analyze --prune
 ```
 
 The CLI emits aggregate counts and an opaque resume cursor. Enrichment remains opt-in; a requested cap never raises configured governor caps. Source creation and material refresh enqueue native analysis work and establish deterministic coverage immediately. Pruning retains current analyses and analyses referenced by retained requirement decisions; superseded unreferenced artifacts become eligible after 30 days.
+
+## Deterministic skill-index repair
+
+The extractor provenance is `deterministic-skills/v2`; the public analysis contract remains `opportunity-analysis/v1`. Older deterministic snapshots are refreshed on the normal analysis path. Compatible enriched snapshots are preserved.
+
+For an existing catalog, use the explicit operator repair command (no model calls):
+
+```sh
+pnpm --filter @willgriffin/iolaus-site opportunities:reindex-skills -- --max 300
+pnpm --filter @willgriffin/iolaus-site opportunities:reindex-skills -- --max 300 --apply
+pnpm --filter @willgriffin/iolaus-site opportunities:reindex-skills -- --max 300 --cursor TOKEN --apply
+pnpm --filter @willgriffin/iolaus-site opportunities:reindex-skills -- --max 300 --check
+```
+
+Dry-run is the default. Follow `nextCursor` until null for a complete scan; each invocation handles at most 300 public-eligible postings. `--check` is read-only, exits 2 for missing deterministic coverage, and cannot be combined with `--apply`. A failure stops before advancing past that posting; resume with `retryCursor` (or omit it when null). Logs contain aggregate counts and opaque cursors only. Apply atomically updates derived analyses and search indexes, preserving source fields and shortlist decisions. A subsequent full check should report zero gaps. The normal backfill governor and optional enrichment budgets are unchanged.
+
+Search filters match any selected canonical skill. Relevance sorts by the number of distinct selected skills matched, then text relevance and stable date/ID ties. Aliases do not count twice. The public catalog and detail page distinguish mentions from required/preferred skills. Cards include all three kinds; requirement scoring does not treat a mention as a requirement.
 
 ## Focused verification
 

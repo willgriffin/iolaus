@@ -2,6 +2,47 @@
 type Database = {
   query(statement: string, ...values: unknown[]): Promise<unknown>;
 };
+// Keep this list in the original catalog-view order. PostgreSQL's CREATE OR
+// REPLACE VIEW can append columns but cannot insert them ahead of an existing
+// dependent view column (search_vector or generation on deployed databases).
+const searchCatalogColumns = [
+  'id',
+  'opportunity_id',
+  'source_id',
+  'company_id',
+  'company_name',
+  'posting_url',
+  'canonical_url',
+  'apply_url',
+  'title',
+  'locations',
+  'posted_at',
+  'expires_at',
+  'updated_at',
+  'opportunity_status',
+  'freshness',
+  'compensation_min',
+  'compensation_max',
+  'compensation_currency',
+  'analysis_id',
+  'source_content_fingerprint',
+  'source_content_version',
+  'analysis_version',
+  'analysis_status',
+  'normalized_title',
+  'seniority',
+  'function',
+  'work_mode',
+  'employment_type',
+  'skills_json',
+  'eligibility_json',
+  'compensation_json',
+  'summary_json',
+  'countries_json',
+  'skill_slugs_json',
+  'search_document',
+  'requirements_json',
+].map((column) => `c.${column}`);
 export async function ensurePublicSearchSchema(
   db: Database,
   dialect: 'postgres' | 'sqlite',
@@ -110,7 +151,7 @@ export async function ensurePublicSearchSchema(
     }
     // The security barrier enforces current source/analysis visibility before public filters.
     await db.query(
-      `CREATE OR REPLACE VIEW public.jobgeni_public_search_v1 WITH (security_barrier=true) AS SELECT c.*,d.search_vector,g.generation FROM public.jobgeni_public_catalog_v1 c JOIN public.public_opportunity_search_documents d ON d.id=CAST(c.id AS TEXT) CROSS JOIN public.public_search_generation g WHERE g.id=1`,
+      `CREATE OR REPLACE VIEW public.jobgeni_public_search_v1 WITH (security_barrier=true) AS SELECT ${searchCatalogColumns.join(',')},d.search_vector,g.generation,c.description_text,c.qualifications_text FROM public.jobgeni_public_catalog_v1 c JOIN public.public_opportunity_search_documents d ON d.id=CAST(c.id AS TEXT) CROSS JOIN public.public_search_generation g WHERE g.id=1`,
     );
     await db.query(`CREATE OR REPLACE FUNCTION public.consume_public_search_quota(cost integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
    DECLARE spent_now integer; epoch bigint:=floor(extract(epoch from clock_timestamp())/60);

@@ -15,6 +15,7 @@ import {
 } from './ats-posting-metadata.js';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
+import { decodeHtmlEntities, htmlToPlainText } from './html-text.js';
 import {
   llmJsonParseDiagnostics,
   requireJsonObjectFromText,
@@ -674,36 +675,7 @@ function parseUnixSecondsDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-      String.fromCodePoint(Number.parseInt(code, 16)),
-    )
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-}
-
-export function htmlToPlainText(value: unknown): string {
-  const html = decodeHtmlEntities(stringValue(value));
-  return decodeHtmlEntities(
-    html
-      .replace(/<\s*br\s*\/?>/gi, '\n')
-      .replace(/<\s*li\b[^>]*>/gi, '\n- ')
-      .replace(/<\s*\/(p|div|h[1-6]|section|article|ul|ol|li)\s*>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n[ \t]+/g, '\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim(),
-  );
-}
+export { decodeHtmlEntities, htmlToPlainText } from './html-text.js';
 
 function htmlAttributeValue(tag: string, name: string): string {
   const pattern = new RegExp(`${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, 'i');

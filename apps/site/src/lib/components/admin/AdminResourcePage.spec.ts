@@ -1,10 +1,14 @@
 import { render } from 'svelte/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ADMIN_DOCK_CONTEXT } from '$lib/admin/dock';
 import { createAdminListPagination } from '$lib/admin/pagination';
 import { getAdminResource } from '$lib/admin/resources';
 import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
 import AdminResourcePage from './AdminResourcePage.svelte';
+
+vi.mock('$app/state', () => ({
+  page: { url: new URL('http://localhost/admin/tasks') },
+}));
 
 describe('AdminResourcePage task loading', () => {
   it('makes Screening Questions discoverable from the actual Preferences list', () => {

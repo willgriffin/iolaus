@@ -13,6 +13,9 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['src/lib/components/sources/*.browser.spec.ts'],
+    include: [
+      'src/lib/components/sources/*.browser.spec.ts',
+      'src/lib/components/admin/CareerResume.browser.spec.ts',
+    ],
   },
 });

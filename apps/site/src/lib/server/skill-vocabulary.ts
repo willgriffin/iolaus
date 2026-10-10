@@ -8,7 +8,10 @@ import {
   SKILL_CANONICAL_ALIASES,
 } from '$lib/skill-canonical.js';
 import { normalizeSkill } from '$lib/skill-matching.js';
-import { CAREER_SKILL_TERMS } from '$lib/skill-vocabulary-data.js';
+import {
+  CAREER_SKILL_TERMS,
+  careerSkillCategory,
+} from '$lib/skill-vocabulary-data.js';
 import { getDbConfig } from './db.js';
 import { getCollection } from './smrt.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
@@ -123,7 +126,7 @@ export async function ensureSeedSkillVocabulary(): Promise<number> {
         skillSlug,
         label: seed.label,
         aliasesJson: JSON.stringify(seed.aliases),
-        category: 'technology',
+        category: careerSkillCategory(seed.label),
         relatedJson: JSON.stringify(
           seed.related.map((slug) => ({ slug, weight: 0.5 })),
         ),
@@ -288,7 +291,7 @@ export async function publishSkillVocabularyCorrection(
           ).sort(),
         ),
         relatedJson: JSON.stringify(checked.related ?? []),
-        category: checked.category ?? existing?.category ?? 'technology',
+        category: checked.category ?? existing?.category ?? 'general',
         status: 'confirmed',
         occurrenceCount: existing?.occurrenceCount ?? 0,
       } as SkillTerm;

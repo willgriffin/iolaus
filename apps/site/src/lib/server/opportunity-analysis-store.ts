@@ -5,6 +5,7 @@ import {
   type OpportunityAnalysisSnapshot,
 } from '$lib/opportunity-analysis-contract.js';
 import type { AnalysisSourceIdentity } from './opportunity-analysis-source.js';
+import { DETERMINISTIC_SKILLS_PROMPT_VERSION } from './opportunity-analysis-source.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 export type AnalysisDatabase = Awaited<ReturnType<typeof resolveDatabase>>;
 export interface AnalysisProvenance {
@@ -18,7 +19,7 @@ export interface AnalysisProvenance {
 }
 export const deterministicAnalysisProvenance: AnalysisProvenance = {
   model: 'deterministic',
-  promptVersion: OPPORTUNITY_ANALYSIS_VERSION,
+  promptVersion: DETERMINISTIC_SKILLS_PROMPT_VERSION,
   outputSchemaVersion: OPPORTUNITY_ANALYSIS_VERSION,
   requestId: '',
   inputTokens: 0,
@@ -69,8 +70,12 @@ export async function readCurrentAnalysis(
   opportunityId: string,
 ): Promise<OpportunityAnalysisSnapshot | null> {
   const rows = await db.query(
-    `SELECT a.*, o.source_content_json AS canonical_source_json FROM opportunities o JOIN opportunity_analyses a ON a.id=o.current_analysis_id AND a.opportunity_id=o.id AND a.source_content_fingerprint=o.source_content_fingerprint AND a.source_content_version=o.source_content_version WHERE o.id=? AND a.analysis_version=? AND a.status IN ('deterministic','enriched')`,
-    [opportunityId, OPPORTUNITY_ANALYSIS_VERSION],
+    `SELECT a.*, o.source_content_json AS canonical_source_json FROM opportunities o JOIN opportunity_analyses a ON a.id=o.current_analysis_id AND a.opportunity_id=o.id AND a.source_content_fingerprint=o.source_content_fingerprint AND a.source_content_version=o.source_content_version WHERE o.id=? AND a.analysis_version=? AND a.status IN ('deterministic','enriched') AND (a.status='enriched' OR (a.model='deterministic' AND a.prompt_version=?))`,
+    [
+      opportunityId,
+      OPPORTUNITY_ANALYSIS_VERSION,
+      DETERMINISTIC_SKILLS_PROMPT_VERSION,
+    ],
   );
   const row = rows.rows[0];
   if (

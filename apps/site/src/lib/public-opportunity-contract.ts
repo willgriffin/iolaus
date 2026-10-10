@@ -24,6 +24,7 @@ export const publicSearchInputSchema = z
     employment_type: tokens,
     country: tokens,
     remote_ok: z.boolean().optional(),
+    location: z.string().trim().min(1).max(120).optional(),
     company: token.optional(),
     source: token.optional(),
     posted_since: z.string().datetime().optional(),
@@ -87,6 +88,7 @@ export const publicOpportunitySchema = z.object({
   skills: z.object({
     required: z.array(skill).max(100),
     preferred: z.array(skill).max(100),
+    mentioned: z.array(skill).max(100).optional(),
   }),
   compensation,
   posted_at: z.string().datetime().nullable(),
@@ -106,6 +108,8 @@ const requirement = z.object({
   skills: z.array(z.string()),
 });
 export const publicOpportunityDetailSchema = publicOpportunitySchema.extend({
+  description_text: z.string().max(30_000).optional(),
+  qualifications_text: z.string().max(12_000).optional(),
   summary_bullets: z.array(z.string()).max(5),
   requirements: z.array(requirement).max(100),
   eligibility: z.object({

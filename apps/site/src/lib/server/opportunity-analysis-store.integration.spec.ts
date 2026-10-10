@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { getDatabase } from '@happyvertical/sql';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureOpportunityAnalysisSchema } from './opportunity-analysis-schema.js';
-import { deterministicOpportunityAnalysis } from './opportunity-analysis-source.js';
+import {
+  DETERMINISTIC_SKILLS_PROMPT_VERSION,
+  deterministicOpportunityAnalysis,
+} from './opportunity-analysis-source.js';
 import {
   type AnalysisDatabase,
   publishOpportunityAnalysis,
@@ -58,7 +61,7 @@ for (const dialect of ['sqlite', ...(pg ? ['postgres'] : [])] as const) {
         );
       const id = dialect === 'postgres' ? 'UUID' : 'TEXT';
       await db.query(
-        `CREATE TABLE opportunities(id ${id} PRIMARY KEY, source_content_json TEXT, source_content_fingerprint TEXT,source_content_version INTEGER,current_analysis_id ${id}, source_id TEXT DEFAULT 'source', company_id TEXT DEFAULT '', posting_url TEXT DEFAULT 'https://example.com/job', canonical_url TEXT DEFAULT '', apply_url TEXT DEFAULT '', title TEXT DEFAULT 'PRIVATE OVERLAY', locations TEXT DEFAULT 'PRIVATE LOCATION', posted_at ${dialect === 'postgres' ? 'TIMESTAMPTZ' : 'TEXT'}, expires_at ${dialect === 'postgres' ? 'TIMESTAMPTZ' : 'TEXT'}, updated_at TEXT, status TEXT DEFAULT 'active', freshness TEXT DEFAULT 'fresh')`,
+        `CREATE TABLE opportunities(id ${id} PRIMARY KEY, source_content_json TEXT, source_content_fingerprint TEXT,source_content_version INTEGER,current_analysis_id ${id}, source_id TEXT DEFAULT 'source', company_id TEXT DEFAULT '', posting_url TEXT DEFAULT 'https://example.com/job', canonical_url TEXT DEFAULT '', apply_url TEXT DEFAULT '', title TEXT DEFAULT 'PRIVATE OVERLAY', locations TEXT DEFAULT 'PUBLIC LOCATION', posted_at ${dialect === 'postgres' ? 'TIMESTAMPTZ' : 'TEXT'}, expires_at ${dialect === 'postgres' ? 'TIMESTAMPTZ' : 'TEXT'}, updated_at TEXT, status TEXT DEFAULT 'active', freshness TEXT DEFAULT 'fresh')`,
       );
       const textCols = [
         'slug',
@@ -190,7 +193,7 @@ for (const dialect of ['sqlite', ...(pg ? ['postgres'] : [])] as const) {
         await db.query('SELECT * FROM jobgeni_public_catalog_v1')
       ).rows[0];
       expect(projected.title).toBe(source.title);
-      expect(projected.locations).toBe('');
+      expect(projected.locations).toBe('PUBLIC LOCATION');
       expect(JSON.stringify(projected)).not.toContain('PRIVATE');
       expect(String(projected.requirements_json)).not.toContain('evidence');
       expect(String(projected.skills_json)).not.toContain('evidence');
@@ -233,6 +236,44 @@ for (const dialect of ['sqlite', ...(pg ? ['postgres'] : [])] as const) {
       expect(
         (await publishOpportunityAnalysis(other, identity, snapshot)).id,
       ).toBe(enriched.id);
+    });
+    it('refreshes deterministic artifacts from superseded extractor provenance', async () => {
+      const current = await publishOpportunityAnalysis(
+        db,
+        identity,
+        deterministicOpportunityAnalysis(identity),
+      );
+      const obsoleteId = randomUUID();
+      await db.query('DELETE FROM opportunity_skills WHERE analysis_id=?', [
+        current.id,
+      ]);
+      await db.query(
+        'UPDATE opportunities SET current_analysis_id=NULL WHERE id=?',
+        [identity.id],
+      );
+      await db.query(
+        'UPDATE opportunity_analyses SET id=?,prompt_version=? WHERE id=?',
+        [obsoleteId, 'deterministic-skills/v1', current.id],
+      );
+      await db.query(
+        'UPDATE opportunities SET current_analysis_id=? WHERE id=?',
+        [obsoleteId, identity.id],
+      );
+      expect(await readCurrentAnalysis(db, identity.id)).toBeNull();
+      const refreshed = await publishOpportunityAnalysis(
+        db,
+        identity,
+        deterministicOpportunityAnalysis(identity),
+      );
+      expect(refreshed.id).toBe(current.id);
+      expect(
+        (
+          await db.query(
+            'SELECT prompt_version FROM opportunity_analyses WHERE id=?',
+            [refreshed.id],
+          )
+        ).rows[0]?.prompt_version,
+      ).toBe(DETERMINISTIC_SKILLS_PROMPT_VERSION);
     });
     it('serializes concurrent workers from separate database connections', async () => {
       const snapshot = deterministicOpportunityAnalysis(identity);

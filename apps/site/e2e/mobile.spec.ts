@@ -35,11 +35,77 @@ async function openTasks(page: Page) {
   const response = await page.goto('/admin/tasks');
   expect(response?.status()).toBe(200);
   await expect(
-    page.getByRole('heading', { name: 'Tasks', exact: true }),
+    page.getByRole('region', {
+      name: 'Application workflow task board',
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     page.getByText('Fictional mobile task 01', { exact: true }),
   ).toBeAttached();
+}
+
+function navigationToggle(page: Page) {
+  return (page.viewportSize()?.width ?? 0) <= 768
+    ? page
+        .locator('header.smrt-admin-shell__edge--top')
+        .getByRole('button', { name: 'Menu', exact: true })
+    : page
+        .locator('.smrt-admin-shell__edge--left')
+        .getByRole('button', { name: /^(Expand|Collapse) Navigation$/ });
+}
+
+async function expectTaskHeaderControlsReachable(page: Page) {
+  const header = page.locator('header.smrt-admin-shell__edge--top');
+  const navigation = header.getByRole('navigation', {
+    name: 'Main navigation',
+  });
+  const controls = [
+    navigation.getByRole('link', { name: 'Your workspace', exact: true }),
+    navigation.getByRole('link', { name: 'Tasks', exact: true }),
+    navigation.getByRole('link', { name: 'Search', exact: true }),
+    header.getByRole('link', { name: 'New Task', exact: true }),
+    header.getByRole('button', { name: 'Sync recommendations', exact: true }),
+    header.getByRole('button', { name: 'Filters', exact: true }),
+    header.getByRole('button', { name: 'Board view', exact: true }),
+    header.getByRole('button', { name: 'List view', exact: true }),
+  ];
+  const menu = header.getByRole('button', { name: 'Menu', exact: true });
+  if (await menu.isVisible()) controls.push(menu);
+  const viewport = page.viewportSize();
+  const headerBounds = await header.boundingBox();
+  if (!viewport || !headerBounds)
+    throw new Error('Missing header viewport bounds');
+  const boxes = [];
+  for (const control of controls) {
+    await expect(control).toBeVisible();
+    const label = await control.getAttribute('aria-label');
+    const box = await control.boundingBox();
+    if (!box) throw new Error(`Missing bounds for ${label}`);
+    expect(box.x, `${label} left edge`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${label} right edge`).toBeLessThanOrEqual(
+      viewport.width,
+    );
+    expect(box.y, `${label} top edge`).toBeGreaterThanOrEqual(headerBounds.y);
+    expect(box.y + box.height, `${label} bottom edge`).toBeLessThanOrEqual(
+      headerBounds.y + headerBounds.height + 1,
+    );
+    boxes.push({ ...box, label });
+  }
+  for (const [index, first] of boxes.entries()) {
+    for (const second of boxes.slice(index + 1)) {
+      const overlapWidth =
+        Math.min(first.x + first.width, second.x + second.width) -
+        Math.max(first.x, second.x);
+      const overlapHeight =
+        Math.min(first.y + first.height, second.y + second.height) -
+        Math.max(first.y, second.y);
+      expect(
+        overlapWidth > 1 && overlapHeight > 1,
+        `${first.label} overlaps ${second.label}`,
+      ).toBe(false);
+    }
+  }
 }
 
 async function swipe(
@@ -132,7 +198,9 @@ test('authenticated admin routes render without application errors', async ({
     expect(response?.status(), path).toBe(200);
     await expect(page.locator('.admin-content')).toBeVisible();
     await expect(
-      page.getByRole('button', { name: /: (Open|Close) navigation menu$/ }),
+      page.getByRole('button', {
+        name: /^(Menu|(Expand|Collapse) Navigation)$/,
+      }),
     ).toBeVisible();
     await expect(page.locator('.resource-action-feedback.error')).toHaveCount(
       0,
@@ -243,27 +311,26 @@ test('archives orphan, approved, and in-progress applications through the dedica
   }
 });
 
-test('logo navigation can be opened with a keyboard, used and reopened', async ({
+test('navigation menu can be opened with a keyboard, used and reopened', async ({
   page,
 }) => {
   await openTasks(page);
+  await expectTaskHeaderControlsReachable(page);
   const panel = page.locator('.admin-tenant-panel');
-  const logo = page.getByRole('button', {
-    name: /: (Open|Close) navigation menu$/,
-  });
+  const logo = navigationToggle(page);
   await expect(logo).toBeInViewport();
-  await expect(
-    page.getByRole('button', { name: 'Expand navigation', exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole('button', { name: 'Collapse navigation', exact: true }),
-  ).toHaveCount(0);
   if ((await logo.getAttribute('aria-expanded')) === 'true') await logo.tap();
   await logo.press('Enter');
   await expect(logo).toHaveAttribute('aria-expanded', 'true');
   await expect(panel).toBeInViewport();
-  await panel.getByRole('link', { name: 'Opportunities', exact: true }).tap();
-  await expect(page).toHaveURL(/\/admin\/opportunities/);
+  await expect(
+    panel.getByRole('link', { name: 'Opportunities', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole('link', { name: 'Tasks', exact: true }),
+  ).toHaveCount(0);
+  await panel.getByRole('link', { name: 'Applications', exact: true }).tap();
+  await expect(page).toHaveURL(/\/admin\/applications/);
   await expect(logo).toHaveAttribute('aria-expanded', 'false');
   await logo.tap();
   await expect(panel).toBeInViewport();
@@ -276,7 +343,7 @@ test('task cards have usable height and respond to a vertical swipe', async ({
 }) => {
   await openTasks(page);
   const list = page
-    .getByRole('region', { name: 'Intake & Decisions', exact: true })
+    .getByRole('region', { name: 'Shortlist', exact: true })
     .locator('.task-card-list');
   await expect(
     list.locator('.task-card').filter({ hasText: 'Fictional mobile task' }),
@@ -301,6 +368,16 @@ test('task board responds to a horizontal swipe across lane headers', async ({
   const board = page.locator('.kanban-board');
   const height = await board.evaluate((element) => element.clientHeight);
   expect(height).toBeGreaterThan(80);
+  if (
+    await board.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    )
+  ) {
+    await expect(
+      page.getByRole('button', { name: 'Collapse Applied', exact: true }),
+    ).toBeInViewport();
+    return;
+  }
   await swipe(page, board, 'left', true);
   await expect
     .poll(() => board.evaluate((element) => element.scrollLeft))
@@ -376,14 +453,14 @@ test('eligibility bucket filters share the list query and survive a reload', asy
 
 test('app settings use the full mobile width', async ({ page }) => {
   await openTasks(page);
-  const logo = page.getByRole('button', {
-    name: /: (Open|Close) navigation menu$/,
-  });
+  const logo = navigationToggle(page);
   if ((await logo.getAttribute('aria-expanded')) !== 'true') await logo.tap();
-  const account = page.getByRole('button', {
-    name: 'Open account menu',
-    exact: true,
-  });
+  const account = page
+    .locator('.smrt-admin-shell__edge--left')
+    .getByRole('button', {
+      name: 'Open account menu',
+      exact: true,
+    });
   await expect(account).toBeInViewport();
   await account.tap();
   await expect(
@@ -425,7 +502,9 @@ test('application review actions fit inside the page', async ({ page }) => {
   await review.tap();
   await expect(page.locator('.review-header')).toBeVisible();
   const width = page.viewportSize()?.width ?? 0;
-  const actions = await page.locator('.header-actions').boundingBox();
+  const actions = await page
+    .locator('.review-header .header-actions')
+    .boundingBox();
   expect(actions).not.toBeNull();
   if (!actions) return;
   expect(actions.x).toBeGreaterThanOrEqual(0);
@@ -496,6 +575,16 @@ test('horizontal swipes over lane content reach later lanes', async ({
   const board = page.locator('.kanban-board');
   const height = await board.evaluate((element) => element.clientHeight);
   expect(height).toBeGreaterThan(80);
+  if (
+    await board.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    )
+  ) {
+    await expect(
+      page.getByRole('button', { name: 'Collapse Applied', exact: true }),
+    ).toBeInViewport();
+    return;
+  }
   await swipe(page, board, 'left');
   const offset = await board.evaluate((element) => element.scrollLeft);
   expect(offset).toBeGreaterThan(30);
@@ -506,9 +595,7 @@ test('navigation remains reachable after reload and viewport changes', async ({
 }) => {
   await openTasks(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  const toggle = page
-    .locator('.admin-app-bar')
-    .getByRole('button', { name: /navigation menu$/ });
+  let toggle = navigationToggle(page);
   await expect(toggle).toBeInViewport();
   if ((await toggle.getAttribute('aria-expanded')) === 'true')
     await toggle.tap();
@@ -517,13 +604,15 @@ test('navigation remains reachable after reload and viewport changes', async ({
   await toggle.tap();
   await expect(page.locator('.admin-tenant-panel')).toBeInViewport();
   await page.setViewportSize({ width: 1280, height: 800 });
+  toggle = navigationToggle(page);
   await expect(toggle).toBeInViewport();
   await page.setViewportSize({ width: 320, height: 568 });
+  toggle = navigationToggle(page);
   await expect(toggle).toBeInViewport();
   await expect(page.locator('.admin-tenant-panel')).toBeInViewport();
 });
 
-test('short task pages allow the toolbar to scroll out of the way', async ({
+test('short task pages scroll the board while header actions remain reachable', async ({
   page,
 }) => {
   await openTasks(page);
@@ -535,11 +624,21 @@ test('short task pages allow the toolbar to scroll out of the way', async ({
     ),
   ).toBeGreaterThan(30);
   const before = await main.evaluate((element) => element.scrollTop);
-  await swipe(page, page.locator('.task-toolbar'), 'up');
+  const bounds = await main.boundingBox();
+  if (!bounds) throw new Error('Missing task main bounds');
+  // Scroll the outer page gutter, rather than the independently scrolling lane.
+  await page.mouse.move(bounds.x + 2, bounds.y + bounds.height / 2);
+  await page.mouse.wheel(0, 300);
   await expect
     .poll(() => main.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(before + 30);
   await expect(page.locator('.kanban-board')).toBeInViewport();
+  await expect(
+    page.getByRole('button', { name: 'Filters', exact: true }),
+  ).toBeInViewport();
+  await expect(
+    page.getByRole('link', { name: 'New Task', exact: true }),
+  ).toBeInViewport();
 });
 
 test('triage uses the mobile viewport and keeps scrolling and actions reachable', async ({
