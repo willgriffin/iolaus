@@ -1,509 +1,524 @@
 {
   "schema": 1,
-  "createdAt": "2026-10-08T00:06:15.193Z",
+  "createdAt": "2026-10-10T07:26:25.082Z",
   "diagnosticDirtySourcesAllowed": false,
   "sources": [
     {
       "path": "../sdk",
-      "commit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
+      "commit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
       "dirty": false
     },
     {
       "path": "../smrt",
-      "commit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
+      "commit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "dirty": false
+    },
+    {
+      "path": "../smrt-retention",
+      "commit": "0bcf22c2a9202fe9cc7b75df6baa36ce871802f8",
       "dirty": false
     }
   ],
   "packages": [
     {
       "name": "@happyvertical/ai",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/ai",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-ai-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-ai-0.102.3.tgz",
-      "sha256": "a0ddbcc6aa24ab59adfab3daaadb9d296077bce3328499f8aee5b4678ff02c0c",
-      "sha512": "CPGjZp6jC/8trGBW/feDQQR96FBpLo8FHqHODKzmJf5/WtyKyz/bAt3Sgm0BFOUN7Nsw3Att2UhkHEv0wFsVeg=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-ai-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-ai-0.103.1.tgz",
+      "sha256": "dd161dd7639ae5544db7675dd413b4702d322eeb08b5faacf7a912af4de9d29a",
+      "sha512": "jQnZTEbCg9yAk5rE2A33YTOV24ys5T9+eBya6JFL04lh1lSHqElvtb9l3DdA6rcV25rBGZCBobGvvHXy0sjmuw=="
     },
     {
       "name": "@happyvertical/auth",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/auth",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-auth-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-auth-0.102.3.tgz",
-      "sha256": "791e5113f9ac5e4df2bff7ee2cfd01f20eb2a99c487873a8d12bbe33fa2a4caa",
-      "sha512": "C5fw6I4iYRLWto7n4JBd+NofBrt1RjggjITiL27Aok0il5spcVFfncbxoIel35AmM/Joeo4RML3Nt2YMlb9nrQ=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-auth-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-auth-0.103.1.tgz",
+      "sha256": "7fd08b5017c32ed04b35590a2370becc28949cd6f87cbc44baf1dd8d98119d17",
+      "sha512": "o9xFlVDTaN393xRDRi1L00ez+6141iTJk61116Bh1XbTaWe7oMw1f2sxmSbjUSg9O5Sf08U9R0VQ6o/YpTg0dA=="
     },
     {
       "name": "@happyvertical/cache",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/cache",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-cache-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-cache-0.102.3.tgz",
-      "sha256": "6a2a228422abb83ec5dfdf2d5bb89b5f190e9a0e26dbfccace3ad2a5cb8a54a7",
-      "sha512": "nP9C8Lroc4ZsOVUJMBBCBY6EXMCnkjBtA+JQu3yEuUHqdlZ44jg6lC3YFonhQMKAAMKasu0eelp9IxWtGu39UA=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-cache-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-cache-0.103.1.tgz",
+      "sha256": "e002aca9ab57d0aa9bd2a3b9813de2650264d19aad58c50559d49ba8896abb63",
+      "sha512": "hAMN8/jcbRAnMYDFJkz1v/boOUkm+7EudXvv87DX4yS5EYGBPg2JP2P6d30N9hJpokO6j14AOALSgep3Howy8w=="
     },
     {
       "name": "@happyvertical/email",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/email",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-email-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-email-0.102.3.tgz",
-      "sha256": "8d48704f7c03c720350a36a528dec21ebc4ec29ca38bd90beec60efb1d8ccc23",
-      "sha512": "ElnGCS+iF+86jbSb81iMtS9cqB92El5ByVpS2F/74L81jVsHx4XBLjI6QbLbZD7um0WFYiSDjUvLg7TiXtTH4A=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-email-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-email-0.103.1.tgz",
+      "sha256": "889c630590a43b779a15a874815e882b1b3775eb7c2fee4b0507260098b71ce1",
+      "sha512": "IhMemsSVQEYPL1NYNWjgLUKUivt16ACkn/RM8fGxmfdsLXQIPSugmPvIkvov5xpwQxmqXeW9z32JyWJZjZGauA=="
     },
     {
       "name": "@happyvertical/encryption",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/encryption",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-encryption-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-encryption-0.102.3.tgz",
-      "sha256": "933d28e9a5f461736a44b6e705b5c816e5744da512d38736a6b1fb4b61de5473",
-      "sha512": "ntJjAQl6usFILpbmfp5WeFv/2jKnK425GKsO9e7N8w3MKk+7TRx7LifOBNqNG/bhSENrMprHBCRLIL83dpmE5g=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-encryption-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-encryption-0.103.1.tgz",
+      "sha256": "6384ec3bba66c627aa42a5394fdfd50b4e32d297d81496559dc52ca0e5790a2c",
+      "sha512": "DCCeZta7A4lmQwcvu+WRuzENj2mgYJXzd6BFKOD4By/c+M8EChaXctDhCjY1E7boqcr8BX/mIEs6+RrJLJDfXw=="
     },
     {
       "name": "@happyvertical/files",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/files",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-files-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-files-0.102.3.tgz",
-      "sha256": "b078dfbf7a2a5d7835033ecae901018844e1dd4329ff73ee37ce3fad1cf7e988",
-      "sha512": "llqa5L8McYi5RFrIQnNYP50VFOZW5Dgoe5FX2FpQNRZv3V/jQ5lQ5Od+4ceeHrZYCYavMt7BxKhLvGh+zZ+FlA=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-files-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-files-0.103.1.tgz",
+      "sha256": "518c1cc7e00b8bc15baf59821aad43cb017cf9eb69aa4f6af4e6d27c6036d50d",
+      "sha512": "7ZiIF58gKdjNuaiklrGvKa3abIUNDAV5bYaxoU5l9xE5tX3Wb6sAEtUS6cVeARUfle9mvqIY0IWi9UqGQ3fc1Q=="
     },
     {
       "name": "@happyvertical/geo",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/geo",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-geo-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-geo-0.102.3.tgz",
-      "sha256": "3790ad75a57e3f8d2b18a5dac722cbd7d766f3bef1e2e6db7fdef4a72a5fdef1",
-      "sha512": "/aSQhQstvE+NvPoHmLr90frXeebi+Ml9mc6nb5nbz4zfxp1S8tcUSKfDmLt1HGAiU2SL+1yLL2vjXJcpXaeYWg=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-geo-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-geo-0.103.1.tgz",
+      "sha256": "9dedcca5681d75f8d182d29b8f2354fb0f36d2f7e920028c58b6dddca02d1109",
+      "sha512": "xTB6ZTrm2LBkTYx4SUiycl5DvV7NPoFTxBrlpbpd5IffOLuE2AM9hTzoA2KWHYqSDkkJynmAmGEOB7KECC95aA=="
     },
     {
       "name": "@happyvertical/jobs",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/jobs",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-jobs-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-jobs-0.102.3.tgz",
-      "sha256": "6f737b63f02a1d063ec7fcea738d4563a9681fed2c2df257a1935bf7449ccca1",
-      "sha512": "nmeJ+1I8G6xPIB9jZGu/+2aL25UfzppfvXz8qgk298fpBFJNCJRvypVvWIILpytcpfqu/sLBwh/Lfwe3DMXU+A=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-jobs-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-jobs-0.103.1.tgz",
+      "sha256": "b9689598fa05486664f39cdbc493481f6e0193ffa33fc5d437333ce0aeb1ee09",
+      "sha512": "XDarTae+bt/NSiSHEJ0KVcXZ0eh19o8fw+YbBaLzALH4RmvnqGwGJ8h6lVzisW2j9d0DAij29sTvLkqhAIxCNw=="
     },
     {
       "name": "@happyvertical/json",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/json",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-json-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-json-0.102.3.tgz",
-      "sha256": "c4ef2cf292c831abbc1aa9743671520ffbc3e77fbde1285e7056804045aa432c",
-      "sha512": "zTcHUdPgtvEa32OwFz6X//IoHTAmkr7mBTm9mQD8nHOnDbsLdfelYVk4I01AB+Rr39fa7uoz24oo9bUuB/xpyg=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-json-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-json-0.103.1.tgz",
+      "sha256": "0340ebe05312080e38679f38f2292a041730091996e8fdbe1478d9fe6e7ec0eb",
+      "sha512": "e6KyGV6WjHtLc4cwMmzc4qUFoFPSLbCG5t4am0mfLswVu9aaQw+GapnkLCwIaVsCJRq4QfGvIv/JW+WZfKC0RQ=="
     },
     {
       "name": "@happyvertical/logger",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/logger",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-logger-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-logger-0.102.3.tgz",
-      "sha256": "02cf6c830faabfc49bc1b285851439bc2fb9a249e836a29ebcb77e21481b8af7",
-      "sha512": "8ZHP/WcNalx3chLunxjJUcw8vWSQh84lRy+57xa8oVlcyZ3LZSudZXUEX2HqUma9U2nwAe8QdVEIK340kV+n2Q=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-logger-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-logger-0.103.1.tgz",
+      "sha256": "d1aaf53c132aaab0002b7e73bd53627eeb0d3132bb96a57de23be65249cb3f7d",
+      "sha512": "sa4UY9iAu60nmXai2DmqRbDYy1ePQtnY9kfzWOYNELVII2ocJcZGalBg5ZBtrZ5LpjnGQXp0m+cUFLDT0avhaA=="
     },
     {
       "name": "@happyvertical/messages",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/messages",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-messages-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-messages-0.102.3.tgz",
-      "sha256": "e6ce783c27f5f91c20da768d703e36eea0b88f7d6510c2d1d50c22e0e0b71ed9",
-      "sha512": "NLP/JhUd26lRZ28jaz5tRvHaDaqCMniruYj5aSSLU2gquKECOqA2yqEzP1BMad4cknXATsndlg7J/1lZ49SJLA=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-messages-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-messages-0.103.1.tgz",
+      "sha256": "1129353b12db478fccf968a8407ac8c3190d24f21e6830dddfd1ce6908fc7646",
+      "sha512": "6uvaiwYqR+jXTBW38/YSB8U8utsuaTR+k3RkOtjretSmdfRTA3VYiZstnBb4otDOJg0nYrDG0CAbDB3b/2W4Nw=="
     },
     {
       "name": "@happyvertical/secrets",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/secrets",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-secrets-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-secrets-0.102.3.tgz",
-      "sha256": "84992dd96fc09bb01d785ca1b79d9658b9a0e7422b55903b2904d60714fc1882",
-      "sha512": "VAgZQqWz/5S631jOhnYXdGKA3UBk6wJY9ARl/3RHG74mUvDpVFv8steywXPTqI/XVxNpYBnq3/W9DxLsKxJfwg=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-secrets-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-secrets-0.103.1.tgz",
+      "sha256": "4f1a93889b611b6900b4af6bcaae0e8e03af5a523a79ab141acef6beb180fd72",
+      "sha512": "OoHvT1XnYFN8OusMO4g0L8PWAQsVZhTZp2NR6YoHRqDF6WkplVBsIOzNmjp5QLy6JIAMpO6KoBjO6e3kWCcgwg=="
     },
     {
       "name": "@happyvertical/smrt-agents",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/agents",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-agents-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-agents-0.55.3.tgz",
-      "sha256": "686233f6e9d7ab503483ce5076cdca3adf870a0bae59b7866078a40d2fe03b14",
-      "sha512": "pwsQtKhUBUU5cdRWDo/mjo79iftmkdzLZKwp63yXtdCSzXwy3KUIRlEc6hY0R/1zB8ERmgVqX0k1aPMuIJ+arw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-agents-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-agents-0.55.9.tgz",
+      "sha256": "2b5c50537a34c3d8c9cfa6ac3b587ccf9bee72976c7ba8cac4c121926ec95b12",
+      "sha512": "atX5POxK73581+YRW9ayQ15Z5ac79yFTMSvHIIr1kBwKjpZ8/IpAMZYzzZbDZ9sHQqhYWza4QTVhbW2lnf486Q=="
     },
     {
       "name": "@happyvertical/smrt-app-cli",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/app-cli",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-app-cli-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-app-cli-0.55.3.tgz",
-      "sha256": "767588ffc1ae72816ffcd79cdf21b8df5c807848a31ac68923e723c6e81dfb3e",
-      "sha512": "Sf/3DDiXbiZZJPhLnd59JL22pV/YMJLFMgb/2Yg2dFOD881cZfIwdoNYF2CWObGUs2ygV6f6L28FfFxMdFRHXw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-app-cli-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz",
+      "sha256": "2dece0b6c4b3569bba8438324da674d9026ea46a62a72d2c6ba8b4b716beba85",
+      "sha512": "ZT6AdHqkgdkHoU2IMc5YHA3fP3TsClWPzcu8LPeN9vnVnYW1aQMgokvII8COuyGooEmrlVB98HWXNrTPHl7Tgw=="
     },
     {
       "name": "@happyvertical/smrt-app-mcp",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-app-mcp",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-app-mcp-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.3.tgz",
-      "sha256": "8fe2decd0db944c3ef4726ac2b9f6944c1adbd398ebeb6de7ba1b8299906ac34",
-      "sha512": "9eV9bbaSFaA/vcDr7Dgbx2klgWNYeMIv1j8S3KyvbvhIk+hYRFUgDlhrGmX5dEeYBC5XxozadHV1+PfjTvCwhg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-app-mcp-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz",
+      "sha256": "00a14e48767e000838ed9da9e52ddfb08da73977e9d0d81c2159977481344c4d",
+      "sha512": "PGJ4iL0OZXCg0gjzcNP7a6GXSLjBSK3Px8l1KsiLcxwvwjo5tMsyC3CxpgSNJzR2UmgQlQlg1Fjbk1XBJ+Df7A=="
     },
     {
       "name": "@happyvertical/smrt-app-runtime",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/app-runtime",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-app-runtime-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
-      "sha256": "a85596755e7a6a68297fa3e80c03182843a229636ef2abcc3e9589086528ce02",
-      "sha512": "jGVRs0z0lBkjQOhE570U+gUYZsYpgcFs6dyDoEWU+s8tux2P0VDWnD+0Km6+Unyk2AZ8c604aaPgoU5UNOeo+Q=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-app-runtime-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz",
+      "sha256": "1c50a82982a1badf70beb446f3299588b2f19b7d7cadecdc69e3eee05f3d40a9",
+      "sha512": "N95tzdz24eTYovQLioBPWaj/vrR6VcVJj6rVWaI519eyYlQJKzipfklauscfXYXeQ2IFNvKdJY525/groVOocw=="
     },
     {
       "name": "@happyvertical/smrt-assets",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/assets",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-assets-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-assets-0.55.3.tgz",
-      "sha256": "780d9956dc499746ea1b9387b6a3e9baeb4895a14f6f169be5bda8dbccbac180",
-      "sha512": "BmOujBO2cbFmNP6i2FVz/1W/IMvkLLXSMs9tCLzwhzo+ndpurNOeUZ1OWCZTLAdDz/jRCU+DIK8WRelONRTyag=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-assets-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-assets-0.55.9.tgz",
+      "sha256": "e2c06f67bda7c26a730bdb10415e533549bbc8e1bd0b8d89de2d21b0d1651b15",
+      "sha512": "P2sXlCnXG1UKkI0WA8FKO9AcX/D89JdGOWlg54TnWkmY4Kt/njX2RSQh+c6GB/p/v6TjnYOmZ4+UACmXBIFB8w=="
     },
     {
       "name": "@happyvertical/smrt-chat",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/chat",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-chat-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-chat-0.55.3.tgz",
-      "sha256": "a9e71e176405ae5b7705f6828fc6381c45bb671acda9391f4e4ebb8a5f7fbc01",
-      "sha512": "XCdMl8/x6dDYE7ZnRqj1ZzxOA38d0DTtljE7MRSaQ3Vvob4IqqY6fpHyHhFe/81U+UWNP3Vfb/MWHqQDKgu1Yg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-chat-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-chat-0.55.9.tgz",
+      "sha256": "f656b97f67b4ace837b38466d376ca7f412518e288e5c313add473a54b34b7f9",
+      "sha512": "xE58Sep7mRHQR7bj7wqdxI3FdNwXEVkBP0TxMh9LkFa4X9cYrvo0nzx1S+PE2mPYoETnPPB3zWvgnr5TmI79OA=="
     },
     {
       "name": "@happyvertical/smrt-cli",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/cli",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-cli-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-cli-0.55.3.tgz",
-      "sha256": "3e416c00ec8d2bedc7d69d34617d21ddab59acacf8d9d4fd5642ce504b4dfffb",
-      "sha512": "xITGt9UgEoVraPWtlBzRh4bBqxKY99jzWxjnHoZORE6uihLLOdkpD53MaJUX3u78saAXzWVdZFFdsvQ3k7+m/A=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-cli-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz",
+      "sha256": "cca4b76a070a1078665f896b83961aa8d79da40c639c289489d172080af30951",
+      "sha512": "L5bLq38YNYp1eT1A4cmgCu4WEzKtH4F7BXmee2wl3i5cQ0EQBEoi2mI6S/sXO+BcmTp0nyH3fFZTiNsRJj3fdw=="
     },
     {
       "name": "@happyvertical/smrt-config",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/config",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-config-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-config-0.55.3.tgz",
-      "sha256": "5bff44ec918cc4d9c5d43cdcd9f9bd6e5b5cc25a83777e783c62d7292606e0e0",
-      "sha512": "kvCMaYsAOESztIUCeaA8UnbQb9h/JhDxaasgjOo6WsMtPj53k3vWHkkim+zj8jt74BQsU3jUSLLmsM9k5lAdGw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-config-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz",
+      "sha256": "b447c9a425d201fdba3b92b9b12486998533b1c7e1be29e69bde253310072641",
+      "sha512": "NrqUF3hSYglULnhCL/mH/t2iGyp0AWTlM9K+PKGDw5t8pGzhbIVZ84kw6nfy8jOtM5wKyF8LymbEu3woWMJF5Q=="
     },
     {
       "name": "@happyvertical/smrt-core",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/core",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-core-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-core-0.55.3.tgz",
-      "sha256": "22c4757ad4f9b79805b180c5648d7f0c9271f8d44ec31318fdf6feb271d9cf4f",
-      "sha512": "5W9jGqD/h30OwDMI+F4snolh4OjbDt8CA+mjwo4Ro2TRuB3zlOVgGGmbax+7WTaMsN0V5XEbcD9K2NQmmAyP9g=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-core-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-core-0.55.9.tgz",
+      "sha256": "bfed2d2531fdfdccd92a215ce062b1755a10c0c910232f99f9f8d2f41eb5d7ec",
+      "sha512": "5Q8qvMLItOs06x4tHamekBJdgRTFBEGot4vnlmGVsAwpRbzWWgLMpANepeYS+JHHnU7dloxaHXtCpn5yLLBs1g=="
     },
     {
       "name": "@happyvertical/smrt-dev-mcp",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-dev-mcp",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-dev-mcp-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.3.tgz",
-      "sha256": "c0d44a16a8b0557292850b6eac5281611ad953838bb92493b054d55587341654",
-      "sha512": "QYCOme401r/Sd62oPHboTRcD8hLfcVq5AfYY8g2Vh4xx0dMstSfjLxB3bOBohqfYbeYSjO00gchIBW/c1X3k4Q=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-dev-mcp-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz",
+      "sha256": "eb1cb9e3b4cbdd9de685512d01fab6a4e0613caa055d2a0ad7d2a41394885600",
+      "sha512": "rlD2yYGWz8bWz1aZPfmvZ6jevVZHWgQ1FSwTiyBwsCufH9kSneD4fotC49vjtt9Me1qApb7EWjcbc+h0lC6Pfw=="
     },
     {
       "name": "@happyvertical/smrt-facts",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/facts",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-facts-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-facts-0.55.3.tgz",
-      "sha256": "f5f2032cf0b8f420cec26cf98c0db7a38e220237ec47775c4cbf60ab91175fe6",
-      "sha512": "YFxMyjIqUQZv8LZdDjiLffl2NcwBt5apRrQEZLL0skXmL58y1LSePfyCbnHX++g9QcnGBJFsaW55QSAIM5ZKGw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-facts-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-facts-0.55.9.tgz",
+      "sha256": "b7b90c52e566271282f81593764c6703e9f4f425e4f848806d386fb4c08a44cc",
+      "sha512": "2qU1MhL6JCeDn5ZD40+/A0bA8ydfL0GOGJ32XVehxqhyji7nDBJX6beTWs2nA8Mzkz3tFnTm7es6LSmk5DkpTg=="
     },
     {
       "name": "@happyvertical/smrt-features",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/features",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-features-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-features-0.55.3.tgz",
-      "sha256": "5254753609a7223e5405f3f808571d6be17a39c432a0f89cdc3b6bc3324b6d46",
-      "sha512": "ECUprvCojMc/siJirCXSr1EV7Ze1BM8e3519FtSo8WRW7/GUKduY7tB/+rDyPQw8pFy1Hi7A5FWEh7CO6Oddmw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-features-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-features-0.55.9.tgz",
+      "sha256": "6a2f6e79ced882e717ae201098253a35cdd3571778a9d06e560f208875fe1028",
+      "sha512": "WfEWg87CB/EagJCNOk9qAqU9eseLiasZt/LT956aH9L3SnTp3Nw/or6k6zCv7+fQ2e47L9MYd071ZiePg8YKDA=="
     },
     {
       "name": "@happyvertical/smrt-jobs",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/jobs",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-jobs-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-jobs-0.55.3.tgz",
-      "sha256": "d3d7584c04dad43f4610bc41bdf34ed8b483e32783f0deb478b1af98cb648804",
-      "sha512": "dyDnMbOu+Uh10TtoiySxpYNHjV8zDguk6k06D7JonAfYrX1HNBCIdcBRrT+CAwhK6sn2vGMlTMQKzi7tp9zZvA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-jobs-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-jobs-0.55.9.tgz",
+      "sha256": "744a372ed26c87efa96f7f486bd67677173184a4f4332861a2f161fac7ac9172",
+      "sha512": "zrqe3OC+Wbp/xfS1cHAC3ZL0QmHH6yq5jMe3L2dfhoJUZrxKmUKfWIK1qqeQdIUWsjnQwJeI0NYmmpcHmajpmQ=="
     },
     {
       "name": "@happyvertical/smrt-languages",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/languages",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-languages-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-languages-0.55.3.tgz",
-      "sha256": "b0e88db55404199acd6248c5362b4ce0099d07047aa42d3df99f58d856f0fa0b",
-      "sha512": "tq/0yHLpqeykktwB6F/4JlrPHTufRQpbh5cQ6teawifunGMUJpvftgscbxaZtewWD88QDGD3S/FpVzAgid9umA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-languages-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-languages-0.55.9.tgz",
+      "sha256": "f2c2a85948b98d060411f813a43992403c97d2d74415b0c2d1b9d8fb60b031cd",
+      "sha512": "h332GQeMejDRJ+r3sKn1zJUKsXw5ZYqSHxPLiLi7E7eOoCoFX/i9x31X2ZQ6hCkU8tFccKO9hjRZrdyTCpHNCg=="
     },
     {
       "name": "@happyvertical/smrt-ledgers",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/ledgers",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-ledgers-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-ledgers-0.55.3.tgz",
-      "sha256": "9ac52ec6b646876bfbde148e80761401b21b09983d286876b1e616a315ec2361",
-      "sha512": "KBui6vnrkOnfn9DVLwduOBPAtZ1Ds/8XyDUyomrXCi6Ep++nJ1RL+zez9/aLN5c85dvaKf8ZCJhfYnzelj8s4A=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-ledgers-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-ledgers-0.55.9.tgz",
+      "sha256": "a0252c19bf14dca4455b76ebd16ac060556bf8b36e814f3dfccdf77aed5b4414",
+      "sha512": "Z385IUHkmxhIhucfzmQfo6tQ4jG5MeZItN5Eh9YhOcKBdiAewGn+82B+V4ORFzmmWeoIjd1fP+LcYyNJB5eDNA=="
     },
     {
       "name": "@happyvertical/smrt-mcp-apps",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/mcp-apps",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-mcp-apps-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.3.tgz",
-      "sha256": "ca316d9a5595cc9ad88971198aa21eb1509b01077b00744c22ed7b21ff8087e8",
-      "sha512": "O2+Iy5OZBzC7NWbvyLJN/xBo00193D8Gbd9waJDk9TPinZBSIiZFG2sZSc57Z8E0fnlPFfVRXWJFBZEgmol0vw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-mcp-apps-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz",
+      "sha256": "ac2ee8f6f00ee568a95e064292185067d5f4cdbd6f3ae055b14bc994fb3cec99",
+      "sha512": "CriljSkNnrr8gBx0hJ4H/OOl4tVmMcbC3BcWzgQHph0B4Y71q5vyRNPJKYwAKVKE3v7clSGDouUA0PLno2RIGQ=="
     },
     {
       "name": "@happyvertical/smrt-mcp-openai",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/mcp-openai",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-mcp-openai-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.3.tgz",
-      "sha256": "f78188417318b7d34efc658c6ce5183818c6fa61154d02fc4419c530c65b9c6f",
-      "sha512": "JC1HAUwJfskNdiYmIOgFklVs4k7lxuNrhNZT2fG770OafT5PZQ4pDxQj9/9OXf7jRBWK5IuZcwWi+sbblgDzSg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-mcp-openai-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz",
+      "sha256": "4596c07a96932b44e8ab20edb846157030d7fb3442a603e02bf990f8fc56afa6",
+      "sha512": "+5ZhXImglBCfu3cM5oGn18IzVdZHMPLMMjMnL1q/wjl2DEBkOereQ72qtCsWTj9rd/TmnitEpBzZlziAvQwadA=="
     },
     {
       "name": "@happyvertical/smrt-messages",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/messages",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-messages-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-messages-0.55.3.tgz",
-      "sha256": "fca13eb32477e8da02185d6a6fe61039a22ac5ecb788e5b14220e9de682b790d",
-      "sha512": "Hj4uNzO7nJ7wYS0XQHnV2BbwReez7Mo4s2l2eZ40sYB2hEi3H2oy1WsnbS6+zwaEs3aPjiTJaF0x9h8MihQURg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-messages-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-messages-0.55.9.tgz",
+      "sha256": "4d93063a8ea15bc1029b521b4a7c0e3854384d69859d4efda2f2c1b4e5aa431c",
+      "sha512": "6NFfqduElE+gFgoBU7NWJix4ovElYkkqOfgSAlOPeU7oZWG1q2OISiDw+GpIi+kr6v7ElNzlAJGkN4I7bgjsKA=="
     },
     {
       "name": "@happyvertical/smrt-mobile-contract",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-mobile-contract",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-mobile-contract-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.3.tgz",
-      "sha256": "95aaeb6c58b624c398ee8e11e06417f9b44ec5c33ceae99f343648d9293ef348",
-      "sha512": "gy4PnCOqsgMzEq3w0Akd5b6S8SfXKAwBti3EhWWWN/xj7WBUAmAkmEU9h30bbXVHsqGq7knbXVbFueqVRORc9Q=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-mobile-contract-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.9.tgz",
+      "sha256": "9e1f5030ee3732b91003415e57685f8da60eabf4679d8230486a2e501368e5fd",
+      "sha512": "UEAWza5XZIiv8m87sPXoiFgeuShb9LN0eUiWnW9vG4aIHpPdbnWMFvJJmTJ8kbWXDXB4XwW3l4rmZqTgw8cM5w=="
     },
     {
       "name": "@happyvertical/smrt-personas",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/personas",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-personas-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-personas-0.55.3.tgz",
-      "sha256": "8686b71dcec2cc0ec3434fa3ccb469f542be33fb6adfaf5d784c39bc5ada2f67",
-      "sha512": "nOSZZW6hj1O//xDRhdR+p1UtSlwKfCxa/n7N8U739q7QiuT3j/UsqMM2WMmIBTO46/ytMRDvpP/6EAt07BXE6Q=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-personas-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-personas-0.55.9.tgz",
+      "sha256": "d8806525a70be87a8a757f7734192140726738ee9ef70d9182228736de03afbf",
+      "sha512": "BUB3GS7B/fS+BhyffAdpRPZvu1FUBMTB64zTLnkq6xGz7+CNSQpdjkWVPE33tcyPe5AF+apfKKPXiG2pG97c9A=="
     },
     {
       "name": "@happyvertical/smrt-places",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/places",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-places-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-places-0.55.3.tgz",
-      "sha256": "71eb45e1c5813bc003ce832a3ebfef1f39f979e38ba3c94f267c7731b2f6df6d",
-      "sha512": "ZCjEjJsy5T2Ggtz5xBQkXjqj/dcM8qUM0B4DKgGeKKxWt7TeFtnRlwc3gqsuoU3sdGBXbI1DVVVRbnnqQ8cqpg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-places-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-places-0.55.9.tgz",
+      "sha256": "cbde7864bfe9e7e079a139ce1e7a597a03d8f60ce8624d39543daff9432bb2ee",
+      "sha512": "TZmwfIRgflpgiotAkXhH0W6LYQihdEexKNsKcgK3zDhL9Y3hYgYcRipPWli9j9hT6ErDQ3R0Zr3CLGETREE7pQ=="
     },
     {
       "name": "@happyvertical/smrt-playbooks",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/playbooks",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-playbooks-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-playbooks-0.55.3.tgz",
-      "sha256": "0d25f365a650ebed87e7dbfbc41b3623d866b7392feea812fbbfac0750a01bfc",
-      "sha512": "6jwTjPrqFCfoHE7lrts4zNnoRejdW6NPjuORa2WAVIvfro5MuEotB9NrlIA0N110/BXOEOCcto4oTslfXUt/PA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-playbooks-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-playbooks-0.55.9.tgz",
+      "sha256": "0f39475ac3ab37b7a87970b99ad9139dcfd52707d117a3b3a31485560c3a0463",
+      "sha512": "IyWO5fvvdx9RZwaUs+X/du0MT5MTzjaiq7h/Er+ObGIkk1YAHOiaw/zADjHG+W84ztpWXvv4KSS998l0X1DtSw=="
     },
     {
       "name": "@happyvertical/smrt-playground",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-playground",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-playground-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-playground-0.55.3.tgz",
-      "sha256": "06c5751ea2fdaf0424acc6404f29e48570690b84007ad4a59e8b4e41e3d9f47d",
-      "sha512": "H5EqUJcaQQEPzV1uqJ6EN/9jLlsXK763hWhFW866DEjfilFqe43mhwRe1JZLezoeD8vQMRCgxPmAeageWIGdnQ=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-playground-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-playground-0.55.9.tgz",
+      "sha256": "b8c25192c71e337be5a99eadb7343545ff672e549f53c8b114250c92671ea732",
+      "sha512": "fCO+2QmhIjTKR0zgx0P0OehCftZffh5B6LTXg5CRBtKaDDIZiRNbO1nVorocq5Gj2M3mYWzERlbBlFLbTRzfXg=="
     },
     {
       "name": "@happyvertical/smrt-profiles",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/profiles",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-profiles-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-profiles-0.55.3.tgz",
-      "sha256": "02f3bb7472bf64b5d31e0f59f3ef6e5794954e7926a9319ad1905478f0973b8d",
-      "sha512": "Bpwr5zH9+8dXrJgLS2x6hNMTcYgACrVFopSh1NqbIfyjH9iTJQKThxbV2VAaLvNIGg5mZHBX1EHPLvgHulMfww=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-profiles-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-profiles-0.55.9.tgz",
+      "sha256": "f72b6d33081d3f937e7211ae90fe7b82a44661f4a8770070922108217b4dc7be",
+      "sha512": "N0KBzV4/Mf+iYZUJhgA0mp58/F3HhznDby7DH7NNAK0mvrlkJ44kPfRhy+6r8im5dF1KxmWK4/lBDgVgQgiSfg=="
     },
     {
       "name": "@happyvertical/smrt-prompts",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/prompts",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-prompts-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-prompts-0.55.3.tgz",
-      "sha256": "981c2a1a0c50703f19a9e548b4ab0a263b9be6780ba7ff20bc2be1cc786b7faf",
-      "sha512": "uHNA9f8eLhRecLvpUC2qXSHqiviFdH+4SPKXc7CRvKEEK+XQA6m28DF26PJlYlpilCRpp9Mvr1aPHdmlc4zwiA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-prompts-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-prompts-0.55.9.tgz",
+      "sha256": "49d53ac2c7902a803de04b04e671450ecc36c0f59e3aefc90feb70c2255ba8f5",
+      "sha512": "B0Vx/lz4/i2z8aKDhFiX5JdejcI3y5QQ2Nms6jVriVvjnCFlEoHW2HpCvZmKDa+xApzOCj3kDYV8Or9DJz0w4g=="
     },
     {
       "name": "@happyvertical/smrt-reports",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/reports",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-reports-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-reports-0.55.3.tgz",
-      "sha256": "082c226d66bb4e5ff7065d442b1af416a13244979331298144671efc32eeb93c",
-      "sha512": "G29M3ZKMsuQCXNHk3D3qtrdFRJwRXXomQLDhPCKsooq+jeR/Qd/ZGGmC1y9TiaMhO5Pbs9niA8PWv3F1UNiHfQ=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-reports-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-reports-0.55.9.tgz",
+      "sha256": "d7859a74f765893a0e14654a31d244050d3028ef3164cf5c9175c1ed74805536",
+      "sha512": "PNDay6tNgQKyyoD8KHzRfopVI+664roLL85qPDL5jTgKjEM33mNr7j1bI33gU9rtR/Hjaa9HsLfjpwaNiz4Hjw=="
     },
     {
       "name": "@happyvertical/smrt-scanner",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/scanner",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-scanner-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-scanner-0.55.3.tgz",
-      "sha256": "5b4b28e4003bf3bad11588e315cc9567b8adc946708a8b0aab1a08d877c99356",
-      "sha512": "pC0/7O6BCtlKaBguMTaVqu53EuZ3E3GGMkIIwNO2XkXCtHGHHS7rDVawjQDluEBZcbU5WgfBBm1gNzrq1pkquA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-scanner-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz",
+      "sha256": "4971ba5bef59ec54c1ac8eeab2bb69a88c92a806d8fca94b4dd28b41975eeca2",
+      "sha512": "Yh/lixmtiTwL5PKmQwNnpDjWpLbYV69oF1mLlnBd0sJUJCXNuX7vbCS7ux1Xdn53HaBxYLu/bjcHymwewcLwMA=="
     },
     {
       "name": "@happyvertical/smrt-secrets",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/secrets",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-secrets-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-secrets-0.55.3.tgz",
-      "sha256": "f2c9234c6c70d13c104581ed1ff31b9b028b0098f53968f2b668d02d57368c7e",
-      "sha512": "Irf4xANjNQxClIQuyHKevgXTOFV55pxeZqdWO3WpAc5+R/G7NNKjMRFT3hYCmkCol6tjY4V984EpEhYPl2E8pg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-secrets-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-secrets-0.55.9.tgz",
+      "sha256": "e47d36e9cb7404f4c520165cd4671662eee2e6864d27cd52a5dccb15f197af46",
+      "sha512": "4klbkNO5dMjkLP3hL3IB3IWZkBZLG9026UBZdsI23kphYPP+Bs8lG7dpi5P+ExDUsOBsg6Yfb/YfjGJUhdhtUA=="
     },
     {
       "name": "@happyvertical/smrt-svelte",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-svelte",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-svelte-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-svelte-0.55.3.tgz",
-      "sha256": "eb58ca27b05d607321270fac6c0c952ad315dd490f8fc5ac095918d87a23f0e6",
-      "sha512": "0KmkChHGMOpiB4jaQ55Qldc+W1VN+0W8gQ3lDtoghY7HmYw3Rl3Xls/vw+FlZdDQK1xiAINug4FOC5T0+KBNPw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-svelte-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-svelte-0.55.9.tgz",
+      "sha256": "52902f40ec0022def3c68bb6449067db1a3c83a15c6c815b8ee80638a0fcfe20",
+      "sha512": "yzWpLuzsuvdOm3Q1pibHgm+R3BClr2gSajaGe8Wjh29m8HT/6YGbYS3zsOhanBdfCaaO/7ZKoNc+bm3ejqR5Rg=="
     },
     {
       "name": "@happyvertical/smrt-tags",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/tags",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-tags-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-tags-0.55.3.tgz",
-      "sha256": "d6e119e718765f29a52c750c3030c7c910cc6e464159b217a30ed0294637fe77",
-      "sha512": "9smVbTz6J2hHfr5xFRcCKm09KcLRvE5nfv4SMvlf/vQAC8g883H5qra03EcQgsqQZt3ypQdRpFJpTC/4PxQf2Q=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-tags-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-tags-0.55.9.tgz",
+      "sha256": "aa7b28fb6f35ac9c46457dcd76d04af8f254db9ff61adb3b1f9603c4097b6cea",
+      "sha512": "D6pPomLdhvMESGSNU+wxik8PUy2Es3hWq3f4X9sDL0Nbd89CRnSmvbTkd6LJk1bGgditevbsEPGzQB8d4/LZhA=="
     },
     {
       "name": "@happyvertical/smrt-tenancy",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/tenancy",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-tenancy-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-tenancy-0.55.3.tgz",
-      "sha256": "cf3269ed0275171c1012fadd1c8bbe28a465009b30c44a90f104b9ca525330e7",
-      "sha512": "LZLW+xObVMqOTrsSdweWtKi06AvZ8x7OVVSmCEQSJnKjkwzwfdtq4FFsn0FEAUR4tBhfvwavVgA5l/9z74ZpUw=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-tenancy-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz",
+      "sha256": "f27fbeeaee1d1d48a8b80be76356aabce159daa336c1601f0b5d0aad6c1521f1",
+      "sha512": "/pRqHd5kSXf8VZXmGovh9aufqQrpZyJ2e8Lwe06gsBfq6hGdk74vJnc2n6P80Qep8qWpuorcNgVn5D2k5jkRLw=="
     },
     {
       "name": "@happyvertical/smrt-types",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/types",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-types-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-types-0.55.3.tgz",
-      "sha256": "307d381f1c331647a16aa3615a5ae162e9f7bfd653fccf1a713ad63a088f2a1d",
-      "sha512": "9DAOrHnZ01nP/sDAgqBv5tyeesxZ4IN8i12cvNQSOpR2f3qtV4QJzrowrvf+9k1dEFI8H5x9eXdG6izJKZjkxA=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-types-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-types-0.55.9.tgz",
+      "sha256": "256a74de42e36981f03b134c95503cb0bab1438b2e26613b53f4b5f2c023ca4d",
+      "sha512": "RbdJdK1bHiGg6l1GHFBaf4fyXX8VU4I9RZ/gbgm1i067y//DZ9FLZWRlbXeaL0q3/jCUlPh4zKc+wtzUS67r2A=="
     },
     {
       "name": "@happyvertical/smrt-ui",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-ui",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-ui-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-ui-0.55.3.tgz",
-      "sha256": "3bc255cefe07aa9f4b4f38a4af89974782e0c21a3f2b1c11feca4a4bae34d3c4",
-      "sha512": "PWBEIUlc4Fm/sz86BVwmiHiXC8YWWt8Pkq9pPDpOViuxKHbvrI2tODc6DWfsDWQaZ+cY55KYwxvzyoq2QOAmjg=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-ui-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-ui-0.55.9.tgz",
+      "sha256": "33815424cdd69c46baa320c3d93d4bbee6e2bd84053c8d5c27b6330dccdef7fe",
+      "sha512": "p5Pg97vsWO9ZW4hmcaWxh1QtLdnTzvIfk1tQ0Nq2Gh/Qahf1Y/1txde86QDIE9xmmhKpn5nazFRoPfv7U7Rw3A=="
     },
     {
       "name": "@happyvertical/smrt-users",
-      "version": "0.55.3",
-      "source": "../smrt/packages/users",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-users-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-users-0.55.3.tgz",
-      "sha256": "79249c17470fc8e803577903242715f0a38f0cb0839add8e49b0912362dae93e",
-      "sha512": "3sYo7P3uEy3sRYVlF/ZhL1pYd7sehFTf6nvlF5nSRV011Z5Nnd/9fibTRqvjsCP1ENPYeA72yA3yfoLd/kKSuQ=="
+      "version": "0.55.9",
+      "source": "../smrt-retention/packages/users",
+      "sourceCommit": "0bcf22c2a9202fe9cc7b75df6baa36ce871802f8",
+      "tarball": "happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz",
+      "sha256": "981c8b0a92cd0d2fe0959a386a1ca2203847497d9e32d653c9e024697e8aa53d",
+      "sha512": "bmXfvYK18Rlf/cyTu+yQq3hnkEiQITlkpy+Ik3Mu7tMkJFcS5qPiHojedH68VHoI5G8oe9ZQMfar1qyAgewktg=="
     },
     {
       "name": "@happyvertical/smrt-web",
-      "version": "0.55.3",
+      "version": "0.55.9",
       "source": "../smrt/packages/smrt-web",
-      "sourceCommit": "8a7e5846120600a97bb50896a17cce9a5f2c2369",
-      "tarball": "happyvertical-smrt-web-0.55.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-smrt-web-0.55.3.tgz",
-      "sha256": "af6cf40ead956dd83e2b69ea458c2530b1bdc9d7f79866804e7ba8ea843a6a53",
-      "sha512": "zvi/O/bri91r7xtXKxhh7ezJt7KTSgRH5iSJXvayw7Ra5zthUJc8qnicnZu5aug7h+Sd6cpJcw0H8xzwkBkZOQ=="
+      "sourceCommit": "f00e34f9a109665b5e759ee38c2bd701dbaed09e",
+      "tarball": "happyvertical-smrt-web-0.55.9.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-web-0.55.9.tgz",
+      "sha256": "41f115c6b21e9b407952a1f6b85d942f78b28a55a61ff3d5c3d14147d0a3dc21",
+      "sha512": "pfI/NMADrPbiWoEwazQBQg4yKe8n2fwp3Kw42aJysQ+YG+Cz9qKqwuccr4CY2z03JahClFagqPd15QLhLA7i0w=="
+    },
+    {
+      "name": "@happyvertical/speech",
+      "version": "0.103.1",
+      "source": "../sdk/packages/speech",
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-speech-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-speech-0.103.1.tgz",
+      "sha256": "017b6989ce88cef2b43eff13e164d535657834999361088d9ffafcc49e1ac0c0",
+      "sha512": "jcbLEjF7mJHFfJke71G74xtgGXRu4DGj85KaeIEVAxkh40k0e3NL3sVcOqU7DX+fvK+uBd6C7or6MYSYgZM+kg=="
     },
     {
       "name": "@happyvertical/sql",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/sql",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-sql-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-sql-0.102.3.tgz",
-      "sha256": "e4fb80fb30a1228051a6a07afdb41884d36334c5f411f36616b2d6b36e0edfd4",
-      "sha512": "U+n89EUPZWMNelYPHs9XXwoDvyllSXFc3I0W/ji6MnKbXhQQrdokOTfJM/fbkqAwwDdcY3smrZTdtJ4ZE9kXEQ=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-sql-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-sql-0.103.1.tgz",
+      "sha256": "d0e6322de8250558894382abfd1a03de3e95817e690743f7ba7a0ace64c30b81",
+      "sha512": "wIIAXzcd0X+30q+mOvgdnf/TaNI70eyeElO5LUiixX3Gvu8YCeueCweWs9zlHW16BhiPFZR0hcorC6rYe+3f5A=="
     },
     {
       "name": "@happyvertical/utils",
-      "version": "0.102.3",
+      "version": "0.103.1",
       "source": "../sdk/packages/utils",
-      "sourceCommit": "717571e69ba91a8cbe589606d9d08cbd3050dc4e",
-      "tarball": "happyvertical-utils-0.102.3.tgz",
-      "resolution": "file:vendor/release/happyvertical-utils-0.102.3.tgz",
-      "sha256": "378239b7b0fc5d2a5c83a5b586b547591ccce7c5a13e37ece357956a4830f167",
-      "sha512": "QjlM/mrwyDfSXoaa4VEgbIrMcE0Qrfjyu7et1xksveQE0K2yLeLBHVJd4AOYGf8oLFW3JtskHm5CxouoJOBdOA=="
+      "sourceCommit": "a9009b687ca58a232a7f3c36d0a6329bd7f64dc7",
+      "tarball": "happyvertical-utils-0.103.1.tgz",
+      "resolution": "file:vendor/release/happyvertical-utils-0.103.1.tgz",
+      "sha256": "ada1a2dc719017f86136cc5a337a5f15fc2e101fa9f1d962e3ce7f25ae3f9a4f",
+      "sha512": "LSbIvDc6vbDVZDXqlB3OVeJXUsMcS0O6mlpcdTe832zWhRHhsOld9e+r26r9UIjeChyFZnNykC0AZV8+0UoMwQ=="
     }
   ],
   "edges": [
@@ -694,6 +709,18 @@
       "spec": "workspace:*"
     },
     {
+      "from": "@happyvertical/geo",
+      "to": "@happyvertical/cache",
+      "field": "dependencies",
+      "spec": "workspace:*"
+    },
+    {
+      "from": "@happyvertical/geo",
+      "to": "@happyvertical/utils",
+      "field": "dependencies",
+      "spec": "workspace:*"
+    },
+    {
       "from": "@happyvertical/smrt-agents",
       "to": "@happyvertical/ai",
       "field": "dependencies",
@@ -834,6 +861,12 @@
     {
       "from": "@happyvertical/smrt-chat",
       "to": "@happyvertical/smrt-profiles",
+      "field": "dependencies",
+      "spec": "workspace:*"
+    },
+    {
+      "from": "@happyvertical/smrt-chat",
+      "to": "@happyvertical/smrt-reports",
       "field": "dependencies",
       "spec": "workspace:*"
     },
@@ -1198,6 +1231,12 @@
       "spec": "workspace:*"
     },
     {
+      "from": "@happyvertical/smrt-svelte",
+      "to": "@happyvertical/speech",
+      "field": "peerDependencies",
+      "spec": ">=0.102.5"
+    },
+    {
       "from": "@happyvertical/smrt-tags",
       "to": "@happyvertical/ai",
       "field": "dependencies",
@@ -1280,6 +1319,12 @@
       "to": "@happyvertical/smrt-types",
       "field": "dependencies",
       "spec": "workspace:*"
+    },
+    {
+      "from": "@happyvertical/smrt-ui",
+      "to": "@happyvertical/speech",
+      "field": "peerDependencies",
+      "spec": ">=0.102.5"
     },
     {
       "from": "@happyvertical/smrt-users",
@@ -1374,6 +1419,12 @@
     {
       "from": "@happyvertical/smrt-playground",
       "to": "@happyvertical/smrt-ui",
+      "field": "dependencies",
+      "spec": "workspace:*"
+    },
+    {
+      "from": "@happyvertical/cache",
+      "to": "@happyvertical/utils",
       "field": "dependencies",
       "spec": "workspace:*"
     },
@@ -1559,24 +1610,6 @@
     },
     {
       "from": "@happyvertical/jobs",
-      "to": "@happyvertical/utils",
-      "field": "dependencies",
-      "spec": "workspace:*"
-    },
-    {
-      "from": "@happyvertical/cache",
-      "to": "@happyvertical/utils",
-      "field": "dependencies",
-      "spec": "workspace:*"
-    },
-    {
-      "from": "@happyvertical/geo",
-      "to": "@happyvertical/cache",
-      "field": "dependencies",
-      "spec": "workspace:*"
-    },
-    {
-      "from": "@happyvertical/geo",
       "to": "@happyvertical/utils",
       "field": "dependencies",
       "spec": "workspace:*"
@@ -1830,55 +1863,56 @@
   ],
   "proposal": {
     "overrides": {
-      "@happyvertical/ai": "file:vendor/release/happyvertical-ai-0.102.3.tgz",
-      "@happyvertical/auth": "file:vendor/release/happyvertical-auth-0.102.3.tgz",
-      "@happyvertical/cache": "file:vendor/release/happyvertical-cache-0.102.3.tgz",
-      "@happyvertical/email": "file:vendor/release/happyvertical-email-0.102.3.tgz",
-      "@happyvertical/encryption": "file:vendor/release/happyvertical-encryption-0.102.3.tgz",
-      "@happyvertical/files": "file:vendor/release/happyvertical-files-0.102.3.tgz",
-      "@happyvertical/geo": "file:vendor/release/happyvertical-geo-0.102.3.tgz",
-      "@happyvertical/jobs": "file:vendor/release/happyvertical-jobs-0.102.3.tgz",
-      "@happyvertical/json": "file:vendor/release/happyvertical-json-0.102.3.tgz",
-      "@happyvertical/logger": "file:vendor/release/happyvertical-logger-0.102.3.tgz",
-      "@happyvertical/messages": "file:vendor/release/happyvertical-messages-0.102.3.tgz",
-      "@happyvertical/secrets": "file:vendor/release/happyvertical-secrets-0.102.3.tgz",
-      "@happyvertical/smrt-agents": "file:vendor/release/happyvertical-smrt-agents-0.55.3.tgz",
-      "@happyvertical/smrt-app-cli": "file:vendor/release/happyvertical-smrt-app-cli-0.55.3.tgz",
-      "@happyvertical/smrt-app-mcp": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.3.tgz",
-      "@happyvertical/smrt-app-runtime": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
-      "@happyvertical/smrt-assets": "file:vendor/release/happyvertical-smrt-assets-0.55.3.tgz",
-      "@happyvertical/smrt-chat": "file:vendor/release/happyvertical-smrt-chat-0.55.3.tgz",
-      "@happyvertical/smrt-cli": "file:vendor/release/happyvertical-smrt-cli-0.55.3.tgz",
-      "@happyvertical/smrt-config": "file:vendor/release/happyvertical-smrt-config-0.55.3.tgz",
-      "@happyvertical/smrt-core": "file:vendor/release/happyvertical-smrt-core-0.55.3.tgz",
-      "@happyvertical/smrt-dev-mcp": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.3.tgz",
-      "@happyvertical/smrt-facts": "file:vendor/release/happyvertical-smrt-facts-0.55.3.tgz",
-      "@happyvertical/smrt-features": "file:vendor/release/happyvertical-smrt-features-0.55.3.tgz",
-      "@happyvertical/smrt-jobs": "file:vendor/release/happyvertical-smrt-jobs-0.55.3.tgz",
-      "@happyvertical/smrt-languages": "file:vendor/release/happyvertical-smrt-languages-0.55.3.tgz",
-      "@happyvertical/smrt-ledgers": "file:vendor/release/happyvertical-smrt-ledgers-0.55.3.tgz",
-      "@happyvertical/smrt-mcp-apps": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.3.tgz",
-      "@happyvertical/smrt-mcp-openai": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.3.tgz",
-      "@happyvertical/smrt-messages": "file:vendor/release/happyvertical-smrt-messages-0.55.3.tgz",
-      "@happyvertical/smrt-mobile-contract": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.3.tgz",
-      "@happyvertical/smrt-personas": "file:vendor/release/happyvertical-smrt-personas-0.55.3.tgz",
-      "@happyvertical/smrt-places": "file:vendor/release/happyvertical-smrt-places-0.55.3.tgz",
-      "@happyvertical/smrt-playbooks": "file:vendor/release/happyvertical-smrt-playbooks-0.55.3.tgz",
-      "@happyvertical/smrt-playground": "file:vendor/release/happyvertical-smrt-playground-0.55.3.tgz",
-      "@happyvertical/smrt-profiles": "file:vendor/release/happyvertical-smrt-profiles-0.55.3.tgz",
-      "@happyvertical/smrt-prompts": "file:vendor/release/happyvertical-smrt-prompts-0.55.3.tgz",
-      "@happyvertical/smrt-reports": "file:vendor/release/happyvertical-smrt-reports-0.55.3.tgz",
-      "@happyvertical/smrt-scanner": "file:vendor/release/happyvertical-smrt-scanner-0.55.3.tgz",
-      "@happyvertical/smrt-secrets": "file:vendor/release/happyvertical-smrt-secrets-0.55.3.tgz",
-      "@happyvertical/smrt-svelte": "file:vendor/release/happyvertical-smrt-svelte-0.55.3.tgz",
-      "@happyvertical/smrt-tags": "file:vendor/release/happyvertical-smrt-tags-0.55.3.tgz",
-      "@happyvertical/smrt-tenancy": "file:vendor/release/happyvertical-smrt-tenancy-0.55.3.tgz",
-      "@happyvertical/smrt-types": "file:vendor/release/happyvertical-smrt-types-0.55.3.tgz",
-      "@happyvertical/smrt-ui": "file:vendor/release/happyvertical-smrt-ui-0.55.3.tgz",
-      "@happyvertical/smrt-users": "file:vendor/release/happyvertical-smrt-users-0.55.3.tgz",
-      "@happyvertical/smrt-web": "file:vendor/release/happyvertical-smrt-web-0.55.3.tgz",
-      "@happyvertical/sql": "file:vendor/release/happyvertical-sql-0.102.3.tgz",
-      "@happyvertical/utils": "file:vendor/release/happyvertical-utils-0.102.3.tgz"
+      "@happyvertical/ai": "file:vendor/release/happyvertical-ai-0.103.1.tgz",
+      "@happyvertical/auth": "file:vendor/release/happyvertical-auth-0.103.1.tgz",
+      "@happyvertical/cache": "file:vendor/release/happyvertical-cache-0.103.1.tgz",
+      "@happyvertical/email": "file:vendor/release/happyvertical-email-0.103.1.tgz",
+      "@happyvertical/encryption": "file:vendor/release/happyvertical-encryption-0.103.1.tgz",
+      "@happyvertical/files": "file:vendor/release/happyvertical-files-0.103.1.tgz",
+      "@happyvertical/geo": "file:vendor/release/happyvertical-geo-0.103.1.tgz",
+      "@happyvertical/jobs": "file:vendor/release/happyvertical-jobs-0.103.1.tgz",
+      "@happyvertical/json": "file:vendor/release/happyvertical-json-0.103.1.tgz",
+      "@happyvertical/logger": "file:vendor/release/happyvertical-logger-0.103.1.tgz",
+      "@happyvertical/messages": "file:vendor/release/happyvertical-messages-0.103.1.tgz",
+      "@happyvertical/secrets": "file:vendor/release/happyvertical-secrets-0.103.1.tgz",
+      "@happyvertical/smrt-agents": "file:vendor/release/happyvertical-smrt-agents-0.55.9.tgz",
+      "@happyvertical/smrt-app-cli": "file:vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz",
+      "@happyvertical/smrt-app-mcp": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz",
+      "@happyvertical/smrt-app-runtime": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz",
+      "@happyvertical/smrt-assets": "file:vendor/release/happyvertical-smrt-assets-0.55.9.tgz",
+      "@happyvertical/smrt-chat": "file:vendor/release/happyvertical-smrt-chat-0.55.9.tgz",
+      "@happyvertical/smrt-cli": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz",
+      "@happyvertical/smrt-config": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz",
+      "@happyvertical/smrt-core": "file:vendor/release/happyvertical-smrt-core-0.55.9.tgz",
+      "@happyvertical/smrt-dev-mcp": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz",
+      "@happyvertical/smrt-facts": "file:vendor/release/happyvertical-smrt-facts-0.55.9.tgz",
+      "@happyvertical/smrt-features": "file:vendor/release/happyvertical-smrt-features-0.55.9.tgz",
+      "@happyvertical/smrt-jobs": "file:vendor/release/happyvertical-smrt-jobs-0.55.9.tgz",
+      "@happyvertical/smrt-languages": "file:vendor/release/happyvertical-smrt-languages-0.55.9.tgz",
+      "@happyvertical/smrt-ledgers": "file:vendor/release/happyvertical-smrt-ledgers-0.55.9.tgz",
+      "@happyvertical/smrt-mcp-apps": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz",
+      "@happyvertical/smrt-mcp-openai": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz",
+      "@happyvertical/smrt-messages": "file:vendor/release/happyvertical-smrt-messages-0.55.9.tgz",
+      "@happyvertical/smrt-mobile-contract": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.9.tgz",
+      "@happyvertical/smrt-personas": "file:vendor/release/happyvertical-smrt-personas-0.55.9.tgz",
+      "@happyvertical/smrt-places": "file:vendor/release/happyvertical-smrt-places-0.55.9.tgz",
+      "@happyvertical/smrt-playbooks": "file:vendor/release/happyvertical-smrt-playbooks-0.55.9.tgz",
+      "@happyvertical/smrt-playground": "file:vendor/release/happyvertical-smrt-playground-0.55.9.tgz",
+      "@happyvertical/smrt-profiles": "file:vendor/release/happyvertical-smrt-profiles-0.55.9.tgz",
+      "@happyvertical/smrt-prompts": "file:vendor/release/happyvertical-smrt-prompts-0.55.9.tgz",
+      "@happyvertical/smrt-reports": "file:vendor/release/happyvertical-smrt-reports-0.55.9.tgz",
+      "@happyvertical/smrt-scanner": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz",
+      "@happyvertical/smrt-secrets": "file:vendor/release/happyvertical-smrt-secrets-0.55.9.tgz",
+      "@happyvertical/smrt-svelte": "file:vendor/release/happyvertical-smrt-svelte-0.55.9.tgz",
+      "@happyvertical/smrt-tags": "file:vendor/release/happyvertical-smrt-tags-0.55.9.tgz",
+      "@happyvertical/smrt-tenancy": "file:vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz",
+      "@happyvertical/smrt-types": "file:vendor/release/happyvertical-smrt-types-0.55.9.tgz",
+      "@happyvertical/smrt-ui": "file:vendor/release/happyvertical-smrt-ui-0.55.9.tgz",
+      "@happyvertical/smrt-users": "file:vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz",
+      "@happyvertical/smrt-web": "file:vendor/release/happyvertical-smrt-web-0.55.9.tgz",
+      "@happyvertical/speech": "file:vendor/release/happyvertical-speech-0.103.1.tgz",
+      "@happyvertical/sql": "file:vendor/release/happyvertical-sql-0.103.1.tgz",
+      "@happyvertical/utils": "file:vendor/release/happyvertical-utils-0.103.1.tgz"
     },
     "manifestChanges": {
       "package.json": [
@@ -1886,43 +1920,43 @@
           "field": "dependencies",
           "name": "@happyvertical/smrt-app-runtime",
           "from": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
-          "to": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz"
+          "to": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-config",
           "from": "file:vendor/release/happyvertical-smrt-config-0.55.3.tgz",
-          "to": "file:vendor/release/happyvertical-smrt-config-0.55.3.tgz"
+          "to": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-scanner",
           "from": "file:vendor/release/happyvertical-smrt-scanner-0.55.3.tgz",
-          "to": "file:vendor/release/happyvertical-smrt-scanner-0.55.3.tgz"
+          "to": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/sql",
           "from": "file:vendor/release/happyvertical-sql-0.102.3.tgz",
-          "to": "file:vendor/release/happyvertical-sql-0.102.3.tgz"
+          "to": "file:vendor/release/happyvertical-sql-0.103.1.tgz"
         },
         {
           "field": "devDependencies",
           "name": "@happyvertical/encryption",
           "from": "file:vendor/release/happyvertical-encryption-0.102.3.tgz",
-          "to": "file:vendor/release/happyvertical-encryption-0.102.3.tgz"
+          "to": "file:vendor/release/happyvertical-encryption-0.103.1.tgz"
         },
         {
           "field": "devDependencies",
           "name": "@happyvertical/smrt-cli",
           "from": "file:vendor/release/happyvertical-smrt-cli-0.55.3.tgz",
-          "to": "file:vendor/release/happyvertical-smrt-cli-0.55.3.tgz"
+          "to": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz"
         },
         {
           "field": "devDependencies",
           "name": "@happyvertical/smrt-dev-mcp",
           "from": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.3.tgz",
-          "to": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.3.tgz"
+          "to": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz"
         }
       ],
       "apps/site/package.json": [
@@ -1930,133 +1964,139 @@
           "field": "dependencies",
           "name": "@happyvertical/ai",
           "from": "file:../../vendor/release/happyvertical-ai-0.102.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-ai-0.102.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-ai-0.103.1.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/auth",
           "from": "file:../../vendor/release/happyvertical-auth-0.102.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-auth-0.102.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-auth-0.103.1.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/files",
           "from": "file:../../vendor/release/happyvertical-files-0.102.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-files-0.102.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-files-0.103.1.tgz"
+        },
+        {
+          "field": "dependencies",
+          "name": "@happyvertical/geo",
+          "from": "file:../../vendor/release/happyvertical-geo-0.102.3.tgz",
+          "to": "file:../../vendor/release/happyvertical-geo-0.103.1.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-agents",
           "from": "file:../../vendor/release/happyvertical-smrt-agents-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-agents-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-agents-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-app-mcp",
           "from": "file:../../vendor/release/happyvertical-smrt-app-mcp-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-app-mcp-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-app-runtime",
           "from": "file:../../vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-chat",
           "from": "file:../../vendor/release/happyvertical-smrt-chat-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-chat-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-chat-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-config",
           "from": "file:../../vendor/release/happyvertical-smrt-config-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-config-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-config-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-core",
           "from": "file:../../vendor/release/happyvertical-smrt-core-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-core-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-core-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-facts",
           "from": "file:../../vendor/release/happyvertical-smrt-facts-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-facts-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-facts-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-jobs",
           "from": "file:../../vendor/release/happyvertical-smrt-jobs-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-jobs-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-jobs-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-mcp-apps",
           "from": "file:../../vendor/release/happyvertical-smrt-mcp-apps-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-mcp-apps-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-mcp-openai",
           "from": "file:../../vendor/release/happyvertical-smrt-mcp-openai-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-mcp-openai-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-places",
           "from": "file:../../vendor/release/happyvertical-smrt-places-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-places-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-places-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-profiles",
           "from": "file:../../vendor/release/happyvertical-smrt-profiles-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-profiles-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-profiles-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-svelte",
           "from": "file:../../vendor/release/happyvertical-smrt-svelte-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-svelte-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-svelte-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-tags",
           "from": "file:../../vendor/release/happyvertical-smrt-tags-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-tags-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-tags-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-tenancy",
           "from": "file:../../vendor/release/happyvertical-smrt-tenancy-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-tenancy-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-ui",
           "from": "file:../../vendor/release/happyvertical-smrt-ui-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-ui-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-ui-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-users",
           "from": "file:../../vendor/release/happyvertical-smrt-users-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-users-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/smrt-web",
           "from": "file:../../vendor/release/happyvertical-smrt-web-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-web-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-web-0.55.9.tgz"
         },
         {
           "field": "dependencies",
           "name": "@happyvertical/sql",
           "from": "file:../../vendor/release/happyvertical-sql-0.102.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-sql-0.102.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-sql-0.103.1.tgz"
         }
       ],
       "packages/cli/package.json": [
@@ -2064,7 +2104,7 @@
           "field": "dependencies",
           "name": "@happyvertical/smrt-app-cli",
           "from": "file:../../vendor/release/happyvertical-smrt-app-cli-0.55.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-smrt-app-cli-0.55.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz"
         }
       ],
       "packages/resume/package.json": [
@@ -2072,7 +2112,7 @@
           "field": "dependencies",
           "name": "@happyvertical/files",
           "from": "file:../../vendor/release/happyvertical-files-0.102.3.tgz",
-          "to": "file:../../vendor/release/happyvertical-files-0.102.3.tgz"
+          "to": "file:../../vendor/release/happyvertical-files-0.103.1.tgz"
         }
       ]
     },
