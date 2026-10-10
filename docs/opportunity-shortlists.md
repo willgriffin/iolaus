@@ -92,6 +92,9 @@ postings no longer expose an active posting link.
 Signing in imports the guest list into the account. Existing account choices
 win; retrying an import does not overwrite them. Browser entries are cleared
 only after the server acknowledges them, and unavailable jobs remain local.
+Bounded removal markers and a compaction generation prevent another open tab
+from restoring acknowledged entries. Newer guest decisions remain eligible;
+account mutations do not change guest removal markers.
 Account storage belongs to the verified tenant/user, independent of candidate
 profile onboarding. A conflicting update reloads the current account entry
 instead of silently overwriting another tab's choice.
@@ -114,7 +117,14 @@ are replaced by fresh public projections.
 current native principal permissions, and same-origin JSON mutations. Durable
 entries and mutation receipts use native SQLite or PostgreSQL transactions,
 owner-scoped natural keys, optimistic revisions and idempotency receipts.
+Writes recheck permission after catalog reads inside the transaction. Native
+active-identity locks coordinate writes with account deactivation and deletion;
+SQLite deletion also shares the shortlist's cross-process owner lock.
 They are excluded from generic model API, CLI and MCP CRUD surfaces.
+
+Decision and undo completions are fenced by the active deck, card and view, so
+a delayed response cannot navigate or display an old error after the user moves
+to another result or search.
 
 The bare `/opportunities/` entry renders the same profession and skill discovery
 page as `/`, including saved category and skill choices. Submitted searches

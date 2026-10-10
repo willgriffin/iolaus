@@ -12,6 +12,7 @@ import {
   type ShortlistStoreError,
 } from './shortlist-store.js';
 import './smrt.js';
+import { seedShortlistOwner } from './fixtures/shortlist-owner.js';
 
 const subject = { tenantId: 'tenant', userId: 'user' };
 const opportunity: PublicOpportunity = {
@@ -44,6 +45,11 @@ describe('shortlist native SQLite store', () => {
       cache: false,
       type: 'sqlite',
       url: join(directory, 'shortlist.sqlite'),
+    });
+    await seedShortlistOwner(database, subject);
+    await seedShortlistOwner(database, {
+      tenantId: 'other-tenant',
+      userId: 'other-user',
     });
     const ddl = getDDLStrategy('sqlite');
     for (const tableName of [

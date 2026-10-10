@@ -135,6 +135,28 @@ let lastUndo = $state<{
   change: ShortlistChange;
   index: number;
 } | null>(null);
+type UiIdentity = {
+  deck: number;
+  cardId: string | null;
+  view: 'triage' | 'list';
+  listOriginId: string | null;
+};
+function captureUiIdentity(): UiIdentity {
+  return {
+    deck: deckGeneration,
+    cardId: card?.id ?? null,
+    view,
+    listOriginId: listOrigin?.id ?? null,
+  };
+}
+function isCurrentUi(identity: UiIdentity): boolean {
+  return (
+    deckGeneration === identity.deck &&
+    card?.id === identity.cardId &&
+    view === identity.view &&
+    (listOrigin?.id ?? null) === identity.listOriginId
+  );
+}
 const seenIds = new Set<string>();
 const card = $derived(items[current] ?? null);
 const entryFor = (opportunity: PublicOpportunity) =>
@@ -285,6 +307,7 @@ async function record(change: ShortlistChange, target = card, advance = true) {
     index = items.findIndex((item) => item.id === originalCard?.id);
   const originScrollY = listScrollY();
   if (!originalCard || !client || !ready || busy) return;
+  const identity = captureUiIdentity();
   busy = true;
   failure = '';
   const prior: ShortlistChange = {
@@ -293,6 +316,10 @@ async function record(change: ShortlistChange, target = card, advance = true) {
   };
   try {
     await client.mutate(originalCard, change);
+    // The choice is durable even if the user navigated away while it was in
+    // flight. Its completion must not move a newly selected card, restore an
+    // old list origin, or make an obsolete choice undoable.
+    if (!isCurrentUi(identity)) return;
     lastUndo = { opportunity: originalCard, change: prior, index };
     if (change.decision && advance) {
       if (listOrigin) setView('list');
@@ -302,37 +329,45 @@ async function record(change: ShortlistChange, target = card, advance = true) {
       setView('list');
     }
   } catch (error) {
-    failure =
-      error instanceof Error
-        ? error.message
-        : 'Could not save that choice. Please retry.';
+    if (isCurrentUi(identity))
+      failure =
+        error instanceof Error
+          ? error.message
+          : 'Could not save that choice. Please retry.';
   } finally {
     busy = false;
   }
 }
 async function opened(displayed = card) {
   if (!displayed || !client || !ready) return;
+  const identity = captureUiIdentity();
   try {
     await client.mutate(displayed, { opened: true });
   } catch (error) {
-    failure =
-      error instanceof Error ? error.message : 'Could not record that opening.';
+    if (isCurrentUi(identity))
+      failure =
+        error instanceof Error
+          ? error.message
+          : 'Could not record that opening.';
   }
 }
 async function undo() {
   const undo = lastUndo;
   if (!undo || !client || !ready || busy) return;
+  const identity = captureUiIdentity();
   busy = true;
   failure = '';
   try {
     await client.mutate(undo.opportunity, undo.change);
+    if (!isCurrentUi(identity)) return;
     current = undo.index;
     lastUndo = null;
   } catch (error) {
-    failure =
-      error instanceof Error
-        ? error.message
-        : 'Could not undo that choice. Reload and try again.';
+    if (isCurrentUi(identity))
+      failure =
+        error instanceof Error
+          ? error.message
+          : 'Could not undo that choice. Reload and try again.';
   } finally {
     busy = false;
   }

@@ -5,6 +5,8 @@ import {
   purgeTombstonedPublicProfileRevisions,
   tombstonePublicProfile,
 } from './public-profile-store.js';
+import { shortlistOwnerLockKey } from './shortlist-store.js';
+import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
 
 /**
@@ -395,6 +397,21 @@ async function findStartedRecord(
  * same scope after any failure. Throws `AccountDeletionError` for refusals.
  */
 export async function deleteAccount(
+  scope: AccountDeletionScope,
+  dependencies: AccountDeletionDependencies,
+): Promise<AccountDeletionResult> {
+  // SQLite only permits one writer; share the shortlist's cross-process lock
+  // across all deletion phases so a held write cannot poison another connection
+  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
+  return dependencies.dialect === 'sqlite'
+    ? await withSqliteOperationLock(
+        `shortlist:${shortlistOwnerLockKey(scope)}`,
+        () => deleteAccountLocked(scope, dependencies),
+      )
+    : await deleteAccountLocked(scope, dependencies);
+}
+
+async function deleteAccountLocked(
   scope: AccountDeletionScope,
   dependencies: AccountDeletionDependencies,
 ): Promise<AccountDeletionResult> {

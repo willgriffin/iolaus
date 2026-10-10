@@ -13,6 +13,7 @@ import {
 import { insert } from './fixtures/account-seed.js';
 import './smrt.js';
 import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
+import { seedShortlistOwner } from './fixtures/shortlist-owner.js';
 import { createShortlistStore } from './shortlist-store.js';
 
 type TestDatabase = Awaited<ReturnType<typeof getTestDatabase>>;
@@ -275,6 +276,7 @@ describe('account export', () => {
     const alice = principal('alice');
     const bob = principal('bob');
     const store = createShortlistStore(db);
+    await seedShortlistOwner(db, alice);
     const opportunity: PublicOpportunity = {
       id: 'opportunity-1',
       title: 'Alice saved role',
@@ -312,6 +314,7 @@ describe('account export', () => {
       { ...bob, tenantId: alice.tenantId },
       { ...alice, tenantId: bob.tenantId },
     ]) {
+      await seedShortlistOwner(db, other);
       await store.mutate(
         other,
         {

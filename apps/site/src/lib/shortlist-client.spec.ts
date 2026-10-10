@@ -176,6 +176,130 @@ describe('shortlist client', () => {
     ).toHaveLength(1);
   });
 
+  it('does not resurrect an imported entry in a stale guest tab, while retaining a newer edit', async () => {
+    const storage = memoryStorage();
+    const window = windowWith(storage);
+    vi.stubGlobal('window', window);
+    const staleGuest = createShortlistClient({ signedIn: false });
+    await staleGuest.mutate(opportunity(), { decision: 'saved' });
+    const importer = createShortlistClient({
+      signedIn: true,
+      fetch: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ entries: [], acknowledgedIds: ['job-1'] }),
+          ),
+        ) as typeof fetch,
+    });
+    await importer.mergeGuest();
+    const listener = (
+      window.addEventListener as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0][1] as (event: StorageEvent) => void;
+    listener({
+      key: SHORTLIST_STORAGE_KEY,
+      storageArea: storage,
+    } as unknown as StorageEvent);
+    expect(staleGuest.getEntries()).toEqual([]);
+    expect(JSON.parse(storage.getItem(SHORTLIST_STORAGE_KEY)!).entries).toEqual(
+      [],
+    );
+
+    const newer = {
+      ...staleGuest.getEntries()[0],
+      opportunity: opportunity(),
+      decision: 'later' as const,
+      firstSeenAt: '2026-10-08T00:00:00.000Z',
+      updatedAt: '2099-10-09T00:00:00.000Z',
+      openedAt: null,
+      appliedAt: null,
+      revision: 2,
+    };
+    storage.setItem(
+      SHORTLIST_STORAGE_KEY,
+      JSON.stringify({ version: 1, entries: [newer] }),
+    );
+    listener({
+      key: SHORTLIST_STORAGE_KEY,
+      storageArea: storage,
+    } as unknown as StorageEvent);
+    expect(staleGuest.getEntries()).toMatchObject([
+      { decision: 'later', revision: 2 },
+    ]);
+    expect(
+      JSON.parse(storage.getItem(SHORTLIST_STORAGE_KEY)!).entries,
+    ).toMatchObject([{ decision: 'later', revision: 2 }]);
+  });
+
+  it('does not clear a guest removal marker during a signed-in mutation', async () => {
+    const storage = memoryStorage();
+    vi.stubGlobal('window', windowWith(storage));
+    const guest = createShortlistClient({ signedIn: false });
+    await guest.mutate(opportunity(), { decision: 'saved' });
+    const accountEntry = {
+      opportunity: opportunity(),
+      decision: 'later' as const,
+      firstSeenAt: '2026-10-08T00:00:00.000Z',
+      updatedAt: '2026-10-08T00:00:00.000Z',
+      openedAt: null,
+      appliedAt: null,
+      revision: 2,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ entries: [], acknowledgedIds: ['job-1'] }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ entry: accountEntry })),
+      );
+    const account = createShortlistClient({
+      signedIn: true,
+      fetch: fetch as typeof fetch,
+    });
+    await account.mergeGuest();
+    await account.mutate(opportunity(), { decision: 'later' });
+    expect(storage.getItem(`${SHORTLIST_STORAGE_KEY}:tombstones`)).toContain(
+      'job-1',
+    );
+  });
+
+  it('uses a tombstone generation change to discard an old tab memory after compaction', async () => {
+    const storage = memoryStorage();
+    const window = windowWith(storage);
+    vi.stubGlobal('window', window);
+    const oldTab = createShortlistClient({ signedIn: false });
+    await oldTab.mutate(opportunity('old-job'), { decision: 'saved' });
+    storage.setItem(
+      SHORTLIST_STORAGE_KEY,
+      JSON.stringify({ version: 1, entries: [] }),
+    );
+    storage.setItem(
+      `${SHORTLIST_STORAGE_KEY}:tombstones`,
+      JSON.stringify({
+        generation: 1,
+        tombstones: Array.from({ length: 500 }, (_, index) => ({
+          id: `newer-${index}`,
+          updatedAt: '2099-01-01T00:00:00.000Z',
+          revision: 1,
+        })),
+      }),
+    );
+    const listener = (
+      window.addEventListener as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0][1] as (event: StorageEvent) => void;
+    listener({
+      key: SHORTLIST_STORAGE_KEY,
+      storageArea: storage,
+    } as unknown as StorageEvent);
+    expect(oldTab.getEntries()).toEqual([]);
+    expect(JSON.parse(storage.getItem(SHORTLIST_STORAGE_KEY)!).entries).toEqual(
+      [],
+    );
+  });
+
   it('keeps unacknowledged browser choices and explains a partial import', async () => {
     const storage = memoryStorage();
     vi.stubGlobal('window', windowWith(storage));

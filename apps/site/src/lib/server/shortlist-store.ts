@@ -7,7 +7,10 @@ import type {
 } from '$lib/shortlist-contract.js';
 import { shortlistEntrySchema } from '$lib/shortlist-contract.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
-import type { WorkspaceSubject } from './workspace-subject.js';
+import {
+  type WorkspaceSubject,
+  WorkspaceSubjectError,
+} from './workspace-subject.js';
 
 type Database = Awaited<ReturnType<typeof resolveDatabase>>;
 type Row = Record<string, unknown>;
@@ -68,7 +71,7 @@ function resultRows(result: { rows?: Row[] } | Row[]): Row[] {
 function tuple(subject: WorkspaceSubject): string[] {
   return [subject.tenantId, subject.userId];
 }
-function lockKey(subject: WorkspaceSubject): string {
+export function shortlistOwnerLockKey(subject: WorkspaceSubject): string {
   return createHash('sha256')
     .update(tuple(subject).join('\u0000'))
     .digest('hex');
@@ -81,7 +84,13 @@ function sqlite(database: Database): boolean {
 }
 
 /** SQL store for private shortlist state. Every write is serialized by tuple. */
-export function createShortlistStore(database: Database) {
+export function createShortlistStore(
+  database: Database,
+  authorizeWrite?: (
+    subject: WorkspaceSubject,
+    transaction: Database,
+  ) => Promise<void>,
+) {
   if (!database.transaction)
     throw new Error('Shortlist persistence requires transactions.');
   const transaction = async <T>(
@@ -93,13 +102,40 @@ export function createShortlistStore(database: Database) {
         if (!sqlite(database)) {
           await db.query("SET LOCAL lock_timeout = '15s'");
           await db.query('SELECT pg_advisory_xact_lock(hashtext(?))', [
-            `shortlist:${lockKey(subject)}`,
+            `shortlist:${shortlistOwnerLockKey(subject)}`,
           ]);
         }
+        // Lock the same identity rows deletion disables, in its membership-first
+        // order. The no-op updates are native write locks on both supported
+        // dialects: deletion either follows this commit or we observe inactive /
+        // missing identity and cannot recreate account data after removal.
+        for (const [table, where, values] of [
+          ['memberships', 'tenant_id = ? AND user_id = ?', tuple(subject)],
+          ['users', 'id = ?', [subject.userId]],
+          ['tenants', 'id = ?', [subject.tenantId]],
+        ] as const) {
+          const locked = resultRows(
+            await db.query(
+              `UPDATE ${table} SET status = status WHERE ${where} AND status = 'active' RETURNING id`,
+              [...values],
+            ),
+          );
+          if (!locked.length)
+            throw new WorkspaceSubjectError(
+              403,
+              'Workspace account is no longer active.',
+            );
+        }
+        // Native principal permission resolution must happen after catalog I/O
+        // and while lifecycle identity locks protect the imminent write.
+        await authorizeWrite?.(subject, db);
         return await work(db);
       });
     return sqlite(database)
-      ? await withSqliteOperationLock(`shortlist:${lockKey(subject)}`, run)
+      ? await withSqliteOperationLock(
+          `shortlist:${shortlistOwnerLockKey(subject)}`,
+          run,
+        )
       : await run();
   };
   const lookup = async (

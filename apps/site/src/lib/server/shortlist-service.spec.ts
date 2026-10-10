@@ -14,6 +14,13 @@ vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(),
 }));
+vi.mock('@happyvertical/smrt-users', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-users')>()),
+  withPrincipalPermissionContext: async (
+    _options: unknown,
+    callback: () => Promise<unknown>,
+  ) => await callback(),
+}));
 vi.mock('./db.js', () => ({ getDbConfig: vi.fn() }));
 vi.mock('./owner-principal.js', () => ({
   runAsOwner: mocks.runAsOwner,
@@ -115,6 +122,61 @@ describe('shortlist account service authorization', () => {
     expect(mocks.single).not.toHaveBeenCalled();
     expect(mocks.batch).not.toHaveBeenCalled();
   });
+  it.each([
+    'mutate',
+    'import',
+  ])('re-enters authority after a paused catalog read for %s', async (action) => {
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredCatalog = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const catalog = async () => {
+      entered();
+      await paused;
+      return opportunity;
+    };
+    mocks.single.mockImplementation(catalog);
+    mocks.batch.mockImplementation(async () => [await catalog()]);
+    const written = vi.fn();
+    mocks.store.mockImplementation((_db, authorize) => ({
+      mutate: async (subject: unknown) => {
+        await authorize(subject);
+        written();
+        return entry;
+      },
+      merge: async (subject: unknown) => {
+        await authorize(subject);
+        written();
+        return { entries: [entry] };
+      },
+    }));
+    const pending =
+      action === 'mutate'
+        ? mutateShortlist(
+            {},
+            {
+              mutationId: '11111111-1111-4111-8111-111111111111',
+              opportunityId: opportunity.id,
+              expectedRevision: 0,
+              decision: 'saved',
+            },
+          )
+        : importShortlist({}, [entry]);
+    await enteredCatalog;
+    // Native runAsOwner is entered afresh, so revoked permission/membership
+    // resolution cannot be inherited from the initial principal snapshot.
+    mocks.runAsOwner.mockRejectedValueOnce(new Error('authority revoked'));
+    const rejection = expect(pending).rejects.toThrow('authority revoked');
+    release();
+    await rejection;
+    expect(written).not.toHaveBeenCalled();
+    expect(mocks.runAsOwner).toHaveBeenCalledTimes(2);
+  });
+
   it('imports only one batched current projection and leaves unavailable guest IDs unacknowledged', async () => {
     mocks.batch.mockResolvedValue([opportunity]);
     mocks.store.mockReturnValue({

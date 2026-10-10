@@ -36,12 +36,18 @@ type Options = {
 };
 
 const storageVersion = 1 as const;
+const tombstoneStorageKey = `${SHORTLIST_STORAGE_KEY}:tombstones`;
 const importEntryLimit = 50;
 const importBodyByteLimit = 200 * 1024;
 // Storage can be disabled for a whole browser session. Keep only public guest
 // snapshots here so a client remount does not pretend that such data was saved.
 let volatileGuestEntries: ShortlistEntry[] = [];
 let volatileGuestStorage: Storage | null = null;
+type Tombstone = Pick<ShortlistEntry, 'updatedAt' | 'revision'> & {
+  id: string;
+};
+let volatileTombstones: Tombstone[] = [];
+let volatileTombstoneGeneration = 0;
 
 function compareEntries(
   left: ShortlistEntry,
@@ -98,6 +104,12 @@ function importBodyBytes(entries: ShortlistEntry[]): number {
     : body.length;
 }
 
+function isAcknowledged(entry: ShortlistEntry, tombstone: Tombstone): boolean {
+  if (entry.updatedAt !== tombstone.updatedAt)
+    return entry.updatedAt < tombstone.updatedAt;
+  return entry.revision <= tombstone.revision;
+}
+
 export function createShortlistClient(options: Options): ShortlistClient {
   const request = options.fetch ?? globalThis.fetch;
   let entries: ShortlistEntry[] = [];
@@ -120,6 +132,67 @@ export function createShortlistClient(options: Options): ShortlistClient {
       return null;
     }
   };
+  const readTombstones = (local: Storage): Tombstone[] => {
+    try {
+      const raw = local.getItem(tombstoneStorageKey);
+      if (!raw) return volatileTombstones;
+      const parsed: unknown = JSON.parse(raw);
+      const legacy = Array.isArray(parsed);
+      const payload = legacy ? { generation: 0, tombstones: parsed } : parsed;
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        !Array.isArray((payload as { tombstones?: unknown }).tombstones) ||
+        !Number.isInteger((payload as { generation?: unknown }).generation)
+      )
+        return volatileTombstones;
+      const generation = (payload as { generation: number }).generation;
+      if (generation > volatileTombstoneGeneration) volatileGuestEntries = [];
+      volatileTombstoneGeneration = generation;
+      volatileTombstones = (payload as { tombstones: unknown[] }).tombstones
+        .filter(
+          (item): item is Tombstone =>
+            !!item &&
+            typeof item === 'object' &&
+            typeof (item as Tombstone).id === 'string' &&
+            typeof (item as Tombstone).updatedAt === 'string' &&
+            Number.isInteger((item as Tombstone).revision),
+        )
+        .slice(-SHORTLIST_LIMIT);
+    } catch {
+      warn('Saved shortlist removal data could not be read.');
+    }
+    return volatileTombstones;
+  };
+  const writeTombstones = (next: Tombstone[]) => {
+    if (next.length > SHORTLIST_LIMIT) volatileTombstoneGeneration += 1;
+    volatileTombstones = next.slice(-SHORTLIST_LIMIT);
+    const local = storage();
+    if (!local) return;
+    try {
+      local.setItem(
+        tombstoneStorageKey,
+        JSON.stringify({
+          generation: volatileTombstoneGeneration,
+          tombstones: volatileTombstones,
+        }),
+      );
+    } catch {
+      warn('Shortlist removal state could not be saved.');
+    }
+  };
+  const withoutAcknowledged = (
+    values: ShortlistEntry[],
+    tombstones: Tombstone[],
+  ) => {
+    const byId = new Map(
+      tombstones.map((tombstone) => [tombstone.id, tombstone]),
+    );
+    return values.filter((entry) => {
+      const tombstone = byId.get(entry.opportunity.id);
+      return !tombstone || !isAcknowledged(entry, tombstone);
+    });
+  };
   const readGuest = (): ShortlistEntry[] => {
     const local = storage();
     if (!local) return [...volatileGuestEntries];
@@ -127,9 +200,18 @@ export function createShortlistClient(options: Options): ShortlistClient {
       if (local !== volatileGuestStorage) {
         volatileGuestStorage = local;
         volatileGuestEntries = [];
+        volatileTombstones = [];
+        volatileTombstoneGeneration = 0;
       }
+      const tombstones = readTombstones(local);
       const raw = local.getItem(SHORTLIST_STORAGE_KEY);
-      if (!raw) return [...volatileGuestEntries];
+      if (!raw) {
+        volatileGuestEntries = withoutAcknowledged(
+          volatileGuestEntries,
+          tombstones,
+        );
+        return [...volatileGuestEntries];
+      }
       let value: unknown;
       try {
         value = JSON.parse(raw);
@@ -152,9 +234,9 @@ export function createShortlistClient(options: Options): ShortlistClient {
         }
         return [...volatileGuestEntries];
       }
-      volatileGuestEntries = mergeEntries(
-        volatileGuestEntries,
-        parsed.data.entries,
+      volatileGuestEntries = withoutAcknowledged(
+        mergeEntries(volatileGuestEntries, parsed.data.entries),
+        tombstones,
       );
       return [...volatileGuestEntries];
     } catch {
@@ -165,14 +247,16 @@ export function createShortlistClient(options: Options): ShortlistClient {
     }
   };
   const writeGuest = (next: ShortlistEntry[]): void => {
-    volatileGuestEntries = [...next];
+    const local = storage();
+    volatileGuestEntries = local
+      ? withoutAcknowledged(next, readTombstones(local))
+      : [...next];
     if (next.length > SHORTLIST_LIMIT) {
       warn(
         `Shortlist sync found more than ${SHORTLIST_LIMIT} entries. Your browser copy was kept in memory; remove entries before trying to save more.`,
       );
       return;
     }
-    const local = storage();
     if (!local) return;
     try {
       volatileGuestStorage = local;
@@ -193,7 +277,8 @@ export function createShortlistClient(options: Options): ShortlistClient {
   const storageListener = (event: StorageEvent) => {
     if (
       destroyed ||
-      event.key !== SHORTLIST_STORAGE_KEY ||
+      (event.key !== SHORTLIST_STORAGE_KEY &&
+        event.key !== tombstoneStorageKey) ||
       event.storageArea !== storage()
     )
       return;
@@ -352,6 +437,12 @@ export function createShortlistClient(options: Options): ShortlistClient {
     async mutate(opportunity, change) {
       const safeOpportunity = publicOpportunitySchema.parse(opportunity);
       if (!options.signedIn) entries = readGuest();
+      const local = !options.signedIn ? storage() : null;
+      const acknowledged = local
+        ? readTombstones(local).find(
+            (tombstone) => tombstone.id === safeOpportunity.id,
+          )
+        : undefined;
       const existing = entries.find(
         (entry) => entry.opportunity.id === safeOpportunity.id,
       );
@@ -386,7 +477,8 @@ export function createShortlistClient(options: Options): ShortlistClient {
               : mutation.applied
                 ? now
                 : null,
-          revision: (existing?.revision ?? 0) + 1,
+          revision:
+            Math.max(existing?.revision ?? 0, acknowledged?.revision ?? 0) + 1,
           available: existing?.available,
         });
         entries = mergeEntries(
@@ -504,6 +596,21 @@ export function createShortlistClient(options: Options): ShortlistClient {
         entries = result.data.entries;
         publish();
         const acknowledged = new Set(result.data.acknowledgedIds);
+        const acknowledgedEntries = batch.filter((entry) =>
+          acknowledged.has(entry.opportunity.id),
+        );
+        if (acknowledgedEntries.length) {
+          const local = storage();
+          const prior = local ? readTombstones(local) : volatileTombstones;
+          writeTombstones([
+            ...prior.filter((tombstone) => !acknowledged.has(tombstone.id)),
+            ...acknowledgedEntries.map((entry) => ({
+              id: entry.opportunity.id,
+              updatedAt: entry.updatedAt,
+              revision: entry.revision,
+            })),
+          ]);
+        }
         const current = readGuest();
         const retained = current.filter(
           (entry) =>

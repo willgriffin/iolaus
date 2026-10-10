@@ -1,4 +1,5 @@
 import { resolveDatabase } from '@happyvertical/smrt-core';
+import { withPrincipalPermissionContext } from '@happyvertical/smrt-users';
 import type {
   ShortlistEntry,
   ShortlistMutation,
@@ -13,8 +14,40 @@ import { createShortlistStore } from './shortlist-store.js';
 import { workspaceSubjectFromLocals } from './workspace-subject.js';
 import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
-async function store() {
-  return createShortlistStore(await resolveDatabase(getDbConfig()));
+async function store(locals?: OwnerPrincipalLocals) {
+  return createShortlistStore(
+    await resolveDatabase(getDbConfig()),
+    locals
+      ? async (subject, transaction) =>
+          await withPrincipalPermissionContext(
+            {
+              db: transaction,
+              userId: subject.userId,
+              tenantId: subject.tenantId,
+              postgresRls: false,
+            },
+            async () =>
+              await runAsOwner(
+                locals,
+                async (run) => {
+                  const current = workspaceSubjectFromLocals(locals);
+                  if (
+                    current.tenantId !== subject.tenantId ||
+                    current.userId !== subject.userId
+                  )
+                    throw new Error('Workspace changed.');
+                  const operation =
+                    workspaceWorkflowOperation('shortlist.manage');
+                  await run.assertOperation(
+                    operation.collection,
+                    operation.action,
+                  );
+                },
+                { action: 'shortlist.write' },
+              ),
+          )
+      : undefined,
+  );
 }
 
 /** Revalidate public snapshots on one bounded catalog read. */
@@ -67,7 +100,7 @@ export async function mutateShortlist(
         mutation.expectedRevision === 0
           ? await getPublicOpportunity(mutation.opportunityId)
           : null;
-      return await (await store()).mutate(subject, mutation, current);
+      return await (await store(locals)).mutate(subject, mutation, current);
     },
     { action: 'shortlist.mutate' },
   );
@@ -123,7 +156,10 @@ export async function importShortlist(
         }
       }
       const acceptedEntries = [...accepted.values()];
-      const result = await (await store()).merge(subject, acceptedEntries);
+      const result = await (await store(locals)).merge(
+        subject,
+        acceptedEntries,
+      );
       return {
         ...result,
         acknowledgedIds: acceptedEntries.map((entry) => entry.opportunity.id),

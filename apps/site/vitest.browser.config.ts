@@ -15,6 +15,7 @@ export default defineConfig({
     environment: 'happy-dom',
     include: [
       'src/lib/components/sources/*.browser.spec.ts',
+      'src/lib/components/SearchTriageRace.browser.spec.ts',
       'src/lib/components/admin/CareerResume.browser.spec.ts',
     ],
   },

@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { executeAsPrincipal } from '@happyvertical/smrt-agents';
 import { getTestDatabase } from '@happyvertical/smrt-core';
+import {
+  getRequestScopedDatabase,
+  withPrincipalPermissionContext,
+} from '@happyvertical/smrt-users';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
 import {
   type AccountDeletionDatabase,
   type AccountDeletionDialect,
@@ -11,7 +20,9 @@ import {
   listIncompleteAccountDeletions,
 } from './account-deletion';
 import { insert } from './fixtures/account-seed.js';
+import { createShortlistStore } from './shortlist-store.js';
 import './smrt.js';
+import './workspace-workflow-capabilities.js';
 import { workspaceOwnershipClasses } from './workspace-ownership-backfill.js';
 
 type TestDatabase = Awaited<ReturnType<typeof getTestDatabase>>;
@@ -266,6 +277,208 @@ function deletionContract(
     dialect,
     environment: shared,
     ...extra,
+  });
+
+  it('resolves fresh native permissions on the held transaction without a second database connection', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    await database.query(
+      'DELETE FROM shortlist_entries WHERE tenant_id = ? AND owner_user_id = ?',
+      [alice.tenantId, alice.userId],
+    );
+    const permissionId = randomUUID();
+    await insert(database, 'permissions', {
+      id: permissionId,
+      slug: 'workflow.shortlist.manage',
+      name: 'Manage shortlist',
+    });
+    const membership = (
+      await database.query(
+        'SELECT role_id FROM memberships WHERE tenant_id = ? AND user_id = ?',
+        [alice.tenantId, alice.userId],
+      )
+    ).rows[0] as { role_id: string };
+    await insert(database, 'role_permissions', {
+      role_id: membership.role_id,
+      permission_id: permissionId,
+    });
+    const store = createShortlistStore(
+      database,
+      async (subject, transaction) => {
+        await withPrincipalPermissionContext(
+          {
+            db: transaction,
+            userId: subject.userId,
+            tenantId: subject.tenantId,
+            postgresRls: false,
+          },
+          async () => {
+            expect(getRequestScopedDatabase()).toBe(transaction);
+            await executeAsPrincipal(
+              {
+                db: getRequestScopedDatabase(),
+                principal: {
+                  runAsUserId: subject.userId,
+                  tenantId: subject.tenantId,
+                  allowedTools: [],
+                },
+                postgresRls: false,
+                audit: () => {},
+              },
+              async (run) => {
+                await run.assertOperation('workflow', 'shortlist.manage');
+              },
+            );
+          },
+        );
+      },
+    );
+    await expect(store.merge(alice, [])).resolves.toBeDefined();
+    await database.query(
+      'DELETE FROM role_permissions WHERE permission_id = ?',
+      [permissionId],
+    );
+    await expect(store.merge(alice, [])).rejects.toThrow();
+  });
+
+  it.each([
+    'mutate',
+    'merge',
+  ])('fences %s behind account deactivation on native storage', async (action) => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    let release!: () => void;
+    let locked!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedLock = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const deletion = deleteAccount(
+      alice,
+      deps(database, {
+        afterPhase: async (phase) => {
+          if (phase === 'lock') {
+            locked();
+            await paused;
+          }
+        },
+      }),
+    );
+    await reachedLock;
+    const second = await getDatabase({
+      cache: false,
+      type: dialect,
+      url: database.url,
+    });
+    try {
+      const store = createShortlistStore(second);
+      const writing =
+        action === 'mutate'
+          ? store.mutate(
+              alice,
+              {
+                mutationId: randomUUID(),
+                opportunityId: 'new',
+                expectedRevision: 0,
+                decision: 'saved',
+              },
+              null,
+            )
+          : store.merge(alice, []);
+      release();
+      await expect(writing).rejects.toThrow(
+        'Workspace account is no longer active',
+      );
+    } finally {
+      await second.close?.();
+      release();
+    }
+    await deletion;
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts'])
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(0);
+    await expect(
+      createShortlistStore(database).merge(alice, []),
+    ).rejects.toThrow('Workspace account is no longer active');
+  });
+
+  it('serializes an in-flight shortlist write before account deletion and removes the committed data', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    let release!: () => void;
+    let locked!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedLock = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const store = createShortlistStore(database, async () => {
+      locked();
+      await paused;
+    });
+    const opportunity: PublicOpportunity = {
+      id: 'race-opportunity',
+      title: 'Role',
+      normalized_title: 'role',
+      company: null,
+      location: { text: '', countries: [], remote: true, timezones: [] },
+      seniority: 'mid',
+      function: 'engineering',
+      employment_type: 'full_time',
+      work_mode: 'remote',
+      skills: { required: [], preferred: [] },
+      compensation: null,
+      posted_at: null,
+      updated_at: '2026-10-08T00:00:00.000Z',
+      expires_at: null,
+      analysis_version: 'v1',
+      source_content_version: 1,
+      posting_url: 'https://example.test/1',
+      url: 'https://example.test/1',
+    };
+    const writing = store.mutate(
+      alice,
+      {
+        mutationId: randomUUID(),
+        opportunityId: opportunity.id,
+        expectedRevision: 0,
+        decision: 'saved',
+      },
+      opportunity,
+    );
+    await reachedLock;
+    const second = await getDatabase({
+      cache: false,
+      type: dialect,
+      url: database.url,
+    });
+    // Start deletion on an independent connection while the transaction is held.
+    const deletion = deleteAccount(alice, deps(second));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    try {
+      await expect(writing).resolves.toMatchObject({ decision: 'saved' });
+      await deletion;
+      for (const table of ['shortlist_entries', 'shortlist_mutation_receipts'])
+        expect(
+          await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+            alice.tenantId,
+            alice.userId,
+          ]),
+        ).toBe(0);
+    } finally {
+      await second.close?.();
+    }
   });
 
   it('deletes account-wide shortlist without a candidate profile and preserves foreign owner tuples', async () => {
@@ -806,7 +1019,15 @@ function deletionContract(
 }
 
 describe('account deletion on SQLite', () => {
-  deletionContract(async () => await getTestDatabase({ classes }), 'sqlite');
+  const paths: string[] = [];
+  afterEach(async () => {
+    for (const path of paths.splice(0)) await rm(path, { force: true });
+  });
+  deletionContract(async () => {
+    const url = join(tmpdir(), `iolaus-deletion-${randomUUID()}.sqlite`);
+    paths.push(url);
+    return await getTestDatabase({ classes, url });
+  }, 'sqlite');
 });
 
 const postgresUrl =
