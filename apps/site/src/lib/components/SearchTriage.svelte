@@ -152,7 +152,7 @@ function captureUiIdentity(): UiIdentity {
 function isCurrentUi(identity: UiIdentity): boolean {
   return (
     deckGeneration === identity.deck &&
-    card?.id === identity.cardId &&
+    (card?.id ?? null) === identity.cardId &&
     view === identity.view &&
     (listOrigin?.id ?? null) === identity.listOriginId
   );

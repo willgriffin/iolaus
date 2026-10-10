@@ -77,6 +77,29 @@ afterEach(async () => {
 });
 
 describe('SearchTriage delayed mutations', () => {
+  it('restores the only card when Undo starts at the end of a deck', async () => {
+    client.load.mockResolvedValue([]);
+    client.mergeGuest.mockResolvedValue(undefined);
+    client.mutate.mockResolvedValue(undefined);
+    target = document.createElement('div');
+    document.body.append(target);
+    component = mount(Harness, { target });
+    component.replaceDeck([opportunity('A')]);
+    await new Promise((resolve) => setTimeout(resolve));
+    await tick();
+    flushSync();
+    client.mutate.mockClear();
+    button('Save').click();
+    await tick();
+    flushSync();
+    expect(target.textContent).toContain('You have reached the end');
+    button('Undo last choice').click();
+    await tick();
+    flushSync();
+    expect(target.textContent).toContain('Role A');
+    expect(button('Undo last choice').disabled).toBe(true);
+  });
+
   it('does not show a rejected old decision on a replacement deck', async () => {
     const saveA = deferred();
     client.load.mockResolvedValue([]);
@@ -122,17 +145,20 @@ describe('SearchTriage delayed mutations', () => {
   it('does not let a delayed decision or undo rewrite a newer deck, card, or list origin', async () => {
     const saveA = deferred(),
       undoC = deferred();
-    let saved = 0;
+    let savedC = false;
     client.load.mockResolvedValue([]);
     client.mergeGuest.mockResolvedValue(undefined);
     client.mutate.mockImplementation(
       (_opportunity: PublicOpportunity, change: { decision?: string }) => {
-        if (change.decision === 'saved' && saved++ === 0) return saveA.promise;
-        if (change.decision === 'seen') return Promise.resolve(undefined);
-        if (change.decision === 'saved' && saved === 2)
+        if (_opportunity.id === 'A' && change.decision === 'saved')
+          return saveA.promise;
+        if (_opportunity.id === 'C' && change.decision === 'saved') {
+          savedC = true;
           return Promise.resolve(undefined);
-        if (change.decision === 'seen') return Promise.resolve(undefined);
-        return undoC.promise;
+        }
+        if (_opportunity.id === 'C' && change.decision === 'seen' && savedC)
+          return undoC.promise;
+        return Promise.resolve(undefined);
       },
     );
     target = document.createElement('div');
@@ -165,6 +191,11 @@ describe('SearchTriage delayed mutations', () => {
     button('Undo last choice').click();
     await tick();
     flushSync();
+    expect(client.mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'C' }),
+      { decision: 'seen' },
+    );
+    expect(button('Undo last choice').disabled).toBe(true);
     button('List view').click();
     await tick();
     flushSync();
