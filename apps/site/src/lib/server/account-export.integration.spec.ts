@@ -12,6 +12,9 @@ import {
 } from './account-export';
 import { insert } from './fixtures/account-seed.js';
 import './smrt.js';
+import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
+import { seedShortlistOwner } from './fixtures/shortlist-owner.js';
+import { createShortlistStore } from './shortlist-store.js';
 
 type TestDatabase = Awaited<ReturnType<typeof getTestDatabase>>;
 
@@ -75,6 +78,8 @@ async function seed(db: TestDatabase, who: Principal, tag: string) {
 const classes = [
   ...new Set(Object.values(accountExportSections).flat()),
   'AdminAssistantTurn',
+  'ShortlistEntryRecord',
+  'ShortlistMutationReceipt',
 ];
 
 describe('account export', () => {
@@ -139,6 +144,7 @@ describe('account export', () => {
     expect(result.counts.CandidateAnswer).toBe(1);
     expect(result.counts.ResumeAsset).toBe(1);
     expect(result.counts.CandidateProfile).toBe(1);
+    expect(result.publicProfile).toBeNull();
 
     // Screening questions are split out of the preference rules.
     expect(result.screeningQuestions).toHaveLength(1);
@@ -186,6 +192,64 @@ describe('account export', () => {
     }
   });
 
+  it('exports only the authenticated owner publication settings, history, and private artifact manifest', async () => {
+    db = await getTestDatabase({ classes });
+    const alice = principal('alice');
+    const bob = principal('bob');
+    await seed(db, alice, 'ALICE');
+    await seed(db, bob, 'BOB');
+    const alicePath = `public-profiles/alice/revision/resume.pdf`;
+    const result = await withTenant(
+      { tenantId: alice.tenantId, userId: alice.userId },
+      async () =>
+        await buildAccountExport(
+          alice,
+          { email: alice.email },
+          {
+            db,
+            publicProfileExport: async (owner) => {
+              if (
+                owner.tenantId !== alice.tenantId ||
+                owner.userId !== alice.userId
+              )
+                return null;
+              return {
+                identity: {
+                  candidateProfileId: alice.profileId,
+                  currentRevisionId: 'revision',
+                  deletedAt: null,
+                  handle: 'alice-public',
+                  revision: 2,
+                },
+                revisions: [
+                  {
+                    baseRevision: 1,
+                    createdAt: '2026-10-06T00:00:00.000Z',
+                    id: 'revision',
+                    pdfBytes: 123,
+                    pdfPath: alicePath,
+                    pdfSha256: 'a'.repeat(64),
+                    publishedRevision: 2,
+                    snapshot: { name: 'Alice', version: 1 },
+                    sourceProfileId: alice.profileId,
+                    status: 'published',
+                  },
+                ],
+              };
+            },
+          },
+        ),
+    );
+    expect(result.publicProfile).toMatchObject({
+      identity: { handle: 'alice-public', revision: 2 },
+      revisions: [{ pdfPath: alicePath, status: 'published' }],
+    });
+    const serialised = JSON.stringify(result.publicProfile);
+    expect(serialised).not.toContain(bob.userId);
+    expect(serialised).not.toContain(bob.tenantId);
+    expect(serialised).not.toContain('BOB');
+  });
+
   it('returns an empty, well-formed export for a user with no profile yet', async () => {
     db = await getTestDatabase({ classes });
     const alice = principal('alice');
@@ -202,6 +266,89 @@ describe('account export', () => {
     expect(result.counts.Achievement).toBe(0);
     expect(result.assets).toEqual([]);
     expect(result.screeningQuestions).toEqual([]);
+  });
+
+  it.each([
+    false,
+    true,
+  ])('exports account-wide shortlist with profile=%s without other owners or receipts', async (withProfile) => {
+    db = await getTestDatabase({ classes });
+    const alice = principal('alice');
+    const bob = principal('bob');
+    const store = createShortlistStore(db);
+    await seedShortlistOwner(db, alice);
+    const opportunity: PublicOpportunity = {
+      id: 'opportunity-1',
+      title: 'Alice saved role',
+      normalized_title: 'role',
+      company: null,
+      location: { text: '', countries: [], remote: true, timezones: [] },
+      seniority: 'mid',
+      function: 'engineering',
+      employment_type: 'full_time',
+      work_mode: 'remote',
+      skills: { required: [], preferred: [] },
+      compensation: null,
+      posted_at: null,
+      updated_at: '2026-10-08T00:00:00.000Z',
+      expires_at: null,
+      analysis_version: 'v1',
+      source_content_version: 1,
+      posting_url: 'https://example.test/jobs/1',
+      url: 'https://example.test/opportunities/1',
+    };
+    const mutationId = randomUUID();
+    await store.mutate(
+      alice,
+      {
+        mutationId,
+        opportunityId: opportunity.id,
+        expectedRevision: 0,
+        decision: 'saved',
+        opened: true,
+      },
+      opportunity,
+    );
+    for (const other of [
+      bob,
+      { ...bob, tenantId: alice.tenantId },
+      { ...alice, tenantId: bob.tenantId },
+    ]) {
+      await seedShortlistOwner(db, other);
+      await store.mutate(
+        other,
+        {
+          mutationId: randomUUID(),
+          opportunityId: opportunity.id,
+          expectedRevision: 0,
+          decision: 'later',
+        },
+        { ...opportunity, title: 'FOREIGN shortlist' },
+      );
+    }
+    const result = await withTenant(
+      { tenantId: alice.tenantId, userId: alice.userId },
+      () =>
+        buildAccountExport(
+          {
+            tenantId: alice.tenantId,
+            userId: alice.userId,
+            ...(withProfile ? { profileId: alice.profileId } : {}),
+          },
+          { email: alice.email },
+          { db, shortlistExport: (owner) => store.list(owner) },
+        ),
+    );
+    expect(result.shortlist).toHaveLength(1);
+    expect(result.shortlist[0]).toMatchObject({
+      decision: 'saved',
+      opportunity: { title: 'Alice saved role' },
+    });
+    expect(result.shortlist[0].openedAt).not.toBeNull();
+    expect(result.counts.ShortlistEntryRecord).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('FOREIGN');
+    expect(JSON.stringify(result)).not.toContain(mutationId);
+    expect(JSON.stringify(result)).not.toContain('requestFingerprint');
   });
 
   it('names the download without any personal data', () => {

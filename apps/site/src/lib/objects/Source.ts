@@ -46,6 +46,9 @@ export class Source extends SmrtObject {
   nextCheckAt: Date | null = null;
   @field({ type: 'boolean' })
   isActive = false;
+  /** Operators may exclude a source from every public catalog surface. */
+  @field({ type: 'boolean' })
+  publicListing = true;
 
   async loadFromId(id?: string) {
     if (id) this.id = id;

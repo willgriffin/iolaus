@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { executeAsPrincipal } from '@happyvertical/smrt-agents';
 import { getTestDatabase } from '@happyvertical/smrt-core';
+import {
+  getRequestScopedDatabase,
+  withPrincipalPermissionContext,
+} from '@happyvertical/smrt-users';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
 import {
   type AccountDeletionDatabase,
   type AccountDeletionDialect,
@@ -11,7 +20,9 @@ import {
   listIncompleteAccountDeletions,
 } from './account-deletion';
 import { insert } from './fixtures/account-seed.js';
+import { createShortlistStore } from './shortlist-store.js';
 import './smrt.js';
+import './workspace-workflow-capabilities.js';
 import { workspaceOwnershipClasses } from './workspace-ownership-backfill.js';
 
 type TestDatabase = Awaited<ReturnType<typeof getTestDatabase>>;
@@ -32,6 +43,10 @@ const classes = [
   'AccountDeletionRecord',
   'CliAuthRequest',
   'DataSurfacePreviewToken',
+  'ShortlistEntryRecord',
+  'ShortlistMutationReceipt',
+  'PublicProfileIdentity',
+  'PublicProfileRevision',
   'User',
   'Tenant',
   'Membership',
@@ -215,7 +230,11 @@ async function seedUser(db: TestDatabase, who: Principal): Promise<void> {
   for (const table of accountOwnedTables) {
     if (['ai_user_budgets'].includes(table)) continue;
     await insert(db, table, {
-      ...(table === 'candidate_profiles'
+      ...([
+        'candidate_profiles',
+        'shortlist_entries',
+        'shortlist_mutation_receipts',
+      ].includes(table)
         ? {}
         : { candidate_profile_id: who.profileId }),
       owner_user_id: who.userId,
@@ -258,6 +277,253 @@ function deletionContract(
     dialect,
     environment: shared,
     ...extra,
+  });
+
+  it('resolves fresh native permissions on the held transaction without a second database connection', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    await database.query(
+      'DELETE FROM shortlist_entries WHERE tenant_id = ? AND owner_user_id = ?',
+      [alice.tenantId, alice.userId],
+    );
+    const permissionId = randomUUID();
+    await insert(database, 'permissions', {
+      id: permissionId,
+      slug: 'workflow.shortlist.manage',
+      name: 'Manage shortlist',
+    });
+    const membership = (
+      await database.query(
+        'SELECT role_id FROM memberships WHERE tenant_id = ? AND user_id = ?',
+        [alice.tenantId, alice.userId],
+      )
+    ).rows[0] as { role_id: string };
+    await insert(database, 'role_permissions', {
+      role_id: membership.role_id,
+      permission_id: permissionId,
+    });
+    const store = createShortlistStore(
+      database,
+      async (subject, transaction) => {
+        await withPrincipalPermissionContext(
+          {
+            db: transaction,
+            userId: subject.userId,
+            tenantId: subject.tenantId,
+            postgresRls: false,
+          },
+          async () => {
+            expect(getRequestScopedDatabase()).toBe(transaction);
+            await executeAsPrincipal(
+              {
+                db: getRequestScopedDatabase(),
+                principal: {
+                  runAsUserId: subject.userId,
+                  tenantId: subject.tenantId,
+                  allowedTools: [],
+                },
+                postgresRls: false,
+                audit: () => {},
+              },
+              async (run) => {
+                await run.assertOperation('workflow', 'shortlist.manage');
+              },
+            );
+          },
+        );
+      },
+    );
+    await expect(store.merge(alice, [])).resolves.toBeDefined();
+    await database.query(
+      'DELETE FROM role_permissions WHERE permission_id = ?',
+      [permissionId],
+    );
+    await expect(store.merge(alice, [])).rejects.toThrow();
+  });
+
+  it.each([
+    'mutate',
+    'merge',
+  ])('fences %s behind account deactivation on native storage', async (action) => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    let release!: () => void;
+    let locked!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedLock = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const deletion = deleteAccount(
+      alice,
+      deps(database, {
+        afterPhase: async (phase) => {
+          if (phase === 'lock') {
+            locked();
+            await paused;
+          }
+        },
+      }),
+    );
+    await reachedLock;
+    const second = await getDatabase({
+      cache: false,
+      type: dialect,
+      url: database.url,
+    });
+    try {
+      const store = createShortlistStore(second);
+      const writing =
+        action === 'mutate'
+          ? store.mutate(
+              alice,
+              {
+                mutationId: randomUUID(),
+                opportunityId: 'new',
+                expectedRevision: 0,
+                decision: 'saved',
+              },
+              null,
+            )
+          : store.merge(alice, []);
+      release();
+      await expect(writing).rejects.toThrow(
+        'Workspace account is no longer active',
+      );
+    } finally {
+      await second.close?.();
+      release();
+    }
+    await deletion;
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts'])
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(0);
+    await expect(
+      createShortlistStore(database).merge(alice, []),
+    ).rejects.toThrow('Workspace account is no longer active');
+  });
+
+  it('serializes an in-flight shortlist write before account deletion and removes the committed data', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    await seedUser(database, alice);
+    let release!: () => void;
+    let locked!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedLock = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const store = createShortlistStore(database, async () => {
+      locked();
+      await paused;
+    });
+    const opportunity: PublicOpportunity = {
+      id: 'race-opportunity',
+      title: 'Role',
+      normalized_title: 'role',
+      company: null,
+      location: { text: '', countries: [], remote: true, timezones: [] },
+      seniority: 'mid',
+      function: 'engineering',
+      employment_type: 'full_time',
+      work_mode: 'remote',
+      skills: { required: [], preferred: [] },
+      compensation: null,
+      posted_at: null,
+      updated_at: '2026-10-08T00:00:00.000Z',
+      expires_at: null,
+      analysis_version: 'v1',
+      source_content_version: 1,
+      posting_url: 'https://example.test/1',
+      url: 'https://example.test/1',
+    };
+    const writing = store.mutate(
+      alice,
+      {
+        mutationId: randomUUID(),
+        opportunityId: opportunity.id,
+        expectedRevision: 0,
+        decision: 'saved',
+      },
+      opportunity,
+    );
+    await reachedLock;
+    const second = await getDatabase({
+      cache: false,
+      type: dialect,
+      url: database.url,
+    });
+    // Start deletion on an independent connection while the transaction is held.
+    const deletion = deleteAccount(alice, deps(second));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    try {
+      await expect(writing).resolves.toMatchObject({ decision: 'saved' });
+      await deletion;
+      for (const table of ['shortlist_entries', 'shortlist_mutation_receipts'])
+        expect(
+          await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+            alice.tenantId,
+            alice.userId,
+          ]),
+        ).toBe(0);
+    } finally {
+      await second.close?.();
+    }
+  });
+
+  it('deletes account-wide shortlist without a candidate profile and preserves foreign owner tuples', async () => {
+    const database = await setup();
+    const alice = principal('alice');
+    const bob = principal('bob');
+    await seedUser(database, alice);
+    await database.query(
+      'DELETE FROM candidate_profiles WHERE tenant_id = ? AND owner_user_id = ?',
+      [alice.tenantId, alice.userId],
+    );
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts']) {
+      await insert(database, table, {
+        tenant_id: alice.tenantId,
+        owner_user_id: bob.userId,
+      });
+      await insert(database, table, {
+        tenant_id: bob.tenantId,
+        owner_user_id: alice.userId,
+      });
+    }
+    await deleteAccount(
+      { tenantId: alice.tenantId, userId: alice.userId },
+      deps(database),
+    );
+    for (const table of ['shortlist_entries', 'shortlist_mutation_receipts']) {
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(0);
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          alice.tenantId,
+          bob.userId,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(database, table, 'tenant_id = ? AND owner_user_id = ?', [
+          bob.tenantId,
+          alice.userId,
+        ]),
+      ).toBe(1);
+    }
   });
 
   it("deletes one user's data across every owned table and leaves the other user untouched", async () => {
@@ -325,6 +591,70 @@ function deletionContract(
         [b.userId],
       ),
     ).toBe(1);
+  });
+
+  it('tombstones a public profile before deleting its private revision artifact', async () => {
+    const database = await setup();
+    const a = principal('alice');
+    const b = principal('bob');
+    await seedUser(database, a);
+    await seedUser(database, b);
+    const publicationId = randomUUID();
+    const revisionId = randomUUID();
+    const path = `public-profiles/${publicationId}/${revisionId}/resume.pdf`;
+    await insert(database, 'public_profile_identities', {
+      candidate_profile_id: a.profileId,
+      handle: `alice-${publicationId.slice(0, 8)}`,
+      id: publicationId,
+      owner_user_id: a.userId,
+      revision: 1,
+      tenant_id: a.tenantId,
+    });
+    await insert(database, 'public_profile_revisions', {
+      base_revision: 0,
+      pdf_bytes: 4,
+      pdf_path: path,
+      pdf_sha256: 'a'.repeat(64),
+      publication_id: publicationId,
+      revision_id: revisionId,
+      snapshot: JSON.stringify({ version: 1, name: 'Alice', sections: [] }),
+      source_profile_id: a.profileId,
+      status: 'published',
+    });
+    const removed: string[] = [];
+
+    await deleteAccount(
+      { tenantId: a.tenantId, userId: a.userId },
+      deps(database, {
+        filesystem: {
+          delete: async (key: string) => {
+            removed.push(key);
+          },
+          exists: async () => true,
+        },
+      }),
+    );
+
+    expect(removed).toContain(path);
+    const tombstone = await database.query(
+      'SELECT deleted_at, current_revision_id FROM public_profile_identities WHERE id = ?',
+      [publicationId],
+    );
+    expect(tombstone.rows).toHaveLength(1);
+    expect(tombstone.rows[0]).toMatchObject({ current_revision_id: null });
+    expect(
+      (tombstone.rows[0] as { deleted_at?: unknown }).deleted_at,
+    ).toBeTruthy();
+    expect(
+      await count(database, 'public_profile_revisions', 'publication_id = ?', [
+        publicationId,
+      ]),
+    ).toBe(0);
+    expect(
+      await count(database, 'public_profile_identities', 'owner_user_id = ?', [
+        b.userId,
+      ]),
+    ).toBe(0);
   });
 
   it('revokes the hosted invite instead of deleting it', async () => {
@@ -498,7 +828,24 @@ function deletionContract(
     await seedUser(database, a);
     const failing = {
       ...database,
-      query: database.query.bind(database),
+      url: database.url,
+      // This case is narrowly about the final account-row transaction. Keep
+      // the publication tables absent to avoid forwarding their nested native
+      // transaction through this deliberately incomplete fault-injection
+      // wrapper; publication deletion is covered by its own SQLite/Postgres
+      // case above.
+      query: async (sql: string, values?: unknown[]) => {
+        if (
+          sql.includes('information_schema.columns') &&
+          (values?.[0] === 'public_profile_identities' ||
+            values?.[0] === 'public_profile_revisions')
+        ) {
+          return { rows: [] };
+        }
+        return values === undefined
+          ? await database.query(sql)
+          : await database.query(sql, values);
+      },
       transaction: async <T>(
         work: (tx: AccountDeletionDatabase) => Promise<T>,
       ) =>
@@ -508,7 +855,20 @@ function deletionContract(
               query: async (sql: string, values?: unknown[]) => {
                 if (/DELETE FROM "users"/u.test(sql))
                   throw new Error('simulated storage failure');
-                return await tx.query(sql, values);
+                // This fault-injection wrapper talks directly to the native
+                // PostgreSQL transaction, below the normal SQL adapter that
+                // rewrites `?` placeholders. Keep the publication advisory
+                // lock executable while preserving the intended final-row
+                // failure.
+                let parameter = 0;
+                const nativeSql =
+                  sql.includes('pg_advisory_xact_lock') ||
+                  sql.includes('public_profile_')
+                    ? sql.replace(/\?/gu, () => `$${++parameter}`)
+                    : sql;
+                return values === undefined
+                  ? await tx.query(nativeSql)
+                  : await tx.query(nativeSql, values);
               },
             }),
         ),
@@ -659,7 +1019,15 @@ function deletionContract(
 }
 
 describe('account deletion on SQLite', () => {
-  deletionContract(async () => await getTestDatabase({ classes }), 'sqlite');
+  const paths: string[] = [];
+  afterEach(async () => {
+    for (const path of paths.splice(0)) await rm(path, { force: true });
+  });
+  deletionContract(async () => {
+    const url = join(tmpdir(), `iolaus-deletion-${randomUUID()}.sqlite`);
+    paths.push(url);
+    return await getTestDatabase({ classes, url });
+  }, 'sqlite');
 });
 
 const postgresUrl =

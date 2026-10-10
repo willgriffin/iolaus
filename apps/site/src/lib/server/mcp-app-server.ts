@@ -8,9 +8,19 @@ import {
   openAiDisplayMetadata,
   withOpenAiEntrypoints,
 } from '@happyvertical/smrt-mcp-openai';
+import { z } from 'zod';
 import workspaceCss from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.css?raw';
 import workspaceScript from '$lib/components/mcp-apps/generated/iolaus-opportunity-workspace.iife.js?raw';
 import { jobSearchToolContracts } from '$lib/job-search-tool-schemas';
+import {
+  publicFacetsSchema,
+  publicMatchInputSchema,
+  publicMatchResultSchema,
+  publicOpportunityDetailSchema,
+  publicOpportunityInputSchema,
+  publicSearchInputSchema,
+  publicSearchPageSchema,
+} from '$lib/public-opportunity-contract.js';
 import { administrativeSessionFailure } from './administrative-auth.js';
 import { getConfiguredMcpServerName } from './app-config.js';
 import { inspectJobApplication } from './application-inspect-webmcp.js';
@@ -19,7 +29,18 @@ import {
   inspectJobOpportunity,
   openJobApplication,
 } from './job-search-webmcp.js';
+import {
+  getMyOpportunityMatches,
+  refreshOpportunityMatches,
+} from './opportunity-matching.js';
 import { runAsOwner } from './owner-principal.js';
+import {
+  consumePublicSearchBudget,
+  getPublicOpportunity,
+  listPublicFacets,
+  matchPublicSkills,
+  searchPublicOpportunities,
+} from './public-search/index.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
 import {
   withVerifiedWorkspaceSubject,
@@ -80,12 +101,199 @@ const outputSchema = {
   type: 'object' as const,
 };
 
+const PUBLIC_MCP_TOOL_NAMES = new Set([
+  'get_opportunity',
+  'explain_match',
+  'list_facets',
+  'search_opportunities',
+]);
+
+/** MCP advertises the same object contracts used by REST parsing and serialization.
+ * Input mode preserves optional/defaulted filters instead of requiring defaults.
+ * Refinements that JSON Schema cannot express remain enforced by Zod at execution.
+ */
+function publicObjectJsonSchema(schema: z.ZodType, io: 'input' | 'output') {
+  return { ...z.toJSONSchema(schema, { io }), type: 'object' as const };
+}
+
 function jsonResult(data: Record<string, unknown>) {
   return {
     content: [{ text: JSON.stringify(data), type: 'text' as const }],
     structuredContent: data,
   };
 }
+
+function parsePublicSearchInput(input: unknown) {
+  try {
+    return publicSearchInputSchema.parse(input);
+  } catch {
+    throw new McpAccessError(400, 'Invalid public search arguments.');
+  }
+}
+
+const publicSearchWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Search the shared public opportunity catalog. It never reads a profile, workspace, application, or private evidence.',
+  effect: 'read',
+  execute: async ({ arguments: input }) =>
+    jsonResult(
+      await (async () => {
+        await consumePublicSearchBudget(3);
+        return publicSearchPageSchema.parse(
+          await searchPublicOpportunities(parsePublicSearchInput(input)),
+        );
+      })(),
+    ),
+  idempotent: true,
+  inputSchema: publicObjectJsonSchema(publicSearchInputSchema, 'input'),
+  name: 'search_opportunities',
+  openWorld: true,
+  outputSchema: publicObjectJsonSchema(publicSearchPageSchema, 'output'),
+  title: 'Search public opportunities',
+};
+
+const publicOpportunityWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Read one allowlisted public opportunity summary and its original posting link. It never returns a raw posting or workspace data.',
+  effect: 'read',
+  execute: async ({ arguments: input }) => {
+    const parsed = publicOpportunityInputSchema.safeParse(input);
+    if (!parsed.success)
+      throw new McpAccessError(
+        400,
+        'A valid public opportunity ID is required.',
+      );
+    const { id } = parsed.data;
+    await consumePublicSearchBudget(1);
+    const opportunity = await getPublicOpportunity(id);
+    if (!opportunity) throw new McpAccessError(404, 'Opportunity not found.');
+    return jsonResult(publicOpportunityDetailSchema.parse(opportunity));
+  },
+  idempotent: true,
+  inputSchema: publicObjectJsonSchema(publicOpportunityInputSchema, 'input'),
+  name: 'get_opportunity',
+  openWorld: true,
+  outputSchema: publicObjectJsonSchema(publicOpportunityDetailSchema, 'output'),
+  title: 'Get public opportunity',
+};
+
+const publicFacetsWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'List bounded filter facets for the shared public opportunity catalog. It does not access linked-account or workspace data.',
+  effect: 'read',
+  execute: async ({ arguments: input }) =>
+    jsonResult(
+      await (async () => {
+        await consumePublicSearchBudget(6);
+        return publicFacetsSchema.parse(
+          await listPublicFacets(parsePublicSearchInput(input)),
+        );
+      })(),
+    ),
+  idempotent: true,
+  inputSchema: publicObjectJsonSchema(publicSearchInputSchema, 'input'),
+  name: 'list_facets',
+  openWorld: true,
+  outputSchema: publicObjectJsonSchema(publicFacetsSchema, 'output'),
+  title: 'List public opportunity facets',
+};
+
+const publicMatchWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Explain zero-model coverage against shared public opportunities using submitted skills and optional experience and eligibility constraints.',
+  effect: 'read',
+  execute: async ({ arguments: input }) => {
+    await consumePublicSearchBudget(10);
+    return jsonResult(
+      publicMatchResultSchema.parse(
+        await matchPublicSkills(publicMatchInputSchema.parse(input)),
+      ),
+    );
+  },
+  idempotent: true,
+  inputSchema: publicObjectJsonSchema(publicMatchInputSchema, 'input'),
+  name: 'explain_match',
+  openWorld: true,
+  outputSchema: publicObjectJsonSchema(publicMatchResultSchema, 'output'),
+  title: 'Explain public skill match',
+};
+
+function matchLimit(input: Record<string, unknown>): number | undefined {
+  const value = input.limit;
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 25
+  ) {
+    throw new McpAccessError(
+      400,
+      'Match limit must be an integer from 1 to 25.',
+    );
+  }
+  return value;
+}
+
+const privateMatchInputSchema = {
+  additionalProperties: false,
+  properties: { limit: { maximum: 25, minimum: 1, type: 'integer' } },
+  type: 'object' as const,
+};
+
+const privateMatchesWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Read the signed-in owner’s private opportunity matches. It rechecks the live workspace subject and never accepts an owner, profile, or tenant argument.',
+  effect: 'read',
+  execute: async ({ arguments: input, principal }) =>
+    jsonResult(
+      await runOwnerWorkflow({
+        execute: async (owner) => ({
+          items: await getMyOpportunityMatches(
+            workspaceSubjectForOwner(owner),
+            {
+              limit: matchLimit(input),
+            },
+          ),
+        }),
+        operations: [workspaceWorkflowOperation('application.inspect')],
+        principal,
+        profileRequired: true,
+        tool: 'match_my_profile',
+      }),
+    ),
+  idempotent: true,
+  inputSchema: privateMatchInputSchema,
+  name: 'match_my_profile',
+  openWorld: false,
+  outputSchema,
+  title: 'Read my opportunity matches',
+};
+
+const refreshPrivateMatchesWorkflow: McpWorkflowToolDefinition = {
+  description:
+    'Refresh the signed-in owner’s bounded private opportunity matches without approving or submitting an application.',
+  effect: 'write',
+  execute: async ({ arguments: input, principal }) =>
+    jsonResult(
+      await runOwnerWorkflow({
+        execute: async (owner) =>
+          await refreshOpportunityMatches(workspaceSubjectForOwner(owner), {
+            limit: matchLimit(input),
+          }),
+        operations: [workspaceWorkflowOperation('assessment.execute')],
+        principal,
+        profileRequired: true,
+        tool: 'refresh_my_matches',
+      }),
+    ),
+  idempotent: false,
+  inputSchema: privateMatchInputSchema,
+  name: 'refresh_my_matches',
+  openWorld: false,
+  outputSchema,
+  title: 'Refresh my opportunity matches',
+};
 
 function asOwnerPrincipal(
   principal: McpAppPrincipal | null,
@@ -118,6 +326,18 @@ async function runOwnerWorkflow<T>(options: {
   }) => Promise<T>;
 }): Promise<T> {
   const owner = asOwnerPrincipal(options.principal, options.profileRequired);
+  for (const operation of options.operations) {
+    if (
+      !owner.permissions?.includes(
+        `${operation.collection}.${operation.action}`,
+      )
+    ) {
+      throw new McpAccessError(
+        403,
+        'The granted scope does not permit this operation.',
+      );
+    }
+  }
   return await runAsOwner(
     {
       permissions: owner.permissions,
@@ -337,7 +557,7 @@ const reviewNavigationWorkflow: McpWorkflowToolDefinition = {
     const applicationId = reviewApplicationId(input.url);
     const inspection = await runOwnerWorkflow({
       execute: async () => await inspectJobApplication({ applicationId }),
-      operations: [workspaceWorkflowOperation('application.review')],
+      operations: [workspaceWorkflowOperation('application.inspect')],
       principal,
       profileRequired: true,
       tool: 'job_search_inspect_application',
@@ -381,6 +601,7 @@ function canUseIolausMcp(
  */
 export const mcpAppServer = createMcpAppServer({
   allowedClassNames: [],
+  publicToolPatterns: () => [...PUBLIC_MCP_TOOL_NAMES],
   resourcePolicy: ({ principal }) => canUseIolausMcp(principal),
   resources: [
     {
@@ -401,8 +622,19 @@ export const mcpAppServer = createMcpAppServer({
   },
   smrtOptions: () =>
     getRequestScopedSmrtOptions() as unknown as Record<string, unknown>,
-  toolPolicy: ({ principal }) => canUseIolausMcp(principal),
+  // Keep the anonymous surface exact. A null principal can discover and call
+  // only the catalog tools declared above; it never makes generated CRUD,
+  // private workflows, or the embedded resource public.
+  toolPolicy: ({ principal, tool }) =>
+    (principal == null && PUBLIC_MCP_TOOL_NAMES.has(tool.name)) ||
+    canUseIolausMcp(principal),
   workflowTools: [
+    publicSearchWorkflow,
+    publicOpportunityWorkflow,
+    publicFacetsWorkflow,
+    publicMatchWorkflow,
+    privateMatchesWorkflow,
+    refreshPrivateMatchesWorkflow,
     browseWorkflow,
     opportunityBoardEntrypoint,
     inspectWorkflow,

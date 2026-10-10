@@ -3,10 +3,15 @@ import { load } from './+page';
 
 type LoadEvent = Parameters<typeof load>[0];
 
-function event(resource: string, href: string): LoadEvent {
+function event(
+  resource: string,
+  href: string,
+  publicOpportunityBrowserEnabled = false,
+): LoadEvent {
   return {
     params: { resource },
     parent: async () => ({
+      publicOpportunityBrowserEnabled,
       tenantId: 'tenant-a',
       user: { email: 'owner@example.test', id: 'user-a' },
     }),
@@ -43,6 +48,47 @@ describe('admin list route load', () => {
     expect(data).toMatchObject({
       activeReviewFilter: 'unsorted',
       pagination: { page: 1, pageSize: 100 },
+      resource: { slug: 'opportunities' },
+    });
+  });
+
+  it('opens the shared list browser for signed-in catalog browsing', async () => {
+    await expect(
+      load(
+        event('opportunities', 'http://localhost/admin/opportunities', true),
+      ),
+    ).rejects.toMatchObject({
+      status: 307,
+      location: '/opportunities/?start=1&view=list',
+    });
+  });
+
+  it('preserves public filters and explicit triage view', async () => {
+    await expect(
+      load(
+        event(
+          'opportunities',
+          'http://localhost/admin/opportunities?skills=nodejs&skills=mysql&view=triage',
+          true,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      status: 307,
+      location:
+        '/opportunities/?skills=nodejs&skills=mysql&view=triage&start=1',
+    });
+  });
+
+  it('retains explicit administrative review filters', async () => {
+    const data = await load(
+      event(
+        'opportunities',
+        'http://localhost/admin/opportunities?review=maybe&sort=score',
+        true,
+      ),
+    );
+    expect(data).toMatchObject({
+      activeReviewFilter: 'maybe',
       resource: { slug: 'opportunities' },
     });
   });

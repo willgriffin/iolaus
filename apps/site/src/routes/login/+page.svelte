@@ -1,6 +1,7 @@
 <script lang="ts">
 import LogIn from '@lucide/svelte/icons/log-in';
 import LegalLinks from '$lib/components/LegalLinks.svelte';
+import PublicSiteHeader from '$lib/components/PublicSiteHeader.svelte';
 
 let { data, form } = $props();
 </script>
@@ -8,6 +9,8 @@ let { data, form } = $props();
 <svelte:head>
   <title>Sign in — {data.appName}</title>
 </svelte:head>
+<PublicSiteHeader/>
+
 
 <main class="login-shell">
   <section class="login-panel">

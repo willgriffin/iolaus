@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   verifySubject: vi.fn(),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: mocks.resolveDatabase,
 }));
 vi.mock('@happyvertical/smrt-chat/internal/agent-runtime', () => ({

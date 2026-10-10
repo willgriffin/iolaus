@@ -9,6 +9,7 @@ vi.mock('$lib/server/ai-usage-guard', () => ({
   getAiUsageSummary: vi.fn(async () => null),
 }));
 vi.mock('$lib/server/app-config', () => ({
+  isSharedHosted: () => true,
   getAppConfig: () => ({ appMark: 'I', appName: 'Iolaus' }),
   getPublicLinks: () => ({
     landing: null,

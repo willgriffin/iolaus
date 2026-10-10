@@ -1,4 +1,5 @@
 import type { FilesystemInterface } from '@happyvertical/files';
+import type { ShortlistEntry } from '$lib/shortlist-contract.js';
 import {
   getPrivateRecord,
   listPrivateRecords,
@@ -100,6 +101,29 @@ export interface AccountExportAsset {
   title: string;
 }
 
+/** Owner-only publication settings, immutable snapshots, and private files. */
+export interface AccountExportPublicProfile {
+  identity: {
+    candidateProfileId: string;
+    currentRevisionId: string | null;
+    deletedAt: string | null;
+    handle: string;
+    revision: number;
+  };
+  revisions: Array<{
+    baseRevision: number;
+    createdAt: string;
+    id: string;
+    pdfBytes: number;
+    pdfPath: string;
+    pdfSha256: string;
+    publishedRevision: number | null;
+    snapshot: unknown;
+    sourceProfileId: string;
+    status: string;
+  }>;
+}
+
 export interface AccountExport {
   account: { email: string | null };
   assets: AccountExportAsset[];
@@ -107,7 +131,9 @@ export interface AccountExport {
   exportedAt: string;
   format: typeof ACCOUNT_EXPORT_FORMAT;
   notes: string[];
+  publicProfile: AccountExportPublicProfile | null;
   screeningQuestions: Row[];
+  shortlist: ShortlistEntry[];
   sections: Record<string, Record<string, Row[]>>;
   version: typeof ACCOUNT_EXPORT_VERSION;
   workspaceMode: string;
@@ -119,6 +145,14 @@ export interface AccountExportDependencies extends PrivateCollectionOptions {
   now?: () => Date;
   /** Origin to prefix download paths with, e.g. `https://app.example`. */
   origin?: string;
+  /** Optional while an older database has no public-profile tables. */
+  publicProfileExport?: (
+    subject: Pick<WorkspaceIdentitySubject, 'tenantId' | 'userId'>,
+  ) => Promise<AccountExportPublicProfile | null>;
+  /** Account-wide decisions; excludes internal idempotency receipts. */
+  shortlistExport?: (
+    subject: Pick<WorkspaceIdentitySubject, 'tenantId' | 'userId'>,
+  ) => Promise<ShortlistEntry[]>;
   workspaceMode?: string;
 }
 
@@ -179,7 +213,7 @@ async function fileEntries(
 
 /**
  * Build the export for one verified candidate workspace subject. A subject
- * without a selected profile yields an empty export rather than an error, so
+ * without a selected profile still exports account-wide data, so
  * a user who never onboarded can still confirm what is held about them.
  */
 export async function buildAccountExport(
@@ -194,6 +228,19 @@ export async function buildAccountExport(
   const counts: Record<string, number> = {};
   const assets: AccountExportAsset[] = [];
   let screeningQuestions: Row[] = [];
+  const publicProfile = deps.publicProfileExport
+    ? await deps.publicProfileExport({
+        tenantId: identity.tenantId,
+        userId: identity.userId,
+      })
+    : null;
+  const shortlist = deps.shortlistExport
+    ? await deps.shortlistExport({
+        tenantId: identity.tenantId,
+        userId: identity.userId,
+      })
+    : [];
+  counts.ShortlistEntryRecord = shortlist.length;
   const notes = [
     'Download links require you to be signed in and stop working once your account is deleted. Save the files you need first.',
     'AI usage accounting rows and the derived opportunity ranking cache are platform records and are not part of this export.',
@@ -277,7 +324,9 @@ export async function buildAccountExport(
     exportedAt,
     format: ACCOUNT_EXPORT_FORMAT,
     notes,
+    publicProfile,
     screeningQuestions,
+    shortlist,
     sections,
     version: ACCOUNT_EXPORT_VERSION,
     workspaceMode: deps.workspaceMode ?? 'shared',

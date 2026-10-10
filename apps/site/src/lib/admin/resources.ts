@@ -880,6 +880,14 @@ export const adminResources: AdminResource[] = [
       { key: 'lastCheckedAt', label: 'Last checked', kind: 'datetime' },
       { key: 'nextCheckAt', label: 'Next check', kind: 'datetime' },
       {
+        key: 'publicListing',
+        label: 'Include in public catalog',
+        kind: 'checkbox',
+        defaultValue: true,
+        description:
+          'Allow structured summaries from this source on public search pages and agent tools.',
+      },
+      {
         key: 'isActive',
         label: 'Active',
         kind: 'checkbox',

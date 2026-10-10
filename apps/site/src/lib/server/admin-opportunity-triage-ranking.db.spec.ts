@@ -46,6 +46,12 @@ vi.mock('./job-workspace-subject.js', async (importOriginal) => ({
   ),
 }));
 
+// This native SQL suite exercises the v2 triage projection. Verified v3 refresh
+// and its owner boundary are covered by opportunity-matching-pipeline/store tests.
+vi.mock('./opportunity-matching.js', () => ({
+  refreshOpportunityMatches: vi.fn(async () => ({ materialFingerprint: '' })),
+}));
+
 const postgresUrl = process.env.TRIAGE_TEST_POSTGRES_URL?.trim();
 const TEST_WORKSPACE_SUBJECT = {
   profileId: 'profile-a',

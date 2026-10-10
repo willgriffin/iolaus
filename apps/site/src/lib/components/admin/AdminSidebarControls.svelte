@@ -10,6 +10,7 @@ let {
   onToggleTheme,
   onOpenSettings,
   compact = false,
+  accountConnectionsEnabled = false,
   id,
 }: {
   email?: string;
@@ -17,6 +18,7 @@ let {
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   compact?: boolean;
+  accountConnectionsEnabled?: boolean;
   id: string;
 } = $props();
 function dismissAccountMenu(event: KeyboardEvent): void {
@@ -39,6 +41,7 @@ function dismissAccountMenu(event: KeyboardEvent): void {
     <div {id} popover="auto" class="account-menu" aria-label="Account">
       <p>{email}</p>
       <button type="button" onclick={(event) => { (event.currentTarget.closest('[popover]') as HTMLElement | null)?.hidePopover(); onOpenSettings(); }}>App settings</button>
+      {#if accountConnectionsEnabled}<a href="/account/connections">Account connections</a>{/if}
       <form method="POST" action="/logout"><button type="submit"><LogOut size={16} aria-hidden="true" /> Sign out</button></form>
     </div>
   {/if}

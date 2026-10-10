@@ -57,11 +57,13 @@ const mocks = vi.hoisted(() => ({
   requireWorkspaceSubject: vi.fn(),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   executeCollectionReadPlan: mocks.executeCollectionReadPlan,
 }));
 
-vi.mock('@happyvertical/smrt-tenancy', () => ({
+vi.mock('@happyvertical/smrt-tenancy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-tenancy')>()),
   getCurrentTenant: mocks.getCurrentTenant,
 }));
 

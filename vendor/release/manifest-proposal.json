@@ -1,0 +1,202 @@
+{
+  "package.json": [
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-app-runtime",
+      "from": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
+      "to": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-config",
+      "from": "file:vendor/release/happyvertical-smrt-config-0.55.3.tgz",
+      "to": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-scanner",
+      "from": "file:vendor/release/happyvertical-smrt-scanner-0.55.3.tgz",
+      "to": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/sql",
+      "from": "file:vendor/release/happyvertical-sql-0.102.3.tgz",
+      "to": "file:vendor/release/happyvertical-sql-0.103.1.tgz"
+    },
+    {
+      "field": "devDependencies",
+      "name": "@happyvertical/encryption",
+      "from": "file:vendor/release/happyvertical-encryption-0.102.3.tgz",
+      "to": "file:vendor/release/happyvertical-encryption-0.103.1.tgz"
+    },
+    {
+      "field": "devDependencies",
+      "name": "@happyvertical/smrt-cli",
+      "from": "file:vendor/release/happyvertical-smrt-cli-0.55.3.tgz",
+      "to": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz"
+    },
+    {
+      "field": "devDependencies",
+      "name": "@happyvertical/smrt-dev-mcp",
+      "from": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.3.tgz",
+      "to": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz"
+    }
+  ],
+  "apps/site/package.json": [
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/ai",
+      "from": "file:../../vendor/release/happyvertical-ai-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-ai-0.103.1.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/auth",
+      "from": "file:../../vendor/release/happyvertical-auth-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-auth-0.103.1.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/files",
+      "from": "file:../../vendor/release/happyvertical-files-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-files-0.103.1.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/geo",
+      "from": "file:../../vendor/release/happyvertical-geo-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-geo-0.103.1.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-agents",
+      "from": "file:../../vendor/release/happyvertical-smrt-agents-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-agents-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-app-mcp",
+      "from": "file:../../vendor/release/happyvertical-smrt-app-mcp-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-app-runtime",
+      "from": "file:../../vendor/release/happyvertical-smrt-app-runtime-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-chat",
+      "from": "file:../../vendor/release/happyvertical-smrt-chat-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-chat-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-config",
+      "from": "file:../../vendor/release/happyvertical-smrt-config-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-config-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-core",
+      "from": "file:../../vendor/release/happyvertical-smrt-core-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-core-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-facts",
+      "from": "file:../../vendor/release/happyvertical-smrt-facts-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-facts-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-jobs",
+      "from": "file:../../vendor/release/happyvertical-smrt-jobs-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-jobs-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-mcp-apps",
+      "from": "file:../../vendor/release/happyvertical-smrt-mcp-apps-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-mcp-openai",
+      "from": "file:../../vendor/release/happyvertical-smrt-mcp-openai-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-places",
+      "from": "file:../../vendor/release/happyvertical-smrt-places-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-places-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-profiles",
+      "from": "file:../../vendor/release/happyvertical-smrt-profiles-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-profiles-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-svelte",
+      "from": "file:../../vendor/release/happyvertical-smrt-svelte-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-svelte-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-tags",
+      "from": "file:../../vendor/release/happyvertical-smrt-tags-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-tags-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-tenancy",
+      "from": "file:../../vendor/release/happyvertical-smrt-tenancy-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-ui",
+      "from": "file:../../vendor/release/happyvertical-smrt-ui-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-ui-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-users",
+      "from": "file:../../vendor/release/happyvertical-smrt-users-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-web",
+      "from": "file:../../vendor/release/happyvertical-smrt-web-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-web-0.55.9.tgz"
+    },
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/sql",
+      "from": "file:../../vendor/release/happyvertical-sql-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-sql-0.103.1.tgz"
+    }
+  ],
+  "packages/cli/package.json": [
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/smrt-app-cli",
+      "from": "file:../../vendor/release/happyvertical-smrt-app-cli-0.55.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz"
+    }
+  ],
+  "packages/resume/package.json": [
+    {
+      "field": "dependencies",
+      "name": "@happyvertical/files",
+      "from": "file:../../vendor/release/happyvertical-files-0.102.3.tgz",
+      "to": "file:../../vendor/release/happyvertical-files-0.103.1.tgz"
+    }
+  ]
+}

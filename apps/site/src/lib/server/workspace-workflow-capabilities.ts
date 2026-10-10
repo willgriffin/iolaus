@@ -42,6 +42,19 @@ export const workspaceWorkflowCapabilityDefinitions = [
   },
   {
     category: 'workspace-workflow',
+    description:
+      'Prepare and publish the signed-in account public resume profile.',
+    name: 'Publish public profile',
+    slug: 'workflow.public-profile.manage',
+  },
+  {
+    category: 'workspace-workflow',
+    description: 'Manage the signed-in account shortlist.',
+    name: 'Manage shortlist',
+    slug: 'workflow.shortlist.manage',
+  },
+  {
+    category: 'workspace-workflow',
     description: 'Record audit facts for an owned workflow action.',
     name: 'Record workflow audit',
     slug: 'workflow.audit.record',
@@ -67,6 +80,8 @@ export type WorkspaceWorkflowCapability =
   | 'application.inspect'
   | 'application.review'
   | 'profile.manage'
+  | 'shortlist.manage'
+  | 'public-profile.manage'
   | 'audit.record'
   | 'task.sync'
   | 'application-auto-submit.execute';

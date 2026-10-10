@@ -11,6 +11,30 @@ import type {
 } from '$lib/server/career-management';
 
 let { data }: { data: CareerManagementData } = $props();
+const tabs = [
+  { id: 'details', label: 'Details', groups: ['summary', 'education'] },
+  { id: 'experience', label: 'Experience', groups: ['experience', 'other'] },
+  { id: 'skills', label: 'Skills', groups: ['skills'] },
+] as const;
+let selectedTab = $state('details');
+async function selectTab(id: string) {
+  if (id === selectedTab) return;
+  if (active && !(await closeEditor())) return;
+  selectedTab = id;
+  await tick();
+  document.getElementById(`resume-tab-${id}`)?.focus();
+}
+function tabKey(event: KeyboardEvent, index: number) {
+  let next: number;
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+  else if (event.key === 'ArrowLeft')
+    next = (index + tabs.length - 1) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  void selectTab(tabs[next].id);
+}
 let active = $state<string | null>(null);
 let draft = $state<Record<string, string>>({});
 let baseline = $state('');
@@ -211,10 +235,13 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
 {/snippet}
 
 <div class="resume-manager">
-  <header><div><h1>Resume</h1><p>Your resume content</p></div><a href="/admin/resume">Preview &amp; PDFs</a></header>
+  <div class="resume-tabs" role="tablist" aria-label="Resume sections">
+    {#each tabs as tab, index}<button type="button" role="tab" id={`resume-tab-${tab.id}`} aria-selected={selectedTab === tab.id} aria-controls={`resume-panel-${tab.id}`} tabindex={selectedTab === tab.id ? 0 : -1} disabled={saving} onclick={() => selectTab(tab.id)} onkeydown={(event) => tabKey(event, index)}>{tab.label}</button>{/each}
+  </div>
+  <div role="tabpanel" id={`resume-panel-${selectedTab}`} aria-labelledby={`resume-tab-${selectedTab}`}>
   <p class="feedback" role="status" aria-live="polite">{notice}</p>
   {#if !data.loadedComplete}<p class="load-notice">Only part of the available data is loaded. Counts describe loaded entries; unavailable entries are not classified as hidden. Open detailed records to see more.</p>{/if}
-  {#each sections as group (group.id)}
+  {#each sections.filter(group => tabs.find(tab => tab.id === selectedTab)?.groups.some(id => id === group.id)) as group (group.id)}
     {@const groupEntries = entries.filter((entry) => group.keys.includes(entry.section.key))}
     {@const hiddenCount = groupEntries.filter((entry) => entry.record.presentation?.inResume === false).length + (group.id === 'skills' ? data.skillExclusions.length : 0)}
     {@const resumeCount = groupEntries.filter((entry) => entry.record.presentation?.inResume === true).length}
@@ -248,12 +275,20 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
       <div class="manage-links">{#each data.sections.filter((section) => group.keys.includes(section.key)) as section (section.key)}<a href={section.href}>Manage {section.label.toLowerCase()}</a>{/each}{#if group.id === 'skills'}<a href="/admin/skills">Manage skills and memberships</a>{/if}</div>
     </section>
   {/each}
+  </div>
 </div>
 
 <style>
+:global(.admin-content:has(.resume-manager) .smrt-breadcrumbs) { display:none; }
+.resume-tabs { display:flex; gap:.25rem; border-bottom:1px solid var(--border-strong); }
+.resume-tabs button { padding:.8rem 1.2rem; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--ink-3); font:inherit; cursor:pointer; }
+.resume-tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); font-weight:700; }
+.resume-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+[role="tabpanel"] { display:grid; gap:1rem; }
+
   .resume-manager { width: 100%; min-width: 0; max-width: 65rem; color: var(--smrt-color-on-surface); }
-  header, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  h1, h2, p { margin: 0; } h1 { font-size: 2rem; } h2 { font-size: 1.25rem; }
+  .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  h2, p { margin: 0; } h2 { font-size: 1.25rem; }
   p, .context, .preview { line-height: 1.5; overflow-wrap: anywhere; color: var(--smrt-color-on-surface-variant); }
   a { display: inline-flex; align-items: center; min-height: 44px; color: var(--smrt-color-primary); overflow-wrap: anywhere; }
   section { margin-block: 1.5rem 2rem; } .section-heading { margin-bottom: .75rem; } .counts { margin-top: .25rem; font-size: .85rem; }
@@ -274,5 +309,5 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
   textarea { resize: vertical; } .editor-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .5rem; } .editor-actions button { padding: .65rem 1.25rem; border-radius: var(--smrt-radius-medium, .5rem); }
   .save { background: var(--smrt-color-primary); color: var(--smrt-color-on-primary); } .error { color: var(--smrt-color-error); } .empty { padding: 1rem 0; }
   :is(a, button, input, textarea):focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 3px; }
-  @media (max-width: 600px) { header { align-items: flex-start; flex-wrap: wrap; gap: .25rem; } section { margin-block: 1.25rem 1.5rem; } h1 { font-size: 1.75rem; } .related { padding-inline: .25rem; } }
+  @media (max-width: 600px) { section { margin-block: 1.25rem 1.5rem; } .related { padding-inline: .25rem; } }
 </style>

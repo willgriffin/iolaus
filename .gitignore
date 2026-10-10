@@ -65,6 +65,7 @@ Thumbs.db
 # Authored routes must survive the first clean git add
 !apps/site/src/routes/api/_events/**/+server.ts
 !apps/site/src/routes/api/mcp/**/+server.ts
+!apps/site/src/routes/api/public/v1/**/+server.ts
 # All local candidate data and generated assets
 var/
 *.sqlite

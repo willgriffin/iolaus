@@ -29,7 +29,7 @@ cd iolaus
 git checkout --detach "$IOLAUS_REVISION"
 test "$(git rev-parse HEAD)" = "$IOLAUS_REVISION"
 corepack enable
-corepack prepare pnpm@11.24.0 --activate
+corepack prepare pnpm@11.25.0 --activate
 pnpm install --frozen-lockfile
 pnpm demo:prepare
 ```
