@@ -14,6 +14,13 @@ application and must never expose an object-store URL. Pages and downloads use
 
 ## Publication and withdrawal
 
+Owners edit profile links at `/admin/candidate-profile-links`. Optional fields
+with service icons are provided for common professional and social profiles,
+plus a website or portfolio. Existing links populate matching fields; other
+links remain available as custom entries. Each field saves independently, and
+blank unused fields do not create records. Editing a URL preserves its resume
+visibility and ordering. These edits do not update an already published snapshot.
+
 The owner preview, publication prepare, and publication commit use a scoped
 identity and revision. Asset generation happens before the short database
 commit. A failed render, write, or commit leaves the previously published
