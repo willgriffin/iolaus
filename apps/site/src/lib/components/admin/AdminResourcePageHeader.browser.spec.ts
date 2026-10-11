@@ -9,10 +9,15 @@ import { getAdminResource } from '$lib/admin/resources';
 import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
 import AdminResourcePageHeaderHarness from './AdminResourcePageHeaderHarness.svelte';
 
-const page = { url: new URL('http://localhost/admin/tasks') };
+const page = vi.hoisted(() => ({
+  url: new URL('http://localhost/admin/tasks'),
+}));
 vi.mock('$app/forms', () => ({ enhance: () => ({ destroy: () => {} }) }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn(async () => {}) }));
 vi.mock('$app/state', () => ({ page }));
+vi.mock('./admin-resource-hydration', () => ({
+  ADMIN_RESOURCE_REFRESH_EVENT: 'iolaus:admin-resource-refresh',
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,6 +27,10 @@ afterEach(() => {
 
 describe('AdminResourcePage header actions', () => {
   it('replaces and clears route controls when a reused page changes resources', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ items: [] })),
+    );
     const registrations: Snippet[] = [];
     const cleanups: ReturnType<typeof vi.fn>[] = [];
     const header: AdminHeaderActions = {
