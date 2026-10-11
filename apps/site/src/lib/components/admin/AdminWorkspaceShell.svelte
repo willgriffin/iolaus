@@ -201,7 +201,7 @@ const adminBreadcrumbs = $derived(
 );
 const showAdminBreadcrumbs = $derived(
   !browsing &&
-    page.url.pathname !== '/admin/sources' &&
+    page.url.pathname.replace(/\/+$/, '') !== '/admin/sources' &&
     adminBreadcrumbs.length > 1,
 );
 const tenantCurrentHref = $derived(
@@ -562,13 +562,14 @@ function currentTenantHref(pathname: string): string {
     <div class="admin-panel-header">
       <strong>Navigation</strong>
     </div>
-    <AdminTenantNav items={navItems} currentHref={tenantCurrentHref} onNavigate={handleTenantNavigate} />
+    <div class="admin-panel-navigation">
+      <AdminTenantNav items={navItems} currentHref={tenantCurrentHref} onNavigate={handleTenantNavigate} />
+    </div>
+    <div class="admin-panel-footer">
+      <AdminSidebarControls accountConnectionsEnabled={data.accountConnectionsEnabled} id="admin-panel-account" email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
+      <div class="admin-legal-links"><LegalLinks links={data.legalLinks} /></div>
+    </div>
   </div>
-{/snippet}
-
-{#snippet tenantFooter()}
-  <AdminSidebarControls accountConnectionsEnabled={data.accountConnectionsEnabled} id="admin-panel-account" email={data.user?.email} {theme} onToggleTheme={toggleTheme} onOpenSettings={() => adminShell.expandPanel('top')} />
-  <div class="admin-legal-links"><LegalLinks links={data.legalLinks} /></div>
 {/snippet}
 
 {#snippet focusRail()}{/snippet}
@@ -640,7 +641,6 @@ function currentTenantHref(pathname: string): string {
       state={adminShell}
       showTenantToggle
       hotkeys
-      {tenantFooter}
       {appBar}
       {appPanel}
       {tenantRail}
@@ -741,13 +741,20 @@ function currentTenantHref(pathname: string): string {
   }
   .admin-tenant-rail { display:flex; flex-direction:column; align-items:center; height:100%; min-height:0; gap:8px; }
   .admin-rail-navigation { flex:1; min-height:0; overflow:auto; width:100%; }
-  .admin-tenant-panel,
+  .admin-tenant-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
   .admin-system-panel {
     display: grid;
     align-content: start;
     gap: 12px;
     min-width: 0;
   }
+  .admin-panel-navigation { flex:1; min-height:0; overflow:auto; }
+  .admin-panel-footer { display:grid; flex:0 0 auto; gap:12px; padding-top:12px; }
   .admin-panel-header {
     justify-content: space-between;
     gap: 10px;
