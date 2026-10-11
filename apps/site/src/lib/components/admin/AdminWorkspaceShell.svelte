@@ -199,7 +199,11 @@ const activeAdminTool = $derived(
 const adminBreadcrumbs = $derived(
   resolveAdminBreadcrumbs(page.url.pathname, data.resources, page.data),
 );
-const showAdminBreadcrumbs = $derived(!browsing && adminBreadcrumbs.length > 1);
+const showAdminBreadcrumbs = $derived(
+  !browsing &&
+    page.url.pathname !== '/admin/sources' &&
+    adminBreadcrumbs.length > 1,
+);
 const tenantCurrentHref = $derived(
   currentTenantHref(browsing ? '/admin/opportunities' : page.url.pathname),
 );
