@@ -100,4 +100,37 @@ describe('AdminResourcePage task loading', () => {
     expect(body).toContain('Try again');
     expect(body).toContain('TypeScript');
   });
+
+  it('keeps Sources controls compact when no workspace header is available', () => {
+    const resource = getAdminResource('sources');
+    if (!resource) throw new Error('Expected Sources admin resource fixture');
+
+    const { body } = render(AdminResourcePage, {
+      props: {
+        data: {
+          activeReviewFilter: 'all',
+          activeTaskOwnerFilter: 'all',
+          activeTaskStatusFilter: 'all',
+          candidateSkills: [],
+          comboOptions: {},
+          opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+          pagination: createAdminListPagination(0, 1, 250),
+          records: [],
+          referenceOptions: {},
+          resource,
+        },
+      },
+      context: new Map([
+        [ADMIN_DOCK_CONTEXT, { setResourceContext: () => undefined }],
+      ]),
+    });
+
+    expect(body).toContain('aria-label="Sources controls"');
+    expect(body).toContain('aria-label="Add URL"');
+    expect(body).toContain('aria-label="Filters"');
+    expect(body).toContain('aria-label="New job source"');
+    expect(body).not.toContain('<h1>Sources</h1>');
+    expect(body).not.toContain('Your job sources');
+    expect(body).not.toContain('Add a job source');
+  });
 });

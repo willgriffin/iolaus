@@ -1,7 +1,9 @@
 <script lang="ts">
+import Link from '@lucide/svelte/icons/link';
 import { detectUrlIntake, type UrlIntakeKind } from '$lib/url-intake';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
 
+let { compact = false }: { compact?: boolean } = $props();
 let dialog: HTMLDialogElement;
 let url = $state('');
 let kind = $state<'auto' | UrlIntakeKind>('auto');
@@ -84,7 +86,20 @@ async function add(event: SubmitEvent) {
 }
 </script>
 
-<button type="button" class="add-url-button" onclick={open}>Add URL</button>
+<button
+  type="button"
+  class="add-url-button"
+  class:compact
+  aria-label={compact ? 'Add URL' : undefined}
+  title={compact ? 'Add URL' : undefined}
+  onclick={open}
+>
+  {#if compact}
+    <Link size={21} aria-hidden="true" />
+  {:else}
+    Add URL
+  {/if}
+</button>
 <dialog bind:this={dialog} aria-labelledby="url-intake-title" oncancel={(event) => {if(busy) event.preventDefault();}}>
   <header>
     <h2 id="url-intake-title">Add a URL</h2>
@@ -121,6 +136,9 @@ async function add(event: SubmitEvent) {
 <style>
   button {font:inherit;cursor:pointer;border:1px solid var(--smrt-color-outline-variant);border-radius:.4rem;padding:.45rem .75rem;background:var(--smrt-color-surface);color:var(--smrt-color-on-surface);}
   button:disabled {opacity:.6;cursor:wait;}
+  .add-url-button.compact {display:grid;place-items:center;width:44px;height:44px;padding:0;border-color:transparent;border-radius:50%;background:transparent;color:var(--smrt-color-on-surface-variant);}
+  .add-url-button.compact:hover,.add-url-button.compact:focus-visible {border-color:var(--smrt-color-outline-variant);background:var(--smrt-color-surface-container);color:var(--smrt-color-on-surface);}
+  .add-url-button.compact:focus-visible {outline:2px solid var(--smrt-color-on-surface);outline-offset:2px;}
   dialog {width:min(32rem,calc(100vw - 2rem));box-sizing:border-box;border:1px solid var(--smrt-color-outline-variant);border-radius:.65rem;padding:1.25rem;background:var(--smrt-color-surface);color:var(--smrt-color-on-surface);}
   dialog::backdrop {background:rgb(0 0 0 / .55);}
   header {display:flex;align-items:center;justify-content:space-between;gap:1rem;}

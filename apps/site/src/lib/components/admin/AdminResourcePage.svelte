@@ -91,6 +91,7 @@ const opportunityReviewStatuses = [
 ] as const;
 
 type TaskViewMode = 'kanban' | 'list';
+type SourceStateFilter = 'active' | 'all' | 'paused';
 type TaskSubjectLink = {
   href: string;
   id: string;
@@ -165,11 +166,14 @@ let taskFilterDialog = $state<HTMLDialogElement>();
 let draftTaskOwner = $state('all');
 let draftTaskStatus = $state('all');
 let draftTaskSearch = $state('');
-const taskHeader = getContext<AdminHeaderActions | undefined>(
+let sourceFilterDialog = $state<HTMLDialogElement>();
+let draftSourceState = $state<SourceStateFilter>('all');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
   ADMIN_HEADER_ACTIONS,
 );
-onMount(() => {
-  if (isTaskResource) return taskHeader?.register(taskHeaderControls);
+$effect(() => {
+  if (isTaskResource) return adminHeader?.register(taskHeaderControls);
+  if (isSourceResource) return adminHeader?.register(sourceHeaderControls);
 });
 function openTaskFilters() {
   draftTaskOwner = data.activeTaskOwnerFilter ?? 'all';
@@ -188,6 +192,26 @@ function applyTaskFilters(event: SubmitEvent) {
       search: draftTaskSearch,
     }),
   );
+}
+function sourceStateFilterFromSearchParams(): SourceStateFilter {
+  const value = page.url.searchParams.get('source_state');
+  return value === 'active' || value === 'paused' ? value : 'all';
+}
+const sourceStateFilter = $derived.by(sourceStateFilterFromSearchParams);
+function openSourceFilters() {
+  draftSourceState = sourceStateFilter;
+  sourceFilterDialog?.showModal();
+}
+function sourceFilterHref(sourceState: SourceStateFilter): string {
+  const url = new URL(page.url);
+  if (sourceState === 'all') url.searchParams.delete('source_state');
+  else url.searchParams.set('source_state', sourceState);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+function applySourceFilters(event: SubmitEvent) {
+  event.preventDefault();
+  sourceFilterDialog?.close();
+  void goto(sourceFilterHref(draftSourceState));
 }
 let collapsedTaskKanbanLanes = $state<Set<string>>(new Set());
 let taskPreferencesLoaded = $state(false);
@@ -1221,6 +1245,13 @@ function taskMeta(record: AdminRecord): string {
   </div>
   </div>
 {/snippet}
+{#snippet sourceHeaderControls()}
+  <div class="source-header-controls" aria-label="Sources controls">
+    <AddUrlIntake compact />
+    <button class="source-header-action" class:active={sourceStateFilter !== 'all'} type="button" aria-label="Filters" title="Filters" aria-haspopup="dialog" onclick={openSourceFilters}><SlidersHorizontal size={21} aria-hidden="true"/></button>
+    <a class="source-header-action" href="/admin/sources/new" aria-label="New job source" title="New job source"><Plus size={22} aria-hidden="true"/></a>
+  </div>
+{/snippet}
 {#if isTaskResource}
 <dialog class="task-filter-dialog" bind:this={taskFilterDialog} aria-labelledby="task-filters-title">
   <header><div><h2 id="task-filters-title">Filter tasks</h2><p>Choose which tasks to show.</p></div><button type="button" aria-label="Close filters" onclick={() => taskFilterDialog?.close()}><X size={22} aria-hidden="true"/></button></header>
@@ -1229,6 +1260,15 @@ function taskMeta(record: AdminRecord): string {
     <label>Assignee<select bind:value={draftTaskOwner}>{#each [{label:'All',value:'all'}, ...taskAssigneeRoleDefinitions] as owner}<option value={owner.value}>{owner.label}</option>{/each}</select></label>
     <label>Status<select bind:value={draftTaskStatus}>{#each [{label:'All',value:'all'}, ...taskStatusDefinitions] as status}<option value={status.value}>{status.label}</option>{/each}</select></label>
     <footer><button type="button" onclick={() => { draftTaskOwner = 'all'; draftTaskStatus = 'all'; draftTaskSearch = ''; }}>Clear all filters</button><button class="apply-task-filters" type="submit">Apply filters</button></footer>
+  </form>
+</dialog>
+{/if}
+{#if isSourceResource}
+<dialog class="source-filter-dialog" bind:this={sourceFilterDialog} aria-labelledby="source-filters-title">
+  <header><div><h2 id="source-filters-title">Filter sources</h2><p>Choose which job sources to show.</p></div><button type="button" aria-label="Close filters" onclick={() => sourceFilterDialog?.close()}><X size={22} aria-hidden="true"/></button></header>
+  <form onsubmit={applySourceFilters}>
+    <label>Source status<select bind:value={draftSourceState}><option value="all">All sources</option><option value="active">Active</option><option value="paused">Paused</option></select></label>
+    <footer><button type="button" onclick={() => { draftSourceState = 'all'; }}>Clear filters</button><button class="apply-source-filters" type="submit">Apply filters</button></footer>
   </form>
 </dialog>
 {/if}
@@ -1428,20 +1468,23 @@ function taskMeta(record: AdminRecord): string {
   class:task-page={isTaskResource}
   class:task-kanban-page={isTaskKanbanView}
 >
-  {#if !isOpportunityResource && !isTaskResource}
+  {#if !isOpportunityResource && !isTaskResource && !isSourceResource}
     <header class="page-header">
       <div>
         <h1>{data.resource.label}</h1>
         <p>{data.resource.description}</p>
       </div>
       {#if data.resource.slug === 'preferences'}<a class="new-record-link" href="/admin/preferences/screening-questions">Screening Questions</a>{/if}
-      {#if isSourceResource}<AddUrlIntake />{/if}
       {#if !isTaskResource && (data.resource.rowAction ?? 'edit') === 'edit'}
         <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
-          {isSourceResource ? 'Add a job source' : `New ${data.resource.singularLabel}`}
+          New {data.resource.singularLabel}
         </a>
       {/if}
     </header>
+  {/if}
+
+  {#if isSourceResource && !adminHeader}
+    {@render sourceHeaderControls()}
   {/if}
 
   {#if isTaskResource && (taskViewMode === 'kanban' || data.error)}
@@ -1613,7 +1656,7 @@ function taskMeta(record: AdminRecord): string {
         {onRetry}
       />
     {:else if isSourceResource}
-      <SourceControlList records={data.records} onRefresh={() => onRetry?.()} />
+      <SourceControlList activeFilter={sourceStateFilter} records={data.records} onRefresh={() => onRetry?.()} />
     {:else if isTaskResource}
       <div class="task-list" aria-label="Tasks">
         {#if data.refreshing || data.stale}<p class="task-list-message" role="status">Refreshing tasks…</p>{/if}
@@ -1816,6 +1859,21 @@ function taskMeta(record: AdminRecord): string {
 .task-filter-dialog input, .task-filter-dialog select, .task-filter-dialog button { min-height:44px; padding:.5rem .75rem; font:inherit; border:1px solid var(--border-strong); border-radius:.5rem; background:var(--bg); color:var(--ink); }
 .task-filter-dialog button { cursor:pointer; }
 .task-filter-dialog .apply-task-filters { background:var(--accent); color:var(--bg); font-weight:700; }
+	.source-header-controls { display:flex; align-items:center; gap:.25rem; }
+	.source-header-action { display:grid; place-items:center; width:44px; height:44px; padding:0; border:1px solid transparent; border-radius:50%; background:transparent; color:var(--smrt-color-on-surface-variant); cursor:pointer; text-decoration:none; }
+	.source-header-action:hover, .source-header-action:focus-visible, .source-header-action.active { border-color:var(--smrt-color-outline-variant); background:var(--smrt-color-surface-container); color:var(--smrt-color-on-surface); }
+	.source-header-action:focus-visible { outline:2px solid var(--smrt-color-on-surface); outline-offset:2px; }
+	.source-filter-dialog { width:min(32rem,calc(100vw - 1.5rem)); max-height:calc(100dvh - 1.5rem); margin:auto; padding:1.25rem; box-sizing:border-box; border:1px solid var(--smrt-color-outline-variant); border-radius:1rem; background:var(--smrt-color-surface); color:var(--smrt-color-on-surface); overflow:auto; }
+	.source-filter-dialog::backdrop { background:rgb(0 0 0 / .55); }
+	.source-filter-dialog header, .source-filter-dialog footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+	.source-filter-dialog h2 { margin:0; }
+	.source-filter-dialog p { color:var(--smrt-color-on-surface-variant); }
+	.source-filter-dialog form, .source-filter-dialog label { display:grid; gap:.5rem; }
+	.source-filter-dialog form { gap:1rem; }
+	.source-filter-dialog select, .source-filter-dialog button { min-height:44px; padding:.5rem .75rem; font:inherit; border:1px solid var(--smrt-color-outline-variant); border-radius:.5rem; background:var(--smrt-color-surface-container); color:var(--smrt-color-on-surface); }
+	.source-filter-dialog button { cursor:pointer; }
+	.source-filter-dialog .apply-source-filters { background:var(--smrt-color-on-surface); border-color:var(--smrt-color-on-surface); color:var(--smrt-color-surface); font-weight:700; }
+	@media(max-width:48rem) { .source-header-controls { position:absolute; right:.75rem; bottom:10px; } }
 
   .resource-page {
     display: grid;

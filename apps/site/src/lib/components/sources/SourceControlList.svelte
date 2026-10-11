@@ -4,7 +4,6 @@ import CircleX from '@lucide/svelte/icons/circle-x';
 import ExternalLink from '@lucide/svelte/icons/external-link';
 import Pencil from '@lucide/svelte/icons/pencil';
 import Play from '@lucide/svelte/icons/play';
-import Plus from '@lucide/svelte/icons/plus';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import { onMount } from 'svelte';
 import type { AdminRecord } from '$lib/admin/dock';
@@ -37,11 +36,14 @@ type CrawlResult = {
 };
 
 type ActionState = 'activate' | 'crawl' | 'deactivate';
+type SourceStateFilter = 'active' | 'all' | 'paused';
 
 let {
+  activeFilter = 'all',
   onRefresh = () => undefined,
   records,
 }: {
+  activeFilter?: SourceStateFilter;
   onRefresh?: () => void;
   records: AdminRecord[];
 } = $props();
@@ -98,6 +100,15 @@ const rootSources = $derived.by(() => {
 
   return [...byId.values()];
 });
+const visibleRootSources = $derived(
+  rootSources.filter((source) =>
+    activeFilter === 'all'
+      ? true
+      : activeFilter === 'active'
+        ? active(source)
+        : !active(source),
+  ),
+);
 
 function text(value: unknown): string {
   if (typeof value === 'string') return value.trim();
@@ -401,17 +412,6 @@ onMount(() => {
 </script>
 
 <section class="source-controls" aria-label="Job sources">
-  <div class="source-controls-heading">
-    <div>
-      <h2>Your job sources</h2>
-      <p>Choose where to look, then pull a small batch of current listings.</p>
-    </div>
-    <a class="add-source" href="/admin/sources/new">
-      <Plus size={16} strokeWidth={2.4} aria-hidden="true" />
-      <span>Add a job source</span>
-    </a>
-  </div>
-
   {#if healthError}
     <p class="source-health-error" role="status">
       {healthError}
@@ -420,7 +420,7 @@ onMount(() => {
   {/if}
 
   <div class="source-card-list" aria-busy={healthLoading}>
-    {#each rootSources as source (source.id)}
+    {#each visibleRootSources as source (source.id)}
       {@const id = sourceId(source)}
       {@const sourceActive = active(source)}
       {@const sourcePending = pending(source)}
@@ -525,9 +525,8 @@ onMount(() => {
       </article>
     {:else}
       <div class="source-empty">
-        <h3>Start with a job source</h3>
-        <p>Add a careers page or job board, then Iolaus can pull the listings you want to review.</p>
-        <a class="add-source" href="/admin/sources/new">Add a job source</a>
+        <h3>{activeFilter === 'all' ? 'Start with a job source' : `No ${activeFilter} job sources`}</h3>
+        <p>{activeFilter === 'all' ? 'Add a careers page or job board from the header, then Iolaus can pull the listings you want to review.' : 'Try another status in Filters.'}</p>
       </div>
     {/each}
   </div>
@@ -539,7 +538,6 @@ onMount(() => {
     gap: 18px;
   }
 
-  .source-controls-heading,
   .source-card header,
   .source-actions,
   .source-facts,
@@ -548,24 +546,21 @@ onMount(() => {
     gap: 12px;
   }
 
-  .source-controls-heading,
   .source-card header {
     align-items: start;
     justify-content: space-between;
   }
 
-  .source-controls h2,
   .source-controls h3,
   .source-controls p {
     margin: 0;
   }
 
-  .source-controls-heading p,
   .source-provider,
   .source-url,
   .source-facts small,
   .source-empty p {
-    color: var(--smrt-color-text-muted, #64748b);
+    color: var(--smrt-color-on-surface-variant);
   }
 
   .source-card-list {
@@ -575,9 +570,9 @@ onMount(() => {
 
   .source-card,
   .source-empty {
-    border: 1px solid var(--smrt-color-border, #d8dee9);
+    border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 14px;
-    background: var(--smrt-color-surface, #fff);
+    background: var(--smrt-color-surface);
     padding: 18px;
   }
 
@@ -596,16 +591,16 @@ onMount(() => {
 
   .source-state {
     border-radius: 999px;
-    background: #edf2f7;
-    color: #475569;
+    background: var(--smrt-color-surface-container);
+    color: var(--smrt-color-on-surface-variant);
     font-size: 0.8rem;
     font-weight: 700;
     padding: 4px 9px;
   }
 
   .source-state.active {
-    background: #dcfce7;
-    color: #166534;
+    background: var(--smrt-color-success-container);
+    color: var(--smrt-color-on-success-container);
   }
 
   .source-url {
@@ -616,7 +611,7 @@ onMount(() => {
   }
 
   .source-url:not(.missing) {
-    color: var(--smrt-color-primary, #2563eb);
+    color: var(--smrt-color-primary);
     font-weight: 650;
     text-decoration: none;
   }
@@ -636,7 +631,7 @@ onMount(() => {
   }
 
   .source-facts dt {
-    color: var(--smrt-color-text-muted, #64748b);
+    color: var(--smrt-color-on-surface-variant);
     font-size: 0.8rem;
     font-weight: 700;
   }
@@ -647,7 +642,7 @@ onMount(() => {
   }
 
   .source-facts dd.attention {
-    color: #a16207;
+    color: var(--smrt-color-on-warning-container);
   }
 
   .source-actions {
@@ -657,7 +652,6 @@ onMount(() => {
 
   .source-actions button,
   .source-actions a,
-  .add-source,
   .source-health-error button {
     align-items: center;
     border-radius: 8px;
@@ -671,25 +665,23 @@ onMount(() => {
   }
 
   .source-actions button,
-  .source-actions a,
-  .add-source {
-    border: 1px solid var(--smrt-color-border-strong, #cbd5e1);
+  .source-actions a {
+    border: 1px solid var(--smrt-color-outline-variant);
   }
 
   .source-actions button {
     cursor: pointer;
   }
 
-  .source-actions .primary,
-  .add-source {
-    background: var(--smrt-color-primary, #2563eb);
-    border-color: var(--smrt-color-primary, #2563eb);
-    color: #fff;
+  .source-actions .primary {
+    background: var(--smrt-color-on-surface);
+    border-color: var(--smrt-color-on-surface);
+    color: var(--smrt-color-surface);
   }
 
   .source-actions .secondary {
-    background: var(--smrt-color-surface, #fff);
-    color: var(--smrt-color-text, #1e293b);
+    background: var(--smrt-color-surface);
+    color: var(--smrt-color-on-surface);
   }
 
   .source-actions button:disabled {
@@ -699,14 +691,14 @@ onMount(() => {
 
   .source-feedback,
   .source-health-error {
-    color: #166534;
+    color: var(--smrt-color-on-success-container);
     font-size: 0.9rem;
     margin-top: 12px !important;
   }
 
   .source-feedback.source-feedback-error,
   .source-health-error {
-    color: #b42318;
+    color: var(--smrt-color-error);
   }
 
   .source-health-error button {
@@ -733,14 +725,4 @@ onMount(() => {
     to { transform: rotate(360deg); }
   }
 
-  @media (max-width: 640px) {
-    .source-controls-heading {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .source-controls-heading .add-source {
-      align-self: stretch;
-    }
-  }
 </style>
