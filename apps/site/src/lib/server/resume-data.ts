@@ -465,11 +465,14 @@ export function assembleResumeSourceFromRecords(
     name: stringValue(profileRecord.name),
     title: stringValue(profileRecord.title),
     email: stringValue(profileRecord.email),
-    summary: stringValue(profileRecord.summary),
+    summary: booleanValue(profileRecord.useOnResume, true)
+      ? stringValue(profileRecord.summary)
+      : '',
     links: records.profileLinks
       .filter(
         (record) =>
-          (stringValue(record.profileKey) || 'default') === profileKey,
+          (stringValue(record.profileKey) || 'default') === profileKey &&
+          booleanValue(record.useOnResume, true),
       )
       .sort(bySortOrder)
       .map((record) => ({
@@ -483,6 +486,7 @@ export function assembleResumeSourceFromRecords(
     'categoryId',
   );
   const groups: SkillCategory[] = [...records.skillCategories]
+    .filter((category) => booleanValue(category.useOnResume, true))
     .sort((a, b) => bySortOrder(a, b) || byLabel(a, b))
     .map((category) => {
       const categoryId = stringValue(category.id);
@@ -507,6 +511,7 @@ export function assembleResumeSourceFromRecords(
     'groupId',
   );
   const skillGroups: SkillGroup[] = [...records.skillGroups]
+    .filter((group) => booleanValue(group.useOnResume, true))
     .sort((a, b) => bySortOrder(a, b) || byLabel(a, b))
     .map((group) => ({
       id: stringValue(group.groupKey) || stringValue(group.id),
@@ -594,8 +599,12 @@ export function assembleResumeSourceFromRecords(
       end: record.endDate
         ? formatDate(record.endDate, record.endPrecision, '')
         : undefined,
-      duties: (dutiesByProject.get(id) ?? []).sort(bySortOrder).map(buildDuty),
+      duties: (dutiesByProject.get(id) ?? [])
+        .filter((item) => booleanValue(item.useOnResume, true))
+        .sort(bySortOrder)
+        .map(buildDuty),
       achievements: (achievementsByProject.get(id) ?? [])
+        .filter((item) => booleanValue(item.useOnResume, true))
         .filter(shouldRenderAchievementAtProject)
         .sort(bySortOrder)
         .map(buildAchievement),
@@ -604,7 +613,8 @@ export function assembleResumeSourceFromRecords(
     };
   };
 
-  const positions: Position[] = [...records.experiences]
+  const positions: Position[] = records.experiences
+    .filter((record) => booleanValue(record.useOnResume, true))
     .sort(bySortOrder)
     .map((experienceRecord) => {
       const experienceId = stringValue(experienceRecord.id);
@@ -650,13 +660,16 @@ export function assembleResumeSourceFromRecords(
         blurb: optionalString(experienceRecord.summary || roleJoin?.summary),
         tags: tagsFor(experienceTags, experienceId, resolveTagSlug),
         duties: (dutiesByExperience.get(experienceId) ?? [])
+          .filter((record) => booleanValue(record.useOnResume, true))
           .filter((record) => !stringValue(record.projectId))
           .sort(bySortOrder)
           .map(buildDuty),
         projects: (projectsByExperience.get(experienceId) ?? [])
+          .filter((record) => booleanValue(record.useOnResume, true))
           .sort(bySortOrder)
           .map(buildProject),
         achievements: (achievementsByExperience.get(experienceId) ?? [])
+          .filter((record) => booleanValue(record.useOnResume, true))
           .filter(shouldRenderAchievementAtPosition)
           .sort(bySortOrder)
           .map(buildAchievement),
@@ -664,7 +677,8 @@ export function assembleResumeSourceFromRecords(
     })
     .filter((position) => position.id && position.role && position.company);
 
-  const other: OtherRole[] = [...records.otherRoles]
+  const other: OtherRole[] = records.otherRoles
+    .filter((record) => booleanValue(record.useOnResume, true))
     .sort(bySortOrder)
     .map((record) => ({
       role: stringValue(record.role),
@@ -675,7 +689,8 @@ export function assembleResumeSourceFromRecords(
     }))
     .filter(isCanonicalOtherRoleEntry);
 
-  const education: Education[] = [...records.education]
+  const education: Education[] = records.education
+    .filter((record) => booleanValue(record.useOnResume, true))
     .sort(bySortOrder)
     .map((record) => ({
       title: stringValue(record.title),

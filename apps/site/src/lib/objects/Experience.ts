@@ -30,4 +30,6 @@ export class Experience extends SmrtObject {
   weight = 0;
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

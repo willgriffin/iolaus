@@ -296,3 +296,74 @@ export async function saveCareerSection(locals: App.Locals, form: FormData) {
     throw cause;
   }
 }
+
+export async function setCareerResumeVisibility(
+  locals: App.Locals,
+  form: FormData,
+) {
+  const subject = subjectFor(locals);
+  const key = String(form.get('section') ?? '');
+  if (!Object.hasOwn(CAREER_EDIT_SECTIONS, key))
+    error(400, 'Unknown career section.');
+  const spec: SectionSpec = CAREER_EDIT_SECTIONS[key as CareerSectionKey];
+  const id = String(form.get('id') ?? '').trim();
+  if (!id) error(400, 'Record ID required.');
+  const visibility = String(form.get('visibility') ?? '');
+  if (visibility !== 'hidden' && visibility !== 'visible')
+    error(400, 'Invalid resume visibility.');
+  const operation = workspaceWorkflowOperation('profile.manage');
+  try {
+    return await runAsOwner(
+      locals,
+      async (run) => {
+        await run.assertOperation(operation.collection, operation.action);
+        return await withVerifiedWorkspaceSubject(subject, async (verified) => {
+          const owned = requireWorkspaceSubject(verified);
+          const record = await getPrivateRecord(spec.className, id, owned);
+          if (!record || typeof record.save !== 'function')
+            error(404, 'Career record not found.');
+          return await runAsOwner(
+            locals,
+            async (write) => {
+              await write.assertOperation(
+                operation.collection,
+                operation.action,
+              );
+              return await withVerifiedWorkspaceSubject(
+                owned,
+                async (current) => {
+                  const writable = await getPrivateRecord(
+                    spec.className,
+                    id,
+                    requireWorkspaceSubject(current),
+                  );
+                  if (!writable || typeof writable.save !== 'function')
+                    error(404, 'Career record not found.');
+                  writable.useOnResume = visibility === 'visible';
+                  await writable.save();
+                  invalidatePublishedResumeCache();
+                  return {
+                    ok: true,
+                    message:
+                      key === 'profile'
+                        ? visibility === 'visible'
+                          ? 'Summary restored to the canonical resume.'
+                          : 'Summary hidden from the canonical resume.'
+                        : visibility === 'visible'
+                          ? `${spec.label} restored to the canonical resume.`
+                          : `${spec.label} hidden from the canonical resume.`,
+                  };
+                },
+              );
+            },
+            { action: 'admin.career.visibility.write' },
+          );
+        });
+      },
+      { action: 'admin.career.visibility.manage' },
+    );
+  } catch (cause) {
+    if (isOwnerAuthorityDenial(cause)) error(403, 'Forbidden');
+    throw cause;
+  }
+}

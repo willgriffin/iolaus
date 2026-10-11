@@ -1,17 +1,22 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, tick, unmount } from 'svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CareerResume from './CareerResume.svelte';
 import { data } from './career-resume-fixture';
 
+const mocks = vi.hoisted(() => ({ enhance: vi.fn() }));
 vi.mock('$app/navigation', () => ({ beforeNavigate: vi.fn() }));
-vi.mock('$app/forms', () => ({ enhance: () => ({ destroy: () => {} }) }));
+vi.mock('$app/forms', () => ({ enhance: mocks.enhance }));
 
 let component: ReturnType<typeof mount> | undefined;
 afterEach(async () => {
   if (component) await unmount(component);
   component = undefined;
   document.body.replaceChildren();
+});
+beforeEach(() => {
+  mocks.enhance.mockReset();
+  mocks.enhance.mockReturnValue({ destroy: () => {} });
 });
 function setup() {
   component = mount(CareerResume, { target: document.body, props: { data } });
@@ -22,6 +27,21 @@ async function click(selector: string) {
   expect(button).not.toBeNull();
   button!.click();
   await tick();
+}
+function visibilityCompletion() {
+  const call = mocks.enhance.mock.calls.find(
+    ([node]) =>
+      node instanceof HTMLFormElement &&
+      node.getAttribute('action') === '?/visibility',
+  );
+  expect(call).toBeDefined();
+  const submit = call?.[1] as (input: { cancel: () => void }) => unknown;
+  const completion = submit({ cancel: vi.fn() });
+  expect(typeof completion).toBe('function');
+  return completion as (input: {
+    result: { type: string; data?: Record<string, unknown> };
+    update: () => Promise<void>;
+  }) => Promise<void>;
 }
 
 describe('Resume section tabs', () => {
@@ -48,7 +68,9 @@ describe('Resume section tabs', () => {
     expect(document.body.textContent).not.toContain('Full achievement body');
     await click('#resume-hidden-experience');
     expect(document.body.textContent).toContain('Hidden experience body');
-    expect(document.querySelector('form')).toBeNull();
+    expect(
+      document.querySelector('form[action="?/visibility"]'),
+    ).not.toBeNull();
   });
 
   it('supports keyboard selection and focus across Details, Experience and Skills', async () => {
@@ -81,6 +103,27 @@ describe('Resume section tabs', () => {
     await tick();
     await vi.waitFor(() =>
       expect(document.activeElement?.id).toBe('resume-tab-details'),
+    );
+  });
+
+  it('shows visibility action success and failure feedback without exposing an inline editor', async () => {
+    setup();
+    await visibilityCompletion()({
+      result: {
+        type: 'success',
+        data: { ok: true, message: 'Summary hidden.' },
+      },
+      update: vi.fn(async () => {}),
+    });
+    expect(document.body.textContent).toContain('Summary hidden.');
+    expect(document.querySelector('#resume-inline-editor')).toBeNull();
+
+    await visibilityCompletion()({
+      result: { type: 'failure', data: { error: 'Visibility failed.' } },
+      update: vi.fn(async () => {}),
+    });
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'Visibility failed.',
     );
   });
 });

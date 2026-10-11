@@ -63,6 +63,9 @@ export class CandidateProfile extends SmrtObject {
   sponsorshipRequired = 'unknown';
   @field({ type: 'text', sensitive: true })
   summary = '';
+  /** Excludes only the profile summary; resume identity/contact remains required. */
+  @field({ type: 'boolean' })
+  useOnResume = true;
   /** Structured facts retain whether a value was verified, safely derived, or unresolved. */
   @field({ type: 'text', sensitive: true })
   factsJson = '{"facts":{},"unresolvedQuestions":[],"version":1}';

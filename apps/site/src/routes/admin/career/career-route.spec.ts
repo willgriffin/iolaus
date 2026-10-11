@@ -4,11 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   save: vi.fn(),
+  visibility: vi.fn(),
   shared: false,
 }));
 vi.mock('$lib/server/career-management', () => ({
   loadCareerManagement: mocks.load,
   saveCareerSection: mocks.save,
+  setCareerResumeVisibility: mocks.visibility,
 }));
 vi.mock('$lib/server/app-config', () => ({
   isSharedHosted: () => mocks.shared,
@@ -56,6 +58,23 @@ describe('Career route', () => {
     expect(result).toEqual({ ok: true, message: 'Saved profile and summary.' });
     expect(mocks.save.mock.calls[0][0]).toBe(locals);
     expect(mocks.save.mock.calls[0][1].get('summary')).toBe('Revised');
+  });
+  it('forwards a visibility mutation through the same safe action boundary', async () => {
+    const body = new FormData();
+    body.set('section', 'education');
+    body.set('id', 'education-1');
+    body.set('visibility', 'hidden');
+    mocks.visibility.mockResolvedValueOnce({ ok: true });
+    await expect(
+      actions.visibility({
+        locals,
+        request: new Request('http://localhost/admin/career?/visibility', {
+          method: 'POST',
+          body,
+        }),
+      } as never),
+    ).resolves.toEqual({ ok: true });
+    expect(mocks.visibility).toHaveBeenCalledWith(locals, expect.any(FormData));
   });
   it.each([
     400, 403, 404,

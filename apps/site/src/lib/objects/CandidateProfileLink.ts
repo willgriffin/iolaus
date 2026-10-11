@@ -23,4 +23,6 @@ export class CandidateProfileLink extends SmrtObject {
   href = '';
   @field({ type: 'decimal', sensitive: true })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

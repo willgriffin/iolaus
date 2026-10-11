@@ -26,4 +26,6 @@ export class Education extends SmrtObject {
   endDate: Date | null = null;
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

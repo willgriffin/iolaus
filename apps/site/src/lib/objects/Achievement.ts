@@ -26,4 +26,6 @@ export class Achievement extends SmrtObject {
   metric = '';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

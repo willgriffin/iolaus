@@ -32,4 +32,6 @@ export class Project extends SmrtObject {
   endPrecision = 'year';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

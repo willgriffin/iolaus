@@ -15,13 +15,14 @@ describe('Resume progressive management', () => {
     expect(body).toContain('Alex Rivera');
     expect(body).not.toContain('Staff Engineer · Northstar');
     expect(body).toContain('Canonical summary');
-    expect(body).not.toContain('<form');
+    expect(body).toContain('action="?/visibility"');
+    expect(body).not.toContain('id="resume-inline-editor"');
     expect(body).not.toContain('<textarea');
     expect(body).not.toContain('Full achievement body');
     expect(body).not.toContain('Short achievement preview');
     expect(body).not.toContain('Hidden experience body');
-    expect(body).toContain('aria-expanded="false"');
-    expect(body).toContain('record-trigger');
+    expect(body).toContain('aria-label="Edit Alex Rivera"');
+    expect(body).toContain('record-summary');
   });
   it('exposes view-only hidden controls and counts for Details', () => {
     const { body } = render(CareerResume, { props: { data } });
@@ -33,6 +34,8 @@ describe('Resume progressive management', () => {
     );
     expect(body).not.toContain('name="useOnResume"');
     expect(body).not.toContain('name="candidateProfileId"');
+    expect(body).toContain('Hide summary from resume');
+    expect(body).toContain('action="?/visibility"');
   });
   it('keeps Details management links and replaces the heading and PDF link with tabs', () => {
     const { body } = render(CareerResume, { props: { data } });

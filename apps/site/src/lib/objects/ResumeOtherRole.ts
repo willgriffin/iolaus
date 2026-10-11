@@ -24,4 +24,6 @@ export class ResumeOtherRole extends SmrtObject {
   tags = '';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

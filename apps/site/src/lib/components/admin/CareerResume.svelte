@@ -69,6 +69,9 @@ const entries = $derived(
   ),
 );
 const keyFor = (entry: Entry) => entry.section.key + ':' + entry.record.id;
+const groupFor = (entry: Entry) =>
+  sections.find((group) => group.keys.includes(entry.section.key))?.id ||
+  'summary';
 const visible = (entry: Entry, group: string) =>
   entry.record.presentation?.inResume !== false || showHidden[group];
 function restoreFocus() {
@@ -104,9 +107,7 @@ async function openEditor(entry: Entry, event: MouseEvent) {
   if (!mayLeave()) return;
   trigger = event.currentTarget as HTMLButtonElement;
   triggerId = trigger.id;
-  activeGroup =
-    sections.find((group) => group.keys.includes(entry.section.key))?.id ||
-    'summary';
+  activeGroup = groupFor(entry);
   active = keyFor(entry);
   draft = { ...entry.record.values };
   baseline = JSON.stringify(draft);
@@ -190,6 +191,45 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
     }
   };
 };
+const visibilitySubmit: SubmitFunction = ({ cancel }) => {
+  if (saving) {
+    cancel();
+    return;
+  }
+  if (active && !mayLeave()) {
+    cancel();
+    return;
+  }
+  active = null;
+  draft = {};
+  baseline = '';
+  saving = true;
+  localError = '';
+  notice = '';
+  return async ({ result, update }) => {
+    try {
+      if (result.type === 'success' && result.data?.ok === true) {
+        await update({ reset: false });
+        notice =
+          typeof result.data.message === 'string'
+            ? result.data.message
+            : 'Resume visibility updated.';
+      } else {
+        localError =
+          result.type === 'failure' && typeof result.data?.error === 'string'
+            ? result.data.error
+            : 'Could not update resume visibility. Please try again.';
+      }
+    } catch {
+      localError = 'Could not update resume visibility. Please try again.';
+    } finally {
+      saving = false;
+      await tick();
+      if (!localError)
+        document.getElementById(`resume-hidden-${activeGroup}`)?.focus();
+    }
+  };
+};
 </script>
 
 <svelte:window onbeforeunload={beforeUnload} />
@@ -216,19 +256,33 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
 
 {#snippet row(entry: Entry, child = false)}
   {@const presentation = entry.record.presentation}
+  {@const hidden = presentation?.inResume === false}
+  {@const manuallyExcluded = presentation?.manuallyExcluded === true}
+  {@const visibilityLabel = entry.section.key === 'profile'
+    ? manuallyExcluded ? 'Show summary on resume' : 'Hide summary from resume'
+    : manuallyExcluded ? 'Show on resume' : 'Hide from resume'}
   <div class:record-card={!child} class:related-row={child} class:editing={active === keyFor(entry)}>
     {#if active === keyFor(entry)}
       <div class="edit-heading"><strong>{presentation?.title || entry.section.label}</strong>{#if presentation?.context}<span class="context">{presentation.context}</span>{/if}</div>
       {@render editor(entry)}
     {:else}
-    <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-trigger" type="button" aria-expanded="false" onclick={(event) => openEditor(entry, event)} disabled={saving}>
+    <div class="record-summary">
       <span class="record-copy"><strong>{presentation?.title || 'Record details unavailable'}</strong>
         {#if presentation?.context}<span class="context">{presentation.context}</span>{/if}
         <span class="preview">{presentation?.preview || (entry.section.key === 'profile' ? 'Add a summary' : 'Add details')}</span>
         {#if presentation?.inResume === false}<span class="membership"><EyeOff size={14} /> Hidden from canonical resume</span>
         {:else if presentation?.inResume === null || !presentation}<span class="membership">Canonical details unavailable</span>{/if}
-      </span><Pencil size={18} aria-hidden="true" />
-    </button>
+      </span>
+      <div class="record-actions">
+        <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-action" type="button" aria-label={'Edit ' + (presentation?.title || entry.section.label)} title={'Edit ' + (presentation?.title || entry.section.label)} onclick={(event) => openEditor(entry, event)} disabled={saving}><Pencil size={18} aria-hidden="true" /></button>
+        <form method="POST" action="?/visibility" use:enhance={visibilitySubmit}>
+          <input type="hidden" name="section" value={entry.section.key} />
+          <input type="hidden" name="id" value={entry.record.id} />
+          <input type="hidden" name="visibility" value={manuallyExcluded ? 'visible' : 'hidden'} />
+          <button class="record-action" type="submit" aria-label={visibilityLabel} title={visibilityLabel} onclick={() => { activeGroup = groupFor(entry); }} disabled={saving}>{#if manuallyExcluded}<Eye size={18} aria-hidden="true" />{:else}<EyeOff size={18} aria-hidden="true" />{/if}</button>
+        </form>
+      </div>
+    </div>
     {#if presentation?.hiddenReason}<p class="reason">{presentation.hiddenReason}</p>{/if}
     {/if}
   </div>
@@ -240,6 +294,7 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
   </div>
   <div role="tabpanel" id={`resume-panel-${selectedTab}`} aria-labelledby={`resume-tab-${selectedTab}`}>
   <p class="feedback" role="status" aria-live="polite">{notice}</p>
+  {#if localError && !active}<p class="error" role="alert">{localError}</p>{/if}
   {#if !data.loadedComplete}<p class="load-notice">Only part of the available data is loaded. Counts describe loaded entries; unavailable entries are not classified as hidden. Open detailed records to see more.</p>{/if}
   {#each sections.filter(group => tabs.find(tab => tab.id === selectedTab)?.groups.some(id => id === group.id)) as group (group.id)}
     {@const groupEntries = entries.filter((entry) => group.keys.includes(entry.section.key))}
@@ -294,14 +349,14 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
   section { margin-block: 1.5rem 2rem; } .section-heading { margin-bottom: .75rem; } .counts { margin-top: .25rem; font-size: .85rem; }
   .records { display: grid; gap: .75rem; } .record-card { border-radius: var(--smrt-radius-large, .75rem); background: var(--smrt-color-surface-container-low, var(--smrt-color-surface-container)); min-width: 0; }
   button { font: inherit; cursor: pointer; min-height: 44px; color: var(--smrt-color-on-surface); background: transparent; border: 0; }
-  button:disabled { cursor: wait; opacity: .65; } .record-trigger { display: flex; align-items: center; justify-content: space-between; text-align: left; gap: .75rem; width: 100%; padding: 1rem; }
-  .record-trigger > :global(svg) { flex: 0 0 auto; color: var(--smrt-color-primary); }
+  button:disabled { cursor: wait; opacity: .65; } .record-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; width: 100%; padding: 1rem; box-sizing: border-box; }
+  .record-actions { display: flex; flex: 0 0 auto; gap: .25rem; } .record-actions form { padding: 0; display: block; } .record-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: .5rem; color: var(--smrt-color-on-surface-variant); border-radius: var(--smrt-radius-medium, .5rem); }
   .record-copy { display: grid; gap: .3rem; min-width: 0; } .record-copy strong, .preview, .context { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   .edit-heading { display: grid; gap: .3rem; padding: 1rem; overflow-wrap: anywhere; }
   .context { font-size: .85rem; } .preview { font-size: .95rem; } .membership { display: flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--smrt-color-on-surface-variant); }
   .hidden-toggle { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-width: 44px; padding: .5rem; border-radius: var(--smrt-radius-medium, .5rem); }
   .related { padding: 0 .5rem; margin-top: -.5rem; } .children-toggle { display: flex; align-items: center; gap: .5rem; padding: .5rem; text-align: left; }
-  .related-row { border-bottom: 1px solid var(--smrt-color-outline-variant); min-width: 0; } .related-row .record-trigger { padding: .75rem .5rem; } .readonly { padding: .75rem .5rem; }
+  .related-row { border-bottom: 1px solid var(--smrt-color-outline-variant); min-width: 0; } .related-row .record-summary { padding: .75rem .5rem; } .readonly { padding: .75rem .5rem; }
   .manage-links { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .85rem; margin-top: .5rem; }
   .reason { font-size: .85rem; padding: 0 1rem .75rem; } .feedback { min-height: 1.5rem; margin-top: .75rem; color: var(--smrt-color-primary); } .load-notice { padding: .75rem 0; }
   form { padding: 0 1rem 1rem; display: grid; gap: .5rem; } label { margin-top: .5rem; font-size: .9rem; }

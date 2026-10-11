@@ -20,4 +20,6 @@ export class SkillGroup extends SmrtObject {
   blurb = '';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

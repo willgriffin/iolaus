@@ -18,4 +18,6 @@ export class SkillCategory extends SmrtObject {
   label = '';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

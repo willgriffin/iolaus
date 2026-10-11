@@ -22,4 +22,6 @@ export class Duty extends SmrtObject {
   body = '';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

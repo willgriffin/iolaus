@@ -14,6 +14,7 @@ export interface CareerRecordPresentation {
   context: string;
   preview: string;
   inResume: boolean | null;
+  manuallyExcluded?: boolean;
   hiddenReason?: string;
   parentExperienceId?: string;
   kind: string;
@@ -303,6 +304,17 @@ export function buildCareerPresentation(
           inResume,
           hiddenReason,
           kind: section.label,
+        };
+      }
+      if (row.useOnResume === false) {
+        presentation = {
+          ...presentation,
+          inResume: false,
+          manuallyExcluded: true,
+          hiddenReason:
+            section.key === 'profile'
+              ? 'The profile summary is hidden from the canonical resume. Identity and contact details remain available.'
+              : 'Hidden from the canonical resume.',
         };
       }
       return { ...record, presentation };

@@ -488,6 +488,75 @@ describe('assembleResumeSourceFromRecords', () => {
     ).not.toContain(hiddenSkill.tagId);
   });
 
+  it('keeps existing records visible by default and removes explicitly hidden source cards from current resume assembly', () => {
+    const records = normalizedRecordsFromSource(loadLegacyResumeSource());
+    const baseline = assembleResumeSourceFromRecords(records);
+    const experience = records.experiences[0];
+    if (!experience) throw new Error('expected fixture experience');
+    const experienceId = String(experience.id);
+    records.profileLinks.push({
+      href: 'https://hidden.example.test',
+      id: 'hidden-link',
+      label: 'Hidden link',
+      profileKey: 'default',
+      sortOrder: 999,
+      useOnResume: false,
+    });
+    records.projects.push({
+      experienceId,
+      id: 'hidden-project',
+      name: 'Hidden project',
+      projectKey: 'hidden-project',
+      sortOrder: 999,
+      useOnResume: false,
+    });
+    records.duties.push({
+      body: 'Hidden duty',
+      experienceId,
+      id: 'hidden-duty',
+      sortOrder: 999,
+      useOnResume: false,
+    });
+    records.achievements.push({
+      body: 'Hidden achievement',
+      experienceId,
+      id: 'hidden-achievement',
+      sortOrder: 999,
+      title: 'Hidden achievement',
+      useOnResume: false,
+    });
+    records.education.push({
+      detail: 'Hidden education',
+      id: 'hidden-education',
+      sortOrder: 999,
+      title: 'Hidden degree',
+      useOnResume: false,
+    });
+    records.otherRoles.push({
+      body: 'Hidden other',
+      company: 'Example',
+      id: 'hidden-other',
+      period: '2020',
+      role: 'Hidden role',
+      sortOrder: 999,
+      useOnResume: false,
+    });
+    records.profiles[0]!.useOnResume = false;
+
+    const assembled = assembleResumeSourceFromRecords(records);
+
+    expect(baseline?.experience.positions).toHaveLength(1);
+    expect(assembled?.profile).toMatchObject({
+      name: baseline?.profile.name,
+      title: baseline?.profile.title,
+      email: baseline?.profile.email,
+      summary: '',
+    });
+    expect(JSON.stringify(assembled)).not.toMatch(
+      /hidden\.(example\.test)|Hidden (project|duty|achievement|education|role)/,
+    );
+  });
+
   it('normalizes canonical SMRT tag IDs back to renderer-facing slugs', () => {
     const records = normalizedRecordsFromSource(loadLegacyResumeSource());
     const skill = records.skillCategoryMembers[0];
