@@ -640,7 +640,7 @@ function currentTenantHref(pathname: string): string {
       state={adminShell}
       showTenantToggle
       hotkeys
-      slots={{ 'leftSidebar.footer': tenantFooter }}
+      {tenantFooter}
       {appBar}
       {appPanel}
       {tenantRail}
