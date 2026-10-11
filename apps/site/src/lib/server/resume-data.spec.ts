@@ -557,6 +557,41 @@ describe('assembleResumeSourceFromRecords', () => {
     );
   });
 
+  it('does not promote visible project achievements when their project is hidden', () => {
+    const records = normalizedRecordsFromSource(loadLegacyResumeSource());
+    const experience = records.experiences[0];
+    if (!experience) throw new Error('expected fixture experience');
+    const experienceId = String(experience.id);
+    records.projects.push({
+      experienceId,
+      id: 'hidden-project',
+      name: 'Hidden parent project',
+      projectKey: 'hidden-project',
+      sortOrder: 999,
+      useOnResume: false,
+    });
+    records.achievements.push({
+      body: 'Must not be promoted from a hidden project',
+      experienceId,
+      id: 'hidden-project-achievement',
+      projectId: 'hidden-project',
+      resumePlacement: 'both',
+      sortOrder: 999,
+      title: 'Hidden project achievement',
+      useOnResume: true,
+    });
+
+    const assembled = assembleResumeSourceFromRecords(records);
+    const position = assembled?.experience.positions[0];
+
+    expect(position?.projects.map((project) => project.id)).not.toContain(
+      'hidden-project',
+    );
+    expect(
+      position?.achievements.map((achievement) => achievement.id),
+    ).not.toContain('hidden-project-achievement');
+  });
+
   it('normalizes canonical SMRT tag IDs back to renderer-facing slugs', () => {
     const records = normalizedRecordsFromSource(loadLegacyResumeSource());
     const skill = records.skillCategoryMembers[0];

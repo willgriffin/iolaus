@@ -554,6 +554,11 @@ export function assembleResumeSourceFromRecords(
     'projectId',
   );
   const projectsByExperience = groupByString(records.projects, 'experienceId');
+  const hiddenProjectIds = new Set(
+    records.projects
+      .filter((record) => !booleanValue(record.useOnResume, true))
+      .map((record) => stringValue(record.id)),
+  );
   const experienceTags = groupByString(records.experienceTags, 'experienceId');
   const achievementTags = groupByString(
     records.achievementTags,
@@ -670,6 +675,9 @@ export function assembleResumeSourceFromRecords(
           .map(buildProject),
         achievements: (achievementsByExperience.get(experienceId) ?? [])
           .filter((record) => booleanValue(record.useOnResume, true))
+          .filter(
+            (record) => !hiddenProjectIds.has(stringValue(record.projectId)),
+          )
           .filter(shouldRenderAchievementAtPosition)
           .sort(bySortOrder)
           .map(buildAchievement),
