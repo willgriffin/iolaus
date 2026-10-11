@@ -20,10 +20,7 @@ import {
   type AdminActivityFeedState,
   startAdminActivityFeed,
 } from '$lib/admin/activity-feed';
-import {
-  adminCategories,
-  buildAdminNavigation,
-} from '$lib/admin/category-navigation';
+import { buildAdminNavigation } from '$lib/admin/category-navigation';
 import {
   ADMIN_DOCK_CONTEXT,
   type AdminDockApi,
@@ -48,12 +45,6 @@ import AdminTenantNav from '$lib/components/admin/AdminTenantNav.svelte';
 import LegalLinks from '$lib/components/LegalLinks.svelte';
 import PublicSiteHeader from '$lib/components/PublicSiteHeader.svelte';
 import type { loadAdminShellData } from '$lib/server/admin-shell-data';
-
-type BreadcrumbItem = {
-  href?: string;
-  label: string;
-};
-type BreadcrumbRecord = Record<string, unknown> | null | undefined;
 
 const ADMIN_SHELL_STORAGE_KEY = 'iolaus.admin.shell';
 const ADMIN_SHELL_CONFIG = {
@@ -195,14 +186,6 @@ const adminDockTools = $derived(buildAdminDockTools(activeAdminDockContext));
 const activeAdminToolId = $derived(adminShell.activeFocusToolId);
 const activeAdminTool = $derived(
   adminDockTools.find((tool) => tool.id === activeAdminToolId) ?? null,
-);
-const adminBreadcrumbs = $derived(
-  resolveAdminBreadcrumbs(page.url.pathname, data.resources, page.data),
-);
-const showAdminBreadcrumbs = $derived(
-  !browsing &&
-    page.url.pathname.replace(/\/+$/, '') !== '/admin/sources' &&
-    adminBreadcrumbs.length > 1,
 );
 const tenantCurrentHref = $derived(
   currentTenantHref(browsing ? '/admin/opportunities' : page.url.pathname),
@@ -395,101 +378,6 @@ onMount(() => {
   };
 });
 
-function resolveAdminBreadcrumbs(
-  pathname: string,
-  resources: Array<{ label: string; singularLabel: string; slug: string }>,
-  pageData: Record<string, unknown>,
-): BreadcrumbItem[] {
-  const parts = pathname.split('/').filter(Boolean);
-  if (parts[0] !== 'admin') return [];
-
-  const crumbs: BreadcrumbItem[] = [{ href: '/admin', label: 'Overview' }];
-  const resourceSlug = parts[1];
-  if (!resourceSlug) return crumbs;
-  if (resourceSlug === 'resume' && parts[2] === 'skill-discovery') {
-    return [
-      ...crumbs,
-      { href: '/admin/career', label: 'Resume' },
-      { label: 'Discover skills' },
-    ];
-  }
-
-  const memoryResources = new Set<string>(
-    adminCategories.find(({ key }) => key === 'memory')?.resources ?? [],
-  );
-  const resumeResources = new Set<string>(
-    adminCategories.find(({ key }) => key === 'career')?.resources ?? [],
-  );
-  if (resourceSlug === 'resume' || resumeResources.has(resourceSlug))
-    crumbs.push({ href: '/admin/career', label: 'Resume' });
-  if (resourceSlug === 'memory' || memoryResources.has(resourceSlug))
-    crumbs.push({ href: '/admin/system', label: 'System' });
-  if (memoryResources.has(resourceSlug))
-    crumbs.push({ href: '/admin/memory', label: 'Memory' });
-
-  const resource = resources.find((item) => item.slug === resourceSlug);
-  if (!resource) {
-    const categoryLabel = adminCategories.find(
-      ({ key }) => key === resourceSlug,
-    )?.label;
-    const label =
-      resourceSlug === 'resume'
-        ? 'Preview & PDFs'
-        : (categoryLabel ?? segmentLabel(resourceSlug));
-    crumbs.push({
-      href: `/admin/${resourceSlug}`,
-      label,
-    });
-    return crumbs;
-  }
-
-  const resourceHref = `/admin/${resource.slug}`;
-  crumbs.push({ href: resourceHref, label: resource.label });
-
-  if (parts[2] === 'new') {
-    crumbs.push({ label: `New ${resource.singularLabel}` });
-    return crumbs;
-  }
-
-  if (!parts[2]) return crumbs;
-
-  if (parts[3] === 'edit') {
-    crumbs.push({ label: 'Edit' });
-    return crumbs;
-  }
-
-  if (parts[3] === 'review') {
-    crumbs.push({ label: 'Review' });
-    return crumbs;
-  }
-
-  const detailLabel =
-    resource.slug === 'applications'
-      ? applicationBreadcrumbLabel(pageData)
-      : '';
-  crumbs.push({ label: detailLabel || resource.singularLabel });
-  return crumbs;
-}
-
-function breadcrumbString(record: BreadcrumbRecord, key: string): string {
-  const value = record?.[key];
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function applicationBreadcrumbLabel(pageData: Record<string, unknown>): string {
-  return (
-    breadcrumbString(pageData.opportunity as BreadcrumbRecord, 'title') ||
-    breadcrumbString(pageData.company as BreadcrumbRecord, 'name') ||
-    breadcrumbString(pageData.application as BreadcrumbRecord, 'title')
-  );
-}
-
-function segmentLabel(segment: string): string {
-  return decodeURIComponent(segment)
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function normalizeRoutePath(path: string): string {
   const normalized = path.replace(/\/+$/, '');
   return normalized || '/';
@@ -651,23 +539,6 @@ function currentTenantHref(pathname: string): string {
       {systemPanel}
     >
       <div class="admin-content" class:browsing>
-        {#if showAdminBreadcrumbs}
-          <nav class="smrt-breadcrumbs" aria-label="Admin breadcrumbs">
-            {#each adminBreadcrumbs as crumb, index}
-              {@const isCurrent = index === adminBreadcrumbs.length - 1}
-              <span class="crumb-item" class:current={isCurrent}>
-                {#if crumb.href && !isCurrent}
-                  <a class="crumb-link" href={crumb.href}>{crumb.label}</a>
-                {:else}
-                  {crumb.label}
-                {/if}
-              </span>
-              {#if !isCurrent}
-                <span class="separator">/</span>
-              {/if}
-            {/each}
-          </nav>
-        {/if}
         {@render children()}
       </div>
     </AdminShell>
@@ -781,27 +652,6 @@ function currentTenantHref(pathname: string): string {
     min-height: 100%;
     min-width: 0;
     padding: 22px;
-  }
-  :global(.admin-content .smrt-breadcrumbs) {
-    margin: 0;
-    padding: 0 12px 6px;
-    border: 0;
-    background: transparent;
-  }
-  :global(.admin-content .smrt-breadcrumbs .crumb-item) {
-    color: var(--smrt-color-on-surface-variant);
-    font-size: 12px;
-    font-weight: 700;
-  }
-  :global(.admin-content .smrt-breadcrumbs .crumb-link) {
-    color: var(--smrt-color-on-surface-variant);
-  }
-  :global(.admin-content .smrt-breadcrumbs .current) {
-    color: var(--smrt-color-on-surface);
-  }
-  :global(.admin-content .smrt-breadcrumbs .separator) {
-    margin: 0 4px;
-    color: var(--smrt-color-on-surface-variant);
   }
 
   @media (max-width: 640px) {

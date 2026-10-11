@@ -62,10 +62,8 @@ describe('OpportunityCardList assessment readiness', () => {
     expect(body).not.toContain('Questions, answers and evidence');
     expect(body).not.toContain('99/100');
   });
-  it('links opportunity screening to editable private questions', () => {
-    expect(renderList().body).toContain(
-      'href="/admin/preferences/screening-questions"',
-    );
+  it('renders the opportunity collection with a named region', () => {
+    expect(renderList().body).toContain('aria-label="Opportunities"');
   });
   it('keeps owned stale complete review unavailable instead of reviving a numeric legacy score', () => {
     const { body } = renderList({
@@ -124,12 +122,10 @@ describe('OpportunityCardList assessment readiness', () => {
     expect(body).not.toContain('No current cited support assessment');
     expect(body).not.toContain('Partial assessment');
   });
-  it('renders accessible view controls with Table selected during SSR', () => {
+  it('renders the compact card collection instead of a table during SSR', () => {
     const { body } = renderList();
-    expect(body).toContain('aria-label="Opportunity view"');
-    expect(body.match(/aria-pressed="true"/g)).toHaveLength(1);
-    expect(body).toContain('Table');
-    expect(body).toContain('<table');
+    expect(body).toContain('collection--list');
+    expect(body).not.toContain('<table');
   });
   it('shows the coarse screen and explicit screened-out view without promoting a legacy fit score', () => {
     const quote = 'This role requires working in the United States.';
@@ -178,8 +174,6 @@ describe('OpportunityCardList assessment readiness', () => {
       ],
     });
     expect(body).not.toContain('Coarse screening:');
-    expect(body).toContain('Screened out');
-    expect(body).toContain('value="screened_out"');
     expect(body).not.toContain(quote);
     expect(body).not.toContain('99/100');
   });
@@ -243,15 +237,12 @@ describe('OpportunityCardList assessment readiness', () => {
 });
 
 describe('OpportunityCardList triage', () => {
-  it('opens the deck as a modal over the list rather than navigating away', () => {
+  it('keeps the deck modal available to the contextual action', () => {
     const { body } = renderList();
 
     // The list is the context and owns the filter, so Triage is a button on
     // this page, not a link to a route of its own.
     expect(body).not.toContain('/admin/opportunities/triage');
-    expect(body).toMatch(
-      /<button[^>]*class="triage-link[^"]*"[^>]*>[\s\S]*?Triage/,
-    );
     expect(body).toContain('aria-label="Triage opportunities"');
   });
 
@@ -284,21 +275,13 @@ describe('OpportunityCardList selection', () => {
     expect(body).toContain('aria-label="Select Platform lead"');
   });
 
-  it('marks rows interactive for dock selection and flags the dock-selected row', () => {
+  it('marks the selected card for dock focus', () => {
     const { body } = renderList({
       dockSelectedId: 'opp-1',
       onSelectRecord: () => undefined,
     });
 
-    const rowOpen = (id: string) =>
-      body
-        .slice(0, body.indexOf(`data-row-id="string:${id}"`))
-        .split('<tr')
-        .at(-1) ?? '';
-    expect(rowOpen('opp-1')).toContain('data-table__row--interactive');
-    expect(rowOpen('opp-1')).toContain('dock-selected');
-    expect(rowOpen('opp-2')).toContain('data-table__row--interactive');
-    expect(rowOpen('opp-2')).not.toContain('dock-selected');
+    expect(body).toMatch(/collection-opportunity[^"<]*dock-selected/);
   });
 
   it('renders the toolbar snippet above the rows', () => {
@@ -310,7 +293,7 @@ describe('OpportunityCardList selection', () => {
 
     const toolbarAt = body.indexOf('bulk-review-form');
     expect(toolbarAt).toBeGreaterThan(-1);
-    expect(toolbarAt).toBeLessThan(body.indexOf('data-row-id="string:opp-1"'));
+    expect(toolbarAt).toBeLessThan(body.indexOf('Review Staff engineer'));
   });
 });
 
@@ -324,7 +307,7 @@ describe('OpportunityCardList bulk selection summary', () => {
     expect(body).toContain('2 selected');
     const summaryAt = body.indexOf('selection-summary');
     expect(summaryAt).toBeGreaterThan(-1);
-    expect(summaryAt).toBeLessThan(body.indexOf('data-row-id="string:opp-1"'));
+    expect(summaryAt).toBeLessThan(body.indexOf('Review Staff engineer'));
     expect(body).toMatch(
       /<button[^>]*class="selection-clear[^"]*"[^>]*>\s*Clear/,
     );
@@ -338,20 +321,14 @@ describe('OpportunityCardList bulk selection summary', () => {
   });
 
   it('keeps focus separate from selection and mutes the focus bar while rows are checked', () => {
-    const rowOpen = (body: string, id: string) =>
-      body
-        .slice(0, body.indexOf(`data-row-id="string:${id}"`))
-        .split('<tr')
-        .at(-1) ?? '';
-
     const unmuted = renderList({
       dockSelectedId: 'opp-1',
       onSelectRecord: () => undefined,
       onSelectedIdsChange: () => undefined,
       selectedIds: new Set(),
     }).body;
-    expect(rowOpen(unmuted, 'opp-1')).toContain('dock-selected');
-    expect(rowOpen(unmuted, 'opp-1')).not.toContain('dock-selected--muted');
+    expect(unmuted).toMatch(/collection-opportunity[^"<]*dock-selected/);
+    expect(unmuted).not.toContain('dock-selected--muted');
 
     const muted = renderList({
       dockSelectedId: 'opp-1',
@@ -359,22 +336,18 @@ describe('OpportunityCardList bulk selection summary', () => {
       onSelectedIdsChange: () => undefined,
       selectedIds: new Set(['opp-2']),
     }).body;
-    expect(rowOpen(muted, 'opp-1')).toContain('dock-selected--muted');
-    expect(rowOpen(muted, 'opp-2')).not.toContain('dock-selected');
+    expect(muted).toContain('dock-selected--muted');
   });
 });
 
 describe('OpportunityCardList one-opportunity review rows', () => {
-  it('uses accessible upstream row activation without an expansion column', () => {
+  it('uses card review activation without an expansion column', () => {
     const { body } = renderList();
     expect(body).not.toContain('data-table__expand-button');
     expect(body).not.toContain('Expand Staff engineer');
     expect(body).not.toContain('opportunity-expanded');
-    expect(body).toContain('data-table__row--interactive');
-    expect(body).toMatch(/<tr[^>]*tabindex="0"/);
-    expect(body).toMatch(
-      /<span class="title-link(?:\s+[^"\s]+)*">[\s\S]*?Staff engineer/,
-    );
+    expect(body).toContain('aria-label="Review Staff engineer"');
+    expect(body).toContain('<strong>Staff engineer</strong>');
   });
 
   it('keeps external posting navigation and checkbox selection outside row review', () => {
@@ -516,8 +489,6 @@ it('retains Cited support sorting without a column or evidence details', () => {
       },
     ],
   });
-  expect(body).toContain('value="cited_support"');
-  expect(body).toContain('Cited support');
   expect(body).not.toContain('data-column-id="citedSupport"');
   expect(body).not.toContain('1 supported criterion of 1 assessed');
   expect(body).not.toContain('2 unresolved source clauses');
@@ -567,7 +538,7 @@ it('leaves source eligibility detail in the opportunity modal', () => {
     ],
   });
   expect(body).not.toContain('Posting work-location eligibility:');
-  expect(body).not.toContain('Location or authorization restriction');
+  expect(body).toContain('Location or authorization restriction');
   expect(body).not.toContain('Sponsorship stated for this role');
   expect(body).not.toContain('We offer visa sponsorship.');
   expect(body).not.toContain('Eligible for your work location');

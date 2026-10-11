@@ -99,6 +99,71 @@ describe('AdminResourcePage task loading', () => {
     expect(body).toContain('Unable to refresh skills.');
     expect(body).toContain('Try again');
     expect(body).toContain('TypeScript');
+    expect(body).toContain('resource-record-metadata');
+    expect(body).toContain('href="/admin/skills/skill-1/edit"');
+    expect(body).toContain('aria-label="Hide from resume"');
+  });
+
+  it('renders configured generic fields as labelled card metadata', () => {
+    const resource = getAdminResource('skills');
+    if (!resource) throw new Error('Expected skills admin resource fixture');
+
+    const { body } = render(AdminResourcePage, {
+      props: {
+        data: {
+          activeReviewFilter: 'all',
+          activeTaskOwnerFilter: 'all',
+          activeTaskStatusFilter: 'all',
+          candidateSkills: [],
+          comboOptions: {},
+          opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+          pagination: createAdminListPagination(1, 1, 250),
+          referenceOptions: {},
+          resource,
+          records: [{ id: 'skill-1', label: 'TypeScript', useOnResume: false }],
+        },
+      },
+      context: new Map([
+        [ADMIN_DOCK_CONTEXT, { setResourceContext: () => undefined }],
+      ]),
+    });
+
+    expect(body).toContain('>Label</dt>');
+    expect(body).toContain('TypeScript');
+    expect(body).toContain('aria-label="Show on resume"');
+    expect(body).not.toContain('<table');
+  });
+
+  it('keeps application status filtering in the neutral filter dialog', () => {
+    const resource = getAdminResource('applications');
+    if (!resource)
+      throw new Error('Expected applications admin resource fixture');
+
+    const { body } = render(AdminResourcePage, {
+      props: {
+        data: {
+          activeReviewFilter: 'all',
+          activeTaskOwnerFilter: 'all',
+          activeTaskStatusFilter: 'all',
+          candidateSkills: [],
+          comboOptions: {},
+          opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+          pagination: createAdminListPagination(0, 1, 250),
+          records: [],
+          referenceOptions: {},
+          resource,
+        },
+      },
+      context: new Map([
+        [ADMIN_DOCK_CONTEXT, { setResourceContext: () => undefined }],
+      ]),
+    });
+
+    expect(body).toContain('aria-label="Filters"');
+    expect(body).toContain('id="application-filters-title"');
+    expect(body).toContain('Application status');
+    expect(body).toContain('value="archived"');
+    expect(body).not.toContain('application-header-filters');
   });
 
   it('keeps Sources controls compact when no workspace header is available', () => {

@@ -1,13 +1,25 @@
 <script lang="ts">
 import { Globe2, Link } from '@lucide/svelte';
 import type { SubmitFunction } from '@sveltejs/kit';
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import type { ActionData, PageData } from './$types';
 
 let { data, form }: { data: PageData; form: ActionData } = $props();
 let saving = $state('');
 let localError = $state('');
 let notice = $state('');
+const backLink = adminBackLink('Resume', '/admin/career');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(profileLinksHeaderActions));
 const submit: SubmitFunction = ({ cancel, formElement }) => {
   if (saving) {
     cancel();
@@ -38,10 +50,17 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
 };
 </script>
 
+{#snippet profileLinksHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
+
 <svelte:head><title>Profile links</title><meta name="robots" content="noindex, nofollow" /></svelte:head>
 
-<div class="profile-links-editor">
-  <header><h1>Profile links</h1><p>Add the links you want to share on your profile and resume. Leave any you don’t use empty.</p></header>
+<div class="profile-links-editor" aria-labelledby="profile-links-title">
+  <h1 id="profile-links-title" class="sr-only">Profile links</h1>
+  {#if !adminHeader}
+    <a class="embedded-back" href={backLink.href} title={backLink.title}>{backLink.label}</a>
+  {/if}
   {#if localError || form?.error}<p class="feedback error" role="alert">{localError || form?.error}</p>{/if}
   <p class="feedback" role="status" aria-live="polite">{notice || (form?.ok ? form.message : '')}</p>
   <section class="provider-grid" aria-label="Profile services">
@@ -84,9 +103,7 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
 
 <style>
 .profile-links-editor { max-width:72rem; width:100%; min-width:0; margin-inline:auto; color:var(--smrt-color-on-surface); }
-header { margin-bottom:.5rem; }
-h1,h2,p { margin:0; }
-h1 { font-size:1.6rem; margin-bottom:.5rem; }
+h2,p { margin:0; }
 h2 { font-size:1rem; }
 p,small { color:var(--smrt-color-on-surface-variant); line-height:1.5; }
 .feedback { min-height:1.5rem; margin-block:.5rem 1rem; }
@@ -103,6 +120,7 @@ button { width:max-content; min-height:44px; border:1px solid var(--smrt-color-o
 button:hover { background:var(--smrt-color-surface-container-high); }
 button:disabled { opacity:.6; cursor:wait; }
 .error { color:var(--smrt-color-error); }
+.embedded-back { color:var(--smrt-color-primary); }
 :is(input,button):focus-visible { outline:2px solid var(--smrt-color-primary); outline-offset:3px; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 @media(max-width:40rem) { .custom { grid-template-columns:1fr; } }

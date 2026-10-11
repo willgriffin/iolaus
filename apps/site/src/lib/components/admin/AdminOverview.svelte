@@ -1,7 +1,17 @@
 <script lang="ts">
+import Layers from '@lucide/svelte/icons/layers';
+import { getContext } from 'svelte';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
 import type { AdminOverview } from '$lib/admin/overview';
 
 let { overview } = $props<{ overview: AdminOverview }>();
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(overviewHeaderActions));
 
 function dueDate(value: string): string {
   const date = new Date(value);
@@ -13,14 +23,20 @@ function dueDate(value: string): string {
 }
 </script>
 
+{#snippet overviewHeaderActions()}
+  <a
+    class="admin-header-action"
+    href="/admin/opportunities?review=unsorted&triage=1"
+    aria-label="Review new opportunities"
+    title="Review new opportunities"
+  >
+    <Layers size={21} aria-hidden="true" />
+  </a>
+{/snippet}
+
 <svelte:head><title>Overview — Employment Search</title></svelte:head>
 
 <div class="overview" data-testid="admin-overview">
-  <header class="page-heading">
-    <div><h1>Overview</h1><p>Your next actions and new opportunities worth reviewing.</p></div>
-    <a class="section-link" href="/admin/opportunities?review=unsorted&amp;triage=1">Review new opportunities</a>
-  </header>
-
   <div class="overview-columns">
     <section aria-labelledby="overview-tasks">
       <header class="section-heading"><div><h2 id="overview-tasks">Priority tasks</h2><p>Overdue work and actions waiting on you come first.</p></div><a href="/admin/tasks">All tasks</a></header>
@@ -74,15 +90,16 @@ function dueDate(value: string): string {
 </div>
 
 <style>
+  .admin-header-action { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:.4rem; color:var(--smrt-color-on-surface-variant); }
+  .admin-header-action:hover { background:var(--smrt-color-surface-container); color:var(--smrt-color-on-surface); }
+  .admin-header-action:focus-visible { outline:2px solid var(--smrt-color-on-surface); outline-offset:2px; }
   .overview { display: grid; gap: var(--smrt-spacing-6); min-width: 0; }
-  .page-heading, .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--smrt-spacing-4); flex-wrap: wrap; }
-  h1, h2, h3, p { margin: 0; }
-  h1 { font-size: 1.75rem; }
+  .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--smrt-spacing-4); flex-wrap: wrap; }
+  h2, h3, p { margin: 0; }
   h2 { font-size: 1.2rem; }
   h3 { font-size: 1rem; margin-top: var(--smrt-spacing-6); }
   p { color: var(--smrt-color-on-surface-variant); line-height: 1.5; margin-top: var(--smrt-spacing-2); }
   a { color: var(--smrt-color-primary); }
-  .section-link { display: inline-flex; align-items: center; min-height: 44px; padding: var(--smrt-spacing-2) var(--smrt-spacing-4); border: 1px solid var(--smrt-color-outline-variant); border-radius: var(--smrt-radius-medium); text-decoration: none; }
   .overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--smrt-spacing-6); }
   section { min-width: 0; padding: var(--smrt-spacing-5); border: 1px solid var(--smrt-color-outline-variant); border-radius: var(--smrt-radius-large); background: var(--smrt-color-surface-container-low); }
   .section-heading a { min-height: 44px; display: inline-flex; align-items: center; font-size: .9rem; }

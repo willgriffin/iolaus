@@ -334,7 +334,6 @@ const visibilitySubmit: SubmitFunction = ({ cancel }) => {
 </div>
 
 <style>
-:global(.admin-content:has(.resume-manager) .smrt-breadcrumbs) { display:none; }
 .resume-tabs { display:flex; gap:.25rem; border-bottom:1px solid var(--border-strong); }
 .resume-tabs button { padding:.8rem 1.2rem; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--ink-3); font:inherit; cursor:pointer; }
 .resume-tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); font-weight:700; }

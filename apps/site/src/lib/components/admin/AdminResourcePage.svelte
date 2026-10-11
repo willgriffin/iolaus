@@ -38,6 +38,7 @@ import {
   ADMIN_HEADER_ACTIONS,
   type AdminHeaderActions,
 } from '$lib/admin/header-actions';
+import { adminParentForPath } from '$lib/admin/navigation';
 import type { AdminListPagination } from '$lib/admin/pagination';
 import type {
   AdminResource,
@@ -46,6 +47,7 @@ import type {
   ResourceField,
 } from '$lib/admin/resources';
 import { displayFieldLabel } from '$lib/admin/resources';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import {
   taskAssigneeRoleDefinitions,
   taskKanbanColumnDefinitions,
@@ -168,12 +170,16 @@ let draftTaskStatus = $state('all');
 let draftTaskSearch = $state('');
 let sourceFilterDialog = $state<HTMLDialogElement>();
 let draftSourceState = $state<SourceStateFilter>('all');
+let applicationFilterDialog = $state<HTMLDialogElement>();
+let draftApplicationStatus = $state<'active' | 'archived'>('active');
 const adminHeader = getContext<AdminHeaderActions | undefined>(
   ADMIN_HEADER_ACTIONS,
 );
 $effect(() => {
   if (isTaskResource) return adminHeader?.register(taskHeaderControls);
   if (isSourceResource) return adminHeader?.register(sourceHeaderControls);
+  if (isOpportunityResource) return;
+  return adminHeader?.register(resourceHeaderControls);
 });
 function openTaskFilters() {
   draftTaskOwner = data.activeTaskOwnerFilter ?? 'all';
@@ -213,6 +219,25 @@ function applySourceFilters(event: SubmitEvent) {
   sourceFilterDialog?.close();
   void goto(sourceFilterHref(draftSourceState));
 }
+function applicationStatusFromSearchParams(): 'active' | 'archived' {
+  return page.url.searchParams.get('status') === 'archived'
+    ? 'archived'
+    : 'active';
+}
+const applicationStatus = $derived.by(applicationStatusFromSearchParams);
+function openApplicationFilters() {
+  draftApplicationStatus = applicationStatus;
+  applicationFilterDialog?.showModal();
+}
+function applyApplicationFilters(event: SubmitEvent) {
+  event.preventDefault();
+  applicationFilterDialog?.close();
+  const url = new URL(page.url);
+  if (draftApplicationStatus === 'archived')
+    url.searchParams.set('status', 'archived');
+  else url.searchParams.delete('status');
+  void goto(`${url.pathname}${url.search}${url.hash}`);
+}
 let collapsedTaskKanbanLanes = $state<Set<string>>(new Set());
 let taskPreferencesLoaded = $state(false);
 let autoOpenedSelectionKey = $state('');
@@ -229,6 +254,7 @@ const OPPORTUNITY_SWEEP_NOT_SEEN_DAYS = 30;
 const isApplicationResource = $derived(data.resource.slug === 'applications');
 const isSkillResource = $derived(data.resource.slug === 'skills');
 const isSourceResource = $derived(data.resource.slug === 'sources');
+const resourceParent = $derived(adminParentForPath(page.url.pathname));
 const resourceActionFeedbackMessage = $derived(
   stringFromValue(feedbackValue(form, 'message')),
 );
@@ -786,14 +812,7 @@ function openPrimaryTool(record: AdminRecord): void {
   void goto(recordHref(record));
 }
 
-function targetIsNestedControl(target: EventTarget | null): boolean {
-  return target instanceof Element
-    ? Boolean(target.closest('a,button,input,select,textarea,label,form'))
-    : false;
-}
-
-function openRow(record: AdminRecord, event?: MouseEvent): void {
-  if (targetIsNestedControl(event?.target ?? null)) return;
+function openRecord(record: AdminRecord): void {
   if (rowOpensPanel) {
     selectedRecordId = record.id ?? null;
     return;
@@ -802,14 +821,6 @@ function openRow(record: AdminRecord, event?: MouseEvent): void {
   if (!rowOpensView) return;
 
   void goto(recordHref(record));
-}
-
-function handleRowKeydown(event: KeyboardEvent, record: AdminRecord): void {
-  if (targetIsNestedControl(event.target)) return;
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-
-  event.preventDefault();
-  openRow(record);
 }
 
 /**
@@ -1032,6 +1043,17 @@ function displayValue(record: AdminRecord, key: string): string {
   return value.length > 96 ? `${value.slice(0, 93)}...` : value;
 }
 
+function recordLabel(record: AdminRecord): string {
+  for (const key of ['title', 'name', 'label', 'company']) {
+    const value = displayValue(record, key);
+    if (value) return value;
+  }
+  return (
+    displayValue(record, data.resource.tableColumns[0] ?? 'id') ||
+    data.resource.singularLabel
+  );
+}
+
 function displayTitle(record: AdminRecord, key: string): string | undefined {
   if (!isDateColumn(key)) return undefined;
 
@@ -1252,6 +1274,22 @@ function taskMeta(record: AdminRecord): string {
     <a class="source-header-action" href="/admin/sources/new" aria-label="New job source" title="New job source"><Plus size={22} aria-hidden="true"/></a>
   </div>
 {/snippet}
+{#snippet resourceHeaderControls()}
+  <div class="resource-header-controls" aria-label={`${data.resource.label} controls`}>
+    {#if resourceParent}
+      <AdminBackLink href={resourceParent.href} label={`Back to ${resourceParent.label}`} />
+    {/if}
+    {#if isApplicationResource}
+      <button class="resource-header-action" class:active={applicationStatus !== 'active'} type="button" aria-label="Filters" title="Filters" aria-haspopup="dialog" onclick={openApplicationFilters}><SlidersHorizontal size={21} aria-hidden="true" /></button>
+    {/if}
+    {#if data.resource.slug === 'preferences'}
+      <a class="resource-header-link" href="/admin/preferences/screening-questions">Screening Questions</a>
+    {/if}
+    {#if (data.resource.rowAction ?? 'edit') === 'edit'}
+      <a class="resource-header-action" href={`/admin/${data.resource.slug}/new`} aria-label={`New ${data.resource.singularLabel}`} title={`New ${data.resource.singularLabel}`}><Plus size={22} aria-hidden="true" /></a>
+    {/if}
+  </div>
+{/snippet}
 {#if isTaskResource}
 <dialog class="task-filter-dialog" bind:this={taskFilterDialog} aria-labelledby="task-filters-title">
   <header><div><h2 id="task-filters-title">Filter tasks</h2><p>Choose which tasks to show.</p></div><button type="button" aria-label="Close filters" onclick={() => taskFilterDialog?.close()}><X size={22} aria-hidden="true"/></button></header>
@@ -1260,6 +1298,15 @@ function taskMeta(record: AdminRecord): string {
     <label>Assignee<select bind:value={draftTaskOwner}>{#each [{label:'All',value:'all'}, ...taskAssigneeRoleDefinitions] as owner}<option value={owner.value}>{owner.label}</option>{/each}</select></label>
     <label>Status<select bind:value={draftTaskStatus}>{#each [{label:'All',value:'all'}, ...taskStatusDefinitions] as status}<option value={status.value}>{status.label}</option>{/each}</select></label>
     <footer><button type="button" onclick={() => { draftTaskOwner = 'all'; draftTaskStatus = 'all'; draftTaskSearch = ''; }}>Clear all filters</button><button class="apply-task-filters" type="submit">Apply filters</button></footer>
+  </form>
+</dialog>
+{/if}
+{#if isApplicationResource}
+<dialog class="application-filter-dialog" bind:this={applicationFilterDialog} aria-labelledby="application-filters-title">
+  <header><div><h2 id="application-filters-title">Filter applications</h2><p>Choose which applications to show.</p></div><button type="button" aria-label="Close filters" onclick={() => applicationFilterDialog?.close()}><X size={22} aria-hidden="true"/></button></header>
+  <form onsubmit={applyApplicationFilters}>
+    <label>Application status<select bind:value={draftApplicationStatus}><option value="active">Active</option><option value="archived">Archived</option></select></label>
+    <footer><button type="button" onclick={() => { draftApplicationStatus = 'active'; }}>Clear filters</button><button class="apply-application-filters" type="submit">Apply filters</button></footer>
   </form>
 </dialog>
 {/if}
@@ -1468,23 +1515,12 @@ function taskMeta(record: AdminRecord): string {
   class:task-page={isTaskResource}
   class:task-kanban-page={isTaskKanbanView}
 >
-  {#if !isOpportunityResource && !isTaskResource && !isSourceResource}
-    <header class="page-header">
-      <div>
-        <h1>{data.resource.label}</h1>
-        <p>{data.resource.description}</p>
-      </div>
-      {#if data.resource.slug === 'preferences'}<a class="new-record-link" href="/admin/preferences/screening-questions">Screening Questions</a>{/if}
-      {#if !isTaskResource && (data.resource.rowAction ?? 'edit') === 'edit'}
-        <a class="new-record-link" href={`/admin/${data.resource.slug}/new`}>
-          New {data.resource.singularLabel}
-        </a>
-      {/if}
-    </header>
-  {/if}
-
+  <h1 class="sr-only">{data.resource.label}</h1>
   {#if isSourceResource && !adminHeader}
     {@render sourceHeaderControls()}
+  {/if}
+  {#if !adminHeader && !isTaskResource && !isSourceResource}
+    {@render resourceHeaderControls()}
   {/if}
 
   {#if isTaskResource && (taskViewMode === 'kanban' || data.error)}
@@ -1638,10 +1674,6 @@ function taskMeta(record: AdminRecord): string {
         {onRetry}
       />
     {:else if isApplicationResource}
-      <nav class="application-list-filters" aria-label="Application status filter">
-        <a class:active={page.url.searchParams.get('status') !== 'archived'} href="/admin/applications">Active</a>
-        <a class:active={page.url.searchParams.get('status') === 'archived'} href="/admin/applications?status=archived">Archived</a>
-      </nav>
       {#if resourceActionFeedbackMessage}
         <p class={`resource-action-feedback ${resourceActionFeedbackTone}`}>
           {resourceActionFeedbackMessage}
@@ -1686,12 +1718,6 @@ function taskMeta(record: AdminRecord): string {
         {/each}
       </div>
     {:else}
-    <div class="section-heading">
-      <div class="section-title-stack">
-        <h2>{data.loading ? 'Loading records…' : `${displayRecords.length} records`}</h2>
-      </div>
-    </div>
-
     {#if !isTaskResource && data.error && displayRecords.length > 0}
       <div class="resource-action-feedback error" role="alert">
         <span>{data.error}</span>
@@ -1705,40 +1731,30 @@ function taskMeta(record: AdminRecord): string {
       </p>
     {/if}
 
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
+    <div class="resource-card-list" aria-label={data.resource.label} aria-busy={data.loading || data.refreshing}>
+      {#each displayRecords as record (record.id)}
+        {@const label = recordLabel(record)}
+        <article class="resource-record-card" class:selected={record.id === selectedRecordId}>
+          <button
+            class="resource-record-open"
+            type="button"
+            onclick={() => openRecord(record)}
+            aria-label={rowIsInteractive ? `Open ${label}` : undefined}
+            disabled={!rowIsInteractive}
+          >
+            <strong>{label}</strong>
+          </button>
+          <dl class="resource-record-metadata">
             {#each data.resource.tableColumns as column}
-              <th>{columnLabel(column)}</th>
+              <div>
+                <dt>{columnLabel(column)}</dt>
+                <dd class:date-cell={isDateColumn(column)} title={displayTitle(record, column)}>
+                  <AdminRecordValue compact field={fieldFor(column)} {record} referenceOptions={data.referenceOptions} />
+                </dd>
+              </div>
             {/each}
-            <th class="tools-heading" aria-label="Tools"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each displayRecords as record (record.id)}
-            <tr
-              class:selected={record.id === selectedRecordId}
-              class:row-opens-view={rowIsInteractive}
-              onclick={(event) => openRow(record, event)}
-              onkeydown={(event) => handleRowKeydown(event, record)}
-              role={rowIsInteractive ? 'button' : undefined}
-              tabindex={rowIsInteractive ? 0 : undefined}
-              aria-label={rowIsInteractive
-                ? `Open ${record.id ?? data.resource.singularLabel}`
-                : undefined}
-            >
-              {#each data.resource.tableColumns as column}
-                <td class:date-cell={isDateColumn(column)} title={displayTitle(record, column)}>
-                  <AdminRecordValue
-                    compact
-                    field={fieldFor(column)}
-                    {record}
-                    referenceOptions={data.referenceOptions}
-                  />
-                </td>
-              {/each}
-              <td class="tools-cell">
+          </dl>
+          <div class="resource-record-actions">
                 <a
                   class="row-action"
                   href={recordHref(record)}
@@ -1789,31 +1805,20 @@ function taskMeta(record: AdminRecord): string {
                     </button>
                   </form>
                 {/if}
-              </td>
-            </tr>
+          </div>
+        </article>
+      {:else}
+        <p class="empty">
+          {#if data.loading}
+            <span role="status">Loading {data.resource.label.toLowerCase()}…</span>
+          {:else if data.error}
+            <span role="alert">{data.error}</span>
+            {#if onRetry}<button type="button" onclick={onRetry}>Try again</button>{/if}
           {:else}
-            <tr>
-              <td
-                colspan={data.resource.tableColumns.length + 1}
-                class="empty"
-              >
-                {#if data.loading}
-                  <span role="status">Loading {data.resource.label.toLowerCase()}…</span>
-                {:else if data.error}
-                  <span role="alert">{data.error}</span>
-                  {#if onRetry}
-                    <button type="button" onclick={onRetry}>Try again</button>
-                  {/if}
-                {:else if isTaskResource && taskSearchQuery.trim()}
-                  No tasks match these filters.
-                {:else}
-                  No {data.resource.label.toLowerCase()} yet.
-                {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+            No {data.resource.label.toLowerCase()} yet.
+          {/if}
+        </p>
+      {/each}
     </div>
 
     {/if}
@@ -1873,6 +1878,16 @@ function taskMeta(record: AdminRecord): string {
 	.source-filter-dialog select, .source-filter-dialog button { min-height:44px; padding:.5rem .75rem; font:inherit; border:1px solid var(--smrt-color-outline-variant); border-radius:.5rem; background:var(--smrt-color-surface-container); color:var(--smrt-color-on-surface); }
 	.source-filter-dialog button { cursor:pointer; }
 	.source-filter-dialog .apply-source-filters { background:var(--smrt-color-on-surface); border-color:var(--smrt-color-on-surface); color:var(--smrt-color-surface); font-weight:700; }
+	.application-filter-dialog { width:min(32rem,calc(100vw - 1.5rem)); max-height:calc(100dvh - 1.5rem); margin:auto; padding:1.25rem; box-sizing:border-box; border:1px solid var(--smrt-color-outline-variant); border-radius:1rem; background:var(--smrt-color-surface); color:var(--smrt-color-on-surface); overflow:auto; }
+	.application-filter-dialog::backdrop { background:rgb(0 0 0 / .55); }
+	.application-filter-dialog header, .application-filter-dialog footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+	.application-filter-dialog h2 { margin:0; }
+	.application-filter-dialog p { color:var(--smrt-color-on-surface-variant); }
+	.application-filter-dialog form, .application-filter-dialog label { display:grid; gap:.5rem; }
+	.application-filter-dialog form { gap:1rem; }
+	.application-filter-dialog select, .application-filter-dialog button { min-height:44px; padding:.5rem .75rem; font:inherit; border:1px solid var(--smrt-color-outline-variant); border-radius:.5rem; background:var(--smrt-color-surface-container); color:var(--smrt-color-on-surface); }
+	.application-filter-dialog button { cursor:pointer; }
+	.application-filter-dialog .apply-application-filters { background:var(--smrt-color-on-surface); border-color:var(--smrt-color-on-surface); color:var(--smrt-color-surface); font-weight:700; }
 	@media(max-width:48rem) { .source-header-controls { position:absolute; right:.75rem; bottom:10px; } }
 
   .resource-page {
@@ -1893,10 +1908,6 @@ function taskMeta(record: AdminRecord): string {
     overflow: hidden;
   }
 
-  :global(.admin-content:has(.task-page) .smrt-breadcrumbs) {
-    display: none;
-  }
-
   .task-page {
     gap: 14px;
   }
@@ -1912,37 +1923,11 @@ function taskMeta(record: AdminRecord): string {
     overflow: hidden;
   }
 
-  .page-header {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .page-header p {
-    margin: 5px 0 0;
-    color: var(--smrt-color-on-surface-variant);
-  }
-
-  .new-record-link {
-    display: inline-flex;
-    min-height: 36px;
-    flex: 0 0 auto;
-    align-items: center;
-    padding: 0 12px;
-    border: 1px solid var(--smrt-color-on-surface);
-    border-radius: 6px;
-    background: var(--smrt-color-on-surface);
-    color: var(--smrt-color-surface);
-    font-size: 13px;
-    font-weight: 800;
-    text-decoration: none;
-  }
-
-  .new-record-link:hover,
-  .new-record-link:focus-visible {
-    background: var(--smrt-color-on-surface);
-  }
+  .resource-header-controls { display: flex; align-items: center; gap: .35rem; }
+  .resource-header-action { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: var(--smrt-color-on-surface); text-decoration: none; }
+  .resource-header-action:hover, .resource-header-action:focus-visible { background: var(--smrt-color-surface-container); outline: 2px solid var(--smrt-color-on-surface); outline-offset: 2px; }
+  .resource-header-link { min-height: 32px; display: inline-flex; align-items: center; padding: 0 .6rem; border-radius: .4rem; color: var(--smrt-color-on-surface-variant); font-size: .8rem; font-weight: 700; text-decoration: none; }
+  .resource-header-link:hover, .resource-header-link:focus-visible { color: var(--smrt-color-on-surface); background: var(--smrt-color-surface-container); outline: 0; }
 
   .task-workspace {
     display: grid;
@@ -2318,15 +2303,9 @@ function taskMeta(record: AdminRecord): string {
     border: 0;
   }
 
-  h1,
   h2 {
     margin: 0;
     color: var(--smrt-color-on-surface);
-  }
-
-  h1 {
-    font: var(--smrt-typography-headline-medium-font);
-    line-height: 1.15;
   }
 
   h2 {
@@ -2340,19 +2319,6 @@ function taskMeta(record: AdminRecord): string {
 
   .opportunity-split-section {
     gap: 0;
-  }
-
-  .section-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .section-title-stack {
-    display: grid;
-    gap: 4px;
-    min-width: 0;
   }
 
   .resource-action-feedback {
@@ -2600,70 +2566,18 @@ function taskMeta(record: AdminRecord): string {
     outline-offset: 2px;
   }
 
-  .table-wrap {
-    overflow-x: auto;
-    border: 1px solid var(--smrt-color-outline-variant);
-    background: var(--smrt-color-surface);
-  }
-
-  .opportunity-split-section .table-wrap {
-    min-height: 0;
-    overflow: auto;
-    border: 0;
-  }
-
-  table {
-    width: 100%;
-    min-width: 860px;
-    border-collapse: collapse;
-  }
-
-  th,
-  td {
-    max-width: 260px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--smrt-color-outline-variant);
-    text-align: left;
-    vertical-align: top;
-  }
-
-  th {
-    background: var(--smrt-color-surface);
-    color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
-    text-transform: uppercase;
-  }
-
-  .opportunity-split-section thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--smrt-color-surface-container);
-    box-shadow: inset 0 -1px 0 var(--smrt-color-outline-variant);
-  }
-
-  tr.selected td {
-    background: var(--smrt-color-warning-container);
-  }
-
-  tbody tr.row-opens-view {
-    cursor: pointer;
-  }
-
-  tbody tr.row-opens-view:hover td,
-  tbody tr.row-opens-view:focus-visible td {
-    background: var(--smrt-color-surface-container);
-  }
-
-  tbody tr.row-opens-view:focus-visible {
-    outline: 2px solid var(--smrt-color-on-surface);
-    outline-offset: -2px;
-  }
-
-  tbody tr.row-opens-view.selected:hover td,
-  tbody tr.row-opens-view.selected:focus-visible td {
-    background: var(--smrt-color-warning-container);
-  }
+  .resource-card-list { display: grid; gap: .65rem; }
+  .resource-record-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem 1rem; padding: .85rem; border: 1px solid var(--smrt-color-outline-variant); border-radius: .65rem; background: var(--smrt-color-surface); }
+  .resource-record-card.selected { border-color: var(--smrt-color-warning); background: var(--smrt-color-warning-container); }
+  .resource-record-open { grid-column: 1; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--smrt-color-on-surface); font: var(--smrt-typography-title-medium-font); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+  .resource-record-open:disabled { cursor: default; }
+  .resource-record-open:not(:disabled):hover { color: var(--smrt-color-primary); }
+  .resource-record-open:focus-visible { outline: 2px solid var(--smrt-color-on-surface); outline-offset: 3px; }
+  .resource-record-metadata { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .65rem 1rem; margin: 0; }
+  .resource-record-metadata > div { min-width: 0; }
+  .resource-record-metadata dt { color: var(--smrt-color-on-surface-variant); font: 800 11px/1.2 var(--smrt-font-family-mono, monospace); text-transform: uppercase; }
+  .resource-record-metadata dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
+  .resource-record-actions { grid-column: 2; grid-row: 1; display: flex; align-items: start; gap: .2rem; }
 
   .resume-skill-toggle-form {
     display: inline-flex;
@@ -2678,14 +2592,6 @@ function taskMeta(record: AdminRecord): string {
   .date-cell {
     color: var(--smrt-color-on-surface-variant);
     font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .tools-heading,
-  .tools-cell {
-    width: 1%;
-    min-width: 40px;
-    text-align: center;
     white-space: nowrap;
   }
 

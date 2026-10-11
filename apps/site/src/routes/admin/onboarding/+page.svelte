@@ -1,10 +1,21 @@
 <script lang="ts">
 import { Combobox, MultiSelect, Select } from '@happyvertical/smrt-ui/forms';
-import { untrack } from 'svelte';
+import { getContext, untrack } from 'svelte';
 import { enhance } from '$app/forms';
 import { keepFormValues } from '$lib/admin/form-enhance';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 
 let { data, form } = $props();
+const backLink = adminBackLink('Overview', '/admin');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(onboardingHeaderActions));
 
 function preferences(): Record<string, string | string[]> {
   try {
@@ -129,6 +140,10 @@ function addRole() {
   roleDraft = '';
 }
 </script>
+
+{#snippet onboardingHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
 
 <svelte:head>
   <title>Set up your job search — Iolaus</title>

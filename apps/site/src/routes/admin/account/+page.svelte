@@ -1,6 +1,13 @@
 <script lang="ts">
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
 import { keepFormValues } from '$lib/admin/form-enhance';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 
 let { data, form } = $props();
 
@@ -8,6 +15,11 @@ let confirming = $state(false);
 let acknowledged = $state(false);
 let typedEmail = $state('');
 let typedPhrase = $state('');
+const backLink = adminBackLink('Overview', '/admin');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(accountHeaderActions));
 
 const matches = $derived(
   acknowledged &&
@@ -16,6 +28,10 @@ const matches = $derived(
     typedPhrase.trim() === data.confirmationPhrase,
 );
 </script>
+
+{#snippet accountHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
 
 <svelte:head>
   <title>Account — {data.appName}</title>

@@ -1,6 +1,5 @@
 <script lang="ts">
 import { Form as SmrtForm } from '@happyvertical/smrt-svelte/forms';
-import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 import BadgeCheck from '@lucide/svelte/icons/badge-check';
 import Edit3 from '@lucide/svelte/icons/edit-3';
 import ExternalLink from '@lucide/svelte/icons/external-link';
@@ -9,11 +8,18 @@ import RotateCw from '@lucide/svelte/icons/rotate-cw';
 import Save from '@lucide/svelte/icons/save';
 import Sparkles from '@lucide/svelte/icons/sparkles';
 import Trash2 from '@lucide/svelte/icons/trash-2';
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
 import { keepFormValues } from '$lib/admin/form-enhance';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
 import { notifyOpportunityListChanged } from '$lib/admin/opportunity-list-refresh';
 import { displayFieldLabel, type ResourceField } from '$lib/admin/resources';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
 import { recommendationDecisionDefinitions } from '$lib/objects/workflow';
 import {
@@ -132,36 +138,39 @@ const needsApplyUrl = $derived(
 );
 
 const listHref = $derived(`/admin/${data.resource.slug}`);
+const backLink = $derived(adminBackLink(data.resource.label, listHref));
+const record = $derived<AdminRecord>(data.record ?? {});
+const hasRecord = $derived(Boolean(data.record?.id));
 const editHref = $derived(
-  `/admin/${data.resource.slug}/${data.record.id ?? ''}/edit`,
+  `/admin/${data.resource.slug}/${data.record?.id ?? ''}/edit`,
 );
 const reviewHref = $derived(
   data.resource.slug === 'applications'
-    ? `/admin/applications/${encodeURIComponent(String(data.record.id ?? ''))}`
+    ? `/admin/applications/${encodeURIComponent(String(data.record?.id ?? ''))}`
     : '',
 );
 const isOpportunityRecord = $derived(data.resource.slug === 'opportunities');
 const assessmentProjection = $derived(
-  getOpportunityAssessmentProjection(data.record.assessmentProjection),
+  getOpportunityAssessmentProjection(record.assessmentProjection),
 );
-const questionRank = $derived(currentQuestionScreeningRank(data.record));
+const questionRank = $derived(currentQuestionScreeningRank(record));
 const questionReview = $derived(
   getCurrentQuestionScreeningProjection(
-    data.record.questionScreeningProjection,
-    data.record.questionScreeningStatus,
+    record.questionScreeningProjection,
+    record.questionScreeningStatus,
   ),
 );
 const completeReview = $derived(
   getCurrentCompleteOpportunityReview(
-    data.record.resumeFitReviewProjection,
-    data.record.completeReviewStatus,
+    record.resumeFitReviewProjection,
+    record.completeReviewStatus,
   ),
 );
 const hasCurrentAssessment = $derived(
   assessmentProjection.sourceStatus === 'current',
 );
 const unavailableCompleteReview = $derived(
-  hasUnavailableCompleteOpportunityReview(data.record),
+  hasUnavailableCompleteOpportunityReview(record),
 );
 const hasCurrentPartialAssessment = $derived(
   !unavailableCompleteReview &&
@@ -169,7 +178,7 @@ const hasCurrentPartialAssessment = $derived(
     !hasCurrentAssessment &&
     Boolean(
       getCurrentPartialOpportunityAssessmentProjection(
-        data.record.partialAssessmentProjection,
+        record.partialAssessmentProjection,
       ),
     ),
 );
@@ -177,7 +186,7 @@ const isCompanyRecord = $derived(data.resource.slug === 'companies');
 const isSourceRecord = $derived(data.resource.slug === 'sources');
 const isTaskRecord = $derived(data.resource.slug === 'tasks');
 const taskWorkTarget = $derived(
-  isTaskRecord ? taskWorkTargetForRecord(data.record) : null,
+  isTaskRecord ? taskWorkTargetForRecord(record) : null,
 );
 const isRecommendationTask = $derived(
   isTaskRecord && stringValue('taskType') === 'review_recommendation',
@@ -238,14 +247,14 @@ const detailFields = $derived(
 
 function titleValue(): string {
   for (const key of ['title', 'name', 'label', 'profileKey', 'status']) {
-    const value = data.record[key];
+    const value = data.record?.[key];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return data.resource.singularLabel;
 }
 
 function stringValue(key: string): string {
-  return stringFromValue(data.record[key]);
+  return stringFromValue(data.record?.[key]);
 }
 
 function stringFromValue(value: unknown): string {
@@ -270,7 +279,7 @@ function feedbackValue(value: unknown, key: string): unknown {
 }
 
 function arrayValue<T>(key: string): T[] {
-  const value = data.record[key];
+  const value = data.record?.[key];
   if (Array.isArray(value)) return value as T[];
   if (typeof value !== 'string' || !value.trim()) return [];
   try {
@@ -396,7 +405,7 @@ function fieldForKey(key: string): ResourceField | null {
 }
 
 function hasDisplayValue(field: ResourceField): boolean {
-  if (field.kind === 'checkbox') return data.record[field.key] !== undefined;
+  if (field.kind === 'checkbox') return data.record?.[field.key] !== undefined;
   return Boolean(stringValue(field.key));
 }
 
@@ -647,7 +656,7 @@ function enhanceSourceCrawlNow() {
 }
 
 $effect(() => {
-  const nextId = String(data.record.id ?? '');
+  const nextId = String(data.record?.id ?? '');
   if (nextId === opportunityReviewRecordId) return;
   opportunityReviewRecordId = nextId;
   opportunityReviewStatus = stringValue('humanReviewStatus');
@@ -658,7 +667,7 @@ $effect(() => {
 });
 
 $effect(() => {
-  const nextId = isSourceRecord ? String(data.record.id ?? '') : '';
+  const nextId = isSourceRecord ? String(data.record?.id ?? '') : '';
   if (nextId === sourceCrawlRecordId) return;
   sourceCrawlRecordId = nextId;
   sourceCrawlState = 'idle';
@@ -669,23 +678,25 @@ $effect(() => {
   if (!isOpportunityRecord || !form || form === lastOpportunityActionForm)
     return;
   lastOpportunityActionForm = form;
-  notifyOpportunityListChanged(String(data.record.id ?? ''));
+  notifyOpportunityListChanged(String(data.record?.id ?? ''));
 });
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(recordHeaderActions));
 </script>
 
-<section class="record-view-page" class:is-opportunity={isOpportunityRecord}>
-  <header class="record-page-header">
-    <div>
-      <a class="back-link" href={listHref}>
-        <ArrowLeft size={15} strokeWidth={2.2} />
-        <span>{data.resource.label}</span>
-      </a>
-      {#if !isOpportunityRecord}
-        <h1>{titleValue()}</h1>
-        <p>{data.resource.singularLabel}</p>
-      {/if}
-    </div>
-    <div class="record-actions">
+{#snippet recordHeaderActions()}
+  <div class="record-header-actions">
+    <AdminBackLink {...backLink} />
+    {#if hasRecord}
+      {@render recordActionControls()}
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet recordActionControls()}
+  <div class="record-actions">
       {#each viewLinkActions() as action}
         <a
           class="secondary-action"
@@ -765,8 +776,22 @@ $effect(() => {
         <Edit3 size={16} strokeWidth={2.2} />
         <span>Edit</span>
       </a>
+  </div>
+{/snippet}
+
+<section class="record-view-page" class:is-opportunity={isOpportunityRecord}>
+  {#if !adminHeader}
+    <AdminBackLink {...backLink} />
+  {/if}
+  {#if !isOpportunityRecord}
+    <div class="record-page-title">
+      <h1>{titleValue()}</h1>
+      <p>{data.resource.singularLabel}</p>
     </div>
-  </header>
+  {/if}
+  {#if !adminHeader}
+    {@render recordActionControls()}
+  {/if}
 
   {#if isSourceRecord && sourceCrawlMessage}
     <p class={`record-action-feedback ${sourceCrawlState}`}>
@@ -1274,27 +1299,19 @@ $effect(() => {
     color: var(--smrt-color-on-surface);
   }
 
-  .record-page-header {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: 18px;
-  }
-
-  .record-page-header h1 {
-    margin: 8px 0 4px;
+  .record-page-title h1 {
+    margin: 0 0 4px;
     color: var(--smrt-color-on-surface);
     font: var(--smrt-typography-headline-medium-font);
   }
 
-  .record-page-header p {
+  .record-page-title p {
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
     line-height: 1.45;
     text-transform: capitalize;
   }
 
-  .back-link,
   .primary-action,
   .secondary-action {
     display: inline-flex;
@@ -1304,10 +1321,6 @@ $effect(() => {
     color: var(--smrt-color-primary);
     font-weight: 800;
     text-decoration: none;
-  }
-
-  .back-link {
-    min-height: 0;
   }
 
   .primary-action,
@@ -1331,8 +1344,6 @@ $effect(() => {
     text-decoration: none;
   }
 
-  .back-link:hover,
-  .back-link:focus-visible,
   .secondary-action:hover,
   .secondary-action:focus-visible {
     color: var(--smrt-color-primary);
@@ -1344,6 +1355,38 @@ $effect(() => {
     flex-wrap: wrap;
     justify-content: end;
     gap: 8px;
+  }
+
+  .record-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .record-header-actions .record-actions {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .record-header-actions .primary-action,
+  .record-header-actions .secondary-action {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 8px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--smrt-color-on-surface-variant);
+  }
+
+  .record-header-actions .primary-action:hover,
+  .record-header-actions .primary-action:focus-visible,
+  .record-header-actions .secondary-action:hover,
+  .record-header-actions .secondary-action:focus-visible {
+    border-color: var(--smrt-color-outline-variant);
+    background: var(--smrt-color-surface-container);
+    color: var(--smrt-color-on-surface);
+    text-decoration: none;
   }
 
   .record-actions form {
@@ -1568,12 +1611,8 @@ $effect(() => {
     align-items: start;
   }
 
-  .record-view-page.is-opportunity > .record-page-header {
-    grid-column: 1 / -1;
-  }
-
   .record-view-page.is-opportunity
-    > :not(.record-page-header):not(.opportunity-summary) {
+    > :not(.opportunity-summary) {
     grid-column: 1;
     min-width: 0;
   }
@@ -1873,8 +1912,14 @@ $effect(() => {
   }
 
   @media (max-width: 760px) {
-    .record-page-header {
-      display: grid;
+    .record-header-actions .record-actions :is(.primary-action, .secondary-action) > span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
     }
 
     .record-actions {

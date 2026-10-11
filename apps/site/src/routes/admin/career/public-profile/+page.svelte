@@ -1,6 +1,13 @@
 <script lang="ts">
 import type { SubmitFunction } from '@sveltejs/kit';
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 
 let { data, form } = $props();
 let identity = $derived(data.identity);
@@ -10,6 +17,11 @@ let selectedProfile = $derived(
 let feedback = $derived(form as { error?: string } | null);
 let busy = $state<'prepare' | 'unpublish' | null>(null);
 let localError = $state('');
+const backLink = adminBackLink('Resume', '/admin/career');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(publicProfileHeaderActions));
 const submit: SubmitFunction = ({ cancel, submitter }) => {
   const action =
     submitter?.getAttribute('value') === 'unpublish' ? 'unpublish' : 'prepare';
@@ -31,9 +43,16 @@ const submit: SubmitFunction = ({ cancel, submitter }) => {
 };
 </script>
 
+{#snippet publicProfileHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
+
 <svelte:head><title>Public profile</title><meta name="robots" content="noindex, nofollow" /></svelte:head>
-<main>
-  <header><h1>Public profile</h1><p>Choose what you share, then review the exact page and PDF before publishing.</p></header>
+<main aria-labelledby="public-profile-title">
+  <h1 id="public-profile-title" class="sr-only">Public profile</h1>
+  {#if !adminHeader}
+    <a class="embedded-back" href={backLink.href} title={backLink.title}>{backLink.label}</a>
+  {/if}
   {#if localError || feedback?.error}<p class="error" role="alert">{localError || feedback?.error}</p>{/if}
   {#if identity?.status === 'published'}
     <section class="status"><h2>Published</h2>{#if data.publicUrl}<p><a href={data.publicUrl} target="_blank" rel="noopener noreferrer">Open your public profile</a></p>{/if}<p>Private edits do not change this version. Prepare and publish a new preview when you are ready.</p><form method="POST" action="?/unpublish" use:enhance={submit}><input type="hidden" name="expectedRevision" value={identity.revision} /><button class="secondary" type="submit" value="unpublish" disabled={busy !== null}>{busy === 'unpublish' ? 'Unpublishing…' : 'Unpublish profile'}</button></form><p class="warning">Unpublishing removes this page and PDF. Copies people already downloaded cannot be recalled.</p></section>
@@ -52,4 +71,4 @@ const submit: SubmitFunction = ({ cancel, submitter }) => {
   {/if}
 </main>
 
-<style>main { max-width: 46rem; margin: 0 auto; padding: clamp(1rem, 4vw, 3rem); } h1,h2,p { margin: 0 0 .75rem; } h1 { font-size: clamp(2rem, 8vw, 2.75rem); } header { margin-bottom: 2rem; } .settings,.status,section { display: grid; gap: .75rem; padding: 1rem; margin: 1rem 0; border-radius: .5rem; background: var(--smrt-color-surface-container-low, #f8fafc); } label { display: grid; gap: .35rem; } fieldset label { display: flex; align-items: center; gap: .5rem; min-height: 2rem; } input,select { min-height: 44px; padding: .5rem; font: inherit; } input[type="checkbox"] { min-height: auto; } button { min-height: 44px; width: fit-content; padding: .6rem 1rem; font: inherit; border: 0; border-radius: .35rem; color: var(--smrt-color-on-primary, white); background: var(--smrt-color-primary, #075985); cursor: pointer; } .secondary { background: var(--smrt-color-error, #b91c1c); } .warning,.error { color: var(--smrt-color-error, #b91c1c); } a { color: var(--smrt-color-primary, #075985); overflow-wrap: anywhere; }</style>
+<style>main { max-width: 46rem; margin: 0 auto; padding: clamp(1rem, 4vw, 3rem); } h2,p { margin: 0 0 .75rem; } .settings,.status,section { display: grid; gap: .75rem; padding: 1rem; margin: 1rem 0; border-radius: .5rem; background: var(--smrt-color-surface-container-low, #f8fafc); } label { display: grid; gap: .35rem; } fieldset label { display: flex; align-items: center; gap: .5rem; min-height: 2rem; } input,select { min-height: 44px; padding: .5rem; font: inherit; } input[type="checkbox"] { min-height: auto; } button { min-height: 44px; width: fit-content; padding: .6rem 1rem; font: inherit; border: 0; border-radius: .35rem; color: var(--smrt-color-on-primary, white); background: var(--smrt-color-primary, #075985); cursor: pointer; } .secondary { background: var(--smrt-color-error, #b91c1c); } .warning,.error { color: var(--smrt-color-error, #b91c1c); } a { color: var(--smrt-color-primary, #075985); overflow-wrap: anywhere; } .embedded-back { display:inline-block; margin-bottom:1rem; } .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }</style>
