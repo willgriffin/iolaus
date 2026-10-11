@@ -49,10 +49,7 @@ describe('career visibility native SQLite schema', () => {
 
   it('creates native visibility columns for every career card source', async () => {
     for (const tableName of tables) {
-      const result = await database.query<{
-        name: string;
-        dflt_value: string | null;
-      }>(`PRAGMA table_info(${tableName})`);
+      const result = await database.query(`PRAGMA table_info(${tableName})`);
       const visibility = result.rows.find(
         (column) => column.name === 'use_on_resume',
       );
@@ -67,11 +64,7 @@ describe('career visibility native SQLite schema', () => {
     await database.query(
       "UPDATE candidate_profiles SET use_on_resume = false WHERE id = 'visibility-profile'",
     );
-    const result = await database.query<{
-      name: string;
-      summary: string;
-      use_on_resume: number;
-    }>(
+    const result = await database.query(
       "SELECT name, summary, use_on_resume FROM candidate_profiles WHERE id = 'visibility-profile'",
     );
     expect(result.rows).toEqual([

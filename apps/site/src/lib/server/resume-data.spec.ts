@@ -584,7 +584,7 @@ describe('assembleResumeSourceFromRecords', () => {
     const assembled = assembleResumeSourceFromRecords(records);
     const position = assembled?.experience.positions[0];
 
-    expect(position?.projects.map((project) => project.id)).not.toContain(
+    expect(position?.projects?.map((project) => project.id)).not.toContain(
       'hidden-project',
     );
     expect(
