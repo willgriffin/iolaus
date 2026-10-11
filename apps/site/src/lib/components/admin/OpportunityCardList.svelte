@@ -287,8 +287,17 @@ function commitFilters(): void {
   setFilters(filters);
 }
 
-function commitSort(): void {
-  setFilters({ ...filters, sortDirection: 'desc' });
+function setSort(event: Event): void {
+  const sort = (event.currentTarget as HTMLSelectElement)
+    .value as OpportunitySort;
+  if (!isOpportunitySort(sort)) return;
+  setFilters({ ...filters, sort });
+}
+
+function setSortDirection(event: Event): void {
+  const sortDirection = (event.currentTarget as HTMLSelectElement).value;
+  if (sortDirection !== 'asc' && sortDirection !== 'desc') return;
+  setFilters({ ...filters, sortDirection });
 }
 
 function closeDrawer(): void {
@@ -852,7 +861,7 @@ function clearBulkSelection(): void {
           disabled={visibleRecords.length === 0 || loading} onchange={togglePageSelection} />
         Select this page
       </label>
-      {#if !error}
+      {#if visibleRecords.length > 0 || !error}
         <CollectionList
           items={visibleRecords} itemKey="id" title="title"
           layout="list"
@@ -921,7 +930,7 @@ function clearBulkSelection(): void {
           </label>
           <label>
             <span>Sort</span>
-            <select bind:value={filters.sort} aria-label="Sort opportunities" onchange={commitSort}>
+            <select value={filters.sort} aria-label="Sort opportunities" onchange={setSort}>
               <option value="best">Best fit</option>
               <option value="eligibility">Eligibility for your work location</option>
               <option value="cited_support">Cited support</option>
@@ -930,6 +939,13 @@ function clearBulkSelection(): void {
               <option value="score">AI score</option>
               <option value="salary">Salary</option>
               <option value="rating">My rating</option>
+            </select>
+          </label>
+          <label>
+            <span>Direction</span>
+            <select value={filters.sortDirection} aria-label="Sort direction" onchange={setSortDirection}>
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
             </select>
           </label>
         </section>

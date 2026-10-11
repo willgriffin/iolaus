@@ -20,9 +20,13 @@ let records = $state<AdminRecord[]>([
 ]);
 let selectedIds = $state(new Set<string>());
 let currentPage = $state(1);
+let error = $state<string | null>(null);
 export function replacePage(next: AdminRecord[], page = 2) {
   records = next;
   currentPage = page;
+}
+export function showRefreshError() {
+  error = 'Unable to refresh opportunities.';
 }
 </script>
 <OpportunityCardList {records} {selectedIds}
@@ -31,5 +35,5 @@ export function replacePage(next: AdminRecord[], page = 2) {
   pagination={createAdminListPagination(4, currentPage, 2)}
   filterOptions={EMPTY_OPPORTUNITY_FILTER_OPTIONS}
   reviewFilters={[{ label: 'Unsorted', value: 'unsorted' }, { label: 'All', value: 'all' }]}
-  reviewStatuses={[]} />
+  reviewStatuses={[]} {error} />
 <output aria-label="Selected IDs">{[...selectedIds].sort().join(',')}</output>

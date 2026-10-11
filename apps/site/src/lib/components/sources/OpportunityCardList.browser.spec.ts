@@ -3,13 +3,14 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const navigation = vi.hoisted(() => ({ goto: vi.fn(async () => {}) }));
+const page = vi.hoisted(() => ({
+  url: new URL(
+    'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
+  ),
+}));
 vi.mock('$app/navigation', () => navigation);
 vi.mock('$app/state', () => ({
-  page: {
-    url: new URL(
-      'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
-    ),
-  },
+  page,
 }));
 vi.mock('../admin/admin-resource-hydration', () => ({
   ADMIN_RESOURCE_REFRESH_EVENT: 'iolaus:admin-resource-refresh',
@@ -57,6 +58,9 @@ beforeEach(() => {
     value: storage,
   });
   navigation.goto.mockClear();
+  page.url = new URL(
+    'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
+  );
 });
 afterEach(() => {
   cleanup?.();
@@ -142,6 +146,44 @@ describe('Opportunity card list interaction', () => {
     flushSync();
     expect(navigation.goto).toHaveBeenCalledWith(
       '/admin/opportunities?review=unsorted&sort=newest&skill=Rust&page=2',
+      { keepFocus: true, noScroll: true },
+    );
+  });
+  it('keeps loaded cards selectable when a refresh error arrives', () => {
+    const view = setup();
+    view.component.showRefreshError();
+    flushSync();
+
+    expect(view.target.textContent).toContain(
+      'Unable to refresh opportunities.',
+    );
+    expect(view.target.textContent).toContain('Staff engineer');
+    view.check('Select Staff engineer');
+    expect(view.selected()).toBe('opp-1');
+  });
+  it.each([
+    ['score', 'asc'],
+    ['salary', 'asc'],
+  ])('writes %s ascending sort from the filter dialog', (sort, direction) => {
+    page.url = new URL(
+      'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust&facets',
+    );
+    const view = setup();
+    const sortSelect = view.target.querySelector<HTMLSelectElement>(
+      'select[aria-label="Sort opportunities"]',
+    );
+    const directionSelect = view.target.querySelector<HTMLSelectElement>(
+      'select[aria-label="Sort direction"]',
+    );
+    if (!sortSelect || !directionSelect)
+      throw new Error('Missing sort controls');
+    directionSelect.value = direction;
+    directionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    sortSelect.value = sort;
+    sortSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+    expect(navigation.goto).toHaveBeenLastCalledWith(
+      `/admin/opportunities?review=unsorted&facets=&skill=Rust&sort=${sort}&sortDirection=asc`,
       { keepFocus: true, noScroll: true },
     );
   });

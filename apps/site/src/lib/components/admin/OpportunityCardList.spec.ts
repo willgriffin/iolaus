@@ -260,6 +260,16 @@ describe('OpportunityCardList triage', () => {
 });
 
 describe('OpportunityCardList selection', () => {
+  it('shows an initial load error without the collection empty state', () => {
+    const { body } = renderList({
+      error: 'Unable to load opportunities.',
+      records: [],
+    });
+
+    expect(body).toContain('Unable to load opportunities.');
+    expect(body).not.toContain('No items available');
+  });
+
   it('renders a checkbox per row plus a header select-all when wired for bulk selection', () => {
     // DataTable seeds its selection controller client-side, so SSR cannot
     // assert `checked`; it can assert the selection column is present.

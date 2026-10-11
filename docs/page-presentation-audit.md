@@ -75,3 +75,6 @@ navigation are covered there rather than duplicated per route.
   browser regression test covers the missing-record update.
 - Checked representative generic lists, profile links, public-profile settings,
   category pages, application filters, and responsive resume navigation locally.
+- Opportunity cards retain loaded records alongside refresh errors, and the filter
+  dialog keeps both ascending and descending sorting accessible. Browser tests
+  cover stale-card selection and ascending score/salary navigation.
