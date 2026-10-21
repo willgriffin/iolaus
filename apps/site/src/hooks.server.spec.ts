@@ -23,6 +23,14 @@ const mocks = vi.hoisted(() => ({
   withBearerSessionContext: vi.fn(),
 }));
 
+vi.mock('$lib/server/skill-vocabulary', () => ({
+  refreshSkillVocabularyLookup: vi.fn(async () => undefined),
+}));
+
+vi.mock('$lib/server/local-oauth', () => ({
+  getLocalOAuth: vi.fn(async () => null),
+}));
+
 vi.mock('$app/environment', () => ({ building: false }));
 
 vi.mock('$lib/server/application-runtime', async (importOriginal) => ({
@@ -164,7 +172,21 @@ describe('server bearer-session handling', () => {
     expect(startPublishedResumePrime).not.toHaveBeenCalled();
     resolveRuntime?.();
     await Promise.resolve();
-    expect(startPublishedResumePrime).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(startPublishedResumePrime).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it('keeps anonymous private-match authentication errors out of shared caches', async () => {
+    const resolve = vi.fn(async () => new Response('unexpected'));
+    const { handle } = await import('./hooks.server');
+    const response = await handle({
+      event: event(null, '/api/public/v1/me/matches'),
+      resolve,
+    } as never);
+    expect(response.status).toBe(401);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it('resolves protected APIs inside the bearer tenant and database context', async () => {
@@ -269,7 +291,7 @@ describe('server bearer-session handling', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('preserves an established cookie session instead of replacing it', async () => {
+  it('rejects invalid explicit credentials even when a cookie session exists', async () => {
     const requestEvent = event('different-bearer');
     const cookieUser = {
       email: 'owner@example.invalid',
@@ -291,14 +313,15 @@ describe('server bearer-session handling', () => {
 
     const response = await handle({ event: requestEvent, resolve } as never);
 
-    expect(response.status).toBe(200);
-    expect(mocks.withBearerSessionContext).not.toHaveBeenCalled();
+    expect(response.status).toBe(401);
+    expect(mocks.withBearerSessionContext).toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
     expect(requestEvent.locals.user).toBe(cookieUser);
     expect(requestEvent.locals.tenantId).toBe('cookie-tenant');
   });
 
   it('rejects an authenticated session without an active tenant role', async () => {
-    const requestEvent = event();
+    const requestEvent = event(null);
     requestEvent.locals.user = { id: 'member-1', status: 'active' };
     requestEvent.locals.tenantId = 'tenant-1';
     requestEvent.locals.permissions = ['opportunities.read'];

@@ -106,7 +106,8 @@ vi.mock('./job-workspace-subject.js', () => ({
 vi.mock('@happyvertical/smrt-jobs', () => ({
   SmrtJobCollection: { create: vi.fn(async () => mocks.jobCollection) },
 }));
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => ({
     query: vi.fn(async () => ({ rows: [] })),
   })),

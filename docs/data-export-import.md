@@ -58,7 +58,14 @@ parts:
   download link on the app's own origin
   (`/admin/resume-assets/<id>/pdf`). The links need a signed-in session and stop
   working once the account is deleted, so save the files first.
+- `shortlist`: account-wide posting snapshots, decisions, and opened/applied
+  timestamps, including accounts without a candidate profile. Internal mutation
+  receipts are excluded.
 - `counts`: records per class.
+- `publicProfile`: when the owner has reserved a public resume profile, its
+  private publication settings, immutable snapshot history, and PDF artifact
+  manifest. This field is available only in the authenticated owner export;
+  anonymous public routes never expose storage paths or publication history.
 
 Excluded on purpose: the platform AI-spend ledger and the derived opportunity
 ranking cache (platform records, not workspace content).
@@ -73,6 +80,7 @@ with `account:delete` (below). It is irreversible.
 | Data | Outcome |
 | --- | --- |
 | Candidate-owned workspace rows (every table in the ownership manifest, plus assistant turns, ranking cache, per-user AI cap override) | Deleted |
+| Account-wide shortlist entries and internal mutation receipts | Deleted by tenant and owner, including accounts without a candidate profile |
 | Generated resume and application-package files (`generated-resumes/<asset-id>/`, `application-packages/<application-id>/`) and attachment files recorded in the user's rows | Deleted from storage (S3 or local). Only files named by the user's own rows under the user's own prefixes; the published/current resume is never touched |
 | Sessions, CLI auth requests and device tokens, MCP/data-surface preview tokens, queued and finished jobs and job events for the tenant | Deleted. MCP OAuth tokens live at the identity provider; they stop working because the user, membership, tenant and invite are gone |
 | Identity: user, profile and OIDC links, membership, grants, private tenant, tenant facts | Deleted |

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const base = resolve(root, 'deploy/self-hosted/base');
@@ -15,6 +15,21 @@ const taskWorkerEntrypoint = readFileSync(
   'utf8',
 );
 const serverHooks = readFileSync(resolve(root, 'apps/site/src/hooks.server.ts'), 'utf8');
+const resumeExtractorUrl = 'http://iolaus-resume-import-extraction:8080';
+const paddleOcrUrl = 'http://paddleocr-vl.paddleocr-vl.svc.cluster.local';
+for (const workload of ['web-deployment.yaml', 'task-worker-deployment.yaml']) {
+  const manifest = readFileSync(resolve(base, workload), 'utf8');
+  if (!manifest.includes(`name: IOLAUS_RESUME_EXTRACTION_URL\n              value: ${resumeExtractorUrl}`)) {
+    throw new Error(`${workload} must use the private resume extraction service.`);
+  }
+  if (!manifest.includes(`name: HAVE_PDF_PADDLEOCR_URL\n              value: ${paddleOcrUrl}`)) {
+    throw new Error(`${workload} must use the approved private PaddleOCR service.`);
+  }
+}
+const namespaceManifest = readFileSync(resolve(base, 'namespace.yaml'), 'utf8');
+if (!namespaceManifest.includes("happyvertical.com/paddleocr-client: 'true'")) {
+  throw new Error('The Iolaus namespace must be allowlisted as a PaddleOCR client.');
+}
 
 function render(path) {
   return execFileSync('kubectl', ['kustomize', path], {
@@ -35,38 +50,58 @@ function count(rendered, text) {
 const baseRendered = render(base);
 const productionRendered = render(production);
 const dependencyManifests = [
-  JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
-  JSON.parse(readFileSync(resolve(root, 'apps/site/package.json'), 'utf8')),
-];
-const qualifiedEmbeddedSmrtTooling = new Map([
-  [
-    '@happyvertical/smrt-cli',
-    'file:vendor/smrt/happyvertical-smrt-cli-0.52.0-c6e5cdf2.tgz',
-  ],
-  [
-    '@happyvertical/smrt-dev-mcp',
-    'file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz',
-  ],
-]);
+  resolve(root, 'package.json'),
+  resolve(root, 'apps/site/package.json'),
+].map((path) => ({ path, manifest: JSON.parse(readFileSync(path, 'utf8')) }));
+const releaseClosurePath = resolve(
+  root,
+  'vendor/release/release-closure.json',
+);
+const releaseClosure = existsSync(releaseClosurePath)
+  ? JSON.parse(readFileSync(releaseClosurePath, 'utf8'))
+  : { packages: [], localSupplements: [] };
+const embeddedReleaseClosure = new Map(
+  [...(releaseClosure.packages ?? []), ...(releaseClosure.localSupplements ?? [])].map(
+    (pkg) => [pkg.name, `file:vendor/release/${pkg.tarball}`],
+  ),
+);
 
-for (const manifest of dependencyManifests) {
+for (const { path: manifestPath, manifest } of dependencyManifests) {
   for (const [name, version] of Object.entries({
     ...manifest.dependencies,
     ...manifest.devDependencies,
   })) {
-    if (!name.startsWith('@happyvertical/smrt')) continue;
-    const embeddedArchive = qualifiedEmbeddedSmrtTooling.get(name);
-    if (embeddedArchive === version) {
+    const embeddedArchive = embeddedReleaseClosure.get(name);
+    if (typeof version === 'string' && version.startsWith('file:')) {
+      const expectedArchive = embeddedArchive && resolve(root, embeddedArchive.slice('file:'.length));
+      const declaredArchive = resolve(dirname(manifestPath), version.slice('file:'.length));
+      if (!expectedArchive || expectedArchive !== declaredArchive) {
+        throw new Error(
+          `${name} must use the tarball recorded in vendor/release/release-closure.json.`,
+        );
+      }
       const archivePath = resolve(root, embeddedArchive.slice('file:'.length));
       if (!existsSync(archivePath)) {
         throw new Error(`${name} qualified embedded archive is missing.`);
       }
       continue;
     }
+    if (!name.startsWith('@happyvertical/smrt')) continue;
     if (!/^\d+\.\d+\.\d+$/u.test(version)) {
       throw new Error(`${name} must be pinned to a released semantic version.`);
     }
   }
+}
+
+for (const supplement of releaseClosure.localSupplements ?? []) {
+  if (supplement.provenance !== 'local-compatibility-repack') {
+    throw new Error(`${supplement.name} must declare its local compatibility provenance.`);
+  }
+  execFileSync(
+    'node',
+    ['scripts/verify-ingestion-archive.mjs', '--provenance', supplement.provenanceFile],
+    { cwd: root, stdio: 'inherit' },
+  );
 }
 
 for (const rendered of [baseRendered, productionRendered]) {
@@ -78,21 +113,22 @@ for (const rendered of [baseRendered, productionRendered]) {
   requireText(rendered, 'node --import tsx apps/site/scripts/db-migrate.ts');
   requireText(rendered, 'name: iolaus-task-worker');
   requireText(rendered, 'name: iolaus-schedule-worker');
+  requireText(rendered, 'name: iolaus-resume-import-extraction');
   requireText(rendered, 'scripts/smrt-worker-heartbeat.mjs');
   requireText(rendered, 'name: iolaus-queue-provider-monitor');
   requireText(rendered, 'automountServiceAccountToken: false');
-  if (count(rendered, 'automountServiceAccountToken: false') !== 4) {
+  if (count(rendered, 'automountServiceAccountToken: false') !== 5) {
     throw new Error('Every self-hosted workload must disable service-account token automounting.');
   }
   requireText(rendered, 'path: /live');
-  if (count(rendered, 'runAsNonRoot: true') < 4 || count(rendered, 'runAsUser: 10001') < 4) {
+  if (count(rendered, 'runAsNonRoot: true') < 5 || count(rendered, 'runAsUser: 10001') < 5) {
     throw new Error('Every self-hosted workload must run as the fixed non-root image user.');
   }
   requireText(rendered, 'type: RuntimeDefault');
   if (
-    count(rendered, '- ALL') < 8 ||
-    count(rendered, 'readOnlyRootFilesystem: true') < 8 ||
-    count(rendered, 'mountPath: /tmp') < 8
+    count(rendered, '- ALL') < 9 ||
+    count(rendered, 'readOnlyRootFilesystem: true') < 9 ||
+    count(rendered, 'mountPath: /tmp') < 9
   ) {
     throw new Error('Every self-hosted init and main container must drop privileges and mount only its writable /tmp surface.');
   }
@@ -120,7 +156,7 @@ if (!/node --import tsx --eval/u.test(runnerDockerfile)) {
   throw new Error('The released image must smoke its direct worker bootstrap without pnpm.');
 }
 if (
-  !/corepack install --global pnpm@11\.24\.0/u.test(runnerDockerfile) ||
+  !/npm install --global pnpm@11\.25\.0/u.test(runnerDockerfile) ||
   !/USER 10001:10001[\s\S]*HOME=\/tmp pnpm --version/u.test(runnerDockerfile)
 ) {
   throw new Error('The released image must carry and smoke its pinned offline pnpm runtime.');
@@ -133,7 +169,12 @@ if (
 ) {
   throw new Error('The task worker must claim tasks only and retain its required heartbeat through task drain.');
 }
-if (/await ensureApplicationRuntimeReady\(\)/u.test(serverHooks)) {
+// The retry callback may await readiness and vocabulary loading; only awaiting
+// the retry loop itself from ServerInit would block the liveness endpoint.
+if (
+  !/void startRuntimeThenPrime\(/u.test(serverHooks) ||
+  /await startRuntimeThenPrime\(/u.test(serverHooks)
+) {
   throw new Error('Server initialization must not block liveness on provider readiness.');
 }
 if (

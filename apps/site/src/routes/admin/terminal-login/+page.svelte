@@ -1,9 +1,25 @@
 <script lang="ts">
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
 import { keepFormValues } from '$lib/admin/form-enhance';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 
 let { data, form } = $props();
+const backLink = adminBackLink('System', '/admin/system');
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(terminalLoginHeaderActions));
 </script>
+
+{#snippet terminalLoginHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
 
 <svelte:head>
   <title>Terminal Login — {data.appName}</title>

@@ -2,6 +2,10 @@
 // package is imported below, so their classes register with complete schemas
 // under tsx (no build scanner). See manifest-preload.ts for the full rationale.
 import '../src/lib/server/manifest-preload.js';
+// A manifest supplies field definitions but does not evaluate model modules.
+// Evaluate the ingestion closure before the schema diff so its private intake
+// tables become registered migration candidates in standalone `tsx` scripts.
+import '@happyvertical/smrt-ingestion/models';
 import {
   ObjectRegistry,
   generateSchemaDiff,
@@ -26,6 +30,12 @@ import {
   SessionCollection,
   TenantCollection,
   UserCollection,
+  UsersOAuthAccessTokenRevocationCollection,
+  UsersOAuthAuthorizationCodeCollection,
+  UsersOAuthAuthorizationCollection,
+  UsersOAuthClientCollection,
+  UsersOAuthRefreshFamilyCollection,
+  UsersOAuthRefreshGrantCollection,
 } from '@happyvertical/smrt-users';
 import { PlaceCollection, PlaceTypeCollection } from '@happyvertical/smrt-places';
 import {
@@ -230,6 +240,11 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     'HostedInvite',
     // Non-PII audit trail of hosted account deletions.
     'AccountDeletionRecord',
+    'SkillTerm',
+    'OpportunityAnalysis',
+    'OpportunitySkill',
+    'MatchModel',
+    'RequirementEvidenceDecision',
   ]) {
     await getCollection(className);
     initialized.push(className);
@@ -253,6 +268,19 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
   const tenants = await TenantCollection.create(options);
   const memberships = await MembershipCollection.create(options);
   const sessions = await SessionCollection.create(options);
+  // OAuth state is deliberately absent from generated CRUD surfaces. Prepare
+  // its durable tables under the migration owner before serving account links.
+  for (const create of [
+    () => UsersOAuthClientCollection.create(options),
+    () => UsersOAuthAuthorizationCodeCollection.create(options),
+    () => UsersOAuthRefreshGrantCollection.create(options),
+    () => UsersOAuthRefreshFamilyCollection.create(options),
+    () => UsersOAuthAccessTokenRevocationCollection.create(options),
+    () => UsersOAuthAuthorizationCollection.create(options),
+  ]) {
+    const oauthCollection = await create();
+    initialized.push(oauthCollection.constructor.name);
+  }
   const roles = await RoleCollection.create(options);
   const profiles = await ProfileCollection.create(options);
   const profileTypes = await ProfileTypeCollection.create(options);

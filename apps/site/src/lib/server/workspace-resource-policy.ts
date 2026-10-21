@@ -13,6 +13,8 @@ import {
 /** Personal records must never inherit the global catalog's query scope. */
 export const privateWorkspaceClasses = new Set([
   'CandidateProfile',
+  'MatchModel',
+  'RequirementEvidenceDecision',
   'CandidateAnswer',
   'CandidateProfileLink',
   'Application',

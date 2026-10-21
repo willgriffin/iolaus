@@ -3,7 +3,7 @@
   "mcpServers": {
     "iolaus": {
       "type": "streamable-http",
-      "url": "http://127.0.0.1:5173/api/mcp"
+      "url": "https://jobgeni.us/api/mcp"
     }
   }
 }

@@ -43,6 +43,7 @@ import {
   CAREER_EDIT_SECTIONS,
   loadCareerManagement,
   saveCareerSection,
+  setCareerResumeVisibility,
 } from './career-management.js';
 
 const subject = { tenantId: 'tenant', userId: 'owner', profileId: 'profile' };
@@ -246,6 +247,55 @@ describe('Career canonical management', () => {
     expect(achievement.body).toBe('Original body');
     expect(achievement.save).not.toHaveBeenCalled();
     expect(mocks.invalidate).not.toHaveBeenCalled();
+  });
+  it('persists reversible resume visibility only for the owned record', async () => {
+    await expect(
+      setCareerResumeVisibility(
+        locals,
+        form('achievements', 'achievement', { visibility: 'hidden' }),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringMatching(/hidden/i),
+    });
+    expect(achievement.useOnResume).toBe(false);
+    expect(achievement.save).toHaveBeenCalledOnce();
+    await setCareerResumeVisibility(
+      locals,
+      form('achievements', 'achievement', { visibility: 'visible' }),
+    );
+    expect(achievement.useOnResume).toBe(true);
+    expect(achievement.save).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+  });
+  it('marks manually excluded records as distinct from incomplete canonical membership', async () => {
+    achievement.useOnResume = false;
+    const loaded = await loadCareerManagement(locals);
+    const record = loaded.sections
+      .find((section) => section.key === 'achievements')
+      ?.records.find((entry) => entry.id === 'achievement');
+    expect(record?.presentation).toMatchObject({
+      inResume: false,
+      manuallyExcluded: true,
+    });
+  });
+  it.each([
+    { id: 'foreign', section: 'achievements', visibility: 'hidden' },
+    { id: 'achievement', section: 'ResumeAsset', visibility: 'hidden' },
+    { id: 'achievement', section: 'achievements', visibility: 'unknown' },
+  ])('rejects foreign or malformed visibility writes %#', async (input) => {
+    await expect(
+      setCareerResumeVisibility(
+        locals,
+        form(input.section, input.id, { visibility: input.visibility }),
+      ),
+    ).rejects.toMatchObject({
+      status:
+        input.section === 'ResumeAsset' || input.visibility === 'unknown'
+          ? 400
+          : 404,
+    });
+    expect(achievement.save).not.toHaveBeenCalled();
   });
   it('denies a different profile ID even in the same owner workspace', async () => {
     records.get('CandidateProfile')?.push({ ...profile, id: 'other-profile' });

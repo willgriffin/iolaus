@@ -377,4 +377,53 @@ describe('Resume record presentation', () => {
         .presentation?.inResume,
     ).toBeNull();
   });
+  it('keeps stored skill evidence private to the career presentation with role and usage dates distinct', () => {
+    const f = fixture();
+    f.rows.skillGroups = [
+      {
+        id: 'group-1',
+        groupKey: 'group-1',
+        label: 'Platform',
+        evidenceJson: JSON.stringify([
+          {
+            proposalExperienceId: 'proposal-1',
+            experienceId: 'raw-experience',
+            role: 'Staff Engineer',
+            company: 'Northstar',
+            roleStartDate: '2020-01',
+            roleEndDate: '2024-01',
+            usage: 'Built services.',
+            depth: 'hands_on',
+            quote: 'Built a service.',
+            page: 1,
+            startDate: '2022-02',
+            endDate: '2022-09',
+          },
+        ]),
+      },
+    ];
+    f.sections
+      .find((section) => section.key === 'skillGroups')
+      ?.records.push({ id: 'group-1', values: {} });
+    const data = buildCareerPresentation(
+      f.source,
+      f.sections,
+      f.rows,
+      f.dependencies,
+      'default',
+    );
+    expect(
+      data.sections.find((section) => section.key === 'skillGroups')?.records[0]
+        .presentation?.evidence,
+    ).toEqual([
+      expect.objectContaining({
+        role: 'Staff Engineer',
+        company: 'Northstar',
+        roleStartDate: '2020-01',
+        roleEndDate: '2024-01',
+        startDate: '2022-02',
+        endDate: '2022-09',
+      }),
+    ]);
+  });
 });

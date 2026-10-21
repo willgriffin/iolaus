@@ -35,12 +35,16 @@ export const load: PageServerLoad = async ({ locals, setHeaders }) => {
   // configured marketing site, or show a neutral sign-in entry.
   if (isSharedHosted()) {
     const links = getPublicLinks();
-    if (links.landing) redirect(302, links.landing.href);
-    setHeaders({ 'cache-control': 'private, no-store' });
+    setHeaders({
+      'cache-control': 'private, no-store',
+    });
+    if (process.env.IOLAUS_PUBLIC_SEARCH_ENABLED !== 'true' && links.landing)
+      redirect(302, links.landing.href);
     return {
       appName: getAppConfig().appName,
       links,
       mode: 'landing' as const,
+      publicCatalogEnabled: process.env.IOLAUS_PUBLIC_SEARCH_ENABLED === 'true',
       signedIn: Boolean(locals?.user),
     };
   }

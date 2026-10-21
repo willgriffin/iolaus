@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   tryReserveChangeEventSubscriberSlot: vi.fn(),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   buildChangeEventStream: mocks.buildChangeEventStream,
   eventStreamCapacityExceededResponse:
     mocks.eventStreamCapacityExceededResponse,
@@ -21,7 +22,8 @@ vi.mock('@happyvertical/smrt-core', () => ({
     mocks.tryReserveChangeEventSubscriberSlot,
 }));
 
-vi.mock('@happyvertical/smrt-tenancy', () => ({
+vi.mock('@happyvertical/smrt-tenancy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-tenancy')>()),
   enterTenantContext: mocks.enterTenantContext,
   hasTenantContext: mocks.hasTenantContext,
 }));

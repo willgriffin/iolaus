@@ -8,7 +8,8 @@ import type {
 /** Same-origin cookie authentication. All session ownership is resolved by the server. */
 export function createAdminAssistantTransport(
   fetchImpl: typeof fetch = fetch,
-): AssistantTransport {
+): AssistantTransport &
+  Required<Pick<AssistantTransport, 'createThread' | 'uploadAttachment'>> {
   const base = '/api/admin/assistant/threads';
   async function request<T>(url: string, body?: unknown): Promise<T> {
     const response = await fetchImpl(url, {

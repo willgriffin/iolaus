@@ -43,13 +43,32 @@ const sweepNotSeenDaysByProject: Record<string, number> = {
   'desktop-control': 30,
 };
 
+function paginationTotal(payload: unknown): number {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    !('pagination' in payload) ||
+    !payload.pagination ||
+    typeof payload.pagination !== 'object' ||
+    !('totalRecords' in payload.pagination) ||
+    typeof payload.pagination.totalRecords !== 'number'
+  ) {
+    throw new Error('Opportunity list response omitted its pagination total');
+  }
+  return payload.pagination.totalRecords;
+}
+
 async function resultTotal(page: Page): Promise<number> {
-  const text = await page.locator('body').innerText();
-  const match = text.match(
-    /\b\d+(?:-\d+)? of (\d+) (?:filtered|opportunities)\b/,
-  );
-  if (!match) throw new Error(`Opportunity total was not rendered: ${text}`);
-  return Number(match[1]);
+  return page
+    .evaluate(async () => {
+      const response = await fetch(
+        '/api/admin-resources/opportunities?review=unsorted&sort=best',
+      );
+      if (!response.ok)
+        throw new Error(`Opportunity list read failed (${response.status})`);
+      return (await response.json()) as unknown;
+    })
+    .then(paginationTotal);
 }
 
 test('inactive-source sweep previews, protects rows, and refreshes the list after archival', async ({
@@ -73,7 +92,6 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
     await expect(page.getByText(title, { exact: true })).toBeVisible();
   }
   const before = await resultTotal(page);
-
   // A preview is intentionally read-only: the eligible fixture remains in the
   // rendered list until the explicit Archive confirmation is submitted.
   await page
@@ -115,7 +133,6 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
     await expect(page.getByText(title, { exact: true })).toBeVisible();
   }
   await expect.poll(() => resultTotal(page)).toBe(before - archivedCount);
-
   // Owner-decided rows are intentionally outside the Unsorted list. Confirm
   // the separate decision filter still returns the inactive-source fixture.
   await page.goto('/admin/opportunities?review=reject&sort=best');

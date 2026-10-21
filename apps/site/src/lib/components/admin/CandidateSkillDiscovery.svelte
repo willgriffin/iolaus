@@ -1,8 +1,15 @@
 <script lang="ts">
 import { Button } from '@happyvertical/smrt-ui/ui';
 import type { SubmitFunction } from '@sveltejs/kit';
+import { getContext } from 'svelte';
 import { enhance } from '$app/forms';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink, adminParentForPath } from '$lib/admin/navigation';
 import type { CandidateSkillDiscoverySnapshot } from '$lib/candidate-skill-discovery';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 
 let {
   snapshot,
@@ -22,6 +29,15 @@ const pending = $derived(
 );
 let saving = $state(false);
 let localError = $state('');
+const parent = adminParentForPath('/admin/resume/skill-discovery');
+const backLink = adminBackLink(
+  parent?.label ?? 'Resume',
+  parent?.href ?? '/admin/career',
+);
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(skillDiscoveryHeaderActions));
 const submit: SubmitFunction = ({ cancel }) => {
   if (saving) {
     cancel();
@@ -52,9 +68,15 @@ const classificationLabel = (classification: string) =>
       : 'Unknown — evidence not established';
 </script>
 
+{#snippet skillDiscoveryHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
+
 <svelte:head><title>Discover skills · Iolaus</title></svelte:head>
 <section class="skill-discovery">
-  <header><div><h1>Discover skills</h1><p>Find skills evidenced by your private career records. Review every proposal before adding it.</p></div><a href="/admin/career">Back to resume</a></header>
+  {#if !adminHeader}
+    <a class="embedded-back" href={backLink.href} title={backLink.title}>{backLink.label}</a>
+  {/if}
   <p>Direct experience means documented hands-on or primary use. Introductory experience keeps that limitation; unknown evidence is not a missing skill. Confirming adds private skill data and does not publish your resume.</p>
   {#if form?.ok}<p role="status">{form.message}</p>{/if}
   {#if form?.error || localError}<p role="alert">{localError || form?.error}</p>{/if}
@@ -87,14 +109,14 @@ const classificationLabel = (classification: string) =>
 
 <style>
 .skill-discovery { max-width: 56rem; margin: 0 auto; padding: 1rem; color: var(--smrt-color-on-surface, inherit); }
-header { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
-h1 { margin: 0; } h2 { font-size: 1.15rem; margin: 0; } h3 { font-size: 1rem; margin: 0; }
-p { line-height: 1.5; overflow-wrap: anywhere; } a { color: var(--smrt-color-primary, inherit); }
+h2 { font-size: 1.15rem; margin: 0; } h3 { font-size: 1rem; margin: 0; }
+p { line-height: 1.5; overflow-wrap: anywhere; }
+.embedded-back { color: var(--smrt-color-primary, inherit); }
 .counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0; } dt { font-size: .85rem; } dd { margin: .3rem 0 0; font-weight: 600; }
 .proposals { display: grid; gap: 1rem; } .proposal { border: 1px solid var(--smrt-color-outline-variant, #d1d5db); border-radius: .5rem; padding: 1rem; background: var(--smrt-color-surface-container-low, transparent); min-width: 0; }
 .classification { font-weight: 600; } .muted { font-size: .85rem; } summary { cursor: pointer; min-height: 2.75rem; display: flex; align-items: center; }
 blockquote { border-left: 3px solid var(--smrt-color-outline-variant, #d1d5db); margin: .5rem 0; padding: .5rem .75rem; } blockquote p { white-space: pre-wrap; }
 .review-actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-top: 1rem; } .skill-discovery :global(button) { min-height: 2.75rem; }
 [role=alert] { color: var(--smrt-color-error, #b91c1c); } .canonical { margin-top: 1.5rem; }
-@media (max-width: 600px) { header { flex-direction: column; } .counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-actions { align-items: stretch; flex-direction: column; } .review-actions :global(button) { width: 100%; } }
+@media (max-width: 600px) { .counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-actions { align-items: stretch; flex-direction: column; } .review-actions :global(button) { width: 100%; } }
 </style>

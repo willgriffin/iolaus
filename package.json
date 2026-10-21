@@ -3,14 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.25.0",
   "files": [
     "AGENTS.md",
     "CLAUDE.md"
   ],
   "engines": {
-    "node": ">=24.18.0",
-    "pnpm": ">=11.24.0"
+    "node": ">=26.10.0",
+    "pnpm": ">=11.25.0"
   },
   "scripts": {
     "app:install": "node scripts/smrt-app.mjs install",
@@ -67,17 +67,19 @@
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/smrt-cli": "file:vendor/smrt/happyvertical-smrt-cli-0.52.0-c6e5cdf2.tgz",
-    "@happyvertical/smrt-dev-mcp": "file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz",
+    "@happyvertical/encryption": "file:vendor/release/happyvertical-encryption-0.103.1.tgz",
+    "@happyvertical/smrt-cli": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz",
+    "@happyvertical/smrt-dev-mcp": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-runtime": "0.52.0",
-    "@happyvertical/smrt-config": "0.52.0",
-    "@happyvertical/smrt-scanner": "0.52.0",
-    "@happyvertical/sql": "0.96.1",
+    "@happyvertical/smrt-app-runtime": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz",
+    "@happyvertical/smrt-config": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz",
+    "@happyvertical/smrt-scanner": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz",
+    "@happyvertical/speech": "file:vendor/release/happyvertical-speech-0.103.1.tgz",
+    "@happyvertical/sql": "file:vendor/release/happyvertical-sql-0.103.1.tgz",
     "tsx": "catalog:"
   },
   "license": "MIT"

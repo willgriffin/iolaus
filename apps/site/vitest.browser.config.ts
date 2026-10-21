@@ -13,6 +13,13 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['src/lib/components/sources/*.browser.spec.ts'],
+    include: [
+      'src/lib/components/sources/*.browser.spec.ts',
+      'src/lib/components/SearchTriageRace.browser.spec.ts',
+      'src/lib/components/admin/CareerResume.browser.spec.ts',
+      'src/lib/components/admin/AdminResourcePageHeader.browser.spec.ts',
+      'src/lib/components/admin/AdminRecordViewPageHeader.browser.spec.ts',
+      'src/lib/components/admin/ResumeImport.browser.spec.ts',
+    ],
   },
 });

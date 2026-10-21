@@ -2,16 +2,58 @@ packages:
   - apps/*
   - packages/*
 
-# Prevent first-party packages from retaining an older unguarded AI SDK copy.
-# Remove only after all dependents require a protected release directly.
+# Exact first-party source packages for the coordinated release.
 overrides:
-  '@happyvertical/ai': 0.96.1
-  '@happyvertical/smrt-dev-mcp': file:vendor/smrt/happyvertical-smrt-dev-mcp-0.52.0-c6e5cdf2.tgz
-
-# Declaration-only bridge for the existing OpenAI-compatible schema serializer.
-patchedDependencies:
-  '@happyvertical/ai@0.96.1': patches/@happyvertical__ai@0.96.1.patch
-  '@happyvertical/smrt-personas@0.52.0': patches/@happyvertical__smrt-personas@0.52.0.patch
+  "@happyvertical/ai": "file:vendor/release/happyvertical-ai-0.103.1.tgz"
+  "@happyvertical/auth": "file:vendor/release/happyvertical-auth-0.103.1.tgz"
+  "@happyvertical/cache": "file:vendor/release/happyvertical-cache-0.103.1.tgz"
+  "@happyvertical/email": "file:vendor/release/happyvertical-email-0.103.1.tgz"
+  "@happyvertical/encryption": "file:vendor/release/happyvertical-encryption-0.103.1.tgz"
+  "@happyvertical/files": "file:vendor/release/happyvertical-files-0.103.1.tgz"
+  "@happyvertical/geo": "file:vendor/release/happyvertical-geo-0.103.1.tgz"
+  "@happyvertical/jobs": "file:vendor/release/happyvertical-jobs-0.103.1.tgz"
+  "@happyvertical/json": "file:vendor/release/happyvertical-json-0.103.1.tgz"
+  "@happyvertical/logger": "file:vendor/release/happyvertical-logger-0.103.1.tgz"
+  "@happyvertical/messages": "file:vendor/release/happyvertical-messages-0.103.1.tgz"
+  "@happyvertical/secrets": "file:vendor/release/happyvertical-secrets-0.103.1.tgz"
+  "@happyvertical/smrt-agents": "file:vendor/release/happyvertical-smrt-agents-0.55.9.tgz"
+  "@happyvertical/smrt-app-cli": "file:vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz"
+  "@happyvertical/smrt-app-mcp": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz"
+  "@happyvertical/smrt-app-runtime": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
+  "@happyvertical/smrt-assets": "file:vendor/release/happyvertical-smrt-assets-0.55.9.tgz"
+  "@happyvertical/smrt-chat": "file:vendor/release/happyvertical-smrt-chat-0.55.9.tgz"
+  "@happyvertical/smrt-cli": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz"
+  "@happyvertical/smrt-config": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz"
+  "@happyvertical/smrt-core": "file:vendor/release/happyvertical-smrt-core-0.55.9.tgz"
+  "@happyvertical/smrt-dev-mcp": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz"
+  "@happyvertical/smrt-facts": "file:vendor/release/happyvertical-smrt-facts-0.55.9.tgz"
+  "@happyvertical/smrt-features": "file:vendor/release/happyvertical-smrt-features-0.55.9.tgz"
+  "@happyvertical/smrt-jobs": "file:vendor/release/happyvertical-smrt-jobs-0.55.9.tgz"
+  "@happyvertical/smrt-languages": "file:vendor/release/happyvertical-smrt-languages-0.55.9.tgz"
+  "@happyvertical/smrt-ledgers": "file:vendor/release/happyvertical-smrt-ledgers-0.55.9.tgz"
+  "@happyvertical/smrt-mcp-apps": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz"
+  "@happyvertical/smrt-mcp-openai": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz"
+  "@happyvertical/smrt-messages": "file:vendor/release/happyvertical-smrt-messages-0.55.9.tgz"
+  "@happyvertical/smrt-mobile-contract": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.9.tgz"
+  "@happyvertical/smrt-personas": "file:vendor/release/happyvertical-smrt-personas-0.55.9.tgz"
+  "@happyvertical/smrt-places": "file:vendor/release/happyvertical-smrt-places-0.55.9.tgz"
+  "@happyvertical/smrt-playbooks": "file:vendor/release/happyvertical-smrt-playbooks-0.55.9.tgz"
+  "@happyvertical/smrt-playground": "file:vendor/release/happyvertical-smrt-playground-0.55.9.tgz"
+  "@happyvertical/smrt-profiles": "file:vendor/release/happyvertical-smrt-profiles-0.55.9.tgz"
+  "@happyvertical/smrt-prompts": "file:vendor/release/happyvertical-smrt-prompts-0.55.9.tgz"
+  "@happyvertical/smrt-reports": "file:vendor/release/happyvertical-smrt-reports-0.55.9.tgz"
+  "@happyvertical/smrt-scanner": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz"
+  "@happyvertical/smrt-secrets": "file:vendor/release/happyvertical-smrt-secrets-0.55.9.tgz"
+  "@happyvertical/smrt-svelte": "file:vendor/release/happyvertical-smrt-svelte-0.55.9.tgz"
+  "@happyvertical/smrt-tags": "file:vendor/release/happyvertical-smrt-tags-0.55.9.tgz"
+  "@happyvertical/smrt-tenancy": "file:vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz"
+  "@happyvertical/smrt-types": "file:vendor/release/happyvertical-smrt-types-0.55.9.tgz"
+  "@happyvertical/smrt-ui": "file:vendor/release/happyvertical-smrt-ui-0.55.9.tgz"
+  "@happyvertical/smrt-users": "file:vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz"
+  "@happyvertical/smrt-web": "file:vendor/release/happyvertical-smrt-web-0.55.9.tgz"
+  "@happyvertical/speech": "file:vendor/release/happyvertical-speech-0.103.1.tgz"
+  "@happyvertical/sql": "file:vendor/release/happyvertical-sql-0.103.1.tgz"
+  "@happyvertical/utils": "file:vendor/release/happyvertical-utils-0.103.1.tgz"
 
 # pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
 # package.json (overrides, onlyBuiltDependencies) are no longer honored.
@@ -88,7 +130,6 @@ minimumReleaseAgeExclude:
   - '@happyvertical/smrt-mcp-openai@0.52.0'
   - '@happyvertical/smrt-chat@0.52.0'
   - '@happyvertical/smrt-messages@0.52.0'
-  - '@happyvertical/smrt-personas@0.52.0'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4

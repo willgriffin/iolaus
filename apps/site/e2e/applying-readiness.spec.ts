@@ -96,11 +96,22 @@ function expectNoExternalAuthorization(record: Record<string, unknown>) {
 }
 
 async function generatePacket(page: Page) {
+  await expect(
+    page.getByRole('navigation', { name: 'Application materials' }),
+  ).toBeVisible();
   const override = page.getByLabel('Reason to override the posting check');
-  // The fictional posting intentionally has no live URL. Wait for its
-  // client-loaded preflight form instead of racing an immediate count().
-  await expect(override).toBeVisible();
-  await override.fill(syntheticOverride);
+  // The current application view exposes the confirmation field only when its
+  // server-side preflight requires it. This isolated fixture is eligible for
+  // local material generation, so exercise the enabled action without
+  // manufacturing an override.
+  if (await override.count()) await override.fill(syntheticOverride);
+  else
+    await expect(
+      page.getByRole('heading', {
+        name: 'Posting needs your confirmation',
+        exact: true,
+      }),
+    ).toHaveCount(0);
   await action(
     page,
     page.getByRole('button', { name: /^(?:Re)?generate packet$/i }),
@@ -189,10 +200,15 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
   });
   const list = await page.goto(`/admin/opportunities?${params}`);
   expect(list?.status()).toBe(200);
-  await expect(page.locator('.table-opportunity .title-link')).toHaveText([
-    title,
-  ]);
-  await page.getByRole('button', { name: /^Filters/ }).click();
+  const listedOpportunity = page.getByRole('button', {
+    name: `Review ${title}`,
+    exact: false,
+  });
+  await expect(listedOpportunity).toBeVisible();
+  await expect(
+    page.locator('article.collection-opportunity > .collection-review'),
+  ).toHaveCount(1);
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
   const filters = page.getByRole('dialog', { name: 'Opportunity filters' });
   await filters
     .getByRole('group', { name: 'Work mode' })
@@ -203,12 +219,15 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
     .getByRole('button', { name: 'Close filters', exact: true })
     .click();
   await expect(filters).toHaveCount(0);
-  await expect(page.locator('.table-opportunity .title-link')).toHaveText([
-    title,
-  ]);
+  await expect(listedOpportunity).toBeVisible();
+  await expect(
+    page.locator('article.collection-opportunity > .collection-review'),
+  ).toHaveCount(1);
   await screenshot(page, testInfo, '02-filtered-opportunity');
 
-  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Triage opportunities', exact: true })
+    .click();
   const triage = page.getByRole('dialog', { name: 'Triage opportunities' });
   await expect(triage.locator('.triage-card')).toHaveAttribute(
     'aria-label',
@@ -270,6 +289,9 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
   await expect(page).toHaveURL(
     new RegExp(`/admin/applications/${applicationId}/?$`),
   );
+  await expect(
+    page.getByRole('navigation', { name: 'Application materials' }),
+  ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: title, exact: true }),
   ).toBeVisible();
@@ -469,25 +491,37 @@ test('row review closes only after a successful decision and preserves sequentia
     if (search.includes('/reviewOpportunity')) decisionRequests += 1;
   });
   await page.goto(listPath);
-  const row = page.getByRole('row').filter({
-    has: page.getByText(title, { exact: true }),
-  });
-  await expect(row).toHaveCount(1);
+  const opportunityCard = page
+    .locator('article.collection-opportunity')
+    .filter({
+      has: page.getByRole('button', {
+        name: `Review ${title}`,
+        exact: false,
+      }),
+    });
+  await expect(opportunityCard).toHaveCount(1);
   const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
-  const checkbox = row.getByRole('checkbox');
+  const checkbox = page
+    .getByRole('listitem')
+    .filter({ has: opportunityCard })
+    .getByRole('checkbox', { name: `Select ${title}`, exact: true });
   await checkbox.check();
   await expect(dialog).toHaveCount(0);
   await checkbox.uncheck();
   const postingPopup = context.waitForEvent('page');
-  await row.getByRole('link', { name: 'View posting', exact: true }).click();
+  await opportunityCard
+    .getByRole('link', { name: 'View posting', exact: true })
+    .click();
   const blockedPosting = await postingPopup;
   await expect(dialog).toHaveCount(0);
   await blockedPosting.close();
 
   for (const dismissal of ['Close triage', 'Later', 'Escape']) {
-    if (dismissal === 'Close triage') await row.press('Enter');
-    else if (dismissal === 'Later') await row.press('Space');
-    else await row.getByRole('cell').last().click();
+    if (dismissal === 'Close triage')
+      await opportunityCard.getByRole('button').press('Enter');
+    else if (dismissal === 'Later')
+      await opportunityCard.getByRole('button').press('Space');
+    else await opportunityCard.getByRole('button').click();
     await expect(dialog).toBeVisible();
     await expect(dialog.locator('.triage-card')).toHaveAttribute(
       'aria-label',
@@ -506,7 +540,7 @@ test('row review closes only after a successful decision and preserves sequentia
   expect(queueReads).toBe(0);
   expect(decisionRequests).toBe(0);
 
-  await row.getByRole('cell').last().click();
+  await opportunityCard.getByRole('button').click();
   await dialog
     .getByRole('link', { name: 'Open opportunity', exact: true })
     .click();
@@ -530,7 +564,7 @@ test('row review closes only after a successful decision and preserves sequentia
       });
     } else await route.continue();
   });
-  await row.getByRole('cell').last().click();
+  await opportunityCard.getByRole('button').click();
   await dialog.getByRole('button', { name: 'Nope', exact: true }).click();
   await expect(
     page.getByText('Isolated QA forced decision failure', { exact: true }),
@@ -548,7 +582,7 @@ test('row review closes only after a successful decision and preserves sequentia
     'reviewOpportunity',
   );
   await expect(dialog).toHaveCount(0);
-  await expect(row).toHaveCount(0);
+  await expect(opportunityCard).toHaveCount(0);
   expect(queueReads).toBe(0);
   const rejected = await context.request.get(
     `/api/admin-resources/opportunities?${new URLSearchParams({ q: title, review: 'reject' })}`,
@@ -562,7 +596,9 @@ test('row review closes only after a successful decision and preserves sequentia
   expect(records[0].title).toBe(title);
   expect(records[0].reviewOverlay?.humanReviewStatus).toBe('reject');
 
-  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Triage opportunities', exact: true })
+    .click();
   await expect(dialog.locator('.triage-card')).toHaveAttribute(
     'aria-label',
     `Triage card for ${prefix} 2`,
@@ -593,9 +629,7 @@ test('Overview separates pending matches from scores and keeps private tasks in 
     applyingOpportunities: Record<string, string>;
   };
   await page.goto('/admin');
-  await expect(
-    page.getByRole('heading', { name: 'Overview', exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId('admin-overview')).toBeVisible();
   const tasks = page.getByRole('region', { name: 'Priority tasks' });
   const priorityCards = tasks.locator('.task-list li');
   await expect(priorityCards.nth(0)).toContainText(
@@ -644,9 +678,7 @@ test('Overview separates pending matches from scores and keeps private tasks in 
   try {
     const foreignPage = await foreign.newPage();
     await foreignPage.goto('/admin');
-    await expect(
-      foreignPage.getByRole('heading', { name: 'Overview', exact: true }),
-    ).toBeVisible();
+    await expect(foreignPage.getByTestId('admin-overview')).toBeVisible();
     const foreignTasks = foreignPage.getByRole('region', {
       name: 'Priority tasks',
     });

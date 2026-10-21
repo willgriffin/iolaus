@@ -48,45 +48,38 @@ export const taskKanbanColumns = taskKanbanColumnDefinitions.map(
   (definition) => definition.value,
 );
 
+// Display lanes only: persisted workflow stages remain unchanged.
 export const taskKanbanLaneDefinitions = [
   {
-    label: 'Intake & Decisions',
-    value: 'intake_decisions',
+    label: 'Shortlist',
+    value: 'shortlist',
     columns: ['inbox', 'recommended', 'needs_user_decision'],
   },
   {
-    label: 'Research',
-    value: 'research',
-    columns: ['accepted_apply', 'researching'],
-  },
-  {
-    label: 'Application Prep',
-    value: 'application_prep',
+    label: 'Applying',
+    value: 'applying',
     columns: [
+      'accepted_apply',
+      'researching',
       'materials_drafting',
       'needs_account_credentials',
       'ready_for_user_review',
+      'approved_to_submit',
+      'submitting',
+      'manual_submission',
+      'blocked',
     ],
   },
   {
-    label: 'Submit',
-    value: 'submit',
-    columns: ['approved_to_submit', 'submitting', 'manual_submission'],
-  },
-  {
-    label: 'After Submit',
-    value: 'after_submit',
-    columns: ['submitted', 'follow_up'],
-  },
-  {
-    label: 'Interview / Offer',
-    value: 'interview_offer',
-    columns: ['interviewing', 'offer_negotiation'],
-  },
-  {
-    label: 'Blocked / Closed',
-    value: 'blocked_closed',
-    columns: ['blocked', 'rejected_archived'],
+    label: 'Applied',
+    value: 'applied',
+    columns: [
+      'submitted',
+      'follow_up',
+      'interviewing',
+      'offer_negotiation',
+      'rejected_archived',
+    ],
   },
 ] as const;
 

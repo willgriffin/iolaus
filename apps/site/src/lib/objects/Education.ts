@@ -24,6 +24,13 @@ export class Education extends SmrtObject {
   startDate: Date | null = null;
   @field({ type: 'datetime', nullable: true })
   endDate: Date | null = null;
+  /** ISO input precision is retained so imported YYYY/MM dates are never presented as exact days. */
+  @field({ type: 'text' })
+  startPrecision = 'year';
+  @field({ type: 'text' })
+  endPrecision = 'year';
   @field({ type: 'decimal' })
   sortOrder = 0;
+  @field({ type: 'boolean' })
+  useOnResume = true;
 }

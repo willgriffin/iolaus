@@ -35,6 +35,16 @@ function persistedColorScheme(): ColorScheme {
   }
 }
 
+// A denied storage getter also prevents the theme provider's persistence checks.
+const canPersistTheme =
+  browser &&
+  (() => {
+    try {
+      return Boolean(window.localStorage);
+    } catch {
+      return false;
+    }
+  })();
 const initialColorScheme: ColorScheme = browser
   ? persistedColorScheme()
   : 'system';
@@ -57,7 +67,7 @@ const webmcp = $derived(
 {/if}
 
 <Provider {webmcp}>
-  <ThemeProvider preset="studio" colorScheme={initialColorScheme}>
+  <ThemeProvider preset="studio" colorScheme={initialColorScheme} persist={canPersistTheme}>
     {@render children?.()}
   </ThemeProvider>
 </Provider>

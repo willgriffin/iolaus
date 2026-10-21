@@ -1,4 +1,8 @@
 import { getDatabaseUrl } from '../src/lib/server/db.js';
+import {
+  getResumeImportSchemaStatus,
+  resumeImportSchemaIsReady,
+} from '../src/lib/server/resume-import-schema.js';
 import { getSourceCrawlAccountingSchemaStatus } from '../src/lib/server/source-crawl-accounting.js';
 import { getSourceCrawlJobDedupeStatus } from '../src/lib/server/source-crawl-job-schema.js';
 import { getSourceCrawlOpportunityGuardStatus } from '../src/lib/server/source-crawl-opportunity-integrity.js';
@@ -35,10 +39,14 @@ const sourceCrawlAccountingSchema = await getSourceCrawlAccountingSchemaStatus(
 const sourceCrawlJobDedupe = await getSourceCrawlJobDedupeStatus(pending.db);
 const sourceProvenance = await getSourceProvenanceSchemaStatus(pending.db);
 const sourceProviders = await getSourceProviderSchemaStatus(pending.db);
+const resumeImportSchema = await getResumeImportSchemaStatus(pending.db);
 
 console.log('Database:', redactDatabaseUrl(getDatabaseUrl()));
 console.log(`SMRT schemas registered: ${pending.schemaCount}`);
 console.log(`Pending schema statements: ${pending.statements.length}`);
+console.log(
+  `Resume import ingestion: ${resumeImportSchema.present}/${resumeImportSchema.total} private intake tables present.`,
+);
 console.log(
   `Tag integrity guards: ${tagIntegrityGuards.foreignKeysPresent}/${tagIntegrityGuards.foreignKeysTotal} foreign keys present (${tagIntegrityGuards.foreignKeysValidated} validated), ${tagIntegrityGuards.requiredColumnsNotNull}/${tagIntegrityGuards.requiredColumnsTotal} business-key columns required, ${tagIntegrityGuards.uniqueIndexesPresent}/${tagIntegrityGuards.uniqueIndexesTotal} unique indexes present.`,
 );
@@ -71,6 +79,9 @@ if (
   process.exitCode = 1;
 }
 if (!sourceCrawlJobDedupe.activeIndexPresent) {
+  process.exitCode = 1;
+}
+if (!resumeImportSchemaIsReady(resumeImportSchema)) {
   process.exitCode = 1;
 }
 if (!sourceProvenanceSchemaIsReady(sourceProvenance)) {

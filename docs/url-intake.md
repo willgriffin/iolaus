@@ -2,7 +2,8 @@
 
 Issue: https://github.com/willgriffin/iolaus/issues/148
 
-The Opportunities and Sources lists expose **Add URL**. A public Ashby,
+The Opportunities list and the Sources header expose **Add URL**. The compact
+Sources action accepts either kind of public URL. A public Ashby,
 Greenhouse, or Lever posting is imported through the existing opportunity
 workflow and queues its existing source preparation/assessment workflow when
 details are available. A recognized board creates or reuses a root source and
@@ -13,6 +14,8 @@ Sources remain operator-managed. New sources use `ad_hoc` cadence. Repeating a
 URL reuses its canonical source and the initial pull for the current verified
 workspace; a terminal pull is reported without silently starting another one.
 Paused sources stay paused. A saved record remains available when queueing fails.
+The Sources header also filters the visible root-source cards by active or
+paused status; derived sources remain absent from this operator view.
 
 Intake crawl fetching uses the existing pinned public-HTTPS transport for the
 root, derived ATS APIs, index links, posting details, and every redirect. Static

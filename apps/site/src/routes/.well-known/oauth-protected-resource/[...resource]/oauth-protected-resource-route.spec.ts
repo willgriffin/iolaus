@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('$lib/server/local-oauth', () => ({
+  getLocalOAuth: async () => null,
+  oauthFailure: () => new Response(null, { status: 401 }),
+}));
+
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
 }));
@@ -22,7 +27,7 @@ describe('OAuth protected-resource discovery', () => {
     const { GET } = await import('./+server');
 
     expect(
-      GET(event('/.well-known/oauth-protected-resource/api/mcp')),
+      await GET(event('/.well-known/oauth-protected-resource/api/mcp')),
     ).toMatchObject({
       status: 404,
     });
@@ -45,11 +50,11 @@ describe('OAuth protected-resource discovery', () => {
     });
     const { GET } = await import('./+server');
 
-    expect(GET(event('/.well-known/oauth-protected-resource/api/mcp'))).toBe(
-      metadata,
-    );
     expect(
-      GET(event('/.well-known/oauth-protected-resource/api/other')),
+      await GET(event('/.well-known/oauth-protected-resource/api/mcp')),
+    ).toBe(metadata);
+    expect(
+      await GET(event('/.well-known/oauth-protected-resource/api/other')),
     ).toMatchObject({
       status: 404,
     });

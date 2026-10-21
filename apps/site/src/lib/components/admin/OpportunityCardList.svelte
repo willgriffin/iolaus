@@ -1,23 +1,21 @@
 <script lang="ts">
-import {
-  CollectionList,
-  DataTable,
-  type DataTableColumn,
-  type SortState,
-} from '@happyvertical/smrt-ui/data';
+import { CollectionList } from '@happyvertical/smrt-ui/data';
 import { Button, Pagination } from '@happyvertical/smrt-ui/ui';
 import Building2 from '@lucide/svelte/icons/building-2';
-import ExternalLink from '@lucide/svelte/icons/external-link';
 import Heart from '@lucide/svelte/icons/heart';
 import Layers from '@lucide/svelte/icons/layers';
 import MapPin from '@lucide/svelte/icons/map-pin';
 import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Sparkles from '@lucide/svelte/icons/sparkles';
 import X from '@lucide/svelte/icons/x';
-import { onMount, type Snippet, untrack } from 'svelte';
+import { getContext, onMount, type Snippet, untrack } from 'svelte';
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import type { AdminRecord } from '$lib/admin/dock';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
 import { OPPORTUNITY_LIST_REFRESH_STORAGE_KEY } from '$lib/admin/opportunity-list-refresh';
 import type { AdminListPagination } from '$lib/admin/pagination';
 import {
@@ -51,10 +49,6 @@ import {
   getCurrentCompleteOpportunityReview,
   hasUnavailableCompleteOpportunityReview,
 } from '$lib/opportunity-resume-fit-review-projection';
-import {
-  filtersForOpportunityTableSort,
-  opportunityTableSort,
-} from '$lib/opportunity-table-sorting';
 import {
   currentQuestionScreeningRank,
   getCurrentQuestionScreeningProjection,
@@ -123,7 +117,7 @@ let {
   /** Record currently selected for the admin dock (single-select). */
   dockSelectedId?: string | null;
   onSelectRecord?: (record: AdminRecord) => void;
-  /** Rendered by DataTable directly above the rows (e.g. bulk review form). */
+  /** Rendered above the collection (e.g. bulk review form). */
   toolbar?: Snippet;
   loading?: boolean;
   refreshing?: boolean;
@@ -135,19 +129,6 @@ let {
 const POSTED_PRESETS = [7, 14, 30, 90];
 const REVIEW_STORAGE_KEY = 'iolaus.admin.opportunities.review';
 const SORT_STORAGE_KEY = 'iolaus.admin.opportunities.sort';
-const VIEW_STORAGE_KEY = 'iolaus.admin.opportunities.view.v1';
-type OpportunityView = 'list' | 'columns' | 'table';
-const opportunityViews: { value: OpportunityView; label: string }[] = [
-  { value: 'list', label: 'List' },
-  { value: 'columns', label: 'Columns' },
-  { value: 'table', label: 'Table' },
-];
-let opportunityView = $state<OpportunityView>('table');
-
-function setOpportunityView(value: OpportunityView): void {
-  opportunityView = value;
-  writePreference(VIEW_STORAGE_KEY, value);
-}
 const OPPORTUNITY_SORT_VALUES: readonly OpportunitySort[] = [
   'best',
   'eligibility',
@@ -158,48 +139,6 @@ const OPPORTUNITY_SORT_VALUES: readonly OpportunitySort[] = [
   'rating',
 ];
 
-const tableColumns: DataTableColumn<AdminRecord>[] = [
-  {
-    id: 'opportunity',
-    label: 'Opportunity',
-    accessor: 'title',
-    minWidth: '18rem',
-    responsive: { keepVisible: true },
-  },
-  {
-    id: 'company',
-    label: 'Company',
-    minWidth: '11rem',
-    responsive: { priority: 3 },
-  },
-  {
-    id: 'location',
-    label: 'Location',
-    minWidth: '11rem',
-    responsive: { priority: 2 },
-  },
-  {
-    id: 'score',
-    label: 'Match assessment',
-    align: 'right',
-    minWidth: '6rem',
-    sortable: true,
-  },
-  { id: 'status', label: 'Status', minWidth: '7rem' },
-  {
-    id: 'compensation',
-    label: 'Compensation',
-    minWidth: '8rem',
-    sortable: true,
-  },
-];
-
-const tableModes = {
-  filtering: 'manual',
-  pagination: 'manual',
-  sorting: 'manual',
-} as const;
-
 let drawerOpen = $state(page.url.searchParams.has('facets'));
 let skillQuery = $state('');
 let skillSearchActive = $state(false);
@@ -209,6 +148,10 @@ let filters = $state<OpportunityFilterState>(
 let lastUrlSearch = $state(page.url.search);
 let preferencesReady = $state(false);
 let lastRefreshAt = 0;
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(opportunityHeaderControls));
 
 $effect(() => {
   if (page.url.search === lastUrlSearch) return;
@@ -224,14 +167,6 @@ $effect(() => {
 });
 
 onMount(() => {
-  const storedView = readPreference(VIEW_STORAGE_KEY);
-  if (
-    storedView === 'list' ||
-    storedView === 'columns' ||
-    storedView === 'table'
-  ) {
-    opportunityView = storedView;
-  }
   const cleanupRefreshListeners = installOpportunityListRefreshListeners();
   const url = new URL(page.url);
   let changed = removeActionSearchParams(url.searchParams);
@@ -352,12 +287,17 @@ function commitFilters(): void {
   setFilters(filters);
 }
 
-function commitSort(): void {
-  setFilters({ ...filters, sortDirection: 'desc' });
+function setSort(event: Event): void {
+  const sort = (event.currentTarget as HTMLSelectElement)
+    .value as OpportunitySort;
+  if (!isOpportunitySort(sort)) return;
+  setFilters({ ...filters, sort });
 }
 
-function setTableSort(nextSort: SortState): void {
-  setFilters(filtersForOpportunityTableSort(filters, nextSort));
+function setSortDirection(event: Event): void {
+  const sortDirection = (event.currentTarget as HTMLSelectElement).value;
+  if (sortDirection !== 'asc' && sortDirection !== 'desc') return;
+  setFilters({ ...filters, sortDirection });
 }
 
 function closeDrawer(): void {
@@ -374,11 +314,13 @@ function closeDrawer(): void {
 }
 
 function openDrawer(): void {
-  if (page.url.searchParams.has('facets')) {
+  const url = new URL(page.url);
+  const closesTriage = url.searchParams.has(TRIAGE_URL_PARAM);
+  url.searchParams.delete(TRIAGE_URL_PARAM);
+  if (url.searchParams.has('facets') && !closesTriage) {
     drawerOpen = true;
     return;
   }
-  const url = new URL(page.url);
   url.searchParams.set('facets', '');
   void goto(`${url.pathname}${url.search}${url.hash}`, {
     keepFocus: true,
@@ -702,8 +644,6 @@ function questionScreeningTooltip(record: AdminRecord): string {
   ].join(' ');
 }
 
-// Score only — the recommendation is still conveyed by the badge's tone color
-// (toneFor(latestRecommendation) on the badge) and by the status badge.
 function scoreLabel(record: AdminRecord): string {
   const questionRank = currentQuestionScreeningRank(record);
   if (questionRank.enabled) {
@@ -745,26 +685,6 @@ function eligibilityLabel(record: AdminRecord): string {
   return bucket ? assessmentEligibilityLabels[bucket] : 'Unknown';
 }
 
-function toneFor(status: string): string {
-  const text = status.trim().toLowerCase();
-  if (
-    [
-      'apply',
-      'applied',
-      'interviewing',
-      'offer',
-      'recommend',
-      'recommended',
-    ].includes(text)
-  )
-    return 'tone-positive';
-  if (['found', 'maybe', 'needs_input', 'needs_research'].includes(text))
-    return 'tone-amber';
-  if (['archived', 'closed', 'reject', 'rejected', 'skip'].includes(text))
-    return 'tone-negative';
-  return 'tone-neutral';
-}
-
 function isApplyableUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -794,10 +714,8 @@ function pageHref(targetPage: number): string {
 }
 
 function navigateToPage(targetPage: number): void {
-  // While the shell is waiting for the authoritative total, DataTable quite
-  // reasonably attempts to clamp an out-of-range deep-linked page. That
-  // attempted change is not user intent, so keep the URL stable until the
-  // server-paged result arrives with its real bounds.
+  // Keep a deep-linked page stable until the server result supplies its real
+  // bounds, rather than navigating against the initial empty shell.
   if (loading && pagination.totalRecords === 0) return;
   if (targetPage === pagination.page) return;
   void goto(pageHref(targetPage), { keepFocus: true, noScroll: true });
@@ -817,7 +735,7 @@ const skillSearchInUse = $derived(
 );
 
 const visibleRecords = $derived(records);
-const tableSelected = $derived(new Set<string | number>(selectedIds));
+const collectionSelected = $derived(new Set<string | number>(selectedIds));
 const pageIds = $derived(
   visibleRecords.map((record: AdminRecord) => String(record.id)),
 );
@@ -860,13 +778,6 @@ const bulkSelectionCount = $derived(selectedIds.size);
  * feeds bulk actions) stay separate. While anything is checked, the focus bar
  * is de-emphasised so the affected set reads unambiguously.
  */
-function rowClassFor(record: AdminRecord): string {
-  if (!record.id || record.id !== dockSelectedId) return '';
-  return bulkSelectionCount > 0
-    ? 'dock-selected dock-selected--muted'
-    : 'dock-selected';
-}
-
 function clearBulkSelection(): void {
   if (onClearSelection) {
     onClearSelection();
@@ -874,18 +785,6 @@ function clearBulkSelection(): void {
   }
   onSelectedIdsChange?.(new Set());
 }
-const tableSort = $derived(opportunityTableSort(filters));
-
-const resultCountLabel = $derived.by(() => {
-  if (pagination.totalRecords === 0) return '0 opportunities';
-
-  const pageRange =
-    pagination.start === pagination.end
-      ? String(pagination.start)
-      : `${pagination.start}-${pagination.end}`;
-  const suffix = activeFilterCount > 0 ? 'filtered' : 'opportunities';
-  return `${pageRange} of ${pagination.totalRecords} ${suffix}`;
-});
 </script>
 
 <svelte:window
@@ -894,68 +793,17 @@ const resultCountLabel = $derived.by(() => {
   }}
 />
 
-<div class="card-list-wrap">
-  <div class="list-toolbar">
-    <form method="GET" class="review-form" aria-label="Review filter">
-      <label>
-        <span>Review</span>
-        <select name="review" onchange={setReviewFilter}>
-          {#each reviewFilters as option}
-            <option value={option.value} selected={option.value === activeReviewFilter}>
-              {option.label}
-            </option>
-          {/each}
-        </select>
-      </label>
-    </form>
-    <label class="sort-field">
-      <span>Sort</span>
-      <select
-        bind:value={filters.sort}
-        aria-label="Sort opportunities"
-        onchange={commitSort}
-      >
-        <option value="best">Best fit</option>
-        <option value="eligibility">Eligibility for your work location</option>
-        <option value="cited_support">Cited support</option>
-        <option value="recommendation">Recommendation</option>
-        <option value="newest">Newest</option>
-        <option value="score">AI score</option>
-        <option value="salary">Salary</option>
-        <option value="rating">My rating</option>
-      </select>
-    </label>
-    <button
-      type="button"
-      class="filters-toggle"
-      class:active={activeFilterCount > 0}
-      aria-haspopup="dialog"
-      aria-expanded={drawerOpen}
-      onclick={openDrawer}
-    >
-      <SlidersHorizontal size={15} strokeWidth={2.2} />
-      Filters
-      {#if activeFilterCount > 0}<span class="filters-count">{activeFilterCount}</span>{/if}
-    </button>
-    <button type="button" class="triage-link" onclick={openTriage}>
-      <Layers size={15} strokeWidth={2.2} /> Triage
-    </button>
-    <a class="triage-link" href={shortlistHref}>
-      <Heart size={15} strokeWidth={2.2} /> Shortlist
-    </a>
-    <a class="triage-link" href="/admin/preferences/screening-questions">Screening Questions</a>
-    <div class="view-selector" role="group" aria-label="Opportunity view">
-      {#each opportunityViews as view}
-        <Button
-          variant={opportunityView === view.value ? 'primary' : 'secondary'}
-          aria-pressed={opportunityView === view.value}
-          onclick={() => setOpportunityView(view.value)}
-        >{view.label}</Button>
-      {/each}
-    </div>
-    <AddUrlIntake />
-    <span class="result-count">{resultCountLabel}</span>
+{#snippet opportunityHeaderControls()}
+  <div class="opportunity-header-controls" aria-label="Opportunity controls">
+    <AddUrlIntake compact />
+    <button type="button" class:active={activeFilterCount > 0} aria-label="Filters" title="Filters" aria-haspopup="dialog" aria-expanded={drawerOpen} onclick={openDrawer}><SlidersHorizontal size={21} aria-hidden="true" /></button>
+    <button type="button" aria-label="Triage opportunities" title="Triage opportunities" onclick={openTriage}><Layers size={21} aria-hidden="true" /></button>
+    <a href={shortlistHref} aria-label="Shortlist" title="Shortlist"><Heart size={21} aria-hidden="true" /></a>
+    <a href="/admin/preferences/screening-questions" aria-label="Screening Questions" title="Screening Questions"><Sparkles size={21} aria-hidden="true" /></a>
   </div>
+{/snippet}
+
+<div class="card-list-wrap">
 
   <OpportunityTriageModal
     bind:open={triageOpen}
@@ -1000,74 +848,7 @@ const resultCountLabel = $derived.by(() => {
     </div>
   {/snippet}
 
-  {#snippet opportunityCell({ column, row: record }: { column: DataTableColumn<AdminRecord>; row: AdminRecord })}
-    {@const posting = postingUrlFor(record)}
-    {#if column.id === 'opportunity'}
-      <div class="table-opportunity">
-        <span
-          class="title-link"
-        >
-          {str(record, 'title') || 'Untitled opportunity'}
-        </span>
-        {#if posting}
-          <a class="posting-icon" href={posting} target="_blank" rel="noreferrer" title="View posting" aria-label="View posting">
-            <ExternalLink size={15} strokeWidth={2.2} />
-          </a>
-        {/if}
-      </div>
-    {:else if column.id === 'company'}
-      <span class="table-meta"><Building2 size={13} strokeWidth={2.2} /> {companyLabel(record)}</span>
-    {:else if column.id === 'location'}
-      <span class="table-meta"><MapPin size={13} strokeWidth={2.2} /> {locationLabel(record)}</span>
-    {:else if column.id === 'score'}
-      <span class="badge neutral" title={currentQuestionScreeningRank(record).enabled ? questionScreeningTooltip(record) : hasUnavailableCompleteOpportunityReview(record) ? 'Saved complete review could not be validated for current material.' : getCurrentCompleteOpportunityReview(record.resumeFitReviewProjection, record.completeReviewStatus)?.evidenceFit ? 'Current complete material review. Candidate support and source uncertainty are shown separately.' : getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>
-        <Sparkles size={12} strokeWidth={2.4} /> {scoreLabel(record)}
-      </span>
-      <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
-    {:else if column.id === 'status'}
-      <span class={`badge ${toneFor(str(record, 'status'))}`}>
-        {humanize(str(record, 'status'), 'unknown')}
-      </span>
-    {:else if column.id === 'compensation'}
-      {salaryLabel(record) || '—'}
-    {/if}
-  {/snippet}
-
-
-  {#if opportunityView === 'table'}
-  <DataTable
-    data={visibleRecords}
-    columns={tableColumns}
-    rowKey="id"
-    agentAddressable
-    selectable
-    selected={tableSelected}
-    onSelectionChange={handleSelectionChange}
-    onRowClick={handleRowClick}
-    rowClass={rowClassFor}
-    toolbar={tableToolbar}
-    modes={tableModes}
-    sortable
-    sort={tableSort}
-    onSortChange={setTableSort}
-    {loading}
-    {refreshing}
-    {stale}
-    {error}
-    {onRetry}
-    page={pagination.page}
-    pageSize={pagination.pageSize}
-    totalRows={pagination.totalRecords}
-    onPageChange={navigateToPage}
-    rowLabel={(record) => str(record, 'title') || 'Untitled opportunity'}
-    caption="Opportunities"
-    stickyHeader
-    hoverable
-    dense
-    cell={opportunityCell}
-  />
-  {:else}
-    <section aria-label="Opportunities" aria-busy={loading || refreshing}>
+  <section aria-label="Opportunities" aria-busy={loading || refreshing}>
       {@render tableToolbar()}
       {#if error}
         <div role="alert">{error instanceof Error ? error.message : error}
@@ -1082,33 +863,34 @@ const resultCountLabel = $derived.by(() => {
           disabled={visibleRecords.length === 0 || loading} onchange={togglePageSelection} />
         Select this page
       </label>
-      <CollectionList
-        items={visibleRecords} itemKey="id" title="title"
-        layout={opportunityView === 'columns' ? 'grid' : 'list'}
-        selectable selected={tableSelected} onselectionchange={handleSelectionChange}
-        {loading} item={collectionOpportunity}
-      />
+      {#if visibleRecords.length > 0 || !error}
+        <CollectionList
+          items={visibleRecords} itemKey="id" title="title"
+          layout="list"
+          selectable selected={collectionSelected} onselectionchange={handleSelectionChange}
+          {loading} item={collectionOpportunity}
+        />
+      {/if}
       <Pagination currentPage={pagination.page} totalPages={pagination.totalPages}
         onPageChange={navigateToPage} aria-label="Opportunity pages" />
-    </section>
-  {/if}
+  </section>
 
   {#snippet collectionOpportunity({ item: record }: { item: AdminRecord; index: number; selected: boolean })}
-    <div class="collection-opportunity">
+    <article class="collection-opportunity" class:dock-selected={record.id === dockSelectedId} class:dock-selected--muted={record.id === dockSelectedId && bulkSelectionCount > 0}>
       <button type="button" class="collection-review" onclick={() => handleRowClick(record)}
         aria-label={`Review ${str(record, 'title') || 'Untitled opportunity'}`}>
         <strong>{str(record, 'title') || 'Untitled opportunity'}</strong>
         <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
         <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
         <span class="eligibility-label">{eligibilityLabel(record)}</span>
-        <span title={questionScreeningTooltip(record)}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        <span title={currentQuestionScreeningRank(record).enabled ? questionScreeningTooltip(record) : hasUnavailableCompleteOpportunityReview(record) ? 'Saved complete review could not be validated for current material.' : getCurrentCompleteOpportunityReview(record.resumeFitReviewProjection, record.completeReviewStatus)?.evidenceFit ? 'Current complete material review. Candidate support and source uncertainty are shown separately.' : getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
       {#if postingUrlFor(record)}
-        <a href={postingUrlFor(record)} target="_blank" rel="noreferrer">View posting</a>
+        <a href={postingUrlFor(record)} target="_blank" rel="noreferrer" aria-label="View posting">View posting</a>
       {/if}
-    </div>
+    </article>
   {/snippet}
 
   {#if drawerOpen}
@@ -1139,6 +921,36 @@ const resultCountLabel = $derived.by(() => {
       </header>
 
       <div class="drawer-body">
+        <section class="drawer-group">
+          <label>
+            <span>Review</span>
+            <select aria-label="Review filter" onchange={setReviewFilter}>
+              {#each reviewFilters as option}
+                <option value={option.value} selected={option.value === activeReviewFilter}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            <span>Sort</span>
+            <select value={filters.sort} aria-label="Sort opportunities" onchange={setSort}>
+              <option value="best">Best fit</option>
+              <option value="eligibility">Eligibility for your work location</option>
+              <option value="cited_support">Cited support</option>
+              <option value="recommendation">Recommendation</option>
+              <option value="newest">Newest</option>
+              <option value="score">AI score</option>
+              <option value="salary">Salary</option>
+              <option value="rating">My rating</option>
+            </select>
+          </label>
+          <label>
+            <span>Direction</span>
+            <select value={filters.sortDirection} aria-label="Sort direction" onchange={setSortDirection}>
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </label>
+        </section>
         <section class="drawer-group">
           <span class="field-label">Posted within</span>
           <div class="toggle-row" role="group" aria-label="Posted within">
@@ -1393,11 +1205,6 @@ const resultCountLabel = $derived.by(() => {
 </div>
 
 <style>
-  .view-selector { display: inline-flex; flex-wrap: wrap; gap: 0; }
-  .view-selector :global(.button) { border-radius: 0; min-height: 44px; }
-  .view-selector :global(.button:first-child) { border-start-start-radius: var(--smrt-radius-medium); border-end-start-radius: var(--smrt-radius-medium); }
-  .view-selector :global(.button:last-child) { border-start-end-radius: var(--smrt-radius-medium); border-end-end-radius: var(--smrt-radius-medium); }
-  .view-selector :global(.button[aria-pressed='true']) { box-shadow: inset 0 0 0 2px currentColor; }
   .page-selection { display: flex; align-items: center; gap: var(--smrt-spacing-2); min-height: 44px; }
   .page-selection input { width: 1.125rem; height: 1.125rem; }
   .collection-opportunity { display: grid; gap: var(--smrt-spacing-2); min-width: 0; }
@@ -1409,103 +1216,9 @@ const resultCountLabel = $derived.by(() => {
     gap: 14px;
   }
 
-  .list-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: end;
-    gap: 12px;
-    padding: 12px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 8px;
-    background: var(--smrt-color-surface);
-  }
-
-  .triage-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 30px;
-    padding: 0 12px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    color: var(--smrt-color-on-surface);
-    font: inherit;
-    font-weight: 800;
-    text-decoration: none;
-    cursor: pointer;
-  }
-
-  .triage-link:hover,
-  .triage-link:focus-visible {
-    border-color: var(--smrt-color-primary);
-    color: var(--smrt-color-primary);
-  }
-
-  .list-toolbar label {
-    display: grid;
-    gap: 4px;
-    font-weight: 800;
-    color: var(--smrt-color-on-surface);
-  }
-
-  .list-toolbar > label > span,
-  .review-form span {
-    color: var(--smrt-color-on-surface-variant);
-    font: 800 11px/1.2 var(--smrt-font-family-mono, monospace);
-    text-transform: uppercase;
-  }
-
-  .list-toolbar select {
-    min-height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    font: inherit;
-    color: var(--smrt-color-on-surface);
-  }
-
-  .filters-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-height: 34px;
-    padding: 0 12px;
-    border: 1px solid var(--smrt-color-outline-variant);
-    border-radius: 6px;
-    background: var(--smrt-color-surface);
-    font: inherit;
-    font-weight: 800;
-    color: var(--smrt-color-on-surface);
-    cursor: pointer;
-  }
-
-  .filters-toggle.active {
-    border-color: var(--smrt-color-primary);
-    color: var(--smrt-color-primary);
-  }
-
-  .filters-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: var(--smrt-color-primary);
-    color: var(--smrt-color-on-primary);
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  .result-count {
-    margin-left: auto;
-    align-self: center;
-    color: var(--smrt-color-on-surface-variant);
-    font-weight: 700;
-  }
+  .opportunity-header-controls { display: flex; align-items: center; gap: .25rem; }
+  .opportunity-header-controls > :global(button), .opportunity-header-controls > a { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--smrt-color-on-surface-variant); text-decoration: none; cursor: pointer; }
+  .opportunity-header-controls > :global(button):hover, .opportunity-header-controls > :global(button):focus-visible, .opportunity-header-controls > a:hover, .opportunity-header-controls > a:focus-visible, .opportunity-header-controls > :global(button).active { border-color: var(--smrt-color-outline-variant); background: var(--smrt-color-surface-container); color: var(--smrt-color-on-surface); outline: 0; }
 
   .drawer-overlay {
     position: fixed;
@@ -1773,43 +1486,11 @@ const resultCountLabel = $derived.by(() => {
     cursor: pointer;
   }
 
-  .table-opportunity {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .title-link {
-    color: var(--smrt-color-on-surface);
-    font: var(--smrt-typography-title-large-font);
-    text-decoration: none;
-    overflow-wrap: anywhere;
-    min-width: 0;
-  }
-
-  .title-link:hover {
-    color: var(--smrt-color-primary);
-    text-decoration: underline;
-  }
-
   .eligibility-label {
     flex: 0 1 auto;
     color: var(--smrt-color-on-surface-variant);
     font-size: 12px;
     overflow-wrap: anywhere;
-  }
-
-  /* Posting opens in a new tab right beside the title; the rating is pushed to
-     the far right of the title row. */
-  .posting-icon {
-    display: inline-flex;
-    flex: 0 0 auto;
-    color: var(--smrt-color-primary);
-  }
-
-  .posting-icon:hover {
-    color: var(--smrt-color-on-surface);
   }
 
   .table-meta {
@@ -1820,29 +1501,13 @@ const resultCountLabel = $derived.by(() => {
     font-size: 13px;
   }
 
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
-    border: 1px solid currentColor;
-    border-radius: 999px;
-    background: color-mix(in srgb, currentColor 9%, var(--smrt-color-surface));
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: capitalize;
-    white-space: nowrap;
-  }
-
-  .tone-positive { color: var(--smrt-color-on-success-container); }
-  .tone-amber { color: var(--smrt-color-on-warning-container); }
-  .tone-negative { color: var(--smrt-color-on-error-container); }
-  .tone-neutral { color: var(--smrt-color-on-surface-variant); }
-
-  /* Dock-selected row (mirrors the legacy `tr.selected td` convention). */
-  .card-list-wrap :global(tr.data-table__row.dock-selected > td) {
+  .collection-opportunity.dock-selected {
     background: var(--smrt-color-warning-container);
     box-shadow: inset 3px 0 0 var(--smrt-color-warning);
+  }
+
+  .collection-opportunity.dock-selected--muted {
+    box-shadow: inset 3px 0 0 var(--smrt-color-outline);
   }
 
   /* Bulk toolbar: selection summary on the left, review controls on the right. */
@@ -1893,17 +1558,6 @@ const resultCountLabel = $derived.by(() => {
     flex: 1 1 auto;
     justify-content: flex-end;
     min-width: 0;
-  }
-
-  /* De-emphasised focus bar while a bulk selection is active. */
-  .card-list-wrap :global(tr.data-table__row.dock-selected.dock-selected--muted > td) {
-    background: color-mix(
-      in srgb,
-      var(--smrt-color-warning-container) 35%,
-      var(--smrt-color-surface)
-    );
-    box-shadow: inset 3px 0 0
-      color-mix(in srgb, var(--smrt-color-warning) 45%, transparent);
   }
 
 </style>

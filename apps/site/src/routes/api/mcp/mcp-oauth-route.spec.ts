@@ -1,7 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('./tools/+server', () => ({ GET: vi.fn() }));
+
+vi.mock('$lib/server/local-oauth', () => ({
+  getLocalOAuth: () => mocks.localOAuth(),
+  oauthFailure: () => new Response(null, { status: 401 }),
+}));
+vi.mock('$lib/server/workspace-subject', () => ({
+  verifyWorkspaceSubject: async (locals: Record<string, unknown>) => {
+    locals.permissions = [
+      'workflow.application.inspect',
+      'workflow.application.prepare',
+    ];
+    return { userId: 'user', tenantId: 'tenant' };
+  },
+}));
+vi.mock('@happyvertical/smrt-users', () => ({
+  withPrincipalPermissionContext: async (
+    _options: unknown,
+    execute: () => Promise<unknown>,
+  ) => execute(),
+}));
+vi.mock('$lib/server/db', () => ({ getSmrtOptions: () => ({}) }));
+
 const mocks = vi.hoisted(() => ({
   canonicalPost: vi.fn(),
+  localOAuth: vi.fn(async (): Promise<unknown> => null),
   resourceAuth: vi.fn(),
   withMcpOauthContext: vi.fn(),
 }));
@@ -34,6 +58,7 @@ function event(request: Request) {
 
 describe('canonical MCP OAuth boundary', () => {
   beforeEach(() => {
+    mocks.localOAuth.mockReset().mockResolvedValue(null);
     mocks.canonicalPost.mockReset();
     mocks.resourceAuth.mockReset();
     mocks.withMcpOauthContext.mockReset();
@@ -111,6 +136,88 @@ describe('canonical MCP OAuth boundary', () => {
       authenticated.principal,
       mocks.canonicalPost,
     );
+    expect(mocks.canonicalPost).not.toHaveBeenCalled();
+  });
+});
+
+describe('local issuer MCP authority', () => {
+  const token = `${Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'at+jwt' })).toString('base64url')}.e30.signature`;
+  it.each([
+    'GET',
+    'POST',
+  ] as const)('rejects a JWT on %s when no verifier is configured', async (method) => {
+    mocks.localOAuth.mockResolvedValue(null);
+    mocks.resourceAuth.mockReturnValue(null);
+    mocks.canonicalPost.mockClear();
+    const route = await import('./+server');
+    expect(
+      (
+        await route[method](
+          event(
+            new Request('https://jobs.example.com/api/mcp', {
+              method,
+              headers: { authorization: `Bearer ${token}` },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(401);
+    expect(mocks.canonicalPost).not.toHaveBeenCalled();
+  });
+  it('re-intersects fresh permissions with live grant scopes before dispatch', async () => {
+    const validateAccessTokenClaims = vi.fn(async () => ({
+      user: { id: 'user' },
+      tenantId: 'tenant',
+      membership: {},
+      permissions: ['workflow.application.inspect'],
+    }));
+    const verifyAccessToken = vi.fn(async () => ({
+      exp: 9999999999,
+      iat: 1,
+      sub: 'user',
+      scope: 'opportunities:read',
+      client_id: 'client',
+    }));
+    mocks.localOAuth.mockResolvedValue({
+      resource: 'https://jobs.example.com/api/mcp',
+      server: { verifyAccessToken },
+      authorization: { validateAccessTokenClaims },
+    });
+    mocks.canonicalPost.mockClear().mockResolvedValue(new Response('local'));
+    const { POST } = await import('./+server');
+    expect(
+      (
+        await POST(
+          event(
+            new Request('https://jobs.example.com/api/mcp', {
+              method: 'POST',
+              headers: { authorization: `Bearer ${token}` },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    expect(verifyAccessToken).toHaveBeenCalledWith(
+      token,
+      'https://jobs.example.com/api/mcp',
+    );
+    expect(mocks.canonicalPost.mock.calls[0][0].locals.permissions).toEqual([
+      'workflow.application.inspect',
+    ]);
+    validateAccessTokenClaims.mockResolvedValueOnce(null as never);
+    mocks.canonicalPost.mockClear();
+    expect(
+      (
+        await POST(
+          event(
+            new Request('https://jobs.example.com/api/mcp', {
+              method: 'POST',
+              headers: { authorization: `Bearer ${token}` },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(401);
     expect(mocks.canonicalPost).not.toHaveBeenCalled();
   });
 });

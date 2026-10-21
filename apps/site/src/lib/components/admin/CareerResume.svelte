@@ -11,6 +11,30 @@ import type {
 } from '$lib/server/career-management';
 
 let { data }: { data: CareerManagementData } = $props();
+const tabs = [
+  { id: 'details', label: 'Details', groups: ['summary', 'education'] },
+  { id: 'experience', label: 'Experience', groups: ['experience', 'other'] },
+  { id: 'skills', label: 'Skills', groups: ['skills'] },
+] as const;
+let selectedTab = $state('details');
+async function selectTab(id: string) {
+  if (id === selectedTab) return;
+  if (active && !(await closeEditor())) return;
+  selectedTab = id;
+  await tick();
+  document.getElementById(`resume-tab-${id}`)?.focus();
+}
+function tabKey(event: KeyboardEvent, index: number) {
+  let next: number;
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+  else if (event.key === 'ArrowLeft')
+    next = (index + tabs.length - 1) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  void selectTab(tabs[next].id);
+}
 let active = $state<string | null>(null);
 let draft = $state<Record<string, string>>({});
 let baseline = $state('');
@@ -45,8 +69,21 @@ const entries = $derived(
   ),
 );
 const keyFor = (entry: Entry) => entry.section.key + ':' + entry.record.id;
+const groupFor = (entry: Entry) =>
+  sections.find((group) => group.keys.includes(entry.section.key))?.id ||
+  'summary';
 const visible = (entry: Entry, group: string) =>
   entry.record.presentation?.inResume !== false || showHidden[group];
+function groupedDuties(entries: Entry[]) {
+  const groups: Array<{ title: string; entries: Entry[] }> = [];
+  for (const entry of entries) {
+    const title = entry.record.presentation?.dutySectionTitle ?? '';
+    const previous = groups.at(-1);
+    if (previous?.title === title) previous.entries.push(entry);
+    else groups.push({ title, entries: [entry] });
+  }
+  return groups;
+}
 function restoreFocus() {
   const currentTrigger = document.getElementById(triggerId);
   if (currentTrigger) currentTrigger.focus();
@@ -80,9 +117,7 @@ async function openEditor(entry: Entry, event: MouseEvent) {
   if (!mayLeave()) return;
   trigger = event.currentTarget as HTMLButtonElement;
   triggerId = trigger.id;
-  activeGroup =
-    sections.find((group) => group.keys.includes(entry.section.key))?.id ||
-    'summary';
+  activeGroup = groupFor(entry);
   active = keyFor(entry);
   draft = { ...entry.record.values };
   baseline = JSON.stringify(draft);
@@ -166,6 +201,45 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
     }
   };
 };
+const visibilitySubmit: SubmitFunction = ({ cancel }) => {
+  if (saving) {
+    cancel();
+    return;
+  }
+  if (active && !mayLeave()) {
+    cancel();
+    return;
+  }
+  active = null;
+  draft = {};
+  baseline = '';
+  saving = true;
+  localError = '';
+  notice = '';
+  return async ({ result, update }) => {
+    try {
+      if (result.type === 'success' && result.data?.ok === true) {
+        await update({ reset: false });
+        notice =
+          typeof result.data.message === 'string'
+            ? result.data.message
+            : 'Resume visibility updated.';
+      } else {
+        localError =
+          result.type === 'failure' && typeof result.data?.error === 'string'
+            ? result.data.error
+            : 'Could not update resume visibility. Please try again.';
+      }
+    } catch {
+      localError = 'Could not update resume visibility. Please try again.';
+    } finally {
+      saving = false;
+      await tick();
+      if (!localError)
+        document.getElementById(`resume-hidden-${activeGroup}`)?.focus();
+    }
+  };
+};
 </script>
 
 <svelte:window onbeforeunload={beforeUnload} />
@@ -190,6 +264,23 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
   {/if}
 {/snippet}
 
+{#snippet recordActions(entry: Entry)}
+  {@const presentation = entry.record.presentation}
+  {@const manuallyExcluded = presentation?.manuallyExcluded === true}
+  {@const visibilityLabel = entry.section.key === 'profile'
+    ? manuallyExcluded ? 'Show summary on resume' : 'Hide summary from resume'
+    : manuallyExcluded ? 'Show on resume' : 'Hide from resume'}
+  <div class="record-actions">
+    <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-action" type="button" aria-label={'Edit ' + (presentation?.title || entry.section.label)} title={'Edit ' + (presentation?.title || entry.section.label)} onclick={(event) => openEditor(entry, event)} disabled={saving}><Pencil size={18} aria-hidden="true" /></button>
+    <form method="POST" action="?/visibility" use:enhance={visibilitySubmit}>
+      <input type="hidden" name="section" value={entry.section.key} />
+      <input type="hidden" name="id" value={entry.record.id} />
+      <input type="hidden" name="visibility" value={manuallyExcluded ? 'visible' : 'hidden'} />
+      <button class="record-action" type="submit" aria-label={visibilityLabel} title={visibilityLabel} onclick={() => { activeGroup = groupFor(entry); }} disabled={saving}>{#if manuallyExcluded}<Eye size={18} aria-hidden="true" />{:else}<EyeOff size={18} aria-hidden="true" />{/if}</button>
+    </form>
+  </div>
+{/snippet}
+
 {#snippet row(entry: Entry, child = false)}
   {@const presentation = entry.record.presentation}
   <div class:record-card={!child} class:related-row={child} class:editing={active === keyFor(entry)}>
@@ -197,24 +288,49 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
       <div class="edit-heading"><strong>{presentation?.title || entry.section.label}</strong>{#if presentation?.context}<span class="context">{presentation.context}</span>{/if}</div>
       {@render editor(entry)}
     {:else}
-    <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-trigger" type="button" aria-expanded="false" onclick={(event) => openEditor(entry, event)} disabled={saving}>
+    <div class="record-summary">
       <span class="record-copy"><strong>{presentation?.title || 'Record details unavailable'}</strong>
         {#if presentation?.context}<span class="context">{presentation.context}</span>{/if}
         <span class="preview">{presentation?.preview || (entry.section.key === 'profile' ? 'Add a summary' : 'Add details')}</span>
         {#if presentation?.inResume === false}<span class="membership"><EyeOff size={14} /> Hidden from canonical resume</span>
         {:else if presentation?.inResume === null || !presentation}<span class="membership">Canonical details unavailable</span>{/if}
-      </span><Pencil size={18} aria-hidden="true" />
-    </button>
+      </span>
+      {@render recordActions(entry)}
+    </div>
     {#if presentation?.hiddenReason}<p class="reason">{presentation.hiddenReason}</p>{/if}
+    {/if}
+    {#if entry.section.key === 'skillGroups' && presentation?.evidence?.length}
+      <details class="skill-evidence"><summary>Evidence from roles ({presentation.evidence.length})</summary>
+        {#each presentation.evidence as evidence}<article><strong>{[evidence.role, evidence.company].filter(Boolean).join(' — ') || 'Role context unavailable'}</strong><span>{evidence.depth.replace('_', ' ')} · Page {evidence.page}</span><p>{evidence.usage}</p><blockquote>{evidence.quote}</blockquote>{#if evidence.startDate || evidence.endDate}<p>Explicit usage dates: {[evidence.startDate, evidence.endDate].filter(Boolean).join(' – ')}</p>{/if}{#if evidence.roleStartDate || evidence.roleEndDate}<p>Role context: {[evidence.roleStartDate, evidence.roleEndDate].filter(Boolean).join(' – ')}</p>{/if}</article>{/each}
+      </details>
     {/if}
   </div>
 {/snippet}
 
+{#snippet dutyGroups(entries: Entry[])}
+  {#each groupedDuties(entries) as group, groupIndex (groupIndex + ':' + group.entries.map(keyFor).join(':'))}
+    <section class="duty-section">
+      {#if group.title}<h3>{group.title}</h3>{/if}
+      {#each group.entries as duty (keyFor(duty))}
+        {#if active === keyFor(duty)}
+          <div class="duty-editor"><strong>{group.title || 'Responsibility'}</strong>{@render editor(duty)}</div>
+        {:else}
+          <div class="duty-row"><p>{duty.record.presentation?.preview || 'Add responsibility details'}</p>{@render recordActions(duty)}</div>
+        {/if}
+      {/each}
+    </section>
+  {/each}
+{/snippet}
+
 <div class="resume-manager">
-  <header><div><h1>Resume</h1><p>Your resume content</p></div><a href="/admin/resume">Preview &amp; PDFs</a></header>
+  <div class="resume-tabs" role="tablist" aria-label="Resume sections">
+    {#each tabs as tab, index}<button type="button" role="tab" id={`resume-tab-${tab.id}`} aria-selected={selectedTab === tab.id} aria-controls={`resume-panel-${tab.id}`} tabindex={selectedTab === tab.id ? 0 : -1} disabled={saving} onclick={() => selectTab(tab.id)} onkeydown={(event) => tabKey(event, index)}>{tab.label}</button>{/each}
+  </div>
+  <div role="tabpanel" id={`resume-panel-${selectedTab}`} aria-labelledby={`resume-tab-${selectedTab}`}>
   <p class="feedback" role="status" aria-live="polite">{notice}</p>
+  {#if localError && !active}<p class="error" role="alert">{localError}</p>{/if}
   {#if !data.loadedComplete}<p class="load-notice">Only part of the available data is loaded. Counts describe loaded entries; unavailable entries are not classified as hidden. Open detailed records to see more.</p>{/if}
-  {#each sections as group (group.id)}
+  {#each sections.filter(group => tabs.find(tab => tab.id === selectedTab)?.groups.some(id => id === group.id)) as group (group.id)}
     {@const groupEntries = entries.filter((entry) => group.keys.includes(entry.section.key))}
     {@const hiddenCount = groupEntries.filter((entry) => entry.record.presentation?.inResume === false).length + (group.id === 'skills' ? data.skillExclusions.length : 0)}
     {@const resumeCount = groupEntries.filter((entry) => entry.record.presentation?.inResume === true).length}
@@ -230,13 +346,25 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
           {#if entry.section.key === 'experiences'}
             {@const children = groupEntries.filter((child) => child.record.presentation?.parentExperienceId === entry.record.id)}
             {@const shownChildren = children.filter((child) => visible(child, group.id))}
+            {@const projects = shownChildren.filter((child) => child.section.key === 'projects')}
+            {@const roleDuties = shownChildren.filter((child) => child.section.key === 'duties' && !child.record.presentation?.parentProjectId)}
+            {@const roleChildren = shownChildren.filter((child) => child.section.key !== 'projects' && child.section.key !== 'duties' && !child.record.presentation?.parentProjectId)}
             {#if children.length}
               <div class="related">
                 <button id={'resume-children-' + entry.record.id} class="children-toggle" type="button" aria-expanded={Boolean(expandedChildren[entry.record.id])} aria-controls={expandedChildren[entry.record.id] ? 'resume-related-' + entry.record.id : undefined} onclick={() => toggleChildren(entry.record.id)} disabled={saving}>
                   {#if expandedChildren[entry.record.id]}<ChevronUp size={18} />{:else}<ChevronDown size={18} />{/if}
                   {children.filter((child) => child.section.key === 'projects').length} projects · {children.filter((child) => child.section.key !== 'projects').length} bullets{#if children.some((child) => child.record.presentation?.inResume === false)} · {children.filter((child) => child.record.presentation?.inResume === false).length} hidden{/if}
                 </button>
-                {#if expandedChildren[entry.record.id]}<div id={'resume-related-' + entry.record.id}>{#each shownChildren as child (keyFor(child))}{@render row(child, true)}{:else}<p>No related entries on your resume. Show hidden to review excluded entries.</p>{/each}</div>{/if}
+                {#if expandedChildren[entry.record.id]}<div id={'resume-related-' + entry.record.id}>
+                  {@render dutyGroups(roleDuties)}
+                  {#each projects as project (keyFor(project))}
+                    {@render row(project, true)}
+                    {@const projectChildren = shownChildren.filter((child) => child.record.presentation?.parentProjectId === project.record.id)}
+                    {#if projectChildren.length}<div class="project-children">{@render dutyGroups(projectChildren.filter((child) => child.section.key === 'duties'))}{#each projectChildren.filter((child) => child.section.key !== 'duties') as child (keyFor(child))}{@render row(child, true)}{/each}</div>{/if}
+                  {/each}
+                  {#each roleChildren as child (keyFor(child))}{@render row(child, true)}{/each}
+                  {#if !shownChildren.length}<p>No related entries on your resume. Show hidden to review excluded entries.</p>{/if}
+                </div>{/if}
               </div>
             {/if}
           {/if}
@@ -248,25 +376,34 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
       <div class="manage-links">{#each data.sections.filter((section) => group.keys.includes(section.key)) as section (section.key)}<a href={section.href}>Manage {section.label.toLowerCase()}</a>{/each}{#if group.id === 'skills'}<a href="/admin/skills">Manage skills and memberships</a>{/if}</div>
     </section>
   {/each}
+  </div>
 </div>
 
 <style>
+.resume-tabs { display:flex; gap:.25rem; border-bottom:1px solid var(--border-strong); }
+.resume-tabs button { padding:.8rem 1.2rem; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--ink-3); font:inherit; cursor:pointer; }
+.resume-tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); font-weight:700; }
+.resume-tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+[role="tabpanel"] { display:grid; gap:1rem; }
+
   .resume-manager { width: 100%; min-width: 0; max-width: 65rem; color: var(--smrt-color-on-surface); }
-  header, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  h1, h2, p { margin: 0; } h1 { font-size: 2rem; } h2 { font-size: 1.25rem; }
+  .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  h2, p { margin: 0; } h2 { font-size: 1.25rem; }
   p, .context, .preview { line-height: 1.5; overflow-wrap: anywhere; color: var(--smrt-color-on-surface-variant); }
   a { display: inline-flex; align-items: center; min-height: 44px; color: var(--smrt-color-primary); overflow-wrap: anywhere; }
   section { margin-block: 1.5rem 2rem; } .section-heading { margin-bottom: .75rem; } .counts { margin-top: .25rem; font-size: .85rem; }
   .records { display: grid; gap: .75rem; } .record-card { border-radius: var(--smrt-radius-large, .75rem); background: var(--smrt-color-surface-container-low, var(--smrt-color-surface-container)); min-width: 0; }
   button { font: inherit; cursor: pointer; min-height: 44px; color: var(--smrt-color-on-surface); background: transparent; border: 0; }
-  button:disabled { cursor: wait; opacity: .65; } .record-trigger { display: flex; align-items: center; justify-content: space-between; text-align: left; gap: .75rem; width: 100%; padding: 1rem; }
-  .record-trigger > :global(svg) { flex: 0 0 auto; color: var(--smrt-color-primary); }
+  button:disabled { cursor: wait; opacity: .65; } .record-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; width: 100%; padding: 1rem; box-sizing: border-box; }
+  .record-actions { display: flex; flex: 0 0 auto; gap: .25rem; } .record-actions form { padding: 0; display: block; } .record-action { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: .5rem; color: var(--smrt-color-on-surface-variant); border-radius: var(--smrt-radius-medium, .5rem); }
   .record-copy { display: grid; gap: .3rem; min-width: 0; } .record-copy strong, .preview, .context { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   .edit-heading { display: grid; gap: .3rem; padding: 1rem; overflow-wrap: anywhere; }
   .context { font-size: .85rem; } .preview { font-size: .95rem; } .membership { display: flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--smrt-color-on-surface-variant); }
   .hidden-toggle { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-width: 44px; padding: .5rem; border-radius: var(--smrt-radius-medium, .5rem); }
   .related { padding: 0 .5rem; margin-top: -.5rem; } .children-toggle { display: flex; align-items: center; gap: .5rem; padding: .5rem; text-align: left; }
-  .related-row { border-bottom: 1px solid var(--smrt-color-outline-variant); min-width: 0; } .related-row .record-trigger { padding: .75rem .5rem; } .readonly { padding: .75rem .5rem; }
+  .related-row { border-bottom: 1px solid var(--smrt-color-outline-variant); min-width: 0; } .related-row .record-summary { padding: .75rem .5rem; } .readonly { padding: .75rem .5rem; }
+  .duty-section { display: grid; gap: .35rem; padding: .75rem .5rem; border-bottom: 1px solid var(--smrt-color-outline-variant); } .duty-section h3 { margin: 0; font-size: 1rem; } .duty-row { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; } .duty-row p { flex: 1; } .duty-editor { display: grid; gap: .35rem; } .project-children { margin-left: .75rem; border-inline-start: 2px solid var(--smrt-color-outline-variant); }
+  .skill-evidence { display: grid; gap: .6rem; padding: 0 1rem 1rem; } .skill-evidence summary { cursor: pointer; } .skill-evidence article { display: grid; gap: .3rem; padding: .65rem; border-inline-start: 3px solid var(--smrt-color-outline-variant); } .skill-evidence article p, .skill-evidence article blockquote { margin: 0; } .skill-evidence article span { color: var(--smrt-color-on-surface-variant); font-size: .85rem; }
   .manage-links { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .85rem; margin-top: .5rem; }
   .reason { font-size: .85rem; padding: 0 1rem .75rem; } .feedback { min-height: 1.5rem; margin-top: .75rem; color: var(--smrt-color-primary); } .load-notice { padding: .75rem 0; }
   form { padding: 0 1rem 1rem; display: grid; gap: .5rem; } label { margin-top: .5rem; font-size: .9rem; }
@@ -274,5 +411,5 @@ const submit: SubmitFunction = ({ cancel, formElement }) => {
   textarea { resize: vertical; } .editor-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .5rem; } .editor-actions button { padding: .65rem 1.25rem; border-radius: var(--smrt-radius-medium, .5rem); }
   .save { background: var(--smrt-color-primary); color: var(--smrt-color-on-primary); } .error { color: var(--smrt-color-error); } .empty { padding: 1rem 0; }
   :is(a, button, input, textarea):focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 3px; }
-  @media (max-width: 600px) { header { align-items: flex-start; flex-wrap: wrap; gap: .25rem; } section { margin-block: 1.25rem 1.5rem; } h1 { font-size: 1.75rem; } .related { padding-inline: .25rem; } }
+  @media (max-width: 600px) { section { margin-block: 1.25rem 1.5rem; } .related { padding-inline: .25rem; } }
 </style>

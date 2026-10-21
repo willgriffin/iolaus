@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AUTO_SUBMIT_APPLICATION_QUEUE } from '../src/lib/server/auto-submit-application-job-schema.js';
+import { RESUME_IMPORT_INGESTION_QUEUE } from '../src/lib/server/resume-import-job-schema.js';
 import {
   OPPORTUNITY_INTELLIGENCE_QUEUE,
 } from '../src/lib/server/opportunity-intelligence-job-schema.js';
@@ -11,8 +12,10 @@ describe('deployed TaskRunner entrypoint', () => {
       expect.arrayContaining([
         'source-crawls',
         'agents',
+        'opportunity-analysis',
         OPPORTUNITY_INTELLIGENCE_QUEUE,
         AUTO_SUBMIT_APPLICATION_QUEUE,
+        RESUME_IMPORT_INGESTION_QUEUE,
       ]),
     );
   });

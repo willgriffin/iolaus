@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { FilesystemInterface } from '@happyvertical/files';
+import type { DatabaseInterface } from '@happyvertical/sql';
 import { type AppConfigEnvironment, isSharedHosted } from './app-config.js';
+import {
+  purgeTombstonedPublicProfileRevisions,
+  tombstonePublicProfile,
+} from './public-profile-store.js';
+import { withResumeImportAccountFence } from './resume-import-account-fence.js';
+import { shortlistOwnerLockKey } from './shortlist-store.js';
+import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
 
 /**
@@ -59,6 +67,11 @@ export interface AccountDeletionDependencies {
   environment?: AppConfigEnvironment;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
   initiatedBy?: AccountDeletionInitiator;
+  /** Revoke private ingestion receipts and sweep retained source-asset locators. */
+  purgeResumeImports?: (
+    database: AccountDeletionDatabase,
+    scope: AccountDeletionScope,
+  ) => Promise<number>;
   /** Test seam: invoked after a phase completes, to inject a crash. */
   afterPhase?: (phase: 'files' | 'lock' | 'record') => Promise<void> | void;
   randomId?: () => string;
@@ -129,6 +142,9 @@ export const accountOwnedTables: readonly string[] = [
     // Tenant-scoped, owner-keyed records outside the ownership manifest.
     'opportunity_recommendation_ranks',
     'admin_assistant_turns',
+    // Account-wide shortlist data does not require a candidate profile.
+    'shortlist_entries',
+    'shortlist_mutation_receipts',
     // Operator cap override for this user; the spend ledger is anonymized.
     'ai_user_budgets',
   ]),
@@ -151,6 +167,7 @@ export const accountTenantTables: readonly string[] = [
 const LEDGER_TABLE = 'ai_user_spend_entries';
 const LEDGER_TENANT_TOMBSTONE = 'deleted';
 const FILE_PREFIXES = ['generated-resumes', 'application-packages'] as const;
+const PUBLIC_PROFILE_FILE_PREFIX = 'public-profiles';
 
 function rowsOf(result: QueryResult): Array<Record<string, unknown>> {
   return Array.isArray(result) ? result : (result.rows ?? []);
@@ -274,6 +291,15 @@ function safeRelativePath(path: string): string | null {
   return trimmed;
 }
 
+function safePublicProfilePath(
+  path: string,
+  identityId: string,
+): string | null {
+  const safe = safeRelativePath(path);
+  const prefix = `${PUBLIC_PROFILE_FILE_PREFIX}/${identityId}/`;
+  return safe?.startsWith(prefix) ? safe : null;
+}
+
 /**
  * Files recorded in this user's own rows that sit under a prefix derived from
  * one of this user's own record ids. The published/current resume, the legacy
@@ -381,7 +407,6 @@ export async function deleteAccount(
   scope: AccountDeletionScope,
   dependencies: AccountDeletionDependencies,
 ): Promise<AccountDeletionResult> {
-  const { database, dialect } = dependencies;
   if (
     accountDeletionMode(dependencies.environment ?? process.env) !== 'enabled'
   ) {
@@ -392,6 +417,29 @@ export async function deleteAccount(
   }
   const tenantId = identifier(scope?.tenantId, 'tenant ID');
   const userId = identifier(scope?.userId, 'user ID');
+  scope = { tenantId, userId };
+  // SQLite only permits one writer; share the shortlist's cross-process lock
+  // across all deletion phases so a held write cannot poison another connection
+  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
+  return await withResumeImportAccountFence(
+    dependencies.database as DatabaseInterface,
+    scope,
+    async () =>
+      dependencies.dialect === 'sqlite'
+        ? await withSqliteOperationLock(
+            `shortlist:${shortlistOwnerLockKey(scope)}`,
+            () => deleteAccountLocked(scope, dependencies),
+          )
+        : await deleteAccountLocked(scope, dependencies),
+  );
+}
+
+async function deleteAccountLocked(
+  scope: AccountDeletionScope,
+  dependencies: AccountDeletionDependencies,
+): Promise<AccountDeletionResult> {
+  const { database, dialect } = dependencies;
+  const { tenantId, userId } = scope;
   const target = { tenantId, userId };
   if (typeof database.transaction !== 'function') {
     throw new AccountDeletionError(
@@ -462,6 +510,55 @@ export async function deleteAccount(
   }
   await dependencies.afterPhase?.('record');
 
+  // Ingestion preserves bytes outside the ordinary resume filesystem. Revoke
+  // receipts and remove their private assets while this account still has an
+  // active owner identity; failures leave the durable deletion record started
+  // so a retry resumes safely instead of silently retaining source evidence.
+  const resumeImports = await (
+    dependencies.purgeResumeImports ??
+    (async (database, accountScope) => {
+      const { purgeResumeImportAccountData } = await import(
+        './resume-import-runtime.js'
+      );
+      return await purgeResumeImportAccountData(
+        database as unknown as DatabaseInterface,
+        accountScope,
+      );
+    })
+  )(database, target);
+
+  // Tombstone before the account is disabled or any artifacts are removed. The
+  // store takes the same native lock used by prepare/publish, captures every
+  // revision path under that lock, clears the pointer, and keeps the handle
+  // reservation. On installations predating public profiles both tables are
+  // absent, so this remains a no-op.
+  let publicProfilePaths: string[] = [];
+  const publicIdentityColumns = await probe.columns(
+    'public_profile_identities',
+  );
+  const publicRevisionColumns = await probe.columns('public_profile_revisions');
+  if (publicIdentityColumns || publicRevisionColumns) {
+    if (!publicIdentityColumns || !publicRevisionColumns) {
+      throw new AccountDeletionError(
+        'schema',
+        'Public-profile tables are incomplete; run db:migrate and retry.',
+      );
+    }
+    const tombstoned = await tombstonePublicProfile(database as never, target);
+    if (tombstoned) {
+      const invalid = tombstoned.artifactPaths.find(
+        (path) => !safePublicProfilePath(path, tombstoned.identity.id),
+      );
+      if (invalid) {
+        throw new AccountDeletionError(
+          'schema',
+          'Public-profile artifact manifest contains an invalid path; account rows were not removed.',
+        );
+      }
+      publicProfilePaths = [...new Set(tombstoned.artifactPaths)].sort();
+    }
+  }
+
   // Phase 1: make the account unusable before touching any data.
   const summary: Record<string, number> = {};
   const count = (
@@ -471,6 +568,7 @@ export async function deleteAccount(
   ) => {
     if (value > 0) counts[key] = (counts[key] ?? 0) + value;
   };
+  count(summary, 'resume_import_receipts', resumeImports);
   if (email) {
     count(
       summary,
@@ -538,7 +636,10 @@ export async function deleteAccount(
   // Phase 2: files. The rows that name them still exist, so a failure here is
   // retried from the same manifest.
   if (dependencies.filesystem) {
-    const paths = await collectOwnedFilePaths(database, probe, target);
+    const paths = [
+      ...(await collectOwnedFilePaths(database, probe, target)),
+      ...publicProfilePaths,
+    ];
     const failures: string[] = [];
     let removed = 0;
     for (const path of paths) {
@@ -560,6 +661,17 @@ export async function deleteAccount(
     count(summary, 'files', removed);
   }
   await dependencies.afterPhase?.('files');
+
+  // Revision rows are the publication snapshot and file manifest. Remove them
+  // only after every captured private object is gone; the retained identity is
+  // the handle reservation that prevents a deleted handle being reused.
+  if (publicIdentityColumns && publicRevisionColumns) {
+    count(
+      summary,
+      'public_profile_revisions',
+      await purgeTombstonedPublicProfileRevisions(database as never, target),
+    );
+  }
 
   // Phase 3: every row, plus the audit record, in one transaction. Schemas are
   // probed first so the transaction never waits on a second connection.

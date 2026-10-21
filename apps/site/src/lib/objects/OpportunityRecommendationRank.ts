@@ -88,9 +88,9 @@ export class OpportunityRecommendationRank extends SmrtObject {
   @field({ type: 'text', sensitive: true })
   questionSetFingerprint = '';
   /** Exact normalized raw opportunity requirements used by the query fence. */
-  @field({ type: 'text', required: true, default: '', sensitive: true })
+  @field({ type: 'text', default: '', sensitive: true })
   requiredSkillsSnapshot = '';
-  @field({ type: 'text', required: true, default: '', sensitive: true })
+  @field({ type: 'text', default: '', sensitive: true })
   preferredSkillsSnapshot = '';
   @field({ type: 'text' })
   contractVersion = '';

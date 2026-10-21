@@ -3,13 +3,14 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const navigation = vi.hoisted(() => ({ goto: vi.fn(async () => {}) }));
+const page = vi.hoisted(() => ({
+  url: new URL(
+    'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
+  ),
+}));
 vi.mock('$app/navigation', () => navigation);
 vi.mock('$app/state', () => ({
-  page: {
-    url: new URL(
-      'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
-    ),
-  },
+  page,
 }));
 vi.mock('../admin/admin-resource-hydration', () => ({
   ADMIN_RESOURCE_REFRESH_EVENT: 'iolaus:admin-resource-refresh',
@@ -57,6 +58,9 @@ beforeEach(() => {
     value: storage,
   });
   navigation.goto.mockClear();
+  page.url = new URL(
+    'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust',
+  );
 });
 afterEach(() => {
   cleanup?.();
@@ -101,72 +105,14 @@ function setup() {
     },
   };
 }
-const KEY = 'iolaus.admin.opportunities.view.v1';
-describe('Opportunity list view interaction', () => {
-  it('defaults to Table and switches the same page through List, Columns, Table without a query', () => {
+describe('Opportunity card list interaction', () => {
+  it('uses one card collection and preserves off-page IDs during select-all', () => {
     const view = setup();
-    expect(view.button('Table').getAttribute('aria-pressed')).toBe('true');
-    for (const label of ['List', 'Columns', 'Table']) {
-      view.switchTo(label);
-      expect(view.target.textContent).toContain('Staff engineer');
-      expect(view.target.textContent).toContain('Platform lead');
-      expect(view.target.querySelectorAll('[aria-pressed=true]')).toHaveLength(
-        1,
-      );
-      expect(view.button(label).getAttribute('aria-pressed')).toBe('true');
-      if (label === 'Table')
-        expect(view.target.querySelector('table')).not.toBeNull();
-      else
-        expect(
-          view.target.querySelector(
-            label === 'Columns' ? '.collection--grid' : '.collection--list',
-          ),
-        ).not.toBeNull();
-      view.switchTo(label);
-      expect(view.button(label).getAttribute('aria-pressed')).toBe('true');
-    }
-    expect(navigation.goto).not.toHaveBeenCalled();
-  });
-  it('restores a persisted view and rejects an invalid preference', () => {
-    window.localStorage.setItem(KEY, 'columns');
-    let view = setup();
-    expect(view.button('Columns').getAttribute('aria-pressed')).toBe('true');
-    view.switchTo('List');
-    expect(window.localStorage.getItem(KEY)).toBe('list');
-    cleanup?.();
-    document.body.replaceChildren();
-    view = setup();
-    expect(view.button('List').getAttribute('aria-pressed')).toBe('true');
-    cleanup?.();
-    document.body.replaceChildren();
-    window.localStorage.setItem(KEY, 'kanban');
-    view = setup();
-    expect(view.button('Table').getAttribute('aria-pressed')).toBe('true');
-  });
-  it('switches when browser storage is unavailable', () => {
-    vi.spyOn(storage, 'getItem').mockImplementation(() => {
-      throw new Error('denied');
-    });
-    vi.spyOn(storage, 'setItem').mockImplementation(() => {
-      throw new Error('denied');
-    });
-    const view = setup();
-    view.switchTo('Columns');
-    expect(view.button('Columns').getAttribute('aria-pressed')).toBe('true');
-  });
-  it('shares native row selection across modes and preserves off-page IDs during select-all', () => {
-    const view = setup();
-    view.switchTo('List');
+    expect(view.target.querySelector('table')).toBeNull();
+    expect(view.target.querySelector('.collection--list')).not.toBeNull();
     view.check('Select Staff engineer');
     expect(view.selected()).toBe('opp-1');
     expect(view.target.querySelector('[role=dialog]')).toBeNull();
-    view.switchTo('Table');
-    expect(
-      view.target.querySelector<HTMLInputElement>(
-        'input[aria-label="Deselect Staff engineer"]',
-      )?.checked,
-    ).toBe(true);
-    view.switchTo('Columns');
     view.check('Select all rows on this page');
     expect(view.selected()).toBe('opp-1,opp-2');
     view.component.replacePage([
@@ -179,17 +125,10 @@ describe('Opportunity list view interaction', () => {
     expect(view.selected()).toBe('opp-1,opp-2,opp-3,opp-4');
     view.check('Select all rows on this page');
     expect(view.selected()).toBe('opp-1,opp-2');
-    view.switchTo('List');
-    expect(view.target.textContent).toContain('New filtered role');
-    view.switchTo('Table');
     expect(view.target.textContent).toContain('New filtered role');
   });
-  it.each([
-    'List',
-    'Columns',
-  ])('%s keeps checkbox separate from the existing review modal and preserves page/filter navigation', (label) => {
+  it('keeps checkbox separate from review and preserves page navigation', () => {
     const view = setup();
-    view.switchTo(label);
     view.check('Select Staff engineer');
     expect(view.target.querySelector('[role=dialog]')).toBeNull();
     view.target
@@ -207,6 +146,44 @@ describe('Opportunity list view interaction', () => {
     flushSync();
     expect(navigation.goto).toHaveBeenCalledWith(
       '/admin/opportunities?review=unsorted&sort=newest&skill=Rust&page=2',
+      { keepFocus: true, noScroll: true },
+    );
+  });
+  it('keeps loaded cards selectable when a refresh error arrives', () => {
+    const view = setup();
+    view.component.showRefreshError();
+    flushSync();
+
+    expect(view.target.textContent).toContain(
+      'Unable to refresh opportunities.',
+    );
+    expect(view.target.textContent).toContain('Staff engineer');
+    view.check('Select Staff engineer');
+    expect(view.selected()).toBe('opp-1');
+  });
+  it.each([
+    ['score', 'asc'],
+    ['salary', 'asc'],
+  ])('writes %s ascending sort from the filter dialog', (sort, direction) => {
+    page.url = new URL(
+      'http://localhost/admin/opportunities?review=unsorted&sort=newest&skill=Rust&facets',
+    );
+    const view = setup();
+    const sortSelect = view.target.querySelector<HTMLSelectElement>(
+      'select[aria-label="Sort opportunities"]',
+    );
+    const directionSelect = view.target.querySelector<HTMLSelectElement>(
+      'select[aria-label="Sort direction"]',
+    );
+    if (!sortSelect || !directionSelect)
+      throw new Error('Missing sort controls');
+    directionSelect.value = direction;
+    directionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    sortSelect.value = sort;
+    sortSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+    expect(navigation.goto).toHaveBeenLastCalledWith(
+      `/admin/opportunities?review=unsorted&facets=&skill=Rust&sort=${sort}&sortDirection=asc`,
       { keepFocus: true, noScroll: true },
     );
   });

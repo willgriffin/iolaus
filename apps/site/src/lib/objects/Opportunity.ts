@@ -1,4 +1,4 @@
-import { field, SmrtObject, smrt } from '@happyvertical/smrt-core';
+import { field, foreignKey, SmrtObject, smrt } from '@happyvertical/smrt-core';
 import {
   backgroundEligible,
   type JobExecutionContext,
@@ -77,6 +77,9 @@ export class Opportunity extends SmrtObject {
   sourceContentFingerprint = '';
   @field({ type: 'integer' })
   sourceContentVersion = 0;
+  /** Current platform analysis; published only while its source version matches. */
+  @foreignKey('OpportunityAnalysis', { onDelete: 'SET NULL' })
+  currentAnalysisId: string | null = null;
   @field({ type: 'text' })
   sourceContentJson = '{}';
   @field({ type: 'text' })
@@ -170,6 +173,15 @@ export class Opportunity extends SmrtObject {
       verifiedOpportunityEligibilityProjection(this.toJSON()),
     );
     return super.save(options);
+  }
+
+  @backgroundEligible()
+  async analyzeSourcePosting(args: Record<string, unknown> = {}) {
+    const { executeOpportunityAnalysisJob } = await import(
+      '../server/opportunity-analysis-job.js'
+    );
+    if (!this.id) throw new Error('Analysis requires a persisted opportunity.');
+    return executeOpportunityAnalysisJob(this.id, args);
   }
 
   @backgroundEligible()

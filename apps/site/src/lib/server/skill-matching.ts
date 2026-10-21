@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DecisionRequest, DecisionResult } from '@happyvertical/ai';
 import type { OpportunityScoringEvidenceSource } from './opportunity-scoring.js';
+import { canonicalSkillSlug } from './skill-vocabulary.js';
 
 export const SKILL_MATCH_VERSION = 'skill-match/v3';
 export const SKILL_MATCH_THRESHOLD = 0.85;
@@ -17,28 +18,8 @@ export interface SkillMatchingResult {
   matches: SkillMatch[];
   provenance?: DecisionResult['provenance'];
 }
-const aliases: Record<string, string> = {
-  postgres: 'postgresql',
-  postgresql: 'postgresql',
-  'node.js': 'nodejs',
-  'node js': 'nodejs',
-  nodejs: 'nodejs',
-  'react.js': 'react',
-  reactjs: 'react',
-  k8s: 'kubernetes',
-  kubernetes: 'kubernetes',
-  golang: 'go',
-  go: 'go',
-  js: 'javascript',
-  javascript: 'javascript',
-  ts: 'typescript',
-  typescript: 'typescript',
-  'amazon web services': 'aws',
-  aws: 'aws',
-};
 export function canonicalSkill(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ');
-  return aliases[normalized] ?? normalized;
+  return canonicalSkillSlug(value);
 }
 
 const explicitQualificationTerms = new Set([

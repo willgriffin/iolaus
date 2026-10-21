@@ -7,6 +7,7 @@ import {
   reapStaleSourceCrawls,
   reconcileFailedSourceCrawlJob,
 } from '../src/lib/server/source-crawl-watchdog.js';
+import { repairQueuedResumeImports } from '../src/lib/server/resume-import-runtime.js';
 import {
   TASK_WORKER_SHUTDOWN_TIMEOUT_MS,
   taskWorkerQueues,
@@ -33,9 +34,16 @@ const sourceCrawlWatchdogIntervalMs = numberFromEnv(
   'SOURCE_CRAWL_WATCHDOG_MS',
   60_000,
 );
+const resumeImportRepairIntervalMs = numberFromEnv(
+  'RESUME_IMPORT_REPAIR_MS',
+  5 * 60_000,
+);
 const db = await resolveDatabase(getDbConfig());
 await ensureSourceScheduleTable(db);
 await reapStaleSourceCrawls(db);
+void repairQueuedResumeImports(db).catch(() => {
+  console.error('Resume import recovery failed.');
+});
 
 const taskRunner = new TaskRunner({
   concurrency: numberFromEnv('SMRT_JOBS_WORKER_CONCURRENCY', 2),
@@ -95,6 +103,11 @@ const sourceCrawlWatchdog = setInterval(() => {
     console.error('Source crawl watchdog failed:', error);
   });
 }, sourceCrawlWatchdogIntervalMs);
+const resumeImportRepair = setInterval(() => {
+  void repairQueuedResumeImports(db).catch(() => {
+    console.error('Resume import recovery failed.');
+  });
+}, resumeImportRepairIntervalMs);
 
 console.log(
   `SMRT jobs worker started for queues ${taskWorkerQueues.join(', ')}.`,
@@ -107,6 +120,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`Received ${signal}; stopping SMRT jobs worker.`);
 
   clearInterval(sourceCrawlWatchdog);
+  clearInterval(resumeImportRepair);
   await drainJobWorkerRunners({ scheduleRunner, stopHeartbeat, taskRunner });
   process.exit(0);
 }

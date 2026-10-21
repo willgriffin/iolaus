@@ -33,6 +33,11 @@ export default {
   },
   smrt: {
     logLevel: 'info',
+    // The transitive messaging model must not share the career attachment
+    // table. This is an additive binding; existing app records keep their table.
+    tableNames: {
+      '@happyvertical/smrt-messages:Attachment': 'message_attachments',
+    },
     ...(postgresPermissions ? { postgresPermissions } : {}),
     schemaMigration: {
       strategy: 'auto-add',

@@ -534,3 +534,41 @@ describe('native SQLite compare-and-swap', () => {
     });
   });
 });
+
+it('discovers skills from non-technology career evidence without adding unrelated catalog skills', () => {
+  const vocabulary = discoveryVocabulary(
+    [
+      {
+        id: 'care',
+        title: 'Care work',
+        kind: 'candidate_profile',
+        text: 'Provided patient care and maintained clinical documentation.',
+      },
+      {
+        id: 'trade',
+        title: 'Workshop',
+        kind: 'project',
+        text: 'Performed welding and equipment maintenance.',
+      },
+      {
+        id: 'office',
+        title: 'Office work',
+        kind: 'candidate_profile',
+        text: 'Responsible for bookkeeping and payroll.',
+      },
+    ],
+    [],
+  );
+  expect(vocabulary).toEqual(
+    expect.arrayContaining([
+      'Patient care',
+      'Clinical documentation',
+      'Welding',
+      'Equipment maintenance',
+      'Bookkeeping',
+      'Payroll',
+    ]),
+  );
+  expect(vocabulary).not.toContain('TypeScript');
+  expect(vocabulary).not.toContain('Medication administration');
+});

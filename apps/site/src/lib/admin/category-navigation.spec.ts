@@ -21,8 +21,6 @@ describe('admin categories and primary navigation', () => {
       buildAdminNavigation(adminResources).map(({ href }) => href),
     ).toEqual([
       '/admin',
-      '/admin/tasks',
-      '/admin/opportunities',
       '/admin/applications',
       '/admin/career',
       '/admin/research',

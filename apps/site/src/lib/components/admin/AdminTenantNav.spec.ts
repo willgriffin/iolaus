@@ -19,10 +19,10 @@ describe('compact admin navigation', () => {
   });
   it('does not mark Overview active on a child page', () => {
     const { body } = render(AdminTenantNav, {
-      props: { items, currentHref: '/admin/tasks' },
+      props: { items, currentHref: '/admin/career' },
     });
     expect(body.match(/aria-current="page"/g)).toHaveLength(1);
-    expect(body).toMatch(/href="\/admin\/tasks"[^>]*aria-current="page"/);
+    expect(body).toMatch(/href="\/admin\/career"[^>]*aria-current="page"/);
     expect(body).not.toMatch(/href="\/admin"[^>]*aria-current="page"/);
   });
   it('keeps collapsed category navigation available through accessible hub links', () => {

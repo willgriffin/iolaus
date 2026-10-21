@@ -1,9 +1,15 @@
 <script lang="ts">
 import { Form as SmrtForm } from '@happyvertical/smrt-svelte/forms';
-import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 import Pencil from '@lucide/svelte/icons/pencil';
 import Plus from '@lucide/svelte/icons/plus';
 import Save from '@lucide/svelte/icons/save';
+import { getContext } from 'svelte';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink, safeAdminNavigationHref } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import ResourceFormFields from './ResourceFormFields.svelte';
 
 type AdminRecord = Record<string, unknown> & { id?: string };
@@ -68,10 +74,24 @@ const currentEditHref = $derived(
     : '',
 );
 const returnHref = $derived(data.returnTo ?? '');
-const backHref = $derived(returnHref || viewHref);
-const backLabel = $derived(
-  returnHref ? 'Return' : isEdit ? 'View record' : data.resource.label,
+const fallbackBackHref = $derived(isEdit ? viewHref : listHref);
+const safeReturnHref = $derived(safeAdminNavigationHref(returnHref, ''));
+const backLink = $derived(
+  adminBackLink(
+    safeReturnHref
+      ? 'previous page'
+      : isEdit
+        ? `this ${data.resource.singularLabel.toLowerCase()}`
+        : data.resource.label,
+    fallbackBackHref,
+    safeReturnHref,
+  ),
 );
+const backHref = $derived(backLink.href);
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(recordFormHeaderActions));
 const experienceId = $derived(String(data.record?.id ?? ''));
 const relatedProjectBulletEditor = $derived(
   data.relatedProjectBulletEditor ?? null,
@@ -139,24 +159,24 @@ function projectBulletCreateRecord(
 }
 </script>
 
+{#snippet recordFormHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
+
 <section class="record-form-page">
-  <header class="record-page-header">
-    <div>
-      <a class="back-link" href={backHref}>
-        <ArrowLeft size={15} strokeWidth={2.2} />
-        <span>{backLabel}</span>
-      </a>
-      <h1>{title}</h1>
-      <p>{data.resource.description}</p>
-    </div>
-  </header>
+  <div class="record-page-title">
+    {#if !adminHeader}
+      <AdminBackLink {...backLink} />
+    {/if}
+    <h1>{title}</h1>
+  </div>
 
   <SmrtForm method="POST" action={isEdit ? '?/update' : '?/create'}>
     {#if isEdit && data.record?.id}
       <input type="hidden" name="id" value={data.record.id} />
     {/if}
-    {#if returnHref}
-      <input type="hidden" name="returnTo" value={returnHref} />
+    {#if safeReturnHref}
+      <input type="hidden" name="returnTo" value={safeReturnHref} />
     {/if}
     <ResourceFormFields
       comboOptions={data.comboOptions}
@@ -417,26 +437,13 @@ function projectBulletCreateRecord(
     color: var(--smrt-color-on-surface);
   }
 
-  .record-page-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .record-page-header h1 {
-    margin: 8px 0 4px;
+  .record-page-title h1 {
+    margin: 0 0 4px;
     color: var(--smrt-color-on-surface);
     font: var(--smrt-typography-headline-medium-font);
   }
 
-  .record-page-header p {
-    max-width: 760px;
-    margin: 0;
-    color: var(--smrt-color-on-surface-variant);
-    line-height: 1.45;
-  }
 
-  .back-link,
   .secondary-action {
     display: inline-flex;
     align-items: center;
@@ -446,8 +453,6 @@ function projectBulletCreateRecord(
     text-decoration: none;
   }
 
-  .back-link:hover,
-  .back-link:focus-visible,
   .secondary-action:hover,
   .secondary-action:focus-visible {
     color: var(--smrt-color-primary);

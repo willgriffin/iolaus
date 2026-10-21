@@ -42,6 +42,10 @@ import {
   validateTagIntegrityGuards,
 } from '../src/lib/server/tag-integrity.js';
 import { ensureOpportunityListQueryIndexes } from '../src/lib/server/admin-opportunity-query.js';
+import { ensureOpportunityAnalysisSchema } from '../src/lib/server/opportunity-analysis-schema.js';
+import { ensurePublicSearchSchema } from '../src/lib/server/public-search/schema.js';
+import { ensureOpportunityAnalysisMaintenanceSchema } from '../src/lib/server/opportunity-analysis-maintenance.js';
+import { ensureSeedSkillVocabulary } from '../src/lib/server/skill-vocabulary.js';
 import { formatIntegrityTextBridgeReleases } from '../src/lib/server/integrity-text-bridge.js';
 import {
   ensureCandidateAnswerNaturalKeyIndex,
@@ -165,6 +169,10 @@ const {
   await ensureCandidateAnswerNaturalKeyIndex(migration.db);
   await ensureNativeAuthUniqueIndexes(migration.db);
   const initialized = await initializeSmrtCollections(database);
+  await ensureOpportunityAnalysisSchema(migration.db);
+  await ensureSeedSkillVocabulary();
+  await ensureOpportunityAnalysisMaintenanceSchema(migration.db);
+  await ensurePublicSearchSchema(migration.db, 'postgres');
   await ensureOpportunityListQueryIndexes(migration.db);
   const backfillAlreadyApplied = await isSmrtNativeBackfillApplied(migration.db);
   const backfill = backfillAlreadyApplied ? null : await backfillSmrtNative();

@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(async () => ({ affected: 1 })),
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => ({ update: mocks.update })),
 }));
 

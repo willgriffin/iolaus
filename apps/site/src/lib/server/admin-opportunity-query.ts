@@ -92,6 +92,7 @@ export type OpportunityQuery = {
 
 export type QuestionRecommendationScope = {
   questionScreeningEnabled: boolean;
+  matchingMaterialFingerprint?: string;
   candidateMaterialFingerprint?: string;
   questionSetFingerprint?: string;
   blockedReason?: string;
@@ -208,21 +209,42 @@ function needsQuestionRecommendationScope(
   );
 }
 
+/** Refresh zero-provider ranks from current source/profile material at the read boundary. */
+async function loadCurrentRecommendationScope(
+  subject: WorkspaceSubject & { profileId: string },
+  supplied?: QuestionRecommendationScope,
+): Promise<QuestionRecommendationScope> {
+  const screening =
+    supplied ??
+    (await loadCurrentScreeningQuestionRecommendationScope(subject));
+  const { refreshOpportunityMatches } = await import(
+    './opportunity-matching.js'
+  );
+  const match = await refreshOpportunityMatches(subject);
+  return {
+    ...screening,
+    questionScreeningEnabled:
+      screening.questionScreeningEnabled || Boolean(match.materialFingerprint),
+    matchingMaterialFingerprint: match.materialFingerprint,
+  };
+}
+
 async function withQuestionRecommendationScope<T extends OpportunityQuery>(
   query: T,
 ): Promise<T> {
   if (
-    query.questionRecommendationScope ||
+    query.questionRecommendationScope?.matchingMaterialFingerprint !==
+      undefined ||
     !needsQuestionRecommendationScope(query.filters) ||
     !hasCandidateWorkspaceSubject(query.workspaceSubject)
   )
     return query;
   return {
     ...query,
-    questionRecommendationScope:
-      await loadCurrentScreeningQuestionRecommendationScope(
-        query.workspaceSubject,
-      ),
+    questionRecommendationScope: await loadCurrentRecommendationScope(
+      query.workspaceSubject,
+      query.questionRecommendationScope,
+    ),
   };
 }
 
@@ -839,22 +861,37 @@ function recommendationRankJoinSql(
   const subject = query.workspaceSubject;
   const material = scope.candidateMaterialFingerprint;
   const questions = scope.questionSetFingerprint;
-  if (!hasCandidateWorkspaceSubject(subject) || !material || !questions)
+  const matchingMaterial = scope.matchingMaterialFingerprint;
+  if (
+    !hasCandidateWorkspaceSubject(subject) ||
+    (!matchingMaterial && (!material || !questions))
+  )
     return 'LEFT JOIN opportunity_recommendation_ranks rank ON FALSE';
   const contracts = [
     OPPORTUNITY_QUESTION_SCREENING_VERSION,
     OPPORTUNITY_QUESTION_SCREENING_OVERFLOW_VERSION,
   ].map((version) => pushParam(values, version));
+  const assessment = `(rank.candidate_material_fingerprint = ${pushParam(values, material ?? '')}
+    AND rank.question_set_fingerprint = ${pushParam(values, questions ?? '')}
+    AND rank.contract_version IN (${contracts.join(', ')})
+    AND rank.model = ${pushParam(values, OPPORTUNITY_QUESTION_SCREENING_MODEL)}
+    AND rank.projection_version = ${pushParam(values, OPPORTUNITY_RECOMMENDATION_RANK_VERSION)})`;
+  const matching = matchingMaterial
+    ? ` OR (rank.candidate_material_fingerprint = ${pushParam(values, matchingMaterial)}
+    AND rank.question_set_fingerprint = 'opportunity-match/v1'
+    AND rank.contract_version = 'opportunity-match/v1'
+    AND rank.model = 'staged-private/v1'
+    AND rank.projection_version = 'opportunity-recommendation-rank/v3'
+    AND rank.assessment_id = CAST(o.current_analysis_id AS TEXT)
+    AND o.status NOT IN ('closed', 'archived', 'expired')
+    AND EXISTS (SELECT 1 FROM sources match_source WHERE match_source.id = o.source_id AND match_source.is_active = TRUE AND match_source.public_listing = TRUE))`
+    : '';
   return `LEFT JOIN opportunity_recommendation_ranks rank
     ON rank.tenant_id = ${pushParam(values, subject.tenantId)}
     AND rank.owner_user_id = ${pushParam(values, subject.userId)}
     AND rank.candidate_profile_id = ${pushParam(values, subject.profileId)}
     AND rank.opportunity_id = CAST(o.id AS TEXT)
-    AND rank.candidate_material_fingerprint = ${pushParam(values, material)}
-    AND rank.question_set_fingerprint = ${pushParam(values, questions)}
-    AND rank.contract_version IN (${contracts.join(', ')})
-    AND rank.model = ${pushParam(values, OPPORTUNITY_QUESTION_SCREENING_MODEL)}
-    AND rank.projection_version = ${pushParam(values, OPPORTUNITY_RECOMMENDATION_RANK_VERSION)}
+    AND (${assessment}${matching})
     AND rank.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
     AND rank.source_content_version = COALESCE(o.source_content_version, 0)
     AND rank.required_skills_snapshot = COALESCE(o.required_skills, '')
@@ -1541,6 +1578,7 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
       'questionRecommendationScope',
       query.questionRecommendationScope?.questionScreeningEnabled ?? false,
       query.questionRecommendationScope?.candidateMaterialFingerprint ?? '',
+      query.questionRecommendationScope?.matchingMaterialFingerprint ?? '',
       query.questionRecommendationScope?.questionSetFingerprint ?? '',
     ],
     ['reviewFilter', query.reviewFilter.trim()],
@@ -1745,10 +1783,14 @@ export async function listOpportunityPageIds({
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
   const questionRecommendationScope =
-    suppliedQuestionRecommendationScope ??
-    (needsQuestionRecommendationScope(filters)
-      ? await loadCurrentScreeningQuestionRecommendationScope(workspaceSubject)
-      : undefined);
+    needsQuestionRecommendationScope(filters) &&
+    suppliedQuestionRecommendationScope?.matchingMaterialFingerprint ===
+      undefined
+      ? await loadCurrentRecommendationScope(
+          workspaceSubject,
+          suppliedQuestionRecommendationScope,
+        )
+      : suppliedQuestionRecommendationScope;
   const sourceEligibility =
     needsSourceEligibility(filters) ||
     (filters.sort === 'best' &&

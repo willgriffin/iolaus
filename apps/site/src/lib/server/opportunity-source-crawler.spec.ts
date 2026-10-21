@@ -1,6 +1,18 @@
 import type { Link, SpiderAdapter } from '@happyvertical/spider';
 import type { AdapterContext } from '@happyvertical/spider/platform';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const analysisHooks = vi.hoisted(() => ({
+  ensure: vi.fn(async () => undefined),
+  enqueue: vi.fn(async () => undefined),
+}));
+vi.mock('./opportunity-analysis.js', () => ({
+  ensureOpportunityAnalysis: analysisHooks.ensure,
+}));
+vi.mock('./opportunity-analysis-job.js', () => ({
+  enqueueOpportunityAnalysis: analysisHooks.enqueue,
+}));
+
 import elastic from './fixtures/ats/elastic-principal-ai-engineer.json';
 import vanta from './fixtures/ats/vanta-developer-experience.json';
 import { fingerprintOpportunitySourceContent } from './opportunity-source-content';
@@ -2945,6 +2957,8 @@ describe('opportunity source crawler discovery', () => {
   });
 
   it('creates Hacker News board-link opportunities using the listing text as detail', async () => {
+    analysisHooks.ensure.mockClear();
+    analysisHooks.enqueue.mockClear();
     getCollection.mockReset();
     const opportunities = recordCollection();
     const sourceCrawls = recordCollection([{ id: 'crawl-1' }]);
@@ -2992,6 +3006,12 @@ describe('opportunity source crawler discovery', () => {
         title: 'Atom Computing',
         workMode: 'remote',
       }),
+    );
+    expect(analysisHooks.enqueue).toHaveBeenCalledWith(
+      opportunities.records[0].id,
+    );
+    expect(analysisHooks.ensure).toHaveBeenCalledWith(
+      opportunities.records[0].id,
     );
     expect(opportunities.records[0]).toMatchObject({
       descriptionRaw: expect.stringContaining(

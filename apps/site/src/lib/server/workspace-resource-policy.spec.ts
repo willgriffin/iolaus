@@ -73,6 +73,28 @@ describe('shared workspace resource boundary', () => {
     state.subject = { tenantId: 'tenant-a', userId: 'user-a' };
     expect(() => workspaceResourceWhere('Application')).toThrow();
   });
+  it.each([
+    'MatchModel',
+    'RequirementEvidenceDecision',
+  ])('isolates %s by user, tenant, and candidate profile', (className) => {
+    const owner = {
+      tenantId: 'tenant-a',
+      ownerUserId: 'user-a',
+      candidateProfileId: 'profile-a',
+    };
+    expect(workspaceResourceWhere(className)).toEqual(owner);
+    expect(workspaceRecordAllowed(className, owner)).toBe(true);
+    for (const key of Object.keys(owner)) {
+      expect(
+        workspaceRecordAllowed(className, { ...owner, [key]: 'foreign' }),
+      ).toBe(false);
+    }
+    expect(() =>
+      workspaceResourcePayload(className, { ownerUserId: 'foreign' }),
+    ).toThrow();
+    state.subject = { tenantId: 'tenant-a', userId: 'user-a' };
+    expect(() => workspaceResourceWhere(className)).toThrow();
+  });
   it('resolves switching and concurrent contexts on every call', () => {
     expect(workspaceResourceWhere('CandidateProfile').id).toBe('profile-a');
     state.subject = {

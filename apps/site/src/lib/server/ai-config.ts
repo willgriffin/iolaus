@@ -18,6 +18,8 @@ export const OPPORTUNITY_INTELLIGENCE_PROFILE_ENV =
   'OPPORTUNITY_INTELLIGENCE_PROFILE';
 /** Existing configured Bifrost chat ceiling; planners must reserve this limit. */
 export const AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS = 4_096;
+/** Per-call cap for explicitly scoped long-form extraction only. */
+export const AI_PROFILE_MAX_OUTPUT_TOKENS = 16_384;
 export const OPPORTUNITY_INTELLIGENCE_PROFILES = {
   openai: {
     apiKeyEnv: 'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',
@@ -55,6 +57,7 @@ export interface AiProfileClient {
   model: string;
   profile: string;
   provider: 'bifrost';
+  maxOutputTokens?: number;
   timeout?: number;
 }
 
@@ -64,9 +67,23 @@ export interface AiProfileClientOptions {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  maxOutputTokens?: number;
   timeout?: number;
   usageTags?: Record<string, string>;
   requireProfileApiKey?: boolean;
+}
+
+function boundedMaxOutputTokens(value: number | undefined) {
+  const maxOutputTokens = value ?? AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS;
+  if (
+    !Number.isSafeInteger(maxOutputTokens) ||
+    maxOutputTokens < 1 ||
+    maxOutputTokens > AI_PROFILE_MAX_OUTPUT_TOKENS
+  )
+    throw new Error(
+      `maxOutputTokens must be an integer from 1 to ${AI_PROFILE_MAX_OUTPUT_TOKENS}.`,
+    );
+  return maxOutputTokens;
 }
 
 interface AiProfileConfig extends Record<string, unknown> {
@@ -357,6 +374,7 @@ export async function resolveAiProfileClient(
     ) ?? MAX_AI_REQUEST_TIMEOUT_MS,
     MAX_AI_REQUEST_TIMEOUT_MS,
   );
+  const maxOutputTokens = boundedMaxOutputTokens(options.maxOutputTokens);
 
   let aiClient = options.aiClient;
   if (!aiClient) {
@@ -365,7 +383,7 @@ export async function resolveAiProfileClient(
       baseUrl,
       generationLimits: {
         maxImagesPerRequest: 1,
-        maxOutputTokens: AI_PROFILE_CHAT_MAX_OUTPUT_TOKENS,
+        maxOutputTokens,
         maxReasoningTokens: 1_024,
         onExceeded: 'error',
       },
@@ -413,6 +431,7 @@ export async function resolveAiProfileClient(
     model,
     profile: effectiveProfileName,
     provider: 'bifrost',
+    maxOutputTokens,
     timeout,
   };
 }

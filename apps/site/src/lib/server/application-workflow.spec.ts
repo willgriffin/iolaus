@@ -153,7 +153,8 @@ vi.mock('@happyvertical/smrt-users', () => ({
   getRequestScopedDatabase: mocks.requestScopedDatabase,
 }));
 
-vi.mock('@happyvertical/smrt-core', () => ({
+vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => ({
     acquireSession: mocks.databaseAcquireSession,
     transaction: async (

@@ -85,6 +85,8 @@ export interface OpportunityIntelligenceRequestIdentity {
 
 export interface OpportunityIntelligenceReservation
   extends OpportunityIntelligenceRequestIdentity {
+  /** Explicit bounded retry admission for the global analysis contract only. */
+  analysisRetry?: boolean;
   estimatedInputTokens: number;
   idempotencyKey: string;
   inputTokenCeiling: number;
@@ -731,13 +733,48 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               };
             }
             const failed = stringValue(existing?.status) === 'failed';
-            return {
-              code: failed ? 'prior_attempt_failed' : 'duplicate_in_progress',
-              kind: 'blocked',
-              message: failed
-                ? 'This idempotency key has a prior terminal failure and requires operator review.'
-                : 'An identical opportunity intelligence request is already active.',
-            };
+            const retryAllowed =
+              failed &&
+              reservation.analysisRetry === true &&
+              reservation.feature === 'opportunity-analysis' &&
+              reservation.profile === 'opportunity-intelligence-extraction' &&
+              reservation.model === 'openai/gpt-6-luna' &&
+              !reservation.workspaceSubject &&
+              !reservation.sourceCrawlId;
+            const attempts = retryAllowed
+              ? queryRow(
+                  await transaction.query(
+                    'SELECT COUNT(*) AS count FROM opportunity_intelligence_requests WHERE idempotency_key = ?',
+                    [reservation.idempotencyKey],
+                  ),
+                )
+              : null;
+            if (!retryAllowed || numberValue(attempts?.count) >= 3) {
+              return {
+                code: failed ? 'prior_attempt_failed' : 'duplicate_in_progress',
+                kind: 'blocked',
+                message: failed
+                  ? 'This idempotency key has a prior terminal failure and requires operator review.'
+                  : 'An identical opportunity intelligence request is already active.',
+              };
+            }
+            // The result row is locked; the previous terminal request remains
+            // immutable in the request ledger. All budget/provider checks below
+            // apply to this attempt, and refusal rolls this handover back.
+            await transaction.query(
+              `UPDATE opportunity_intelligence_results
+              SET status = 'started', owner_request_id = ?, request_id = ?,
+                  agent_run_id = ?, output_json = '{}', error_code = '',
+                  started_at = CURRENT_TIMESTAMP, finished_at = NULL, updated_at = CURRENT_TIMESTAMP
+              WHERE idempotency_key = ? AND status = 'failed' AND ${ownershipPredicate()}`,
+              [
+                reservation.requestId,
+                reservation.requestId,
+                reservation.agentRunId,
+                reservation.idempotencyKey,
+                ...ownershipValues(reservation),
+              ],
+            );
           }
 
           const control = queryRow(
@@ -1087,6 +1124,8 @@ export async function executeGovernedOpportunityIntelligenceRequest<
   T,
 >(options: {
   config?: OpportunityIntelligenceBudgetConfig;
+  /** At most three total attempts; only the global opportunity-analysis adapter. */
+  analysisRetry?: boolean;
   estimatedInputTokens: number;
   /** Optional larger financial reserve; never lowers the token-based spend reserve. */
   financialInputTokenCeiling?: number;
@@ -1165,6 +1204,7 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     : undefined;
   const reservation: OpportunityIntelligenceReservation = {
     ...options.identity,
+    analysisRetry: options.analysisRetry,
     estimatedInputTokens: options.estimatedInputTokens,
     idempotencyKey: scopedOpportunityIntelligenceIdempotencyKey(
       options.identity,

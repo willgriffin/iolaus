@@ -51,6 +51,23 @@ function response(payload: unknown, ok = true) {
 }
 
 describe('shared Add URL form', () => {
+  it('uses the header icon without changing intake behavior', () => {
+    const target = document.createElement('div');
+    document.body.append(target);
+    const component = mount(AddUrlIntake, { props: { compact: true }, target });
+    cleanup = () => unmount(component);
+    flushSync();
+
+    const addUrl = target.querySelector<HTMLButtonElement>(
+      '[aria-label="Add URL"]',
+    );
+    expect(addUrl?.textContent?.trim()).toBe('');
+    addUrl?.click();
+    flushSync();
+    expect(target.querySelector('dialog')?.open).toBe(true);
+    expect(target.querySelector('input[type=url]')).not.toBeNull();
+  });
+
   it.each([
     [
       'https://jobs.ashbyhq.com/acme/d78184cd-027f-4932-8613-bf8c94d536ae',

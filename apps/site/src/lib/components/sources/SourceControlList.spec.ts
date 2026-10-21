@@ -32,7 +32,6 @@ describe('SourceControlList', () => {
       },
     });
 
-    expect(body).toContain('Your job sources');
     expect(body).toContain('OpenAI careers');
     expect(body).toContain('Ashby');
     expect(body).toContain('Activate');
@@ -40,7 +39,6 @@ describe('SourceControlList', () => {
     expect(body).toContain('Pull now');
     expect(body).toContain('Edit');
     expect(body).toContain('View opportunities');
-    expect(body).toContain('Add a job source');
     expect(body).not.toContain('A posting-derived record');
     expect(body).not.toContain('idempotency');
     expect(body).not.toContain('invitation');
@@ -50,7 +48,40 @@ describe('SourceControlList', () => {
     const { body } = render(SourceControlList, { props: { records: [] } });
 
     expect(body).toContain('Start with a job source');
-    expect(body).toContain('Add a job source');
+    expect(body).toContain('from the header');
+  });
+
+  it('filters root sources by active state without revealing derived sources', () => {
+    const { body } = render(SourceControlList, {
+      props: {
+        activeFilter: 'active',
+        records: [
+          {
+            id: 'active-root',
+            isActive: true,
+            name: 'Active source',
+            sourceRole: 'root',
+          },
+          {
+            id: 'paused-root',
+            isActive: false,
+            name: 'Paused source',
+            sourceRole: 'root',
+          },
+          {
+            id: 'derived-source',
+            isActive: true,
+            name: 'Derived source',
+            parentSourceId: 'active-root',
+            sourceRole: 'posting_derived',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('Active source');
+    expect(body).not.toContain('Paused source');
+    expect(body).not.toContain('Derived source');
   });
 
   it('only makes web addresses clickable', () => {

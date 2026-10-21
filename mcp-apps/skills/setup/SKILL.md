@@ -1,11 +1,12 @@
 # Iolaus setup
 
-Use this package with an authenticated Iolaus installation. The bundled endpoint
-is for local development at `http://127.0.0.1:5173/api/mcp`.
+The bundled endpoint is the public Iolaus catalog at
+`https://jobgeni.us/api/mcp`. It supports anonymous opportunity discovery and
+asks the host to link an account before a tool needs private workspace data.
 
-For a self-hosted or shared Iolaus service, copy this package and change only
-`mcp.json` to that deployment's HTTPS `/api/mcp` URL. Authenticate with the
-Iolaus deployment's normal session flow; do not put credentials in this package.
+For local development, copy this package and change only `mcp.json` to
+`http://127.0.0.1:5173/api/mcp`. For a self-hosted Iolaus service, instead use
+that deployment's HTTPS `/api/mcp` URL. Do not put credentials in this package.
 
 Private installs use their configured administrative workspace. Shared hosted
 deployments require the signed-in account's active tenant membership, role, and

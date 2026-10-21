@@ -36,7 +36,8 @@ describe('AdminGenericHydratedResourcePage', () => {
       ]),
     });
 
-    expect(body).toContain('Loading records');
+    expect(body).toContain('Loading skills');
+    expect(body).toContain('aria-busy="true"');
     expect(body).toContain('Loading skills');
   });
 });

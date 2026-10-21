@@ -1,4 +1,5 @@
-import { error } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
+import { opportunityBrowserDestination } from '$lib/admin/opportunity-browser';
 import { buildAdminResourceShell } from '$lib/admin/resource-shell';
 import type { PageLoad } from './$types';
 
@@ -7,7 +8,11 @@ import type { PageLoad } from './$types';
 // the browser instead of waiting on /__data.json. Records hydrate after mount
 // through the authenticated list API; form actions stay in +page.server.ts.
 export const load: PageLoad = async ({ params, parent, url }) => {
-  const { tenantId, user } = await parent();
+  const { tenantId, user, publicOpportunityBrowserEnabled } = await parent();
+  if (params.resource === 'opportunities' && publicOpportunityBrowserEnabled) {
+    const destination = opportunityBrowserDestination(url);
+    if (destination) redirect(307, destination);
+  }
   const shell = buildAdminResourceShell(params.resource, url, {
     tenantId,
     user: user ? { id: user.id } : null,

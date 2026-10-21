@@ -1,8 +1,14 @@
 <script lang="ts">
 import { Button } from '@happyvertical/smrt-ui/ui';
 import type { SubmitFunction } from '@sveltejs/kit';
-import { tick } from 'svelte';
+import { getContext, tick } from 'svelte';
 import { enhance } from '$app/forms';
+import {
+  ADMIN_HEADER_ACTIONS,
+  type AdminHeaderActions,
+} from '$lib/admin/header-actions';
+import { adminBackLink, adminParentForPath } from '$lib/admin/navigation';
+import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import type { ScreeningQuestion } from '$lib/opportunity-screening-questions';
 
 type Draft = Omit<ScreeningQuestion, 'id' | 'revision'>;
@@ -39,6 +45,15 @@ let saving = $state(false);
 let localError = $state('');
 let notice = $state('');
 let triggerId = '';
+const parent = adminParentForPath('/admin/preferences/screening-questions');
+const backLink = adminBackLink(
+  parent?.label ?? 'Opportunities',
+  parent?.href ?? '/admin/opportunities',
+);
+const adminHeader = getContext<AdminHeaderActions | undefined>(
+  ADMIN_HEADER_ACTIONS,
+);
+$effect(() => adminHeader?.register(screeningHeaderActions));
 let invalidLocator = $state<InvalidQuestion | null>(null);
 const activeQuestion = $derived(
   data.questions.find((question) => question.id === editing),
@@ -129,9 +144,15 @@ const importanceLabel = (value: ScreeningQuestion['importance']) =>
       : 'Informational';
 </script>
 
+{#snippet screeningHeaderActions()}
+  <AdminBackLink {...backLink} />
+{/snippet}
+
 <svelte:head><title>Screening Questions · Iolaus</title></svelte:head>
 <section class="screening-preferences">
-  <header><div><h1>Screening Questions</h1><p>Ask about the posting or how your supplied evidence fits. You choose the desired answer and how much it matters.</p></div><a href="/admin/opportunities">Opportunities</a></header>
+  {#if !adminHeader}
+    <a class="embedded-back" href={backLink.href} title={backLink.title}>{backLink.label}</a>
+  {/if}
   <p>Must-have conflicts and unknowns are shown separately. Unknown answers reduce recommendation points without establishing a mismatch. Informational questions do not contribute to recommendation.</p>
   {#if notice || form?.ok}<p role="status">{notice || form?.message}</p>{/if}
   {#if localError || form?.error}<p role="alert">{localError || form?.error}</p>{/if}
@@ -183,14 +204,14 @@ const importanceLabel = (value: ScreeningQuestion['importance']) =>
 
 <style>
 .screening-preferences { max-width: 56rem; margin: 0 auto; padding: 1rem; }
-header { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
-h1 { margin: 0; } h2, h3 { font-size: 1rem; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+h2, h3 { font-size: 1rem; margin: 0 0 .5rem; overflow-wrap: anywhere; }
 p { line-height: 1.5; }
+.embedded-back { color: var(--smrt-color-primary, inherit); }
 .question-list { display: grid; gap: 1rem; margin-top: 1rem; }
 .question-card { padding: 1rem; margin: .75rem 0; border: 1px solid var(--border-color, #d1d5db); border-radius: .5rem; }
 label { display: grid; gap: .4rem; } .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
 textarea, select, input[type=number] { width: 100%; box-sizing: border-box; min-height: 2.75rem; padding: .6rem; color: inherit; background: var(--background-color, transparent); border: 1px solid var(--border-color, #d1d5db); border-radius: .3rem; font: inherit; }
-.enabled { display: flex; align-items: center; gap: .5rem; } .screening-preferences :global(button), header a { min-height: 2.75rem; } .editor-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
+.enabled { display: flex; align-items: center; gap: .5rem; } .screening-preferences :global(button) { min-height: 2.75rem; } .editor-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
 [role=alert] { color: var(--error-color, #b91c1c); }
-@media (max-width: 600px) { header { flex-direction: column; } .field-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { .field-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>
