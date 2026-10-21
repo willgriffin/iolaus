@@ -314,11 +314,13 @@ function closeDrawer(): void {
 }
 
 function openDrawer(): void {
-  if (page.url.searchParams.has('facets')) {
+  const url = new URL(page.url);
+  const closesTriage = url.searchParams.has(TRIAGE_URL_PARAM);
+  url.searchParams.delete(TRIAGE_URL_PARAM);
+  if (url.searchParams.has('facets') && !closesTriage) {
     drawerOpen = true;
     return;
   }
-  const url = new URL(page.url);
   url.searchParams.set('facets', '');
   void goto(`${url.pathname}${url.search}${url.hash}`, {
     keepFocus: true,

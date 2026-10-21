@@ -828,9 +828,39 @@ test('legacy triage sort links become list sorting and explicit list sort wins',
   );
   const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
   await expect(dialog.locator('.triage-card')).toBeVisible();
-  await dialog.getByRole('button', { name: 'Close triage' }).click();
-  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  let releaseCloseNavigation: (() => void) | undefined;
+  const closeNavigationReleased = new Promise<void>((resolve) => {
+    releaseCloseNavigation = resolve;
+  });
+  let observeCloseNavigation: (() => void) | undefined;
+  const closeNavigationObserved = new Promise<void>((resolve) => {
+    observeCloseNavigation = resolve;
+  });
+  await page.route('**/admin/opportunities/__data.json*', async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (
+      !requestUrl.searchParams.has('triage') &&
+      !requestUrl.searchParams.has('facets')
+    ) {
+      observeCloseNavigation?.();
+      await closeNavigationReleased;
+    }
+    await route.continue();
+  });
+  try {
+    const close = dialog.getByRole('button', { name: 'Close triage' }).click();
+    await closeNavigationObserved;
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    releaseCloseNavigation?.();
+    await close;
+  } finally {
+    releaseCloseNavigation?.();
+    await page.unroute('**/admin/opportunities/__data.json*');
+  }
   const filters = page.getByRole('dialog', { name: 'Opportunity filters' });
+  await expect(page).toHaveURL((url) => !url.searchParams.has('triage'));
+  await expect(dialog).toBeHidden();
+  await expect(filters).toBeVisible();
   await expect(filters.getByLabel('Sort opportunities')).toHaveValue('newest');
   await filters
     .getByRole('button', { name: 'Close filters', exact: true })
