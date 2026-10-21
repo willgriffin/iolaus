@@ -205,7 +205,8 @@ let opportunityExtractionState = $state<
   'idle' | 'processing' | 'processed' | 'queued' | 'error'
 >('idle');
 let opportunityExtractionMessage = $state('');
-let lastOpportunityActionForm = $state<unknown>(null);
+// Keep the original action-result identity; a deep proxy would never compare equal.
+let lastOpportunityActionForm = $state.raw<unknown>(null);
 let sourceCrawlState = $state<'idle' | 'queueing' | 'queued' | 'error'>('idle');
 let sourceCrawlMessage = $state('');
 let sourceCrawlRecordId = $state('');
@@ -687,12 +688,14 @@ $effect(() => adminHeader?.register(recordHeaderActions));
 </script>
 
 {#snippet recordHeaderActions()}
-  <div class="record-header-actions">
-    <AdminBackLink {...backLink} />
-    {#if hasRecord}
-      {@render recordActionControls()}
-    {/if}
-  </div>
+  {#if data.resource}
+    <div class="record-header-actions">
+      <AdminBackLink {...backLink} />
+      {#if hasRecord}
+        {@render recordActionControls()}
+      {/if}
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet recordActionControls()}

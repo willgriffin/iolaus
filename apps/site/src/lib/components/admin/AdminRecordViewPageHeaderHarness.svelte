@@ -10,6 +10,19 @@ let { data }: { data: ComponentProps<typeof AdminRecordViewPage>['data'] } =
   $props();
 let currentData = $state(untrack(() => data));
 let headerActions = $state<Snippet>();
+let currentForm = $state.raw<unknown>();
+let showRecord = $state(true);
+
+export function applyActionResult(result: unknown): void {
+  currentForm = result;
+}
+
+export function leaveRecordRoute(): void {
+  currentData = {
+    application: { id: 'application-1' },
+  } as unknown as typeof currentData;
+  showRecord = false;
+}
 
 const header: AdminHeaderActions = {
   register(actions) {
@@ -31,4 +44,8 @@ export function removeRecord(): void {
 </script>
 
 <div data-testid="registered-header">{@render headerActions?.()}</div>
-<AdminRecordViewPage data={currentData} />
+{#if showRecord}
+  <AdminRecordViewPage data={currentData} form={currentForm} />
+{:else}
+  <nav aria-label="Application materials">Application review</nav>
+{/if}

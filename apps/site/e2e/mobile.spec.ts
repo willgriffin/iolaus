@@ -280,7 +280,17 @@ test('archives orphan, approved, and in-progress applications through the dedica
 
   await page.goto('/admin/applications');
   await expect(page.getByText('Untitled opportunity')).toHaveCount(0);
-  await page.getByRole('link', { name: 'Archived', exact: true }).click();
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const applicationFilters = page.getByRole('dialog', {
+    name: 'Filter applications',
+  });
+  await applicationFilters
+    .getByRole('combobox', { name: 'Application status', exact: true })
+    .selectOption('archived');
+  await applicationFilters
+    .getByRole('button', { name: 'Apply filters', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/applications\/\?status=archived/);
   await expect(page.getByText('Untitled opportunity')).toBeVisible();
 
   const approvedAfter = await readRecord(
@@ -712,7 +722,7 @@ test('triage uses the mobile viewport and keeps scrolling and actions reachable'
   await close.tap();
   await expect(dialog).toBeHidden();
   await expect(
-    page.getByRole('button', { name: 'Triage', exact: true }),
+    page.getByRole('button', { name: 'Triage opportunities', exact: true }),
   ).toBeInViewport();
 });
 
@@ -741,14 +751,23 @@ test('triage inherits list filters and ascending salary through refills and deci
     review: 'unsorted',
   });
   await page.goto(`/admin/opportunities?${params}`);
-  const titles = page.locator('.table-opportunity .title-link');
+  const titles = page.locator(
+    'article.collection-opportunity > .collection-review > strong',
+  );
   const expected = Array.from(
     { length: 6 },
     (_, index) => `${prefix} Role ${index + 1}`,
   );
   await expect(titles).toHaveText(expected);
-  await expect(page.getByLabel('Sort opportunities')).toHaveValue('salary');
-  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const filters = page.getByRole('dialog', { name: 'Opportunity filters' });
+  await expect(filters.getByLabel('Sort opportunities')).toHaveValue('salary');
+  await filters
+    .getByRole('button', { name: 'Close filters', exact: true })
+    .click();
+  await page
+    .getByRole('button', { name: 'Triage opportunities', exact: true })
+    .click();
   const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
   const card = dialog.locator('.triage-card');
   await expect(dialog.getByRole('group', { name: 'Queue order' })).toHaveCount(
@@ -779,7 +798,9 @@ test('triage inherits list filters and ascending salary through refills and deci
   await dialog.getByRole('button', { name: 'Close triage' }).click();
   await expect(dialog).toBeHidden();
   await expect(titles).toHaveText(expected.filter((_, index) => index !== 1));
-  await page.getByRole('button', { name: 'Triage', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Triage opportunities', exact: true })
+    .click();
   await expect(card).toHaveAttribute(
     'aria-label',
     `Triage card for ${expected[0]}`,
@@ -808,7 +829,12 @@ test('legacy triage sort links become list sorting and explicit list sort wins',
   const dialog = page.getByRole('dialog', { name: 'Triage opportunities' });
   await expect(dialog.locator('.triage-card')).toBeVisible();
   await dialog.getByRole('button', { name: 'Close triage' }).click();
-  await expect(page.getByLabel('Sort opportunities')).toHaveValue('newest');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const filters = page.getByRole('dialog', { name: 'Opportunity filters' });
+  await expect(filters.getByLabel('Sort opportunities')).toHaveValue('newest');
+  await filters
+    .getByRole('button', { name: 'Close filters', exact: true })
+    .click();
   params.set('sort', 'salary');
   params.set('sortDirection', 'asc');
   await page.goto(`/admin/opportunities?${params}`);
@@ -820,5 +846,6 @@ test('legacy triage sort links become list sorting and explicit list sort wins',
   );
   await expect(dialog.locator('.triage-card')).toBeVisible();
   await dialog.getByRole('button', { name: 'Close triage' }).click();
-  await expect(page.getByLabel('Sort opportunities')).toHaveValue('salary');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await expect(filters.getByLabel('Sort opportunities')).toHaveValue('salary');
 });
