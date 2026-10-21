@@ -6,6 +6,7 @@ import {
   purgeTombstonedPublicProfileRevisions,
   tombstonePublicProfile,
 } from './public-profile-store.js';
+import { withResumeImportAccountFence } from './resume-import-account-fence.js';
 import { shortlistOwnerLockKey } from './shortlist-store.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
@@ -406,22 +407,6 @@ export async function deleteAccount(
   scope: AccountDeletionScope,
   dependencies: AccountDeletionDependencies,
 ): Promise<AccountDeletionResult> {
-  // SQLite only permits one writer; share the shortlist's cross-process lock
-  // across all deletion phases so a held write cannot poison another connection
-  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
-  return dependencies.dialect === 'sqlite'
-    ? await withSqliteOperationLock(
-        `shortlist:${shortlistOwnerLockKey(scope)}`,
-        () => deleteAccountLocked(scope, dependencies),
-      )
-    : await deleteAccountLocked(scope, dependencies);
-}
-
-async function deleteAccountLocked(
-  scope: AccountDeletionScope,
-  dependencies: AccountDeletionDependencies,
-): Promise<AccountDeletionResult> {
-  const { database, dialect } = dependencies;
   if (
     accountDeletionMode(dependencies.environment ?? process.env) !== 'enabled'
   ) {
@@ -432,6 +417,29 @@ async function deleteAccountLocked(
   }
   const tenantId = identifier(scope?.tenantId, 'tenant ID');
   const userId = identifier(scope?.userId, 'user ID');
+  scope = { tenantId, userId };
+  // SQLite only permits one writer; share the shortlist's cross-process lock
+  // across all deletion phases so a held write cannot poison another connection
+  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
+  return await withResumeImportAccountFence(
+    dependencies.database as DatabaseInterface,
+    scope,
+    async () =>
+      dependencies.dialect === 'sqlite'
+        ? await withSqliteOperationLock(
+            `shortlist:${shortlistOwnerLockKey(scope)}`,
+            () => deleteAccountLocked(scope, dependencies),
+          )
+        : await deleteAccountLocked(scope, dependencies),
+  );
+}
+
+async function deleteAccountLocked(
+  scope: AccountDeletionScope,
+  dependencies: AccountDeletionDependencies,
+): Promise<AccountDeletionResult> {
+  const { database, dialect } = dependencies;
+  const { tenantId, userId } = scope;
   const target = { tenantId, userId };
   if (typeof database.transaction !== 'function') {
     throw new AccountDeletionError(

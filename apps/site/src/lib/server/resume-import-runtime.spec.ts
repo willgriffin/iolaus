@@ -86,6 +86,7 @@ beforeEach(() => {
       await callback(subject, { assertOperation: state.assertOperation }),
   );
   state.host.process.mockResolvedValue({ id: 'item' });
+  state.host.repair.mockResolvedValue(1);
   state.service.expire.mockResolvedValue(undefined);
 });
 
@@ -210,5 +211,72 @@ describe('resume import runtime', () => {
     await expect(repairQueuedResumeImports(db)).resolves.toBe(1);
     expect(state.service.expire).toHaveBeenCalledWith('expired');
     expect(state.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues expired retention and authorized repair after a malformed receipt', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'malformed',
+              tenant_id: 'tenant',
+              confidential_scope_id: 'profile',
+              data: '{',
+            },
+            {
+              id: 'expired',
+              tenant_id: 'tenant',
+              confidential_scope_id: 'profile',
+              data: {
+                capturedCeiling: { execution: { principalId: 'user' } },
+              },
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              tenant_id: 'tenant',
+              owner_user_id: 'user',
+              confidential_scope_id: 'profile',
+            },
+          ],
+        }),
+    } as any;
+
+    await expect(repairQueuedResumeImports(db)).resolves.toBe(2);
+    expect(state.service.expire).toHaveBeenCalledWith('expired');
+    expect(state.host.repair).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(
+      'Skipped expired resume import retention cleanup.',
+    );
+    expect(warning.mock.calls.flat().join(' ')).not.toContain('malformed');
+  });
+
+  it('repairs authorized scopes when the retention sweep itself fails', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = {
+      query: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('retention database unavailable'))
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              tenant_id: 'tenant',
+              owner_user_id: 'user',
+              confidential_scope_id: 'profile',
+            },
+          ],
+        }),
+    } as any;
+
+    await expect(repairQueuedResumeImports(db)).resolves.toBe(1);
+    expect(state.host.repair).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(
+      'Skipped resume import retention cleanup during recovery.',
+    );
   });
 });

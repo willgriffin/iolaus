@@ -49,9 +49,15 @@ access is rechecked while processing and applying.
 
 Receipts have a 30-day retention/replay window. Deleting an upload revokes the
 receipt and removes its private source assets through native ingestion cleanup.
-The task worker runs retention/repair at startup and every five minutes. Operators
+Uploads and account deletion share a per-account lifecycle fence. Deletion waits
+for in-flight uploads before enumerating receipts; a started deletion also
+refuses subsequent uploads if cleanup must be retried. Unrelated accounts remain
+independent. The task worker runs retention/repair at startup and every five minutes. Operators
 must provide private AssetRuntime storage, apply ingestion migrations before
-service, and run that worker. Never put resume files, evidence, or extracted
+service, and run that worker. Retention cleanup isolates failed receipts and
+continues recovery for other scopes; startup recovery failures do not stop the
+other worker queues. Failed cleanup remains eligible for a later sweep. Account
+deletion cleanup stays fail-closed and resumable. Never put resume files, evidence, or extracted
 text in a public bucket or shared catalog.
 
 Text extraction runs through the private

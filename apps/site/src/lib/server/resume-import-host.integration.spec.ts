@@ -40,7 +40,9 @@ import {
 import './smrt.js';
 import './workspace-workflow-capabilities.js';
 import { type SmrtJob, TaskRunner } from '@happyvertical/smrt-jobs';
+import { deleteAccount } from './account-deletion.js';
 import { getDbConfig } from './db.js';
+import { withResumeImportAccountFence } from './resume-import-account-fence.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
 import {
   exportResumeImportReceipts,
@@ -90,6 +92,7 @@ const classes = [
   'IntakeFeedback',
   'IntakeDispatch',
   'IntakeDeletion',
+  'AccountDeletionRecord',
   'ResumeImport',
   'ResumeImportJob',
   'Company',
@@ -1791,6 +1794,130 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           ).toString(),
         ).toBe('%PDF-other-account');
         expect((await files()).length).toBeLessThan(before.length);
+      });
+
+      it('drains a concurrent upload before account deletion and rejects uploads after a failed deletion starts', async () => {
+        let signalEntered!: () => void;
+        let releaseUpload!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          signalEntered = resolve;
+        });
+        const released = new Promise<void>((resolve) => {
+          releaseUpload = resolve;
+        });
+        const originalReceive = host.service.receive.bind(host.service);
+        const receiveSpy = vi
+          .spyOn(host.service, 'receive')
+          .mockImplementation(async (input) => {
+            signalEntered();
+            await released;
+            return await originalReceive(input);
+          });
+        const receiving = host.receive({
+          bytes: Buffer.from('%PDF-concurrent-delete'),
+          filename: 'resume.pdf',
+          requestId: randomUUID(),
+        });
+        await entered;
+        let recordCreated = false;
+        let releasePurge!: () => void;
+        const allowPurge = new Promise<void>((resolve) => {
+          releasePurge = resolve;
+        });
+        let deletionRequested!: () => void;
+        const requested = new Promise<void>((resolve) => {
+          deletionRequested = resolve;
+        });
+        const deleting = (async () => {
+          deletionRequested();
+          return await deleteAccount(owner, {
+            database: db,
+            dialect,
+            environment: {
+              IOLAUS_WORKSPACE_MODE: 'shared',
+              SMRT_APP_ID: 'resume-delete-qa',
+              SMRT_RUNTIME_PROFILE: 'self-hosted',
+            },
+            purgeResumeImports: async (executor, scope) =>
+              await purgeResumeImportAccountData(
+                executor as DatabaseInterface,
+                scope,
+              ),
+            afterPhase: async (phase) => {
+              if (phase === 'record') {
+                recordCreated = true;
+                await allowPurge;
+              }
+            },
+          });
+        })();
+        await requested;
+        try {
+          // A separate owner never waits for this account's fence.
+          await withResumeImportAccountFence(
+            db,
+            { ...owner, userId: randomUUID() },
+            async () => {},
+          );
+          expect(recordCreated).toBe(false);
+        } finally {
+          releaseUpload();
+        }
+        const uploaded = await receiving;
+        receiveSpy.mockRestore();
+        const evidence = (await host.service.getEvidence(uploaded.id))[0];
+        const assetRoot = getIolausUserAssetsRoot();
+        const privateFiles = (
+          await readdir(assetRoot, { recursive: true })
+        ).map((path) => join(assetRoot, path));
+        const retainedFiles: string[] = [];
+        for (const path of privateFiles)
+          if ((await stat(path)).isFile()) retainedFiles.push(path);
+        expect(retainedFiles.length).toBeGreaterThan(0);
+        releasePurge();
+        await expect(deleting).resolves.toMatchObject({ status: 'deleted' });
+        for (const path of retainedFiles)
+          await expect(stat(path)).rejects.toThrow();
+        await expect(
+          host.service.readEvidence(uploaded.id, evidence.id),
+        ).rejects.toThrow();
+        await expect(
+          host.receive({
+            bytes: Buffer.from('%PDF-after-delete'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          }),
+        ).rejects.toThrow();
+
+        const other = subject();
+        await seedPrincipal(db, other);
+        const otherHost = await makeHost(other);
+        await expect(
+          deleteAccount(other, {
+            database: db,
+            dialect,
+            environment: {
+              IOLAUS_WORKSPACE_MODE: 'shared',
+              SMRT_APP_ID: 'resume-delete-qa',
+              SMRT_RUNTIME_PROFILE: 'self-hosted',
+            },
+            purgeResumeImports: async () => {
+              throw new Error('Storage unavailable');
+            },
+          }),
+        ).rejects.toThrow('Storage unavailable');
+        await expect(
+          otherHost.receive({
+            bytes: Buffer.from('%PDF-after-failed-delete'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          }),
+        ).rejects.toThrow('Account deletion has started');
+        expect(
+          (await rows('intake_items')).filter(
+            (row) => row.tenant_id === other.tenantId,
+          ),
+        ).toHaveLength(0);
       });
 
       it('production runtime retention purges expired bytes even after native account suspension', async () => {

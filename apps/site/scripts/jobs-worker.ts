@@ -41,7 +41,9 @@ const resumeImportRepairIntervalMs = numberFromEnv(
 const db = await resolveDatabase(getDbConfig());
 await ensureSourceScheduleTable(db);
 await reapStaleSourceCrawls(db);
-await repairQueuedResumeImports(db);
+void repairQueuedResumeImports(db).catch(() => {
+  console.error('Resume import recovery failed.');
+});
 
 const taskRunner = new TaskRunner({
   concurrency: numberFromEnv('SMRT_JOBS_WORKER_CONCURRENCY', 2),
@@ -102,8 +104,8 @@ const sourceCrawlWatchdog = setInterval(() => {
   });
 }, sourceCrawlWatchdogIntervalMs);
 const resumeImportRepair = setInterval(() => {
-  void repairQueuedResumeImports(db).catch((error) => {
-    console.error('Resume import recovery failed:', error);
+  void repairQueuedResumeImports(db).catch(() => {
+    console.error('Resume import recovery failed.');
   });
 }, resumeImportRepairIntervalMs);
 

@@ -18,6 +18,10 @@ import {
 } from '$lib/resume-import';
 import { RESUME_IMPORT_STRUCTURE_MAX_BYTES } from '$lib/resume-import-structure.js';
 import {
+  assertResumeImportAccountNotDeleting,
+  withResumeImportAccountFence,
+} from './resume-import-account-fence.js';
+import {
   applyResumeImportDomain,
   captureResumeImportMatches,
   type ResumeImportApplyInput,
@@ -586,82 +590,97 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
       requestId: string;
       newImport?: boolean;
     }): Promise<ResumeImportView> {
-      identifier(input.requestId);
-      if (!input.bytes.length || input.bytes.length > RESUME_IMPORT_MAX_BYTES)
-        throw new ResumeImportHostError('Choose a PDF of at most 10 MiB.', 413);
-      if (new TextDecoder().decode(input.bytes.subarray(0, 5)) !== '%PDF-')
-        throw new ResumeImportHostError('Choose a valid PDF file.');
-      const filename =
-        [...input.filename]
-          .map((character) =>
-            character.charCodeAt(0) < 32 ||
-            character.charCodeAt(0) === 127 ||
-            character === '/' ||
-            character === '\\'
-              ? '_'
-              : character,
+      return await withResumeImportAccountFence(
+        options.db,
+        subject,
+        async () => {
+          await assertResumeImportAccountNotDeleting(options.db, subject);
+          identifier(input.requestId);
+          if (
+            !input.bytes.length ||
+            input.bytes.length > RESUME_IMPORT_MAX_BYTES
           )
-          .join('')
-          .slice(0, 160) || 'Resume.pdf';
-      const now = options.now?.() ?? new Date();
-      const pdfHash = createHash('sha256').update(input.bytes).digest('hex');
-      const receiptInput = {
-        sourceId: `iolaus-resume-upload:${subject.profileId}`,
-        sourceVersion: VERSION,
-        deliveryKey: input.newImport
-          ? `${pdfHash}:generation:${input.requestId}`
-          : pdfHash,
-        deliveredAt: now,
-        traceId: filename,
-        parts: [
-          {
-            partId: 'Resume.pdf',
-            mediaType: 'application/pdf',
-            bytes: input.bytes,
-          },
-        ],
-        capturedCeiling: { execution: capturedCeiling },
-        retention: {
-          version: VERSION,
-          expiresAt: new Date(now.getTime() + RETENTION_MS),
-          replayUntil: new Date(now.getTime() + RETENTION_MS),
-          acceptAfter: new Date(now.getTime() - 60_000),
+            throw new ResumeImportHostError(
+              'Choose a PDF of at most 10 MiB.',
+              413,
+            );
+          if (new TextDecoder().decode(input.bytes.subarray(0, 5)) !== '%PDF-')
+            throw new ResumeImportHostError('Choose a valid PDF file.');
+          const filename =
+            [...input.filename]
+              .map((character) =>
+                character.charCodeAt(0) < 32 ||
+                character.charCodeAt(0) === 127 ||
+                character === '/' ||
+                character === '\\'
+                  ? '_'
+                  : character,
+              )
+              .join('')
+              .slice(0, 160) || 'Resume.pdf';
+          const now = options.now?.() ?? new Date();
+          const pdfHash = createHash('sha256')
+            .update(input.bytes)
+            .digest('hex');
+          const receiptInput = {
+            sourceId: `iolaus-resume-upload:${subject.profileId}`,
+            sourceVersion: VERSION,
+            deliveryKey: input.newImport
+              ? `${pdfHash}:generation:${input.requestId}`
+              : pdfHash,
+            deliveredAt: now,
+            traceId: filename,
+            parts: [
+              {
+                partId: 'Resume.pdf',
+                mediaType: 'application/pdf',
+                bytes: input.bytes,
+              },
+            ],
+            capturedCeiling: { execution: capturedCeiling },
+            retention: {
+              version: VERSION,
+              expiresAt: new Date(now.getTime() + RETENTION_MS),
+              replayUntil: new Date(now.getTime() + RETENTION_MS),
+              acceptAfter: new Date(now.getTime() - 60_000),
+            },
+            limits: {
+              maxBytes: RESUME_IMPORT_MAX_BYTES,
+              maxParts: 1,
+              maxAttempts: 3,
+              // Docker extraction (75s), OCR cold wake (120s), and the existing
+              // bounded AI interpretation must fit one native analysis lease.
+              leaseMs: 360_000,
+              maxOutputBytes: MAX_OUTPUT_BYTES,
+            },
+          };
+          const receipt = await service.receive(receiptInput);
+          if (receipt.kind === 'rejected' && receipt.category === 'expired') {
+            throw new ResumeImportHostError(
+              'This PDF belongs to a deleted or expired import. Choose Start a new import to upload it again.',
+              409,
+              'expired_import',
+            );
+          }
+          if (receipt.kind === 'retry')
+            throw new ResumeImportHostError(
+              'Upload is temporarily unavailable. Retry this upload.',
+              503,
+            );
+          if (receipt.kind === 'rejected')
+            throw new ResumeImportHostError(
+              'Upload conflicts with a previous request or exceeds its limits.',
+              409,
+            );
+          // `analyze`/receive persist a dispatch before a worker may claim it.
+          // Repair it now so an authorized caller never waits for the periodic
+          // recovery loop, while GET remains a pure read.
+          await service.repairDispatches();
+          // `receive` has durably accepted and dispatched native analysis. Do not
+          // run PDF/OCR/AI work in the request; the worker and repair loop own it.
+          return await get(receipt.itemId);
         },
-        limits: {
-          maxBytes: RESUME_IMPORT_MAX_BYTES,
-          maxParts: 1,
-          maxAttempts: 3,
-          // Docker extraction (75s), OCR cold wake (120s), and the existing
-          // bounded AI interpretation must fit one native analysis lease.
-          leaseMs: 360_000,
-          maxOutputBytes: MAX_OUTPUT_BYTES,
-        },
-      };
-      const receipt = await service.receive(receiptInput);
-      if (receipt.kind === 'rejected' && receipt.category === 'expired') {
-        throw new ResumeImportHostError(
-          'This PDF belongs to a deleted or expired import. Choose Start a new import to upload it again.',
-          409,
-          'expired_import',
-        );
-      }
-      if (receipt.kind === 'retry')
-        throw new ResumeImportHostError(
-          'Upload is temporarily unavailable. Retry this upload.',
-          503,
-        );
-      if (receipt.kind === 'rejected')
-        throw new ResumeImportHostError(
-          'Upload conflicts with a previous request or exceeds its limits.',
-          409,
-        );
-      // `analyze`/receive persist a dispatch before a worker may claim it.
-      // Repair it now so an authorized caller never waits for the periodic
-      // recovery loop, while GET remains a pure read.
-      await service.repairDispatches();
-      // `receive` has durably accepted and dispatched native analysis. Do not
-      // run PDF/OCR/AI work in the request; the worker and repair loop own it.
-      return await get(receipt.itemId);
+      );
     },
     async retry(itemId: string, requestId: string) {
       identifier(requestId);

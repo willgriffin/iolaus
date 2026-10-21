@@ -306,7 +306,14 @@ export async function repairResumeImportDispatches(
 export async function repairQueuedResumeImports(
   db: DatabaseInterface,
 ): Promise<number> {
-  const expired = await purgeExpiredResumeImportAssets(db);
+  let repaired = 0;
+  try {
+    repaired = await purgeExpiredResumeImportAssets(db);
+  } catch {
+    // Retention is best effort during recovery. A later interval retries it,
+    // while authorized receipts must still be able to repair now.
+    console.warn('Skipped resume import retention cleanup during recovery.');
+  }
   const result = await db.query(
     `SELECT DISTINCT item.tenant_id, profile.owner_user_id, item.confidential_scope_id
        FROM intake_items AS item
@@ -316,7 +323,6 @@ export async function repairQueuedResumeImports(
       WHERE item.visibility NOT IN ('expired', 'deleted')
         AND (item.expires_at IS NULL OR item.expires_at > CURRENT_TIMESTAMP)`,
   );
-  let repaired = expired;
   for (const row of result.rows as Array<Record<string, unknown>>) {
     const subject: RuntimeWorkspaceSubject = {
       tenantId: identifier(row.tenant_id, 'tenant ID'),
@@ -376,25 +382,31 @@ export async function purgeExpiredResumeImportAssets(
   const assets = await createResumeImportAssets(db);
   let purged = 0;
   for (const row of result.rows as Array<Record<string, unknown>>) {
-    const service = new IngestionService({
-      assets,
-      db,
-      scope: {
-        tenantId: identifier(row.tenant_id, 'tenant ID'),
-        actorId: capturedPrincipal(row.data),
-        confidentialScopeId: identifier(
-          row.confidential_scope_id,
-          'profile ID',
-        ),
-      },
-      jobTarget: RESUME_IMPORT_JOB_TARGET,
-      // This is a retention-only system operation. It neither extracts nor
-      // applies profile data and cannot re-enable a revoked owner.
-      authorize: async () => true,
-      purgeDerived: async () => {},
-    });
-    await service.expire(identifier(row.id, 'receipt ID'));
-    purged += 1;
+    try {
+      const service = new IngestionService({
+        assets,
+        db,
+        scope: {
+          tenantId: identifier(row.tenant_id, 'tenant ID'),
+          actorId: capturedPrincipal(row.data),
+          confidentialScopeId: identifier(
+            row.confidential_scope_id,
+            'profile ID',
+          ),
+        },
+        jobTarget: RESUME_IMPORT_JOB_TARGET,
+        // This is a retention-only system operation. It neither extracts nor
+        // applies profile data and cannot re-enable a revoked owner.
+        authorize: async () => true,
+        purgeDerived: async () => {},
+      });
+      await service.expire(identifier(row.id, 'receipt ID'));
+      purged += 1;
+    } catch {
+      // Expired source data can be malformed or its cleanup can fail. Do not
+      // leak receipt data while retaining the remaining sweep work.
+      console.warn('Skipped expired resume import retention cleanup.');
+    }
   }
   return purged;
 }

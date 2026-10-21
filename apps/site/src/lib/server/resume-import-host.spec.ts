@@ -1,3 +1,12 @@
+vi.mock('./resume-import-account-fence.js', () => ({
+  withResumeImportAccountFence: async (
+    _db: unknown,
+    _scope: unknown,
+    action: () => Promise<unknown>,
+  ) => await action(),
+  assertResumeImportAccountNotDeleting: vi.fn(async () => {}),
+}));
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
