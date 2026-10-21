@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "provenance": "local-compatibility-repack",
+  "archive": "happyvertical-smrt-ingestion-0.55.17-iolaus-0559.tgz",
+  "archiveSha256": "44dbc3de5b384f2a8dbb768c93a5c33e2f2ef3d892597e9383ffdb2f38acf5d0",
+  "package": {
+    "name": "@happyvertical/smrt-ingestion",
+    "version": "0.55.17"
+  },
+  "source": {
+    "repository": "https://github.com/happyvertical/smrt.git",
+    "commit": "af25b95b6d91067752275089f5203db0396380ad",
+    "packageManifest": "packages/ingestion/package.json",
+    "packageManifestSha256": "1088a9db4f1545b26b113a906b6be97e53bdf4eba8adc1e3e8910f4694e9d411"
+  },
+  "publishedArtifact": {
+    "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ingestion/-/smrt-ingestion-0.55.17.tgz",
+    "integrity": "sha512-LzAqdcW+id/zNkNkqaQv3+bNBc2lwGJFDG5bs5U926U5c41RT44gs4CwUP/8SsM2+ywAnDhGpM3IjcvBMWX2YQ==",
+    "sha256": "543d66a55989e1d8a78530ec66354d53b79174372bbdfcd22da044f7e2be12dc"
+  },
+  "reboundDependencies": {
+    "@happyvertical/ai": "0.103.1",
+    "@happyvertical/ocr": "0.61.4",
+    "@happyvertical/pdf": "0.65.9",
+    "@happyvertical/smrt-agents": "0.55.9",
+    "@happyvertical/smrt-assets": "0.55.9",
+    "@happyvertical/smrt-core": "0.55.9",
+    "@happyvertical/smrt-jobs": "0.55.9",
+    "@happyvertical/smrt-playbooks": "0.55.9",
+    "@happyvertical/smrt-tenancy": "0.55.9",
+    "@happyvertical/smrt-types": "0.55.9",
+    "@happyvertical/smrt-ui": "0.55.9",
+    "@happyvertical/speech": "0.103.1",
+    "@happyvertical/sql": "0.103.1",
+    "sharp": "0.35.3"
+  }
+}

@@ -158,6 +158,7 @@ function addRole() {
       missing and never treats a role-specific answer as reusable unless you
       explicitly save it.
     </p>
+    <p><a href="/admin/career/import">Upload a resume PDF to prefill your experience</a></p>
   </header>
 
   {#if form?.error}

@@ -43,6 +43,13 @@ export const workspaceWorkflowCapabilityDefinitions = [
   {
     category: 'workspace-workflow',
     description:
+      'Apply an explicitly reviewed private resume-import proposal to the active profile.',
+    name: 'Apply reviewed resume import',
+    slug: 'resumeimports.apply',
+  },
+  {
+    category: 'workspace-workflow',
+    description:
       'Prepare and publish the signed-in account public resume profile.',
     name: 'Publish public profile',
     slug: 'workflow.public-profile.manage',

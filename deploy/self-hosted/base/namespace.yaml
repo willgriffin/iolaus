@@ -5,3 +5,4 @@ metadata:
   labels:
     app.kubernetes.io/name: iolaus
     app.kubernetes.io/part-of: iolaus
+    happyvertical.com/paddleocr-client: 'true'

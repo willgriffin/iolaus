@@ -19,6 +19,7 @@ export default defineConfig({
       'src/lib/components/admin/CareerResume.browser.spec.ts',
       'src/lib/components/admin/AdminResourcePageHeader.browser.spec.ts',
       'src/lib/components/admin/AdminRecordViewPageHeader.browser.spec.ts',
+      'src/lib/components/admin/ResumeImport.browser.spec.ts',
     ],
   },
 });

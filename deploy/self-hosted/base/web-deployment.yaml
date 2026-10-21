@@ -89,6 +89,12 @@ spec:
               value: 0.0.0.0
             - name: PORT
               value: "3000"
+            - name: BODY_SIZE_LIMIT
+              value: "10551296"
+            - name: IOLAUS_RESUME_EXTRACTION_URL
+              value: http://iolaus-resume-import-extraction:8080
+            - name: HAVE_PDF_PADDLEOCR_URL
+              value: http://paddleocr-vl.paddleocr-vl.svc.cluster.local
             - name: HOME
               value: /tmp
             - name: XDG_CACHE_HOME

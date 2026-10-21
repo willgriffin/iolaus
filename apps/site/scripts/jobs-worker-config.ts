@@ -1,3 +1,4 @@
+import { RESUME_IMPORT_INGESTION_QUEUE } from '../src/lib/server/resume-import-job-schema.js';
 import { AUTO_SUBMIT_APPLICATION_QUEUE } from '../src/lib/server/auto-submit-application-job-schema.js';
 import { OPPORTUNITY_INTELLIGENCE_QUEUE } from '../src/lib/server/opportunity-intelligence-job-schema.js';
 import { OPPORTUNITY_ANALYSIS_QUEUE } from '../src/lib/server/opportunity-analysis-job-schema.js';
@@ -14,6 +15,7 @@ export const taskWorkerQueues = [
   OPPORTUNITY_INTELLIGENCE_QUEUE,
   OPPORTUNITY_ANALYSIS_QUEUE,
   AUTO_SUBMIT_APPLICATION_QUEUE,
+  RESUME_IMPORT_INGESTION_QUEUE,
 ] as const;
 
 export const TASK_WORKER_SHUTDOWN_TIMEOUT_MS = 240_000;

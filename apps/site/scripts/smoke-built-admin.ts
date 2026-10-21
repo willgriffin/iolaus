@@ -27,10 +27,10 @@ async function getAvailablePort(): Promise<number> {
 function collectOutput(process: ChildProcessWithoutNullStreams) {
   let output = '';
   process.stdout.on('data', (chunk) => {
-    output += chunk.toString();
+    output = (output + chunk.toString()).slice(-65_536);
   });
   process.stderr.on('data', (chunk) => {
-    output += chunk.toString();
+    output = (output + chunk.toString()).slice(-65_536);
   });
   return () => output.trim();
 }
@@ -117,16 +117,37 @@ const runtimeEnvironment = {
   SMRT_DATA_DIR: dataDirectory,
   SMRT_RUNTIME_PROFILE: 'local',
 };
-const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const migration = spawn(packageManager, ['exec', 'smrt', 'db:migrate'], {
-  cwd: process.cwd(),
-  env: runtimeEnvironment,
-});
+// Initialize the isolated SQLite database through native DDL using the explicit
+// app registry. Generic CLI discovery walks the entire pnpm symlink graph.
+const migration = spawn(
+  process.execPath,
+  ['--import', 'tsx', 'scripts/smoke-migrate.ts'],
+  {
+    cwd: process.cwd(),
+    env: runtimeEnvironment,
+  },
+);
 const migrationOutput = collectOutput(migration);
-const migrationExit = await new Promise<number | null>((resolveExit, reject) => {
-  migration.once('error', reject);
-  migration.once('exit', resolveExit);
-});
+const migrationExit = await new Promise<number | null>(
+  (resolveExit, reject) => {
+    const deadline = setTimeout(() => {
+      migration.kill('SIGKILL');
+      reject(
+        new Error(
+          `Built-server smoke database migration exceeded 120 seconds.\n${migrationOutput()}`,
+        ),
+      );
+    }, 120_000);
+    migration.once('error', (cause) => {
+      clearTimeout(deadline);
+      reject(cause);
+    });
+    migration.once('exit', (code) => {
+      clearTimeout(deadline);
+      resolveExit(code);
+    });
+  },
+);
 if (migrationExit !== 0) {
   throw new Error(
     `Built-server smoke database migration failed with exit code ${migrationExit ?? 'none'}.\n${migrationOutput()}`,

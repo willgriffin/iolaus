@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FilesystemInterface } from '@happyvertical/files';
+import type { DatabaseInterface } from '@happyvertical/sql';
 import { type AppConfigEnvironment, isSharedHosted } from './app-config.js';
 import {
   purgeTombstonedPublicProfileRevisions,
@@ -65,6 +66,11 @@ export interface AccountDeletionDependencies {
   environment?: AppConfigEnvironment;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
   initiatedBy?: AccountDeletionInitiator;
+  /** Revoke private ingestion receipts and sweep retained source-asset locators. */
+  purgeResumeImports?: (
+    database: AccountDeletionDatabase,
+    scope: AccountDeletionScope,
+  ) => Promise<number>;
   /** Test seam: invoked after a phase completes, to inject a crash. */
   afterPhase?: (phase: 'files' | 'lock' | 'record') => Promise<void> | void;
   randomId?: () => string;
@@ -496,6 +502,23 @@ async function deleteAccountLocked(
   }
   await dependencies.afterPhase?.('record');
 
+  // Ingestion preserves bytes outside the ordinary resume filesystem. Revoke
+  // receipts and remove their private assets while this account still has an
+  // active owner identity; failures leave the durable deletion record started
+  // so a retry resumes safely instead of silently retaining source evidence.
+  const resumeImports = await (
+    dependencies.purgeResumeImports ??
+    (async (database, accountScope) => {
+      const { purgeResumeImportAccountData } = await import(
+        './resume-import-runtime.js'
+      );
+      return await purgeResumeImportAccountData(
+        database as unknown as DatabaseInterface,
+        accountScope,
+      );
+    })
+  )(database, target);
+
   // Tombstone before the account is disabled or any artifacts are removed. The
   // store takes the same native lock used by prepare/publish, captures every
   // revision path under that lock, clears the pointer, and keeps the handle
@@ -537,6 +560,7 @@ async function deleteAccountLocked(
   ) => {
     if (value > 0) counts[key] = (counts[key] ?? 0) + value;
   };
+  count(summary, 'resume_import_receipts', resumeImports);
   if (email) {
     count(
       summary,

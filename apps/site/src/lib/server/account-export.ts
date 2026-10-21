@@ -132,6 +132,7 @@ export interface AccountExport {
   format: typeof ACCOUNT_EXPORT_FORMAT;
   notes: string[];
   publicProfile: AccountExportPublicProfile | null;
+  resumeImports: Array<Record<string, unknown>>;
   screeningQuestions: Row[];
   shortlist: ShortlistEntry[];
   sections: Record<string, Record<string, Row[]>>;
@@ -149,6 +150,9 @@ export interface AccountExportDependencies extends PrivateCollectionOptions {
   publicProfileExport?: (
     subject: Pick<WorkspaceIdentitySubject, 'tenantId' | 'userId'>,
   ) => Promise<AccountExportPublicProfile | null>;
+  resumeImportExport?: (
+    subject: Pick<WorkspaceIdentitySubject, 'tenantId' | 'userId'>,
+  ) => Promise<Array<Record<string, unknown>>>;
   /** Account-wide decisions; excludes internal idempotency receipts. */
   shortlistExport?: (
     subject: Pick<WorkspaceIdentitySubject, 'tenantId' | 'userId'>,
@@ -240,6 +244,12 @@ export async function buildAccountExport(
         userId: identity.userId,
       })
     : [];
+  const resumeImports = deps.resumeImportExport
+    ? await deps.resumeImportExport({
+        tenantId: identity.tenantId,
+        userId: identity.userId,
+      })
+    : [];
   counts.ShortlistEntryRecord = shortlist.length;
   const notes = [
     'Download links require you to be signed in and stop working once your account is deleted. Save the files you need first.',
@@ -325,6 +335,7 @@ export async function buildAccountExport(
     format: ACCOUNT_EXPORT_FORMAT,
     notes,
     publicProfile,
+    resumeImports,
     screeningQuestions,
     shortlist,
     sections,

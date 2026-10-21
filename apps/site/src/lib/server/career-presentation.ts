@@ -1,4 +1,8 @@
 import type { ResumeSource } from '@willgriffin/iolaus-resume';
+import {
+  parseResumeImportStoredSkillEvidence,
+  type ResumeImportStoredSkillEvidence,
+} from '$lib/resume-import-structure';
 import type {
   CareerEditorSection,
   CareerSectionKey,
@@ -17,6 +21,9 @@ export interface CareerRecordPresentation {
   manuallyExcluded?: boolean;
   hiddenReason?: string;
   parentExperienceId?: string;
+  parentProjectId?: string;
+  dutySectionTitle?: string;
+  evidence?: ResumeImportStoredSkillEvidence[];
   kind: string;
 }
 export interface CareerSkillExclusion {
@@ -200,6 +207,9 @@ export function buildCareerPresentation(
         kind: key === 'achievements' ? 'Achievement' : 'Responsibility',
         inResume,
         parentExperienceId: experience ? text(experience.id) : undefined,
+        parentProjectId: project ? text(project.id) : undefined,
+        dutySectionTitle:
+          key === 'duties' ? text(row.title) || undefined : undefined,
         hiddenReason:
           inResume === false
             ? 'Not rendered at its current placement or relationship. Manage placement in detailed records.'
@@ -297,12 +307,23 @@ export function buildCareerPresentation(
             `${labels.slice(0, 3).join(' · ')}${labels.length > 3 ? ` · +${labels.length - 3} more` : ''}` ||
             preview;
         }
+        const evidence =
+          section.key === 'skillGroups' && typeof row.evidenceJson === 'string'
+            ? (() => {
+                try {
+                  return parseResumeImportStoredSkillEvidence(row.evidenceJson);
+                } catch {
+                  return [];
+                }
+              })()
+            : undefined;
         presentation = {
           title,
           context,
           preview: short(preview),
           inResume,
           hiddenReason,
+          evidence,
           kind: section.label,
         };
       }

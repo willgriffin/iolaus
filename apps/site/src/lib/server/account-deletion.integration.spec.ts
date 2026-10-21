@@ -276,6 +276,10 @@ function deletionContract(
     database: database as unknown as AccountDeletionDatabase,
     dialect,
     environment: shared,
+    // This fixture does not create the optional ingestion closure. Dedicated
+    // runtime tests exercise its real expiry path; deletion tests keep their
+    // native account-lock assertions focused on their seeded schema.
+    purgeResumeImports: async () => 0,
     ...extra,
   });
 
@@ -876,7 +880,12 @@ function deletionContract(
     await expect(
       deleteAccount(
         { tenantId: a.tenantId, userId: a.userId },
-        { database: failing, dialect, environment: shared },
+        {
+          database: failing,
+          dialect,
+          environment: shared,
+          purgeResumeImports: async () => 0,
+        },
       ),
     ).rejects.toThrow('simulated storage failure');
     // Nothing was deleted by the aborted transaction.
