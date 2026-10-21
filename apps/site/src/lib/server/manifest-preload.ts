@@ -38,6 +38,7 @@ const DEPENDENCY_PACKAGES = [
   '@happyvertical/smrt-tags',
   '@happyvertical/smrt-facts',
   '@happyvertical/smrt-jobs',
+  '@happyvertical/smrt-ingestion',
 ] as const;
 
 for (const packageName of DEPENDENCY_PACKAGES) {

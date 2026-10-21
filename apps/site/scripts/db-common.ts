@@ -2,6 +2,10 @@
 // package is imported below, so their classes register with complete schemas
 // under tsx (no build scanner). See manifest-preload.ts for the full rationale.
 import '../src/lib/server/manifest-preload.js';
+// A manifest supplies field definitions but does not evaluate model modules.
+// Evaluate the ingestion closure before the schema diff so its private intake
+// tables become registered migration candidates in standalone `tsx` scripts.
+import '@happyvertical/smrt-ingestion/models';
 import {
   ObjectRegistry,
   generateSchemaDiff,

@@ -88,6 +88,10 @@ spec:
               value: "4"
             - name: SMRT_JOBS_WORKER_SHUTDOWN_MS
               value: "240000"
+            - name: IOLAUS_RESUME_EXTRACTION_URL
+              value: http://iolaus-resume-import-extraction:8080
+            - name: HAVE_PDF_PADDLEOCR_URL
+              value: http://paddleocr-vl.paddleocr-vl.svc.cluster.local
             - name: SMRT_WORKER_HEARTBEAT_FILE
               value: /var/run/iolaus/worker-heartbeat.json
             - name: SMRT_WORKER_HEARTBEAT_MAX_AGE_MS

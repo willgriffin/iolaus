@@ -2117,5 +2117,15 @@
       ]
     },
     "output": "vendor/release"
-  }
+  },
+  "localSupplements": [
+    {
+      "name": "@happyvertical/smrt-ingestion",
+      "version": "0.55.17",
+      "tarball": "happyvertical-smrt-ingestion-0.55.17-iolaus-0559.tgz",
+      "resolution": "file:vendor/release/happyvertical-smrt-ingestion-0.55.17-iolaus-0559.tgz",
+      "provenance": "local-compatibility-repack",
+      "provenanceFile": "vendor/release/smrt-ingestion-0.55.17-iolaus-0559.provenance.json"
+    }
+  ]
 }

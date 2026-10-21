@@ -7,6 +7,8 @@ metadata:
     # operator overlay. This repository never owns a live DNS zone or issuer.
     cert-manager.io/cluster-issuer: iolaus-self-hosted-cluster-issuer
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Node and the upload route apply the stricter 10 MiB + envelope bound.
+    nginx.ingress.kubernetes.io/proxy-body-size: "11m"
 spec:
   ingressClassName: nginx
   tls:

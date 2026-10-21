@@ -11,3 +11,4 @@ resources:
   - schedule-worker-deployment.yaml
   - web-pod-disruption-budget.yaml
   - queue-provider-monitor.yaml
+  - resume-import-extraction.yaml

@@ -372,3 +372,13 @@ down both worker deployments
 as a substitute for a migration or a rollback. Rollback is a traffic and
 worker-fleet decision owned by the cutover runbook; this topology neither
 changes DNS/TLS nor decommissions a predecessor deployment.
+
+## Resume upload request size
+
+The web image and deployment set `BODY_SIZE_LIMIT=10551296` (10 MiB plus
+64 KiB for the multipart envelope). Set the same value when running the built
+adapter-node server directly. The ingress permits 11 MiB so a valid upload
+reaches the stricter application checks. Resume files remain limited to 10 MiB;
+review JSON remains limited to 512 KiB. Do not set an unlimited global body
+size. PDF extraction has additional runtime requirements in
+[resume-upload.md](resume-upload.md).

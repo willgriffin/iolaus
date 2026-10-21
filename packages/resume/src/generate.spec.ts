@@ -363,6 +363,63 @@ describe('renderResume', () => {
       '<span class="ach-title">SDK Architecture</span>',
     );
   });
+
+  it('groups consecutive duty section titles once while retaining every duty body', () => {
+    const dutySource = JSON.parse(JSON.stringify(source)) as ResumeSource;
+    const position = dutySource.experience.positions[0];
+    if (!position) throw new Error('expected fixture position');
+    position.duties = [
+      { title: 'Platform delivery', body: 'Built a service.' },
+      { title: 'Platform delivery', body: 'Mentored engineers.' },
+      { title: 'Operations', body: 'Improved reliability.' },
+      { title: 'Platform delivery', body: 'Documented the system.' },
+      { body: 'Supported a legacy responsibility.' },
+    ];
+    position.projects = [
+      {
+        achievements: [],
+        duties: [
+          { title: 'Project delivery', body: 'Implemented checkout.' },
+          { title: 'Project delivery', body: 'Measured conversion.' },
+        ],
+        id: 'portal',
+        name: 'Customer portal',
+      },
+    ];
+
+    const html = renderResumeHtml(
+      dutySource.profile,
+      dutySource.experience,
+      dutySource.skills,
+    );
+    const markdown = renderResumeMarkdown(
+      dutySource.profile,
+      dutySource.experience,
+      dutySource.skills,
+    );
+
+    expect(
+      html.match(/class="duty-section-title">Platform delivery/g),
+    ).toHaveLength(2);
+    expect(html.match(/class="duty-section-title">Operations/g)).toHaveLength(
+      1,
+    );
+    for (const body of [
+      'Built a service.',
+      'Mentored engineers.',
+      'Improved reliability.',
+      'Documented the system.',
+      'Supported a legacy responsibility.',
+    ])
+      expect(html).toContain(`<li>${body}</li>`);
+    expect(html).not.toContain('<strong>Platform delivery:</strong>');
+    expect(markdown.match(/^#### Platform delivery$/gm)).toHaveLength(2);
+    expect(markdown.match(/^##### Project delivery$/gm)).toHaveLength(1);
+    expect(markdown).toContain('- Implemented checkout.');
+    expect(markdown).toContain('- Measured conversion.');
+    expect(markdown).not.toContain('**Platform delivery:**');
+    expect(markdown).not.toContain('**Project delivery:**');
+  });
 });
 
 describe('applyTailoring', () => {

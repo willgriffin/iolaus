@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { FilesystemInterface } from '@happyvertical/files';
+import type { DatabaseInterface } from '@happyvertical/sql';
 import { type AppConfigEnvironment, isSharedHosted } from './app-config.js';
 import {
   purgeTombstonedPublicProfileRevisions,
   tombstonePublicProfile,
 } from './public-profile-store.js';
+import { withResumeImportAccountFence } from './resume-import-account-fence.js';
 import { shortlistOwnerLockKey } from './shortlist-store.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
@@ -65,6 +67,11 @@ export interface AccountDeletionDependencies {
   environment?: AppConfigEnvironment;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
   initiatedBy?: AccountDeletionInitiator;
+  /** Revoke private ingestion receipts and sweep retained source-asset locators. */
+  purgeResumeImports?: (
+    database: AccountDeletionDatabase,
+    scope: AccountDeletionScope,
+  ) => Promise<number>;
   /** Test seam: invoked after a phase completes, to inject a crash. */
   afterPhase?: (phase: 'files' | 'lock' | 'record') => Promise<void> | void;
   randomId?: () => string;
@@ -400,22 +407,6 @@ export async function deleteAccount(
   scope: AccountDeletionScope,
   dependencies: AccountDeletionDependencies,
 ): Promise<AccountDeletionResult> {
-  // SQLite only permits one writer; share the shortlist's cross-process lock
-  // across all deletion phases so a held write cannot poison another connection
-  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
-  return dependencies.dialect === 'sqlite'
-    ? await withSqliteOperationLock(
-        `shortlist:${shortlistOwnerLockKey(scope)}`,
-        () => deleteAccountLocked(scope, dependencies),
-      )
-    : await deleteAccountLocked(scope, dependencies);
-}
-
-async function deleteAccountLocked(
-  scope: AccountDeletionScope,
-  dependencies: AccountDeletionDependencies,
-): Promise<AccountDeletionResult> {
-  const { database, dialect } = dependencies;
   if (
     accountDeletionMode(dependencies.environment ?? process.env) !== 'enabled'
   ) {
@@ -426,6 +417,29 @@ async function deleteAccountLocked(
   }
   const tenantId = identifier(scope?.tenantId, 'tenant ID');
   const userId = identifier(scope?.userId, 'user ID');
+  scope = { tenantId, userId };
+  // SQLite only permits one writer; share the shortlist's cross-process lock
+  // across all deletion phases so a held write cannot poison another connection
+  // with SQLITE_BUSY. Native identity locks remain the durable write fence.
+  return await withResumeImportAccountFence(
+    dependencies.database as DatabaseInterface,
+    scope,
+    async () =>
+      dependencies.dialect === 'sqlite'
+        ? await withSqliteOperationLock(
+            `shortlist:${shortlistOwnerLockKey(scope)}`,
+            () => deleteAccountLocked(scope, dependencies),
+          )
+        : await deleteAccountLocked(scope, dependencies),
+  );
+}
+
+async function deleteAccountLocked(
+  scope: AccountDeletionScope,
+  dependencies: AccountDeletionDependencies,
+): Promise<AccountDeletionResult> {
+  const { database, dialect } = dependencies;
+  const { tenantId, userId } = scope;
   const target = { tenantId, userId };
   if (typeof database.transaction !== 'function') {
     throw new AccountDeletionError(
@@ -496,6 +510,23 @@ async function deleteAccountLocked(
   }
   await dependencies.afterPhase?.('record');
 
+  // Ingestion preserves bytes outside the ordinary resume filesystem. Revoke
+  // receipts and remove their private assets while this account still has an
+  // active owner identity; failures leave the durable deletion record started
+  // so a retry resumes safely instead of silently retaining source evidence.
+  const resumeImports = await (
+    dependencies.purgeResumeImports ??
+    (async (database, accountScope) => {
+      const { purgeResumeImportAccountData } = await import(
+        './resume-import-runtime.js'
+      );
+      return await purgeResumeImportAccountData(
+        database as unknown as DatabaseInterface,
+        accountScope,
+      );
+    })
+  )(database, target);
+
   // Tombstone before the account is disabled or any artifacts are removed. The
   // store takes the same native lock used by prepare/publish, captures every
   // revision path under that lock, clears the pointer, and keeps the handle
@@ -537,6 +568,7 @@ async function deleteAccountLocked(
   ) => {
     if (value > 0) counts[key] = (counts[key] ?? 0) + value;
   };
+  count(summary, 'resume_import_receipts', resumeImports);
   if (email) {
     count(
       summary,

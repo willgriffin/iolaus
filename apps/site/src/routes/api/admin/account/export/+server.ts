@@ -11,6 +11,7 @@ import {
 import { getDbConfig } from '$lib/server/db';
 import { createPublicProfileStore } from '$lib/server/public-profile-store';
 import { getResumeFilesystem } from '$lib/server/resume-files';
+import { exportResumeImportReceipts } from '$lib/server/resume-import-runtime';
 import { createShortlistStore } from '$lib/server/shortlist-store';
 import {
   WorkspaceSubjectError,
@@ -98,6 +99,11 @@ export const GET: RequestHandler = async ({ locals, url }) => {
           throw cause;
         }
       },
+      resumeImportExport: async (owner) =>
+        await exportResumeImportReceipts(
+          await resolveDatabase(getDbConfig()),
+          owner,
+        ),
       workspaceMode: getAppConfig().workspaceMode,
     },
   );

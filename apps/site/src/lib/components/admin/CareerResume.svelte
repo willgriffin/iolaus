@@ -74,6 +74,16 @@ const groupFor = (entry: Entry) =>
   'summary';
 const visible = (entry: Entry, group: string) =>
   entry.record.presentation?.inResume !== false || showHidden[group];
+function groupedDuties(entries: Entry[]) {
+  const groups: Array<{ title: string; entries: Entry[] }> = [];
+  for (const entry of entries) {
+    const title = entry.record.presentation?.dutySectionTitle ?? '';
+    const previous = groups.at(-1);
+    if (previous?.title === title) previous.entries.push(entry);
+    else groups.push({ title, entries: [entry] });
+  }
+  return groups;
+}
 function restoreFocus() {
   const currentTrigger = document.getElementById(triggerId);
   if (currentTrigger) currentTrigger.focus();
@@ -254,13 +264,25 @@ const visibilitySubmit: SubmitFunction = ({ cancel }) => {
   {/if}
 {/snippet}
 
-{#snippet row(entry: Entry, child = false)}
+{#snippet recordActions(entry: Entry)}
   {@const presentation = entry.record.presentation}
-  {@const hidden = presentation?.inResume === false}
   {@const manuallyExcluded = presentation?.manuallyExcluded === true}
   {@const visibilityLabel = entry.section.key === 'profile'
     ? manuallyExcluded ? 'Show summary on resume' : 'Hide summary from resume'
     : manuallyExcluded ? 'Show on resume' : 'Hide from resume'}
+  <div class="record-actions">
+    <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-action" type="button" aria-label={'Edit ' + (presentation?.title || entry.section.label)} title={'Edit ' + (presentation?.title || entry.section.label)} onclick={(event) => openEditor(entry, event)} disabled={saving}><Pencil size={18} aria-hidden="true" /></button>
+    <form method="POST" action="?/visibility" use:enhance={visibilitySubmit}>
+      <input type="hidden" name="section" value={entry.section.key} />
+      <input type="hidden" name="id" value={entry.record.id} />
+      <input type="hidden" name="visibility" value={manuallyExcluded ? 'visible' : 'hidden'} />
+      <button class="record-action" type="submit" aria-label={visibilityLabel} title={visibilityLabel} onclick={() => { activeGroup = groupFor(entry); }} disabled={saving}>{#if manuallyExcluded}<Eye size={18} aria-hidden="true" />{:else}<EyeOff size={18} aria-hidden="true" />{/if}</button>
+    </form>
+  </div>
+{/snippet}
+
+{#snippet row(entry: Entry, child = false)}
+  {@const presentation = entry.record.presentation}
   <div class:record-card={!child} class:related-row={child} class:editing={active === keyFor(entry)}>
     {#if active === keyFor(entry)}
       <div class="edit-heading"><strong>{presentation?.title || entry.section.label}</strong>{#if presentation?.context}<span class="context">{presentation.context}</span>{/if}</div>
@@ -273,19 +295,31 @@ const visibilitySubmit: SubmitFunction = ({ cancel }) => {
         {#if presentation?.inResume === false}<span class="membership"><EyeOff size={14} /> Hidden from canonical resume</span>
         {:else if presentation?.inResume === null || !presentation}<span class="membership">Canonical details unavailable</span>{/if}
       </span>
-      <div class="record-actions">
-        <button id={'resume-record-' + entry.section.key + '-' + entry.record.id} class="record-action" type="button" aria-label={'Edit ' + (presentation?.title || entry.section.label)} title={'Edit ' + (presentation?.title || entry.section.label)} onclick={(event) => openEditor(entry, event)} disabled={saving}><Pencil size={18} aria-hidden="true" /></button>
-        <form method="POST" action="?/visibility" use:enhance={visibilitySubmit}>
-          <input type="hidden" name="section" value={entry.section.key} />
-          <input type="hidden" name="id" value={entry.record.id} />
-          <input type="hidden" name="visibility" value={manuallyExcluded ? 'visible' : 'hidden'} />
-          <button class="record-action" type="submit" aria-label={visibilityLabel} title={visibilityLabel} onclick={() => { activeGroup = groupFor(entry); }} disabled={saving}>{#if manuallyExcluded}<Eye size={18} aria-hidden="true" />{:else}<EyeOff size={18} aria-hidden="true" />{/if}</button>
-        </form>
-      </div>
+      {@render recordActions(entry)}
     </div>
     {#if presentation?.hiddenReason}<p class="reason">{presentation.hiddenReason}</p>{/if}
     {/if}
+    {#if entry.section.key === 'skillGroups' && presentation?.evidence?.length}
+      <details class="skill-evidence"><summary>Evidence from roles ({presentation.evidence.length})</summary>
+        {#each presentation.evidence as evidence}<article><strong>{[evidence.role, evidence.company].filter(Boolean).join(' — ') || 'Role context unavailable'}</strong><span>{evidence.depth.replace('_', ' ')} · Page {evidence.page}</span><p>{evidence.usage}</p><blockquote>{evidence.quote}</blockquote>{#if evidence.startDate || evidence.endDate}<p>Explicit usage dates: {[evidence.startDate, evidence.endDate].filter(Boolean).join(' – ')}</p>{/if}{#if evidence.roleStartDate || evidence.roleEndDate}<p>Role context: {[evidence.roleStartDate, evidence.roleEndDate].filter(Boolean).join(' – ')}</p>{/if}</article>{/each}
+      </details>
+    {/if}
   </div>
+{/snippet}
+
+{#snippet dutyGroups(entries: Entry[])}
+  {#each groupedDuties(entries) as group, groupIndex (groupIndex + ':' + group.entries.map(keyFor).join(':'))}
+    <section class="duty-section">
+      {#if group.title}<h3>{group.title}</h3>{/if}
+      {#each group.entries as duty (keyFor(duty))}
+        {#if active === keyFor(duty)}
+          <div class="duty-editor"><strong>{group.title || 'Responsibility'}</strong>{@render editor(duty)}</div>
+        {:else}
+          <div class="duty-row"><p>{duty.record.presentation?.preview || 'Add responsibility details'}</p>{@render recordActions(duty)}</div>
+        {/if}
+      {/each}
+    </section>
+  {/each}
 {/snippet}
 
 <div class="resume-manager">
@@ -312,13 +346,25 @@ const visibilitySubmit: SubmitFunction = ({ cancel }) => {
           {#if entry.section.key === 'experiences'}
             {@const children = groupEntries.filter((child) => child.record.presentation?.parentExperienceId === entry.record.id)}
             {@const shownChildren = children.filter((child) => visible(child, group.id))}
+            {@const projects = shownChildren.filter((child) => child.section.key === 'projects')}
+            {@const roleDuties = shownChildren.filter((child) => child.section.key === 'duties' && !child.record.presentation?.parentProjectId)}
+            {@const roleChildren = shownChildren.filter((child) => child.section.key !== 'projects' && child.section.key !== 'duties' && !child.record.presentation?.parentProjectId)}
             {#if children.length}
               <div class="related">
                 <button id={'resume-children-' + entry.record.id} class="children-toggle" type="button" aria-expanded={Boolean(expandedChildren[entry.record.id])} aria-controls={expandedChildren[entry.record.id] ? 'resume-related-' + entry.record.id : undefined} onclick={() => toggleChildren(entry.record.id)} disabled={saving}>
                   {#if expandedChildren[entry.record.id]}<ChevronUp size={18} />{:else}<ChevronDown size={18} />{/if}
                   {children.filter((child) => child.section.key === 'projects').length} projects · {children.filter((child) => child.section.key !== 'projects').length} bullets{#if children.some((child) => child.record.presentation?.inResume === false)} · {children.filter((child) => child.record.presentation?.inResume === false).length} hidden{/if}
                 </button>
-                {#if expandedChildren[entry.record.id]}<div id={'resume-related-' + entry.record.id}>{#each shownChildren as child (keyFor(child))}{@render row(child, true)}{:else}<p>No related entries on your resume. Show hidden to review excluded entries.</p>{/each}</div>{/if}
+                {#if expandedChildren[entry.record.id]}<div id={'resume-related-' + entry.record.id}>
+                  {@render dutyGroups(roleDuties)}
+                  {#each projects as project (keyFor(project))}
+                    {@render row(project, true)}
+                    {@const projectChildren = shownChildren.filter((child) => child.record.presentation?.parentProjectId === project.record.id)}
+                    {#if projectChildren.length}<div class="project-children">{@render dutyGroups(projectChildren.filter((child) => child.section.key === 'duties'))}{#each projectChildren.filter((child) => child.section.key !== 'duties') as child (keyFor(child))}{@render row(child, true)}{/each}</div>{/if}
+                  {/each}
+                  {#each roleChildren as child (keyFor(child))}{@render row(child, true)}{/each}
+                  {#if !shownChildren.length}<p>No related entries on your resume. Show hidden to review excluded entries.</p>{/if}
+                </div>{/if}
               </div>
             {/if}
           {/if}
@@ -356,6 +402,8 @@ const visibilitySubmit: SubmitFunction = ({ cancel }) => {
   .hidden-toggle { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-width: 44px; padding: .5rem; border-radius: var(--smrt-radius-medium, .5rem); }
   .related { padding: 0 .5rem; margin-top: -.5rem; } .children-toggle { display: flex; align-items: center; gap: .5rem; padding: .5rem; text-align: left; }
   .related-row { border-bottom: 1px solid var(--smrt-color-outline-variant); min-width: 0; } .related-row .record-summary { padding: .75rem .5rem; } .readonly { padding: .75rem .5rem; }
+  .duty-section { display: grid; gap: .35rem; padding: .75rem .5rem; border-bottom: 1px solid var(--smrt-color-outline-variant); } .duty-section h3 { margin: 0; font-size: 1rem; } .duty-row { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; } .duty-row p { flex: 1; } .duty-editor { display: grid; gap: .35rem; } .project-children { margin-left: .75rem; border-inline-start: 2px solid var(--smrt-color-outline-variant); }
+  .skill-evidence { display: grid; gap: .6rem; padding: 0 1rem 1rem; } .skill-evidence summary { cursor: pointer; } .skill-evidence article { display: grid; gap: .3rem; padding: .65rem; border-inline-start: 3px solid var(--smrt-color-outline-variant); } .skill-evidence article p, .skill-evidence article blockquote { margin: 0; } .skill-evidence article span { color: var(--smrt-color-on-surface-variant); font-size: .85rem; }
   .manage-links { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .85rem; margin-top: .5rem; }
   .reason { font-size: .85rem; padding: 0 1rem .75rem; } .feedback { min-height: 1.5rem; margin-top: .75rem; color: var(--smrt-color-primary); } .load-notice { padding: .75rem 0; }
   form { padding: 0 1rem 1rem; display: grid; gap: .5rem; } label { margin-top: .5rem; font-size: .9rem; }

@@ -123,6 +123,20 @@ beforeEach(() => {
 });
 
 describe('SMRT database timestamp compatibility', () => {
+  it('registers the native ingestion table closure before schema inspection', () => {
+    const schemas = SmrtCore.ObjectRegistry.getAllSchemasAsDefinitions();
+    expect(
+      Object.values(schemas).some(
+        (schema) => schema.tableName === 'intake_items',
+      ),
+    ).toBe(true);
+    expect(
+      Object.values(schemas).some(
+        (schema) => schema.tableName === 'intake_evidence',
+      ),
+    ).toBe(true);
+  });
+
   it.each([false, true])(
     'uses native atomic DDL only for an explicit maintenance window (%s)',
     async (maintenanceWindow) => {

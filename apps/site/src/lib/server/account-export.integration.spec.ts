@@ -64,6 +64,20 @@ async function seed(db: TestDatabase, who: Principal, tag: string) {
     category: SCREENING_QUESTION_CATEGORY,
     name: `${tag} screening question`,
   });
+  await insert(db, 'skill_groups', {
+    ...own,
+    evidence_json: JSON.stringify([
+      {
+        quote: `${tag} private skill evidence`,
+        page: 1,
+        proposalExperienceId: 'experience-1',
+        usage: `${tag} usage`,
+        depth: 'hands_on',
+      },
+    ]),
+    group_key: `${tag}-skill`,
+    label: `${tag} skill`,
+  });
   const assetId = randomUUID();
   await insert(db, 'resume_assets', {
     ...own,
@@ -145,6 +159,19 @@ describe('account export', () => {
     expect(result.counts.ResumeAsset).toBe(1);
     expect(result.counts.CandidateProfile).toBe(1);
     expect(result.publicProfile).toBeNull();
+    expect(result.sections.evidence.SkillGroup).toEqual([
+      expect.objectContaining({
+        evidenceJson: JSON.stringify([
+          {
+            quote: 'ALICE private skill evidence',
+            page: 1,
+            proposalExperienceId: 'experience-1',
+            usage: 'ALICE usage',
+            depth: 'hands_on',
+          },
+        ]),
+      }),
+    ]);
 
     // Screening questions are split out of the preference rules.
     expect(result.screeningQuestions).toHaveLength(1);

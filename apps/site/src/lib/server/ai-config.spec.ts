@@ -383,6 +383,32 @@ describe('AI config profiles', () => {
     );
   });
 
+  it('permits a scoped bounded output override without changing the default', async () => {
+    vi.stubEnv('BIFROST_API_KEY', 'test-key');
+    const { resolveExtractionAiProfileClient } = await import('./ai-config');
+
+    await expect(
+      resolveExtractionAiProfileClient({ maxOutputTokens: 16_384 }),
+    ).resolves.toMatchObject({ maxOutputTokens: 16_384 });
+    expect(getAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationLimits: expect.objectContaining({ maxOutputTokens: 16_384 }),
+      }),
+    );
+  });
+
+  it.each([
+    0, 16_385, 4.5,
+  ])('rejects an output override outside the bounded integer range: %s', async (maxOutputTokens) => {
+    const { resolveExtractionAiProfileClient } = await import('./ai-config');
+    await expect(
+      resolveExtractionAiProfileClient({
+        aiClient: { chat: vi.fn() },
+        maxOutputTokens,
+      }),
+    ).rejects.toThrow('maxOutputTokens must be an integer from 1 to 16384.');
+  });
+
   it('allows profile-specific timeout overrides from private env', async () => {
     vi.stubEnv('BIFROST_API_KEY', 'test-key');
     vi.stubEnv('BIFROST_CHEAP_TIMEOUT', '15000');

@@ -48,6 +48,8 @@ ENV NODE_ENV=production
 ENV SMRT_RUNTIME_PROFILE=self-hosted
 ENV TSX_TSCONFIG_PATH=/app/apps/site/tsconfig.runtime.json
 ENV HOST=0.0.0.0
+# 10 MiB resume PDF plus a bounded multipart envelope.
+ENV BODY_SIZE_LIMIT=10551296
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \

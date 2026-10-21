@@ -15,6 +15,21 @@ const taskWorkerEntrypoint = readFileSync(
   'utf8',
 );
 const serverHooks = readFileSync(resolve(root, 'apps/site/src/hooks.server.ts'), 'utf8');
+const resumeExtractorUrl = 'http://iolaus-resume-import-extraction:8080';
+const paddleOcrUrl = 'http://paddleocr-vl.paddleocr-vl.svc.cluster.local';
+for (const workload of ['web-deployment.yaml', 'task-worker-deployment.yaml']) {
+  const manifest = readFileSync(resolve(base, workload), 'utf8');
+  if (!manifest.includes(`name: IOLAUS_RESUME_EXTRACTION_URL\n              value: ${resumeExtractorUrl}`)) {
+    throw new Error(`${workload} must use the private resume extraction service.`);
+  }
+  if (!manifest.includes(`name: HAVE_PDF_PADDLEOCR_URL\n              value: ${paddleOcrUrl}`)) {
+    throw new Error(`${workload} must use the approved private PaddleOCR service.`);
+  }
+}
+const namespaceManifest = readFileSync(resolve(base, 'namespace.yaml'), 'utf8');
+if (!namespaceManifest.includes("happyvertical.com/paddleocr-client: 'true'")) {
+  throw new Error('The Iolaus namespace must be allowlisted as a PaddleOCR client.');
+}
 
 function render(path) {
   return execFileSync('kubectl', ['kustomize', path], {
@@ -42,23 +57,21 @@ const releaseClosurePath = resolve(
   root,
   'vendor/release/release-closure.json',
 );
-const qualifiedReleaseClosure = existsSync(releaseClosurePath)
-  ? new Map(
-      JSON.parse(readFileSync(releaseClosurePath, 'utf8')).packages.map(
-        (pkg) => [
-          pkg.name,
-          `file:vendor/release/${pkg.tarball}`,
-        ],
-      ),
-    )
-  : new Map();
+const releaseClosure = existsSync(releaseClosurePath)
+  ? JSON.parse(readFileSync(releaseClosurePath, 'utf8'))
+  : { packages: [], localSupplements: [] };
+const embeddedReleaseClosure = new Map(
+  [...(releaseClosure.packages ?? []), ...(releaseClosure.localSupplements ?? [])].map(
+    (pkg) => [pkg.name, `file:vendor/release/${pkg.tarball}`],
+  ),
+);
 
 for (const { path: manifestPath, manifest } of dependencyManifests) {
   for (const [name, version] of Object.entries({
     ...manifest.dependencies,
     ...manifest.devDependencies,
   })) {
-    const embeddedArchive = qualifiedReleaseClosure.get(name);
+    const embeddedArchive = embeddedReleaseClosure.get(name);
     if (typeof version === 'string' && version.startsWith('file:')) {
       const expectedArchive = embeddedArchive && resolve(root, embeddedArchive.slice('file:'.length));
       const declaredArchive = resolve(dirname(manifestPath), version.slice('file:'.length));
@@ -80,6 +93,17 @@ for (const { path: manifestPath, manifest } of dependencyManifests) {
   }
 }
 
+for (const supplement of releaseClosure.localSupplements ?? []) {
+  if (supplement.provenance !== 'local-compatibility-repack') {
+    throw new Error(`${supplement.name} must declare its local compatibility provenance.`);
+  }
+  execFileSync(
+    'node',
+    ['scripts/verify-ingestion-archive.mjs', '--provenance', supplement.provenanceFile],
+    { cwd: root, stdio: 'inherit' },
+  );
+}
+
 for (const rendered of [baseRendered, productionRendered]) {
   requireText(rendered, 'name: iolaus-runtime');
   requireText(rendered, 'name: iolaus-migration-runtime');
@@ -89,21 +113,22 @@ for (const rendered of [baseRendered, productionRendered]) {
   requireText(rendered, 'node --import tsx apps/site/scripts/db-migrate.ts');
   requireText(rendered, 'name: iolaus-task-worker');
   requireText(rendered, 'name: iolaus-schedule-worker');
+  requireText(rendered, 'name: iolaus-resume-import-extraction');
   requireText(rendered, 'scripts/smrt-worker-heartbeat.mjs');
   requireText(rendered, 'name: iolaus-queue-provider-monitor');
   requireText(rendered, 'automountServiceAccountToken: false');
-  if (count(rendered, 'automountServiceAccountToken: false') !== 4) {
+  if (count(rendered, 'automountServiceAccountToken: false') !== 5) {
     throw new Error('Every self-hosted workload must disable service-account token automounting.');
   }
   requireText(rendered, 'path: /live');
-  if (count(rendered, 'runAsNonRoot: true') < 4 || count(rendered, 'runAsUser: 10001') < 4) {
+  if (count(rendered, 'runAsNonRoot: true') < 5 || count(rendered, 'runAsUser: 10001') < 5) {
     throw new Error('Every self-hosted workload must run as the fixed non-root image user.');
   }
   requireText(rendered, 'type: RuntimeDefault');
   if (
-    count(rendered, '- ALL') < 8 ||
-    count(rendered, 'readOnlyRootFilesystem: true') < 8 ||
-    count(rendered, 'mountPath: /tmp') < 8
+    count(rendered, '- ALL') < 9 ||
+    count(rendered, 'readOnlyRootFilesystem: true') < 9 ||
+    count(rendered, 'mountPath: /tmp') < 9
   ) {
     throw new Error('Every self-hosted init and main container must drop privileges and mount only its writable /tmp surface.');
   }

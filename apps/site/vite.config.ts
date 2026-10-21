@@ -94,6 +94,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       'src/**/*.browser.spec.ts',
       'src/**/*.mcp-app.spec.ts',
+      'scripts/resume-import-extraction.spec.mjs',
       'e2e/**',
     ],
   },

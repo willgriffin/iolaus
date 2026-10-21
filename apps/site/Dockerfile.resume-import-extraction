@@ -1,0 +1,22 @@
+FROM node:26-trixie-slim AS dependencies
+WORKDIR /workspace
+RUN npm install --global pnpm@11.25.0
+# The checked-in lock and vendored release archives are the only dependency
+# source. This build never copies npm configuration or application credentials.
+COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/site/package.json apps/site/package.json
+COPY packages/resume/package.json packages/resume/package.json
+COPY vendor/release vendor/release
+RUN pnpm install --frozen-lockfile --prod --filter @willgriffin/iolaus-site...
+
+FROM node:26-trixie-slim
+WORKDIR /app
+RUN groupadd --system --gid 10001 extraction && useradd --system --uid 10001 --gid extraction --no-create-home extraction
+COPY --from=dependencies /workspace/node_modules /app/node_modules
+COPY --from=dependencies /workspace/apps/site/node_modules /app/apps/site/node_modules
+COPY apps/site/scripts/resume-import-extraction.mjs /app/apps/site/scripts/resume-import-extraction.mjs
+RUN ln -s /app/apps/site/scripts/resume-import-extraction.mjs /app/extract.mjs
+USER 10001:10001
+ENV NODE_ENV=production HOME=/tmp PORT=8080
+EXPOSE 8080
+CMD ["node", "/app/apps/site/scripts/resume-import-extraction.mjs"]

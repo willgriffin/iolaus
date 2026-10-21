@@ -71,19 +71,47 @@ function renderProjectBulletHtml(
         </div>`;
 }
 
+function groupDuties(duties: Duty[] | undefined) {
+  if (!duties?.length) return [];
+  const sections: Array<{ title?: string; duties: Duty[] }> = [];
+  for (const duty of duties) {
+    const previous = sections.at(-1);
+    if (duty.title && previous?.title === duty.title) {
+      previous.duties.push(duty);
+    } else {
+      sections.push({ title: duty.title, duties: [duty] });
+    }
+  }
+  return sections;
+}
+
 function renderDutiesHtml(duties: Duty[] | undefined): string {
-  if (!duties?.length) return '';
-  return `
-        <ul class="duties">
-          ${duties
-            .map((duty) => {
-              const label = duty.title
-                ? `<strong>${escapeHtml(duty.title)}:</strong> `
-                : '';
-              return `<li>${label}${escapeHtml(duty.body)}</li>`;
-            })
-            .join('')}
-        </ul>`;
+  return groupDuties(duties)
+    .map(({ title, duties: grouped }) => {
+      const heading = title
+        ? `<h5 class="duty-section-title">${escapeHtml(title)}</h5>`
+        : '';
+      return `
+        <section class="duty-section">
+          ${heading}
+          <ul class="duties">
+            ${grouped.map((duty) => `<li>${escapeHtml(duty.body)}</li>`).join('')}
+          </ul>
+        </section>`;
+    })
+    .join('');
+}
+
+function appendDutiesMarkdown(
+  lines: string[],
+  duties: Duty[] | undefined,
+  headingLevel: '####' | '#####',
+) {
+  for (const { title, duties: grouped } of groupDuties(duties)) {
+    if (title) lines.push(`${headingLevel} ${title}`, '');
+    for (const duty of grouped) lines.push(`- ${duty.body}`);
+    lines.push('');
+  }
 }
 
 function renderQrCode(url: string, className: string): string {
@@ -334,11 +362,7 @@ export function renderResumeMarkdown(
       '',
     );
     if (position.blurb) lines.push(position.blurb, '');
-    for (const duty of position.duties ?? []) {
-      const label = duty.title ? `**${duty.title}:** ` : '';
-      lines.push(`- ${label}${duty.body}`);
-    }
-    if (position.duties?.length) lines.push('');
+    appendDutiesMarkdown(lines, position.duties, '####');
     for (const project of position.projects ?? []) {
       const projectDates =
         project.start || project.end
@@ -350,10 +374,7 @@ export function renderResumeMarkdown(
       const projectUrl = project.url ? ` ${EM_DASH} ${project.url}` : '';
       lines.push(`#### ${projectName}${projectUrl}${projectDates}`, '');
       if (project.summary) lines.push(project.summary, '');
-      for (const duty of project.duties ?? []) {
-        const label = duty.title ? `**${duty.title}:** ` : '';
-        lines.push(`- ${label}${duty.body}`);
-      }
+      appendDutiesMarkdown(lines, project.duties, '#####');
       for (const achievement of project.achievements) {
         const metric = achievement.metric ? ` *(${achievement.metric})*` : '';
         const label = achievement.title ? `**${achievement.title}:** ` : '';
@@ -571,6 +592,14 @@ const PDF_STYLES = `
     font-size: 8.6pt;
   }
   .duties li { margin: 0 0 2pt; }
+  .duty-section { margin: 0 0 4pt; }
+  .duty-section-title {
+    margin: 0 0 1pt;
+    color: var(--ink);
+    font: 600 8.6pt/1.2 var(--font-sans);
+    break-after: avoid;
+    page-break-after: avoid;
+  }
   .projects {
     display: grid;
     gap: 4pt;

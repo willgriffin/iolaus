@@ -18,6 +18,9 @@ export class SkillGroup extends SmrtObject {
   label = '';
   @field({ type: 'text' })
   blurb = '';
+  /** Private, source-backed resume-import observations. */
+  @field({ type: 'text', sensitive: true })
+  evidenceJson = '[]';
   @field({ type: 'decimal' })
   sortOrder = 0;
   @field({ type: 'boolean' })
