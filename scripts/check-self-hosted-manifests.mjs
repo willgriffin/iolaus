@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { verifyPublishedClosure } from './verify-published-closure.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const base = resolve(root, 'deploy/self-hosted/base');
@@ -49,60 +50,7 @@ function count(rendered, text) {
 
 const baseRendered = render(base);
 const productionRendered = render(production);
-const dependencyManifests = [
-  resolve(root, 'package.json'),
-  resolve(root, 'apps/site/package.json'),
-].map((path) => ({ path, manifest: JSON.parse(readFileSync(path, 'utf8')) }));
-const releaseClosurePath = resolve(
-  root,
-  'vendor/release/release-closure.json',
-);
-const releaseClosure = existsSync(releaseClosurePath)
-  ? JSON.parse(readFileSync(releaseClosurePath, 'utf8'))
-  : { packages: [], localSupplements: [] };
-const embeddedReleaseClosure = new Map(
-  [...(releaseClosure.packages ?? []), ...(releaseClosure.localSupplements ?? [])].map(
-    (pkg) => [pkg.name, `file:vendor/release/${pkg.tarball}`],
-  ),
-);
-
-for (const { path: manifestPath, manifest } of dependencyManifests) {
-  for (const [name, version] of Object.entries({
-    ...manifest.dependencies,
-    ...manifest.devDependencies,
-  })) {
-    const embeddedArchive = embeddedReleaseClosure.get(name);
-    if (typeof version === 'string' && version.startsWith('file:')) {
-      const expectedArchive = embeddedArchive && resolve(root, embeddedArchive.slice('file:'.length));
-      const declaredArchive = resolve(dirname(manifestPath), version.slice('file:'.length));
-      if (!expectedArchive || expectedArchive !== declaredArchive) {
-        throw new Error(
-          `${name} must use the tarball recorded in vendor/release/release-closure.json.`,
-        );
-      }
-      const archivePath = resolve(root, embeddedArchive.slice('file:'.length));
-      if (!existsSync(archivePath)) {
-        throw new Error(`${name} qualified embedded archive is missing.`);
-      }
-      continue;
-    }
-    if (!name.startsWith('@happyvertical/smrt')) continue;
-    if (!/^\d+\.\d+\.\d+$/u.test(version)) {
-      throw new Error(`${name} must be pinned to a released semantic version.`);
-    }
-  }
-}
-
-for (const supplement of releaseClosure.localSupplements ?? []) {
-  if (supplement.provenance !== 'local-compatibility-repack') {
-    throw new Error(`${supplement.name} must declare its local compatibility provenance.`);
-  }
-  execFileSync(
-    'node',
-    ['scripts/verify-ingestion-archive.mjs', '--provenance', supplement.provenanceFile],
-    { cwd: root, stdio: 'inherit' },
-  );
-}
+verifyPublishedClosure(root);
 
 for (const rendered of [baseRendered, productionRendered]) {
   requireText(rendered, 'name: iolaus-runtime');

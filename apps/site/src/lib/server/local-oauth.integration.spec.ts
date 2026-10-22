@@ -1,6 +1,6 @@
 import './manifest-preload.js';
 import { createHash } from 'node:crypto';
-import { getTestDatabase } from '@happyvertical/smrt-core';
+import { getRetentionTasks, getTestDatabase } from '@happyvertical/smrt-core';
 import {
   MembershipCollection,
   PermissionCollection,
@@ -9,6 +9,7 @@ import {
   SessionService,
   TenantCollection,
   UserCollection,
+  UsersOAuthRefreshGrantCollection,
 } from '@happyvertical/smrt-users';
 import { exportJWK, generateKeyPair } from 'jose';
 import { expect, it, vi } from 'vitest';
@@ -167,6 +168,42 @@ it('uses native session-backed grants from app consent through token use and acc
         }),
       ),
     ).rejects.toThrow();
+    // The published closure must preserve spent refresh hashes through expiry,
+    // so replay can still revoke a live replacement after credential cleanup.
+    const replayApproval = await oauth.authorization.approve(
+      oauth.server,
+      request,
+      sessionId,
+    );
+    exchange.set(
+      'code',
+      new URL(replayApproval.redirectUri).searchParams.get('code') as string,
+    );
+    const replayToken = await oauth.server.token(exchange);
+    const refresh = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: replayToken.refresh_token as string,
+      client_id: client.client_id,
+      resource: oauth.resource,
+    });
+    const replacement = await oauth.server.token(refresh);
+    const refreshRows = await UsersOAuthRefreshGrantCollection.create({ db });
+    await db.query(
+      `UPDATE ${refreshRows.tableName} SET expires_at = ? WHERE consumed_at IS NOT NULL`,
+      new Date(Date.now() - 86400000).toISOString(),
+    );
+    const retention = getRetentionTasks().find(
+      (task) => task.name === 'users-oauth-credentials',
+    );
+    expect(retention).toBeDefined();
+    await retention?.run(db, { dryRun: false, now: new Date() });
+    const retained = await db.query(
+      `SELECT id FROM ${refreshRows.tableName} WHERE consumed_at IS NOT NULL`,
+    );
+    expect(retained.rows).toHaveLength(1);
+    await expect(oauth.server.token(refresh)).rejects.toThrow();
+    refresh.set('refresh_token', replacement.refresh_token as string);
+    await expect(oauth.server.token(refresh)).rejects.toThrow();
   } finally {
     await db.close?.();
   }
