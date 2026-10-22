@@ -42,7 +42,10 @@ import './workspace-workflow-capabilities.js';
 import { type SmrtJob, TaskRunner } from '@happyvertical/smrt-jobs';
 import { deleteAccount } from './account-deletion.js';
 import { getDbConfig } from './db.js';
-import { withResumeImportAccountFence } from './resume-import-account-fence.js';
+import {
+  ResumeImportLifecycleBusyError,
+  withResumeImportAccountFence,
+} from './resume-import-account-fence.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
 import {
   exportResumeImportReceipts,
@@ -266,6 +269,8 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           url.pathname = `/${databaseName}`;
           db = await getDatabase({
             cache: false,
+            max: 5,
+            connectionTimeoutMillis: 5_000,
             type: 'postgres',
             url: url.toString(),
           });
@@ -1853,12 +1858,18 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         })();
         await requested;
         try {
-          // A separate owner never waits for this account's fence.
-          await withResumeImportAccountFence(
+          // Receive and the waiting deletion consume both max5 admissions.
+          // A third owner is refused immediately, rather than queued on a pin.
+          const independent = withResumeImportAccountFence(
             db,
             { ...owner, userId: randomUUID() },
             async () => {},
           );
+          if (dialect === 'postgres')
+            await expect(independent).rejects.toBeInstanceOf(
+              ResumeImportLifecycleBusyError,
+            );
+          else await independent;
           expect(recordCreated).toBe(false);
         } finally {
           releaseUpload();

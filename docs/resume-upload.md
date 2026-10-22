@@ -60,6 +60,37 @@ other worker queues. Failed cleanup remains eligible for a later sweep. Account
 deletion cleanup stays fail-closed and resumable. Never put resume files, evidence, or extracted
 text in a public bucket or shared catalog.
 
+### Hosted lifecycle capacity
+
+PostgreSQL lifecycle work uses the shared application pool: one pinned advisory
+lock session plus one native transaction connection per receive/deletion action.
+Admission is immediate and shared by wrappers of the actual pool. It counts
+pending acquisition, account lock waits, execution and cleanup until release.
+The limit is `min(2, floor((poolMax - 1) / 2))`: max 5 allows two actions with one
+connection left for other queries; max 3/4 allow one; max 1/2 refuse lifecycle work.
+Use at least three connections to enable uploads/deletion. This adds no pool and
+does not raise the hosted ceiling (main 5 + readiness 1 per process, five processes
+within the role limit 30). Nested native transactions use one executor connection
+and SAVEPOINTs; independent transactions still require their own connection.
+
+`IOLAUS_DB_CONNECTION_TIMEOUT_MS` defaults to 5000 and must be a positive integer
+at most 2147483647. It configures native pool acquisition for both application and
+readiness handles, including pinned sessions; no abandoned Promise.race checkout
+is created. Account advisory lock waiting remains bounded to 15s. Capacity,
+acquisition and lock refusals before an action starts return retryable HTTP 503
+(`resume_lifecycle_busy`, upload Retry-After 5s); account deletion and its CLI
+report a retry without claiming deletion started. Action or cleanup failures
+remain failures because writes may already have committed.
+
+The advisory lock still drains same-account work across processes. Admission is
+per process/pool and does not replace that lock or the started-deletion check.
+This capacity change does not establish safety after loss of the pinned advisory
+session during an action; native authority/write-guard qualification is required
+before release. Qualify native bounded-pool behavior with
+`RESUME_IMPORT_POSTGRES_TEST_DATABASE_URL` pointing to the isolated
+`iolaus_resume_import_qa` database and run the fence PostgreSQL and host integration
+specs. Unit fakes are not evidence for PostgreSQL acquisition or lock behavior.
+
 Text extraction runs through the private
 `iolaus-resume-import-extraction` ClusterIP service, configured through
 `IOLAUS_RESUME_EXTRACTION_URL`. It accepts only `POST /extract` with an

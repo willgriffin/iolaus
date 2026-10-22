@@ -13,6 +13,7 @@ import { getAppConfig } from '$lib/server/app-config';
 import { sessionCookieName } from '$lib/server/auth';
 import { getDbConfig } from '$lib/server/db';
 import { getResumeFilesystem } from '$lib/server/resume-files';
+import { ResumeImportLifecycleBusyError } from '$lib/server/resume-import-account-fence.js';
 import { isTerminalSession } from '$lib/server/terminal-auth';
 import {
   WorkspaceSubjectError,
@@ -112,6 +113,8 @@ export const actions: Actions = {
         }),
       );
     } catch (cause) {
+      if (cause instanceof ResumeImportLifecycleBusyError)
+        return fail(503, { error: cause.message });
       console.error(
         JSON.stringify({
           event: 'account.deletion_failed',

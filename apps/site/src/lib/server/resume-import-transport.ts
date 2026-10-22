@@ -3,6 +3,7 @@ import {
   isOwnerAuthorityDenial,
   OwnerPrincipalError,
 } from './owner-principal.js';
+import { ResumeImportLifecycleBusyError } from './resume-import-account-fence.js';
 import { ResumeImportDomainError } from './resume-import-domain.js';
 import { ResumeImportHostError } from './resume-import-host.js';
 
@@ -26,6 +27,11 @@ export function resumeImportTransportGuard(
   }
 }
 export function resumeImportTransportError(cause: unknown): Response {
+  if (cause instanceof ResumeImportLifecycleBusyError)
+    return json(
+      { error: cause.message, code: cause.code },
+      { status: 503, headers: { 'retry-after': '5' } },
+    );
   if (cause instanceof OwnerPrincipalError)
     return json(
       { error: 'Sign in before importing a resume.' },

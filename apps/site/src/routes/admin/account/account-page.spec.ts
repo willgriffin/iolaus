@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ResumeImportLifecycleBusyError } from '$lib/server/resume-import-account-fence.js';
 
 const state = vi.hoisted(() => ({
   mode: 'enabled' as 'disabled' | 'enabled',
@@ -120,6 +121,19 @@ describe('account page deletion action', () => {
     const result = (await run(event(fields))) as { status: number };
     expect(result.status).toBe(400);
     expect(state.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('reports a retryable refusal without claiming the account was locked', async () => {
+    state.deleteAccount.mockRejectedValueOnce(
+      new ResumeImportLifecycleBusyError(),
+    );
+    const input = event(good);
+    const result = await run(input);
+    expect(result).toMatchObject({
+      status: 503,
+      data: { error: expect.stringContaining('try again') },
+    });
+    expect(input.cookies.delete).not.toHaveBeenCalled();
   });
 
   it('deletes only the verified session subject, clears the cookie and redirects', async () => {
