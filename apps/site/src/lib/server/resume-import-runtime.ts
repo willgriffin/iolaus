@@ -23,7 +23,10 @@ import {
   type ResumeImportHost,
 } from './resume-import-host.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
-import { getIolausUserAssetsRoot } from './runtime-paths.js';
+import {
+  getResumeImportStorage,
+  resumeImportStorageOptions,
+} from './resume-import-storage.js';
 import {
   type CandidateWorkspaceSubject,
   requireCandidateWorkspaceSubject,
@@ -107,7 +110,7 @@ async function createResumeImportAssets(
 ): Promise<AssetRuntimeLike> {
   return await createAssetRuntime({
     db,
-    storage: { type: 'local', basePath: getIolausUserAssetsRoot() },
+    ...resumeImportStorageOptions(getResumeImportStorage()),
   });
 }
 
@@ -351,14 +354,11 @@ export async function repairQueuedResumeImports(
           return await host.repair();
         },
       );
-    } catch (cause) {
+    } catch {
       // A revoked member or an unavailable account must not strand the other
       // tenants' receipts. Its durable receipt remains for a later authorized
       // repair or account-deletion purge.
-      console.warn(
-        'Skipped resume import recovery for an unavailable scope:',
-        cause,
-      );
+      console.warn('Skipped resume import recovery for an unavailable scope.');
     }
   }
   return repaired;

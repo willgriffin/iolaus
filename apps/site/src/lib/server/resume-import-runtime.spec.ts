@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { requireCandidateWorkspaceSubject } from './workspace-subject.js';
 
 const state = vi.hoisted(() => ({
   active: vi.fn(),
@@ -62,6 +64,8 @@ vi.mock('./job-workspace-subject.js', () => ({
 
 import {
   exportResumeImportReceipts,
+  getResumeImportHost,
+  purgeExpiredResumeImportAssets,
   purgeResumeImportAccountData,
   RESUME_IMPORT_INGESTION_QUEUE,
   repairQueuedResumeImports,
@@ -79,6 +83,8 @@ const args = { dispatchId: 'dispatch', itemId: 'item', revision: 1 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('SMRT_RUNTIME_PROFILE', 'local');
+  vi.stubEnv('IOLAUS_RESUME_IMPORT_STORAGE_JSON', undefined);
   state.hostFactory.mockReturnValue(state.host);
   state.active.mockReturnValue({ job, progress: state.progress });
   state.revalidate.mockImplementation(
@@ -90,7 +96,60 @@ beforeEach(() => {
   state.service.expire.mockResolvedValue(undefined);
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe('resume import runtime', () => {
+  it('uses one private provider configuration for request, worker, retention, recovery and account deletion', async () => {
+    const storage = {
+      type: 's3',
+      bucket: 'private-ingestion',
+      region: 'us-east-1',
+    };
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+    vi.stubEnv('IOLAUS_RESUME_IMPORT_STORAGE_JSON', JSON.stringify(storage));
+    const row = {
+      id: 'item',
+      tenant_id: 'tenant',
+      owner_user_id: 'user',
+      confidential_scope_id: 'profile',
+      data: { capturedCeiling: { execution: { principalId: 'user' } } },
+    };
+    const db = { query: vi.fn(async () => ({ rows: [row] })) } as any;
+    vi.mocked(getRequestScopedDatabase).mockReturnValue(db);
+    vi.mocked(requireCandidateWorkspaceSubject).mockReturnValue(subject as any);
+    await getResumeImportHost({} as any);
+    await runResumeImportIngestionJob(args, {} as any, db);
+    await purgeExpiredResumeImportAssets(db);
+    await repairQueuedResumeImports(db);
+    await purgeResumeImportAccountData(db, subject);
+    expect(state.assets).toHaveBeenCalledTimes(6);
+    for (const [options] of state.assets.mock.calls as unknown as Array<
+      [any]
+    >) {
+      expect(options).toEqual({
+        db,
+        storage,
+        storeOptions: { resolver: expect.any(Function) },
+      });
+    }
+    state.assets.mockClear();
+    await exportResumeImportReceipts(db, subject);
+    expect(state.assets).not.toHaveBeenCalled();
+  });
+
+  it('refuses hosted missing configuration before constructing an asset runtime', async () => {
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+    const db = { query: vi.fn(async () => ({ rows: [] })) } as any;
+    vi.mocked(getRequestScopedDatabase).mockReturnValue(db);
+    vi.mocked(requireCandidateWorkspaceSubject).mockReturnValue(subject as any);
+    await expect(getResumeImportHost({} as any)).rejects.toThrow(
+      'Invalid private',
+    );
+    await expect(purgeResumeImportAccountData(db, subject)).rejects.toThrow(
+      'Invalid private',
+    );
+    expect(state.assets).not.toHaveBeenCalled();
+  });
   it('rejects direct or wrong-queue calls before reading private receipts', async () => {
     const db = { query: vi.fn() } as any;
     state.active.mockImplementation(() => {
