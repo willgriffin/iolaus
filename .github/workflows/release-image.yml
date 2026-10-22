@@ -18,6 +18,7 @@ concurrency:
   cancel-in-progress: false
 env:
   IMAGE: ghcr.io/willgriffin/iolaus/site
+  EXTRACTOR_IMAGE: ghcr.io/willgriffin/iolaus/resume-import-extraction
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -31,6 +32,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
+      CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,14 +51,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Build and push site image
+      - name: Build and push site candidate
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/site/Dockerfile
           push: true
-          tags: ${{ env.IMAGE }}:${{ env.RELEASE_TAG }}
+          tags: >-
+            ${{ env.IMAGE }}:${{ env.CANDIDATE_TAG }}
           build-args: |
             IOLAUS_SOURCE_REVISION=${{ steps.meta.outputs.revision }}
             IOLAUS_LOCKFILE_SHA256=${{ steps.meta.outputs.lock_sha256 }}
@@ -68,41 +71,109 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - name: Record immutable digest
+      - name: Build and push extractor candidate
+        id: extractor
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/site/Dockerfile.resume-import-extraction
+          push: true
+          tags: >-
+            ${{ env.EXTRACTOR_IMAGE }}:${{ env.CANDIDATE_TAG }}
+          build-args: |
+            IOLAUS_SOURCE_REVISION=${{ steps.meta.outputs.revision }}
+            IOLAUS_LOCKFILE_SHA256=${{ steps.meta.outputs.lock_sha256 }}
+          provenance: mode=max
+          sbom: true
+      - name: Attest extractor build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.EXTRACTOR_IMAGE }}
+          subject-digest: ${{ steps.extractor.outputs.digest }}
+          push-to-registry: true
+      - name: Qualify candidate container envelope
+        env:
+          EXTRACTOR_DIGEST: ${{ steps.extractor.outputs.digest }}
+          REVISION: ${{ steps.meta.outputs.revision }}
+          LOCK_SHA256: ${{ steps.meta.outputs.lock_sha256 }}
+        run: |
+          node --test scripts/resume-extractor-release.test.mjs
+          node scripts/resume-extractor-candidate.mjs \
+            "${EXTRACTOR_IMAGE}@${EXTRACTOR_DIGEST}" \
+            "${REVISION}" "${LOCK_SHA256}"
+      - name: Publish release tags for tested candidates
+        env:
+          SITE_DIGEST: ${{ steps.build.outputs.digest }}
+          EXTRACTOR_DIGEST: ${{ steps.extractor.outputs.digest }}
+        run: |
+          # Copy the index verbatim to preserve provenance.
+          docker buildx imagetools create --prefer-index=false \
+            --tag "${IMAGE}:${RELEASE_TAG}" "${IMAGE}@${SITE_DIGEST}"
+          docker buildx imagetools create --prefer-index=false \
+            --tag "${EXTRACTOR_IMAGE}:${RELEASE_TAG}" \
+            "${EXTRACTOR_IMAGE}@${EXTRACTOR_DIGEST}"
+      - name: Record immutable image pair
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          EXTRACTOR_DIGEST: ${{ steps.extractor.outputs.digest }}
           REVISION: ${{ steps.meta.outputs.revision }}
+          LOCK_SHA256: ${{ steps.meta.outputs.lock_sha256 }}
         run: |
-          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Unexpected digest: ${DIGEST}" >&2
-            exit 1
-          fi
+          for digest in "${DIGEST}" "${EXTRACTOR_DIGEST}"; do
+            if ! [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Unexpected image digest" >&2
+              exit 1
+            fi
+          done
           ref="${IMAGE}@${DIGEST}"
+          extractor_ref="${EXTRACTOR_IMAGE}@${EXTRACTOR_DIGEST}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs"
+          jq -n --arg tag "${RELEASE_TAG}" --arg revision "${REVISION}" \
+            --arg lock "${LOCK_SHA256}" --arg site "${ref}" \
+            --arg extractor "${extractor_ref}" \
+            --arg run "${run_url}/${GITHUB_RUN_ID}" \
+            '{schema: 1, tag: $tag, revision: $revision, lockSha256: $lock,
+              site: $site, extractor: $extractor, workflow: $run,
+              qualification:
+                "candidate-envelope-passed; production-integration-required"}' \
+            > resume-image-pair.json
           {
-            echo "### Released site image"
+            echo "### Released image candidates"
             echo
-            echo "- Tag: \`${RELEASE_TAG}\`"
             echo "- Source revision: \`${REVISION}\`"
-            echo "- Immutable reference: \`${ref}\`"
+            echo "- Lock SHA-256: \`${LOCK_SHA256}\`"
+            echo "- Site: \`${ref}\`"
+            echo "- Extractor: \`${extractor_ref}\`"
+            echo "- Container envelope passed;"
+            echo "  production integration remains required."
           } >> "$GITHUB_STEP_SUMMARY"
-          if ! gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+          # Dispatch without a GitHub release still retains the artifact.
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --json body --jq .body > notes.md; then
-            echo "::notice::No release for ${RELEASE_TAG};" \
-              "digest recorded in job summary only."
-            exit 0
+            gh release upload "${RELEASE_TAG}" resume-image-pair.json \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+            if ! grep -Fq "${extractor_ref}" notes.md; then
+              {
+                echo
+                echo "## Resume image candidates"
+                echo
+                echo "Site: \`${ref}\`"
+                echo
+                echo "Extractor: \`${extractor_ref}\`"
+                echo
+                echo "Source: \`${REVISION}\`;"
+                echo "lock SHA-256: \`${LOCK_SHA256}\`."
+                echo
+                echo "Envelope tested. Production requires qualification:"
+                echo "docs/resume-extractor-release.md."
+              } >> notes.md
+              gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --notes-file notes.md
+            fi
           fi
-          if grep -Fq "${ref}" notes.md; then
-            exit 0
-          fi
-          {
-            echo
-            echo "## Container image"
-            echo
-            echo "Pin deploy overlays to this immutable reference:"
-            echo
-            echo '```'
-            echo "${ref}"
-            echo '```'
-          } >> notes.md
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-            --notes-file notes.md
+      - name: Retain exact candidate identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: resume-image-pair
+          path: resume-image-pair.json
+          if-no-files-found: error
