@@ -44,3 +44,13 @@ Follow-up evidence: corrected ledger/host unit checks passed 28 cases
 case passed (`225-candidate-profile-native-sqlite.log`). The corrected ownership
 fixture fails with the pre-fix admission query
 (`225-candidate-profile-base.log`). PostgreSQL rerun remains coordinator-owned.
+
+Published PostgreSQL schema boundary: native `users.id`, `tenants.id`,
+`memberships.user_id` and `memberships.tenant_id` are UUID columns;
+CandidateProfile `owner_user_id` and `tenant_id` are text fields. Admission casts
+both sides of cross-record identity joins to text using syntax also supported by
+SQLite. The PostgreSQL contract asserts those actual schema types before an
+ordinary successful admission. Model key types are unchanged; schema migration
+is not used to avoid the cross-package comparison. Worker SQLite regression
+results are in `225-uuid-join-sqlite.log`; actual PostgreSQL qualification must be
+rerun by the coordinator after this correction.

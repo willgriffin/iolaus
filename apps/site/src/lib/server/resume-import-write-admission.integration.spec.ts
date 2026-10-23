@@ -75,6 +75,38 @@ async function seed(db: Db) {
   return scope;
 }
 function contract(create: () => Promise<Db>, dialect: AccountDeletionDialect) {
+  if (dialect === 'postgres')
+    it('qualifies the published UUID identity and text candidate-ownership schema boundary', async () => {
+      const db = await create();
+      const columns = (
+        await db.query(
+          `SELECT table_name, column_name, data_type FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name IN ('users', 'memberships', 'tenants', 'candidate_profiles')`,
+        )
+      ).rows as Array<{
+        table_name: string;
+        column_name: string;
+        data_type: string;
+      }>;
+      const type = (table: string, column: string) =>
+        columns.find(
+          (entry) => entry.table_name === table && entry.column_name === column,
+        )?.data_type;
+      for (const [table, column] of [
+        ['users', 'id'],
+        ['tenants', 'id'],
+        ['memberships', 'user_id'],
+        ['memberships', 'tenant_id'],
+      ])
+        expect(type(table, column)).toBe('uuid');
+      expect(type('candidate_profiles', 'owner_user_id')).toBe('text');
+      expect(type('candidate_profiles', 'tenant_id')).toBe('text');
+      const scope = await seed(db);
+      await beginResumeImportWrite(db, scope, locator);
+      expect(await pendingResumeImportWrites(db, scope)).toBe(1);
+    });
+
   it('commits separate markers for repeated delivery; closure persists pending without purging or erasing recovery identities', async () => {
     const db = await create();
     const scope = await seed(db);

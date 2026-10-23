@@ -60,11 +60,16 @@ export async function beginResumeImportWrite(
       detectEngine(db.url) === 'sqlite' ? 'sqlite' : 'postgres',
     );
     // Workspace profileId is CandidateProfile, not users.profile_id (the person).
+    // Published users/membership/tenant identity keys are PostgreSQL UUIDs;
+    // CandidateProfile owner/tenant fields are text. Compare their text forms
+    // across package schemas; SQLite uses the same portable CAST syntax.
     const account = rows(
       await tx.query(
-        `SELECT u.id FROM users u JOIN memberships m ON m.user_id = u.id
-        JOIN tenants t ON t.id = m.tenant_id
-        JOIN candidate_profiles p ON p.owner_user_id = u.id AND p.tenant_id = m.tenant_id
+        `SELECT u.id FROM users u
+        JOIN memberships m ON CAST(m.user_id AS TEXT) = CAST(u.id AS TEXT)
+        JOIN tenants t ON CAST(t.id AS TEXT) = CAST(m.tenant_id AS TEXT)
+        JOIN candidate_profiles p ON CAST(p.owner_user_id AS TEXT) = CAST(u.id AS TEXT)
+          AND CAST(p.tenant_id AS TEXT) = CAST(m.tenant_id AS TEXT)
        WHERE u.id = ? AND p.id = ? AND m.tenant_id = ?
          AND u.status = 'active' AND m.status = 'active' AND t.status = 'active'`,
         [scope.userId, scope.profileId, scope.tenantId],
