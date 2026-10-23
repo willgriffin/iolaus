@@ -28,6 +28,8 @@ export class ResumeImportQuarantine extends SmrtObject {
   @field({ type: 'text' }) deletionId = '';
   @field({ type: 'text' }) contentHash = '';
   @field({ type: 'integer' }) byteLength = 0;
+  /** Durable scheduling turn; failures and unknown writers must not starve later rows. */
+  @field({ type: 'integer', default: 0 }) purgeAttempts = 0;
   @field({ type: 'datetime' }) revokedAt = new Date(0);
   @field({ type: 'datetime' }) purgeAfter = new Date(0);
   @field({ type: 'datetime', nullable: true }) purgedAt: Date | null = null;

@@ -172,8 +172,8 @@ export async function resolveQuarantinedResumeStorage(
   await db.query(
     `INSERT INTO resume_import_quarantines
     (id, slug, context, storage_identity, object_key, tenant_id, user_id, profile_id,
-     asset_id, item_id, deletion_id, content_hash, byte_length, revoked_at, purge_after, created_at, updated_at)
-    VALUES (?, ?, 'resume-original-quarantine', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     asset_id, item_id, deletion_id, content_hash, byte_length, revoked_at, purge_after, purge_attempts, created_at, updated_at)
+    VALUES (?, ?, 'resume-original-quarantine', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT (storage_identity, object_key) DO NOTHING`,
     [
       id,
@@ -227,7 +227,7 @@ export async function purgeQuarantinedResumeOriginals(
   const now = options.now ?? new Date();
   const rows = (
     await db.query(
-      'SELECT * FROM resume_import_quarantines WHERE storage_identity = ? AND purged_at IS NULL AND purge_after <= ? ORDER BY purge_after LIMIT 200',
+      'SELECT * FROM resume_import_quarantines WHERE storage_identity = ? AND purged_at IS NULL AND purge_after <= ? ORDER BY COALESCE(purge_attempts, 0), purge_after, id LIMIT 200',
       [identity, now.toISOString()],
     )
   ).rows as Row[];
@@ -235,6 +235,13 @@ export async function purgeQuarantinedResumeOriginals(
   const filesystem = options.filesystem ?? (await getFilesystemLazy(storage));
   for (const row of rows) {
     try {
+      // Commit this scheduling turn before any failure-prone marker/provider I/O.
+      // A new sweep or restarted worker then reaches less-attempted due rows.
+      // This never settles a writer, extends retention, or marks bytes purged.
+      await db.query(
+        'UPDATE resume_import_quarantines SET purge_attempts = COALESCE(purge_attempts, 0) + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND purged_at IS NULL',
+        [row.id],
+      );
       if (instant(row.purge_after) > now) continue;
       const scope = {
         tenantId: value(row.tenant_id),

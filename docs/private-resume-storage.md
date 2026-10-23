@@ -123,10 +123,14 @@ row in `resume_import_write_operations`. Admission checks an extant active user,
 profile, tenant and membership and no started deletion while holding the existing
 users-row lock in the same native transaction (PostgreSQL `FOR UPDATE`, SQLite
 writer lock). Request IDs and delivery deduplication never replace invocation IDs.
-Only a fully accepted/duplicate native receive, after awaited preservation and
-receipt acceptance, resolves that invocation. Failed resolution leaves evidence.
-No generic `finally`, provider error, retry/rejection, unknown outcome, elapsed
-lease, process restart or disconnected advisory session resolves it. Markers have
+A fully accepted/duplicate native receive, after awaited preservation and
+receipt acceptance, resolves that invocation. The pinned ingestion 0.55.19 source
+also proves every `rejected` result and `retry/busy` return before its first
+`preserve()` call; these outcomes resolve only this invocation's marker because
+it never began source writes. Another busy invocation retains its own marker.
+Failed resolution leaves evidence. No generic `finally`, provider error, other
+retry, unknown outcome, elapsed lease, process restart or disconnected advisory
+session resolves it. Markers have
 no expiry. Their source/delivery locators are private operator recovery data and
 are excluded from generated API, CLI and MCP access.
 
@@ -160,8 +164,17 @@ Source qualification: installed `@happyvertical/smrt-ingestion` 0.55.19 `server.
 uses `preserve()` only from `receive()`. Its `planFile` and `preserveFile` writes
 are awaited; `readEvidence`, analysis/retry and dispatch repair read sources or
 write database state. Native accepted/duplicate results follow preservation and
-receipt acceptance; uncertain outcomes return retry or throw. Recheck this source
+receipt acceptance; unavailable retries and thrown/unknown outcomes can follow
+source writes and retain their markers. Rejected outcomes and retry/busy are
+provably prewrite in this pinned version; recheck every return point on upgrades. Recheck this source
 contract when upgrading ingestion/assets. Ordinary native SQLite and PostgreSQL
 transaction tests are distinct from actual provider/interruption qualification.
 The preserved stopped fault-injection artifact is not executed or replaced;
 remaining applicable provider/deployment gates must be recorded before release.
+
+Account deletion constructs the configured provider only when it finds a receipt
+captured for that owner. Expired/deleted receipts still require provider cleanup;
+missing configuration fails closed for them. An account with no matching receipts
+can complete without import storage configuration. The separate durable pending
+write gate still runs first, and retained quarantine tombstones remain the
+independent retention worker's responsibility even after account deletion.

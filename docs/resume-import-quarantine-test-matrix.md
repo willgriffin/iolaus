@@ -12,6 +12,7 @@ supported; root integration owns PostgreSQL execution and full native lifecycle.
 | Original only | native delete | root Resume.pdf PDF retained | derived evidence physically deleted | exact native evidence ownership | supplied db | both | deleted metadata replay uses durable tombstone | quarantine integration + native host |
 | Account deletion survival | account deletion after native expire | scalar identity and tombstone survive | no FK/cascade, missing provenance fails closed | deleted owner | ledger commits before metadata redaction | both | #225 drain unchanged | quarantine integration + root account/native integration |
 | Purge independent of profiles | worker interval | due object physically deleted, tombstone retained | provider failure retries; missing object succeeds; unresolved writes prevent finality | system retention | supplied db, marker checks before/after I/O | both | raw provider DELETE through SDK | quarantine integration; root native/Garage |
+| Fair bounded purge retries | more than 200 due originals | a later independent tenant purges on the next sweep/new database handle after 200 old rows stall | unresolved writers or provider failures remain retryable without monopolizing the oldest batch | system retention across deleted owners | persist atomic attempt increment before validation/marker/provider I/O; order by durable attempt count, fixed deadline and ID; max 200 attempts | SQLite + PostgreSQL | provider DELETE failure, worker restart | quarantine integration regression: 200 unresolved rows and separately 200 provider failures plus a later due tenant |
 | Explicit recovery authority | service exact ledger ID | tenant+actor+destination authorized, checksum matches | foreign tenant, refusal, expired/purged, bad checksum, failed audit deny | operator only; no account reactivation | audit INSERT before I/O, verified outcome before return | both | raw provider read only | quarantine integration; root PG |
 | Ledger rollback | transaction abort | committed identity visible | aborted insertion leaves no row | native executor | native rollback | both | N/A: SQL only | quarantine integration; root PG |
 | Cluster HTTP opt-in exact | hosted config load | exact service + flag + garage region + path style | arbitrary HTTP/near-match/missing flag rejected | protected runtime config | N/A: pure validator | Node | Garage plaintext inside constrained cluster network | storage spec |
@@ -39,3 +40,22 @@ Worker evidence (Node 26.10.0, in-process SQLite; no service containers):
 The resolver's source classifier uses the host's normalized `partId: 'Resume.pdf'`
 plus root evidence and PDF media type. Original user filenames are arbitrary;
 the recovery fixture uses `CV-final-2026 (reviewed).pdf` as its asset name.
+
+Accepted review blocker: durable purge fairness
+
+`ResumeImportQuarantine.purgeAttempts` is an additive private integer column with
+native default 0. Migrate it before enabling the updated retention worker. Every
+selected row consumes a durable turn before validation, marker checks or provider
+I/O. Batches order by attempt count, immutable `purgeAfter`, and ID; each invocation
+attempts at most 200 rows. Old failures/uncertain writers therefore yield to
+less-attempted due rows across sweeps and fresh database handles. The counter
+never changes a deadline, clears a write marker or proves physical finality.
+
+Regression evidence (Node 26.10.0, in-process SQLite): both new fairness cases
+failed the prior oldest-deadline-only implementation: the second sweep repeated
+200 stalled originals and purged zero later originals. With durable turns, each
+case purges the later tenant on the second bounded sweep through a fresh database
+handle, retries the stalled originals on the third sweep, and leaves unresolved
+markers intact. Native default assertions cover all 201 initial ledger rows.
+The full quarantine contract passes 14 SQLite cases; the 14 PostgreSQL cases
+remain root integration work for this revision.

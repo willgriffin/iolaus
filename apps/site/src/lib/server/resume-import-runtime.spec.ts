@@ -153,10 +153,49 @@ describe('resume import runtime', () => {
     await expect(getResumeImportHost({} as any)).rejects.toThrow(
       'Invalid private',
     );
+    await expect(purgeResumeImportAccountData(db, subject)).resolves.toBe(0);
+    expect(state.assets).not.toHaveBeenCalled();
+  });
+  it.each([
+    'active',
+    'expired',
+  ])('requires hosted storage for owned %s receipt cleanup', async (visibility) => {
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+    const db = {
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            id: 'item',
+            confidential_scope_id: 'profile',
+            visibility,
+            data: { capturedCeiling: { execution: { principalId: 'user' } } },
+          },
+        ],
+      })),
+    } as any;
     await expect(purgeResumeImportAccountData(db, subject)).rejects.toThrow(
       'Invalid private',
     );
     expect(state.assets).not.toHaveBeenCalled();
+    expect(state.service.expire).not.toHaveBeenCalled();
+  });
+  it('does not configure storage for another owner in the selected tenant', async () => {
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+    const db = {
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            id: 'other',
+            data: {
+              capturedCeiling: { execution: { principalId: 'other-user' } },
+            },
+          },
+        ],
+      })),
+    } as any;
+    await expect(purgeResumeImportAccountData(db, subject)).resolves.toBe(0);
+    expect(state.assets).not.toHaveBeenCalled();
+    expect(state.service.expire).not.toHaveBeenCalled();
   });
   it('rejects direct or wrong-queue calls before reading private receipts', async () => {
     const db = { query: vi.fn() } as any;

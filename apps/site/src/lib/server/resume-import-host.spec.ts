@@ -158,7 +158,6 @@ describe('resume ingestion application adapter', () => {
   });
   it.each([
     'retry',
-    'rejected',
     'unknown',
     'throw',
   ])('retains unresolved evidence for %s outcomes', async (kind) => {
@@ -181,6 +180,28 @@ describe('resume ingestion application adapter', () => {
     ).rejects.toBeInstanceOf(Error);
     expect(beginResumeImportWrite).toHaveBeenCalledOnce();
     expect(resolveResumeImportWrite).not.toHaveBeenCalled();
+  });
+  it.each([
+    { kind: 'rejected', category: 'expired' },
+    { kind: 'rejected', category: 'limit' },
+    { kind: 'rejected', category: 'invalid' },
+    { kind: 'rejected', category: 'conflict' },
+    { kind: 'retry', category: 'busy' },
+  ])('resolves provably prewrite refusal $kind/$category', async (receipt) => {
+    const { host } = setup();
+    state.service.receive.mockResolvedValueOnce(receipt);
+    await expect(
+      host.receive({
+        bytes: Buffer.from('%PDF-example'),
+        filename: 'one.pdf',
+        requestId: 'one',
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(resolveResumeImportWrite).toHaveBeenCalledWith(
+      expect.anything(),
+      subject,
+      'write-invocation',
+    );
   });
   it('never calls native receive when durable admission fails', async () => {
     vi.mocked(beginResumeImportWrite).mockRejectedValueOnce(

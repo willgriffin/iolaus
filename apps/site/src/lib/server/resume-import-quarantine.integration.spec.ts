@@ -276,6 +276,121 @@ function contract(create: () => Promise<Db>) {
       }),
     ).toEqual({ purged: 1, pendingWrites: 0, failed: 0 });
   });
+  it.each([
+    'unresolved writers',
+    'provider failures',
+  ] as const)('makes durable bounded progress beyond 200 older rows with %s', async (blockedBy) => {
+    const s = await setup();
+    await s.quarantine();
+    const original = await s.row();
+    const ledger = {
+      storage_identity: identity,
+      tenant_id: s.tenantId,
+      user_id: s.userId,
+      profile_id: s.profileId,
+      item_id: s.itemId,
+      deletion_id: original.deletion_id,
+      content_hash: original.content_hash,
+      byte_length: bytes.length,
+      revoked_at: '2026-10-05T00:00:00.000Z',
+      purge_after: due.toISOString(),
+    };
+    for (let index = 1; index < 200; index++) {
+      const assetId = randomUUID();
+      await insert(s.db, 'resume_import_quarantines', {
+        ...ledger,
+        asset_id: assetId,
+        object_key: `intake/${assetId}.pdf`,
+      });
+    }
+    const independentId = randomUUID();
+    const independentKey = `intake/${randomUUID()}.pdf`;
+    const independentDeadline = new Date(due.getTime() + 1).toISOString();
+    await insert(s.db, 'resume_import_quarantines', {
+      ...ledger,
+      id: independentId,
+      object_key: independentKey,
+      asset_id: randomUUID(),
+      tenant_id: randomUUID(),
+      user_id: randomUUID(),
+      purge_after: independentDeadline,
+    });
+    const initialTurns = (
+      await s.db.query(
+        'SELECT COUNT(*) AS n FROM resume_import_quarantines WHERE purge_attempts = 0',
+      )
+    ).rows[0];
+    expect(Number(initialTurns.n)).toBe(201); // Native default initializes rows not written by the resolver.
+    if (blockedBy === 'unresolved writers')
+      await insert(s.db, 'resume_import_write_operations', {
+        tenant_id: s.tenantId,
+        user_id: s.userId,
+      });
+    const filesystem = {
+      ...s.filesystem,
+      delete: vi.fn(async (key: string) => {
+        if (blockedBy === 'provider failures' && key !== independentKey)
+          throw new Error('provider unavailable');
+      }),
+    };
+    const now = new Date(due.getTime() + 1000);
+    const pendingWrites = blockedBy === 'unresolved writers' ? 200 : 0;
+    const failed = blockedBy === 'provider failures' ? 200 : 0;
+    expect(
+      await purgeQuarantinedResumeOriginals(s.db, storage, { now, filesystem }),
+    ).toEqual({ purged: 0, pendingWrites, failed });
+    expect(filesystem.delete).toHaveBeenCalledTimes(200);
+    // A new database handle has no process-local retry cursor. Durable turns
+    // must still let the later tenant run before the old batch repeats.
+    if (!s.db.url) throw new Error('Expected explicit native database URL.');
+    const restarted = await getDatabase({
+      cache: false,
+      type: s.db.url.startsWith('postgres') ? 'postgres' : 'sqlite',
+      url: s.db.url,
+    });
+    try {
+      filesystem.delete.mockClear();
+      expect(
+        await purgeQuarantinedResumeOriginals(restarted, storage, {
+          now,
+          filesystem,
+        }),
+      ).toEqual({
+        purged: 1,
+        pendingWrites: pendingWrites ? 199 : 0,
+        failed: failed ? 199 : 0,
+      });
+      expect(filesystem.delete).toHaveBeenCalledTimes(200);
+      expect(filesystem.delete).toHaveBeenCalledWith(independentKey);
+      const independent = (
+        await restarted.query(
+          'SELECT * FROM resume_import_quarantines WHERE id = ?',
+          [independentId],
+        )
+      ).rows[0];
+      expect(independent.purged_at).toBeTruthy();
+      const savedDeadline =
+        independent.purge_after instanceof Date
+          ? independent.purge_after
+          : new Date(String(independent.purge_after));
+      expect(savedDeadline.toISOString()).toBe(independentDeadline);
+      filesystem.delete.mockClear();
+      expect(
+        await purgeQuarantinedResumeOriginals(restarted, storage, {
+          now,
+          filesystem,
+        }),
+      ).toEqual({ purged: 0, pendingWrites, failed });
+      expect(filesystem.delete).toHaveBeenCalledTimes(200);
+      expect(filesystem.delete).not.toHaveBeenCalledWith(independentKey);
+      const markers = (
+        await restarted.query('SELECT id FROM resume_import_write_operations')
+      ).rows;
+      expect(markers).toHaveLength(blockedBy === 'unresolved writers' ? 1 : 0);
+    } finally {
+      await restarted.close?.();
+    }
+  });
   it('requires actor/tenant/destination authority and correct checksum for operator recovery', async () => {
     const s = await setup();
     await s.quarantine();

@@ -441,11 +441,15 @@ export async function purgeResumeImportAccountData(
       WHERE item.tenant_id = ?`,
     [scope.tenantId],
   );
-  const items = rows.rows as Array<Record<string, unknown>>;
+  // Include expired/deleted receipts: their retained cleanup identities still
+  // require the configured store. Empty/foreign-only accounts need no provider.
+  const items = (rows.rows as Array<Record<string, unknown>>).filter(
+    (row) => capturedPrincipal(row.data) === scope.userId,
+  );
+  if (!items.length) return 0;
   const assets = await createResumeImportAssets(db);
   let purged = 0;
   for (const row of items) {
-    if (capturedPrincipal(row.data) !== scope.userId) continue;
     const itemId = identifier(row.id, 'receipt ID');
     const profileId = identifier(row.confidential_scope_id, 'profile ID');
     const service = new IngestionService({

@@ -1848,6 +1848,68 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         expect(await rows('resume_import_quarantines')).toHaveLength(1);
       });
 
+      it.each([
+        'deleted',
+        'expired',
+      ])('permits account deletion after a prewrite refusal to reupload an %s PDF', async (state) => {
+        const received = await host.receive({
+          bytes: Buffer.from('%PDF-prewrite-reupload'),
+          filename: 'resume.pdf',
+          requestId: randomUUID(),
+        });
+        if (state === 'deleted') await host.delete(received.id);
+        else
+          await db.query(
+            'UPDATE intake_items SET expires_at = ? WHERE id = ?',
+            ['2000-01-01T00:00:00.000Z', received.id],
+          );
+        await expect(
+          host.receive({
+            bytes: Buffer.from('%PDF-prewrite-reupload'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          }),
+        ).rejects.toMatchObject({ code: 'expired_import' });
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+        const result = await deleteAccount(owner, {
+          database: db,
+          dialect,
+          environment: {
+            IOLAUS_WORKSPACE_MODE: 'shared',
+            SMRT_APP_ID: 'resume-delete-qa',
+            SMRT_RUNTIME_PROFILE: 'self-hosted',
+          },
+          purgeResumeImports: async (executor, scope) =>
+            await purgeResumeImportAccountData(
+              executor as DatabaseInterface,
+              scope,
+            ),
+        });
+        expect(result.status).toBe('deleted');
+        expect(await rows('users')).toHaveLength(0);
+      });
+
+      it('deletes an account with no imports without hosted provider configuration', async () => {
+        vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+        vi.stubEnv('IOLAUS_RESUME_IMPORT_STORAGE_JSON', undefined);
+        const result = await deleteAccount(owner, {
+          database: db,
+          dialect,
+          environment: {
+            IOLAUS_WORKSPACE_MODE: 'shared',
+            SMRT_APP_ID: 'resume-delete-qa',
+            SMRT_RUNTIME_PROFILE: 'self-hosted',
+          },
+          purgeResumeImports: async (executor, scope) =>
+            await purgeResumeImportAccountData(
+              executor as DatabaseInterface,
+              scope,
+            ),
+        });
+        expect(result.status).toBe('deleted');
+        expect(await rows('users')).toHaveLength(0);
+      });
+
       it('drains a concurrent upload before account deletion and rejects uploads after a failed deletion starts', async () => {
         let signalEntered!: () => void;
         let releaseUpload!: () => void;

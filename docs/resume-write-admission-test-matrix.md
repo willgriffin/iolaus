@@ -6,7 +6,7 @@ normal capacity/drain aids. No lease, age, or disconnected session clears eviden
 
 | Behavior / reachable trigger | Positive | Negative / failure | Actor/context | Executor/runtime | External edge | Level / command |
 |---|---|---|---|---|---|---|
-| Receive before source persistence | Commit fresh invocation marker before native receive; accepted/duplicate removes its own row | Retry, rejected, unknown, thrown provider result leaves marker; denied admission never invokes receive | Active owner + profile + tenant | Native transaction; SQLite and PostgreSQL | Native source preservation promise | Host unit and admission integration specs |
+| Receive before source persistence | Commit fresh invocation marker before native receive; accepted/duplicate removes its own row | Unavailable/unknown retry, unknown, thrown provider result leaves marker; rejected and retry/busy resolve their own provably prewrite invocation; denied admission never invokes receive | Active owner + profile + tenant | Native transaction; SQLite and PostgreSQL | Native source preservation promise | Host unit and admission integration specs |
 | Admission closure and repeat deletion | Atomic started record closes admission, retry reuses record | Unresolved marker returns pending before any purge/identity deletion | Same account, independent other owner | Same native users-row lock and executor; SQLite writer / PostgreSQL FOR UPDATE | Account deletion response 503, CLI typed pending error | Admission integration; account integration |
 | Scope and identity | Valid active owner admitted | Wrong tenant/profile, missing/inactive identity/membership/tenant denied; scope-mismatched resolution preserves marker | Two actors, own/cross resources | Same gate transaction both dialects | No generated API/CLI/MCP access | Integration + exposure unit |
 | Rollback / persistence | A committed marker survives handles/retries; explicit successful resolution permits deletion | Transaction abort leaves no half admission; missing ledger fails closed | Native account scope | Adapter transaction affinity | No pool/engine substitute | Integration |
@@ -55,3 +55,20 @@ ordinary successful admission. Model key types are unchanged; schema migration
 is not used to avoid the cross-package comparison. Worker SQLite regression
 results are in `225-uuid-join-sqlite.log`; actual PostgreSQL qualification must be
 rerun by the coordinator after this correction.
+
+Formal review fixes: native ingestion 0.55.19 `server.js` receive validation
+(939–982), reservation rejection (1024–1055), and retry/busy (1075–1078) all return
+before first preservation at 1080. Host unit tests cover each rejection category
+and busy, while other retries/unknown/throws retain markers. Native deleted and
+expired same-PDF reupload tests assert `expired_import`, no stranded invocation,
+and subsequent account deletion. Empty hosted account deletion succeeds without
+provider configuration; owned active/expired receipts still require configuration.
+No visibility filter excludes retained source cleanup identities. Orphan quarantine
+retention and the existing pending-write gate remain unchanged.
+
+Formal fix worker evidence: host/runtime unit checks passed 38 cases
+(`225-review-fixes-unit.log`); the native SQLite deleted/expired reupload and
+empty-hosted-account cases passed 3 cases (`225-review-fixes-native-sqlite.log`).
+Seven new outcome/empty-account assertions fail against copied pre-fix host and
+runtime modules (`225-review-fixes-base.log`); production files were not swapped.
+PostgreSQL and integrated review remain coordinator-owned.

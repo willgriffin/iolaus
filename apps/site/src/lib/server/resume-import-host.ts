@@ -660,6 +660,14 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
             receiptInput,
           );
           const receipt = await service.receive(receiptInput);
+          // Pinned smrt-ingestion 0.55.19 returns every rejected result and
+          // retry/busy before its first preserve() call. This invocation did
+          // not start source I/O; another busy invocation keeps its own marker.
+          if (
+            receipt.kind === 'rejected' ||
+            (receipt.kind === 'retry' && receipt.category === 'busy')
+          )
+            await resolveResumeImportWrite(options.db, subject, writeId);
           if (receipt.kind === 'rejected' && receipt.category === 'expired') {
             throw new ResumeImportHostError(
               'This PDF belongs to a deleted or expired import. Choose Start a new import to upload it again.',
@@ -683,7 +691,7 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
               503,
             );
           // Native receive awaits source persistence and acceptance before returning.
-          // Rejections, retries and thrown/unknown outcomes intentionally retain evidence.
+          // Other retries and thrown/unknown outcomes intentionally retain evidence.
           await resolveResumeImportWrite(options.db, subject, writeId);
           // `analyze`/receive persist a dispatch before a worker may claim it.
           // Repair it now so an authorized caller never waits for the periodic
