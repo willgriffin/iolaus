@@ -81,10 +81,12 @@ export async function beginResumeImportWrite(
         [scope.tenantId, scope.userId],
       ),
     );
-    if (!account.length || closed.length)
+    if (closed.length)
       throw new Error(
-        'Account is unavailable or deletion has started; resume upload is unavailable.',
+        'Account deletion has started; resume upload is unavailable.',
       );
+    if (!account.length)
+      throw new Error('Account is unavailable; resume upload is unavailable.');
     await tx.query(
       `INSERT INTO resume_import_write_operations
         (id, slug, context, tenant_id, user_id, profile_id, source_id, delivery_key, created_at, updated_at)
