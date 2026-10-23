@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ResumeImportLifecycleBusyError } from './resume-import-account-fence.js';
 
 vi.mock('./owner-principal.js', () => ({
   OwnerPrincipalError: class extends Error {},
@@ -26,6 +27,17 @@ import {
 } from './resume-import-transport.js';
 
 describe('resume import transport boundary', () => {
+  it('returns a safe actionable retry for lifecycle capacity refusals', async () => {
+    const response = resumeImportTransportError(
+      new ResumeImportLifecycleBusyError(),
+    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('5');
+    expect(await response.json()).toMatchObject({
+      code: 'resume_lifecycle_busy',
+      error: expect.stringContaining('try again'),
+    });
+  });
   it('requires sign-in and rejects cross-origin mutation', () => {
     const url = new URL('https://example.test/api/admin/resume-import');
     expect(

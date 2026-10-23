@@ -11,6 +11,7 @@ import {
 } from '../src/lib/server/account-deletion.js';
 import { getDbConfig } from '../src/lib/server/db.js';
 import { getResumeFilesystem } from '../src/lib/server/resume-files.js';
+import { ResumeImportLifecycleBusyError } from '../src/lib/server/resume-import-account-fence.js';
 
 const usage = `Usage: pnpm --filter @willgriffin/iolaus-site account:deletions
        pnpm --filter @willgriffin/iolaus-site account:delete -- --tenant-id ID --user-id ID
@@ -102,7 +103,8 @@ try {
   }
 } catch (error) {
   console.error(
-    error instanceof AccountDeletionError
+    error instanceof AccountDeletionError ||
+    error instanceof ResumeImportLifecycleBusyError
       ? `${error.code}: ${error.message}`
       : error instanceof Error
         ? error.message

@@ -1,3 +1,13 @@
+vi.mock('./resume-import-write-admission.js', () => ({
+  beginResumeImportWrite: vi.fn(),
+  resolveResumeImportWrite: vi.fn(),
+}));
+
+import {
+  beginResumeImportWrite,
+  resolveResumeImportWrite,
+} from './resume-import-write-admission.js';
+
 vi.mock('./resume-import-account-fence.js', () => ({
   withResumeImportAccountFence: async (
     _db: unknown,
@@ -99,6 +109,8 @@ function setup() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(beginResumeImportWrite).mockResolvedValue('write-invocation');
+  vi.mocked(resolveResumeImportWrite).mockResolvedValue();
   state.service.getItem.mockResolvedValue({
     id: 'import',
     analysisRevision: 1,
@@ -126,6 +138,84 @@ beforeEach(() => {
   });
 });
 describe('resume ingestion application adapter', () => {
+  it('admits before native receive and resolves only accepted settlement', async () => {
+    const { host } = setup();
+    state.service.receive.mockImplementationOnce(async () => {
+      expect(beginResumeImportWrite).toHaveBeenCalledOnce();
+      expect(resolveResumeImportWrite).not.toHaveBeenCalled();
+      return { kind: 'accepted', itemId: 'import' };
+    });
+    await host.receive({
+      bytes: Buffer.from('%PDF-example'),
+      filename: 'one.pdf',
+      requestId: 'one',
+    });
+    expect(resolveResumeImportWrite).toHaveBeenCalledWith(
+      expect.anything(),
+      subject,
+      'write-invocation',
+    );
+  });
+  it.each([
+    'retry',
+    'unknown',
+    'throw',
+  ])('retains unresolved evidence for %s outcomes', async (kind) => {
+    const { host } = setup();
+    if (kind === 'throw')
+      state.service.receive.mockRejectedValueOnce(
+        new Error('provider outcome unknown'),
+      );
+    else
+      state.service.receive.mockResolvedValueOnce({
+        kind,
+        category: 'unavailable',
+      });
+    await expect(
+      host.receive({
+        bytes: Buffer.from('%PDF-example'),
+        filename: 'one.pdf',
+        requestId: 'one',
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(beginResumeImportWrite).toHaveBeenCalledOnce();
+    expect(resolveResumeImportWrite).not.toHaveBeenCalled();
+  });
+  it.each([
+    { kind: 'rejected', category: 'expired' },
+    { kind: 'rejected', category: 'limit' },
+    { kind: 'rejected', category: 'invalid' },
+    { kind: 'rejected', category: 'conflict' },
+    { kind: 'retry', category: 'busy' },
+  ])('resolves provably prewrite refusal $kind/$category', async (receipt) => {
+    const { host } = setup();
+    state.service.receive.mockResolvedValueOnce(receipt);
+    await expect(
+      host.receive({
+        bytes: Buffer.from('%PDF-example'),
+        filename: 'one.pdf',
+        requestId: 'one',
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(resolveResumeImportWrite).toHaveBeenCalledWith(
+      expect.anything(),
+      subject,
+      'write-invocation',
+    );
+  });
+  it('never calls native receive when durable admission fails', async () => {
+    vi.mocked(beginResumeImportWrite).mockRejectedValueOnce(
+      new Error('admission closed'),
+    );
+    await expect(
+      setup().host.receive({
+        bytes: Buffer.from('%PDF-example'),
+        filename: 'one.pdf',
+        requestId: 'one',
+      }),
+    ).rejects.toThrow('admission closed');
+    expect(state.service.receive).not.toHaveBeenCalled();
+  });
   it('projects public candidates without private revision fingerprints', async () => {
     const view = await setup().host.get('import');
     expect(view.filename).toBe('Original.pdf');

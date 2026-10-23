@@ -17,10 +17,7 @@ import {
   type ResumeImportView,
 } from '$lib/resume-import';
 import { RESUME_IMPORT_STRUCTURE_MAX_BYTES } from '$lib/resume-import-structure.js';
-import {
-  assertResumeImportAccountNotDeleting,
-  withResumeImportAccountFence,
-} from './resume-import-account-fence.js';
+import { withResumeImportAccountFence } from './resume-import-account-fence.js';
 import {
   applyResumeImportDomain,
   captureResumeImportMatches,
@@ -31,6 +28,10 @@ import {
   validateResumeImportProposalEntries,
 } from './resume-import-domain.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
+import {
+  beginResumeImportWrite,
+  resolveResumeImportWrite,
+} from './resume-import-write-admission.js';
 import type { CandidateWorkspaceSubject } from './workspace-subject.js';
 
 export const RESUME_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -594,7 +595,6 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
         options.db,
         subject,
         async () => {
-          await assertResumeImportAccountNotDeleting(options.db, subject);
           identifier(input.requestId);
           if (
             !input.bytes.length ||
@@ -654,7 +654,20 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
               maxOutputBytes: MAX_OUTPUT_BYTES,
             },
           };
+          const writeId = await beginResumeImportWrite(
+            options.db,
+            subject,
+            receiptInput,
+          );
           const receipt = await service.receive(receiptInput);
+          // Pinned smrt-ingestion 0.55.19 returns every rejected result and
+          // retry/busy before its first preserve() call. This invocation did
+          // not start source I/O; another busy invocation keeps its own marker.
+          if (
+            receipt.kind === 'rejected' ||
+            (receipt.kind === 'retry' && receipt.category === 'busy')
+          )
+            await resolveResumeImportWrite(options.db, subject, writeId);
           if (receipt.kind === 'rejected' && receipt.category === 'expired') {
             throw new ResumeImportHostError(
               'This PDF belongs to a deleted or expired import. Choose Start a new import to upload it again.',
@@ -672,6 +685,14 @@ export function createResumeImportHost(options: ResumeImportHostOptions) {
               'Upload conflicts with a previous request or exceeds its limits.',
               409,
             );
+          if (receipt.kind !== 'accepted' && receipt.kind !== 'duplicate')
+            throw new ResumeImportHostError(
+              'Upload outcome is unresolved. Contact support before account deletion.',
+              503,
+            );
+          // Native receive awaits source persistence and acceptance before returning.
+          // Other retries and thrown/unknown outcomes intentionally retain evidence.
+          await resolveResumeImportWrite(options.db, subject, writeId);
           // `analyze`/receive persist a dispatch before a worker may claim it.
           // Repair it now so an authorized caller never waits for the periodic
           // recovery loop, while GET remains a pure read.

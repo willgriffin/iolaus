@@ -22,6 +22,7 @@ async function probeHostedRuntime(
   primeLocalConfigCache = false,
 ): Promise<{
   database: string;
+  timeout: number;
   profile: string;
 }> {
   const cacheDirectory = primeLocalConfigCache
@@ -48,7 +49,7 @@ async function probeHostedRuntime(
         'tsx',
         '--input-type=module',
         '--eval',
-        `${cachePreload} const runtime = await import(${JSON.stringify(applicationRuntimeModule)}); process.stdout.write(JSON.stringify({ profile: runtime.applicationRuntime.profile, database: runtime.getApplicationDatabaseConfig().type }));`,
+        `${cachePreload} const runtime = await import(${JSON.stringify(applicationRuntimeModule)}); process.stdout.write(JSON.stringify({ profile: runtime.applicationRuntime.profile, database: runtime.getApplicationDatabaseConfig().type, timeout: runtime.getApplicationDatabaseConfig().connectionTimeoutMillis }));`,
       ],
       {
         cwd,
@@ -56,13 +57,18 @@ async function probeHostedRuntime(
           ...process.env,
           DATABASE_URL:
             'postgresql://runtime:runtime@127.0.0.1:5432/runtime_bootstrap_test',
+          IOLAUS_DB_CONNECTION_TIMEOUT_MS: '5000',
           SMRT_APP_ID: 'runtime-bootstrap',
           SMRT_RUNTIME_PROFILE: 'self-hosted',
           TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.runtime.json'),
         },
       },
     );
-    return JSON.parse(stdout) as { database: string; profile: string };
+    return JSON.parse(stdout) as {
+      database: string;
+      timeout: number;
+      profile: string;
+    };
   } finally {
     if (cacheDirectory)
       await rm(cacheDirectory, { force: true, recursive: true });
@@ -117,14 +123,17 @@ describe('deployed runtime entrypoints', () => {
   it('loads the self-hosted site config from root and site working directories', async () => {
     await expect(probeHostedRuntime(sourceRoot)).resolves.toEqual({
       database: 'postgres',
+      timeout: 5_000,
       profile: 'self-hosted',
     });
     await expect(probeHostedRuntime(siteRoot)).resolves.toEqual({
       database: 'postgres',
+      timeout: 5_000,
       profile: 'self-hosted',
     });
     await expect(probeHostedRuntime(sourceRoot, true)).resolves.toEqual({
       database: 'postgres',
+      timeout: 5_000,
       profile: 'self-hosted',
     });
   }, 15_000);
@@ -148,5 +157,25 @@ describe('hosted database pool ceiling', () => {
         hostedDatabasePoolMax({ IOLAUS_DB_POOL_MAX: value }),
       ).toThrow('IOLAUS_DB_POOL_MAX must be a positive integer.');
     }
+  });
+});
+
+describe('native database acquisition timeout', () => {
+  it('uses a positive bounded timeout and validates overrides', async () => {
+    const { databaseConnectionTimeoutMillis } = await import(
+      './application-runtime'
+    );
+    expect(databaseConnectionTimeoutMillis({})).toBe(5_000);
+    expect(
+      databaseConnectionTimeoutMillis({
+        IOLAUS_DB_CONNECTION_TIMEOUT_MS: ' 250 ',
+      }),
+    ).toBe(250);
+    for (const value of ['0', '-1', '1.5', 'many', '2147483648'])
+      expect(() =>
+        databaseConnectionTimeoutMillis({
+          IOLAUS_DB_CONNECTION_TIMEOUT_MS: value,
+        }),
+      ).toThrow('positive bounded integer');
   });
 });

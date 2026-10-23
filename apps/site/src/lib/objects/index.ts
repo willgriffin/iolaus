@@ -61,6 +61,11 @@ export { ResumeAsset } from './ResumeAsset.js';
 export { ResumeEducation } from './ResumeEducation.js';
 export { ResumeImport } from './ResumeImport.js';
 export { ResumeImportJob } from './ResumeImportJob.js';
+export {
+  ResumeImportQuarantine,
+  ResumeImportRecoveryAudit,
+} from './ResumeImportQuarantine.js';
+export { ResumeImportWriteOperation } from './ResumeImportWriteOperation.js';
 export { ResumeLink } from './ResumeLink.js';
 export { ResumeOtherRole } from './ResumeOtherRole.js';
 export { ResumePosition } from './ResumePosition.js';

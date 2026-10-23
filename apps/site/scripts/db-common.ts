@@ -240,6 +240,7 @@ export async function initializeSmrtCollections(db?: SmrtDatabase): Promise<stri
     'HostedInvite',
     // Non-PII audit trail of hosted account deletions.
     'AccountDeletionRecord',
+    'ResumeImportWriteOperation',
     'SkillTerm',
     'OpportunityAnalysis',
     'OpportunitySkill',

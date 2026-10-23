@@ -2,58 +2,84 @@ packages:
   - apps/*
   - packages/*
 
-# Exact first-party source packages for the coordinated release.
+# Exact published first-party packages for the supported resume release closure.
 overrides:
-  "@happyvertical/ai": "file:vendor/release/happyvertical-ai-0.103.1.tgz"
-  "@happyvertical/auth": "file:vendor/release/happyvertical-auth-0.103.1.tgz"
-  "@happyvertical/cache": "file:vendor/release/happyvertical-cache-0.103.1.tgz"
-  "@happyvertical/email": "file:vendor/release/happyvertical-email-0.103.1.tgz"
-  "@happyvertical/encryption": "file:vendor/release/happyvertical-encryption-0.103.1.tgz"
-  "@happyvertical/files": "file:vendor/release/happyvertical-files-0.103.1.tgz"
-  "@happyvertical/geo": "file:vendor/release/happyvertical-geo-0.103.1.tgz"
-  "@happyvertical/jobs": "file:vendor/release/happyvertical-jobs-0.103.1.tgz"
-  "@happyvertical/json": "file:vendor/release/happyvertical-json-0.103.1.tgz"
-  "@happyvertical/logger": "file:vendor/release/happyvertical-logger-0.103.1.tgz"
-  "@happyvertical/messages": "file:vendor/release/happyvertical-messages-0.103.1.tgz"
-  "@happyvertical/secrets": "file:vendor/release/happyvertical-secrets-0.103.1.tgz"
-  "@happyvertical/smrt-agents": "file:vendor/release/happyvertical-smrt-agents-0.55.9.tgz"
-  "@happyvertical/smrt-app-cli": "file:vendor/release/happyvertical-smrt-app-cli-0.55.9.tgz"
-  "@happyvertical/smrt-app-mcp": "file:vendor/release/happyvertical-smrt-app-mcp-0.55.9.tgz"
-  "@happyvertical/smrt-app-runtime": "file:vendor/release/happyvertical-smrt-app-runtime-0.55.9.tgz"
-  "@happyvertical/smrt-assets": "file:vendor/release/happyvertical-smrt-assets-0.55.9.tgz"
-  "@happyvertical/smrt-chat": "file:vendor/release/happyvertical-smrt-chat-0.55.9.tgz"
-  "@happyvertical/smrt-cli": "file:vendor/release/happyvertical-smrt-cli-0.55.9.tgz"
-  "@happyvertical/smrt-config": "file:vendor/release/happyvertical-smrt-config-0.55.9.tgz"
-  "@happyvertical/smrt-core": "file:vendor/release/happyvertical-smrt-core-0.55.9.tgz"
-  "@happyvertical/smrt-dev-mcp": "file:vendor/release/happyvertical-smrt-dev-mcp-0.55.9.tgz"
-  "@happyvertical/smrt-facts": "file:vendor/release/happyvertical-smrt-facts-0.55.9.tgz"
-  "@happyvertical/smrt-features": "file:vendor/release/happyvertical-smrt-features-0.55.9.tgz"
-  "@happyvertical/smrt-jobs": "file:vendor/release/happyvertical-smrt-jobs-0.55.9.tgz"
-  "@happyvertical/smrt-languages": "file:vendor/release/happyvertical-smrt-languages-0.55.9.tgz"
-  "@happyvertical/smrt-ledgers": "file:vendor/release/happyvertical-smrt-ledgers-0.55.9.tgz"
-  "@happyvertical/smrt-mcp-apps": "file:vendor/release/happyvertical-smrt-mcp-apps-0.55.9.tgz"
-  "@happyvertical/smrt-mcp-openai": "file:vendor/release/happyvertical-smrt-mcp-openai-0.55.9.tgz"
-  "@happyvertical/smrt-messages": "file:vendor/release/happyvertical-smrt-messages-0.55.9.tgz"
-  "@happyvertical/smrt-mobile-contract": "file:vendor/release/happyvertical-smrt-mobile-contract-0.55.9.tgz"
-  "@happyvertical/smrt-personas": "file:vendor/release/happyvertical-smrt-personas-0.55.9.tgz"
-  "@happyvertical/smrt-places": "file:vendor/release/happyvertical-smrt-places-0.55.9.tgz"
-  "@happyvertical/smrt-playbooks": "file:vendor/release/happyvertical-smrt-playbooks-0.55.9.tgz"
-  "@happyvertical/smrt-playground": "file:vendor/release/happyvertical-smrt-playground-0.55.9.tgz"
-  "@happyvertical/smrt-profiles": "file:vendor/release/happyvertical-smrt-profiles-0.55.9.tgz"
-  "@happyvertical/smrt-prompts": "file:vendor/release/happyvertical-smrt-prompts-0.55.9.tgz"
-  "@happyvertical/smrt-reports": "file:vendor/release/happyvertical-smrt-reports-0.55.9.tgz"
-  "@happyvertical/smrt-scanner": "file:vendor/release/happyvertical-smrt-scanner-0.55.9.tgz"
-  "@happyvertical/smrt-secrets": "file:vendor/release/happyvertical-smrt-secrets-0.55.9.tgz"
-  "@happyvertical/smrt-svelte": "file:vendor/release/happyvertical-smrt-svelte-0.55.9.tgz"
-  "@happyvertical/smrt-tags": "file:vendor/release/happyvertical-smrt-tags-0.55.9.tgz"
-  "@happyvertical/smrt-tenancy": "file:vendor/release/happyvertical-smrt-tenancy-0.55.9.tgz"
-  "@happyvertical/smrt-types": "file:vendor/release/happyvertical-smrt-types-0.55.9.tgz"
-  "@happyvertical/smrt-ui": "file:vendor/release/happyvertical-smrt-ui-0.55.9.tgz"
-  "@happyvertical/smrt-users": "file:vendor/release/happyvertical-smrt-users-0.55.9-0bcf22c2a920.tgz"
-  "@happyvertical/smrt-web": "file:vendor/release/happyvertical-smrt-web-0.55.9.tgz"
-  "@happyvertical/speech": "file:vendor/release/happyvertical-speech-0.103.1.tgz"
-  "@happyvertical/sql": "file:vendor/release/happyvertical-sql-0.103.1.tgz"
-  "@happyvertical/utils": "file:vendor/release/happyvertical-utils-0.103.1.tgz"
+  "@happyvertical/ai": "0.103.5"
+  "@happyvertical/auth": "0.103.5"
+  "@happyvertical/cache": "0.103.5"
+  "@happyvertical/email": "0.103.5"
+  "@happyvertical/encryption": "0.103.5"
+  "@happyvertical/files": "0.103.5"
+  "@happyvertical/geo": "0.103.5"
+  "@happyvertical/jobs": "0.103.5"
+  "@happyvertical/json": "0.103.5"
+  "@happyvertical/logger": "0.103.5"
+  "@happyvertical/messages": "0.103.5"
+  "@happyvertical/secrets": "0.103.5"
+  "@happyvertical/smrt-agents": "0.55.19"
+  "@happyvertical/smrt-app-cli": "0.55.19"
+  "@happyvertical/smrt-app-mcp": "0.55.19"
+  "@happyvertical/smrt-app-runtime": "0.55.19"
+  "@happyvertical/smrt-assets": "0.55.19"
+  "@happyvertical/smrt-chat": "0.55.19"
+  "@happyvertical/smrt-cli": "0.55.19"
+  "@happyvertical/smrt-config": "0.55.19"
+  "@happyvertical/smrt-core": "0.55.19"
+  "@happyvertical/smrt-dev-mcp": "0.55.19"
+  "@happyvertical/smrt-facts": "0.55.19"
+  "@happyvertical/smrt-features": "0.55.19"
+  "@happyvertical/smrt-jobs": "0.55.19"
+  "@happyvertical/smrt-languages": "0.55.19"
+  "@happyvertical/smrt-ledgers": "0.55.19"
+  "@happyvertical/smrt-mcp-apps": "0.55.19"
+  "@happyvertical/smrt-mcp-openai": "0.55.19"
+  "@happyvertical/smrt-messages": "0.55.19"
+  "@happyvertical/smrt-mobile-contract": "0.55.19"
+  "@happyvertical/smrt-personas": "0.55.19"
+  "@happyvertical/smrt-places": "0.55.19"
+  "@happyvertical/smrt-playbooks": "0.55.19"
+  "@happyvertical/smrt-playground": "0.55.19"
+  "@happyvertical/smrt-profiles": "0.55.19"
+  "@happyvertical/smrt-prompts": "0.55.19"
+  "@happyvertical/smrt-reports": "0.55.19"
+  "@happyvertical/smrt-scanner": "0.55.19"
+  "@happyvertical/smrt-secrets": "0.55.19"
+  "@happyvertical/smrt-svelte": "0.55.19"
+  "@happyvertical/smrt-tags": "0.55.19"
+  "@happyvertical/smrt-tenancy": "0.55.19"
+  "@happyvertical/smrt-types": "0.55.19"
+  "@happyvertical/smrt-ui": "0.55.19"
+  "@happyvertical/smrt-users": "0.55.19"
+  "@happyvertical/smrt-web": "0.55.19"
+  "@happyvertical/speech": "0.103.5"
+  "@happyvertical/sql": "0.103.5"
+  "@happyvertical/utils": "0.103.5"
+  "@happyvertical/smrt-ingestion": "0.55.19"
+  "@happyvertical/pdf": "0.66.0"
+  "@happyvertical/ocr": "0.61.6"
+  "@happyvertical/animation": "0.5.0"
+  "@happyvertical/smrt-images": "0.55.19"
+  "@happyvertical/images": "0.103.5"
+  sharp: "0.35.5"
+
+  # Bounded advisory remediation; preserve each existing major line.
+  "pdfjs-dist@6": "6.2.108"
+  "proxy-addr@2": "2.0.8"
+  "undici@8": "8.10.2"
+  "undici@7": "7.29.1"
+  "axios@1": "1.20.0"
+  "follow-redirects@1": "1.16.1"
+  "fast-uri@3": "3.1.7"
+  "ip-address@10": "10.3.1"
+  "nanoid@3": "3.3.18"
+  "http-cache-semantics@4": "4.3.0"
+  "brace-expansion@2": "2.1.6"
+  "brace-expansion@5": "5.0.11"
+  "postcss@8": "8.5.18"
+  "source-map-js@1": "1.2.2"
+  "browserslist@4": "4.28.7"
+  "figlet@1": "1.11.3"
+  "vite@8": "8.1.6"
 
 # pnpm 11 reads these settings from pnpm-workspace.yaml; the `pnpm.*` fields in
 # package.json (overrides, onlyBuiltDependencies) are no longer honored.
@@ -80,8 +106,8 @@ allowBuilds:
   tesseract.js: false
 
 # Allow freshly-published first-party @happyvertical packages through any
-# minimum-release-age policy (these are deliberately consumed at their newest
-# published version).
+# minimum-release-age policy (the coordinated closure deliberately pins its
+# qualified published versions).
 minimumReleaseAgeExclude:
   - '@happyvertical/ai'
   - '@happyvertical/auth'
@@ -141,5 +167,5 @@ catalog:
   svelte-check: ^4.3.5
   tsx: ^4.21.0
   typescript: 5.9.3
-  vite: 8.1.4
+  vite: 8.1.6
   vitest: 4.1.10

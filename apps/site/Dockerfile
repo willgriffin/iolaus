@@ -12,8 +12,8 @@ FROM base AS deps
 # into the image. Never add credentials to it: pass them with a BuildKit
 # secret mount. `pnpm lint` fails on credential keys (scripts/check-npmrc-credentials.mjs).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json .npmrc ./
-# The frozen lockfile resolves the coordinated release's local archives.
-# Copy them before installation so cold builds have every file-backed input.
+# The frozen lockfile resolves the coordinated published registry closure.
+# Keep release provenance records available to deployment verification.
 COPY vendor vendor
 COPY apps/site/package.json apps/site/package.json
 COPY packages/cli/package.json packages/cli/package.json
@@ -52,15 +52,22 @@ ENV HOST=0.0.0.0
 ENV BODY_SIZE_LIMIT=10551296
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --only-upgrade perl-base \
+  && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
     fonts-liberation \
   && groupadd --gid 10001 iolaus \
   && useradd --uid 10001 --gid iolaus --create-home --home-dir /home/iolaus \
     --shell /usr/sbin/nologin iolaus \
-  && rm -rf /var/lib/apt/lists/*
-RUN pnpm --version | grep -Fx '11.25.0'
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+# Runtime uses node and pinned pnpm; npm/npx and npm's bundled closure are unused.
+RUN test ! -e /usr/local/lib/node_modules/npm \
+  && ! command -v npm \
+  && ! command -v npx \
+  && pnpm --version | grep -Fx '11.25.0'
 COPY --from=build --chown=iolaus:iolaus /app /app
 # Runtime entrypoints use this lockfile-pinned loader directly. This build-time
 # smoke prevents a released image from downloading a runtime loader at startup.

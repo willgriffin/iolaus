@@ -47,9 +47,22 @@ The self-hosted profile intentionally uses its released default
 `s3-compatible` asset provider. Web, migrations, and workers read their
 operator-owned external object storage configuration from their scoped runtime
 secret; the monitor does not receive asset access. Configure
-bucket/versioning/encryption/retention and independently verify object backup
+bucket/encryption/retention and independently verify object backup
 and restore before importing any production asset. Do not substitute an
 `emptyDir`, an image layer, or source-checkout path.
+
+For private resume imports, also set `IOLAUS_RESUME_IMPORT_STORAGE_JSON` on web
+and task-worker runtimes using the separate private import bucket. Follow
+[private resume storage](private-resume-storage.md#uploaded-original-recovery-retention):
+qualify application quarantine, independent 30-day purge and explicit operator
+recovery against the existing Garage. Garage has no bucket versioning or object
+lock. The exact cluster HTTP endpoint requires `IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE=1`,
+`region: "garage"`, `forcePathStyle: true` and the documented NetworkPolicy;
+transport is plaintext within the constrained cluster. Other custom endpoints
+require HTTPS. Migrate `resume_import_quarantines` and
+`resume_import_recovery_audits` before enabling consumers; preserve both on rollback.
+Ingestion source-evidence expiry remains upload+30 days, independently of recovery
+retention. Keep generated PDFs on existing `RESUME_FILES_CONFIG_JSON` storage.
 
 The secret is consumed with Kubernetes `secretRef` only. Do not add a
 `Secret` manifest, sample token, endpoint, email address, or base64 value to

@@ -65,6 +65,7 @@ export type IolausDatabaseConfig = {
   url: string;
   /** PostgreSQL pool size per process; see {@link hostedDatabasePoolMax}. */
   max?: number;
+  connectionTimeoutMillis?: number;
 };
 
 /**
@@ -88,6 +89,21 @@ export function hostedDatabasePoolMax(
   if (!Number.isInteger(value) || value < 1) {
     throw new Error('IOLAUS_DB_POOL_MAX must be a positive integer.');
   }
+  return value;
+}
+
+/** Bound native pool acquisition, including pinned lifecycle sessions. */
+export const DEFAULT_DATABASE_CONNECTION_TIMEOUT_MS = 5_000;
+export function databaseConnectionTimeoutMillis(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.IOLAUS_DB_CONNECTION_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_DATABASE_CONNECTION_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647)
+    throw new Error(
+      'IOLAUS_DB_CONNECTION_TIMEOUT_MS must be a positive bounded integer.',
+    );
   return value;
 }
 
@@ -126,6 +142,7 @@ export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   }
   return {
     max: hostedDatabasePoolMax(),
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     type: 'postgres',
     url: validateHostedDatabaseUrl(databaseUrl),
   };
@@ -206,7 +223,12 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
       connect: () =>
         // Readiness probes only; keep this separate pool to one client so it
         // does not compete with the SMRT pool for the role's connections.
-        getDatabase({ max: 1, type: 'postgres', url: validatedDatabaseUrl }),
+        getDatabase({
+          max: 1,
+          connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
+          type: 'postgres',
+          url: validatedDatabaseUrl,
+        }),
       close: async (db) => db.close?.(),
     },
     authentication: {

@@ -23,7 +23,11 @@ import {
   type ResumeImportHost,
 } from './resume-import-host.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
-import { getIolausUserAssetsRoot } from './runtime-paths.js';
+import { purgeQuarantinedResumeOriginals } from './resume-import-quarantine.js';
+import {
+  getResumeImportStorage,
+  resumeImportStorageOptions,
+} from './resume-import-storage.js';
 import {
   type CandidateWorkspaceSubject,
   requireCandidateWorkspaceSubject,
@@ -107,7 +111,7 @@ async function createResumeImportAssets(
 ): Promise<AssetRuntimeLike> {
   return await createAssetRuntime({
     db,
-    storage: { type: 'local', basePath: getIolausUserAssetsRoot() },
+    ...resumeImportStorageOptions(getResumeImportStorage(), db),
   });
 }
 
@@ -310,6 +314,20 @@ export async function repairQueuedResumeImports(
   try {
     repaired = await purgeExpiredResumeImportAssets(db);
   } catch {
+    console.warn('Skipped resume import expiry cleanup during recovery.');
+  }
+  try {
+    const quarantine = await purgeQuarantinedResumeOriginals(
+      db,
+      getResumeImportStorage(),
+    );
+    repaired += quarantine.purged;
+    if (quarantine.failed || quarantine.pendingWrites) {
+      console.warn(
+        'Resume original purge needs retry or operator write-drain investigation.',
+      );
+    }
+  } catch {
     // Retention is best effort during recovery. A later interval retries it,
     // while authorized receipts must still be able to repair now.
     console.warn('Skipped resume import retention cleanup during recovery.');
@@ -351,14 +369,11 @@ export async function repairQueuedResumeImports(
           return await host.repair();
         },
       );
-    } catch (cause) {
+    } catch {
       // A revoked member or an unavailable account must not strand the other
       // tenants' receipts. Its durable receipt remains for a later authorized
       // repair or account-deletion purge.
-      console.warn(
-        'Skipped resume import recovery for an unavailable scope:',
-        cause,
-      );
+      console.warn('Skipped resume import recovery for an unavailable scope.');
     }
   }
   return repaired;
@@ -426,11 +441,15 @@ export async function purgeResumeImportAccountData(
       WHERE item.tenant_id = ?`,
     [scope.tenantId],
   );
-  const items = rows.rows as Array<Record<string, unknown>>;
+  // Include expired/deleted receipts: their retained cleanup identities still
+  // require the configured store. Empty/foreign-only accounts need no provider.
+  const items = (rows.rows as Array<Record<string, unknown>>).filter(
+    (row) => capturedPrincipal(row.data) === scope.userId,
+  );
+  if (!items.length) return 0;
   const assets = await createResumeImportAssets(db);
   let purged = 0;
   for (const row of items) {
-    if (capturedPrincipal(row.data) !== scope.userId) continue;
     const itemId = identifier(row.id, 'receipt ID');
     const profileId = identifier(row.confidential_scope_id, 'profile ID');
     const service = new IngestionService({

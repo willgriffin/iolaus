@@ -42,8 +42,15 @@ import './workspace-workflow-capabilities.js';
 import { type SmrtJob, TaskRunner } from '@happyvertical/smrt-jobs';
 import { deleteAccount } from './account-deletion.js';
 import { getDbConfig } from './db.js';
-import { withResumeImportAccountFence } from './resume-import-account-fence.js';
+import {
+  ResumeImportLifecycleBusyError,
+  withResumeImportAccountFence,
+} from './resume-import-account-fence.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
+import {
+  purgeQuarantinedResumeOriginals,
+  recoverQuarantinedResumeOriginal,
+} from './resume-import-quarantine.js';
 import {
   exportResumeImportReceipts,
   purgeExpiredResumeImportAssets,
@@ -51,6 +58,7 @@ import {
   resolveResumeImportReceiptSubject,
   runResumeImportIngestionJob,
 } from './resume-import-runtime.js';
+import { resumeImportStorageOptions } from './resume-import-storage.js';
 import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const subject = () => ({
@@ -59,6 +67,9 @@ const subject = () => ({
   profileId: randomUUID(),
 });
 const classes = [
+  'ResumeImportWriteOperation',
+  'ResumeImportQuarantine',
+  'ResumeImportRecoveryAudit',
   'CandidateProfile',
   'Project',
   'Experience',
@@ -266,6 +277,8 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           url.pathname = `/${databaseName}`;
           db = await getDatabase({
             cache: false,
+            max: 5,
+            connectionTimeoutMillis: 5_000,
             type: 'postgres',
             url: url.toString(),
           });
@@ -281,7 +294,10 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         roleId = await seedPrincipal(db, owner);
         assets = await createAssetRuntime({
           db,
-          storage: { type: 'local', basePath: getIolausUserAssetsRoot() },
+          ...resumeImportStorageOptions(
+            { type: 'local', basePath: getIolausUserAssetsRoot() },
+            db,
+          ),
         });
         entries = structuredClone(initialEntries);
         host = await makeHost();
@@ -347,6 +363,41 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         expect(await rows('tags')).toHaveLength(0);
         expect(await rows('skill_group_members')).toHaveLength(0);
       }
+
+      it('admits source writes only for the owned candidate profile, independently of the person profile', async () => {
+        const nativeUser = (
+          await db.query('SELECT profile_id FROM users WHERE id = ?', [
+            owner.userId,
+          ])
+        ).rows[0] as { profile_id: string | null };
+        expect(nativeUser.profile_id).not.toBe(owner.profileId);
+        await upload('candidate-profile-admission');
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+        const other = subject();
+        await seedPrincipal(db, other);
+        const receive = () =>
+          host.receive({
+            bytes: Buffer.from('%PDF-other-owned-profile'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          });
+        await db.query(
+          'UPDATE candidate_profiles SET owner_user_id = ? WHERE id = ?',
+          [other.userId, owner.profileId],
+        );
+        await expect(receive()).rejects.toThrow('unavailable');
+        await db.query(
+          'UPDATE candidate_profiles SET owner_user_id = ?, tenant_id = ? WHERE id = ?',
+          [owner.userId, other.tenantId, owner.profileId],
+        );
+        await expect(receive()).rejects.toThrow('unavailable');
+        await db.query('DELETE FROM candidate_profiles WHERE id = ?', [
+          owner.profileId,
+        ]);
+        await expect(receive()).rejects.toThrow('unavailable');
+        expect(await rows('intake_items')).toHaveLength(1);
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+      });
 
       it('creates private reviewed data, deduplicates bytes and repeated apply, and deletes actual evidence', async () => {
         const review = await upload();
@@ -1708,7 +1759,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).rejects.toThrow();
       });
 
-      it('production retention removes private bytes after the profile has been deleted', async () => {
+      it('production retention quarantines originals after the profile has been deleted', async () => {
         const review = await upload();
         await db.query('DELETE FROM candidate_profiles WHERE id = ?', [
           owner.profileId,
@@ -1793,7 +1844,70 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             ),
           ).toString(),
         ).toBe('%PDF-other-account');
-        expect((await files()).length).toBeLessThan(before.length);
+        expect((await files()).length).toBe(before.length);
+        expect(await rows('resume_import_quarantines')).toHaveLength(1);
+      });
+
+      it.each([
+        'deleted',
+        'expired',
+      ])('permits account deletion after a prewrite refusal to reupload an %s PDF', async (state) => {
+        const received = await host.receive({
+          bytes: Buffer.from('%PDF-prewrite-reupload'),
+          filename: 'resume.pdf',
+          requestId: randomUUID(),
+        });
+        if (state === 'deleted') await host.delete(received.id);
+        else
+          await db.query(
+            'UPDATE intake_items SET expires_at = ? WHERE id = ?',
+            ['2000-01-01T00:00:00.000Z', received.id],
+          );
+        await expect(
+          host.receive({
+            bytes: Buffer.from('%PDF-prewrite-reupload'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          }),
+        ).rejects.toMatchObject({ code: 'expired_import' });
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+        const result = await deleteAccount(owner, {
+          database: db,
+          dialect,
+          environment: {
+            IOLAUS_WORKSPACE_MODE: 'shared',
+            SMRT_APP_ID: 'resume-delete-qa',
+            SMRT_RUNTIME_PROFILE: 'self-hosted',
+          },
+          purgeResumeImports: async (executor, scope) =>
+            await purgeResumeImportAccountData(
+              executor as DatabaseInterface,
+              scope,
+            ),
+        });
+        expect(result.status).toBe('deleted');
+        expect(await rows('users')).toHaveLength(0);
+      });
+
+      it('deletes an account with no imports without hosted provider configuration', async () => {
+        vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+        vi.stubEnv('IOLAUS_RESUME_IMPORT_STORAGE_JSON', undefined);
+        const result = await deleteAccount(owner, {
+          database: db,
+          dialect,
+          environment: {
+            IOLAUS_WORKSPACE_MODE: 'shared',
+            SMRT_APP_ID: 'resume-delete-qa',
+            SMRT_RUNTIME_PROFILE: 'self-hosted',
+          },
+          purgeResumeImports: async (executor, scope) =>
+            await purgeResumeImportAccountData(
+              executor as DatabaseInterface,
+              scope,
+            ),
+        });
+        expect(result.status).toBe('deleted');
+        expect(await rows('users')).toHaveLength(0);
       });
 
       it('drains a concurrent upload before account deletion and rejects uploads after a failed deletion starts', async () => {
@@ -1853,12 +1967,18 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         })();
         await requested;
         try {
-          // A separate owner never waits for this account's fence.
-          await withResumeImportAccountFence(
+          // Receive and the waiting deletion consume both max5 admissions.
+          // A third owner is refused immediately, rather than queued on a pin.
+          const independent = withResumeImportAccountFence(
             db,
             { ...owner, userId: randomUUID() },
             async () => {},
           );
+          if (dialect === 'postgres')
+            await expect(independent).rejects.toBeInstanceOf(
+              ResumeImportLifecycleBusyError,
+            );
+          else await independent;
           expect(recordCreated).toBe(false);
         } finally {
           releaseUpload();
@@ -1877,7 +1997,41 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         releasePurge();
         await expect(deleting).resolves.toMatchObject({ status: 'deleted' });
         for (const path of retainedFiles)
+          expect((await stat(path)).isFile()).toBe(true);
+        const quarantines = await rows('resume_import_quarantines');
+        expect(quarantines).toHaveLength(1);
+        const quarantine = quarantines[0];
+        expect(
+          await recoverQuarantinedResumeOriginal({
+            db,
+            storage: { type: 'local', basePath: assetRoot },
+            quarantineId: String(quarantine.id),
+            authority: {
+              tenantId: owner.tenantId,
+              actorId: 'test-operator',
+              destinationAuthority: 'verified-deleted-owner-export',
+              reason: 'explicit test rescue',
+            },
+            authorize: async () => true,
+          }),
+        ).toEqual(Buffer.from('%PDF-concurrent-delete'));
+        expect(
+          await purgeQuarantinedResumeOriginals(
+            db,
+            { type: 'local', basePath: assetRoot },
+            {
+              // PostgreSQL returns Date; String(Date) discards milliseconds and
+              // can move this exact-boundary fixture before its real deadline.
+              now:
+                quarantine.purge_after instanceof Date
+                  ? quarantine.purge_after
+                  : new Date(String(quarantine.purge_after)),
+            },
+          ),
+        ).toEqual({ purged: 1, failed: 0, pendingWrites: 0 });
+        for (const path of retainedFiles)
           await expect(stat(path)).rejects.toThrow();
+        expect(await rows('resume_import_quarantines')).toHaveLength(1);
         await expect(
           host.service.readEvidence(uploaded.id, evidence.id),
         ).rejects.toThrow();
@@ -1920,7 +2074,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).toHaveLength(0);
       });
 
-      it('production runtime retention purges expired bytes even after native account suspension', async () => {
+      it('production runtime retention quarantines expired originals even after native account suspension', async () => {
         const review = await upload();
         const evidence = (await host.service.getEvidence(review.id))[0];
         await db.query('UPDATE users SET status = ? WHERE id = ?', [

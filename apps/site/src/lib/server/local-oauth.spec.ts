@@ -19,7 +19,7 @@ import {
 } from './local-oauth';
 
 beforeEach(() => {
-  mocks.storage.mockResolvedValue({});
+  mocks.storage.mockResolvedValue({ narrowRefreshGrant: vi.fn() });
   mocks.authorization.mockResolvedValue({ identity: {} });
 });
 describe('local OAuth signing configuration', () => {

@@ -7,6 +7,10 @@ import {
   tombstonePublicProfile,
 } from './public-profile-store.js';
 import { withResumeImportAccountFence } from './resume-import-account-fence.js';
+import {
+  lockResumeImportAccount,
+  pendingResumeImportWrites,
+} from './resume-import-write-admission.js';
 import { shortlistOwnerLockKey } from './shortlist-store.js';
 import { withSqliteOperationLock } from './sqlite-operation-lock.js';
 import { workspaceOwnershipTables } from './workspace-ownership-backfill.js';
@@ -67,7 +71,8 @@ export interface AccountDeletionDependencies {
   environment?: AppConfigEnvironment;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
   initiatedBy?: AccountDeletionInitiator;
-  /** Revoke private ingestion receipts and sweep retained source-asset locators. */
+  /** Revoke private ingestion receipts and quarantine original PDFs; derived
+   * evidence is removed now and independent retention purges originals later. */
   purgeResumeImports?: (
     database: AccountDeletionDatabase,
     scope: AccountDeletionScope,
@@ -87,6 +92,7 @@ export interface AccountDeletionResult {
 export type AccountDeletionErrorCode =
   | 'disabled'
   | 'files'
+  | 'pending-source-writes'
   | 'invalid-scope'
   | 'scope-mismatch'
   | 'schema'
@@ -450,69 +456,96 @@ async function deleteAccountLocked(
   const probe = new SchemaProbe(database, dialect);
   const newId = dependencies.randomId ?? randomUUID;
 
-  const user = rowsOf(
-    await database.query(
-      'SELECT id, email, profile_id FROM users WHERE id = ?',
-      [userId],
-    ),
-  )[0];
-  const tenant = rowsOf(
-    await database.query('SELECT id FROM tenants WHERE id = ?', [tenantId]),
-  )[0];
-  const memberships = rowsOf(
-    await database.query(
-      'SELECT user_id FROM memberships WHERE tenant_id = ?',
-      [tenantId],
-    ),
-  );
-  const started = await findStartedRecord(database, target);
+  const admission = await database.transaction(async (transaction) => {
+    await lockResumeImportAccount(transaction, target, dialect);
+    const user = rowsOf(
+      await transaction.query(
+        'SELECT id, email, profile_id FROM users WHERE id = ?',
+        [userId],
+      ),
+    )[0];
+    const tenant = rowsOf(
+      await transaction.query('SELECT id FROM tenants WHERE id = ?', [
+        tenantId,
+      ]),
+    )[0];
+    const memberships = rowsOf(
+      await transaction.query(
+        'SELECT user_id FROM memberships WHERE tenant_id = ?',
+        [tenantId],
+      ),
+    );
+    const started = await findStartedRecord(transaction, target);
 
-  if (!user && !tenant && !started) {
-    return { deletionId: '', status: 'already-deleted', summary: {} };
-  }
-  // A hosted tenant is one user's private workspace. Refuse any scope that does
-  // not demonstrably belong to this user, or that is shared with anyone else.
-  const owned = memberships.some(
-    (membership) => text(membership.user_id) === userId,
-  );
-  if (!started && !(user && tenant && owned)) {
-    throw new AccountDeletionError(
-      'scope-mismatch',
-      'The user and tenant do not form one hosted workspace.',
+    if (!user && !tenant && !started) {
+      if (await pendingResumeImportWrites(transaction, target))
+        throw new AccountDeletionError(
+          'pending-source-writes',
+          'Account deletion remains pending unresolved private source writes; recovery evidence must be reconciled by an operator.',
+        );
+      return { alreadyDeleted: true as const };
+    }
+    // A hosted tenant is one user's private workspace. Refuse any scope that does
+    // not demonstrably belong to this user, or that is shared with anyone else.
+    const owned = memberships.some(
+      (membership) => text(membership.user_id) === userId,
     );
-  }
-  if (memberships.some((membership) => text(membership.user_id) !== userId)) {
-    throw new AccountDeletionError(
-      'tenant-not-exclusive',
-      'Refusing to delete a tenant that has another member.',
-    );
-  }
-  const email = text(user?.email).trim().toLowerCase();
-  const profileId = text(user?.profile_id);
-  const pseudonym = started?.pseudonym || newId();
-  let deletionId = started?.id ?? '';
-  if (!started) {
-    deletionId = newId();
-    await database.query(
-      `INSERT INTO account_deletion_records (
+    if (!started && !(user && tenant && owned)) {
+      throw new AccountDeletionError(
+        'scope-mismatch',
+        'The user and tenant do not form one hosted workspace.',
+      );
+    }
+    if (memberships.some((membership) => text(membership.user_id) !== userId)) {
+      throw new AccountDeletionError(
+        'tenant-not-exclusive',
+        'Refusing to delete a tenant that has another member.',
+      );
+    }
+    const email = text(user?.email).trim().toLowerCase();
+    const profileId = text(user?.profile_id);
+    const pseudonym = started?.pseudonym || newId();
+    let deletionId = started?.id ?? '';
+    if (!started) {
+      deletionId = newId();
+      await transaction.query(
+        `INSERT INTO account_deletion_records (
          id, slug, context, status, initiated_by, tenant_id, user_id,
          ledger_pseudonym, started_at, summary, created_at, updated_at
        ) VALUES (?, ?, 'account-deletion', 'started', ?, ?, ?, ?, CURRENT_TIMESTAMP, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [
-        deletionId,
-        deletionId,
-        dependencies.initiatedBy ?? 'self',
-        tenantId,
-        userId,
-        pseudonym,
-      ],
+        [
+          deletionId,
+          deletionId,
+          dependencies.initiatedBy ?? 'self',
+          tenantId,
+          userId,
+          pseudonym,
+        ],
+      );
+    }
+    return {
+      alreadyDeleted: false as const,
+      email,
+      profileId,
+      pseudonym,
+      deletionId,
+      pending: await pendingResumeImportWrites(transaction, target),
+    };
+  });
+  if (admission.alreadyDeleted)
+    return { deletionId: '', status: 'already-deleted', summary: {} };
+  const { email, profileId, pseudonym, deletionId } = admission;
+  // Throw after commit: closure must survive a pending response and every retry.
+  if (admission.pending)
+    throw new AccountDeletionError(
+      'pending-source-writes',
+      'Account deletion is pending unresolved private source writes. Upload admission is closed. Retry after writes settle; if it persists, an operator must establish writer quiescence and reconcile retained source locators before recovery.',
     );
-  }
   await dependencies.afterPhase?.('record');
 
   // Ingestion preserves bytes outside the ordinary resume filesystem. Revoke
-  // receipts and remove their private assets while this account still has an
-  // active owner identity; failures leave the durable deletion record started
+  // receipts and quarantine originals (purge derived assets) while this account
+  // still has an active owner identity; failures leave the durable deletion record started
   // so a retry resumes safely instead of silently retaining source evidence.
   const resumeImports = await (
     dependencies.purgeResumeImports ??
@@ -679,6 +712,15 @@ async function deleteAccountLocked(
   for (const step of plan) await probe.columns(step.spec.table);
   const rowCounts: Record<string, number> = {};
   await database.transaction(async (transaction) => {
+    await lockResumeImportAccount(transaction, target, dialect);
+    if (
+      !(await findStartedRecord(transaction, target)) ||
+      (await pendingResumeImportWrites(transaction, target))
+    )
+      throw new AccountDeletionError(
+        'pending-source-writes',
+        'Account deletion remains pending private source write recovery.',
+      );
     for (const step of plan) {
       count(
         rowCounts,

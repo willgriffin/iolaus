@@ -627,6 +627,10 @@ test('short task pages scroll the board while header actions remain reachable', 
 }) => {
   await openTasks(page);
   await page.setViewportSize({ width: 667, height: 375 });
+  await expect(page.locator('.smrt-admin-shell')).toHaveAttribute(
+    'data-viewport',
+    'phone',
+  );
   const main = page.locator('.smrt-admin-shell__main');
   expect(
     await main.evaluate(
@@ -634,10 +638,9 @@ test('short task pages scroll the board while header actions remain reachable', 
     ),
   ).toBeGreaterThan(30);
   const before = await main.evaluate((element) => element.scrollTop);
-  const bounds = await main.boundingBox();
-  if (!bounds) throw new Error('Missing task main bounds');
-  // Scroll the outer page gutter, rather than the independently scrolling lane.
-  await page.mouse.move(bounds.x + 2, bounds.y + bounds.height / 2);
+  // Hover waits for stable layout after the shell's viewport transition. Raw
+  // coordinates captured during that transition can land inside a scrolling lane.
+  await main.hover({ position: { x: 2, y: 20 } });
   await page.mouse.wheel(0, 300);
   await expect
     .poll(() => main.evaluate((element) => element.scrollTop))

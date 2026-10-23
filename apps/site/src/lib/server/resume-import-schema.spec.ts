@@ -15,7 +15,7 @@ describe('resume import schema readiness', () => {
     const status = await getResumeImportSchemaStatus({ query } as any);
     expect(status).toEqual({
       present: resumeImportTables.length - 1,
-      total: 12,
+      total: 14,
     });
     expect(resumeImportSchemaIsReady(status)).toBe(false);
     expect(query).toHaveBeenCalledWith(
