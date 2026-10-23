@@ -59,11 +59,13 @@ export async function beginResumeImportWrite(
       scope,
       detectEngine(db.url) === 'sqlite' ? 'sqlite' : 'postgres',
     );
+    // Workspace profileId is CandidateProfile, not users.profile_id (the person).
     const account = rows(
       await tx.query(
         `SELECT u.id FROM users u JOIN memberships m ON m.user_id = u.id
         JOIN tenants t ON t.id = m.tenant_id
-       WHERE u.id = ? AND u.profile_id = ? AND m.tenant_id = ?
+        JOIN candidate_profiles p ON p.owner_user_id = u.id AND p.tenant_id = m.tenant_id
+       WHERE u.id = ? AND p.id = ? AND m.tenant_id = ?
          AND u.status = 'active' AND m.status = 'active' AND t.status = 'active'`,
         [scope.userId, scope.profileId, scope.tenantId],
       ),

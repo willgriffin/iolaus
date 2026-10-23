@@ -62,6 +62,7 @@ const subject = () => ({
   profileId: randomUUID(),
 });
 const classes = [
+  'ResumeImportWriteOperation',
   'CandidateProfile',
   'Project',
   'Experience',
@@ -352,6 +353,41 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         expect(await rows('tags')).toHaveLength(0);
         expect(await rows('skill_group_members')).toHaveLength(0);
       }
+
+      it('admits source writes only for the owned candidate profile, independently of the person profile', async () => {
+        const nativeUser = (
+          await db.query('SELECT profile_id FROM users WHERE id = ?', [
+            owner.userId,
+          ])
+        ).rows[0] as { profile_id: string | null };
+        expect(nativeUser.profile_id).not.toBe(owner.profileId);
+        await upload('candidate-profile-admission');
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+        const other = subject();
+        await seedPrincipal(db, other);
+        const receive = () =>
+          host.receive({
+            bytes: Buffer.from('%PDF-other-owned-profile'),
+            filename: 'resume.pdf',
+            requestId: randomUUID(),
+          });
+        await db.query(
+          'UPDATE candidate_profiles SET owner_user_id = ? WHERE id = ?',
+          [other.userId, owner.profileId],
+        );
+        await expect(receive()).rejects.toThrow('unavailable');
+        await db.query(
+          'UPDATE candidate_profiles SET owner_user_id = ?, tenant_id = ? WHERE id = ?',
+          [owner.userId, other.tenantId, owner.profileId],
+        );
+        await expect(receive()).rejects.toThrow('unavailable');
+        await db.query('DELETE FROM candidate_profiles WHERE id = ?', [
+          owner.profileId,
+        ]);
+        await expect(receive()).rejects.toThrow('unavailable');
+        expect(await rows('intake_items')).toHaveLength(1);
+        expect(await rows('resume_import_write_operations')).toHaveLength(0);
+      });
 
       it('creates private reviewed data, deduplicates bytes and repeated apply, and deletes actual evidence', async () => {
         const review = await upload();

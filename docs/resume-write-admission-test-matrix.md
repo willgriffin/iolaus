@@ -29,3 +29,18 @@ admission SQLite, exposure, account policy/page and database class-list tests:
 (`225-account-sqlite.log`). PostgreSQL ordinary admission cases are authored for
 the integration coordinator, unexecuted by the worker. Actual provider and
 deployment qualification remains open; mocks do not establish drain.
+
+Candidate ownership regression: `scope.profileId` identifies a
+`candidate_profiles` row, while `users.profile_id` identifies the separate SMRT
+person profile. Admission joins candidate owner and tenant to the active native
+user/membership/tenant under the same users-row lock. Ledger fixtures seed both
+identities separately; native host coverage admits a valid candidate profile
+without matching `users.profile_id` and refuses reassigned/moved/missing profiles
+before receipt or source writes. This is a correction to the ownership predicate,
+not a new identity contract.
+
+Follow-up evidence: corrected ledger/host unit checks passed 28 cases
+(`225-candidate-profile-narrow.log`); the new ordinary native SQLite ownership
+case passed (`225-candidate-profile-native-sqlite.log`). The corrected ownership
+fixture fails with the pre-fix admission query
+(`225-candidate-profile-base.log`). PostgreSQL rerun remains coordinator-owned.

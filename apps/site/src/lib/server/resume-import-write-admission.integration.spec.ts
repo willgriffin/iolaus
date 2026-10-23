@@ -22,6 +22,7 @@ type Db = Awaited<ReturnType<typeof getTestDatabase>>;
 const classes = [
   'ResumeImportWriteOperation',
   'AccountDeletionRecord',
+  'CandidateProfile',
   'User',
   'Tenant',
   'Membership',
@@ -48,12 +49,13 @@ async function seed(db: Db) {
     profileId: randomUUID(),
   };
   const roleId = randomUUID();
+  const personProfileId = randomUUID();
   await insert(db, 'tenants', { id: scope.tenantId, status: 'active' });
-  await insert(db, 'profiles', { id: scope.profileId, _meta_type: 'person' });
+  await insert(db, 'profiles', { id: personProfileId, _meta_type: 'person' });
   await insert(db, 'roles', { id: roleId, name: roleId });
   await insert(db, 'users', {
     id: scope.userId,
-    profile_id: scope.profileId,
+    profile_id: personProfileId,
     email: `${scope.userId}@example.invalid`,
     email_key: scope.userId,
     status: 'active',
@@ -63,6 +65,12 @@ async function seed(db: Db) {
     tenant_id: scope.tenantId,
     role_id: roleId,
     status: 'active',
+  });
+  await insert(db, 'candidate_profiles', {
+    id: scope.profileId,
+    tenant_id: scope.tenantId,
+    owner_user_id: scope.userId,
+    profile_key: 'default',
   });
   return scope;
 }
@@ -178,6 +186,19 @@ function contract(create: () => Promise<Db>, dialect: AccountDeletionDialect) {
     const db = await create();
     const scope = await seed(db);
     const other = await seed(db);
+    const person = (
+      await db.query('SELECT profile_id FROM users WHERE id = ?', [
+        scope.userId,
+      ])
+    ).rows[0] as { profile_id: string };
+    expect(person.profile_id).not.toBe(scope.profileId);
+    await expect(
+      beginResumeImportWrite(
+        db,
+        { ...scope, profileId: person.profile_id },
+        locator,
+      ),
+    ).rejects.toThrow('unavailable');
     for (const invalid of [
       { ...scope, tenantId: other.tenantId },
       { ...scope, profileId: other.profileId },
@@ -207,6 +228,24 @@ function contract(create: () => Promise<Db>, dialect: AccountDeletionDialect) {
         [...values],
       );
     }
+    await db.query(
+      'UPDATE candidate_profiles SET owner_user_id = ? WHERE id = ?',
+      [other.userId, scope.profileId],
+    );
+    await expect(beginResumeImportWrite(db, scope, locator)).rejects.toThrow(
+      'unavailable',
+    );
+    await db.query(
+      'UPDATE candidate_profiles SET owner_user_id = ?, tenant_id = ? WHERE id = ?',
+      [scope.userId, other.tenantId, scope.profileId],
+    );
+    await expect(beginResumeImportWrite(db, scope, locator)).rejects.toThrow(
+      'unavailable',
+    );
+    await db.query('UPDATE candidate_profiles SET tenant_id = ? WHERE id = ?', [
+      scope.tenantId,
+      scope.profileId,
+    ]);
     expect(await pendingResumeImportWrites(db, scope)).toBe(0);
     await beginResumeImportWrite(db, scope, locator);
     expect(await pendingResumeImportWrites(db, scope)).toBe(1);
