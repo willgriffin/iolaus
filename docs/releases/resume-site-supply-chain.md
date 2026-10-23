@@ -1,0 +1,42 @@
+# Hardened site supply-chain disposition
+
+Read-only assessment of `/tmp/iolaus-resume-production/site-hardened-trivy.json`, scanner timestamp 2026-10-23T05:02:08Z; `/input/site-hardened.tar`, artifact ID `sha256:4af51b50ba71355c5d58c502d2b72c4abdf065de4993fe246475289a7ed777b1`. This is scanner identity, not an asserted registry manifest digest. Root identifies runtime source as 5821b17 with subsequent test/docs-only changes. No containers, exploits, tests, or fault injection performed here.
+
+**Results remain: 222 Debian matches (4 critical, 218 high; 102 unique CVEs), 18 Node high matches, and 17 Go high matches. No zero-findings or whole-application safety claim is justified.** No fixed-version field is supplied for the Debian matches. The old site-trivy.json is not used as final evidence.
+
+## New resume workflow boundary
+
+Inspected `resume-import-host.ts` checks size/PDF magic, hashes bytes and hands the original bytes to the private intake receipt/storage path. `resume-import-extraction.ts:1739` calls the configured extraction HTTP client; `resume-import-pdf-client.ts` forwards bytes to the configured service after authorization, disallows redirects, and validates bounded JSON/text output. If no service URL is configured, the alternative is an isolated Docker extractor, not in-process PDF parsing. Structured OCR fallback uses `PaddleOCRClient.parse(bytes)` to the configured external OCR service. Therefore this is not a claim that all PDF processing occurs in one service: external OCR is another processing/trust boundary and is not scanned by this image report.
+
+The new upload/worker/proposal/review/recovery path does not open the private uploaded PDF in Chromium, parse it through libxml2, interpret it as YAML, or execute its text as SQL. Existing resume PDF generation and other browser/crawling features are separate execution surfaces. This assessment does not certify their native library reachability. The `%PDF-` check establishes format gating only, not parser safety.
+
+**No concrete remaining scanner-advisory path to an unsafe outcome in this new resume flow was established.** This is a bounded static conclusion, not proof of non-exploitability. Existing site MCP/mail risks remain substantive and separately tracked (SMRT#4175 / SDK#1447 per root); they are not excused by the extractor's isolation.
+
+## Four critical Debian matches: individual dispositions
+
+| Installed package / CVE | Disposition |
+|---|---|
+| `zlib1g 1:1.2.13.dfsg-1`, CVE-2023-45853 | **Non-applicable source-package match for Debian's zlib binary.** MiniZip ZIP creation overflow; Debian explicitly says bookworm src:zlib does not build/provide contrib/minizip. This exception is narrowly scoped, not a dismissal of zlib generally. [Debian](https://security-tracker.debian.org/tracker/CVE-2023-45853). |
+| `libglib2.0-0 2.74.6-2+deb12u9`, CVE-2026-58016 | **Real affected library, feature not established in resume flow.** Requires malformed D-Bus introspection XML passed to `g_dbus_node_info_new_for_xml`; Debian describes OOB-read DoS and postpones bookworm fix. PDF bytes/text are not passed to that API here. Do not label as absent or patched merely because scanner says critical and Debian says minor. [Debian](https://security-tracker.debian.org/tracker/CVE-2026-58016). |
+| `libsqlite3-0 3.40.1-2+deb12u2`, CVE-2025-7458 | **Real affected library, required SQL capability not established.** Needs arbitrary crafted SQL with many ORDER BY expressions; ordinary stored resume strings are not SQL programs. Local SQLite support in the app is not proof that this OS library is used, nor that arbitrary SQL is exposed. No such path was established in inspected import flow. [Debian](https://security-tracker.debian.org/tracker/CVE-2025-7458). |
+| `libxml2 2.9.14+dfsg-1.3~deb12u6`, CVE-2026-6653 | **Real affected library, not a source-only false positive.** XML internal-subset entity handling UAF; Debian explicitly confirms the affected backport and defers the bookworm fix. No uploaded PDF → native XML parser path found in the new workflow. Other Chromium/XML rendering features require separate analysis. [Debian](https://security-tracker.debian.org/tracker/CVE-2026-6653). |
+
+## Other Debian families remain visible
+
+Source-family match counts: Chromium 120 (60 unique CVEs, packages chromium/chromium-common at 155.0.8059.79-1~deb12u1); util-linux 54 (6 CVEs); GLib 7; libxml2 7; systemd 6; ncurses 4; TIFF 4; SQLite 3; libX11 3; CUPS 2; HarfBuzz 2; OpenSSL 2; gzip, ACL, libsndfile, libXrender, libXtst, Perl, xdg-utils and zlib each 1. These counts include the critical rows above.
+
+The Chromium/media/font/XML stack is **real installed attack surface**, not tooling that can universally be ignored. It is not the parser for these private uploads, but any existing feature opening attacker-controlled web/media content needs its own disposition. The six util-linux CVEs concern mounting, namespace/cgroup operations, and partition probing, not PDF extraction. The systemd-homed, ncurses infocmp, GNU gzip LZW/LZH, ACL privileged path, and Perl Archive::Tar prerequisites are separately described in `extractor-supply-chain-disposition.md`; their package presence does not imply execution during this flow. No broad absence or universal mitigation claim is made for all 218 highs. Base refresh/minimization remains follow-up work; do not suppress the entire OS result.
+
+## Node and Go additions versus extractor
+
+- `js-yaml@4.3.1`: CVE-2026-84375, scanner minimum 4.3.2 (or 3.15.2 on v3). Exact image path `app/node_modules/.pnpm/js-yaml@4.3.1/node_modules/js-yaml/package.json`; lockfile consumer is `cosmiconfig@9.0.2`. Resume interpretation uses JSON plus schema validation, not YAML. Patch/remove unused config tooling separately; do not assert all application YAML uses safe without tracing them.
+- `undici@6.28.0`: CVE-2026-19534, minimum 6.28.1 on v6. **Exact path is `usr/local/lib/node_modules/pnpm/dist/node_modules/undici/package.json`**, the retained global pnpm bundle, not the app's patched undici or Node's built-in fetch. Advisory concerns WebSocket subprotocol handling. Resume extraction HTTP client uses fetch, not pnpm WebSocket. Remove runtime package manager where startup contracts permit, or update its verified distribution; a root workspace override cannot patch this embedded global copy.
+- `@modelcontextprotocol/client@2.0.0`: CLI OAuth credential binding, minimum 2.2.0. Installed as site image copied the complete workspace. No CLI OAuth client launched by upload/recovery. MCP server 2.0.0 and SDK 1.29.0 remain separately important for existing site's MCP endpoint: server upgrade must also enable bounded input/request options.
+- Other 15 Node highs are the same five-package families as extractor: MCP SDK/server, adm-zip, braces, nodemailer. No ZIP unpacking, caller-provided glob, or mail operation was established in the new resume import path. AI profile usage does not by itself activate MCP OAuth/task servers. Existing unrelated features still need upstream fixes.
+- **All 17 Go findings are in one executable:** `app/node_modules/.pnpm/lefthook-linux-arm64@2.1.10/node_modules/lefthook-linux-arm64/bin/lefthook`. Embedded modules: Go stdlib 1.26.4 (13), x/mod 0.37.0 (2), x/text 0.38.0 (2). This is Git-hook tooling retained by whole-build copying, not the Node HTTP service. No lefthook invocation in resume upload/worker/review/recovery. Tooling removal or updated upstream binary is appropriate; changing app JS dependencies cannot patch an embedded Go stdlib.
+
+## Receipt and remaining boundaries
+
+Suggested receipt: “Hardened site retains 222 Debian, 18 Node, and 17 Go high/critical scanner matches. One critical zlib match is non-applicable per Debian binary-build evidence; the three other critical libraries remain affected with prerequisites not established in the new resume flow. Private PDF bytes are forwarded to isolated extraction and optional external OCR rather than parsed by the site browser/native XML stack. Existing site features and broad Chromium/native attack surface are not certified by this review; upstream and base-image follow-ups remain open.”
+
+Do not equate ‘no demonstrated in-scope advisory exploit’ with operational acceptance of every residual. Deployment isolation, limits, scanner provenance, and the separate extractor/OCR boundaries remain required. This assessment neither ran formal code review nor verified live deployment configuration.

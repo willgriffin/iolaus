@@ -114,5 +114,6 @@ The qualified extractor dependency assessment is recorded in
 [the supply-chain disposition](releases/resume-extractor-supply-chain.md). It
 retains visible scanner findings and their feature-specific rationale; it is
 not a clean-image assertion. Bind the final rebuilt image digest to its own scan
-before rollout. The site image has a broader execution surface and requires a
-separate disposition.
+before rollout. The site image has a broader execution surface; its
+[separate disposition](releases/resume-site-supply-chain.md) records the remaining
+findings without claiming unrelated application features are certified.
