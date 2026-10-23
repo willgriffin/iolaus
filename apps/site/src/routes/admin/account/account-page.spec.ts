@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AccountDeletionError } from '$lib/server/account-deletion';
 import { ResumeImportLifecycleBusyError } from '$lib/server/resume-import-account-fence.js';
 
 const state = vi.hoisted(() => ({
@@ -21,7 +22,12 @@ vi.mock('$lib/server/account-deletion', () => ({
   ACCOUNT_DELETION_CONFIRMATION_PHRASE: 'DELETE MY ACCOUNT',
   ACCOUNT_DELETION_DISABLED_MESSAGE: 'disabled-message',
   AccountDeletionError: class extends Error {
-    code = 'files';
+    constructor(
+      readonly code: string,
+      message: string,
+    ) {
+      super(message);
+    }
   },
   accountDeletionConfirmed: (input: {
     email?: string | null;
@@ -132,6 +138,24 @@ describe('account page deletion action', () => {
     expect(result).toMatchObject({
       status: 503,
       data: { error: expect.stringContaining('try again') },
+    });
+    expect(input.cookies.delete).not.toHaveBeenCalled();
+  });
+
+  it('reports pending source writes without redirecting to account deleted', async () => {
+    state.deleteAccount.mockRejectedValueOnce(
+      Object.assign(
+        new AccountDeletionError(
+          'pending-source-writes',
+          'pending source writes; retry after recovery',
+        ),
+        { code: 'pending-source-writes' },
+      ),
+    );
+    const input = event(good);
+    expect(await run(input)).toMatchObject({
+      status: 503,
+      data: { error: expect.stringContaining('pending source writes') },
     });
     expect(input.cookies.delete).not.toHaveBeenCalled();
   });

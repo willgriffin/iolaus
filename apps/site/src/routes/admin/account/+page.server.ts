@@ -113,6 +113,11 @@ export const actions: Actions = {
         }),
       );
     } catch (cause) {
+      if (
+        cause instanceof AccountDeletionError &&
+        cause.code === 'pending-source-writes'
+      )
+        return fail(503, { error: cause.message });
       if (cause instanceof ResumeImportLifecycleBusyError)
         return fail(503, { error: cause.message });
       console.error(

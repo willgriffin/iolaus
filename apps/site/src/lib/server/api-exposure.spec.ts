@@ -159,6 +159,7 @@ describe('decorator-driven surface exposure', () => {
         'EmploymentPerson',
         'HostedInvite',
         'AccountDeletionRecord',
+        'ResumeImportWriteOperation',
         ...privateEvidenceClasses,
       ]),
     );

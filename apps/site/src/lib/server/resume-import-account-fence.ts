@@ -21,7 +21,7 @@ export class ResumeImportLifecycleBusyError extends Error {
 // than their request-local object identity. Never key this by account or URL.
 const admittedByPool = new WeakMap<object, number>();
 
-/** Drain in-flight receives before deletion enumerates private source assets. */
+/** Normal drain/capacity aid. Durable write admission, not this session, proves settlement. */
 export async function withResumeImportAccountFence<T>(
   db: DatabaseInterface,
   scope: AccountScope,

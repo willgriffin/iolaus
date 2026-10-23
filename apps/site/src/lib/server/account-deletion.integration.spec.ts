@@ -41,6 +41,7 @@ const classes = [
   'AiUserSpendEntry',
   'HostedInvite',
   'AccountDeletionRecord',
+  'ResumeImportWriteOperation',
   'CliAuthRequest',
   'DataSurfacePreviewToken',
   'ShortlistEntryRecord',
