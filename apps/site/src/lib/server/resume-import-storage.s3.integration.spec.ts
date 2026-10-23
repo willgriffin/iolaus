@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Asset, createAssetRuntime } from '@happyvertical/smrt-assets';
+import {
+  type Asset,
+  createAssetRuntime,
+  getFilesystemLazy,
+} from '@happyvertical/smrt-assets';
 import { getTestDatabase } from '@happyvertical/smrt-core';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { afterEach, expect, it } from 'vitest';
@@ -12,6 +16,12 @@ import {
   resumeImportStorageOptions,
 } from './resume-import-storage.js';
 import './smrt.js';
+import '@happyvertical/smrt-ingestion/server';
+import { insert } from './fixtures/account-seed.js';
+import {
+  purgeQuarantinedResumeOriginals,
+  recoverQuarantinedResumeOriginal,
+} from './resume-import-quarantine.js';
 
 // Opt in only with an isolated, precreated private bucket. Never point this at
 // a candidate bucket. NODE_EXTRA_CA_CERTS supplies the staging TLS root CA.
@@ -23,6 +33,7 @@ let root: string | undefined;
 let db: DatabaseInterface | undefined;
 let runtime: Awaited<ReturnType<typeof createAssetRuntime>> | undefined;
 const cleanup: Asset[] = [];
+const providerCleanup: Array<() => Promise<unknown>> = [];
 
 async function mustReject(action: () => Promise<unknown>): Promise<void> {
   let rejected = false;
@@ -39,6 +50,13 @@ afterEach(async () => {
   for (const asset of cleanup.splice(0)) {
     try {
       await runtime?.store.removeFile(asset);
+    } catch {
+      cleanupFailed = true;
+    }
+  }
+  for (const cleanupOriginal of providerCleanup.splice(0)) {
+    try {
+      await cleanupOriginal();
     } catch {
       cleanupFailed = true;
     }
@@ -68,7 +86,7 @@ async function childRead(metadata: string, ids: string[]): Promise<void> {
       const { getDatabase } = await import('@happyvertical/sql');
       const { getResumeImportStorage, resumeImportStorageOptions } = await import(${JSON.stringify(new URL('./resume-import-storage.ts', import.meta.url).href)});
       db = await getDatabase({type: 'sqlite', url: process.env.IOLAUS_S3_QA_METADATA, cache: false});
-      const assets = await createAssetRuntime({db, ...resumeImportStorageOptions(getResumeImportStorage())});
+      const assets = await createAssetRuntime({db, ...resumeImportStorageOptions(getResumeImportStorage(), db)});
       for (const id of JSON.parse(process.env.IOLAUS_S3_QA_ASSET_IDS)) {
         const asset = await assets.collection.get(id);
         if (!asset || !(await assets.store.read(asset)).equals(Buffer.from('Fictional Candidate. Synthetic provider qualification only.'))) throw new Error('read failed');
@@ -143,11 +161,17 @@ it.skipIf(rawConfig === undefined)(
           'Tag',
           'PlaceAsset',
           'ProfileAsset',
+          'ResumeImportQuarantine',
+          'ResumeImportRecoveryAudit',
+          'ResumeImportWriteOperation',
+          'IntakeItem',
+          'IntakeEvidence',
+          'IntakeDeletion',
         ],
       });
       runtime = await createAssetRuntime({
         db,
-        ...resumeImportStorageOptions(storage),
+        ...resumeImportStorageOptions(storage, db),
       });
       const tenantId = randomUUID();
       const ownerProfileId = randomUUID();
@@ -194,7 +218,7 @@ it.skipIf(rawConfig === undefined)(
       db = await getDatabase(dbOptions);
       runtime = await createAssetRuntime({
         db,
-        ...resumeImportStorageOptions(storage),
+        ...resumeImportStorageOptions(storage, db),
       });
       for (const id of ids) {
         const asset = await runtime.collection.get(id);
@@ -207,7 +231,7 @@ it.skipIf(rawConfig === undefined)(
       db = await getDatabase(dbOptions);
       runtime = await createAssetRuntime({
         db,
-        ...resumeImportStorageOptions(storage),
+        ...resumeImportStorageOptions(storage, db),
       });
       const asset = await runtime.collection.get(ids[0]);
       if (!asset) throw new Error('Source metadata missing');
@@ -226,11 +250,14 @@ it.skipIf(rawConfig === undefined)(
       stage = 'provider authorization failure and recovery';
       const denied = await createAssetRuntime({
         db,
-        ...resumeImportStorageOptions({
-          ...storage,
-          accessKeyId: `denied-${randomUUID()}`,
-          secretAccessKey: randomUUID(),
-        }),
+        ...resumeImportStorageOptions(
+          {
+            ...storage,
+            accessKeyId: `denied-${randomUUID()}`,
+            secretAccessKey: randomUUID(),
+          },
+          db,
+        ),
       });
       await mustReject(async () => await denied.store.read(asset));
       await mustReject(async () => await denied.store.removeFile(asset));
@@ -243,6 +270,98 @@ it.skipIf(rawConfig === undefined)(
       // Failed reads/deletion must leave the actual private object intact and
       // retryable with the authorized provider, without a fallback filesystem.
       expect((await runtime.store.read(asset)).equals(fictional)).toBe(true);
+      stage = 'original quarantine and operator recovery';
+      const ownerId = randomUUID();
+      const original = await runtime.collection.create({
+        name: 'Fictional CV (nonstandard name).pdf',
+        mimeType: 'application/pdf',
+        typeSlug: 'file',
+        tenantId,
+        ownerProfileId,
+      });
+      original.sourceUri = await runtime.store.planFile(original, {
+        mimeType: 'application/pdf',
+      });
+      cleanup.push(original);
+      const ownedOriginalKey = original.sourceUri.slice(
+        `s3://${storage.bucket}/`.length,
+      );
+      providerCleanup.push(
+        async () =>
+          await (await getFilesystemLazy(storage)).delete(ownedOriginalKey),
+      );
+      await original.save();
+      await runtime.store.preserveFile(original, fictional, {
+        mimeType: 'application/pdf',
+      });
+      const itemId = randomUUID();
+      await insert(db, 'intake_items', {
+        id: itemId,
+        tenant_id: tenantId,
+        confidential_scope_id: ownerProfileId,
+        visibility: 'deleted',
+        data: JSON.stringify({
+          capturedCeiling: { execution: { principalId: ownerId } },
+        }),
+      });
+      await insert(db, 'intake_evidence', {
+        item_id: itemId,
+        tenant_id: tenantId,
+        confidential_scope_id: ownerProfileId,
+        asset_id: original.id,
+        source_uri: original.sourceUri,
+        parent_evidence_id: null,
+        part_id: 'Resume.pdf',
+        media_type: 'application/pdf',
+        state: 'revoked',
+        content_hash: createHash('sha256').update(fictional).digest('hex'),
+        byte_length: fictional.length,
+      });
+      await insert(db, 'intake_deletions', {
+        item_id: itemId,
+        tenant_id: tenantId,
+        confidential_scope_id: ownerProfileId,
+        created_at: '2000-01-01T00:00:00.000Z',
+      });
+      await runtime.store.removeFile(original);
+      const quarantine = (
+        await db.query(
+          'SELECT id, purge_after FROM resume_import_quarantines WHERE asset_id = ?',
+          [original.id],
+        )
+      ).rows[0];
+      if (!quarantine) throw new Error('Missing original recovery identity');
+      await mustReject(
+        async () => await authorizedRuntime.store.read(original),
+      );
+      const recovered = await recoverQuarantinedResumeOriginal({
+        db,
+        storage,
+        quarantineId: String(quarantine.id),
+        now: new Date('2000-01-02T00:00:00Z'),
+        authority: {
+          actorId: 'operator:fictional',
+          tenantId,
+          destinationAuthority: 'fictional-owner-export',
+          reason: 'provider qualification',
+        },
+        authorize: async ({ tenantId: requested }) => requested === tenantId,
+      });
+      expect(recovered.equals(fictional)).toBe(true);
+      expect(
+        await purgeQuarantinedResumeOriginals(db, storage, {
+          now: new Date(String(quarantine.purge_after)),
+        }),
+      ).toEqual({ purged: 1, pendingWrites: 0, failed: 0 });
+      const physical = await getFilesystemLazy(storage);
+      const originalKey = original.sourceUri.slice(
+        `s3://${storage.bucket}/`.length,
+      );
+      await mustReject(
+        async () => await physical.read(originalKey, { raw: true }),
+      );
+      // Retain the tombstone while cleaning native asset metadata.
+      await runtime.store.remove(original);
       stage = 'durable deletion';
       for (const id of [...ids].reverse()) {
         const restored = await runtime.collection.get(id);
@@ -253,7 +372,7 @@ it.skipIf(rawConfig === undefined)(
       db = await getDatabase(dbOptions);
       runtime = await createAssetRuntime({
         db,
-        ...resumeImportStorageOptions(storage),
+        ...resumeImportStorageOptions(storage, db),
       });
       const reopenedRuntime = runtime;
       for (const original of cleanup) {
