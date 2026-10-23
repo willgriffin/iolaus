@@ -1,8 +1,8 @@
 FROM node:26.10.0-bookworm-slim AS dependencies
 WORKDIR /workspace
 RUN npm install --global pnpm@11.25.0
-# The checked-in lock and vendored release archives are the only dependency
-# source. This build never copies npm configuration or application credentials.
+# The frozen lock resolves the published registry closure. The checked-in
+# .npmrc supplies registry routing only; never copy application credentials.
 COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/site/package.json apps/site/package.json
 COPY packages/resume/package.json packages/resume/package.json
@@ -15,7 +15,18 @@ ARG IOLAUS_SOURCE_REVISION=unknown
 ARG IOLAUS_LOCKFILE_SHA256=unknown
 LABEL org.opencontainers.image.revision="${IOLAUS_SOURCE_REVISION}"
 LABEL dev.happyvertical.iolaus.pnpm-lock.sha256="${IOLAUS_LOCKFILE_SHA256}"
-RUN groupadd --system --gid 10001 extraction && useradd --system --uid 10001 --gid extraction --no-create-home extraction
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --only-upgrade perl-base \
+  && groupadd --system --gid 10001 extraction \
+  && useradd --system --uid 10001 --gid extraction --no-create-home extraction \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+# Only node executes the extractor; package managers are build-stage tools.
+RUN test ! -e /usr/local/lib/node_modules/npm \
+  && ! command -v npm \
+  && ! command -v npx \
+  && ! command -v pnpm \
+  && node --version | grep -Fx 'v26.10.0'
 COPY --from=dependencies /workspace/node_modules /app/node_modules
 COPY --from=dependencies /workspace/apps/site/node_modules /app/apps/site/node_modules
 COPY apps/site/scripts/resume-import-extraction.mjs /app/apps/site/scripts/resume-import-extraction.mjs

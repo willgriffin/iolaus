@@ -64,3 +64,17 @@ test('extractor image pins Node and carries source and lock labels', () => {
   assert.match(probe, /production deadline exceeded/);
   assert.match(probe, /NoNewPrivs/);
 });
+
+test('runtime images upgrade perl and remove unused npm while retaining site pnpm smoke', () => {
+  const site = readFileSync(new URL('../apps/site/Dockerfile', import.meta.url), 'utf8').split('FROM base AS runner')[1];
+  const extractor = readFileSync(new URL('../apps/site/Dockerfile.resume-import-extraction', import.meta.url), 'utf8').split('FROM node:26.10.0-bookworm-slim')[2];
+  for (const runtime of [site, extractor]) {
+    assert.match(runtime, /apt-get update[\s\S]*apt-get install -y --no-install-recommends --only-upgrade perl-base/);
+    assert.match(runtime, /rm -rf \/usr\/local\/lib\/node_modules\/npm \/usr\/local\/bin\/npm \/usr\/local\/bin\/npx/);
+    assert.match(runtime, /! command -v npm/);
+    assert.match(runtime, /! command -v npx/);
+  }
+  assert.match(site, /USER 10001:10001[\s\S]*HOME=\/tmp pnpm --version/);
+  assert.match(extractor, /! command -v pnpm/);
+  assert.match(extractor, /CMD \["node", "\/app\/apps\/site\/scripts\/resume-import-extraction.mjs"\]/);
+});

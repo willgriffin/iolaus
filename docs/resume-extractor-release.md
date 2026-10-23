@@ -70,3 +70,41 @@ The narrow contract tests run without containers. Their mocked Docker calls prov
 orchestration and refusal behavior only. The base workflow had no extractor build
 or gate; the workflow contract would fail against that base. Native image and
 production qualification are pending until their actual commands pass.
+
+## Runtime dependency hardening (2026-10-22)
+
+Both final image stages refresh Debian's package index and upgrade only the
+installed `perl-base` package before deleting apt indexes. The official
+Bookworm security index publishes `5.36.0-7+deb12u4`, the fix for the scanned
+`5.36.0-7+deb12u3` finding. Builds select the repository's available security
+candidate rather than pinning an obsolete package archive; qualification must
+record the resulting `dpkg-query -W perl-base` output and rescan both digests.
+
+Both final stages remove `/usr/local/lib/node_modules/npm` and its `npm`/`npx`
+launchers after installing runtime OS packages and creating the unprivileged
+user. The old base's npm 11.19.1 carries vulnerable undici 6.28.0 independently
+of the workspace lockfile. Removing the unused global npm closure removes this
+copy without changing the application's separately pinned undici versions.
+Build stages retain npm to install pinned pnpm. The site retains global pnpm
+11.25.0 for operator migration/status commands; its default server and worker
+entrypoints use Node and the installed tsx loader. Source inspection of
+`scripts/smrt-app.mjs`, `scripts/daily-use-dev.mjs`, `scripts/smrt-worker.mjs`,
+site migration/status scripts and worker bootstrap found no runtime npm/npx
+invocation. `npm_execpath` in the app wrapper identifies a running pnpm process;
+it does not invoke npm. The extractor runs its Node entrypoint and Node child
+only, so its final stage needs neither npm nor pnpm.
+
+| Invariant / trigger | Positive / negative | Actor, executor and runtime | Edge, level and command |
+| --- | --- | --- | --- |
+| Runtime OS remediation | Updated perl-base candidate; stale vulnerable version must fail image qualification | Image builder and release coordinator / apt and dpkg / Debian Bookworm, Node 26.10; data transaction N/A | Official security repository; source contract `node --test scripts/resume-extractor-release.test.mjs`, actual `dpkg-query -W perl-base` and digest scan required |
+| Remove unused npm closure | npm directory and npm/npx commands absent; site pnpm 11.25 remains callable as UID 10001 | Runtime operator / Node and pnpm / Linux; no database mutation in version smoke | Global tool closure; Dockerfile build assertions plus actual image command smoke; wrong/missing pnpm fails retained version checks |
+| Preserve extraction entrypoint | Node 26.10 remains present, extractor has no package-manager command; valid PDF extraction and malformed-input refusal remain required | Extractor UID 10001 / Node child / Linux; no application database transaction | Native parser and published dependencies; actual candidate envelope and PDF integration probes required |
+
+Source-only contracts and manifest checks pass without building containers.
+They do not establish that an image layer is free of vulnerable files. Before
+publication, inspect the actual final filesystems, run the retained site pnpm
+version and Node/tsx worker bootstrap smokes, exercise the extractor entrypoint
+and benign text PDF, and scan both exact images. Runtime package installation
+through npm/npx is intentionally unavailable; supported operator scripts use
+pnpm. Native package/runtime behavior on Linux and the security repository's
+availability remain actual-build qualification risks.
