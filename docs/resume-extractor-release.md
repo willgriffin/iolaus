@@ -108,3 +108,11 @@ and benign text PDF, and scan both exact images. Runtime package installation
 through npm/npx is intentionally unavailable; supported operator scripts use
 pnpm. Native package/runtime behavior on Linux and the security repository's
 availability remain actual-build qualification risks.
+
+
+The qualified extractor dependency assessment is recorded in
+[the supply-chain disposition](releases/resume-extractor-supply-chain.md). It
+retains visible scanner findings and their feature-specific rationale; it is
+not a clean-image assertion. Bind the final rebuilt image digest to its own scan
+before rollout. The site image has a broader execution surface and requires a
+separate disposition.
