@@ -9,10 +9,11 @@ Starting source: `c60a46751a79731a692ad7c17b2f1ec3a6542965` (merged #210/#218).
 - Repository: `willgriffin/iolaus`; release line: next compatible feature release
   after v0.5.1 (choose the version using repository release conventions).
 - One branch: `codex/resume-production`; one ready pull request; one attributed
-  commit per item with `Refs #N`. Close #221 and completed member issues from
-  that PR using a separate closing keyword for each issue.
+  commit per item with `Refs #N`. Close completed member issues from that PR using a separate closing keyword
+  for each issue. Keep #221 open until deployed qualification and release finish.
 - Ordered items: #219 lifecycle capacity, #223 released dependency closure,
-  #222 private hosted storage, #224 extractor image/release, then integrated
+  #222 private hosted storage, #224 extractor image/release, #225 durable
+  source-write admission, #226 retention disclosure, then integrated
   qualification. Dependency inventory may run alongside #219; workers must
   never share file ownership at the same time.
 - Siblings: `/Users/will/Work/_trees/resume-production/{iolaus,iac,sdk,smrt}`.
@@ -64,10 +65,13 @@ Map capacity/acquire/lock refusals to typed actionable retry results without
 misreporting a partially committed action failure as a harmless busy refusal.
 
 Qualify actual nested transaction demand, role limits and progress under bursts.
-Also probe advisory-session loss during receive/deletion; do not assert a
-loss-safe fence based solely on `isActive()`. If existing native authority/write
-guards are insufficient, record and fix the proven blocker through its owning
-upstream layer before release.
+Do not assert a loss-safe fence based solely on `isActive()`. The earlier
+advisory-session-loss fault-injection proposal was rejected by automatic review
+and was not executed. Do not retry it through another workflow. #225 adds a
+nonexpiring durable source-write ledger and atomic admission/deletion gate,
+qualified through ordinary PostgreSQL and SQLite transactions. Unresolved writes
+keep deletion pending until documented operator reconciliation; elapsed time or
+session disappearance never proves a write finished.
 
 ### 2. Released dependency closure (#223)
 
@@ -114,7 +118,7 @@ retries. Use current governed AI profile/pricing and fictional input only.
 | Invariant / trigger | Positive | Failure / negative | Actor / executor / runtime | Edge / level / command |
 |---|---|---|---|---|
 | Peak lifecycle work | Two distinct owners progress at max5; nested native work and unrelated CRUD/worker reads complete | Excess admission is immediate bounded refusal; max1/2 safe; failed acquire/lock/action/cleanup reclaims permits | Owner scopes; actual native PostgreSQL pool/role + SQLite regression | Native acquisition queue timeout, no leaked late client; focused fence/native host specs |
-| Upload vs deletion | Same-account deletion waits before enumerating receipts | Different owners independent; deletion-started refuses new bytes; advisory-session loss cannot silently violate cleanup | Two native handles/processes, real transactions/authority, PostgreSQL; SQLite keyed fence | Hold barriers, revoke/loss/retry/partial failure; native host/account tests |
+| Upload vs deletion | Same-account deletion waits before enumerating receipts | Different owners independent; deletion-started refuses new bytes; advisory-session loss cannot silently violate cleanup | Two native handles/processes, real transactions/authority, PostgreSQL; SQLite keyed fence | Ordinary transaction, admission, rollback/retry and pending-marker cases; native host/account tests; rejected session-loss fault injection not executed |
 | Private source assets | Another web/worker process reads original and evidence after restart | Wrong owner/context, missing config, unavailable store, interrupted write/deletion fail safely | Two owners/tenants; native AssetRuntime + private object store; SQLite/PostgreSQL metadata | Real provider allow/deny, retention/export/delete/retry; focused + integrated provider tests |
 | Account deletion disclosure (#226): open enabled account page before confirming | Immediate access removal, uploaded-original-only private 30-day post-deletion recovery and asynchronous lifecycle removal are visible | Disabled mode has no deletion affordance; acknowledgement/email/phrase and verified-session refusals remain enforced; no generated-PDF migration promise | Account owner; rendered Svelte page + existing server-action tests; database executor/dialect N/A (copy only, no mutation changes) | Private version lifecycle policy is an operator qualification gate; SSR regression + action unit tests: `pnpm --filter @willgriffin/iolaus-site exec vitest run src/routes/admin/account/account-page.spec.ts` |
 | Dependency consumption | Frozen install and actual runtime imports/peers work | Missing/malformed/native failure and incompatible copies detectable | Installed released SDK/SMRT + Node26.10/pnpm11.25 | Native adapters, package/source provenance; archive checks and host/extraction specs |
@@ -153,7 +157,8 @@ rollback checks. Do not mark #221 complete merely because app code is merged.
   main revision and pass after the fix. Coordinator executed all three actual
   PostgreSQL18 capacity/timeout/cross-handle scenarios successfully, evidence
   `/tmp/iolaus-resume-production/219-native-capacity.log`. Requalify under the
-  published dependency candidate; advisory-session-loss safety is still pending.
+  published dependency candidate. The later #225 durable ledger replaces the
+  unsupported session-only safety claim; rejected fault injection was not run.
 - Smallest published dependency candidate: SMRT0.55.19 and SDK0.103.5, PDF0.66.0,
   OCR0.61.6 and Sharp0.35.5. Earlier family releases omit required OAuth or server
   exports. Registry presence/source inventory is not runtime compatibility proof.
@@ -185,5 +190,36 @@ private mode and safe deletion failures. No schema, dependency or mutation chang
 
 Head validation: account-page spec passes all 15 cases, including both rendered
 copy cases; targeted Biome check and `git diff --check` pass. Head log:
-`/tmp/iolaus-resume-production/226-head.log`. Full branch validation, browser
+`/tmp/iolaus-resume-production/226-head-node26.log`. Full branch validation, browser
 layout and provider lifecycle qualification remain integration responsibilities.
+
+
+### Current integration checkpoint and Garage selection (2026-10-23 UTC)
+
+- The owner selected the existing cluster Garage instead of provisioning AWS.
+  IaC PR2340 is merged as inactive preparation only; no AWS apply or credentials
+  retrieval occurred. Its automatic plan also contained unrelated mail DNS
+  drift, which was not applied. Stop AWS provisioning and keep all legacy
+  objects, generated PDF storage and existing Flux ownership intact.
+- Read-only cluster inventory confirms the Garage gateways still run 1.0.1.
+  Garage does not expose S3 bucket versioning; the user-approved 30-day recovery
+  behavior needs an explicitly qualified application-managed mechanism, rather
+  than claims about unsupported noncurrent versions. Private access, native
+  write semantics, transport and retention remain release gates.
+- Current integrated checks: format/lint/check/build and strict SMRT knowledge
+  checks passed; server tests 4590 passed/195 skipped, browser components48
+  passed, resume21 passed. Native PostgreSQL18 lifecycle suite66 passed/2 skipped.
+  Full E2E88 passed/155 opt-in skipped with one geometry regression; that test
+  was repaired and its focused rerun passed. Reconcile these results with every
+  later changed behavior; do not report opt-in skips as executed qualification.
+- Disposable PostgreSQL maintenance migration, status and idempotent rerun pass.
+  Production still requires the declared offline migration and permission gates.
+- Actual extractor read-only/no-network envelope and text/scanned fixtures pass.
+  Cold Paddle OCR fictional scanned input succeeded in69.3 seconds; this is not
+  namespace CNI proof. Site image builds. Final image source labels, immutable
+  registry pair, attestations, supply-chain disposition and namespace policy
+  proof remain release gates.
+- Dependency audit findings are being assessed by actual execution path and
+  patched narrowly under #223; neither audit counts nor SBOM generation alone
+  prove the release safe. Full logs and scanner results remain outside source in
+  `/tmp/iolaus-resume-production`; review the exact final tree before publication.
