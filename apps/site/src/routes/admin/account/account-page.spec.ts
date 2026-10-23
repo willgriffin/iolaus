@@ -256,7 +256,7 @@ describe('account deletion disclosure', () => {
   } satisfies PageData;
 
   it('discloses uploaded-original recovery before opening final confirmation', () => {
-    const { body } = render(AccountPage, { props: { data } });
+    const { body } = render(AccountPage, { props: { data, form: null } });
     const text = body.replace(/<[^>]*>/gu, ' ').replace(/\s+/gu, ' ');
     expect(text).toContain('Deletion immediately removes your account access');
     expect(text).toContain(
@@ -276,7 +276,7 @@ describe('account deletion disclosure', () => {
 
   it('keeps deletion unavailable when disabled', () => {
     const { body } = render(AccountPage, {
-      props: { data: { ...data, deletionEnabled: false } },
+      props: { data: { ...data, deletionEnabled: false }, form: null },
     });
     expect(body).toContain('disabled-message');
     expect(body).not.toContain('Delete my account…');
