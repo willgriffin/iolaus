@@ -13,7 +13,7 @@ Starting source: `c60a46751a79731a692ad7c17b2f1ec3a6542965` (merged #210/#218).
   for each issue. Keep #221 open until deployed qualification and release finish.
 - Ordered items: #219 lifecycle capacity, #223 released dependency closure,
   #222 private hosted storage, #224 extractor image/release, #225 durable
-  source-write admission, #226 retention disclosure, then integrated
+  source-write admission, #226 retention disclosure, #227 Garage recovery, then integrated
   qualification. Dependency inventory may run alongside #219; workers must
   never share file ownership at the same time.
 - Siblings: `/Users/will/Work/_trees/resume-production/{iolaus,iac,sdk,smrt}`.
@@ -223,3 +223,38 @@ layout and provider lifecycle qualification remain integration responsibilities.
   patched narrowly under #223; neither audit counts nor SBOM generation alone
   prove the release safe. Full logs and scanner results remain outside source in
   `/tmp/iolaus-resume-production`; review the exact final tree before publication.
+
+
+### Garage recovery implementation and provider evidence
+
+#227 adds app-managed original-PDF quarantine and minimal durable tombstones,
+not Garage versioning. Revoked original bytes immediately become unavailable
+through normal app reads/writes; operator recovery requires explicit actor, tenant,
+ledger and destination authority, a durable audit and checksum verification.
+The first durable revocation/expiry deadline never extends on retry. Independent
+purge retains tombstones and refuses to claim physical finality while source
+write markers remain unresolved. Generated PDFs and derived extraction deletion
+retain their existing behavior. Local SQLite defaults remain supported.
+
+Cluster Garage transport is an explicit deployment choice: only the exact
+`http://garage.garage.svc.cluster.local:3900` endpoint, region `garage` and path
+style accept `IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE=1`. Other hosted endpoints
+remain HTTPS. Cluster-private traffic is plaintext and relies on namespace/pod
+NetworkPolicy boundaries; no transport encryption is claimed for this path.
+
+A disposable pinned Garage1.0.1 instance in this branch's compose project passed
+normal fresh provisioning and existing-resource refusal. The actual released
+AssetRuntime/provider passed private upload, metadata reopen, separate-process
+read, anonymous denial, foreign-locator denial, invalid credentials, original
+quarantine, audited checksum recovery and physical timed purge. Evidence:
+`227-garage-provider.log` and `garage-setup-receipt.json` under the external
+evidence directory. This is not yet in-cluster CNI or production credential proof.
+Native PostgreSQL quarantine checks passed before the final three cases were
+added; rerun the final shared contract and full integrated checks before review.
+
+Compatible dependency patches reduced the npm audit from one critical/55high
+to zero critical/16high; residual advisories are explicitly assessed in
+`docs/releases/resume-published-dependencies.md`. Runtime images now remove unused
+npm and update the available perl-base security package. Actual hardened
+extractor envelope passes; final exact-source images/scans and registry evidence
+still gate release. Scanner findings are not silently suppressed.
