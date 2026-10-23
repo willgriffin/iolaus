@@ -87,3 +87,10 @@ contains npm's bundled undici 6.28.0 at
 `usr/local/lib/node_modules/npm/node_modules/undici/package.json`; no undici 6
 occurs in this workspace lock, so its remediation belongs to base-image/npm
 qualification and cannot be achieved by a workspace override.
+
+Upstream remediation is tracked in
+[SMRT #4175](https://github.com/happyvertical/smrt/issues/4175) for MCP request
+and validation limits, and [SDK #1447](https://github.com/happyvertical/sdk/issues/1447)
+for compatible mail/archive adapter updates. These are not parser execution
+features; the site's broader runtime exposure must be assessed separately from
+the isolated extractor's feature-specific dispositions.
