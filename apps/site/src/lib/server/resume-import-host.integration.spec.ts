@@ -1957,7 +1957,14 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           await purgeQuarantinedResumeOriginals(
             db,
             { type: 'local', basePath: assetRoot },
-            { now: new Date(String(quarantine.purge_after)) },
+            {
+              // PostgreSQL returns Date; String(Date) discards milliseconds and
+              // can move this exact-boundary fixture before its real deadline.
+              now:
+                quarantine.purge_after instanceof Date
+                  ? quarantine.purge_after
+                  : new Date(String(quarantine.purge_after)),
+            },
           ),
         ).toEqual({ purged: 1, failed: 0, pendingWrites: 0 });
         for (const path of retainedFiles)
