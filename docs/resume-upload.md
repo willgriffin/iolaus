@@ -47,14 +47,17 @@ records are scoped to the authenticated tenant, user, and candidate profile.
 The server sets that scope. PDF text and source metadata are untrusted input;
 access is rechecked while processing and applying.
 
-Receipts have a 30-day retention/replay window. Deleting an upload revokes the
-receipt and removes its private source assets through native ingestion cleanup.
-The production private import store may retain noncurrent versions of deleted
-uploaded original PDFs for a 30-day recovery period after deletion, followed by
-asynchronous automatic lifecycle removal. Recovery versions have no account
-access. This is separate from the existing 30-day ingestion expiry measured from
-upload and does not change active-original lifetime. Generated PDFs remain on
-their existing storage and policy, without migration. See
+Receipts have a 30-day retention/replay window. Deletion revokes receipt/source
+access immediately and purges derived evidence. Uploaded original PDFs remain
+in private application quarantine for 30 days after first revocation, then an
+independent worker physically purges them. Provider outages or unresolved write
+markers require retry/investigation. Recovery requires explicit operator tenant
+and destination authorization plus a verified checksum; it never restores an
+account or expired receipt. Garage has no bucket versioning/object lock: direct
+administrative object deletion requires separate backup. This recovery period is
+separate from the existing upload+30-day ingestion expiry (day-5 deletion -> day-35
+purge eligibility; day-30 expiry -> day-60 eligibility). Generated PDFs keep their
+existing storage and policy without migration. See
 [private resume storage](private-resume-storage.md#uploaded-original-recovery-retention).
 Uploads and account deletion share a per-account lifecycle fence. Deletion waits
 for in-flight uploads before enumerating receipts; a started deletion also

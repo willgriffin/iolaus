@@ -251,7 +251,9 @@ describe('account deletion disclosure', () => {
       'uploaded original PDFs in the private import store',
     );
     expect(text).toContain('recoverable for 30 days after deletion');
-    expect(text).toContain('lifecycle processing may take longer');
+    expect(text).toContain('private quarantine');
+    expect(text).toContain('explicit operator authorization');
+    expect(text).toContain('can delay physical removal');
     expect(text).toContain('Generated PDFs use their existing storage');
     expect(text).not.toContain(
       'permanently deletes your workspace, your uploaded',

@@ -1,6 +1,8 @@
 import type { DatabaseInterface } from '@happyvertical/sql';
 
 export const resumeImportTables = [
+  'resume_import_quarantines',
+  'resume_import_recovery_audits',
   'intake_items',
   'intake_evidence',
   'intake_analyses',

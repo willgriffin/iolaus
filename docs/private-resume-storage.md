@@ -27,7 +27,15 @@ Example shape, with fictional non-secret values:
 ```
 
 `endpoint` is optional for AWS S3; a custom endpoint must use HTTPS with no user
-information, query, fragment or path prefix. `forcePathStyle` is an optional
+information, query, fragment or path prefix. The sole HTTP exception is the
+explicit `IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE=1` opt-in with the exact endpoint
+`http://garage.garage.svc.cluster.local:3900`, `region: "garage"` and
+`forcePathStyle: true`. The opt-in does not permit any other HTTP host, port,
+path or spelling. It accepts plaintext transport inside the cluster; NetworkPolicy
+must restrict web/worker access to that Garage service. This is not TLS encryption.
+Use a new private originals bucket and bucket-scoped key, never the generated-PDF
+bucket or its credentials. Mount the same protected configuration in every
+request, worker, retention and operator recovery process. `forcePathStyle` is an optional
 boolean. Use either the SDK's ambient IAM credential chain or the paired
 `accessKeyId` and `secretAccessKey` fields delivered through the protected
 runtime Secret. Never put credentials or the JSON value in logs, source,
@@ -49,7 +57,8 @@ access to old locators until an explicitly authorized migration restores them.
 
 Provider failures propagate to ingestion's durable recovery/deletion machinery;
 there is no alternate store. Retention retries failed sweeps, and account deletion
-must finish private byte cleanup before suspension. Recovery warnings omit raw
+must finish private source revocation/quarantine before suspension; physical
+original-PDF purge follows the recovery deadline. Recovery warnings omit raw
 provider errors to avoid disclosing credentials. Do not delete the bucket to
 roll back application code.
 
@@ -61,21 +70,51 @@ before release; local tests do not establish hosted durability or bucket privacy
 
 ## Uploaded-original recovery retention
 
-The production private import store keeps noncurrent versions of deleted uploaded
-**original PDFs** for a 30-day recovery period after deletion makes the version
-noncurrent. Account/upload deletion removes application access immediately;
-private recovery versions are operator-only and do not restore an account.
-Automatic lifecycle expiration is asynchronous, so physical removal may complete
-after that period. Operators must qualify the versioning and noncurrent-version
-expiration rule before activating this store; application cleanup alone cannot
-prove removal of every retained version.
+The application quarantines deleted uploaded **original PDFs** in place in the
+private import store for 30 days after the first durable native revocation.
+Normal reads and writes are denied immediately, including revoked native items
+whose storage callback has not completed. Derived extraction/evidence continues
+native immediate purge. This is application-managed retention: Garage provides
+neither version recovery nor object lock. Direct administrative/key-level deletion
+of the sole object is outside this recovery promise and requires independent backup.
 
-This is separate from ingestion's existing 30-day source-evidence/receipt expiry
-measured **from upload**, with cleanup performed by the retention worker. It does
-not change the lifetime of active originals or promise 30 additional days of
-application access. Generated PDFs remain on `RESUME_FILES_CONFIG_JSON` with their
-existing deletion/retention policy; this release does not migrate them or extend
-the original-PDF recovery policy to them.
+The durable `resume_import_quarantines` ledger has a unique storage identity/key,
+original hash and length, scalar tenant/owner/profile/asset/item/deletion identities,
+and fixed revocation/purge timestamps. It has no account foreign keys. The ledger
+commits before native metadata is removed or redacted and survives account deletion.
+Retries, restarts and completed-deletion replays cannot reset the deadline. Minimal
+tombstones remain after physical purge so delayed cleanup cannot create a new window;
+they contain no extracted content. These recovery identities are an explicit exception
+to the otherwise detached account deletion audit and have no normal user surface.
+
+The worker runs independent retention before looking up active profiles, even when
+an owner is deleted or suspended. At/after the deadline it deletes the original
+through the configured filesystem and retains the tombstone. Provider failures retry.
+An unresolved write marker causes repeated physical sweeps and an operator warning,
+never a claim that bytes have permanently settled and never timeout-based clearing.
+A provider outage or unresolved writer may delay physical completion; investigate
+rather than claiming a strict physical 30-day maximum was met.
+
+Operator-only `recoverQuarantinedResumeOriginal` requires explicit authorization
+of the named actor, exact tenant/ledger identity, reason and destination authority.
+It requires an independently committing root database (no outer transaction),
+commits a private audit before reading and verifies original length/SHA-256
+before releasing bytes. It refuses foreign, expired, purged or corrupted originals.
+The service never reactivates a deleted account/expired receipt or restores derived
+facts. A fresh authorized import must receive a fresh native asset identity.
+There is no public recovery URL, presigning or user-facing recovery endpoint.
+
+This is separate from ingestion's existing source-evidence/receipt expiry measured
+**30 days from upload**. A day-5 deletion becomes physically eligible on day 35;
+upload expiry on day 30 begins recovery retention until day 60. A delayed
+sweeper uses the persisted access-expiry timestamp and cannot extend that window. Active-original
+lifetime is unchanged. Generated PDFs retain their existing
+`RESUME_FILES_CONFIG_JSON` storage/deletion policy and are not migrated.
+
+Before rollout migrate both private ledger/audit tables, qualify disposable native
+SQLite/PostgreSQL and Garage lifecycle checks, and confirm anonymous access and
+legacy bucket access are denied. Rollback must preserve ledger and bucket and must
+not use an older binary that physically deletes quarantined originals.
 
 ## Unresolved private writes and account deletion
 

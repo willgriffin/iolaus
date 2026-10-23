@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertResumeImportStorageIdentity,
   getResumeImportStorage,
-  resumeImportStorageOptions,
 } from './resume-import-storage.js';
 
 vi.mock('./runtime-paths.js', () => ({
@@ -85,6 +85,40 @@ describe('private ingestion configuration', () => {
       /^Invalid private/,
     );
   });
+  it('permits only the exact opted-in cluster Garage HTTP transport', () => {
+    const garage = {
+      ...s3,
+      region: 'garage',
+      endpoint: 'http://garage.garage.svc.cluster.local:3900',
+    };
+    const config = {
+      ...hosted(garage),
+      IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE: '1',
+    };
+    expect(getResumeImportStorage(config)).toEqual(garage);
+    expect(() => getResumeImportStorage(hosted(garage))).toThrow(
+      'Invalid private',
+    );
+    for (const change of [
+      { endpoint: 'http://other.invalid:3900' },
+      { endpoint: `${garage.endpoint}/` },
+      { endpoint: 'http://garage.garage.svc.cluster.local:3901' },
+      { region: 'us-east-1' },
+      { forcePathStyle: false },
+    ])
+      expect(() =>
+        getResumeImportStorage({
+          ...config,
+          ...hosted({ ...garage, ...change }),
+        }),
+      ).toThrow('Invalid private');
+    expect(() =>
+      getResumeImportStorage({
+        ...config,
+        IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE: 'true',
+      }),
+    ).toThrow('Invalid private');
+  });
   it('passes explicit credentials or the SDK IAM chain through without adding provider options', () => {
     const credentials = {
       ...s3,
@@ -100,10 +134,8 @@ describe('private ingestion configuration', () => {
 
 describe('persisted private provider identity', () => {
   function check(sourceUri: string, storage = s3) {
-    const resolver = resumeImportStorageOptions(storage as any).storeOptions
-      ?.resolver;
-    if (!resolver) throw new Error('Storage identity resolver is required.');
-    return resolver({ sourceUri } as any);
+    assertResumeImportStorageIdentity(storage as any, sourceUri);
+    return undefined;
   }
   it('accepts only the configured bucket for read, write and delete resolution', () => {
     expect(check('s3://private-ingestion/document/asset.pdf')).toBeUndefined();

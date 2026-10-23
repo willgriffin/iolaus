@@ -70,9 +70,11 @@ const matches = $derived(
       </p>
       <p>
         Deleted uploaded original PDFs in the private import store may remain
-        recoverable for 30 days after deletion before automatic removal; storage
-        lifecycle processing may take longer. These recovery versions are not accessible
-        through your account. Generated PDFs use their existing storage and deletion
+        recoverable for 30 days after deletion in private quarantine, followed by
+        automatic cleanup. Provider failures or unresolved uploads can delay physical
+        removal. Recovery requires explicit operator authorization and does not restore
+        your account. Minimal recovery identities remain for audit and safe cleanup;
+        the PDFs are not accessible through your account. Generated PDFs use their existing storage and deletion
         policy; they are not moved into this recovery store.
       </p>
 

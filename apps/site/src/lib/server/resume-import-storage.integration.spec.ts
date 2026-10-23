@@ -10,6 +10,7 @@ import {
   getResumeImportStorage,
   resumeImportStorageOptions,
 } from './resume-import-storage.js';
+import '@happyvertical/smrt-ingestion/server';
 import './smrt.js';
 
 let root: string;
@@ -34,6 +35,11 @@ it('reopens native AssetRuntime metadata and bytes after a local restart, then d
   await getTestDatabase({
     db,
     classes: [
+      'ResumeImportQuarantine',
+      'ResumeImportRecoveryAudit',
+      'IntakeItem',
+      'IntakeEvidence',
+      'IntakeDeletion',
       'Asset',
       'AssetAssociation',
       'AssetType',
@@ -47,7 +53,7 @@ it('reopens native AssetRuntime metadata and bytes after a local restart, then d
   });
   let runtime = await createAssetRuntime({
     db,
-    ...resumeImportStorageOptions(getResumeImportStorage()),
+    ...resumeImportStorageOptions(getResumeImportStorage(), db),
   });
   const data = Buffer.from('fictional private resume');
   const asset = await runtime.storeSourceAsset('Resume.txt', data, {
@@ -61,7 +67,7 @@ it('reopens native AssetRuntime metadata and bytes after a local restart, then d
   db = await getDatabase(options);
   runtime = await createAssetRuntime({
     db,
-    ...resumeImportStorageOptions(getResumeImportStorage()),
+    ...resumeImportStorageOptions(getResumeImportStorage(), db),
   });
   const restored = await runtime.collection.get(id);
   if (!restored) throw new Error('Asset was not restored.');

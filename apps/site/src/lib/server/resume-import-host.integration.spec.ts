@@ -48,12 +48,17 @@ import {
 } from './resume-import-account-fence.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
 import {
+  purgeQuarantinedResumeOriginals,
+  recoverQuarantinedResumeOriginal,
+} from './resume-import-quarantine.js';
+import {
   exportResumeImportReceipts,
   purgeExpiredResumeImportAssets,
   purgeResumeImportAccountData,
   resolveResumeImportReceiptSubject,
   runResumeImportIngestionJob,
 } from './resume-import-runtime.js';
+import { resumeImportStorageOptions } from './resume-import-storage.js';
 import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const subject = () => ({
@@ -63,6 +68,8 @@ const subject = () => ({
 });
 const classes = [
   'ResumeImportWriteOperation',
+  'ResumeImportQuarantine',
+  'ResumeImportRecoveryAudit',
   'CandidateProfile',
   'Project',
   'Experience',
@@ -287,7 +294,10 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         roleId = await seedPrincipal(db, owner);
         assets = await createAssetRuntime({
           db,
-          storage: { type: 'local', basePath: getIolausUserAssetsRoot() },
+          ...resumeImportStorageOptions(
+            { type: 'local', basePath: getIolausUserAssetsRoot() },
+            db,
+          ),
         });
         entries = structuredClone(initialEntries);
         host = await makeHost();
@@ -1749,7 +1759,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).rejects.toThrow();
       });
 
-      it('production retention removes private bytes after the profile has been deleted', async () => {
+      it('production retention quarantines originals after the profile has been deleted', async () => {
         const review = await upload();
         await db.query('DELETE FROM candidate_profiles WHERE id = ?', [
           owner.profileId,
@@ -1834,7 +1844,8 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             ),
           ).toString(),
         ).toBe('%PDF-other-account');
-        expect((await files()).length).toBeLessThan(before.length);
+        expect((await files()).length).toBe(before.length);
+        expect(await rows('resume_import_quarantines')).toHaveLength(1);
       });
 
       it('drains a concurrent upload before account deletion and rejects uploads after a failed deletion starts', async () => {
@@ -1924,7 +1935,34 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         releasePurge();
         await expect(deleting).resolves.toMatchObject({ status: 'deleted' });
         for (const path of retainedFiles)
+          expect((await stat(path)).isFile()).toBe(true);
+        const quarantines = await rows('resume_import_quarantines');
+        expect(quarantines).toHaveLength(1);
+        const quarantine = quarantines[0];
+        expect(
+          await recoverQuarantinedResumeOriginal({
+            db,
+            storage: { type: 'local', basePath: assetRoot },
+            quarantineId: String(quarantine.id),
+            authority: {
+              tenantId: owner.tenantId,
+              actorId: 'test-operator',
+              destinationAuthority: 'verified-deleted-owner-export',
+              reason: 'explicit test rescue',
+            },
+            authorize: async () => true,
+          }),
+        ).toEqual(Buffer.from('%PDF-concurrent-delete'));
+        expect(
+          await purgeQuarantinedResumeOriginals(
+            db,
+            { type: 'local', basePath: assetRoot },
+            { now: new Date(String(quarantine.purge_after)) },
+          ),
+        ).toEqual({ purged: 1, failed: 0, pendingWrites: 0 });
+        for (const path of retainedFiles)
           await expect(stat(path)).rejects.toThrow();
+        expect(await rows('resume_import_quarantines')).toHaveLength(1);
         await expect(
           host.service.readEvidence(uploaded.id, evidence.id),
         ).rejects.toThrow();
@@ -1967,7 +2005,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).toHaveLength(0);
       });
 
-      it('production runtime retention purges expired bytes even after native account suspension', async () => {
+      it('production runtime retention quarantines expired originals even after native account suspension', async () => {
         const review = await upload();
         const evidence = (await host.service.getEvidence(review.id))[0];
         await db.query('UPDATE users SET status = ? WHERE id = ?', [

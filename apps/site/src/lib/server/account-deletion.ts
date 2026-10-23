@@ -71,7 +71,8 @@ export interface AccountDeletionDependencies {
   environment?: AppConfigEnvironment;
   filesystem?: Pick<FilesystemInterface, 'delete' | 'exists'>;
   initiatedBy?: AccountDeletionInitiator;
-  /** Revoke private ingestion receipts and sweep retained source-asset locators. */
+  /** Revoke private ingestion receipts and quarantine original PDFs; derived
+   * evidence is removed now and independent retention purges originals later. */
   purgeResumeImports?: (
     database: AccountDeletionDatabase,
     scope: AccountDeletionScope,
@@ -543,8 +544,8 @@ async function deleteAccountLocked(
   await dependencies.afterPhase?.('record');
 
   // Ingestion preserves bytes outside the ordinary resume filesystem. Revoke
-  // receipts and remove their private assets while this account still has an
-  // active owner identity; failures leave the durable deletion record started
+  // receipts and quarantine originals (purge derived assets) while this account
+  // still has an active owner identity; failures leave the durable deletion record started
   // so a retry resumes safely instead of silently retaining source evidence.
   const resumeImports = await (
     dependencies.purgeResumeImports ??

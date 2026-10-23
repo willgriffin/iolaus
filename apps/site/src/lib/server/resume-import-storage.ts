@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
 import type { GetFilesystemOptions } from '@happyvertical/files';
 import type { AssetRuntimeOptions } from '@happyvertical/smrt-assets';
+import type { DatabaseInterface } from '@happyvertical/sql';
+import { resolveQuarantinedResumeStorage } from './resume-import-quarantine.js';
 import { getIolausUserAssetsRoot } from './runtime-paths.js';
 
 const CONFIG = 'IOLAUS_RESUME_IMPORT_STORAGE_JSON';
@@ -74,7 +76,13 @@ export function getResumeImportStorage(
       if (!cleanString(config.endpoint)) throw invalid();
       const endpoint = new URL(config.endpoint);
       if (
-        endpoint.protocol !== 'https:' ||
+        (endpoint.protocol !== 'https:' &&
+          !(
+            environment.IOLAUS_RESUME_IMPORT_CLUSTER_GARAGE === '1' &&
+            config.endpoint === 'http://garage.garage.svc.cluster.local:3900' &&
+            config.forcePathStyle === true &&
+            config.region === 'garage'
+          )) ||
         endpoint.username ||
         endpoint.password ||
         endpoint.search ||
@@ -90,32 +98,41 @@ export function getResumeImportStorage(
 }
 
 /** AssetStore does not validate persisted URI provider identity itself. */
-export function resumeImportStorageOptions(
+export function assertResumeImportStorageIdentity(
   storage: GetFilesystemOptions,
-): Pick<AssetRuntimeOptions, 'storage' | 'storeOptions'> {
+  sourceUri: string,
+): { prefix: string; key: string } {
   const prefix =
     storage.type === 's3'
       ? `s3://${storage.bucket}/`
       : `file://${storage.basePath}/`;
+  const key = sourceUri.startsWith(prefix)
+    ? sourceUri.slice(prefix.length)
+    : '';
+  if (
+    !key ||
+    key.split('/').some((part) => !part || part === '.' || part === '..') ||
+    /[\\?#%\p{Cc}\p{Cf}]/u.test(key)
+  ) {
+    throw new Error('Private resume asset storage identity is unavailable.');
+  }
+  return { prefix, key };
+}
+
+/** Database is mandatory: a missing quarantine schema cannot bypass deletion policy. */
+export function resumeImportStorageOptions(
+  storage: GetFilesystemOptions,
+  db: DatabaseInterface,
+): Pick<AssetRuntimeOptions, 'storage' | 'storeOptions'> {
   return {
     storage,
     storeOptions: {
-      resolver: ({ sourceUri }) => {
-        const key = sourceUri.startsWith(prefix)
-          ? sourceUri.slice(prefix.length)
-          : '';
-        if (
-          !key ||
-          key
-            .split('/')
-            .some((part) => !part || part === '.' || part === '..') ||
-          /[\\?#%\p{Cc}\p{Cf}]/u.test(key)
-        ) {
-          throw new Error(
-            'Private resume asset storage identity is unavailable.',
-          );
-        }
-        return undefined;
+      resolver: (request) => {
+        const { prefix, key } = assertResumeImportStorageIdentity(
+          storage,
+          request.sourceUri,
+        );
+        return resolveQuarantinedResumeStorage(db, prefix, key, request);
       },
     },
   };

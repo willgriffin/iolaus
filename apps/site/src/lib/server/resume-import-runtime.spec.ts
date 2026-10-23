@@ -13,6 +13,14 @@ const state = vi.hoisted(() => ({
   service: { expire: vi.fn() },
 }));
 
+vi.mock('./resume-import-quarantine.js', () => ({
+  purgeQuarantinedResumeOriginals: vi.fn(async () => ({
+    purged: 0,
+    pendingWrites: 0,
+    failed: 0,
+  })),
+  resolveQuarantinedResumeStorage: vi.fn(),
+}));
 vi.mock('@happyvertical/smrt-assets', () => ({
   createAssetRuntime: state.assets,
 }));
@@ -335,7 +343,7 @@ describe('resume import runtime', () => {
     await expect(repairQueuedResumeImports(db)).resolves.toBe(1);
     expect(state.host.repair).toHaveBeenCalledOnce();
     expect(warning).toHaveBeenCalledWith(
-      'Skipped resume import retention cleanup during recovery.',
+      'Skipped resume import expiry cleanup during recovery.',
     );
   });
 });

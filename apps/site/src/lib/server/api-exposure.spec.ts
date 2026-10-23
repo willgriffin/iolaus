@@ -160,6 +160,8 @@ describe('decorator-driven surface exposure', () => {
         'HostedInvite',
         'AccountDeletionRecord',
         'ResumeImportWriteOperation',
+        'ResumeImportQuarantine',
+        'ResumeImportRecoveryAudit',
         ...privateEvidenceClasses,
       ]),
     );

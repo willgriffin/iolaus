@@ -23,6 +23,7 @@ import {
   type ResumeImportHost,
 } from './resume-import-host.js';
 import { RESUME_IMPORT_INGESTION_QUEUE } from './resume-import-job-schema.js';
+import { purgeQuarantinedResumeOriginals } from './resume-import-quarantine.js';
 import {
   getResumeImportStorage,
   resumeImportStorageOptions,
@@ -110,7 +111,7 @@ async function createResumeImportAssets(
 ): Promise<AssetRuntimeLike> {
   return await createAssetRuntime({
     db,
-    ...resumeImportStorageOptions(getResumeImportStorage()),
+    ...resumeImportStorageOptions(getResumeImportStorage(), db),
   });
 }
 
@@ -312,6 +313,20 @@ export async function repairQueuedResumeImports(
   let repaired = 0;
   try {
     repaired = await purgeExpiredResumeImportAssets(db);
+  } catch {
+    console.warn('Skipped resume import expiry cleanup during recovery.');
+  }
+  try {
+    const quarantine = await purgeQuarantinedResumeOriginals(
+      db,
+      getResumeImportStorage(),
+    );
+    repaired += quarantine.purged;
+    if (quarantine.failed || quarantine.pendingWrites) {
+      console.warn(
+        'Resume original purge needs retry or operator write-drain investigation.',
+      );
+    }
   } catch {
     // Retention is best effort during recovery. A later interval retries it,
     // while authorized receipts must still be able to repair now.
