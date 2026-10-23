@@ -218,6 +218,14 @@ vi.mock('./application-workflow.js', async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  // Generic provider discovery has a direct-HTML fallback in addition to its
+  // injected fetch. Every test must stay offline, including that fallback.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL) => {
+      throw new Error(`Unexpected unmocked fetch: ${String(input)}`);
+    }),
+  );
   databaseSessionFactory.mockReset();
   databaseSessionFactory.mockResolvedValue(null);
   databaseUpdate.mockReset();
@@ -233,7 +241,10 @@ beforeEach(() => {
   cancelStaleOpportunityIntelligenceTasks.mockResolvedValue(0);
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 it('terminalizes a running crawl when accounting-writer setup fails before discovery', async () => {
   const sourceCrawls = recordCollection();
@@ -4890,12 +4901,17 @@ describe('opportunity source crawler discovery', () => {
   });
 
   it('discovers Zapier Ashby jobs from a generic Builder.io careers page', async () => {
+    const careersHtml =
+      '{"component":{"name":"JobBoard","options":{"useAshbyData":true}}}';
+    const htmlFetch = vi.fn(async (input: string | URL) => {
+      expect(String(input)).toBe('https://zapier.com/jobs');
+      return new Response(careersHtml, {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    });
+    vi.stubGlobal('fetch', htmlFetch);
     const spider = {
-      fetch: vi.fn(async () =>
-        spiderPage(
-          '{"component":{"name":"JobBoard","options":{"useAshbyData":true}}}',
-        ),
-      ),
+      fetch: vi.fn(async () => spiderPage(careersHtml)),
     } as unknown as SpiderAdapter;
     const fetchMock = vi.fn(async (input: string | URL) => {
       expect(String(input)).toBe(
@@ -4939,6 +4955,12 @@ describe('opportunity source crawler discovery', () => {
         workMode: 'remote',
       }),
     ]);
+    expect(htmlFetch).toHaveBeenCalledExactlyOnceWith(
+      'https://zapier.com/jobs',
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spider.fetch).toHaveBeenCalledTimes(1);
     expect(candidates[0]?.resolvedDetail).toMatchObject({
       descriptionRaw: expect.stringContaining('automation platform systems'),
       message: 'Loaded Ashby posting details.',
