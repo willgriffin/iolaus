@@ -52,13 +52,27 @@ export async function beginResumeImportWrite(
 ): Promise<string> {
   if (!db.transaction)
     throw new Error('Private source writes require transactional storage.');
+  const url = db.url;
+  if (typeof url !== 'string' || !url.trim() || url !== url.trim())
+    throw new Error('Private source writes require an explicit database URL.');
+  // detectEngine defaults unknown URLs to SQLite. Reject unrecognized storage
+  // before calling it, rather than treating that default as dialect evidence.
+  const recognized =
+    /^(postgres(?:ql)?:\/\/|sqlite:|file:|libsql:)/iu.test(url) ||
+    url === ':memory:' ||
+    (!url.includes('://') && /\.(db|sqlite|sqlite3)$/iu.test(url));
+  if (!recognized)
+    throw new Error(
+      'Private source writes require supported SQLite or PostgreSQL storage.',
+    );
+  const dialect = detectEngine(url);
+  if (dialect !== 'sqlite' && dialect !== 'postgres')
+    throw new Error(
+      'Private source writes require supported SQLite or PostgreSQL storage.',
+    );
   const id = randomUUID();
   await db.transaction(async (tx) => {
-    await lockResumeImportAccount(
-      tx,
-      scope,
-      detectEngine(db.url) === 'sqlite' ? 'sqlite' : 'postgres',
-    );
+    await lockResumeImportAccount(tx, scope, dialect);
     // Workspace profileId is CandidateProfile, not users.profile_id (the person).
     // Published users/membership/tenant identity keys are PostgreSQL UUIDs;
     // CandidateProfile owner_user_id is text; TenantScoped normalizes tenant_id
