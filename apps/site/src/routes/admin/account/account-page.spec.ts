@@ -2,6 +2,7 @@ import { render } from 'svelte/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountDeletionError } from '$lib/server/account-deletion';
 import { ResumeImportLifecycleBusyError } from '$lib/server/resume-import-account-fence.js';
+import type { PageData } from './$types';
 
 const state = vi.hoisted(() => ({
   mode: 'enabled' as 'disabled' | 'enabled',
@@ -236,12 +237,23 @@ describe('account page deletion action', () => {
 
 describe('account deletion disclosure', () => {
   const data = {
+    accountConnectionsEnabled: false,
+    activityScopeKey: null,
+    aiBudget: null,
+    appMark: 'I',
+    assistantEnabled: false,
+    legalLinks: { landing: null, privacy: null, support: null, terms: null },
+    permissions: [],
+    publicOpportunityBrowserEnabled: false,
+    resources: [],
+    tenantId: locals.tenantId,
+    user: locals.user,
     appName: 'Iolaus',
     email: 'alice@example.invalid',
     confirmationPhrase: 'DELETE MY ACCOUNT',
     deletionEnabled: true,
     deletionDisabledMessage: 'disabled-message',
-  };
+  } satisfies PageData;
 
   it('discloses uploaded-original recovery before opening final confirmation', () => {
     const { body } = render(AccountPage, { props: { data } });
