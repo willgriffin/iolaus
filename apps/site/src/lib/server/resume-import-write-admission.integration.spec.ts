@@ -101,7 +101,7 @@ function contract(create: () => Promise<Db>, dialect: AccountDeletionDialect) {
       ])
         expect(type(table, column)).toBe('uuid');
       expect(type('candidate_profiles', 'owner_user_id')).toBe('text');
-      expect(type('candidate_profiles', 'tenant_id')).toBe('text');
+      expect(type('candidate_profiles', 'tenant_id')).toBe('uuid');
       const scope = await seed(db);
       await beginResumeImportWrite(db, scope, locator);
       expect(await pendingResumeImportWrites(db, scope)).toBe(1);

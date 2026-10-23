@@ -61,8 +61,8 @@ export async function beginResumeImportWrite(
     );
     // Workspace profileId is CandidateProfile, not users.profile_id (the person).
     // Published users/membership/tenant identity keys are PostgreSQL UUIDs;
-    // CandidateProfile owner/tenant fields are text. Compare their text forms
-    // across package schemas; SQLite uses the same portable CAST syntax.
+    // CandidateProfile owner_user_id is text; TenantScoped normalizes tenant_id
+    // to UUID. Compare text forms across schemas using portable SQLite syntax.
     const account = rows(
       await tx.query(
         `SELECT u.id FROM users u

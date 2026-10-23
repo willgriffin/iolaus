@@ -47,7 +47,8 @@ fixture fails with the pre-fix admission query
 
 Published PostgreSQL schema boundary: native `users.id`, `tenants.id`,
 `memberships.user_id` and `memberships.tenant_id` are UUID columns;
-CandidateProfile `owner_user_id` and `tenant_id` are text fields. Admission casts
+CandidateProfile `owner_user_id` is text; TenantScoped normalizes its `tenant_id`
+to UUID in the actual PostgreSQL schema. Admission casts
 both sides of cross-record identity joins to text using syntax also supported by
 SQLite. The PostgreSQL contract asserts those actual schema types before an
 ordinary successful admission. Model key types are unchanged; schema migration
