@@ -51,6 +51,15 @@ bucket/versioning/encryption/retention and independently verify object backup
 and restore before importing any production asset. Do not substitute an
 `emptyDir`, an image layer, or source-checkout path.
 
+For private resume imports, also set `IOLAUS_RESUME_IMPORT_STORAGE_JSON` on web
+and task-worker runtimes using the separate private import bucket. Follow
+[private resume storage](private-resume-storage.md#uploaded-original-recovery-retention):
+qualify versioning and automatic expiration of noncurrent uploaded-original PDF
+versions after a 30-day recovery period following deletion. Lifecycle processing
+is asynchronous. Ingestion's existing source-evidence expiry remains 30 days from
+upload, independently of recovery retention. Keep generated PDFs on their
+existing `RESUME_FILES_CONFIG_JSON` storage; no migration is included.
+
 The secret is consumed with Kubernetes `secretRef` only. Do not add a
 `Secret` manifest, sample token, endpoint, email address, or base64 value to
 this repository. `SMRT_APP_ID` and the PostgreSQL database name must satisfy

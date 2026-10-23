@@ -1,3 +1,4 @@
+import { render } from 'svelte/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountDeletionError } from '$lib/server/account-deletion';
 import { ResumeImportLifecycleBusyError } from '$lib/server/resume-import-account-fence.js';
@@ -55,6 +56,7 @@ vi.mock('$lib/server/resume-files', () => ({
 }));
 
 import { actions, load } from './+page.server';
+import AccountPage from './+page.svelte';
 
 const subject = {
   profileId: 'profile-a',
@@ -229,5 +231,41 @@ describe('account page deletion action', () => {
     )) as { status: number };
     expect(result.status).toBe(403);
     expect(state.deleteAccount).not.toHaveBeenCalled();
+  });
+});
+
+describe('account deletion disclosure', () => {
+  const data = {
+    appName: 'Iolaus',
+    email: 'alice@example.invalid',
+    confirmationPhrase: 'DELETE MY ACCOUNT',
+    deletionEnabled: true,
+    deletionDisabledMessage: 'disabled-message',
+  };
+
+  it('discloses uploaded-original recovery before opening final confirmation', () => {
+    const { body } = render(AccountPage, { props: { data } });
+    const text = body.replace(/<[^>]*>/gu, ' ').replace(/\s+/gu, ' ');
+    expect(text).toContain('Deletion immediately removes your account access');
+    expect(text).toContain(
+      'uploaded original PDFs in the private import store',
+    );
+    expect(text).toContain('recoverable for 30 days after deletion');
+    expect(text).toContain('lifecycle processing may take longer');
+    expect(text).toContain('Generated PDFs use their existing storage');
+    expect(text).not.toContain(
+      'permanently deletes your workspace, your uploaded',
+    );
+    expect(body).toContain('Delete my account…');
+    expect(body).not.toContain('name="confirmEmail"');
+  });
+
+  it('keeps deletion unavailable when disabled', () => {
+    const { body } = render(AccountPage, {
+      props: { data: { ...data, deletionEnabled: false } },
+    });
+    expect(body).toContain('disabled-message');
+    expect(body).not.toContain('Delete my account…');
+    expect(body).not.toContain('recoverable for 30 days after deletion');
   });
 });

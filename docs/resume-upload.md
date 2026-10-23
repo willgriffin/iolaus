@@ -49,6 +49,13 @@ access is rechecked while processing and applying.
 
 Receipts have a 30-day retention/replay window. Deleting an upload revokes the
 receipt and removes its private source assets through native ingestion cleanup.
+The production private import store may retain noncurrent versions of deleted
+uploaded original PDFs for a 30-day recovery period after deletion, followed by
+asynchronous automatic lifecycle removal. Recovery versions have no account
+access. This is separate from the existing 30-day ingestion expiry measured from
+upload and does not change active-original lifetime. Generated PDFs remain on
+their existing storage and policy, without migration. See
+[private resume storage](private-resume-storage.md#uploaded-original-recovery-retention).
 Uploads and account deletion share a per-account lifecycle fence. Deletion waits
 for in-flight uploads before enumerating receipts; a started deletion also
 refuses subsequent uploads if cleanup must be retried. Unrelated accounts remain

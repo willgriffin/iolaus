@@ -116,6 +116,7 @@ retries. Use current governed AI profile/pricing and fictional input only.
 | Peak lifecycle work | Two distinct owners progress at max5; nested native work and unrelated CRUD/worker reads complete | Excess admission is immediate bounded refusal; max1/2 safe; failed acquire/lock/action/cleanup reclaims permits | Owner scopes; actual native PostgreSQL pool/role + SQLite regression | Native acquisition queue timeout, no leaked late client; focused fence/native host specs |
 | Upload vs deletion | Same-account deletion waits before enumerating receipts | Different owners independent; deletion-started refuses new bytes; advisory-session loss cannot silently violate cleanup | Two native handles/processes, real transactions/authority, PostgreSQL; SQLite keyed fence | Hold barriers, revoke/loss/retry/partial failure; native host/account tests |
 | Private source assets | Another web/worker process reads original and evidence after restart | Wrong owner/context, missing config, unavailable store, interrupted write/deletion fail safely | Two owners/tenants; native AssetRuntime + private object store; SQLite/PostgreSQL metadata | Real provider allow/deny, retention/export/delete/retry; focused + integrated provider tests |
+| Account deletion disclosure (#226): open enabled account page before confirming | Immediate access removal, uploaded-original-only private 30-day post-deletion recovery and asynchronous lifecycle removal are visible | Disabled mode has no deletion affordance; acknowledgement/email/phrase and verified-session refusals remain enforced; no generated-PDF migration promise | Account owner; rendered Svelte page + existing server-action tests; database executor/dialect N/A (copy only, no mutation changes) | Private version lifecycle policy is an operator qualification gate; SSR regression + action unit tests: `pnpm --filter @willgriffin/iolaus-site exec vitest run src/routes/admin/account/account-page.spec.ts` |
 | Dependency consumption | Frozen install and actual runtime imports/peers work | Missing/malformed/native failure and incompatible copies detectable | Installed released SDK/SMRT + Node26.10/pnpm11.25 | Native adapters, package/source provenance; archive checks and host/extraction specs |
 | Extraction envelope | Text and cold scanned fixtures yield editable cited proposals | Invalid/oversize/timeout/output/disconnect, denied network, revoked receipt do not apply data | Synthetic private assets, actual candidate image/OCR, authenticated scopes | Process tests + rendered/security checks + browser upload/review/apply |
 | Durable operation | Restart/retry and selective import preserve complete evidence | Stale revision, repeated receive/apply, failed cleanup, account deletion remain bounded and safe | Native ingestion, two users, worker, actual storage and PostgreSQL | Existing lifecycle suites and one final end-to-end rehearsal |
@@ -165,3 +166,24 @@ rollback checks. Do not mark #221 complete merely because app code is merged.
   and namespace-scoped SOPS Secret, rather than changing legacy asset endpoints.
   Cloud apply uses the existing reviewed workflow; sensitive outputs must stream
   directly to SOPS custody without appearing in logs.
+
+### Account deletion disclosure (#226)
+
+The owner approved a 30-day recovery period for noncurrent **uploaded original
+PDF** versions after deletion, plus asynchronous lifecycle processing. Generated
+PDFs retain their existing storage and are not migrated. Ingestion's current
+30-day source-evidence expiry starts at upload and remains a separate rule;
+active-original lifetime is unchanged. UI, storage, deployment and account-data
+docs disclose these boundaries. Actual provider versioning/lifecycle enforcement
+remains part of #222/IaC qualification, not evidence supplied by copy tests.
+
+Regression evidence: the enabled-page disclosure test fails against the prior
+copy (1 failed, 14 passed), saved outside source at
+`/tmp/iolaus-resume-production/226-base.log`. The existing action cases cover
+unchecked acknowledgement, wrong email/phrase, unverified and terminal sessions,
+private mode and safe deletion failures. No schema, dependency or mutation change.
+
+Head validation: account-page spec passes all 15 cases, including both rendered
+copy cases; targeted Biome check and `git diff --check` pass. Head log:
+`/tmp/iolaus-resume-production/226-head.log`. Full branch validation, browser
+layout and provider lifecycle qualification remain integration responsibilities.

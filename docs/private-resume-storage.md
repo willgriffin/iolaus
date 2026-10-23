@@ -59,6 +59,24 @@ read/deny, unavailable provider, interrupted deletion/retry and PostgreSQL
 lifecycle qualification must run against the isolated private staging bucket
 before release; local tests do not establish hosted durability or bucket privacy.
 
+## Uploaded-original recovery retention
+
+The production private import store keeps noncurrent versions of deleted uploaded
+**original PDFs** for a 30-day recovery period after deletion makes the version
+noncurrent. Account/upload deletion removes application access immediately;
+private recovery versions are operator-only and do not restore an account.
+Automatic lifecycle expiration is asynchronous, so physical removal may complete
+after that period. Operators must qualify the versioning and noncurrent-version
+expiration rule before activating this store; application cleanup alone cannot
+prove removal of every retained version.
+
+This is separate from ingestion's existing 30-day source-evidence/receipt expiry
+measured **from upload**, with cleanup performed by the retention worker. It does
+not change the lifetime of active originals or promise 30 additional days of
+application access. Generated PDFs remain on `RESUME_FILES_CONFIG_JSON` with their
+existing deletion/retention policy; this release does not migrate them or extend
+the original-PDF recovery policy to them.
+
 ## Unresolved private writes and account deletion
 
 Before calling native ingestion `receive`, Iolaus commits a new random invocation

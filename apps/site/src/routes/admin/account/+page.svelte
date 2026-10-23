@@ -63,10 +63,17 @@ const matches = $derived(
       <p>{data.deletionDisabledMessage}</p>
     {:else}
       <p>
-        This permanently deletes your workspace, your uploaded and generated files, your
-        sign-in sessions, terminal and MCP access and any queued work, and removes your invitation.
-        It cannot be undone. AI usage totals are kept for platform cost accounting but are
-        detached from you.
+        Deletion immediately removes your account access, including sign-in sessions,
+        terminal and MCP access, and cancels queued work. Your workspace is deleted and
+        your invitation is revoked. Your account cannot be restored. AI usage totals are
+        kept for platform cost accounting but are detached from you.
+      </p>
+      <p>
+        Deleted uploaded original PDFs in the private import store may remain
+        recoverable for 30 days after deletion before automatic removal; storage
+        lifecycle processing may take longer. These recovery versions are not accessible
+        through your account. Generated PDFs use their existing storage and deletion
+        policy; they are not moved into this recovery store.
       </p>
 
       {#if !confirming}
@@ -78,7 +85,7 @@ const matches = $derived(
           <p><strong>Final confirmation.</strong> Download your data first if you want a copy.</p>
           <label class="check">
             <input type="checkbox" name="acknowledge" bind:checked={acknowledged} />
-            <span>I understand this permanently deletes my account and data.</span>
+            <span>I understand my account cannot be restored and uploaded original PDFs may be retained as described above.</span>
           </label>
           <label>
             <span>Type your email address ({data.email})</span>
