@@ -197,7 +197,7 @@ export async function resolveResumeImportReceiptSubject(
        FROM intake_items AS item
        JOIN candidate_profiles AS profile
          ON CAST(profile.id AS TEXT) = item.confidential_scope_id
-        AND profile.tenant_id = item.tenant_id
+        AND CAST(profile.tenant_id AS TEXT) = CAST(item.tenant_id AS TEXT)
       WHERE item.id = ?`,
     [itemId],
   );
@@ -337,7 +337,7 @@ export async function repairQueuedResumeImports(
        FROM intake_items AS item
        JOIN candidate_profiles AS profile
          ON CAST(profile.id AS TEXT) = item.confidential_scope_id
-        AND profile.tenant_id = item.tenant_id
+        AND CAST(profile.tenant_id AS TEXT) = CAST(item.tenant_id AS TEXT)
       WHERE item.visibility NOT IN ('expired', 'deleted')
         AND (item.expires_at IS NULL OR item.expires_at > CURRENT_TIMESTAMP)`,
   );
@@ -481,7 +481,7 @@ export async function exportResumeImportReceipts(
        FROM intake_items AS item
        JOIN candidate_profiles AS profile
          ON CAST(profile.id AS TEXT) = item.confidential_scope_id
-        AND profile.tenant_id = item.tenant_id
+        AND CAST(profile.tenant_id AS TEXT) = CAST(item.tenant_id AS TEXT)
       WHERE item.tenant_id = ? AND profile.owner_user_id = ?
       ORDER BY item.created_at ASC`,
     [scope.tenantId, scope.userId],
