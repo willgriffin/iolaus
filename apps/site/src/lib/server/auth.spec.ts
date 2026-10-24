@@ -1,4 +1,12 @@
+import {
+  MembershipCollection,
+  RoleCollection,
+  TenantCollection,
+  type User,
+} from '@happyvertical/smrt-users';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getAppConfig } from './app-config';
+import * as rolePermissions from './role-permissions';
 
 const getAuthMock = vi.hoisted(() => vi.fn());
 
@@ -13,6 +21,7 @@ import {
   canUseLocalDevLogin,
   completeMagicLinkLogin,
   completeOidcLogin,
+  ensureSingleTenantAccess,
   getOidcAuth,
   getRuntimeCookieName,
   hostedWorkspaceTenantSlug,
@@ -49,6 +58,7 @@ const originalEnvironment = Object.fromEntries(
 
 afterEach(() => {
   getAuthMock.mockReset();
+  vi.restoreAllMocks();
   for (const name of authEnvNames) {
     const original = originalEnvironment[name];
     if (original === undefined) delete process.env[name];
@@ -377,6 +387,79 @@ describe('tenantSlugsFor', () => {
     expect(tenantSlugsFor('iolaus', 'self-hosted')).toEqual(['iolaus']);
     expect(tenantSlugsFor('iolaus', 'cloud')).toEqual(['iolaus']);
     expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
+  });
+});
+
+describe('explicit private tenant binding', () => {
+  function setup(existing: { id: string; isActive: () => boolean } | null) {
+    const tenants = {
+      findBySlug: vi.fn().mockResolvedValue(existing),
+      create: vi.fn(),
+    };
+    const membership = { save: vi.fn() };
+    const memberships = {
+      findByUserAndTenant: vi.fn().mockResolvedValue(membership),
+      create: vi.fn(),
+    };
+    vi.spyOn(TenantCollection, 'create').mockResolvedValue(tenants as never);
+    vi.spyOn(RoleCollection, 'create').mockResolvedValue({
+      findBySlug: vi.fn().mockResolvedValue({ id: 'admin' }),
+    } as never);
+    vi.spyOn(MembershipCollection, 'create').mockResolvedValue(
+      memberships as never,
+    );
+    vi.spyOn(
+      rolePermissions,
+      'seedSystemRolesWithPermissions',
+    ).mockResolvedValue(undefined as never);
+    return { tenants, memberships, membership };
+  }
+  const configuration = () =>
+    getAppConfig({
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+      IOLAUS_PRIVATE_TENANT_SLUG: 'willgriffin.dev',
+    });
+  it('selects only the configured active tenant and reuses its owner membership', async () => {
+    const selected = { id: 'preserved-tenant', isActive: () => true };
+    const { tenants, memberships, membership } = setup(selected);
+    await expect(
+      ensureSingleTenantAccess({ id: 'owner' } as User, configuration()),
+    ).resolves.toEqual({ tenant: selected, membership });
+    expect(tenants.findBySlug).toHaveBeenCalledExactlyOnceWith(
+      'willgriffin.dev',
+    );
+    expect(memberships.findByUserAndTenant).toHaveBeenCalledWith(
+      'owner',
+      'preserved-tenant',
+    );
+    expect(tenants.create).not.toHaveBeenCalled();
+    expect(memberships.create).not.toHaveBeenCalled();
+  });
+  it('refuses missing and inactive targets without creating or selecting an app-ID fallback', async () => {
+    for (const target of [null, { id: 'inactive', isActive: () => false }]) {
+      const { tenants, memberships } = setup(target);
+      await expect(
+        ensureSingleTenantAccess({ id: 'owner' } as User, configuration()),
+      ).rejects.toThrow('configured existing private tenant');
+      expect(tenants.findBySlug).toHaveBeenCalledExactlyOnceWith(
+        'willgriffin.dev',
+      );
+      expect(tenants.create).not.toHaveBeenCalled();
+      expect(memberships.findByUserAndTenant).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+  it('does not use local legacy fallback when the explicit existing tenant is missing', async () => {
+    const { tenants } = setup(null);
+    await expect(
+      ensureSingleTenantAccess(
+        { id: 'owner' } as User,
+        getAppConfig({ IOLAUS_PRIVATE_TENANT_SLUG: 'iolaus' }),
+      ),
+    ).rejects.toThrow();
+    expect(tenants.findBySlug).toHaveBeenCalledExactlyOnceWith('iolaus');
+    expect(tenants.create).not.toHaveBeenCalled();
   });
 });
 

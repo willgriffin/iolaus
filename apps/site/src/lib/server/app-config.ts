@@ -34,6 +34,8 @@ export interface IolausAppConfig {
   sessionCookieName: string;
   tenantName: string;
   tenantSlug: string;
+  /** Explicit existing private-install tenant; never provision a fallback. */
+  privateTenantSlug?: string;
 }
 
 export interface OidcConfiguration {
@@ -168,6 +170,17 @@ export function getAppConfig(
       'Public deployments must set SMRT_APP_ID to a unique non-default identifier.',
     );
   }
+  const privateTenantSlug = stringValue(environment.IOLAUS_PRIVATE_TENANT_SLUG);
+  if (
+    privateTenantSlug &&
+    (workspaceMode !== 'private' ||
+      privateTenantSlug.length > 200 ||
+      !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(privateTenantSlug))
+  ) {
+    throw new Error(
+      'IOLAUS_PRIVATE_TENANT_SLUG must name an existing private tenant with a lowercase slug.',
+    );
+  }
   const cookiePrefix = cookieSegment(appId);
 
   return {
@@ -185,7 +198,8 @@ export function getAppConfig(
     workspaceMode,
     sessionCookieName: `${cookiePrefix}_session`,
     tenantName: appName,
-    tenantSlug: appId,
+    tenantSlug: privateTenantSlug || appId,
+    ...(privateTenantSlug ? { privateTenantSlug } : {}),
   };
 }
 

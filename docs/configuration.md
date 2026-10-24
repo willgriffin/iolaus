@@ -23,6 +23,14 @@ profile. Local owner sign-in rejects forwarded requests, and a proxy that hides
 its forwarding metadata cannot safely provide public authentication. Use the
 `self-hosted` or `cloud` profile with OIDC for any remotely reachable install.
 
+For a private installation upgraded from an existing tenant, set
+`IOLAUS_PRIVATE_TENANT_SLUG` to that tenant's exact lowercase slug (for example,
+`willgriffin.dev`). This selects the existing active tenant independently of
+`SMRT_APP_ID`; it does not move or duplicate candidate data. Login refuses a
+missing or inactive configured tenant and never creates a fallback. This option
+is unavailable in shared mode. Keep the application ID and sign out, then sign
+in again: existing sessions retain their original tenant binding.
+
 `SMRT_APP_ID` is a lowercase, hyphenated identifier. It namespaces the local
 tenant, cookies, terminal authorization code prefix, audit agent class, and
 CLI configuration directory. The `iolaus` default is reserved for the local

@@ -65,6 +65,35 @@ describe('Iolaus application configuration', () => {
     });
   });
 
+  it('binds an explicit private tenant without changing application identity', () => {
+    const environment = {
+      SMRT_APP_ID: 'career-hub',
+      SMRT_RUNTIME_PROFILE: 'self-hosted',
+      IOLAUS_PRIVATE_TENANT_SLUG: 'willgriffin.dev',
+    };
+    expect(getAppConfig(environment)).toMatchObject({
+      appId: 'career-hub',
+      tenantSlug: 'willgriffin.dev',
+      privateTenantSlug: 'willgriffin.dev',
+      sessionCookieName: 'career_hub_session',
+      agentClass: 'career-hub/owner',
+    });
+    for (const slug of [
+      'UPPER',
+      '../owner',
+      'two tenants',
+      '.',
+      'a'.repeat(201),
+    ]) {
+      expect(() =>
+        getAppConfig({ ...environment, IOLAUS_PRIVATE_TENANT_SLUG: slug }),
+      ).toThrow();
+    }
+    expect(() =>
+      getAppConfig({ ...environment, IOLAUS_WORKSPACE_MODE: 'shared' }),
+    ).toThrow();
+  });
+
   it('supports an explicit, canonical root issuer without weakening realm validation', () => {
     const base = {
       IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.com',

@@ -25,6 +25,7 @@ import {
   getAppConfig,
   getAuthConfiguration,
   getConfiguredPublicOrigin,
+  type IolausAppConfig,
   isLoopbackAddress,
   isLoopbackHostname,
   type RuntimeProfile,
@@ -373,7 +374,10 @@ export async function getOrCreateHostedOidcLoginUser(
   );
 }
 
-async function ensureSingleTenantAccess(user: User) {
+export async function ensureSingleTenantAccess(
+  user: User,
+  configuration: IolausAppConfig = appConfig,
+) {
   const options = getSmrtOptions();
   const roles = await RoleCollection.create(options);
   const tenants = await TenantCollection.create(options);
@@ -381,19 +385,22 @@ async function ensureSingleTenantAccess(user: User) {
 
   await seedSystemRolesWithPermissions(roles);
 
-  const [primaryTenantSlug, ...legacyTenantSlugs] = tenantSlugsFor(
-    appConfig.appId,
-    appConfig.runtimeProfile,
-  );
+  const [primaryTenantSlug, ...legacyTenantSlugs] =
+    configuration.privateTenantSlug
+      ? [configuration.privateTenantSlug]
+      : tenantSlugsFor(configuration.appId, configuration.runtimeProfile);
   let tenant = await tenants.findBySlug(primaryTenantSlug ?? singleTenantSlug);
   for (const slug of legacyTenantSlugs) {
     if (tenant) break;
     tenant = await tenants.findBySlug(slug);
   }
+  if (configuration.privateTenantSlug && (!tenant || !tenant.isActive())) {
+    throw new Error('The configured existing private tenant is unavailable.');
+  }
   if (!tenant) {
     tenant = await tenants.create({
-      name: singleTenantName,
-      slug: singleTenantSlug,
+      name: configuration.tenantName,
+      slug: configuration.tenantSlug,
       status: TenantStatus.ACTIVE,
       description: 'Single-tenant employment-search workspace.',
     });
