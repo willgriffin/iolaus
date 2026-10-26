@@ -7,6 +7,10 @@ import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
 import { getLocalOAuth } from '$lib/server/local-oauth';
+import {
+  isPublicProfileApiPath,
+  publicProfileApiHeaders,
+} from '$lib/server/public-profile-api-transport';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
 import { refreshSkillVocabularyLookup } from '$lib/server/skill-vocabulary';
 import { startRuntimeThenPrime } from '$lib/server/startup-readiness';
@@ -143,9 +147,47 @@ const workspaceSubjectHandler: Handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 
-export const handle = sequence(
+const authenticatedHandle = sequence(
   sessionHandler as unknown as Handle,
   bearerSessionHandler,
   workspaceSubjectHandler,
   authGuard,
 );
+
+/** Published profile JSON is credential-free, including stale cookies/bearers. */
+export const handle: Handle = async ({ event, resolve }) => {
+  if (!isPublicProfileApiPath(event.url.pathname))
+    return authenticatedHandle({ event, resolve });
+  let response: Response;
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(event.request.method)) {
+    response = new Response(null, {
+      status: 405,
+      headers: { allow: 'GET, HEAD, OPTIONS' },
+    });
+  } else {
+    try {
+      response = await resolve(event);
+    } catch {
+      response = Response.json(
+        {
+          apiVersion: 1,
+          error: {
+            code: 'PROFILE_SERVICE_UNAVAILABLE',
+            message: 'Profile service unavailable.',
+          },
+        },
+        { status: 503 },
+      );
+    }
+  }
+  if (event.request.method === 'HEAD')
+    response = new Response(null, {
+      status: response.status,
+      headers: response.headers,
+    });
+  for (const [name, value] of Object.entries(publicProfileApiHeaders))
+    response.headers.set(name, value);
+  response.headers.delete('set-cookie');
+  response.headers.delete('access-control-allow-credentials');
+  return response;
+};

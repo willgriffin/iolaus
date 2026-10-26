@@ -146,6 +146,81 @@ describe('server bearer-session handling', () => {
     mocks.verifyWorkspaceSubject.mockResolvedValue(null);
   });
 
+  it('bypasses sessions and workspace resolution only for public profile JSON', async () => {
+    const { handle } = await import('./hooks.server');
+    for (const pathname of [
+      '/api/public/v1/profiles/avery-example',
+      '/api/public/v1/profiles/invalid!',
+    ]) {
+      const requestEvent = event(null, pathname);
+      requestEvent.request.headers.set('authorization', 'broken credential');
+      const resolve = vi.fn(
+        async () =>
+          new Response('public', {
+            headers: {
+              'set-cookie': 'session=extended',
+              'access-control-allow-credentials': 'true',
+            },
+          }),
+      );
+      const response = await handle({ event: requestEvent, resolve } as never);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      expect(response.headers.has('set-cookie')).toBe(false);
+      expect(response.headers.has('access-control-allow-credentials')).toBe(
+        false,
+      );
+    }
+    expect(mocks.verifyWorkspaceSubject).not.toHaveBeenCalled();
+    expect(mocks.withBearerSessionContext).not.toHaveBeenCalled();
+    for (const pathname of [
+      '/admin',
+      '/api/public/v1/me/matches',
+      '/api/job-search/browse',
+      '/api/public/v1/profiles/avery-example/private',
+    ]) {
+      const requestEvent = event(null, pathname);
+      requestEvent.request.headers.set('authorization', 'broken credential');
+      const resolve = vi.fn();
+      expect(
+        (await handle({ event: requestEvent, resolve } as never)).status,
+      ).toBe(401);
+      expect(resolve).not.toHaveBeenCalled();
+    }
+  });
+
+  it('bounds public hook failures and unsupported methods with anonymous transport', async () => {
+    const { handle } = await import('./hooks.server');
+    for (const method of ['GET', 'HEAD']) {
+      const requestEvent = event(null, '/api/public/v1/profiles/avery-example');
+      requestEvent.request = new Request(requestEvent.url, { method });
+      const response = await handle({
+        event: requestEvent,
+        resolve: async () => {
+          throw new Error('private configuration failure');
+        },
+      } as never);
+      expect(response.status).toBe(503);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      if (method === 'HEAD') expect(await response.text()).toBe('');
+      else
+        expect((await response.json()).error.code).toBe(
+          'PROFILE_SERVICE_UNAVAILABLE',
+        );
+    }
+    const requestEvent = event(null, '/api/public/v1/profiles/avery-example');
+    requestEvent.request = new Request(requestEvent.url, { method: 'POST' });
+    const resolve = vi.fn();
+    const response = await handle({ event: requestEvent, resolve } as never);
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('GET, HEAD, OPTIONS');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   afterAll(() => {
     for (const name of environmentNames) {
       const original = originalEnvironment[name];
