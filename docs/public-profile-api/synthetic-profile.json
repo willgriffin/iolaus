@@ -1,0 +1,62 @@
+{
+  "apiVersion": 1,
+  "handle": "avery-example",
+  "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "revisionCreatedAt": "2026-10-20T12:00:00.000Z",
+  "links": {
+    "profile": "/people/avery-example",
+    "pdf": "/people/avery-example/resume.pdf"
+  },
+  "profile": {
+    "name": "Avery Example",
+    "title": "Community engineer",
+    "summary": "Synthetic fixture for public website development.",
+    "links": [
+      {
+        "label": "Portfolio",
+        "url": "https://example.org/avery"
+      }
+    ],
+    "experience": [
+      {
+        "role": "Engineer",
+        "company": "Example Cooperative",
+        "start": "2024",
+        "end": "Present",
+        "summary": "Builds useful community tools.",
+        "bullets": [
+          "Improved access to public resources."
+        ],
+        "projects": [
+          {
+            "name": "Community toolkit",
+            "summary": "A synthetic project.",
+            "url": "https://example.org/toolkit"
+          }
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "Example University",
+        "credential": "BSc",
+        "end": "2023"
+      }
+    ],
+    "other": [
+      {
+        "label": "Volunteering",
+        "value": "Community teaching"
+      }
+    ],
+    "skills": [
+      {
+        "label": "Engineering",
+        "skills": [
+          "TypeScript",
+          "Accessibility"
+        ]
+      }
+    ]
+  }
+}

@@ -76,3 +76,9 @@ and links each require opt-in. Resume sections can be selected independently.
 The first reserved handle is immutable. At most 20 previews can be prepared in
 48 hours per identity. PDF rendering uses two concurrent render slots and a
 bounded waiting queue; PDF size is limited to 10 MiB.
+
+## External websites
+
+The [versioned public-profile API](public-profile-api/README.md) exposes only
+the current published snapshot for anonymous static-site consumers, with typed
+withdrawal responses, an opaque revision token, synthetic fixtures and schemas.
