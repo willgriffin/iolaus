@@ -24,7 +24,11 @@ export const fixtureIdentity = Object.freeze({
 });
 const qualificationStages = new Set([
   'preflight', 'public-artifacts', 'image-identity', 'toolchain', 'kind-create',
-  'fixture-setup', 'missing-schema-refusal', 'writer-refusal', 'clean-migration',
+  'fixture-setup', 'fixture-postgres-pod', 'fixture-postgres-ready',
+  'fixture-postgres-roles', 'fixture-postgres-schema', 'fixture-assets',
+  'fixture-service-accounts', 'fixture-observer', 'fixture-maintenance-render',
+  'fixture-maintenance-ready', 'fixture-actor-secrets',
+  'missing-schema-refusal', 'writer-refusal', 'clean-migration',
   'runtime-readiness', 'http-and-operator', 'worker-and-monitor',
   'source-and-extractor', 'evidence', 'cleanup-started', 'cleanup-completed',
 ]);
@@ -287,6 +291,7 @@ export async function qualifyKind({
     if (registrySecrets.length) {
       apply(registrySecrets);
     }
+    checkpoint('fixture-postgres-pod');
     const password = randomBytes(24).toString('hex');
     const fixturePod = {
       apiVersion: 'v1',
@@ -300,7 +305,9 @@ export async function qualifyKind({
             image: prerequisites.fixture.postgresImage,
             env: [{ name: 'POSTGRES_PASSWORD', value: password }],
             readinessProbe: {
-              exec: { command: ['pg_isready', '-U', 'postgres'] },
+              // The image bootstraps a temporary Unix-only server first.
+              // Only the final TCP listener can serve application clients.
+              exec: { command: ['pg_isready', '-h', '127.0.0.1', '-U', 'postgres'] },
             },
             ports: [{ containerPort: 5432 }],
           },
@@ -315,6 +322,7 @@ export async function qualifyKind({
     });
     fixturePod.metadata.labels.app = 'postgres';
     apply([fixturePod, service('postgres', 5432)]);
+    checkpoint('fixture-postgres-ready');
     kubectl(
       '-n',
       'iolaus-fixture',
@@ -346,10 +354,13 @@ export async function qualifyKind({
         ],
         statement,
       );
+    checkpoint('fixture-postgres-roles');
     sql(
       `CREATE ROLE iolaus_maintenance LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_runtime LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_monitor LOGIN PASSWORD '${password}';\nCREATE DATABASE ${fixtureIdentity.databaseName} OWNER iolaus_maintenance;\n`,
     );
+    checkpoint('fixture-postgres-schema');
     sql(fixtureDatabaseSql('REVOKE CREATE ON SCHEMA public FROM PUBLIC;'));
+    checkpoint('fixture-assets');
     // Real HTTP HeadBucket edge, no readiness override module or passed flag.
     // This endpoint is a synthetic fixture, not qualification of an S3 vendor.
     const assetCode =
@@ -379,6 +390,7 @@ export async function qualifyKind({
     ]);
     const databaseUrl = (role) => fixtureDatabaseUrl(role, password);
     const values = syntheticRuntimeValues(password);
+    checkpoint('fixture-service-accounts');
     apply(
       ['iolaus-runtime', 'iolaus-monitor', 'iolaus-migration-observer'].map(
         (sa) => ({
@@ -390,6 +402,7 @@ export async function qualifyKind({
         }),
       ),
     );
+    checkpoint('fixture-observer');
     apply([
       {
         apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -488,7 +501,9 @@ export async function qualifyKind({
         ...(only ? ['--show-only', only] : []),
       ]);
     };
+    checkpoint('fixture-maintenance-render');
     apply(render('templates/maintenance.yaml'));
+    checkpoint('fixture-maintenance-ready');
     kubectl(
       '-n',
       namespace,
@@ -506,6 +521,7 @@ export async function qualifyKind({
       serviceAccountName: 'default',
       migrationServiceAccountName: 'iolaus-migration-observer',
     });
+    checkpoint('fixture-actor-secrets');
     apply(
       ['runtime', 'migration', 'monitor'].map((role) => ({
         apiVersion: 'v1',
