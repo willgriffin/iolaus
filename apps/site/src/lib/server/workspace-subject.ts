@@ -4,6 +4,7 @@ import {
   MembershipCollection,
   MembershipStatus,
   PermissionResolver,
+  RoleCollection,
   TenantCollection,
   type User,
   UserCollection,
@@ -12,6 +13,7 @@ import { isConfiguredOidcAdminEmail } from './administrative-auth.js';
 import { getAppConfig } from './app-config.js';
 import { getSmrtOptions } from './db.js';
 import { isEmailInvited } from './hosted-invite.js';
+import { HOSTED_OPERATOR_ROLE_SLUG } from './hosted-operator-role.js';
 import { getCollection, getRequestScopedSmrtOptions } from './smrt.js';
 
 /**
@@ -179,6 +181,23 @@ export async function revalidateWorkspaceIdentity(
     !(await isEmailInvited(user.email))
   ) {
     throw new WorkspaceNotInvitedError();
+  }
+  // A removed operator may still have a persisted role and a live session.
+  // Reject that identity before generic routes or native principals resolve
+  // its catalog grants. A fresh login replaces the role with MEMBER.
+  if (
+    getAppConfig().runtimeProfile !== 'local' &&
+    getAppConfig().workspaceMode === 'shared' &&
+    !isConfiguredOidcAdminEmail(user.email)
+  ) {
+    const roles = await RoleCollection.create(getRequestScopedSmrtOptions());
+    const role = await roles.get({ id: membership.roleId as string });
+    if (!role || role.slug === HOSTED_OPERATOR_ROLE_SLUG) {
+      throw new WorkspaceSubjectError(
+        403,
+        'Workspace operator is no longer authorized.',
+      );
+    }
   }
   return { membership, user };
 }

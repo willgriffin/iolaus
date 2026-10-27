@@ -21,6 +21,7 @@ import {
   canUseLocalDevLogin,
   completeMagicLinkLogin,
   completeOidcLogin,
+  ensureHostedWorkspaceAccess,
   ensureSingleTenantAccess,
   getOidcAuth,
   getRuntimeCookieName,
@@ -387,6 +388,57 @@ describe('tenantSlugsFor', () => {
     expect(tenantSlugsFor('iolaus', 'self-hosted')).toEqual(['iolaus']);
     expect(tenantSlugsFor('iolaus', 'cloud')).toEqual(['iolaus']);
     expect(tenantSlugsFor('career-hub')).toEqual(['career-hub']);
+  });
+});
+
+describe('hosted workspace role selection', () => {
+  it.each([
+    true,
+    false,
+  ])('selects a scoped operator role only for configured operators (%s)', async (operator) => {
+    process.env.SMRT_RUNTIME_PROFILE = 'self-hosted';
+    process.env.SMRT_APP_ID = 'career-hub';
+    process.env.IOLAUS_PUBLIC_URL = 'https://jobs.example.invalid';
+    process.env.IOLAUS_OIDC_ISSUER_MODE = 'root';
+    process.env.IOLAUS_OIDC_SERVER_URL = 'https://identity.example.invalid';
+    process.env.IOLAUS_OIDC_CLIENT_ID = 'career-hub';
+    process.env.IOLAUS_OIDC_ADMIN_EMAILS = operator
+      ? 'owner@example.com'
+      : 'someone@example.com';
+    const tenant = { id: 'workspace-1' };
+    const membership = {
+      roleId: operator ? 'member' : 'old-operator',
+      status: 'active',
+      save: vi.fn(),
+    };
+    const roles = { findBySlug: vi.fn(async () => ({ id: 'member' })) };
+    vi.spyOn(RoleCollection, 'create').mockResolvedValue(roles as never);
+    vi.spyOn(TenantCollection, 'create').mockResolvedValue({
+      findBySlug: vi.fn(async () => tenant),
+    } as never);
+    vi.spyOn(MembershipCollection, 'create').mockResolvedValue({
+      findByUserAndTenant: vi.fn(async () => membership),
+    } as never);
+    vi.spyOn(
+      rolePermissions,
+      'seedSystemRolesWithPermissions',
+    ).mockResolvedValue(undefined);
+    const operatorRole = vi
+      .spyOn(rolePermissions, 'ensureHostedOperatorRole')
+      .mockResolvedValue({ id: 'catalog-operator' } as never);
+    await ensureHostedWorkspaceAccess({
+      id: 'owner',
+      email: 'owner@example.com',
+    } as User);
+    expect(membership.roleId).toBe(operator ? 'catalog-operator' : 'member');
+    expect(membership.save).toHaveBeenCalledOnce();
+    if (operator)
+      expect(operatorRole).toHaveBeenCalledWith(
+        roles,
+        expect.anything(),
+        tenant.id,
+      );
+    else expect(operatorRole).not.toHaveBeenCalled();
   });
 });
 

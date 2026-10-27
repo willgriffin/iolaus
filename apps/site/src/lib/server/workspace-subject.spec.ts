@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   getTenant: vi.fn(),
   getUser: vi.fn(),
+  getRole: vi.fn(),
   list: vi.fn(),
   getCurrentTenant: vi.fn(),
   permissions: vi.fn(),
@@ -25,6 +26,9 @@ vi.mock('@happyvertical/smrt-users', () => ({
   MembershipStatus: { ACTIVE: 'active' },
   PermissionResolver: {
     create: vi.fn(async () => ({ resolvePermissions: mocks.permissions })),
+  },
+  RoleCollection: {
+    create: vi.fn(async () => ({ get: mocks.getRole })),
   },
   TenantCollection: {
     create: vi.fn(async () => ({ get: mocks.getTenant })),
@@ -94,6 +98,7 @@ describe('workspace subject', () => {
     mocks.sharedHosted = false;
     mocks.invited = true;
     mocks.operatorAllowed = true;
+    mocks.getRole.mockResolvedValue({ slug: 'member' });
     mocks.getCurrentTenant.mockReturnValue({
       metadata: {},
       tenantId: 'tenant-1',
@@ -125,6 +130,24 @@ describe('workspace subject', () => {
     mocks.withTenant.mockImplementation(
       async (_context: unknown, fn: () => Promise<unknown>) => await fn(),
     );
+  });
+
+  it('revokes a persisted operator role at every identity boundary when its allowlist entry is removed', async () => {
+    mocks.sharedHosted = true;
+    mocks.getRole.mockResolvedValue({ slug: 'iolaus-catalog-operator' });
+    await expect(
+      revalidateWorkspaceIdentity({ tenantId: 'tenant-1', userId: 'user-1' }),
+    ).resolves.toBeDefined();
+    mocks.operatorAllowed = false;
+    await expect(
+      revalidateWorkspaceIdentity({ tenantId: 'tenant-1', userId: 'user-1' }),
+    ).rejects.toBeInstanceOf(WorkspaceSubjectError);
+    const requestLocals = locals();
+    expect(await verifyWorkspaceSubject(requestLocals)).toBeNull();
+    expect(requestLocals.permissions).toEqual([]);
+    expect(requestLocals.membership).toBeNull();
+    mocks.getRole.mockResolvedValue({ slug: 'member' });
+    await expect(verifyWorkspaceSubject(locals())).resolves.toBeDefined();
   });
 
   it('re-reads an active exact membership and replaces stale permissions', async () => {

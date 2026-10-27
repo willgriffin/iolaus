@@ -30,6 +30,10 @@ import {
   runAsOwner,
 } from './owner-principal';
 import { generateResumeAsset } from './resume-admin';
+import {
+  ensureHostedOperatorRole,
+  hostedOperatorPermissions,
+} from './role-permissions';
 import { listOwnerToolNames } from './tool-catalog';
 import { WorkspaceSubjectError } from './workspace-subject';
 import { workspaceWorkflowOperation } from './workspace-workflow-capabilities';
@@ -280,6 +284,45 @@ describe('runAsOwner', () => {
       [...owner.permissions, 'workflow.profile.manage'].sort(),
     );
     expect(isOwnerAuthorityDenial(new Error('other'))).toBe(false);
+  });
+
+  it('grants the dedicated operator only catalog/source authority alongside private workflows', async () => {
+    const options = { db: fixture.database };
+    const roles = await RoleCollection.create(options);
+    const role = await ensureHostedOperatorRole(roles, options, owner.tenantId);
+    const repeated = await ensureHostedOperatorRole(
+      roles,
+      options,
+      owner.tenantId,
+    );
+    expect(repeated.id).toBe(role.id);
+    const memberships = await MembershipCollection.create(options);
+    const membership = await memberships.get(membershipId);
+    if (!membership || !role.id) throw new Error('Missing operator membership');
+    membership.roleId = role.id;
+    await membership.save();
+
+    await runAsOwner(owner, async (run) => {
+      for (const slug of hostedOperatorPermissions) {
+        const dot = slug.indexOf('.');
+        await run.assertOperation(slug.slice(0, dot), slug.slice(dot + 1));
+      }
+      expect(new Set(run.permissions)).toEqual(
+        new Set(hostedOperatorPermissions),
+      );
+      for (const collection of [
+        'candidateprofiles',
+        'applications',
+        'agent-runs',
+      ]) {
+        await expect(
+          run.assertOperation(collection, 'read'),
+        ).rejects.toBeInstanceOf(OperationPermissionError);
+      }
+      await expect(
+        run.assertOperation('sources', 'delete'),
+      ).rejects.toBeInstanceOf(OperationPermissionError);
+    });
   });
 
   it('denies every operation without a tenant, matching the session gate', async () => {
