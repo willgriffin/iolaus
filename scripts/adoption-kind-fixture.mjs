@@ -73,6 +73,15 @@ export function requireIsolatedContext(context, namespace) {
   assert.match(context, /^kind-iolaus-236-[a-z0-9-]+$/);
   assert.equal(namespace, 'iolaus-qualification');
 }
+export function terminalJobFailure(job) {
+  return (
+    (job.status?.failed ?? 0) > 0 &&
+    (job.status?.active ?? 0) === 0 &&
+    job.status?.conditions?.some(
+      (condition) => condition.type === 'Failed' && condition.status === 'True',
+    ) === true
+  );
+}
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 export async function until(description, check, timeout = 180_000) {
   const deadline = Date.now() + timeout;
@@ -511,9 +520,8 @@ export async function qualifyKind({
     apply(render());
     const jobName = () =>
       `iolaus-migration-qualification-${release.release.attempt}`;
-    await until(
-      'unknown writer refusal',
-      () => get('job', jobName()).status?.failed === 1,
+    await until('unknown writer refusal', () =>
+      terminalJobFailure(get('job', jobName())),
     );
     assert.equal(
       sql(

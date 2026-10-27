@@ -153,3 +153,38 @@ test('explicit private OIDC actor data satisfies real resolver without magic-lin
     assert.equal(getAuthConfiguration(incomplete).kind, 'invalid');
   }
 });
+
+test('migration replay waits for terminal failed Job rather than a pending replacement', async () => {
+  const { terminalJobFailure } = await import('./adoption-kind-fixture.mjs');
+  assert.equal(terminalJobFailure({ status: { failed: 1, active: 0 } }), false);
+  assert.equal(
+    terminalJobFailure({
+      status: {
+        failed: 1,
+        active: 1,
+        conditions: [{ type: 'Failed', status: 'True' }],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    terminalJobFailure({
+      status: {
+        failed: 1,
+        active: 0,
+        conditions: [{ type: 'Failed', status: 'False' }],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    terminalJobFailure({
+      status: {
+        failed: 1,
+        active: 0,
+        conditions: [{ type: 'Failed', status: 'True' }],
+      },
+    }),
+    true,
+  );
+});
