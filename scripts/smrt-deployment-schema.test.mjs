@@ -129,3 +129,59 @@ test('physical catalog attestor rejects undeclared expression and predicate supp
       /Unsupported declared startup/,
     );
 });
+
+test('column-level uniqueness requires a full valid immediate single-key guarantee, independent of its name', async () => {
+  const schema = {
+    tableName: 'tokens',
+    columns: { token_hash: { type: 'TEXT', unique: true } },
+  };
+  const full = {
+    table_name: 'tokens',
+    index_name: 'server_generated_token_key',
+    method: 'btree',
+    unique: true,
+    valid: true,
+    ready: true,
+    live: true,
+    immediate: true,
+    key_columns: 1,
+    columns: ['token_hash'],
+    predicate: null,
+    nulls_not_distinct: false,
+  };
+  const db = (index) => ({
+    query: async (statement) => ({
+      rows: statement.includes('FROM pg_index') ? [index] : [],
+    }),
+  });
+  await assertDeploymentCatalogReady(db(full), [schema]);
+  await assertDeploymentCatalogReady(db({ ...full, primary: true }), [schema]);
+  for (const change of [
+    { unique: false },
+    { predicate: 'token_hash IS NOT NULL' },
+    { columns: [null] },
+    { columns: ['token_hash', 'other'], key_columns: 2 },
+    { valid: false },
+    { ready: false },
+    { live: false },
+    { immediate: false },
+  ])
+    await assert.rejects(
+      assertDeploymentCatalogReady(db({ ...full, ...change }), [schema]),
+      /column uniqueness/,
+    );
+  const nullEqual = {
+    ...schema,
+    columns: {
+      token_hash: { type: 'TEXT', unique: true, nullsNotDistinct: true },
+    },
+  };
+  await assert.rejects(
+    assertDeploymentCatalogReady(db(full), [nullEqual]),
+    /column uniqueness/,
+  );
+  await assertDeploymentCatalogReady(
+    db({ ...full, nulls_not_distinct: true }),
+    [nullEqual],
+  );
+});

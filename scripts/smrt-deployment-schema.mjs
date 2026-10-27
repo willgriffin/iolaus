@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 /** @typedef {{column: string, referencesTable: string, referencesColumn: string, onDelete?: string, onUpdate?: string}} ForeignKey */
 /** @typedef {{name: string, columns: string[], unique?: boolean, nullsNotDistinct?: boolean, where?: string, jsonPath?: unknown}} SchemaIndex */
-/** @typedef {{tableName: string, columns: Record<string, {type: string, notNull?: boolean, primaryKey?: boolean}>, foreignKeys?: ForeignKey[], indexes?: SchemaIndex[], triggers?: unknown[]}} DeploymentSchema */
+/** @typedef {{tableName: string, columns: Record<string, {type: string, notNull?: boolean, primaryKey?: boolean, unique?: boolean, nullsNotDistinct?: boolean}>, foreignKeys?: ForeignKey[], indexes?: SchemaIndex[], triggers?: unknown[]}} DeploymentSchema */
 /** @typedef {Pick<import('@happyvertical/sql').DatabaseInterface, 'query'>} QueryDatabase */
 
 /** Explicit inactive adoption boundary; unknown protocol versions fail closed.
@@ -252,6 +252,30 @@ export async function assertDeploymentCatalogReady(db, schemas) {
       throw new Error(
         `Deployment primary key is not ready: ${schema.tableName}.`,
       );
+    for (const [name, column] of Object.entries(schema.columns)) {
+      if (!column.unique) continue;
+      // Column UNIQUE clauses may have server-generated constraint names.
+      // Match the full-table single-key guarantee, not an index-name guess.
+      const found = indexes.rows.some(
+        (actual) =>
+          actual.table_name === schema.tableName &&
+          actual.unique === true &&
+          actual.valid === true &&
+          actual.ready === true &&
+          actual.live === true &&
+          actual.immediate === true &&
+          actual.method === 'btree' &&
+          Number(actual.key_columns) === 1 &&
+          actual.predicate === null &&
+          JSON.stringify(actual.columns) === JSON.stringify([name]) &&
+          (column.nullsNotDistinct === undefined ||
+            actual.nulls_not_distinct === column.nullsNotDistinct),
+      );
+      if (!found)
+        throw new Error(
+          `Deployment column uniqueness is not ready: ${schema.tableName}.${name}.`,
+        );
+    }
     for (const expected of schema.indexes ?? []) {
       if (
         expected.jsonPath ||

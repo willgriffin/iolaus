@@ -167,6 +167,16 @@ suite('real application release catalog', () => {
           /denied DDL/,
         );
         await assertDeployedSchemaReady(runtimeDb);
+        await database.query(
+          'ALTER TABLE users_oauth_refresh_grants DROP CONSTRAINT users_oauth_refresh_grants_token_hash_key',
+        );
+        await expect(assertDeployedSchemaReady(runtimeDb)).rejects.toThrow(
+          /column uniqueness.*users_oauth_refresh_grants.token_hash/,
+        );
+        await database.query(
+          'ALTER TABLE users_oauth_refresh_grants ADD CONSTRAINT users_oauth_refresh_grants_token_hash_key UNIQUE(token_hash)',
+        );
+        await assertDeployedSchemaReady(runtimeDb);
         const foreignKey = 'profiles_type_id_profile_types_id_fkey';
         await database.query(
           `ALTER TABLE profiles DROP CONSTRAINT ${foreignKey}`,
