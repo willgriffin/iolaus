@@ -346,7 +346,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         ...contextReadOperations,
         workspaceWorkflowOperation('audit.record'),
         { action: 'create', collection: 'opportunities' },
-        { action: 'delete', collection: 'opportunities' },
         { action: 'update', collection: 'opportunities' },
       ],
       () => importJobOpportunity(input, user),
