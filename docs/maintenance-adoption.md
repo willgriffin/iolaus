@@ -22,10 +22,20 @@ No unpublished worktree supplies CI code. The public runner checkout must have
 its exact approved origin, revision and clean tree. OCI manifest bytes must hash
 to their requested digest and bind the packaged chart layer bytes.
 
-The image inputs must be public `ghcr.io/willgriffin/iolaus/site@sha256:…` and
+The image inputs must be published `ghcr.io/willgriffin/iolaus/site@sha256:…` and
 `ghcr.io/willgriffin/iolaus/resume-import-extraction@sha256:…` artifacts from the
-exact checked-out source commit and frozen lock. Availability of this exact public
-image pair is an external prerequisite; this workflow does not build or publish it. An index is resolved to exactly
+exact checked-out source commit and frozen lock. Availability of this exact
+image pair is an external prerequisite; this workflow does not build or publish it.
+The site package may remain private. After fetching the public chart and runner,
+manual CI authenticates using its temporary `GITHUB_TOKEN` with only
+`contents: read` and `packages: read`.
+The fixture sends immutable pull Secrets directly to its two freshly created
+namespaces and binds them to its ServiceAccounts. They are never application
+environment or mounted credentials, never written to evidence or manifest files,
+and are deleted with Kind; the login action logs out at job completion. The raw
+token is removed from the fixture's child-process environment. No personal token,
+package visibility change, existing-cluster credential or registry write is used.
+An index is resolved to exactly
 one Linux/amd64 platform manifest; both index and child bytes are digest checked.
 A local Docker ID, mutable tag, wrong architecture, unknown source or wrong lock
 fails. No release-image promotion wiring changes in this preparation.
@@ -134,7 +144,7 @@ A synthetic fixture receipt is not production rollout approval.
 ## Actual-image qualification
 
 Run the manual **Inactive adoption image qualification** workflow using the
-reviewed pins and matching public final-source image pair. It creates one uniquely named disposable Kind cluster,
+reviewed pins and matching final-source image pair. It creates one uniquely named disposable Kind cluster,
 never reads a default kubeconfig or accepts an arbitrary namespace, and destroys
 the cluster in `finally`. PostgreSQL and the synthetic provider HTTP endpoint
 live outside the dedicated application namespace, so they cannot be mistaken

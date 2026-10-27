@@ -11,7 +11,7 @@
     "repository": "https://github.com/happyvertical/smrt.git",
     "revision": "5be1d744eae39bbc226ce62cd1c27a8e59b4c08f"
   },
-  "blocker": "Matching public final-source images and actual-image qualification are required before adoption. Chart and runner pins were anonymously verified against the SMRT #4414 publication receipt; qualification does not authorize rollout.",
+  "blocker": "Matching final-source images and actual-image qualification are required before adoption. Chart and runner pins were anonymously verified against the SMRT #4414 publication receipt; qualification does not authorize rollout.",
   "fixture": {
     "kindNodeImage": "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5",
     "postgresImage": "docker.io/library/postgres@sha256:0ae695e3d11c7cc82cbed8f3e506233f18cdd40e3fc7622893f6a4d0772a5a09",

@@ -22,6 +22,44 @@ export const fixtureIdentity = Object.freeze({
   applicationId: 'iolaus-qualification',
   databaseName: 'iolaus_qualification',
 });
+
+// Only this disposable fixture receives the workflow's temporary read token.
+// The returned objects are sent to the fresh API on stdin, never to a file/log.
+export function qualificationRegistryPullSecrets(environment) {
+  const actor = environment.IOLAUS_QUALIFICATION_REGISTRY_ACTOR;
+  const token = environment.IOLAUS_QUALIFICATION_REGISTRY_TOKEN;
+  if (actor === undefined && token === undefined) return [];
+  assert.ok(typeof actor === 'string' && /^[\w-]+(?:\[bot\])?$/.test(actor),
+    'Complete ephemeral registry pull identity required.');
+  assert.ok(typeof token === 'string' && token.length > 0 && !/[\r\n]/.test(token),
+    'Complete ephemeral registry pull identity required.');
+  const config = JSON.stringify({ auths: { 'ghcr.io': {
+    auth: Buffer.from(`${actor}:${token}`).toString('base64'),
+  } } });
+  return ['iolaus-fixture', fixtureIdentity.applicationId].map((namespace) => ({
+    apiVersion: 'v1', kind: 'Secret',
+    metadata: { name: 'iolaus-qualification-registry', namespace },
+    type: 'kubernetes.io/dockerconfigjson', immutable: true,
+    data: { '.dockerconfigjson': Buffer.from(config).toString('base64') },
+  }));
+}
+
+export function assertRegistryPullIsolation(pod, secretName, needsPull = true) {
+  assert.deepEqual(pod.spec.imagePullSecrets?.map(({ name }) => name) ?? [],
+    needsPull ? [secretName] : []);
+  for (const container of [...pod.spec.containers, ...(pod.spec.initContainers ?? [])]) {
+    assert.ok(!(container.env ?? []).some((entry) =>
+      entry.valueFrom?.secretKeyRef?.name === secretName ||
+      ['GITHUB_TOKEN', 'IOLAUS_QUALIFICATION_REGISTRY_TOKEN'].includes(entry.name)),
+    'Registry pull credentials must not enter container environment.');
+    assert.ok(!(container.envFrom ?? []).some((entry) => entry.secretRef?.name === secretName),
+      'Registry pull credentials must not enter container environment.');
+  }
+  assert.ok(!(pod.spec.volumes ?? []).some((volume) =>
+    volume.secret?.secretName === secretName ||
+    volume.projected?.sources?.some((source) => source.secret?.name === secretName)),
+  'Registry pull credentials must not be mounted into containers.');
+}
 export function fixtureDatabaseUrl(role, password) {
   assert.match(role, /^iolaus_(maintenance|runtime|monitor)$/);
   assert.match(password, /^[a-f0-9]{48}$/);
@@ -113,6 +151,11 @@ export async function qualifyKind({
   }
   assert.equal(process.platform, 'linux');
   assert.equal(process.arch, 'x64');
+  const registrySecrets = qualificationRegistryPullSecrets(process.env);
+  delete process.env.IOLAUS_QUALIFICATION_REGISTRY_TOKEN;
+  delete process.env.IOLAUS_QUALIFICATION_REGISTRY_ACTOR;
+  const imagePullSecrets = registrySecrets.length
+    ? [{ name: registrySecrets[0].metadata.name }] : [];
   const run = (binary, args, input) => {
     try {
       return execFileSync(binary, args, {
@@ -219,6 +262,9 @@ export async function qualifyKind({
       ],
       'synthetic-only',
     );
+    if (registrySecrets.length) {
+      apply(registrySecrets);
+    }
     const password = randomBytes(24).toString('hex');
     const fixturePod = {
       apiVersion: 'v1',
@@ -297,6 +343,7 @@ export async function qualifyKind({
         },
         spec: {
           automountServiceAccountToken: false,
+          imagePullSecrets,
           containers: [
             {
               name: 'assets',
@@ -317,6 +364,7 @@ export async function qualifyKind({
           kind: 'ServiceAccount',
           metadata: { name: sa, namespace },
           automountServiceAccountToken: false,
+          imagePullSecrets,
         }),
       ),
     );
@@ -504,6 +552,7 @@ export async function qualifyKind({
         metadata: { name: 'unknown-writer', namespace },
         spec: {
           automountServiceAccountToken: false,
+          imagePullSecrets,
           containers: [
             {
               name: 'writer',
@@ -592,6 +641,17 @@ export async function qualifyKind({
           pod.status.containerStatuses[0].imageID.split('@').at(-1),
           runtime.workloads[name].image.split('@')[1],
         );
+    }
+    if (registrySecrets.length) {
+      for (const ns of ['iolaus-fixture', namespace]) {
+        const pods = JSON.parse(kubectl('-n', ns, 'get', 'pods', '-o', 'json')).items;
+        for (const pod of pods) {
+          const needsPull = pod.spec.containers.some(({ image }) =>
+            Object.values(resolvedImages).includes(image));
+          assertRegistryPullIsolation(pod, registrySecrets[0].metadata.name, needsPull);
+        }
+      }
+      checks.push('ephemeral-read-only-registry-pull-without-container-credential-projection');
     }
     const webPod = get('deployment', 'iolaus-web').spec.selector.matchLabels;
     const selector = Object.entries(webPod)

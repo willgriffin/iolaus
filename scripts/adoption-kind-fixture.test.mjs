@@ -7,7 +7,63 @@ import {
   fixtureDatabaseSql,
   requireIsolatedContext,
   until,
+  qualificationRegistryPullSecrets,
+  assertRegistryPullIsolation,
 } from './adoption-kind-fixture.mjs';
+
+test('ephemeral registry pull credentials are scoped to the two disposable namespaces', () => {
+  assert.deepEqual(qualificationRegistryPullSecrets({}), []);
+  for (const environment of [
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture' },
+    { IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'fixture-read-token' },
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture', IOLAUS_QUALIFICATION_REGISTRY_TOKEN: '' },
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture', IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'bad\ntoken' },
+  ]) {
+    assert.throws(() => qualificationRegistryPullSecrets(environment), (error) => {
+      assert.match(error.message, /Complete ephemeral registry pull identity required/);
+      assert.ok(!error.message.includes('bad\ntoken'));
+      return true;
+    });
+  }
+  const secrets = qualificationRegistryPullSecrets({
+    IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture',
+    IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'fixture-read-token',
+  });
+  assert.deepEqual(secrets.map(({ metadata }) => metadata.namespace),
+    ['iolaus-fixture', fixtureIdentity.applicationId]);
+  for (const secret of secrets) {
+    assert.equal(secret.type, 'kubernetes.io/dockerconfigjson');
+    assert.equal(secret.immutable, true);
+    const config = JSON.parse(Buffer.from(secret.data['.dockerconfigjson'], 'base64'));
+    assert.deepEqual(Object.keys(config.auths), ['ghcr.io']);
+    assert.equal(Buffer.from(config.auths['ghcr.io'].auth, 'base64').toString(),
+      'fixture:fixture-read-token');
+  }
+});
+
+test('registry pull authority never becomes application environment or mounted credentials', () => {
+  const name = 'iolaus-qualification-registry';
+  const pod = { spec: {
+    imagePullSecrets: [{ name }],
+    containers: [{ name: 'app', env: [], envFrom: [] }], volumes: [],
+  } };
+  assertRegistryPullIsolation(pod, name);
+  assertRegistryPullIsolation({ spec: { containers: [{ name: 'public' }] } }, name, false);
+  for (const inject of [
+    (p) => p.spec.containers[0].env.push({ name: 'TOKEN', valueFrom: { secretKeyRef: { name, key: '.dockerconfigjson' } } }),
+    (p) => p.spec.containers[0].env.push({ name: 'GITHUB_TOKEN', value: 'fixture' }),
+    (p) => p.spec.containers[0].envFrom.push({ secretRef: { name } }),
+    (p) => { p.spec.initContainers = [{ name: 'init', envFrom: [{ secretRef: { name } }] }]; },
+    (p) => p.spec.volumes.push({ name: 'creds', secret: { secretName: name } }),
+    (p) => p.spec.volumes.push({ name: 'creds', projected: { sources: [{ secret: { name } }] } }),
+    (p) => p.spec.imagePullSecrets.push({ name: 'unapproved-registry' }),
+    (p) => { p.spec.imagePullSecrets = []; },
+  ]) {
+    const injected = structuredClone(pod); inject(injected);
+    assert.throws(() => assertRegistryPullIsolation(injected, name));
+  }
+  assert.throws(() => assertRegistryPullIsolation(pod, name, false));
+});
 
 test('qualification refuses arbitrary kube contexts and namespaces', () => {
   requireIsolatedContext('kind-iolaus-236-abc123', 'iolaus-qualification');
@@ -53,6 +109,9 @@ test('inactive adoption workflow never auto-triggers, promotes or touches GitOps
     workflow,
     /packages: write|contents: write|git push|imagetools create|kubeconfig.*secrets\./,
   );
+  assert.match(workflow, /packages: read/);
+  assert.match(workflow, /logout: true/);
+  assert.match(workflow, /IOLAUS_QUALIFICATION_REGISTRY_TOKEN: \$\{\{ github\.token \}\}/);
   const base = readFileSync(
     new URL('../deploy/self-hosted/base/kustomization.yaml', import.meta.url),
     'utf8',

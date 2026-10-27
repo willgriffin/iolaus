@@ -43,7 +43,7 @@ export function resolvePlatformManifest(
 export function assertImageMetadata(metadata, reference, revision, lock) {
   assert.ok(
     metadata.RepoDigests.includes(reference),
-    'Pulled image is not the exact public artifact.',
+    'Pulled image is not the exact published artifact.',
   );
   assert.equal(metadata.Os, 'linux');
   assert.equal(metadata.Architecture, 'amd64');
@@ -128,7 +128,7 @@ export function resolvePublicPlatform(reference, run = execFileSync) {
   return { platform, metadata };
 }
 
-export function inspectPublicImage(
+export function inspectPublishedImage(
   reference,
   revision,
   lock,
@@ -146,7 +146,7 @@ export function resolveImages(images, revision, lock, run) {
       extractor: 'ghcr.io/willgriffin/iolaus/resume-import-extraction',
     }).map(([key, repository]) => {
       immutableImage(images[key], repository);
-      return [key, inspectPublicImage(images[key], revision, lock, run)];
+      return [key, inspectPublishedImage(images[key], revision, lock, run)];
     }),
   );
 }
