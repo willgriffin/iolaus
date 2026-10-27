@@ -3,7 +3,10 @@ import './db-common.js';
 import { ObjectRegistry, resolveDatabase } from '@happyvertical/smrt-core';
 import { getDbConfig } from '../src/lib/server/db.js';
 import { releaseIdentity } from '../src/lib/server/deployment/observer.js';
-import { assertDeploymentSchemaReady } from '../../../scripts/smrt-deployment-schema.mjs';
+import {
+  assertDeploymentSchemaReady,
+  releaseDeploymentProtocolEnabled,
+} from '../../../scripts/smrt-deployment-schema.mjs';
 import { withSmrtDatabaseMigrationLock } from './db-common.js';
 import { parseDbMigrateOptions } from './db-migrate-options.js';
 import { createReleaseSafetyCheck } from './db-release-safety.js';
@@ -21,6 +24,10 @@ if (!maintenanceWindow)
 if (getDbConfig().type !== 'postgres')
   throw new Error(
     'Dedicated release migration supports PostgreSQL only; local onboarding is unchanged.',
+  );
+if (!releaseDeploymentProtocolEnabled())
+  throw new Error(
+    'Dedicated release migration requires IOLAUS_DEPLOYMENT_PROTOCOL=smrt-release-v1.',
   );
 const identity = releaseIdentity();
 const database = await resolveDatabase(getDbConfig());

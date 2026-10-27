@@ -12,6 +12,7 @@ import {
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
 import { getDatabase } from '@happyvertical/sql';
+import { releaseDeploymentProtocolEnabled } from '../../../../../scripts/smrt-deployment-schema.mjs';
 import { createProviderReadinessProbe } from '../../../../../scripts/smrt-provider-readiness.mjs';
 import {
   prepareApplicationStateRoot,
@@ -177,6 +178,7 @@ async function withinReadinessBudget<T>(
 
 /** Fail-closed startup gate for every deployed web process. */
 export async function ensureApplicationRuntimeReady(): Promise<void> {
+  const releaseProtocol = releaseDeploymentProtocolEnabled();
   if (applicationRuntime.profile === 'local') {
     await getLocalApplicationRuntime();
     return;
@@ -231,7 +233,7 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
           url: validatedDatabaseUrl,
         });
         try {
-          await assertDeployedSchemaReady(db);
+          if (releaseProtocol) await assertDeployedSchemaReady(db);
           return db;
         } catch (error) {
           await db.close?.();

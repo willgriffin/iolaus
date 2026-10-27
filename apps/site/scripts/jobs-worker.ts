@@ -1,4 +1,5 @@
 import './jobs-worker-bootstrap.js';
+import { releaseDeploymentProtocolEnabled } from '../../../scripts/smrt-deployment-schema.mjs';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { ScheduleRunner, TaskRunner, type SmrtJob } from '@happyvertical/smrt-jobs';
 import { getDbConfig } from '../src/lib/server/db.js';
@@ -39,8 +40,9 @@ const resumeImportRepairIntervalMs = numberFromEnv(
   'RESUME_IMPORT_REPAIR_MS',
   5 * 60_000,
 );
+const releaseProtocol = releaseDeploymentProtocolEnabled();
 const db = await resolveDatabase(getDbConfig());
-if (getDbConfig().type === 'postgres') await assertDeployedSchemaReady(db);
+if (releaseProtocol && getDbConfig().type === 'postgres') await assertDeployedSchemaReady(db);
 else await ensureSourceScheduleTable(db);
 await reapStaleSourceCrawls(db);
 void repairQueuedResumeImports(db).catch(() => {

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assertDeploymentSchemaReady,
+  assertDeploymentCatalogReady,
   assertRuntimeDatabaseRole,
   assertRuntimeStaticAgreement,
+  releaseDeploymentProtocolEnabled,
 } from './smrt-deployment-schema.mjs';
 
 const schemas = [
@@ -81,4 +83,49 @@ test('static/runtime agreement rejects missing and changed columns before effect
       ),
     /mismatch/,
   );
+});
+
+test('explicit deployment protocol preserves legacy absence and rejects invalid defined values', () => {
+  assert.equal(releaseDeploymentProtocolEnabled({}), false);
+  assert.equal(
+    releaseDeploymentProtocolEnabled({
+      IOLAUS_DEPLOYMENT_PROTOCOL: 'smrt-release-v1',
+    }),
+    true,
+  );
+  for (const value of [
+    '',
+    'legacy',
+    'true',
+    'smrt-release-v2',
+    ' smrt-release-v1',
+  ])
+    assert.throws(
+      () =>
+        releaseDeploymentProtocolEnabled({ IOLAUS_DEPLOYMENT_PROTOCOL: value }),
+      /IOLAUS_DEPLOYMENT_PROTOCOL/,
+    );
+});
+
+test('physical catalog attestor rejects undeclared expression and predicate support rather than guessing SQL equivalence', async () => {
+  const db = { query: async () => ({ rows: [] }) };
+  for (const index of [
+    { name: 'unknown', columns: ['id'], where: 'id > 0' },
+    { name: 'unknown', columns: ['lower(id)'] },
+    {
+      name: 'unknown',
+      columns: ['id'],
+      jsonPath: { column: 'id', path: 'key' },
+    },
+  ])
+    await assert.rejects(
+      assertDeploymentCatalogReady(db, [
+        {
+          tableName: 'sentinel',
+          columns: { id: { type: 'TEXT' } },
+          indexes: [index],
+        },
+      ]),
+      /Unsupported declared startup/,
+    );
 });

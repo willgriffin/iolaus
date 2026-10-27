@@ -1,10 +1,7 @@
-import {
-  generateSchemaDiff,
-  hasActionableChanges,
-  ObjectRegistry,
-} from '@happyvertical/smrt-core';
+import { ObjectRegistry } from '@happyvertical/smrt-core';
 import type { DatabaseInterface } from '@happyvertical/sql';
 import {
+  assertDeploymentCatalogReady,
   assertDeploymentSchemaReady,
   assertRuntimeDatabaseRole,
   assertRuntimeStaticAgreement,
@@ -32,12 +29,8 @@ export async function assertDeployedSchemaReady(
     db,
     Object.values(ObjectRegistry.getAllSchemasAsDefinitions()),
   );
-  const diff = await generateSchemaDiff(
+  await assertDeploymentCatalogReady(
     db,
-    ObjectRegistry.getAllSchemasAsDefinitions(),
+    Object.values(ObjectRegistry.getAllSchemasAsDefinitions()),
   );
-  if (hasActionableChanges(diff))
-    throw new Error(
-      'Deployed schema has pending changes; run the dedicated migration before starting runtime roles.',
-    );
 }

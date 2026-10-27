@@ -33,6 +33,7 @@ export function releaseIdentity(env = process.env): ReleaseIdentity {
 }
 
 interface KubeObject {
+  apiVersion?: string;
   kind: string;
   metadata: {
     name: string;
@@ -347,21 +348,32 @@ export async function observeWriterExclusion(
     throw new Error('Kubernetes service endpoint is unavailable.');
   const objects: KubeObject[] = [];
   let maintenanceConfig: KubeObject | undefined;
-  for (const [api, resource] of [
-    ['api/v1', 'pods'],
-    ['apis/apps/v1', 'deployments'],
-    ['apis/apps/v1', 'replicasets'],
-    ['apis/apps/v1', 'statefulsets'],
-    ['apis/apps/v1', 'daemonsets'],
-    ['apis/batch/v1', 'jobs'],
-    ['apis/batch/v1', 'cronjobs'],
-    ['apis/autoscaling/v2', 'horizontalpodautoscalers'],
-    ['api/v1', `configmaps/${policy.releaseName}-maintenance`],
+  for (const [api, resource, kind, apiVersion] of [
+    ['api/v1', 'pods', 'Pod', 'v1'],
+    ['apis/apps/v1', 'deployments', 'Deployment', 'apps/v1'],
+    ['apis/apps/v1', 'replicasets', 'ReplicaSet', 'apps/v1'],
+    ['apis/apps/v1', 'statefulsets', 'StatefulSet', 'apps/v1'],
+    ['apis/apps/v1', 'daemonsets', 'DaemonSet', 'apps/v1'],
+    ['apis/batch/v1', 'jobs', 'Job', 'batch/v1'],
+    ['apis/batch/v1', 'cronjobs', 'CronJob', 'batch/v1'],
+    [
+      'apis/autoscaling/v2',
+      'horizontalpodautoscalers',
+      'HorizontalPodAutoscaler',
+      'autoscaling/v2',
+    ],
+    [
+      'api/v1',
+      `configmaps/${policy.releaseName}-maintenance`,
+      'ConfigMap',
+      'v1',
+    ],
   ]) {
     const result = await new Promise<{
       items?: KubeObject[];
       metadata?: { continue?: string };
       kind?: string;
+      apiVersion?: string;
     }>((resolve, reject) => {
       const req = request(
         {
@@ -406,14 +418,34 @@ export async function observeWriterExclusion(
       req.end();
     });
     if (resource.startsWith('configmaps/')) {
-      if (result.kind !== 'ConfigMap')
+      if (result.kind !== kind || result.apiVersion !== apiVersion)
         throw new Error('Maintenance ConfigMap inventory is invalid.');
       maintenanceConfig = result as KubeObject;
       continue;
     }
-    if (!Array.isArray(result.items) || result.metadata?.continue)
-      throw new Error('Kubernetes observer inventory is incomplete.');
-    objects.push(...result.items);
+    if (
+      result.kind !== `${kind}List` ||
+      result.apiVersion !== apiVersion ||
+      !Array.isArray(result.items) ||
+      result.metadata?.continue
+    )
+      throw new Error(
+        'Kubernetes observer inventory is incomplete or has conflicting type metadata.',
+      );
+    // Native list items omit TypeMeta; bind it to the trusted resource request.
+    // Explicit conflicting item metadata is never overwritten or accepted.
+    for (const item of result.items) {
+      if (
+        !item ||
+        typeof item !== 'object' ||
+        (item.kind !== undefined && item.kind !== kind) ||
+        (item.apiVersion !== undefined && item.apiVersion !== apiVersion)
+      )
+        throw new Error(
+          'Kubernetes observer item type conflicts with requested inventory.',
+        );
+      objects.push({ ...item, kind, apiVersion });
+    }
   }
   assertWriterExclusion(
     { namespace, podName, podUid, objects, maintenanceConfig },

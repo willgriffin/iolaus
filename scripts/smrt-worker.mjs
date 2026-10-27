@@ -9,8 +9,10 @@ import {
 import { getDatabase } from '@happyvertical/sql';
 import {
   assertDeploymentSchemaReady,
+  assertDeploymentCatalogReady,
   assertRuntimeDatabaseRole,
   readDeploymentSchemas,
+  releaseDeploymentProtocolEnabled,
 } from './smrt-deployment-schema.mjs';
 import { startWorkerHeartbeat } from './smrt-worker-heartbeat.mjs';
 import { createProviderReadinessProbe } from './smrt-provider-readiness.mjs';
@@ -25,6 +27,7 @@ if (configured.profile === 'local') {
   );
 }
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
+const releaseProtocol = releaseDeploymentProtocolEnabled();
 
 const runtime = await initializeDeployedApplicationRuntime({
   profile: configured.profile,
@@ -45,6 +48,7 @@ const runtime = await initializeDeployedApplicationRuntime({
         url: process.env.DATABASE_URL,
       });
       try {
+        if (!releaseProtocol) return db;
         await assertRuntimeDatabaseRole(db);
         const schemas = await readDeploymentSchemas();
         // This plain-Node process owns schedule dispatch, whose concrete model
@@ -61,6 +65,7 @@ const runtime = await initializeDeployedApplicationRuntime({
         if (required.length !== tables.length)
           throw new Error('Schedule schema artifact is incomplete.');
         await assertDeploymentSchemaReady(db, required);
+        await assertDeploymentCatalogReady(db, required);
         return db;
       } catch (error) {
         await db.close?.();
