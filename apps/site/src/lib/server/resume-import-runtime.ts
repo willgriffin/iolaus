@@ -74,7 +74,7 @@ function identifier(value: unknown, label: string): string {
   return value;
 }
 
-function capturedPrincipal(value: unknown): string {
+function receiptData(value: unknown): Record<string, unknown> {
   let data: unknown = value;
   if (typeof data === 'string') {
     try {
@@ -88,7 +88,11 @@ function capturedPrincipal(value: unknown): string {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('Resume import receipt has invalid ownership provenance.');
   }
-  const ceiling = (data as Record<string, unknown>).capturedCeiling;
+  return data as Record<string, unknown>;
+}
+
+function capturedPrincipal(value: unknown): string {
+  const ceiling = receiptData(value).capturedCeiling;
   const execution =
     ceiling && typeof ceiling === 'object' && !Array.isArray(ceiling)
       ? (ceiling as Record<string, unknown>).execution
@@ -100,6 +104,63 @@ function capturedPrincipal(value: unknown): string {
     'captured principal ID',
   );
 }
+
+/**
+ * Native ingestion atomically completes deletion with these redaction fields.
+ * Only that completed, fully redacted state can lack owner authority; pending
+ * cleanup, unresolved actions and malformed receipts still fail provenance checks.
+ */
+function isCompletedRedactedReceipt(row: Record<string, unknown>): boolean {
+  if (row.deletion_completed !== true && row.deletion_completed !== 1)
+    return false;
+  if (row.has_unfinished_actions !== false && row.has_unfinished_actions !== 0)
+    return false;
+  if (
+    row.has_unfinished_deletions !== false &&
+    row.has_unfinished_deletions !== 0
+  )
+    return false;
+  if (
+    row.visibility !== 'expired' ||
+    row.processing_state !== 'expired' ||
+    (row.cancelled !== true && row.cancelled !== 1) ||
+    row.payload_digest !== 'redacted' ||
+    row.scope_digest !== 'redacted' ||
+    row.trace_id !== '' ||
+    row.submitter_id !== '' ||
+    row.owner_key !== ''
+  )
+    return false;
+  const data = receiptData(row.data);
+  const ceiling = data.capturedCeiling;
+  if (!ceiling || typeof ceiling !== 'object' || Array.isArray(ceiling))
+    return false;
+  const execution = (ceiling as Record<string, unknown>).execution;
+  return Boolean(
+    execution &&
+      typeof execution === 'object' &&
+      !Array.isArray(execution) &&
+      !Object.hasOwn(execution, 'principalId'),
+  );
+}
+
+const receiptLifecycleColumns = `item.processing_state, item.visibility,
+  item.cancelled, item.payload_digest, item.scope_digest, item.trace_id,
+  item.submitter_id, item.owner_key,
+  EXISTS (SELECT 1 FROM intake_deletions AS deletion
+    WHERE deletion.tenant_id = item.tenant_id
+      AND deletion.confidential_scope_id = item.confidential_scope_id
+      AND deletion.item_id = item.id AND deletion.state = 'completed') AS deletion_completed,
+  EXISTS (SELECT 1 FROM intake_deletions AS deletion
+    WHERE deletion.tenant_id = item.tenant_id
+      AND deletion.confidential_scope_id = item.confidential_scope_id
+      AND deletion.item_id = item.id
+      AND (deletion.state <> 'completed' OR deletion.state IS NULL)) AS has_unfinished_deletions,
+  EXISTS (SELECT 1 FROM intake_actions AS action
+    WHERE action.tenant_id = item.tenant_id
+      AND action.confidential_scope_id = item.confidential_scope_id
+      AND action.item_id = item.id
+      AND action.state IN ('executing', 'outcome_unknown')) AS has_unfinished_actions`;
 
 async function currentDatabase(): Promise<DatabaseInterface> {
   return (getRequestScopedDatabase() ??
@@ -436,15 +497,17 @@ export async function purgeResumeImportAccountData(
   scope: Pick<RuntimeWorkspaceSubject, 'tenantId' | 'userId'>,
 ): Promise<number> {
   const rows = await db.query(
-    `SELECT item.id, item.confidential_scope_id, item.data
+    `SELECT item.id, item.confidential_scope_id, item.data, ${receiptLifecycleColumns}
        FROM intake_items AS item
       WHERE item.tenant_id = ?`,
     [scope.tenantId],
   );
-  // Include expired/deleted receipts: their retained cleanup identities still
-  // require the configured store. Empty/foreign-only accounts need no provider.
+  // Receipts retaining owner authority still need the configured cleanup store.
+  // Fully redacted completed tombstones have no owner authority to recover.
   const items = (rows.rows as Array<Record<string, unknown>>).filter(
-    (row) => capturedPrincipal(row.data) === scope.userId,
+    (row) =>
+      !isCompletedRedactedReceipt(row) &&
+      capturedPrincipal(row.data) === scope.userId,
   );
   if (!items.length) return 0;
   const assets = await createResumeImportAssets(db);
@@ -476,8 +539,8 @@ export async function exportResumeImportReceipts(
   scope: Pick<RuntimeWorkspaceSubject, 'tenantId' | 'userId'>,
 ): Promise<Array<Record<string, unknown>>> {
   const result = await db.query(
-    `SELECT item.id, item.receipt_state, item.processing_state, item.analysis_revision, item.created_at,
-            item.expires_at, item.visibility, item.data
+    `SELECT item.id, item.receipt_state, item.analysis_revision, item.created_at,
+            item.expires_at, item.data, ${receiptLifecycleColumns}
        FROM intake_items AS item
        JOIN candidate_profiles AS profile
          ON CAST(profile.id AS TEXT) = item.confidential_scope_id
@@ -487,7 +550,11 @@ export async function exportResumeImportReceipts(
     [scope.tenantId, scope.userId],
   );
   return (result.rows as Array<Record<string, unknown>>)
-    .filter((row) => capturedPrincipal(row.data) === scope.userId)
+    .filter(
+      (row) =>
+        !isCompletedRedactedReceipt(row) &&
+        capturedPrincipal(row.data) === scope.userId,
+    )
     .map((row) => ({
       analysisRevision: Number(row.analysis_revision),
       createdAt: row.created_at,

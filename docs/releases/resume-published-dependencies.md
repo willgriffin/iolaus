@@ -30,6 +30,36 @@ runtime behavior. Full integrated tests and deployment qualification belong to
 #236; the historical evidence below does not qualify the new baseline or a
 production rollout.
 
+The upgraded native-ingestion test fixture creates all 13 model schemas from
+its public `/models` export, including `IntakeDisposition`. The reviewed parity
+snapshot is regenerated with the documented inventory builder; all REST, MCP,
+WebMCP and data-surface arrays remain exactly unchanged. A deleted receipt now
+has redacted digests and dispatch lineage, so replay returns the safe generic
+HTTP 409 conflict. A live but expired receipt still returns `expired_import`.
+Both paths must preserve the existing receipt, remove the prewrite marker and
+permit account deletion. The transport returns only the host's safe constant
+message and status; the upload UI displays that message through its existing
+error fallback. No scrubbed receipt data is restored.
+
+Account cleanup and metadata export omit a tombstone only after reading public
+`IntakeItem`, `IntakeDeletion` and `IntakeAction` lifecycle state: matching
+completed deletion, no unfinished deletion or action, expired/cancelled item,
+all native redaction fields, and a valid execution ceiling with its principal
+removed. Every proof is bound to the same tenant, confidential scope and item.
+Published ingestion 0.57.32 establishes redaction and deletion completion in one
+transaction. Active, pending, malformed or partially reconciled receipts still
+require their captured principal; cleanup never reconstructs erased authority.
+The fixtures cover same-tenant foreign tombstones and active receipts, pending
+cleanup, a mismatched deletion scope, unfinished actions and malformed active
+receipts on both supported test dialects. A unit case also refuses conflicting
+completed/pending proof; native schema uniqueness permits only one deletion
+intent per tenant/item.
+
+Focused qualification passes **92 tests**, with two dialect-inapplicable skips,
+across the parity inventory, native resume ingestion (real SQLite and isolated
+PostgreSQL), cleanup runtime and transport suites. This is affected-only evidence;
+root integrated validation remains separate.
+
 ## Historical resume release (#223)
 
 The resume production train (#223) consumed published SMRT **0.55.19** and SDK

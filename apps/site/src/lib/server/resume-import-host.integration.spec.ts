@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { executeAsPrincipal } from '@happyvertical/smrt-agents';
 import { createAssetRuntime } from '@happyvertical/smrt-assets';
-import { getTestDatabase, ObjectRegistry } from '@happyvertical/smrt-core';
+import {
+  getTestDatabase,
+  ObjectRegistry,
+  SmrtObject,
+} from '@happyvertical/smrt-core';
+import * as ingestionModels from '@happyvertical/smrt-ingestion/models';
 import { withSystemContext } from '@happyvertical/smrt-tenancy';
 import {
   MembershipCollection,
@@ -91,18 +96,11 @@ const classes = [
   'SmrtJob',
   'SmrtJobEvent',
   'SmrtWorker',
-  'IntakeItem',
-  'IntakeEvidence',
-  'IntakeAnalysis',
-  'IntakeAnalysisAttempt',
-  'IntakePlan',
-  'IntakeAction',
-  'IntakeProposal',
-  'IntakeReviewDecision',
-  'IntakeExecution',
-  'IntakeFeedback',
-  'IntakeDispatch',
-  'IntakeDeletion',
+  // Keep the fixture aligned with every model in the installed public ingestion
+  // API, including lifecycle records introduced by published upgrades.
+  ...Object.values(ingestionModels)
+    .filter((model) => model.prototype instanceof SmrtObject)
+    .map((model) => model.name),
   'AccountDeletionRecord',
   'ResumeImport',
   'ResumeImportJob',
@@ -152,13 +150,15 @@ const initialEntries: ResumeImportEntry[] = [
 async function seedPrincipal(
   db: DatabaseInterface,
   owner: ReturnType<typeof subject>,
+  tenantExists = false,
 ) {
   return await withSystemContext(async () => {
-    await (await TenantCollection.create({ db })).create({
-      id: owner.tenantId,
-      name: 'Workspace',
-      status: TenantStatus.ACTIVE,
-    });
+    if (!tenantExists)
+      await (await TenantCollection.create({ db })).create({
+        id: owner.tenantId,
+        name: 'Workspace',
+        status: TenantStatus.ACTIVE,
+      });
     const role = await (await RoleCollection.create({ db })).create({
       name: `member-${randomUUID()}`,
     });
@@ -1863,13 +1863,25 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             'UPDATE intake_items SET expires_at = ? WHERE id = ?',
             ['2000-01-01T00:00:00.000Z', received.id],
           );
+        const beforeReupload = await rows('intake_items');
         await expect(
           host.receive({
             bytes: Buffer.from('%PDF-prewrite-reupload'),
             filename: 'resume.pdf',
             requestId: randomUUID(),
           }),
-        ).rejects.toMatchObject({ code: 'expired_import' });
+        ).rejects.toMatchObject({
+          status: 409,
+          message:
+            state === 'deleted'
+              ? 'Upload conflicts with a previous request or exceeds its limits.'
+              : 'This PDF belongs to a deleted or expired import. Choose Start a new import to upload it again.',
+          // Published ingestion scrubs deleted receipt digests and lineage, so
+          // replay refuses a redacted tombstone as a generic conflict.
+          code: state === 'deleted' ? undefined : 'expired_import',
+        });
+        expect(beforeReupload).toHaveLength(1);
+        expect(await rows('intake_items')).toEqual(beforeReupload);
         expect(await rows('resume_import_write_operations')).toHaveLength(0);
         const result = await deleteAccount(owner, {
           database: db,
@@ -1887,6 +1899,96 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         });
         expect(result.status).toBe('deleted');
         expect(await rows('users')).toHaveLength(0);
+      });
+
+      it('ignores only completed redacted tombstones without purging or exporting another owner', async () => {
+        const other = { ...subject(), tenantId: owner.tenantId };
+        await seedPrincipal(db, other, true);
+        const otherHost = await makeHost(other);
+        const tombstone = await otherHost.receive({
+          bytes: Buffer.from('%PDF-other-deleted'),
+          filename: 'other.pdf',
+          requestId: randomUUID(),
+        });
+        await otherHost.delete(tombstone.id);
+        const active = await otherHost.receive({
+          bytes: Buffer.from('%PDF-other-active'),
+          filename: 'active.pdf',
+          requestId: randomUUID(),
+        });
+        const own = await host.receive({
+          bytes: Buffer.from('%PDF-own-active'),
+          filename: 'own.pdf',
+          requestId: randomUUID(),
+        });
+        const foreignBefore = (await rows('intake_items')).filter(
+          (row) => row.confidential_scope_id === other.profileId,
+        );
+        expect(foreignBefore).toHaveLength(2);
+        expect(
+          (await exportResumeImportReceipts(db, owner)).map((row) => row.id),
+        ).toEqual([own.id]);
+        expect(await purgeResumeImportAccountData(db, owner)).toBe(1);
+        expect(await exportResumeImportReceipts(db, owner)).toEqual([]);
+        expect(
+          (await rows('intake_items')).filter(
+            (row) => row.confidential_scope_id === other.profileId,
+          ),
+        ).toEqual(foreignBefore);
+        expect((await otherHost.get(active.id)).id).toBe(active.id);
+        expect(
+          (await exportResumeImportReceipts(db, other)).map((row) => row.id),
+        ).toEqual([active.id]);
+      });
+
+      it.each([
+        'pending deletion',
+        'mismatched deletion scope',
+        'malformed active',
+        'unfinished action',
+      ])('refuses missing authority for %s rather than treating it as a completed tombstone', async (state) => {
+        const item = await host.receive({
+          bytes: Buffer.from('%PDF-invalid-provenance'),
+          filename: 'resume.pdf',
+          requestId: randomUUID(),
+        });
+        if (state !== 'malformed active') {
+          await host.delete(item.id);
+          if (state === 'pending deletion')
+            await db.query(
+              "UPDATE intake_deletions SET state='pending' WHERE item_id=?",
+              [item.id],
+            );
+          if (state === 'mismatched deletion scope')
+            await db.query(
+              'UPDATE intake_deletions SET confidential_scope_id=? WHERE item_id=?',
+              [randomUUID(), item.id],
+            );
+          if (state === 'unfinished action')
+            await withSystemContext(async () =>
+              (
+                await ObjectRegistry.getCollection('IntakeAction', { db })
+              ).create({
+                tenantId: owner.tenantId,
+                confidentialScopeId: owner.profileId,
+                itemId: item.id,
+                actionKey: randomUUID(),
+                state: 'outcome_unknown',
+                resultDigest: 'fixture-result',
+              }),
+            );
+        } else
+          await db.query("UPDATE intake_items SET data='{}' WHERE id=?", [
+            item.id,
+          ]);
+        const before = await rows('intake_items');
+        await expect(purgeResumeImportAccountData(db, owner)).rejects.toThrow(
+          'captured principal',
+        );
+        await expect(exportResumeImportReceipts(db, owner)).rejects.toThrow(
+          'captured principal',
+        );
+        expect(await rows('intake_items')).toEqual(before);
       });
 
       it('deletes an account with no imports without hosted provider configuration', async () => {
