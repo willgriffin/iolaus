@@ -11,6 +11,22 @@ import {
 
 export const sha256 = (bytes) =>
   createHash('sha256').update(bytes).digest('hex');
+
+function canonicalDigestReference(reference) {
+  const parts = reference.split('@');
+  assert.equal(parts.length, 2, 'One immutable image digest required.');
+  assert.match(parts[1], /^sha256:[a-f0-9]{64}$/);
+  let repository = parts[0];
+  const tag = repository.lastIndexOf(':');
+  if (tag > repository.lastIndexOf('/')) repository = repository.slice(0, tag);
+  assert.match(repository, /^[a-z0-9][a-z0-9._-]*(?::[0-9]+)?(?:\/[a-z0-9][a-z0-9._-]*)*$/);
+  const names = repository.split('/');
+  if (names.length === 1 || (!/[.:]/.test(names[0]) && names[0] !== 'localhost'))
+    names.unshift('docker.io');
+  if (names[0] === 'index.docker.io') names[0] = 'docker.io';
+  if (names[0] === 'docker.io' && names.length === 2) names.splice(1, 0, 'library');
+  return `${names.join('/')}@${parts[1]}`;
+}
 export function resolvePlatformManifest(
   reference,
   manifest,
@@ -124,7 +140,9 @@ export function resolvePublicPlatform(reference, run = execFileSync) {
   const [metadata] = JSON.parse(docker('image', 'inspect', platform));
   assert.equal(metadata.Os, 'linux');
   assert.equal(metadata.Architecture, 'amd64');
-  assert.ok(metadata.RepoDigests.includes(platform));
+  assert.ok(metadata.RepoDigests.some((reference) =>
+    canonicalDigestReference(reference) === canonicalDigestReference(platform)),
+  'Pulled platform must match the requested repository and digest.');
   return { platform, metadata };
 }
 

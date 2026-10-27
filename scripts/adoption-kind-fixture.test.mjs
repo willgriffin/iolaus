@@ -9,7 +9,18 @@ import {
   until,
   qualificationRegistryPullSecrets,
   assertRegistryPullIsolation,
+  qualificationStageMessage,
 } from './adoption-kind-fixture.mjs';
+
+test('qualification progress accepts static stages and never echoes unknown sensitive input', () => {
+  assert.equal(qualificationStageMessage('image-identity'), '[adoption] image-identity');
+  const sensitive = 'fixture-token-that-must-not-be-logged';
+  assert.throws(() => qualificationStageMessage(sensitive), (error) => {
+    assert.match(error.message, /Unknown qualification stage/);
+    assert.ok(!error.message.includes(sensitive));
+    return true;
+  });
+});
 
 test('ephemeral registry pull credentials are scoped to the two disposable namespaces', () => {
   assert.deepEqual(qualificationRegistryPullSecrets({}), []);

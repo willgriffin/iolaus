@@ -15,6 +15,7 @@ import {
 import {
   assertImageMetadata,
   resolvePlatformManifest,
+  resolvePublicPlatform,
   sha256,
 } from './adoption-images.mjs';
 
@@ -22,6 +23,30 @@ const images = {
   site: `ghcr.io/willgriffin/iolaus/site@sha256:${'a'.repeat(64)}`,
   extractor: `ghcr.io/willgriffin/iolaus/resume-import-extraction@sha256:${'b'.repeat(64)}`,
 };
+
+test('platform inspection accepts Docker Hub familiar digest names without accepting another registry', () => {
+  const raw = JSON.stringify({ schemaVersion: 2, config: {}, layers: [] });
+  const digest = `sha256:${sha256(raw)}`;
+  for (const [requested, inspected] of [
+    [`docker.io/library/postgres@${digest}`, `postgres@${digest}`],
+    [`kindest/node:v1.37.0@${digest}`, `kindest/node@${digest}`],
+    [`index.docker.io/library/postgres@${digest}`, `postgres@${digest}`],
+    [`registry.example:5000/team/image:version@${digest}`, `registry.example:5000/team/image@${digest}`],
+  ]) {
+    const run = (binary, args) => {
+      assert.equal(binary, 'docker');
+      if (args[0] === 'buildx') return raw;
+      if (args[0] === 'pull') return 'pulled';
+      assert.deepEqual(args.slice(0, 2), ['image', 'inspect']);
+      return JSON.stringify([{ Os: 'linux', Architecture: 'amd64', RepoDigests: [inspected] }]);
+    };
+    assert.equal(resolvePublicPlatform(requested, run).platform, requested);
+    assert.throws(() => resolvePublicPlatform(requested, (binary, args) =>
+      args[0] === 'image'
+        ? JSON.stringify([{ Os: 'linux', Architecture: 'amd64', RepoDigests: [`ghcr.io/other/image@${digest}`] }])
+        : run(binary, args)));
+  }
+});
 
 test('inactive candidate preserves actual entrypoints, restricted identities, singleton and drain', () => {
   const runtime = candidateRuntime(images, syntheticAuthContract);

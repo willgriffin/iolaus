@@ -22,6 +22,22 @@ export const fixtureIdentity = Object.freeze({
   applicationId: 'iolaus-qualification',
   databaseName: 'iolaus_qualification',
 });
+const qualificationStages = new Set([
+  'preflight', 'public-artifacts', 'image-identity', 'toolchain', 'kind-create',
+  'fixture-setup', 'missing-schema-refusal', 'writer-refusal', 'clean-migration',
+  'runtime-readiness', 'http-and-operator', 'worker-and-monitor',
+  'source-and-extractor', 'evidence', 'cleanup-started', 'cleanup-completed',
+]);
+let activeQualificationStage = 'preflight';
+export function qualificationStageMessage(stage) {
+  assert.ok(qualificationStages.has(stage), 'Unknown qualification stage.');
+  return `[adoption] ${stage}`;
+}
+function checkpoint(stage) {
+  const message = qualificationStageMessage(stage);
+  activeQualificationStage = stage;
+  console.log(message);
+}
 
 // Only this disposable fixture receives the workflow's temporary read token.
 // The returned objects are sent to the fresh API on stdin, never to a file/log.
@@ -141,6 +157,7 @@ export async function qualifyKind({
   images,
   output,
 }) {
+  checkpoint('preflight');
   requirePublishedPrerequisites(prerequisites);
   for (const name of ['postgresImage', 'kindNodeImage', 'maintenanceImage']) {
     assert.match(
@@ -170,6 +187,7 @@ export async function qualifyKind({
       );
     }
   };
+  checkpoint('public-artifacts');
   const shared = await verifyPublicArtifacts({
     prerequisites,
     runnerRoot,
@@ -186,6 +204,7 @@ export async function qualifyKind({
   const source = run('git', ['rev-parse', 'HEAD']).trim();
   const tree = run('git', ['rev-parse', 'HEAD^{tree}']).trim();
   const lock = sha256(readFileSync('pnpm-lock.yaml'));
+  checkpoint('image-identity');
   const resolvedImages = resolveImages(images, source, lock);
   prerequisites = structuredClone(prerequisites);
   for (const name of ['postgresImage', 'kindNodeImage', 'maintenanceImage'])
@@ -200,6 +219,7 @@ export async function qualifyKind({
   const namespace = 'iolaus-qualification';
   requireIsolatedContext(context, namespace);
   const kubeconfig = join(scratch, 'kubeconfig');
+  checkpoint('toolchain');
   const toolchain = await import(
     pathToFileURL(join(runnerRoot, 'scripts/deployment-toolchain.mjs'))
   );
@@ -236,6 +256,7 @@ export async function qualifyKind({
       !run(tools.kind, ['get', 'clusters']).trim().split(/\s+/).includes(name),
     );
     created = true;
+    checkpoint('kind-create');
     run(tools.kind, [
       'create',
       'cluster',
@@ -262,6 +283,7 @@ export async function qualifyKind({
       ],
       'synthetic-only',
     );
+    checkpoint('fixture-setup');
     if (registrySecrets.length) {
       apply(registrySecrets);
     }
@@ -502,6 +524,7 @@ export async function qualifyKind({
         ),
       })),
     );
+    checkpoint('missing-schema-refusal');
     apply([
       {
         apiVersion: 'v1',
@@ -545,6 +568,7 @@ export async function qualifyKind({
     );
     checks.push('actual-runtime-missing-schema-refusal-without-ddl');
     // An unrelated active Pod must prevent schema/ledger creation.
+    checkpoint('writer-refusal');
     apply([
       {
         apiVersion: 'v1',
@@ -597,6 +621,7 @@ export async function qualifyKind({
       '--wait=true',
       '--timeout=60s',
     );
+    checkpoint('clean-migration');
     release.release.attempt = 2;
     apply(render());
     await until(
@@ -610,6 +635,7 @@ export async function qualifyKind({
         `GRANT CONNECT ON DATABASE ${fixtureIdentity.databaseName} TO iolaus_runtime, iolaus_monitor;\nGRANT USAGE ON SCHEMA public TO iolaus_runtime, iolaus_monitor;\nGRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO iolaus_runtime;\nGRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO iolaus_runtime;\nGRANT SELECT (status,finished_at,started_at) ON source_crawls TO iolaus_monitor;\nGRANT SELECT (queue,status) ON _smrt_jobs TO iolaus_monitor;\n`,
       ),
     );
+    checkpoint('runtime-readiness');
     release.release.phase = 'verify';
     release.release.sequence++;
     apply(render());
@@ -653,6 +679,7 @@ export async function qualifyKind({
       }
       checks.push('ephemeral-read-only-registry-pull-without-container-credential-projection');
     }
+    checkpoint('http-and-operator');
     const webPod = get('deployment', 'iolaus-web').spec.selector.matchLabels;
     const selector = Object.entries(webPod)
       .map(([key, value]) => `${key}=${value}`)
@@ -691,6 +718,7 @@ export async function qualifyKind({
     checks.push('actual-image-shared-operator-projection-and-allowlist-revalidation');
     // SIGTERM must produce a clean exit after the actual worker started.
     // This idle-queue scenario does not claim inflight provider cancellation.
+    checkpoint('worker-and-monitor');
     for (const name of ['task', 'schedule']) {
       const deployment = get('deployment', `iolaus-${name}`);
       const selection = Object.entries(deployment.spec.selector.matchLabels)
@@ -740,6 +768,7 @@ export async function qualifyKind({
       '--timeout=90s',
     );
     checks.push('actual-monitor-with-column-restricted-database-role');
+    checkpoint('source-and-extractor');
     const parityFile = join(scratch, 'parity.json');
     run('node', [
       'scripts/deployed-parity.mjs',
@@ -805,15 +834,21 @@ export async function qualifyKind({
       scope: 'synthetic-kind-image-qualification',
       providerVendorEffectsQualified: false,
     };
+    checkpoint('evidence');
     writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`, {
       flag: 'wx',
     });
     return evidence;
   } finally {
-    if (created) run(tools.kind, ['delete', 'cluster', '--name', name]);
-    rmSync(scratch, { force: true, recursive: true });
-    process.env.PATH = originalPath;
-    process.chdir(root);
+    console.log(qualificationStageMessage('cleanup-started'));
+    try {
+      if (created) run(tools.kind, ['delete', 'cluster', '--name', name]);
+    } finally {
+      rmSync(scratch, { force: true, recursive: true });
+      process.env.PATH = originalPath;
+      process.chdir(root);
+    }
+    console.log(qualificationStageMessage('cleanup-completed'));
   }
 }
 
@@ -841,7 +876,7 @@ if (
     )
     .catch(() => {
       console.error(
-        'Iolaus synthetic adoption qualification failed; no success receipt is authorized.',
+        `Iolaus synthetic adoption qualification failed at ${activeQualificationStage}; no success receipt is authorized.`,
       );
       process.exitCode = 1;
     });

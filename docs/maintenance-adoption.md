@@ -39,6 +39,11 @@ An index is resolved to exactly
 one Linux/amd64 platform manifest; both index and child bytes are digest checked.
 A local Docker ID, mutable tag, wrong architecture, unknown source or wrong lock
 fails. No release-image promotion wiring changes in this preparation.
+Docker's familiar Hub names and optional tag spelling are normalized only when
+matching inspected repository+digest identity; registry bytes and the exact
+requested digest remain authoritative. Static `[adoption]` stage checkpoints
+locate a failure without emitting credential-bearing child stderr. Cleanup
+completion is logged only after the disposable cluster is deleted.
 
 ## Inactive target
 
