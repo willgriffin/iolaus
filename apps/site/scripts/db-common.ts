@@ -6,6 +6,8 @@ import '../src/lib/server/manifest-preload.js';
 // Evaluate the ingestion closure before the schema diff so its private intake
 // tables become registered migration candidates in standalone `tsx` scripts.
 import '@happyvertical/smrt-ingestion/models';
+// Private chat tables are declared through public metadata-only registration.
+import '../src/lib/server/deployment/register-schemas.js';
 import {
   ObjectRegistry,
   generateSchemaDiff,

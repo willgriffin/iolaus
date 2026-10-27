@@ -38,7 +38,7 @@ export interface OpportunitySourceFingerprintBackfillResult {
  * write is itself fenced on the fingerprint still being null.
  */
 export async function backfillOpportunitySourceFingerprints(
-  db: SmrtDatabase,
+  db: Pick<SmrtDatabase, 'query'>,
   options: { batchSize?: number; maxRows?: number } = {},
 ): Promise<OpportunitySourceFingerprintBackfillResult> {
   const batchSize = Math.max(

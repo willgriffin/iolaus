@@ -160,3 +160,101 @@ matrix in [the test matrix](maintenance-adoption-test-matrix.md) remain separate
 required evidence. Flux Git phase publication/acknowledgement is covered by the
 upstream disposable exercise and must be rerun against the released runner; this
 fixture does not impersonate a Flux integration run. Rollout remains held.
+
+## Dedicated migration and deployed startup
+
+`pnpm --filter @willgriffin/iolaus-site db:release-migrate -- --maintenance-window`
+is PostgreSQL-only. It requires the chart's `SMRT_APP_NAME`,
+`SMRT_APP_ENVIRONMENT`, `SMRT_RELEASE_ID` and `SMRT_RELEASE_ATTEMPT`; it never
+infers approval from a supplied quiescence flag. `db:migrate` remains available
+for documented local/standalone compatibility; the inactive candidate alone
+uses the dedicated command. Local SQLite onboarding is unchanged.
+
+The pinned global application migration lock remains held through schema,
+data and final verification. The released SQL adapter owns pinned sessions and
+cleans their advisory locks on release. MigrationTracker remains the schema
+history authority and the explicit maintenance window retains NULL-equal index
+semantics. Schema compatibility and ancillary guard helpers run as named native
+operations, not shell commands recorded as schema migrations. Released integrity
+bridges are restored immediately after schema success and attempted independently
+on failure; final activation requires validated source/tag guards.
+
+DeploymentPhaseTracker stores permanent application/environment/data-step IDs,
+not release timestamps. The catalog records lifecycle values, achievement
+placement, source provenance/providers/fingerprints, identity readiness, canonical
+seeds and schedules. Checksums bind the logical specification and its enumerated
+implementation source bytes (the native identity helper is additionally bound to
+the published dependency closure). Changing an implementation requires a new
+logical ID. Retain completed markers permanently.
+
+Lifecycle, achievement and source-fingerprint writes use only the tracker's
+query-only transactional connection, so their writes and completion marker commit
+or roll back together. Collection/native helpers that own independent transactions
+use reconciled steps instead: independent inspectors verify persisted roles,
+permission mappings, types, vocabulary, control existence, provenance/provider
+constraints, identity keys/links and schedule fields. The canonical role seeder is
+additive (`prune:false`); expected grants must exist while operator-added grants
+remain intact. Existing intelligence-control choices are preserved. A legacy
+native-import completion marker can be adopted; an absent marker with existing
+legacy input is ambiguous and becomes `needs-repair`. Empty legacy input is a
+verified no-op. Personal resume imports, source imports and asset rewrites remain
+permanently disabled and are absent from the executable catalog.
+
+Safety is checked on every tracker entry, including a completed-step replay, and
+immediately before schema/data effects. It compares concrete registry schemas
+against the built app artifact and released dependency manifests, reads fresh
+TLS-verified namespace inventory and immutable Pod/Job identity, and refuses
+non-maintenance database sessions. Internal checkpoint/failure marker writes stay
+pinned and remain possible after safety is lost; they are not additional mutation
+authorization. The observer never kills sessions or mutates Kubernetes resources.
+It refuses missing projections, unknown or terminating writers, nonterminal Jobs,
+unsuspended CronJobs and non-drained writer controllers. Retained failed Jobs need
+a true terminal `Failed` condition. The monitor is drained during migration.
+
+Only the approved maintenance responder is exempt: the immutable policy binds its
+exact image digest, fixed nginx command, ConfigMap byte hash, service accounts and
+release identity; the actual Deployment/ReplicaSet/Pod UID chain and absence of
+credential/token/extra containers are inspected. These are actual API reads,
+not trusted labels or a `writer:false` assertion.
+
+Static manifests also carry inheritance-only metadata for undecorated
+SmrtClass/SmrtObject/SmrtCollection bases; those are not application tables. Web
+and task startup verify every concrete registered schema against static metadata
+and actual PostgreSQL columns/types/nullability, then use the public read-only
+schema diff to refuse pending changes. Chat's private model closure is registered
+with the public metadata-only `ObjectRegistry.registerFromManifest` API; importing
+its full facade would unnecessarily evaluate unrelated same-named message models.
+Released manifests supply transitive prompts/secrets/playbooks/reports metadata.
+The plain-Node scheduler checks its actual persisted jobs/events/agent-schedule
+closure from the same built artifact. All deployed processes require a role denied
+schema/database creation and table ownership; queue recovery and normal queue
+writes occur only after readiness. No startup path creates missing tables.
+
+## Reproducing migration evidence
+
+Use the repository-pinned Node/pnpm toolchain and an isolated, disposable
+PostgreSQL16 database with a fixture administrator allowed to create/drop synthetic
+databases and roles. Never point these commands at a live database. The tests
+create uniquely named schemas/databases/roles, retain a sentinel across two full
+catalog passes, and remove only their own fixtures. The catalog test selects its
+self-hosted synthetic identity before imports; a local profile never redirects
+its database to the supplied PostgreSQL URL.
+
+```bash
+export IOLAUS_RELEASE_TEST_DATABASE_URL='postgresql://<fixture-role>:<fixture-password>@127.0.0.1:<fixture-port>/<fixture-database>'
+pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/db-release-executor.integration.spec.ts scripts/db-release-catalog.integration.spec.ts
+pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/db-release-inspectors.spec.ts src/lib/server/deployment/observer.spec.ts scripts/db-common.spec.ts src/lib/server/application-runtime.spec.ts
+node --test scripts/smrt-deployment-schema.test.mjs
+```
+
+The real PostgreSQL suite covers marker/data rollback, concurrent executors,
+changed checksums, fresh safety on completed replay, lost COMMIT acknowledgement
+and retry, unresolved reconciliation, runtime DDL denial with permitted data
+writes, missing queue tables and restricted monitor reads. The full application
+catalog test exercises clean bootstrap, existing-schema replay, seeded state,
+validated integrity and sentinel retention. Its safety callback validates actual
+static/registry agreement on an isolated fixture; it does not impersonate
+Kubernetes observation. Pure observer tests verify chart-shaped maintenance and
+failure decisions. The image/Kind workflow is the separate real API/TLS/projected
+identity boundary. Unexecuted image/provider/Flux cases remain unqualified; local
+PostgreSQL success does not authorize rollout.
