@@ -41,6 +41,7 @@ export function syntheticRuntimeValues(password) {
     XDG_CACHE_HOME: '/tmp/.cache',
     IOLAUS_AUTH_MODE: 'magic-link',
     IOLAUS_WORKSPACE_MODE: 'shared',
+    IOLAUS_OIDC_ADMIN_EMAILS: 'operator@example.invalid',
     IOLAUS_PUBLIC_URL: 'https://iolaus.example.invalid',
     ADDRESS_HEADER: 'x-forwarded-for',
     IOLAUS_MAGIC_LINK_SECRET: randomBytes(32).toString('hex'),
@@ -602,6 +603,32 @@ export async function qualifyKind({
     const http = String.raw`(async()=>{const a=require('node:assert/strict');for(const [path,status,method] of [['/',200,'GET'],['/live',200,'GET'],['/health',200,'GET'],['/api/job-search/browse',401,'POST']]){const r=await fetch('http://127.0.0.1:3000'+path,{method,redirect:'manual',headers:{'content-type':'application/json'},...(method==='POST'?{body:'{}'}:{})});a.equal(r.status,status,path);a.notEqual(r.status,500);} })().catch(()=>process.exit(1))`;
     kubectl('-n', namespace, 'exec', pod, '--', 'node', '-e', http);
     checks.push('actual-image-http-positive-private-denial-no-500');
+    const taskSelector = Object.entries(
+      get('deployment', 'iolaus-task').spec.selector.matchLabels,
+    ).map(([key, value]) => `${key}=${value}`).join(',');
+    const taskPod = JSON.parse(kubectl(
+      '-n', namespace, 'get', 'pods', '-l', taskSelector, '-o', 'json',
+    )).items.find((entry) => entry.status.phase === 'Running').metadata.name;
+    const operator = String.raw`
+      import assert from 'node:assert/strict';
+      import { withTenant } from '@happyvertical/smrt-tenancy';
+      import { requireSourceCrawlOperator } from './src/lib/server/source-crawl-operator.ts';
+      assert.equal(process.env.IOLAUS_OIDC_ADMIN_EMAILS, 'operator@example.invalid');
+      await withTenant({tenantId:'fixture-tenant', userId:'fixture-operator',
+        user:{id:'fixture-operator',email:'operator@example.invalid',status:'active'}}, async()=>{
+        assert.doesNotThrow(()=>requireSourceCrawlOperator());
+        process.env.IOLAUS_OIDC_ADMIN_EMAILS='revoked@example.invalid';
+        assert.throws(()=>requireSourceCrawlOperator(), /active installation operator/);
+      });
+      await withTenant({tenantId:'fixture-tenant', userId:'fixture-member',
+        user:{id:'fixture-member',email:'member@example.invalid',status:'active'}}, async()=>{
+        assert.throws(()=>requireSourceCrawlOperator(), /active installation operator/);
+      });
+    `;
+    kubectl('-n', namespace, 'exec', taskPod, '--', 'sh', '-c',
+      'cd /app/apps/site && exec node --import tsx --input-type=module -e "$1"',
+      'iolaus-operator-probe', operator);
+    checks.push('actual-image-shared-operator-projection-and-allowlist-revalidation');
     // SIGTERM must produce a clean exit after the actual worker started.
     // This idle-queue scenario does not claim inflight provider cancellation.
     for (const name of ['task', 'schedule']) {

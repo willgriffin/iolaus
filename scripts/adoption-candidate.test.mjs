@@ -246,6 +246,40 @@ test('candidate requires explicit reviewed auth and preserves private OIDC key s
   );
 });
 
+test('shared auth modes preserve explicit operator allowlists across runtime actors', () => {
+  for (const contract of [
+    syntheticAuthContract,
+    {
+      authMode: 'oidc',
+      workspaceMode: 'shared',
+      oidcIssuerMode: 'root',
+      optionalOidcKeys: [],
+    },
+  ]) {
+    const runtime = candidateRuntime(images, contract);
+    for (const name of ['web', 'task', 'schedule'])
+      assert.ok(runtime.workloads[name].env.some(
+        ({ name }) => name === 'IOLAUS_OIDC_ADMIN_EMAILS',
+      ));
+    const values = Object.fromEntries(runtime.workloads.web.env.concat(
+      runtime.workloads.task.env, runtime.workloads.schedule.env,
+    ).map(({ name }) => [name, 'fixture-value']));
+    Object.assign(values, {
+      IOLAUS_DEPLOYMENT_PROTOCOL: 'smrt-release-v1',
+      IOLAUS_WORKSPACE_MODE: 'shared',
+      IOLAUS_OIDC_ADMIN_EMAILS: 'owner@example.invalid,operator@example.invalid',
+    });
+    assert.equal(actorSecretData(runtime, values, 'runtime').IOLAUS_OIDC_ADMIN_EMAILS,
+      values.IOLAUS_OIDC_ADMIN_EMAILS);
+    assert.throws(() => actorSecretData(runtime,
+      { ...values, IOLAUS_OIDC_ADMIN_EMAILS: undefined }, 'runtime'), /Required/);
+    assert.equal(actorSecretData(runtime,
+      { ...values, IOLAUS_OIDC_ADMIN_EMAILS: '' }, 'runtime').IOLAUS_OIDC_ADMIN_EMAILS, '');
+    assert.throws(() => actorSecretData(runtime,
+      { ...values, IOLAUS_WORKSPACE_MODE: 'private', IOLAUS_OIDC_ADMIN_EMAILS: '' }, 'runtime'), /empty/);
+  }
+});
+
 test('monitor and migration Secrets and env exclude runtime authentication and asset authority', () => {
   const runtime = candidateRuntime(images, syntheticAuthContract);
   const allKeys = new Set(

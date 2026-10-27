@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { withTenant } from '@happyvertical/smrt-tenancy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -65,6 +66,55 @@ const ownerSession = {
 };
 
 describe('private administrative authorization matrix', () => {
+  it.each([
+    'magic-link',
+    'oidc',
+  ])('preserves shared %s operator revalidation through adoption Secret projection', async (authMode) => {
+    // Exercise the CLI helpers in their Node runtime, then use the real auth guard.
+    const projected: Record<string, string> = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `
+      import { actorSecretData, candidateRuntime, syntheticAuthContract } from './scripts/adoption-candidate.mjs';
+      import { syntheticRuntimeValues } from './scripts/adoption-kind-fixture.mjs';
+      const authMode=process.argv[1];
+      const contract=authMode==='magic-link' ? syntheticAuthContract : {
+        authMode,workspaceMode:'shared',oidcIssuerMode:'root',optionalOidcKeys:[]};
+      const runtime=candidateRuntime({
+        site:'ghcr.io/willgriffin/iolaus/site@sha256:'+'a'.repeat(64),
+        extractor:'ghcr.io/willgriffin/iolaus/resume-import-extraction@sha256:'+'b'.repeat(64)},contract);
+      const values={...syntheticRuntimeValues('a'.repeat(48)),
+        DATABASE_URL:'postgresql://fixture:fixture@127.0.0.1/fixture',
+        IOLAUS_AUTH_MODE:authMode,IOLAUS_OIDC_ADMIN_EMAILS:'owner@example.invalid',
+        IOLAUS_OIDC_SERVER_URL:'https://identity.example.invalid',
+        IOLAUS_OIDC_ISSUER_MODE:'root',IOLAUS_OIDC_CLIENT_ID:'fixture'};
+      console.log(JSON.stringify(actorSecretData(runtime,values,'runtime')));
+      `,
+          authMode,
+        ],
+        { encoding: 'utf8', cwd: new URL('../../../../../', import.meta.url) },
+      ),
+    );
+    for (const name of environmentNames) {
+      if (projected[name] === undefined) delete process.env[name];
+      else process.env[name] = projected[name];
+    }
+    expect(isConfiguredOidcAdminEmail(ownerSession.user.email)).toBe(true);
+    await withTenant(
+      { tenantId: 'tenant-1', userId: 'user-1', user: ownerSession.user },
+      async () => {
+        expect(() => requireSourceCrawlOperator()).not.toThrow();
+        process.env.IOLAUS_OIDC_ADMIN_EMAILS = 'revoked@example.invalid';
+        expect(isConfiguredOidcAdminEmail(ownerSession.user.email)).toBe(false);
+        expect(() => requireSourceCrawlOperator()).toThrow(
+          'active installation operator',
+        );
+      },
+    );
+  });
   it('permits the source worker operator without login mail settings and observes allowlist revocation', async () => {
     hostedEnvironment();
     process.env.IOLAUS_AUTH_MODE = 'magic-link';

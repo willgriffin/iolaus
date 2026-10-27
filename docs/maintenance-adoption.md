@@ -37,8 +37,12 @@ reviewed-contract.json /tmp/target-runtime.json`. The reviewed non-secret contra
 must explicitly select `authMode` and `workspaceMode`; there is no auth default.
 OIDC additionally requires `oidcIssuerMode` (`root` or `realm`) and an explicit
 `optionalOidcKeys` list limited to `IOLAUS_OIDC_CLIENT_SECRET` and
-`IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS`. Private OIDC requires administrator-email
-configuration; realm mode requires a realm key, while root mode excludes it.
+`IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS`. Both auth modes require the named
+`IOLAUS_OIDC_ADMIN_EMAILS` key for web, task and schedule, preserving the reviewed
+installation operator allowlist. An explicit empty value selects no operators
+in shared mode; omission fails. Private OIDC requires a nonempty administrator-email
+configuration. Monitor and migration never receive this authority. Realm mode
+requires a realm key, while root mode excludes it.
 Preserve the existing deployment's reviewed authentication and workspace contract;
 this preparation does not choose or alter Iolaus's live auth profile. Images must already be resolved platform manifests by
 `scripts/adoption-images.mjs`; the qualification entrypoint does this itself.
@@ -143,7 +147,9 @@ schema/ledger table creation. After that writer is removed, attempt2 must finish
 using a real TLS-verified projected observer identity and PostgreSQL. It then
 starts the actual web/task/schedule/extractor images, checks Pod platform imageIDs,
 checks positive liveness/readiness and an anonymous private HTTP denial (never
-accepting HTTP500), sends SIGTERM to running workers and requires exit0/restart,
+accepting HTTP500), verifies projected operator allowlist and allow/deny/revocation
+in the actual task image's native tenant context, sends SIGTERM to running workers
+and requires exit0/restart,
 and executes the monitor using column-restricted database grants. Existing
 `deployed-parity.mjs` checks raw source bytes and installed dependencies inside
 the actual site image, and the existing extractor qualification executes its
@@ -158,7 +164,8 @@ or operator-written `passed:true` does not satisfy this contract.
 This is synthetic image qualification: the asset endpoint exercises real
 HeadBucket HTTP readiness but is not an S3 vendor; mail settings do not send mail;
 OCR is not exercised; worker SIGTERM uses idle queues and does not prove inflight
-provider cancellation. Real provider effects and the durable PostgreSQL fault
+provider cancellation. The synthetic operator context does not prove login-provider
+or queued-job principal revalidation. Real provider effects and the durable PostgreSQL fault
 matrix in [the test matrix](maintenance-adoption-test-matrix.md) remain separate
 required evidence. Flux Git phase publication/acknowledgement is covered by the
 upstream disposable exercise and must be rerun against the released runner; this

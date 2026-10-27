@@ -60,6 +60,7 @@ export function authenticationKeys(contract) {
     );
     return [
       'IOLAUS_AUTH_MODE',
+      'IOLAUS_OIDC_ADMIN_EMAILS',
       'IOLAUS_MAGIC_LINK_SECRET',
       'SMTP_HOST',
       'SMTP_USER',
@@ -98,9 +99,7 @@ export function authenticationKeys(contract) {
     'IOLAUS_OIDC_ISSUER_MODE',
     'IOLAUS_OIDC_CLIENT_ID',
     ...(contract.oidcIssuerMode === 'realm' ? ['IOLAUS_OIDC_REALM'] : []),
-    ...(contract.workspaceMode === 'private'
-      ? ['IOLAUS_OIDC_ADMIN_EMAILS']
-      : []),
+    'IOLAUS_OIDC_ADMIN_EMAILS',
     ...contract.optionalOidcKeys,
   ];
 }
@@ -153,7 +152,9 @@ export function actorSecretData(runtime, values, role) {
         `Required ${role} configuration key missing: ${key}`,
       );
       assert.ok(
-        values[key].length > 0,
+        values[key].length > 0 ||
+          (key === 'IOLAUS_OIDC_ADMIN_EMAILS' &&
+            values.IOLAUS_WORKSPACE_MODE === 'shared'),
         `Required ${role} configuration key empty: ${key}`,
       );
       return [key, values[key]];
