@@ -1,0 +1,24 @@
+# Maintenance adoption test evidence (#236)
+
+No row below is live qualification until its command has actually executed on
+its named inputs. The manual workflow currently blocks on public artifact pins.
+
+| Trigger | Positive / negative assertion | Actor / context / executor | Dialect / external edge | Level and exact command |
+| --- | --- | --- | --- | --- |
+| Candidate generation | Five actual commands, explicit versioned Secret keys, fixed hardening, singleton and270s drain; mutable/wrong images refused | CI pure builder; no DB | In-process; no external access | `node --test scripts/adoption-candidate.test.mjs` |
+| Platform image input | Raw manifest/index digest verified; wrong/ambiguous arch, source, lock or UID refused | Trusted CI registry inspector | Registry immutable public OCI bytes; Docker metadata | `node --test scripts/adoption-candidate.test.mjs`; actual path `node scripts/adoption-kind-fixture.mjs deploy/self-hosted/adoption/prerequisites.json /tmp/iolaus-smrt-runner /tmp/smrt-app-0.2.0.tgz /tmp/iolaus-adoption-images.json /tmp/iolaus-adoption-evidence.json` |
+| Isolated fixture selection | Only freshly created kind-iolaus-236 context and fixed synthetic namespace allowed | CI fixture; no inherited cluster credentials | Kind API | `node --test scripts/adoption-kind-fixture.test.mjs` |
+| Unknown writer before bootstrap | Actual wrapper refuses; public schema/ledger table count unchanged | Maintenance role; real wrapper; public durable tracker session | PostgreSQL; TLS Kubernetes inventory/projected identity | Manual workflow actual fixture command above |
+| Clean migration | Actual retained attempt2 Job succeeds; no supplied safety flag | Dedicated maintenance role + migration-observer SA; wrapper/session lock | PostgreSQL; native token/CA and exact maintenance policy | Manual workflow actual fixture command above |
+| Runtime startup | Actual web/task/schedule/extractor become ready with immutable Pod imageIDs | DDL-denied runtime role; read-only startup checks before queue writes | PostgreSQL; synthetic HeadBucket HTTP and magic-link settings | Manual workflow actual fixture command above |
+| HTTP | `/live`, `/health`200; anonymous private POST401; HTTP500 never accepted | Actual site image; anonymous HTTP actor | Real HTTP loopback from exact web Pod | Manual workflow actual fixture command above |
+| Worker termination | Started idle task/scheduler receive SIGTERM, exit0 and restart within270s | Actual worker processes; runtime role | PostgreSQL; no inflight external provider job | Manual workflow actual fixture command above |
+| Monitor | Count-only monitor succeeds with column-restricted SELECT | Separate monitor principal; scheduled image command | PostgreSQL aggregate-safe columns | Manual workflow actual fixture command above |
+| Source and extractor envelopes | Actual image raw source bytes, installed versions and extractor HTTP cases match | Existing parity/extractor frameworks | Network-disabled Docker execution | `node scripts/deployed-parity.mjs --image-ref <platform-site-ref> --evidence /tmp/parity.json`; `node scripts/resume-extractor-candidate.mjs <platform-extractor-ref> <source> <lock>` |
+| Durable migration fault matrix | Upgrade/sentinel retention, transaction rollback+marker atomicity, lost COMMIT/retry, concurrent sessions, changed checksum refusal, ambiguous reconciliation needs-repair, completed skip with fresh safety; disabled legacy never executes | Dedicated maintenance role; real session/transaction executor; isolated synthetic data | Real PostgreSQL, separate-session concurrency; SQLite compatibility separate | Migration executor's owning integration tests and parent documented fixture validation; **not claimed by builder or image smoke tests** |
+| Full deployment lifecycle | Complete rendering, RBAC/admission refusal, five exact Git/Flux acknowledgements, recovery, retained failure and successful repair | Public runner/reconciler observer; disposable platform | Kind/Flux/PostgreSQL/public chart OCI | Released public `scripts/deployment-exercise.mjs` under its documented toolchain; **not run by image smoke fixture** |
+| Real provider edges / inflight drain | Approved private OCR/S3/mail/auth behavior and executing task cancellation | Platform/provider actors; synthetic provider-specific jobs | Approved isolated provider fixtures only | Required adoption acceptance evidence; **not covered by HeadBucket stub or idle worker test** |
+
+Root gates remain `pnpm format-check`, `pnpm lint`, `pnpm check`, `pnpm test`,
+`pnpm build`, `pnpm knowledge:check`; database commands target isolated fixtures
+only. Local in-process results are not a substitute for the real rows above.
