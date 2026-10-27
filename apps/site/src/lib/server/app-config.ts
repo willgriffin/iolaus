@@ -401,7 +401,10 @@ function configuredRootOidcIssuer(
   }
 }
 
-function configuredAdminEmails(environment: AppConfigEnvironment): string[] {
+/** Current operator identities; independent of login-provider transport readiness. */
+export function configuredAdminEmails(
+  environment: AppConfigEnvironment = process.env,
+): string[] {
   const emails = stringValue(environment.IOLAUS_OIDC_ADMIN_EMAILS)
     .split(',')
     .map((value) => value.trim().toLowerCase())

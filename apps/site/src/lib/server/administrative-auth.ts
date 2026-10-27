@@ -1,6 +1,6 @@
 import {
+  configuredAdminEmails,
   getAppConfig,
-  getAuthConfiguration,
   isSharedHosted,
 } from './app-config.js';
 
@@ -39,14 +39,11 @@ function normalizedEmail(value: string | null | undefined): string {
 export function isConfiguredOidcAdminEmail(
   email: string | null | undefined,
 ): boolean {
-  const configuration = getAuthConfiguration();
-  const adminEmails =
-    configuration.kind === 'self-hosted'
-      ? configuration.oidc.adminEmails
-      : configuration.kind === 'magic-link'
-        ? configuration.magicLink.adminEmails
-        : null;
-  if (!adminEmails) return false;
+  if (getAppConfig().runtimeProfile === 'local') return false;
+  // Workers authenticate an existing bound principal; they do not send login
+  // mail and intentionally have no SMTP credentials. Keep the validated
+  // current allowlist independent from full login-provider readiness.
+  const adminEmails = configuredAdminEmails();
 
   const candidate = normalizedEmail(email);
   return Boolean(candidate) && adminEmails.includes(candidate);

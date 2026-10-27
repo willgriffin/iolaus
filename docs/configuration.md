@@ -108,6 +108,9 @@ After upgrading an existing shared installation, the operator must sign in again
 to receive that role. Removing the address from the operator list immediately
 rejects existing operator-role sessions and queued work at their next verified
 identity boundary; signing in again provisions the ordinary member role.
+Operator checks use the validated current allowlist independently of mail-provider
+readiness, so task workers do not need SMTP credentials. Browser login still
+requires the complete authentication provider configuration.
 
 The link is a single-use, signed token (SMRT `MagicLinkService`, stored in
 `users_magic_link_tokens`) that expires after 15 minutes, delivered through the
