@@ -248,6 +248,11 @@ let pendingCalls = 0;
 export function liveVoiceCalls(): number {
   return calls.size;
 }
+/** The provider says the call no longer exists: that is a confirmed end. */
+function callAlreadyGone(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 404 || status === 410;
+}
 
 /** Test seam: forget every window and live call. */
 export function resetPublicAssistantState() {
@@ -432,10 +437,12 @@ export async function openPublicProfileVoice(
     throw new AssistantHttpError(503, 'Voice unavailable.');
   const headers = assistantCorsHeaders(request);
   const offer = await readOffer(request);
+  // Busy lines are checked first so a turned-away retry does not spend a
+  // start from the address or handle windows.
   if (
+    calls.size + pendingCalls >= ASSISTANT_LIMITS.voiceConcurrent ||
     !voiceByAddress.allow(`voice:${clientAddressKey(address)}`) ||
-    !voiceByHandle.allow(`voice:${handle}`) ||
-    calls.size + pendingCalls >= ASSISTANT_LIMITS.voiceConcurrent
+    !voiceByHandle.allow(`voice:${handle}`)
   )
     throw new AssistantHttpError(429, 'Voice lines are busy.');
   pendingCalls += 1;
@@ -457,16 +464,25 @@ export async function openPublicProfileVoice(
     });
     callId = call.callId;
     const id = randomUUID();
-    // The slot is released only once the provider confirms the hang-up; a
-    // failed hang-up retries and keeps the line counted as busy meanwhile.
+    // The slot is released when the provider confirms the hang-up, or says
+    // the call is already gone (the visitor usually hangs up first). Other
+    // failures retry and keep the line counted as busy; once the retries are
+    // spent the slot is freed anyway — a permanently stuck line would be a
+    // self-inflicted outage, and the provider's own session cap bounds what
+    // is left of such a call.
     const end = (attempt: number) => {
       void hangup(call.callId, { apiKey }).then(
         () => calls.delete(id),
-        () => {
+        (error: unknown) => {
+          if (callAlreadyGone(error)) {
+            calls.delete(id);
+            return;
+          }
           if (attempt >= ASSISTANT_LIMITS.hangupRetries) {
             console.error(
-              '[public-profile-assistant] voice hang-up failed; slot stays reserved',
+              `[public-profile-assistant] voice hang-up failed ${attempt} times; releasing the line (call ${call.callId})`,
             );
+            calls.delete(id);
             return;
           }
           const retry = setTimeout(

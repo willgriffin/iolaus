@@ -627,7 +627,7 @@
     "/api/public/v1/profiles/{handle}/voice": {
       "post": {
         "summary": "Open a bounded WebRTC voice call with the published profile.",
-        "description": "Anonymous; requires the deployment's dedicated voice key. Per client address 4 calls per hour; 3 concurrent calls per replica; the call is hung up after x-voice-seconds. The same Origin allowlist applies.",
+        "description": "Anonymous; requires the deployment's dedicated voice key. Per client address 4 calls per hour; per handle 12 call starts per hour across all addresses; 3 concurrent calls per replica; the call is hung up after x-voice-seconds. The same Origin allowlist applies.",
         "parameters": [
           {
             "name": "handle",

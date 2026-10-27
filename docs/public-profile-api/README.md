@@ -68,8 +68,12 @@ Admission: browser requests must carry an `Origin` listed in
 matched origin, never `*`). Per client address: 12 questions per 10 minutes and
 4 calls per hour (IPv6 keyed by /64); per handle: 120 questions per 10 minutes
 and 12 call starts per hour; 3 concurrent calls per replica. A call's slot is
-released only when the provider confirms the hang-up (retried on failure), so a
-stuck call keeps counting against the concurrency cap rather than freeing it.
+released when the provider confirms the hang-up or reports the call already
+gone (404/410, the usual case when the visitor hangs up first); other failures
+retry eight times at 15 s intervals while the line stays counted as busy, then
+the line is released with an operator-visible error so a provider outage cannot
+turn into a permanent "lines busy" on that replica. The provider's own session
+cap bounds whatever remains of a call that could not be ended.
 `OPTIONS` answers the same typed 404 as the profile API while the feature is
 disabled or the handle is malformed, before any origin decision. Replies are capped at 350 output tokens (voice
 800). The text model is the configured AI profile named by

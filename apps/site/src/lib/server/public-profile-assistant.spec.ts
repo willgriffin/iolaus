@@ -510,6 +510,98 @@ describe('voice endpoint', () => {
     }
   });
 
+  it('treats a call the provider no longer knows as ended, and frees a line once retries are spent', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: `call-${createCall.mock.calls.length}`,
+      }));
+      // The visitor hung up first: the provider answers 404.
+      const gone = vi.fn(async () => {
+        throw Object.assign(new Error('not found'), { status: 404 });
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '40.0.0.1', {
+            createCall: createCall as never,
+            hangup: gone as never,
+          }),
+        ),
+      ).toBe(200);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      expect(gone).toHaveBeenCalledTimes(1);
+      expect(liveVoiceCalls()).toBe(0);
+      // A provider that keeps failing does not strand the line forever.
+      const broken = vi.fn(async () => {
+        throw Object.assign(new Error('upstream'), { status: 502 });
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '40.0.0.2', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      for (let i = 1; i < ASSISTANT_LIMITS.hangupRetries; i++) {
+        expect(liveVoiceCalls()).toBe(1);
+        await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      }
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+      expect(liveVoiceCalls()).toBe(0);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(String(errorLog.mock.calls[0][0])).not.toContain('sk-');
+    } finally {
+      errorLog.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not spend a handle or address start on a request turned away by busy lines', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: `call-${createCall.mock.calls.length}`,
+      }));
+      const hangup = vi.fn(async () => undefined);
+      const deps = { createCall: createCall as never, hangup: hangup as never };
+      const open = (address: string) =>
+        status(openPublicProfileVoice(handle, voiceRequest(), address, deps));
+      for (let i = 0; i < ASSISTANT_LIMITS.voiceConcurrent; i++)
+        expect(await open(`50.0.0.${i}`)).toBe(200);
+      // Many retries while the lines are busy...
+      for (let i = 0; i < 20; i++) expect(await open('50.0.1.1')).toBe(429);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      // ...cost neither the retrying address nor the handle its starts.
+      expect(await open('50.0.1.1')).toBe(200);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      let opened = ASSISTANT_LIMITS.voiceConcurrent + 1;
+      for (let i = 0; opened < ASSISTANT_LIMITS.voicePerHandle; i++, opened++) {
+        expect(await open(`50.0.2.${i}`)).toBe(200);
+        await vi.advanceTimersByTimeAsync(
+          ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+        );
+      }
+      expect(await open('50.0.3.1')).toBe(429);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('caps concurrent calls and per-address attempts, and cleans up failed setups', async () => {
     enable(true);
     vi.useFakeTimers();
