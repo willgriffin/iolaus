@@ -30,3 +30,7 @@ workflow still requires matching final-source images and executed evidence.
 Root gates remain `pnpm format-check`, `pnpm lint`, `pnpm check`, `pnpm test`,
 `pnpm build`, `pnpm knowledge:check`; database commands target isolated fixtures
 only. Local in-process results are not a substitute for the real rows above.
+The workspace CI uses the same native `VITEST_MAX_WORKERS=2` profile as local
+integrated validation, passed and hashed through Turbo. CI records Node, available
+parallelism and the selected worker limit; assertions, test selection and timeouts
+remain unchanged. A fresh full CI result is still required after profile changes.
