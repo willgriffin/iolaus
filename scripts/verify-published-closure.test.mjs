@@ -47,3 +47,8 @@ test('rejects stale direct installed links even when the expected store copy exi
   write('apps/site/node_modules/@happyvertical/auth/package.json', { name: '@happyvertical/auth', version: '0.103.1' });
   assert.throws(() => verifyPublishedClosure(root), /direct installed link differs/u);
 }));
+
+test('rejects an unrecorded transitive first-party dependency', () => fixture(({ root, write }) => {
+  write('pnpm-lock.yaml', `${readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')}\n  '@happyvertical/spider@1.1.11':\n    resolution: {}\n`);
+  assert.throws(() => verifyPublishedClosure(root), /unrecorded first-party lock identity/u);
+}));

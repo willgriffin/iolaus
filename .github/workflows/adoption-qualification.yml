@@ -1,0 +1,97 @@
+---
+name: Inactive adoption image qualification
+'on':
+  workflow_dispatch:
+    inputs:
+      site:
+        description: Published immutable site image matching this commit
+        required: true
+        type: string
+      extractor:
+        description: Published immutable extractor image matching this commit
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: adoption-qualification-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  synthetic-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # No cluster credentials, publication or promotion permissions.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.10.0
+      - name: Require published public adoption prerequisites
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import {
+            requirePublishedPrerequisites
+          } from './scripts/adoption-candidate.mjs';
+          const file = 'deploy/self-hosted/adoption/prerequisites.json';
+          const pins = requirePublishedPrerequisites(
+            JSON.parse(readFileSync(file))
+          );
+          for (const value of Object.values(pins.fixture ?? {})) {
+            const pattern = /^[a-z0-9./:_-]+@sha256:[a-f0-9]{64}$/;
+            if (!pattern.test(value ?? '')) {
+              throw new Error('Exact public fixture image pins required.');
+            }
+          }
+          appendFileSync(process.env.GITHUB_ENV,
+            `SMRT_RUNNER_REVISION=${pins.runner.revision}\n`);
+          JS
+      - name: Install repository toolchain and dependencies
+        run: |
+          npm install --global pnpm@11.25.0
+          pnpm install --frozen-lockfile
+      - name: Fetch pinned public runner and exact packaged chart
+        run: |
+          runner=/tmp/iolaus-smrt-runner
+          git init "$runner"
+          git -C "$runner" remote add origin \
+            https://github.com/happyvertical/smrt.git
+          git -C "$runner" fetch --depth=1 origin "$SMRT_RUNNER_REVISION"
+          git -C "$runner" checkout --detach FETCH_HEAD
+          node "$runner/scripts/deployment-toolchain.mjs" \
+            helm /tmp/iolaus-adoption-tools
+          /tmp/iolaus-adoption-tools/helm pull \
+            oci://ghcr.io/happyvertical/charts/smrt-app \
+            --version 0.2.0 --destination /tmp
+      - name: Qualify actual immutable images in disposable Kind
+        env:
+          SITE_IMAGE: ${{ inputs.site }}
+          EXTRACTOR_IMAGE: ${{ inputs.extractor }}
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          import { immutableImage } from './scripts/adoption-candidate.mjs';
+          const images = {
+            site: immutableImage(process.env.SITE_IMAGE,
+              'ghcr.io/willgriffin/iolaus/site'),
+            extractor: immutableImage(process.env.EXTRACTOR_IMAGE,
+              'ghcr.io/willgriffin/iolaus/resume-import-extraction')
+          };
+          writeFileSync('/tmp/iolaus-adoption-images.json',
+            JSON.stringify(images));
+          JS
+          node --test scripts/adoption-candidate.test.mjs \
+            scripts/adoption-kind-fixture.test.mjs
+          node scripts/adoption-kind-fixture.mjs \
+            deploy/self-hosted/adoption/prerequisites.json \
+            /tmp/iolaus-smrt-runner /tmp/smrt-app-0.2.0.tgz \
+            /tmp/iolaus-adoption-images.json \
+            /tmp/iolaus-adoption-evidence.json
+      - name: Retain executed synthetic qualification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: inactive-adoption-qualification
+          path: /tmp/iolaus-adoption-evidence.json
+          if-no-files-found: error

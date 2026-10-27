@@ -7,6 +7,13 @@ import {
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
 import { getDatabase } from '@happyvertical/sql';
+import {
+  assertDeploymentSchemaReady,
+  assertDeploymentCatalogReady,
+  assertRuntimeDatabaseRole,
+  readDeploymentSchemas,
+  releaseDeploymentProtocolEnabled,
+} from './smrt-deployment-schema.mjs';
 import { startWorkerHeartbeat } from './smrt-worker-heartbeat.mjs';
 import { createProviderReadinessProbe } from './smrt-provider-readiness.mjs';
 
@@ -15,9 +22,12 @@ process.chdir(join(process.cwd(), 'apps', 'site'));
 await loadConfig({ cache: false });
 const configured = resolveConfiguredApplicationRuntime();
 if (configured.profile === 'local') {
-  throw new Error('Local jobs run inline or embedded; a separate worker requires self-hosted or cloud.');
+  throw new Error(
+    'Local jobs run inline or embedded; a separate worker requires self-hosted or cloud.',
+  );
 }
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
+const releaseProtocol = releaseDeploymentProtocolEnabled();
 
 const runtime = await initializeDeployedApplicationRuntime({
   profile: configured.profile,
@@ -32,8 +42,36 @@ const runtime = await initializeDeployedApplicationRuntime({
   },
   database: {
     engine: 'postgres',
-    connect: () =>
-      getDatabase({ type: 'postgres', url: process.env.DATABASE_URL }),
+    connect: async () => {
+      const db = await getDatabase({
+        type: 'postgres',
+        url: process.env.DATABASE_URL,
+      });
+      try {
+        if (!releaseProtocol) return db;
+        await assertRuntimeDatabaseRole(db);
+        const schemas = await readDeploymentSchemas();
+        // This plain-Node process owns schedule dispatch, whose concrete model
+        // closure is the public jobs + agent-schedules tables. The full app
+        // registry is verified by web/task startup and the dedicated migrator.
+        const tables = [
+          '_smrt_jobs',
+          '_smrt_job_events',
+          '_smrt_agent_schedules',
+        ];
+        const required = schemas.filter((schema) =>
+          tables.includes(schema.tableName),
+        );
+        if (required.length !== tables.length)
+          throw new Error('Schedule schema artifact is incomplete.');
+        await assertDeploymentSchemaReady(db, required);
+        await assertDeploymentCatalogReady(db, required);
+        return db;
+      } catch (error) {
+        await db.close?.();
+        throw error;
+      }
+    },
     close: async (db) => db.close?.(),
   },
   authentication: {

@@ -12,6 +12,7 @@ import {
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
 import { getDatabase } from '@happyvertical/sql';
+import { releaseDeploymentProtocolEnabled } from '../../../../../scripts/smrt-deployment-schema.mjs';
 import { createProviderReadinessProbe } from '../../../../../scripts/smrt-provider-readiness.mjs';
 import {
   prepareApplicationStateRoot,
@@ -20,6 +21,7 @@ import {
 } from '../../../../../scripts/smrt-runtime-identity.mjs';
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
 import { getAuthConfiguration } from './app-config.js';
+import { assertDeployedSchemaReady } from './deployment/schema.js';
 import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
   getIolausSmrtConfigPath,
@@ -176,6 +178,7 @@ async function withinReadinessBudget<T>(
 
 /** Fail-closed startup gate for every deployed web process. */
 export async function ensureApplicationRuntimeReady(): Promise<void> {
+  const releaseProtocol = releaseDeploymentProtocolEnabled();
   if (applicationRuntime.profile === 'local') {
     await getLocalApplicationRuntime();
     return;
@@ -220,15 +223,23 @@ export async function ensureApplicationRuntimeReady(): Promise<void> {
     },
     database: {
       engine: 'postgres',
-      connect: () =>
+      connect: async () => {
         // Readiness probes only; keep this separate pool to one client so it
         // does not compete with the SMRT pool for the role's connections.
-        getDatabase({
+        const db = await getDatabase({
           max: 1,
           connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
           type: 'postgres',
           url: validatedDatabaseUrl,
-        }),
+        });
+        try {
+          if (releaseProtocol) await assertDeployedSchemaReady(db);
+          return db;
+        } catch (error) {
+          await db.close?.();
+          throw error;
+        }
+      },
       close: async (db) => db.close?.(),
     },
     authentication: {

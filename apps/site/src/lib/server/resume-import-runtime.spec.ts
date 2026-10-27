@@ -179,6 +179,51 @@ describe('resume import runtime', () => {
     expect(state.assets).not.toHaveBeenCalled();
     expect(state.service.expire).not.toHaveBeenCalled();
   });
+  it.each([
+    'completed',
+    'completed plus pending deletion',
+    'pending deletion',
+    'unfinished action',
+    'active receipt',
+    'incomplete redaction',
+  ])('requires the complete native tombstone proof for %s', async (stateName) => {
+    const row = {
+      id: 'item',
+      confidential_scope_id: 'profile',
+      deletion_completed: stateName !== 'pending deletion',
+      has_unfinished_deletions: [
+        'pending deletion',
+        'completed plus pending deletion',
+      ].includes(stateName),
+      has_unfinished_actions: stateName === 'unfinished action',
+      visibility: stateName === 'active receipt' ? 'active' : 'expired',
+      processing_state: 'expired',
+      cancelled: true,
+      payload_digest:
+        stateName === 'incomplete redaction' ? 'original-digest' : 'redacted',
+      scope_digest: 'redacted',
+      trace_id: '',
+      submitter_id: '',
+      owner_key: '',
+      data: { capturedCeiling: { execution: { permissions: [] } } },
+    };
+    const db = { query: vi.fn(async () => ({ rows: [row] })) } as any;
+    if (stateName === 'completed') {
+      await expect(purgeResumeImportAccountData(db, subject)).resolves.toBe(0);
+      await expect(exportResumeImportReceipts(db, subject)).resolves.toEqual(
+        [],
+      );
+    } else {
+      await expect(purgeResumeImportAccountData(db, subject)).rejects.toThrow(
+        'captured principal',
+      );
+      await expect(exportResumeImportReceipts(db, subject)).rejects.toThrow(
+        'captured principal',
+      );
+    }
+    expect(state.assets).not.toHaveBeenCalled();
+    expect(state.service.expire).not.toHaveBeenCalled();
+  });
   it('does not configure storage for another owner in the selected tenant', async () => {
     vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
     const db = {

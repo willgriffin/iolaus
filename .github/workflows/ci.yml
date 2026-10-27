@@ -31,6 +31,10 @@ jobs:
         postgresql://postgres@127.0.0.1:5432/profiles_lifecycle_test
       OPPORTUNITY_RECOMMENDATION_RANK_POSTGRES_TEST_DATABASE_URL: >-
         postgresql://postgres@127.0.0.1:5432/rank_schema_test
+      IOLAUS_RELEASE_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/release_migration
+      RESUME_IMPORT_POSTGRES_TEST_DATABASE_URL: >-
+        postgresql://postgres@127.0.0.1:5432/iolaus_resume_import_qa
     services:
       postgres-workspace-transfer:
         image: postgres:16-alpine
@@ -53,7 +57,8 @@ jobs:
         run: |
           for database in analysis_store analysis_ledger public_search \
             matching vocabulary match_query public_profile_store_test \
-            shortlist_store_test profiles_lifecycle_test rank_schema_test; do
+            shortlist_store_test profiles_lifecycle_test rank_schema_test \
+            release_migration iolaus_resume_import_qa; do
             docker exec \
               '${{ job.services.postgres-workspace-transfer.id }}' \
               createdb -U postgres "$database"
