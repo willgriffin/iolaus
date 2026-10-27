@@ -7,6 +7,8 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import {
   candidateRuntime,
+  actorSecretData,
+  syntheticAuthContract,
   requirePublishedPrerequisites,
 } from './adoption-candidate.mjs';
 import {
@@ -27,6 +29,44 @@ export function fixtureDatabaseUrl(role, password) {
 }
 export function fixtureDatabaseSql(statement) {
   return `\\connect ${fixtureIdentity.databaseName}\n${statement}\n`;
+}
+
+export function syntheticRuntimeValues(password) {
+  return {
+    SMRT_RUNTIME_PROFILE: 'self-hosted',
+    SMRT_APP_ID: fixtureIdentity.applicationId,
+    NODE_ENV: 'production',
+    HOME: '/tmp',
+    XDG_CACHE_HOME: '/tmp/.cache',
+    IOLAUS_AUTH_MODE: 'magic-link',
+    IOLAUS_WORKSPACE_MODE: 'shared',
+    IOLAUS_PUBLIC_URL: 'https://iolaus.example.invalid',
+    ADDRESS_HEADER: 'x-forwarded-for',
+    IOLAUS_MAGIC_LINK_SECRET: randomBytes(32).toString('hex'),
+    SMTP_HOST: 'smtp.example.invalid',
+    SMTP_USER: 'fixture',
+    SMTP_PASSWORD: password,
+    SMTP_FROM: 'fixture@example.invalid',
+    RESUME_FILES_CONFIG_JSON: JSON.stringify({
+      type: 's3',
+      endpoint: 'http://assets.iolaus-fixture.svc.cluster.local:8080',
+      region: 'fixture',
+      bucket: 'assets',
+      accessKeyId: 'fixture',
+      secretAccessKey: password,
+      forcePathStyle: true,
+    }),
+    HOST: '0.0.0.0',
+    PORT: '3000',
+    BODY_SIZE_LIMIT: '10551296',
+    IOLAUS_RESUME_EXTRACTION_URL: `http://iolaus-extractor.${fixtureIdentity.applicationId}.svc.cluster.local:8080`,
+    HAVE_PDF_PADDLEOCR_URL: 'http://ocr.example.invalid',
+    SMRT_WORKER_HEARTBEAT_FILE: '/tmp/worker-heartbeat.json',
+    SMRT_WORKER_HEARTBEAT_MAX_AGE_MS: '45000',
+    SMRT_WORKER_CONCURRENCY: '4',
+    SMRT_JOBS_WORKER_CONCURRENCY: '4',
+    SMRT_JOBS_WORKER_SHUTDOWN_MS: '240000',
+  };
 }
 
 export function requireIsolatedContext(context, namespace) {
@@ -98,7 +138,7 @@ export async function qualifyKind({
     prerequisites.fixture[name] = resolvePublicPlatform(
       prerequisites.fixture[name],
     ).platform;
-  const runtime = candidateRuntime(resolvedImages);
+  const runtime = candidateRuntime(resolvedImages, syntheticAuthContract);
   shared.validateRuntime(runtime);
   const scratch = mkdtempSync(join(tmpdir(), 'iolaus-adoption-'));
   const name = `iolaus-236-${randomBytes(4).toString('hex')}`;
@@ -258,38 +298,7 @@ export async function qualifyKind({
       service('assets', 8080),
     ]);
     const databaseUrl = (role) => fixtureDatabaseUrl(role, password);
-    const values = {
-      SMRT_RUNTIME_PROFILE: 'self-hosted',
-      SMRT_APP_ID: fixtureIdentity.applicationId,
-      NODE_ENV: 'production',
-      HOME: '/tmp',
-      XDG_CACHE_HOME: '/tmp/.cache',
-      IOLAUS_AUTH_MODE: 'magic-link',
-      IOLAUS_MAGIC_LINK_SECRET: randomBytes(32).toString('hex'),
-      SMTP_HOST: 'smtp.example.invalid',
-      SMTP_USER: 'fixture',
-      SMTP_PASSWORD: password,
-      SMTP_FROM: 'fixture@example.invalid',
-      RESUME_FILES_CONFIG_JSON: JSON.stringify({
-        type: 's3',
-        endpoint: 'http://assets.iolaus-fixture.svc.cluster.local:8080',
-        region: 'fixture',
-        bucket: 'assets',
-        accessKeyId: 'fixture',
-        secretAccessKey: password,
-        forcePathStyle: true,
-      }),
-      HOST: '0.0.0.0',
-      PORT: '3000',
-      BODY_SIZE_LIMIT: '10551296',
-      IOLAUS_RESUME_EXTRACTION_URL: `http://iolaus-extractor.${namespace}.svc.cluster.local:8080`,
-      HAVE_PDF_PADDLEOCR_URL: 'http://ocr.example.invalid',
-      SMRT_WORKER_HEARTBEAT_FILE: '/tmp/worker-heartbeat.json',
-      SMRT_WORKER_HEARTBEAT_MAX_AGE_MS: '45000',
-      SMRT_WORKER_CONCURRENCY: '4',
-      SMRT_JOBS_WORKER_CONCURRENCY: '4',
-      SMRT_JOBS_WORKER_SHUTDOWN_MS: '240000',
-    };
+    const values = syntheticRuntimeValues(password);
     apply(
       ['iolaus-runtime', 'iolaus-monitor', 'iolaus-migration-observer'].map(
         (sa) => ({
@@ -422,12 +431,16 @@ export async function qualifyKind({
         kind: 'Secret',
         metadata: { name: `iolaus-${role}-v1`, namespace },
         immutable: true,
-        stringData: {
-          ...values,
-          DATABASE_URL: databaseUrl(
-            role === 'migration' ? 'iolaus_maintenance' : `iolaus_${role}`,
-          ),
-        },
+        stringData: actorSecretData(
+          runtime,
+          {
+            ...values,
+            DATABASE_URL: databaseUrl(
+              role === 'migration' ? 'iolaus_maintenance' : `iolaus_${role}`,
+            ),
+          },
+          role,
+        ),
       })),
     );
     apply([

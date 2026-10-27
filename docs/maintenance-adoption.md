@@ -31,7 +31,14 @@ fails. No release-image promotion wiring changes in this preparation.
 ## Inactive target
 
 Build a target with `node scripts/adoption-candidate.mjs images.json
-/tmp/target-runtime.json`. Images must already be resolved platform manifests by
+reviewed-contract.json /tmp/target-runtime.json`. The reviewed non-secret contract
+must explicitly select `authMode` and `workspaceMode`; there is no auth default.
+OIDC additionally requires `oidcIssuerMode` (`root` or `realm`) and an explicit
+`optionalOidcKeys` list limited to `IOLAUS_OIDC_CLIENT_SECRET` and
+`IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS`. Private OIDC requires administrator-email
+configuration; realm mode requires a realm key, while root mode excludes it.
+Preserve the existing deployment's reviewed authentication and workspace contract;
+this preparation does not choose or alter Iolaus's live auth profile. Images must already be resolved platform manifests by
 `scripts/adoption-images.mjs`; the qualification entrypoint does this itself.
 The target is a runtime object, not an applied HelmRelease. A complete protected
 HelmRelease must separately bind its current runtime, release ID/attempt,
@@ -61,13 +68,25 @@ platform-owned names are `iolaus-runtime-v1`, `iolaus-migration-v1`, and
 `iolaus-monitor-v1`, with `immutable:true`. No values, envFrom, or production
 credential documents are committed. The target enumerates every required key;
 `DATABASE_URL` differs by role. The platform supplies non-secret deployment
-settings in the same immutable configuration contract: profile self-hosted,
-unique `SMRT_APP_ID`, production NODE_ENV, HOME `/tmp`, cache under `/tmp`,
-HOST/PORT, body limit, extraction/private OCR endpoints, heartbeat path/age,
-concurrency and shutdown settings. Authentication here explicitly uses
-magic-link: its signing key and SMTP configuration, and S3-compatible asset
-configuration, are required. An OIDC adoption needs a separately reviewed
-candidate rather than silently reinterpreting these keys.
+settings in the same immutable configuration contract. Monitor receives only
+DATABASE_URL, SMRT_RUNTIME_PROFILE, SMRT_APP_ID, NODE_ENV, HOME and XDG_CACHE_HOME.
+Migration receives those keys plus IOLAUS_WORKSPACE_MODE (the reachable canonical
+schedule seed/reconciliation checks shared mode) and its observer policy. Neither
+actor receives authentication, SMTP, S3, crawler, model or submission credentials.
+The currently reachable release catalog does not need asset access; disabled
+legacy personal resume/asset backfills remain disabled.
+
+Web/task/schedule receive the reviewed authentication/provider configuration,
+unique application ID, public URL, workspace mode, trusted ADDRESS_HEADER,
+S3-compatible assets, and their process-specific keys. Configured Secret values
+must agree with the reviewed contract; literal environment values are never
+rendered by the candidate builder. The disposable fixture explicitly selects
+magic-link/shared, supplies public URL and trusted proxy-header settings plus
+its synthetic signing key/SMTP settings, and is tested against the application's
+real authentication resolver. That fixture profile is not the live Iolaus profile.
+Fixture Secret contents are projected from each actor's exact required env keys,
+so restricted actors cannot receive runtime credentials through an overbroad
+Secret even when they are not referenced by the Pod.
 
 Migration additionally requires `IOLAUS_MAINTENANCE_OBSERVER_POLICY` in its named
 Secret. This JSON binds exact `releaseName`, maintenance `image`, SHA256 of actual

@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   candidateRuntime,
+  actorSecretData,
+  authenticationKeys,
+  syntheticAuthContract,
   requirePublishedPrerequisites,
 } from './adoption-candidate.mjs';
 import {
@@ -21,7 +24,7 @@ const images = {
 };
 
 test('inactive candidate preserves actual entrypoints, restricted identities, singleton and drain', () => {
-  const runtime = candidateRuntime(images);
+  const runtime = candidateRuntime(images, syntheticAuthContract);
   assert.deepEqual(Object.keys(runtime.workloads), [
     'web',
     'task',
@@ -70,7 +73,9 @@ test('mutable, local, wrong repository and absent artifacts fail closed', () => 
     images.extractor,
     undefined,
   ]) {
-    assert.throws(() => candidateRuntime({ ...images, site }));
+    assert.throws(() =>
+      candidateRuntime({ ...images, site }, syntheticAuthContract),
+    );
   }
   const prereqs = JSON.parse(
     readFileSync(
@@ -165,16 +170,113 @@ test('candidate CLI produces parseable JSON with a real trailing newline', () =>
   try {
     const input = join(directory, 'images.json');
     const output = join(directory, 'target.json');
+    const contractFile = join(directory, 'contract.json');
+    writeFileSync(contractFile, JSON.stringify(syntheticAuthContract));
     writeFileSync(input, JSON.stringify(images));
     execFileSync(process.execPath, [
       fileURLToPath(new URL('./adoption-candidate.mjs', import.meta.url)),
       input,
+      contractFile,
       output,
     ]);
     const bytes = readFileSync(output, 'utf8');
     assert.equal(bytes.at(-1), '\n');
-    assert.deepEqual(JSON.parse(bytes), candidateRuntime(images));
+    assert.deepEqual(
+      JSON.parse(bytes),
+      candidateRuntime(images, syntheticAuthContract),
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('candidate requires explicit reviewed auth and preserves private OIDC key shape', () => {
+  assert.throws(() => candidateRuntime(images), /Explicit reviewed/);
+  assert.throws(
+    () =>
+      authenticationKeys({ authMode: 'magic-link', workspaceMode: 'private' }),
+    /shared/,
+  );
+  assert.throws(() =>
+    authenticationKeys({ ...syntheticAuthContract, unknown: true }),
+  );
+  const contract = {
+    authMode: 'oidc',
+    workspaceMode: 'private',
+    oidcIssuerMode: 'realm',
+    optionalOidcKeys: [
+      'IOLAUS_OIDC_CLIENT_SECRET',
+      'IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS',
+    ],
+  };
+  const runtime = candidateRuntime(images, contract);
+  const keys = runtime.workloads.web.env.map(({ name }) => name);
+  for (const key of [
+    'IOLAUS_PUBLIC_URL',
+    'IOLAUS_WORKSPACE_MODE',
+    'ADDRESS_HEADER',
+    'IOLAUS_OIDC_SERVER_URL',
+    'IOLAUS_OIDC_REALM',
+    'IOLAUS_OIDC_CLIENT_ID',
+    'IOLAUS_OIDC_ADMIN_EMAILS',
+    ...contract.optionalOidcKeys,
+  ])
+    assert.ok(keys.includes(key), key);
+  for (const key of ['IOLAUS_MAGIC_LINK_SECRET', 'SMTP_PASSWORD', 'SMTP_USER'])
+    assert.ok(!keys.includes(key), key);
+  const root = candidateRuntime(images, {
+    ...contract,
+    oidcIssuerMode: 'root',
+    optionalOidcKeys: [],
+  });
+  assert.ok(
+    !root.workloads.web.env.some(({ name }) => name === 'IOLAUS_OIDC_REALM'),
+  );
+  assert.throws(() =>
+    candidateRuntime(images, {
+      ...contract,
+      optionalOidcKeys: ['SMTP_PASSWORD'],
+    }),
+  );
+});
+
+test('monitor and migration Secrets and env exclude runtime authentication and asset authority', () => {
+  const runtime = candidateRuntime(images, syntheticAuthContract);
+  const allKeys = new Set(
+    [...Object.values(runtime.workloads), runtime.migration].flatMap(
+      ({ env }) => env.map(({ name }) => name),
+    ),
+  );
+  const values = Object.fromEntries(
+    [...allKeys].map((key) => [key, 'fixture-value']),
+  );
+  for (const role of ['monitor', 'migration']) {
+    const environment =
+      role === 'monitor'
+        ? runtime.workloads.monitor.env
+        : runtime.migration.env;
+    const data = actorSecretData(runtime, values, role);
+    assert.deepEqual(
+      Object.keys(data).sort(),
+      environment.map(({ name }) => name).sort(),
+    );
+    for (const key of Object.keys(data))
+      assert.doesNotMatch(
+        key,
+        /^(SMTP_|IOLAUS_(AUTH_|MAGIC_LINK_|OIDC_|PUBLIC_URL)|ADDRESS_HEADER|RESUME_FILES_)/,
+      );
+    assert.throws(
+      () =>
+        actorSecretData(runtime, { ...values, DATABASE_URL: undefined }, role),
+      /Required/,
+    );
+  }
+  assert.ok(
+    runtime.migration.env.some(({ name }) => name === 'IOLAUS_WORKSPACE_MODE'),
+  );
+  assert.ok(
+    !runtime.workloads.monitor.env.some(
+      ({ name }) => name === 'IOLAUS_WORKSPACE_MODE',
+    ),
+  );
 });

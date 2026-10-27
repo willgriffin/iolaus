@@ -27,30 +27,132 @@ const probe = (path, port) => ({ httpGet: { path, port } });
 const heartbeat = {
   exec: { command: ['node', 'scripts/smrt-worker-heartbeat.mjs', '--check'] },
 };
-const runtimeKeys = [
+export const actorBaseKeys = Object.freeze([
   'DATABASE_URL',
   'SMRT_RUNTIME_PROFILE',
   'SMRT_APP_ID',
   'NODE_ENV',
   'HOME',
   'XDG_CACHE_HOME',
-  'IOLAUS_AUTH_MODE',
-  'IOLAUS_MAGIC_LINK_SECRET',
-  'SMTP_HOST',
-  'SMTP_USER',
-  'SMTP_PASSWORD',
-  'SMTP_FROM',
-  'RESUME_FILES_CONFIG_JSON',
-];
-const runtimeEnv = () => runtimeKeys.map((name) => secret(name, name));
-const workerEnv = () => [
-  ...runtimeEnv(),
+]);
+export const syntheticAuthContract = Object.freeze({
+  authMode: 'magic-link',
+  workspaceMode: 'shared',
+});
+
+export function authenticationKeys(contract) {
+  assert.ok(
+    contract && typeof contract === 'object',
+    'Explicit reviewed authentication contract required.',
+  );
+  assert.ok(['private', 'shared'].includes(contract.workspaceMode));
+  if (contract.authMode === 'magic-link') {
+    assert.deepEqual(Object.keys(contract).sort(), [
+      'authMode',
+      'workspaceMode',
+    ]);
+    assert.equal(
+      contract.workspaceMode,
+      'shared',
+      'Magic-link requires shared workspace mode.',
+    );
+    return [
+      'IOLAUS_AUTH_MODE',
+      'IOLAUS_MAGIC_LINK_SECRET',
+      'SMTP_HOST',
+      'SMTP_USER',
+      'SMTP_PASSWORD',
+      'SMTP_FROM',
+    ];
+  }
+  assert.equal(
+    contract.authMode,
+    'oidc',
+    'Reviewed authMode must be oidc or magic-link.',
+  );
+  assert.deepEqual(Object.keys(contract).sort(), [
+    'authMode',
+    'oidcIssuerMode',
+    'optionalOidcKeys',
+    'workspaceMode',
+  ]);
+  assert.ok(['root', 'realm'].includes(contract.oidcIssuerMode));
+  assert.ok(Array.isArray(contract.optionalOidcKeys));
+  assert.equal(
+    new Set(contract.optionalOidcKeys).size,
+    contract.optionalOidcKeys.length,
+  );
+  assert.ok(
+    contract.optionalOidcKeys.every((key) =>
+      [
+        'IOLAUS_OIDC_CLIENT_SECRET',
+        'IOLAUS_OIDC_IMPORTED_OWNER_BINDINGS',
+      ].includes(key),
+    ),
+  );
+  return [
+    'IOLAUS_AUTH_MODE',
+    'IOLAUS_OIDC_SERVER_URL',
+    'IOLAUS_OIDC_ISSUER_MODE',
+    'IOLAUS_OIDC_CLIENT_ID',
+    ...(contract.oidcIssuerMode === 'realm' ? ['IOLAUS_OIDC_REALM'] : []),
+    ...(contract.workspaceMode === 'private'
+      ? ['IOLAUS_OIDC_ADMIN_EMAILS']
+      : []),
+    ...contract.optionalOidcKeys,
+  ];
+}
+
+const runtimeEnv = (contract) =>
+  [
+    ...actorBaseKeys,
+    'IOLAUS_PUBLIC_URL',
+    'IOLAUS_WORKSPACE_MODE',
+    'ADDRESS_HEADER',
+    'RESUME_FILES_CONFIG_JSON',
+    ...authenticationKeys(contract),
+  ].map((name) => secret(name, name));
+const workerEnv = (contract) => [
+  ...runtimeEnv(contract),
   secret('SMRT_WORKER_HEARTBEAT_FILE', 'SMRT_WORKER_HEARTBEAT_FILE'),
   secret(
     'SMRT_WORKER_HEARTBEAT_MAX_AGE_MS',
     'SMRT_WORKER_HEARTBEAT_MAX_AGE_MS',
   ),
 ];
+
+// Both manifest references and actual fixture Secret data use this projection.
+// A role-specific Secret never contains another actor's credentials.
+export function actorSecretData(runtime, values, role) {
+  const environment =
+    role === 'runtime'
+      ? runtime.workloads.web.env.concat(
+          runtime.workloads.task.env,
+          runtime.workloads.schedule.env,
+        )
+      : role === 'monitor'
+        ? runtime.workloads.monitor.env
+        : role === 'migration'
+          ? runtime.migration.env
+          : null;
+  assert.ok(environment, 'Unknown Secret actor.');
+  return Object.fromEntries(
+    [
+      ...new Set(environment.map((entry) => entry.valueFrom.secretKeyRef.key)),
+    ].map((key) => {
+      assert.equal(
+        typeof values[key],
+        'string',
+        `Required ${role} configuration key missing: ${key}`,
+      );
+      assert.ok(
+        values[key].length > 0,
+        `Required ${role} configuration key empty: ${key}`,
+      );
+      return [key, values[key]];
+    }),
+  );
+}
 
 export function immutableImage(value, repository) {
   assert.match(
@@ -62,7 +164,8 @@ export function immutableImage(value, repository) {
 
 // A target builder, deliberately not a HelmRelease or a GitOps entrypoint.
 // Every identity must be supplied from a real published platform artifact.
-export function candidateRuntime(images) {
+export function candidateRuntime(images, reviewedContract) {
+  authenticationKeys(reviewedContract);
   assert.deepEqual(
     Object.keys(images).sort(),
     ['extractor', 'site'],
@@ -92,7 +195,7 @@ export function candidateRuntime(images) {
     terminationGracePeriodSeconds: 90,
   });
   const web = hardened(site, ['node', 'apps/site/build'], 'web', true, [
-    ...runtimeEnv(),
+    ...runtimeEnv(reviewedContract),
     ...[
       'HOST',
       'PORT',
@@ -120,7 +223,7 @@ export function candidateRuntime(images) {
     'task',
     true,
     [
-      ...workerEnv(),
+      ...workerEnv(reviewedContract),
       ...[
         'SMRT_WORKER_CONCURRENCY',
         'SMRT_JOBS_WORKER_CONCURRENCY',
@@ -141,7 +244,7 @@ export function candidateRuntime(images) {
     ['node', 'scripts/smrt-worker.mjs', 'schedule'],
     'schedule',
     true,
-    workerEnv(),
+    workerEnv(reviewedContract),
   );
   Object.assign(schedule, {
     readinessProbe: heartbeat,
@@ -168,7 +271,7 @@ export function candidateRuntime(images) {
     ['node', '--import', 'tsx', 'apps/site/scripts/deployment-monitor.ts'],
     'task',
     true,
-    runtimeKeys.map((name) => secret(name, name, 'iolaus-monitor-v1')),
+    actorBaseKeys.map((name) => secret(name, name, 'iolaus-monitor-v1')),
   );
   Object.assign(monitor, {
     serviceAccountName: 'iolaus-monitor',
@@ -187,7 +290,9 @@ export function candidateRuntime(images) {
       '--maintenance-window',
     ],
     env: [
-      ...runtimeKeys.map((name) => secret(name, name, 'iolaus-migration-v1')),
+      ...[...actorBaseKeys, 'IOLAUS_WORKSPACE_MODE'].map((name) =>
+        secret(name, name, 'iolaus-migration-v1'),
+      ),
       secret(
         'IOLAUS_MAINTENANCE_OBSERVER_POLICY',
         'IOLAUS_MAINTENANCE_OBSERVER_POLICY',
@@ -247,14 +352,14 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  const [imageFile, output] = process.argv.slice(2);
+  const [imageFile, contractFile, output] = process.argv.slice(2);
   assert.ok(
-    imageFile && output,
-    'Usage: node scripts/adoption-candidate.mjs images.json target-runtime.json',
+    imageFile && contractFile && output,
+    'Usage: node scripts/adoption-candidate.mjs images.json reviewed-contract.json target-runtime.json',
   );
   writeFileSync(
     output,
-    `${JSON.stringify(candidateRuntime(JSON.parse(readFileSync(imageFile, 'utf8'))), null, 2)}\n`,
+    `${JSON.stringify(candidateRuntime(JSON.parse(readFileSync(imageFile, 'utf8')), JSON.parse(readFileSync(contractFile, 'utf8'))), null, 2)}\n`,
     { flag: 'wx' },
   );
 }
