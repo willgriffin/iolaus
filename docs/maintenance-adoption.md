@@ -8,11 +8,13 @@ ownership transfer and rollout.
 
 ## Public prerequisites
 
-`deploy/self-hosted/adoption/prerequisites.json` intentionally has null artifact
-pins. This is a blocking input, not an installable deployment. Chart 0.1.0 cannot
-supply the required security envelope or observer projection. After chart 0.2.0
-and its reviewed runner source are publicly released, a reviewed change must fill
-in the exact OCI manifest digest, packaged chart SHA256 and public runner Git commit.
+`deploy/self-hosted/adoption/prerequisites.json` pins the public chart 0.2.0 OCI
+manifest, packaged chart SHA256 and runner Git commit from
+[the verified SMRT #4414 publication](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6442258826).
+Anonymous registry and Helm pulls verified both digests, all packaged source
+files and phase renders; the public runner source matches the reviewed bytes.
+Chart 0.1.0 cannot supply the required security envelope or observer projection.
+These prerequisite identities enable qualification, not installation or rollout.
 The already pinned Kind node, PostgreSQL and maintenance responder images are
 reused from the upstream disposable exercise; they are platform-resolved and
 verified before use.
@@ -127,8 +129,8 @@ A synthetic fixture receipt is not production rollout approval.
 
 ## Actual-image qualification
 
-Run the manual **Inactive adoption image qualification** workflow only after
-reviewed pins exist. It creates one uniquely named disposable Kind cluster,
+Run the manual **Inactive adoption image qualification** workflow using the
+reviewed pins and matching public final-source image pair. It creates one uniquely named disposable Kind cluster,
 never reads a default kubeconfig or accepts an arbitrary namespace, and destroys
 the cluster in `finally`. PostgreSQL and the synthetic provider HTTP endpoint
 live outside the dedicated application namespace, so they cannot be mistaken

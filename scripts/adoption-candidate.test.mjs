@@ -85,10 +85,16 @@ test('mutable, local, wrong repository and absent artifacts fail closed', () => 
       ),
     ),
   );
-  assert.throws(
-    () => requirePublishedPrerequisites(prereqs),
-    /Public chart OCI digest required/,
-  );
+  assert.equal(requirePublishedPrerequisites(prereqs), prereqs);
+  for (const [section, key, error] of [
+    ['chart', 'ociDigest', /Public chart OCI digest required/],
+    ['chart', 'packageSha256', /Public packaged chart digest required/],
+    ['runner', 'revision', /Public runner source commit required/],
+  ]) {
+    const missing = structuredClone(prereqs);
+    missing[section][key] = null;
+    assert.throws(() => requirePublishedPrerequisites(missing), error);
+  }
 });
 
 test('platform resolution verifies registry bytes and rejects ambiguous or wrong architectures', () => {

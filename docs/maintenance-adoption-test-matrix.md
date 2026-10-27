@@ -1,10 +1,12 @@
 # Maintenance adoption test evidence (#236)
 
 No row below is live qualification until its command has actually executed on
-its named inputs. The manual workflow currently blocks on public artifact pins.
+its named inputs. Chart 0.2.0 and public runner pins are verified; the manual
+workflow still requires matching public final-source images and executed evidence.
 
 | Trigger | Positive / negative assertion | Actor / context / executor | Dialect / external edge | Level and exact command |
 | --- | --- | --- | --- | --- |
+| Published prerequisite selection | Committed verified chart/runner pins accepted; missing OCI, package or runner pin refused independently | CI fixture; no mutation | Anonymous OCI manifest/layer and public Git source; no DB executor | `node --test scripts/adoption-candidate.test.mjs`; [public verification receipt](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6442258826) |
 | Candidate generation | Five actual commands, explicit versioned Secret keys, fixed hardening, singleton and270s drain; mutable/wrong images refused | CI pure builder; no DB | In-process; no external access | `node --test scripts/adoption-candidate.test.mjs` |
 | Platform image input | Raw manifest/index digest verified; wrong/ambiguous arch, source, lock or UID refused | Trusted CI registry inspector | Registry immutable public OCI bytes; Docker metadata | `node --test scripts/adoption-candidate.test.mjs`; actual path `node scripts/adoption-kind-fixture.mjs deploy/self-hosted/adoption/prerequisites.json /tmp/iolaus-smrt-runner /tmp/smrt-app-0.2.0.tgz /tmp/iolaus-adoption-images.json /tmp/iolaus-adoption-evidence.json` |
 | Isolated fixture selection | Only freshly created kind-iolaus-236 context and fixed synthetic namespace allowed | CI fixture; no inherited cluster credentials | Kind API | `node --test scripts/adoption-kind-fixture.test.mjs` |
