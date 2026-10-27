@@ -275,15 +275,21 @@ export function heldVoiceLines(): number {
   for (const call of calls.values()) if (call.held) held += 1;
   return held;
 }
-/** Status and message of a provider error, for logs; never a header or key. */
+/**
+ * A provider error reduced to its HTTP status and error class for logs. The
+ * message is deliberately dropped: provider and transport errors may echo the
+ * request, and nothing in these alarm lines may ever carry a credential.
+ */
 function errorSummary(error: unknown): string {
-  const status = (error as { status?: unknown } | null)?.status;
-  const message =
-    error instanceof Error ? error.message : String(error ?? 'unknown');
-  return `${typeof status === 'number' ? `${status} ` : ''}${message}`.slice(
-    0,
-    200,
-  );
+  const details = (error ?? {}) as { status?: unknown; code?: unknown };
+  const status = typeof details.status === 'number' ? `${details.status} ` : '';
+  const kind =
+    typeof details.code === 'string'
+      ? details.code
+      : error instanceof Error
+        ? error.name
+        : typeof error;
+  return `${status}${kind}`.replace(/[^\w .-]/g, '').slice(0, 60) || 'unknown';
 }
 /** The provider says the call no longer exists: that is a confirmed end. */
 function callAlreadyGone(error: unknown): boolean {
@@ -594,6 +600,14 @@ export async function openPublicProfileVoice(
             console.error(
               `[public-profile-assistant] ${VOICE_LINE_HELD} ${JSON.stringify(line)} — hang-up failed ${attempt} times (${errorSummary(error)}); the line stays reserved until the provider session cap`,
             );
+            const expiry = setTimeout(() => {
+              calls.delete(id);
+              console.error(
+                `[public-profile-assistant] ${VOICE_LINE_RELEASED_BY_CAP} ${JSON.stringify({ callId: call.callId, startedAt: line.startedAt })} — released by the provider session cap, never confirmed hung up`,
+              );
+            }, release);
+            expiry.unref?.();
+            calls.set(id, { timer: expiry, held: true });
             void alert(line).then(
               (outcome) => {
                 const status = (outcome as { status?: unknown } | null)?.status;
@@ -607,14 +621,6 @@ export async function openPublicProfileVoice(
                   `[public-profile-assistant] ${VOICE_LINE_HELD} alert for ${call.callId} threw (${errorSummary(cause)})`,
                 ),
             );
-            const expiry = setTimeout(() => {
-              calls.delete(id);
-              console.error(
-                `[public-profile-assistant] ${VOICE_LINE_RELEASED_BY_CAP} ${JSON.stringify({ callId: call.callId, startedAt: line.startedAt })} — released by the provider session cap, never confirmed hung up`,
-              );
-            }, release);
-            expiry.unref?.();
-            calls.set(id, { timer: expiry, held: true });
             return;
           }
           console.warn(

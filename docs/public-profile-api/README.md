@@ -79,9 +79,10 @@ be live, and a dead line cannot outlast the provider cap. Worst-case spend per
 replica is three lines for one provider session each; enforcing the deadline
 independently of the hang-up API is tracked in #247.
 
-That worst case is an accepted risk, so it is never silent. Each failed hang-up
-attempt logs a `console.warn` with the attempt count and the provider's status;
-exhaustion logs one `console.error` carrying the stable marker `VOICE_LINE_HELD`
+That worst case is an accepted risk, so it is never silent. Each retried
+hang-up attempt logs a `console.warn` with the attempt count and the provider's
+HTTP status and error class (never its message, which could echo the request);
+the final failure logs one `console.error` carrying the stable marker `VOICE_LINE_HELD`
 and a JSON record (`callId`, `attempts`, `startedAt`, `releaseAt`,
 `heldSeconds`), then emails the operator at `IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL`
 (falling back to an email `IOLAUS_SUPPORT_URL`) over the configured SMTP; an

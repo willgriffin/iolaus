@@ -582,7 +582,8 @@ describe('voice endpoint', () => {
       const held = String(errorLog.mock.calls[0][0]);
       expect(held).toContain(VOICE_LINE_HELD);
       expect(held).toContain('"callId":"call-2"');
-      expect(held).toContain('502 upstream');
+      expect(held).toContain('(502 Error)');
+      expect(held).not.toContain('upstream');
       expect(held).not.toContain('sk-');
       expect(alert).toHaveBeenCalledTimes(1);
       expect(alert.mock.calls[0][0]).toMatchObject({
@@ -614,6 +615,55 @@ describe('voice endpoint', () => {
     } finally {
       errorLog.mockRestore();
       warnLog.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('never copies provider error text, so an echoed key or header cannot reach the logs', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({ answer: 'v=0', callId: 'c' }));
+      const leaky = vi.fn(async () => {
+        throw Object.assign(
+          new Error(
+            'request failed: Authorization: Bearer sk-test; {"error":"sk-test rejected"}',
+          ),
+          { status: 401, code: 'E_UPSTREAM<script>' },
+        );
+      });
+      const alert = vi.fn(
+        async (_line: HeldVoiceLine) => ({ status: 'sent' }) as const,
+      );
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '42.0.0.1', {
+            createCall: createCall as never,
+            hangup: leaky as never,
+            alert,
+          }),
+        ),
+      ).toBe(200);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 +
+          ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      const lines = [...warnLog.mock.calls, ...errorLog.mock.calls].map(
+        (call) => String(call[0]),
+      );
+      expect(lines.length).toBe(ASSISTANT_LIMITS.hangupRetries);
+      for (const line of lines) {
+        expect(line).not.toContain('sk-');
+        expect(line).not.toContain('Bearer');
+        expect(line).not.toContain('Authorization');
+        expect(line).not.toContain('<');
+        expect(line).toContain('401 E_UPSTREAMscript');
+      }
+      expect(JSON.stringify(alert.mock.calls[0][0])).not.toContain('sk-');
+    } finally {
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });
