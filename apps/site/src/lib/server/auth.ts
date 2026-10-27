@@ -41,7 +41,10 @@ import {
   provisionHostedOidcUser,
 } from './hosted-oidc-provisioning.js';
 import { consumeMagicLink } from './magic-link-login.js';
-import { seedSystemRolesWithPermissions } from './role-permissions.js';
+import {
+  ensureHostedOperatorRole,
+  seedSystemRolesWithPermissions,
+} from './role-permissions.js';
 
 const appConfig = getAppConfig();
 
@@ -478,8 +481,11 @@ export async function ensureHostedWorkspaceAccess(
     }
   }
 
-  const memberRole = await roles.findBySlug(DEFAULT_ROLE_SLUGS.MEMBER);
-  if (!memberRole?.id || !tenant.id) {
+  if (!tenant.id) throw new Error('Unable to resolve hosted workspace tenant.');
+  const workspaceRole = isConfiguredOidcAdminEmail(user.email)
+    ? await ensureHostedOperatorRole(roles, options, tenant.id)
+    : await roles.findBySlug(DEFAULT_ROLE_SLUGS.MEMBER);
+  if (!workspaceRole?.id) {
     throw new Error(
       'Unable to resolve hosted workspace membership prerequisites.',
     );
@@ -488,7 +494,7 @@ export async function ensureHostedWorkspaceAccess(
   let membership = await memberships.findByUserAndTenant(userId, tenant.id);
   if (!membership) {
     membership = await memberships.create({
-      roleId: memberRole.id,
+      roleId: workspaceRole.id,
       status: MembershipStatus.ACTIVE,
       tenantId: tenant.id,
       userId,
@@ -496,10 +502,10 @@ export async function ensureHostedWorkspaceAccess(
     await membership.save();
   } else if (
     membership.status !== MembershipStatus.ACTIVE ||
-    membership.roleId !== memberRole.id
+    membership.roleId !== workspaceRole.id
   ) {
     membership.status = MembershipStatus.ACTIVE;
-    membership.roleId = memberRole.id;
+    membership.roleId = workspaceRole.id;
     await membership.save();
   }
   return { membership, tenant };

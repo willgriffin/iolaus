@@ -1,8 +1,11 @@
+import type { SmrtClassOptions } from '@happyvertical/smrt-core';
 import {
   DEFAULT_ROLE_SLUGS,
   type RoleCollection,
+  RolePermissionCollection,
   type RolePermissionPatternMatrix,
 } from '@happyvertical/smrt-users';
+import { HOSTED_OPERATOR_ROLE_SLUG } from './hosted-operator-role.js';
 import { workspaceWorkflowCapabilitySlugs } from './workspace-workflow-capabilities.js';
 
 type SystemRoleSeeder = Pick<RoleCollection, 'seedSystemRoles'>;
@@ -24,6 +27,47 @@ export const iolausRolePermissionMatrix = {
   [DEFAULT_ROLE_SLUGS.OWNER]: ['*'],
   [DEFAULT_ROLE_SLUGS.VIEWER]: ['companies.read', 'opportunities.read'],
 } satisfies RolePermissionPatternMatrix;
+
+export const hostedOperatorPermissions = [
+  ...iolausRolePermissionMatrix.member,
+  'sources.read',
+  'sources.create',
+  'sources.update',
+  'sourcecrawls.read',
+  'sourcecrawlitems.read',
+  'opportunities.create',
+  'opportunities.update',
+  'companies.create',
+  'companies.update',
+] as const;
+
+/** Called only after the authenticated email matches the current operator list. */
+export async function ensureHostedOperatorRole(
+  roles: RoleCollection,
+  options: SmrtClassOptions,
+  tenantId: string,
+) {
+  let role = await roles.findBySlug(HOSTED_OPERATOR_ROLE_SLUG, tenantId);
+  if (!role || role.tenantId !== tenantId) {
+    try {
+      role = await roles.create({
+        slug: HOSTED_OPERATOR_ROLE_SLUG,
+        name: 'Catalog operator',
+        description: 'Workspace workflows and installation source operations.',
+        tenantId,
+        isSystem: false,
+      });
+    } catch (cause) {
+      role = await roles.findBySlug(HOSTED_OPERATOR_ROLE_SLUG, tenantId);
+      if (!role || role.tenantId !== tenantId) throw cause;
+    }
+  }
+  await (await RolePermissionCollection.create(options)).seedRolePermissions(
+    { [HOSTED_OPERATOR_ROLE_SLUG]: hostedOperatorPermissions },
+    { tenantId, prune: true },
+  );
+  return role;
+}
 
 /**
  * Keep built-in roles and their manifest-derived permission mappings current.

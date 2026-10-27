@@ -149,7 +149,11 @@ Sixteen application-owned definitions provide the curated workflow surface:
   rows are hidden from the admin list and from
   `job_search_browse_opportunities` unless a `status` filter names them.
 - `job_search_import_opportunity` imports a public HTTPS posting URL and reuses
-  an existing canonical URL match when available.
+  an existing canonical URL match when available. It requires catalog
+  read/create/update and workflow-audit authority, without generic delete
+  authority. Canonical deduplication can delete only an alias created by that
+  import inside its transaction; pre-existing aliases are archived, and failed
+  reconciliation rolls back the alias/reference transition.
 - `job_search_record_decision` records Apply, Maybe, or Reject through the
   existing audited decision and application workflow.
 - `job_search_open_application` returns an existing local application or

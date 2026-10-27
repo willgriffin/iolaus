@@ -1,8 +1,11 @@
+import { withTenant } from '@happyvertical/smrt-tenancy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   administrativeSessionFailure,
   isConfiguredOidcAdminEmail,
 } from './administrative-auth';
+import { getAuthConfiguration } from './app-config';
+import { requireSourceCrawlOperator } from './source-crawl-operator';
 
 const environmentNames = [
   'IOLAUS_OIDC_ADMIN_EMAILS',
@@ -12,6 +15,14 @@ const environmentNames = [
   'IOLAUS_PUBLIC_URL',
   'SMRT_APP_ID',
   'SMRT_RUNTIME_PROFILE',
+  'IOLAUS_AUTH_MODE',
+  'IOLAUS_WORKSPACE_MODE',
+  'SMTP_HOST',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+  'SMTP_FROM',
+  'IOLAUS_MAGIC_LINK_SECRET',
+  'ADDRESS_HEADER',
 ] as const;
 const originalEnvironment = Object.fromEntries(
   environmentNames.map((name) => [name, process.env[name]]),
@@ -54,6 +65,41 @@ const ownerSession = {
 };
 
 describe('private administrative authorization matrix', () => {
+  it('permits the source worker operator without login mail settings and observes allowlist revocation', async () => {
+    hostedEnvironment();
+    process.env.IOLAUS_AUTH_MODE = 'magic-link';
+    process.env.IOLAUS_WORKSPACE_MODE = 'shared';
+    process.env.IOLAUS_MAGIC_LINK_SECRET =
+      'test-only-worker-signing-secret-at-least-32-characters';
+    process.env.ADDRESS_HEADER = 'X-Forwarded-For';
+    Object.assign(process.env, {
+      SMTP_HOST: 'smtp.example.invalid',
+      SMTP_USER: 'fixture',
+      SMTP_PASSWORD: 'fixture',
+      SMTP_FROM: 'fixture@example.invalid',
+    });
+    expect(getAuthConfiguration().kind).toBe('magic-link');
+    for (const name of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM'])
+      delete process.env[name];
+    expect(getAuthConfiguration().kind).toBe('invalid');
+    await withTenant(
+      { tenantId: 'tenant-1', userId: 'user-1', user: ownerSession.user },
+      async () => {
+        expect(() => requireSourceCrawlOperator()).not.toThrow();
+        for (const allowlist of [
+          '',
+          'not-an-email',
+          'owner@example.invalid,invalid',
+          'different@example.invalid',
+        ]) {
+          process.env.IOLAUS_OIDC_ADMIN_EMAILS = allowlist;
+          expect(() => requireSourceCrawlOperator()).toThrow(
+            'active installation operator',
+          );
+        }
+      },
+    );
+  });
   it.each([
     'ui',
     'rest',

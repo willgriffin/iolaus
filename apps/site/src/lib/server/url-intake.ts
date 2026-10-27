@@ -149,7 +149,7 @@ export async function ingestPublicUrl(
         run.assertToolAllowed('job_search_import_opportunity');
         await workflow(run, 'audit.record');
         await run.assertOperation('companies', 'read');
-        for (const operation of ['read', 'create', 'update', 'delete'] as const)
+        for (const operation of ['read', 'create', 'update'] as const)
           await run.assertOperation('opportunities', operation);
         return await importJobOpportunity({ url: detection.url }, user);
       },

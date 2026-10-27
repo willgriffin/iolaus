@@ -262,6 +262,40 @@ describe('job-search WebMCP route', () => {
     await expect(response.json()).resolves.toMatchObject({ position: 1 });
   });
 
+  it('imports with native scoped operator permissions without generic delete authority', async () => {
+    const { POST } = await import('./+server');
+    const response = await POST(
+      event({
+        action: 'import',
+        method: 'POST',
+        body: { url: 'https://jobs.example.com/staff' },
+        permissions: without('opportunities.delete'),
+      }) as never,
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.importOpportunity).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'companies.read',
+    'opportunities.read',
+    'opportunities.create',
+    'opportunities.update',
+    'workflow.audit.record',
+  ])('denies import before executing without retained permission %s', async (permission) => {
+    const { POST } = await import('./+server');
+    const response = await POST(
+      event({
+        action: 'import',
+        method: 'POST',
+        body: { url: 'https://jobs.example.com/staff' },
+        permissions: without(permission),
+      }) as never,
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.importOpportunity).not.toHaveBeenCalled();
+  });
+
   it('refuses a triage candidate read without opportunity-read permission', async () => {
     const { GET } = await import('./+server');
 

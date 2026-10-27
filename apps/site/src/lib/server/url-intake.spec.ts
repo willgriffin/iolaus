@@ -139,7 +139,11 @@ describe('native shared URL intake', () => {
     expect(mocks.sourceCreate).not.toHaveBeenCalled();
   });
 
-  it('imports a posting and queues the existing private preparation workflow with fresh authority', async () => {
+  it('imports a posting without generic delete authority and queues private preparation', async () => {
+    mocks.operation.mockImplementation(async (collection, operation) => {
+      if (collection === 'opportunities' && operation === 'delete')
+        throw new Error('Generic delete denied');
+    });
     expect(await ingestPublicUrl({ url: posting }, locals)).toMatchObject({
       status: 'queued',
       kind: 'opportunity',
@@ -150,6 +154,7 @@ describe('native shared URL intake', () => {
       { url: posting },
       locals.user,
     );
+    expect(mocks.operation).not.toHaveBeenCalledWith('opportunities', 'delete');
     expect(mocks.process).toHaveBeenCalledWith('opp-1', {
       modes: 'assessment',
       reason: 'url_intake',
