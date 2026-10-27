@@ -556,9 +556,21 @@ describe('voice endpoint', () => {
         await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
       }
       expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
-      expect(liveVoiceCalls()).toBe(0);
+      // Still reserved: the call may be live until the provider's own cap.
+      expect(liveVoiceCalls()).toBe(1);
       expect(errorLog).toHaveBeenCalledTimes(1);
       expect(String(errorLog.mock.calls[0][0])).not.toContain('sk-');
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '40.0.0.3', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.providerSessionCapMs);
+      expect(liveVoiceCalls()).toBe(0);
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries * 2);
     } finally {
       errorLog.mockRestore();
       vi.useRealTimers();

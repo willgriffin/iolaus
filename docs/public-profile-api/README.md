@@ -70,10 +70,12 @@ matched origin, never `*`). Per client address: 12 questions per 10 minutes and
 and 12 call starts per hour; 3 concurrent calls per replica. A call's slot is
 released when the provider confirms the hang-up or reports the call already
 gone (404/410, the usual case when the visitor hangs up first); other failures
-retry eight times at 15 s intervals while the line stays counted as busy, then
-the line is released with an operator-visible error so a provider outage cannot
-turn into a permanent "lines busy" on that replica. The provider's own session
-cap bounds whatever remains of a call that could not be ended.
+are attempted eight times at 15 s intervals while the line stays counted as
+busy; if none succeeds the line stays reserved, with an operator-visible error,
+until the provider's own 60-minute session cap has certainly ended the call,
+and is released then. A replacement call is therefore never admitted while an
+unconfirmed one may still be live, and a dead line cannot outlast the provider
+cap. Worst-case spend per replica is three lines for one provider session each.
 `OPTIONS` answers the same typed 404 as the profile API while the feature is
 disabled or the handle is malformed, before any origin decision. Replies are capped at 350 output tokens (voice
 800). The text model is the configured AI profile named by

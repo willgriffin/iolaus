@@ -48,9 +48,15 @@ export const ASSISTANT_LIMITS = {
   voiceWindowMs: 60 * 60 * 1000,
   voiceConcurrent: 3,
   voiceSeconds: 150,
-  /** Hang-up retries after expiry; the slot stays taken until one succeeds. */
+  /** Hang-up attempts after expiry; the slot stays taken until one succeeds. */
   hangupRetries: 8,
   hangupRetryMs: 15_000,
+  /**
+   * OpenAI Realtime ends every session at 60 minutes. When no hang-up attempt
+   * is ever confirmed, a line is released only once that provider cap has
+   * certainly passed since the call started.
+   */
+  providerSessionCapMs: 60 * 60 * 1000,
   voiceMaxOutputTokens: 800,
   offerBytes: 65_536,
 } as const;
@@ -466,10 +472,11 @@ export async function openPublicProfileVoice(
     const id = randomUUID();
     // The slot is released when the provider confirms the hang-up, or says
     // the call is already gone (the visitor usually hangs up first). Other
-    // failures retry and keep the line counted as busy; once the retries are
-    // spent the slot is freed anyway — a permanently stuck line would be a
-    // self-inflicted outage, and the provider's own session cap bounds what
-    // is left of such a call.
+    // failures retry and keep the line counted as busy; when every attempt
+    // fails the line stays reserved until the provider's own session cap has
+    // certainly ended the call, so a replacement can never be admitted while
+    // this one may still be live, and a dead line still cannot last forever.
+    const startedAt = Date.now();
     const end = (attempt: number) => {
       void hangup(call.callId, { apiKey }).then(
         () => calls.delete(id),
@@ -479,10 +486,16 @@ export async function openPublicProfileVoice(
             return;
           }
           if (attempt >= ASSISTANT_LIMITS.hangupRetries) {
-            console.error(
-              `[public-profile-assistant] voice hang-up failed ${attempt} times; releasing the line (call ${call.callId})`,
+            const release = Math.max(
+              0,
+              startedAt + ASSISTANT_LIMITS.providerSessionCapMs - Date.now(),
             );
-            calls.delete(id);
+            console.error(
+              `[public-profile-assistant] voice hang-up failed ${attempt} times; line ${call.callId} stays reserved for ${Math.ceil(release / 1000)}s until the provider session cap`,
+            );
+            const expiry = setTimeout(() => calls.delete(id), release);
+            expiry.unref?.();
+            calls.set(id, { timer: expiry });
             return;
           }
           const retry = setTimeout(
