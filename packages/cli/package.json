@@ -22,7 +22,7 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-cli": "0.55.19"
+    "@happyvertical/smrt-app-cli": "0.57.32"
   },
   "devDependencies": {
     "@types/node": "catalog:",

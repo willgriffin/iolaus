@@ -1,6 +1,38 @@
 # Resume dependency release closure
 
-The resume production train (#223) consumes published SMRT **0.55.19** and SDK
+## Current adoption baseline (#236, 2026-10-26)
+
+The active published closure uses SMRT **0.57.32** and standard SDK **0.108.0**.
+OCR moves to **0.62.1**, the minimum required by ingestion's `^0.62.1` range.
+PDF **0.66.0**, spider **1.1.11**, animation **0.5.0** and Sharp **0.35.5** remain
+unchanged. All 57 first-party active lock identities, including independently
+versioned spider, have exact overrides and registry metadata records in
+`vendor/release/published-closure.json`. The verifier rejects an unrecorded
+first-party transitive identity.
+
+Normal and frozen pnpm installation, all six closure verifier contracts, and
+public ESM imports for core migrations, SQL, auth/server, PDF, OCR,
+ingestion/server and spider pass with Node **26.12.1** and pnpm **11.25.0**.
+`DeploymentPhaseTracker` imports from `@happyvertical/smrt-core/migrations`.
+Registry SHA-512 integrities match the frozen lock; installed versions match
+the closure records.
+Observed source references are SDK `v0.108.0` at
+`82f860d056251d89376844827fa573639f856273` and SMRT `v0.57.32` at
+`ce94e5805d8cd159a84c9d615b4cd2a2779ca0ab`; registry metadata supplies no
+`gitHead` or build attestation.
+
+The existing coordinated override policy still supersedes historical ranges
+from independent packages: PDF requests utils `^0.80.1` and OCR `^0.61.1`; OCR
+requests ai/utils `^0.80.0`; spider requests cache/utils `^0.74.8`; ingestion
+requests PDF `^0.65.9`. The standard SDK satisfies SMRT's new `^0.108.0`
+minimum. These import and identity checks do not qualify every downstream
+runtime behavior. Full integrated tests and deployment qualification belong to
+#236; the historical evidence below does not qualify the new baseline or a
+production rollout.
+
+## Historical resume release (#223)
+
+The resume production train (#223) consumed published SMRT **0.55.19** and SDK
 **0.103.5**, with PDF **0.66.0**, OCR **0.61.6**, Sharp **0.35.5** and animation
 **0.5.0**. All coordinated packages use exact registry versions and workspace
 overrides; ingestion's SMRT siblings remain on the same release. SDK 0.103.4 was

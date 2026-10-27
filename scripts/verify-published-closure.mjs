@@ -35,15 +35,17 @@ export function verifyPublishedClosure(root = resolve(import.meta.dirname, '..')
       assert.equal(manifest.version, pkg.version, `${pkg.name}: incompatible installed copy ${entry}`);
     }
   }
+  for (const identity of identities.filter((item) => item.startsWith('@happyvertical/'))) {
+    assert.ok(closure.packages.some((pkg) => identity === `${pkg.name}@${pkg.version}` || identity.startsWith(`${pkg.name}@${pkg.version}(`)), `unrecorded first-party lock identity ${identity}`);
+  }
   for (const manifestPath of ['package.json', 'apps/site/package.json', 'packages/cli/package.json', 'packages/resume/package.json']) {
     const manifest = JSON.parse(readFileSync(resolve(root, manifestPath), 'utf8'));
     for (const [name, version] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
       if (!name.startsWith('@happyvertical/')) continue;
       assert.match(version, /^\d+\.\d+\.\d+$/u, `${name}: expected a published version`);
       const pkg = closure.packages.find((item) => item.name === name);
-      // Independently versioned spider is outside this coordinated SDK/SMRT closure.
-      if (!pkg) assert.equal(name, '@happyvertical/spider');
-      else assert.equal(version, pkg.version, `${name}: direct dependency differs from closure`);
+      assert.ok(pkg, `${name}: missing published closure record`);
+      assert.equal(version, pkg.version, `${name}: direct dependency differs from closure`);
       const installed = JSON.parse(readFileSync(resolve(root, dirname(manifestPath), 'node_modules', name, 'package.json'), 'utf8'));
       assert.equal(installed.version, version, `${name}: direct installed link differs from manifest`);
     }
