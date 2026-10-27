@@ -11,6 +11,7 @@ vi.mock('./public-profile-service', () => ({
 vi.mock('./app-config', () => ({ isSharedHosted: mocks.shared }));
 
 import { publicProfileApiSchema } from '$lib/public-profile-api-contract';
+import type { InviteMessage } from './hosted-invite-email';
 import { publicProfileApiResponse } from './public-profile-api';
 import {
   ASSISTANT_LIMITS,
@@ -21,13 +22,18 @@ import {
   assistantErrorResponse,
   assistantInstructions,
   assistantPreflightResponse,
+  type HeldVoiceLine,
+  heldVoiceLines,
   liveVoiceCalls,
+  notifyHeldVoiceLine,
   openPublicProfileVoice,
   profileContext,
   publicAssistantEnabled,
   publicVoiceEnabled,
   resetPublicAssistantState,
   sseFrames,
+  VOICE_LINE_HELD,
+  VOICE_LINE_RELEASED_BY_CAP,
 } from './public-profile-assistant';
 
 const fixture = JSON.parse(
@@ -514,6 +520,10 @@ describe('voice endpoint', () => {
     enable(true);
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const alert = vi.fn(
+      async (_line: HeldVoiceLine) => ({ status: 'sent' }) as const,
+    );
     try {
       const createCall = vi.fn(async () => ({
         answer: 'v=0',
@@ -545,6 +555,7 @@ describe('voice endpoint', () => {
           openPublicProfileVoice(handle, voiceRequest(), '40.0.0.2', {
             createCall: createCall as never,
             hangup: broken as never,
+            alert,
           }),
         ),
       ).toBe(200);
@@ -553,28 +564,177 @@ describe('voice endpoint', () => {
       );
       for (let i = 1; i < ASSISTANT_LIMITS.hangupRetries; i++) {
         expect(liveVoiceCalls()).toBe(1);
+        // Every failed attempt is visible, not only the last.
+        expect(warnLog).toHaveBeenCalledTimes(i);
+        expect(String(warnLog.mock.calls[i - 1][0])).toContain(
+          `attempt ${i}/${ASSISTANT_LIMITS.hangupRetries}`,
+        );
+        expect(heldVoiceLines()).toBe(0);
+        expect(alert).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
       }
       expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
-      // Still reserved: the call may be live until the provider's own cap.
+      // Still reserved: the call may be live until the provider's own cap,
+      // and that is an alarm — a marked error line plus the operator email.
       expect(liveVoiceCalls()).toBe(1);
+      expect(heldVoiceLines()).toBe(1);
       expect(errorLog).toHaveBeenCalledTimes(1);
-      expect(String(errorLog.mock.calls[0][0])).not.toContain('sk-');
+      const held = String(errorLog.mock.calls[0][0]);
+      expect(held).toContain(VOICE_LINE_HELD);
+      expect(held).toContain('"callId":"call-2"');
+      expect(held).toContain('502 upstream');
+      expect(held).not.toContain('sk-');
+      expect(alert).toHaveBeenCalledTimes(1);
+      expect(alert.mock.calls[0][0]).toMatchObject({
+        callId: 'call-2',
+        attempts: ASSISTANT_LIMITS.hangupRetries,
+      });
+      expect(alert.mock.calls[0][0].heldSeconds).toBeGreaterThan(0);
+      expect(JSON.stringify(alert.mock.calls[0][0])).not.toContain('sk-');
       expect(
         await status(
           openPublicProfileVoice(handle, voiceRequest(), '40.0.0.3', {
             createCall: createCall as never,
             hangup: broken as never,
+            alert,
           }),
         ),
       ).toBe(200);
       await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.providerSessionCapMs);
       expect(liveVoiceCalls()).toBe(0);
+      expect(heldVoiceLines()).toBe(0);
       expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries * 2);
+      // The release by the cap is logged too, so a quiet recovery never hides
+      // that the call was never confirmed hung up.
+      const released = errorLog.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes(VOICE_LINE_RELEASED_BY_CAP));
+      expect(released).toHaveLength(2);
+      expect(released[0]).toContain('"callId":"call-2"');
     } finally {
       errorLog.mockRestore();
+      warnLog.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it('logs, under the same marker, an alert that could not be delivered', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({ answer: 'v=0', callId: 'c' }));
+      const broken = vi.fn(async () => {
+        throw new Error('upstream');
+      });
+      const alert = vi.fn(async () => {
+        throw new Error('smtp down');
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '41.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+            alert,
+          }),
+        ),
+      ).toBe(200);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 +
+          ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(alert).toHaveBeenCalledTimes(1);
+      const lines = errorLog.mock.calls.map((call) => String(call[0]));
+      expect(lines.filter((l) => l.includes(VOICE_LINE_HELD))).toHaveLength(2);
+      expect(lines.some((l) => l.includes('alert for c threw'))).toBe(true);
+      expect(heldVoiceLines()).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  describe('notifyHeldVoiceLine', () => {
+    const line = {
+      callId: 'rtc_123',
+      attempts: 8,
+      startedAt: '2026-10-27T10:00:00.000Z',
+      releaseAt: '2026-10-27T11:00:00.000Z',
+      heldSeconds: 3_300,
+    };
+    const smtp = {
+      SMTP_HOST: 'smtp.example',
+      SMTP_USER: 'u',
+      SMTP_PASSWORD: 'p',
+      SMTP_FROM: 'alerts@example',
+    };
+
+    it('emails the configured alert address with the call, no secrets', async () => {
+      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
+      expect(
+        await notifyHeldVoiceLine(line, {
+          environment: {
+            ...smtp,
+            IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL: 'mailto:ops@example.com',
+            IOLAUS_PUBLIC_ASSISTANT_OPENAI_API_KEY: 'sk-secret',
+          },
+          transport: { sendMail },
+        }),
+      ).toEqual({ status: 'sent' });
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      const message = sendMail.mock.calls[0][0];
+      expect(message.to).toBe('ops@example.com');
+      expect(message.from).toBe('alerts@example');
+      expect(message.subject).toContain('rtc_123');
+      expect(message.text).toContain('8 attempts');
+      expect(message.text).toContain('2026-10-27T11:00:00.000Z');
+      expect(message.text).toContain(VOICE_LINE_HELD);
+      expect(JSON.stringify(message)).not.toContain('sk-secret');
+    });
+
+    it('falls back to an email support address', async () => {
+      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
+      await notifyHeldVoiceLine(line, {
+        environment: { ...smtp, IOLAUS_SUPPORT_URL: 'mailto:help@example.com' },
+        transport: { sendMail },
+      });
+      expect(sendMail.mock.calls[0][0].to).toBe('help@example.com');
+    });
+
+    it('skips, naming the missing setting, when nobody can be told', async () => {
+      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
+      const outcome = await notifyHeldVoiceLine(line, {
+        environment: {
+          ...smtp,
+          IOLAUS_SUPPORT_URL: 'https://example.com/help',
+        },
+        transport: { sendMail },
+      });
+      expect(outcome.status).toBe('skipped');
+      expect(JSON.stringify(outcome)).toContain(
+        'IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL',
+      );
+      expect(sendMail).not.toHaveBeenCalled();
+    });
+
+    it('reports an SMTP failure without throwing', async () => {
+      const outcome = await notifyHeldVoiceLine(line, {
+        environment: {
+          ...smtp,
+          IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL: 'ops@example.com',
+        },
+        transport: {
+          sendMail: async () => {
+            throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
+          },
+        },
+      });
+      expect(outcome).toEqual({
+        status: 'failed',
+        reason: 'SMTP delivery failed (ECONNREFUSED)',
+      });
+    });
   });
 
   it('does not spend a handle or address start on a request turned away by busy lines', async () => {

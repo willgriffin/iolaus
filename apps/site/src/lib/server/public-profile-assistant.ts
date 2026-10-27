@@ -19,6 +19,12 @@ import {
 } from '$lib/public-profile-contract';
 import { resolveAiProfileClient } from './ai-config.js';
 import { isSharedHosted } from './app-config.js';
+import {
+  deliverEmail,
+  getSupportEmail,
+  type InviteEmailOutcome,
+  type InviteTransport,
+} from './hosted-invite-email.js';
 import { clientAddressKey, WindowRateLimiter } from './login-rate-limit.js';
 import { getPublicProfile } from './public-profile-service.js';
 
@@ -30,6 +36,12 @@ export const PUBLIC_ASSISTANT_OPENAI_KEY_ENV =
 export const PUBLIC_ASSISTANT_REALTIME_MODEL_ENV =
   'IOLAUS_PUBLIC_ASSISTANT_REALTIME_MODEL';
 export const PUBLIC_ASSISTANT_VOICE_ENV = 'IOLAUS_PUBLIC_ASSISTANT_VOICE';
+/** Where a held voice line is reported; falls back to the support address. */
+export const PUBLIC_ASSISTANT_ALERT_EMAIL_ENV =
+  'IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL';
+/** Stable log markers for a line that outlives its deadline; alert on them. */
+export const VOICE_LINE_HELD = 'VOICE_LINE_HELD';
+export const VOICE_LINE_RELEASED_BY_CAP = 'VOICE_LINE_RELEASED_BY_CAP';
 
 export const ASSISTANT_LIMITS = {
   /** Messages a client may send per handle per window. */
@@ -248,11 +260,30 @@ const voiceByHandle = new WindowRateLimiter(
   ASSISTANT_LIMITS.voicePerHandle,
   ASSISTANT_LIMITS.voiceWindowMs,
 );
-const calls = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
+const calls = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; held?: boolean }
+>();
 let pendingCalls = 0;
 /** Calls whose hang-up has not been confirmed; visible for operators and tests. */
 export function liveVoiceCalls(): number {
   return calls.size;
+}
+/** Lines past every hang-up attempt, reserved until the provider cap. */
+export function heldVoiceLines(): number {
+  let held = 0;
+  for (const call of calls.values()) if (call.held) held += 1;
+  return held;
+}
+/** Status and message of a provider error, for logs; never a header or key. */
+function errorSummary(error: unknown): string {
+  const status = (error as { status?: unknown } | null)?.status;
+  const message =
+    error instanceof Error ? error.message : String(error ?? 'unknown');
+  return `${typeof status === 'number' ? `${status} ` : ''}${message}`.slice(
+    0,
+    200,
+  );
 }
 /** The provider says the call no longer exists: that is a confirmed end. */
 function callAlreadyGone(error: unknown): boolean {
@@ -402,6 +433,65 @@ export async function answerPublicProfileChat(
 export interface AssistantVoiceDependencies {
   createCall?: typeof createOpenAIVoiceCall;
   hangup?: typeof hangupOpenAIVoiceCall;
+  alert?: (line: HeldVoiceLine) => Promise<unknown>;
+}
+
+/** A voice line no hang-up attempt confirmed; everything an operator needs, no key. */
+export interface HeldVoiceLine {
+  callId: string;
+  attempts: number;
+  startedAt: string;
+  releaseAt: string;
+  heldSeconds: number;
+}
+
+/**
+ * Ring the bell for a held line: one email to `IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL`
+ * (or the support address) over the configured SMTP. Never throws; a missing
+ * recipient or failed delivery is itself logged under the same marker so a
+ * log alert still fires.
+ */
+export async function notifyHeldVoiceLine(
+  line: HeldVoiceLine,
+  options: { environment?: Environment; transport?: InviteTransport } = {},
+): Promise<InviteEmailOutcome> {
+  const environment = options.environment ?? process.env;
+  const configured = environment[PUBLIC_ASSISTANT_ALERT_EMAIL_ENV]
+    ?.trim()
+    .replace(/^mailto:/iu, '');
+  const recipient =
+    configured && /^[^\s@/:?]+@[^\s@/:?]+\.[^\s@/:?]+$/u.test(configured)
+      ? configured
+      : getSupportEmail(environment);
+  if (!recipient)
+    return {
+      status: 'skipped',
+      reason: `no alert recipient (${PUBLIC_ASSISTANT_ALERT_EMAIL_ENV} or an email IOLAUS_SUPPORT_URL)`,
+    };
+  const minutes = Math.ceil(line.heldSeconds / 60);
+  const text = [
+    `A public-profile voice call could not be hung up after ${line.attempts} attempts.`,
+    '',
+    `Call: ${line.callId}`,
+    `Started: ${line.startedAt}`,
+    `Line reserved until: ${line.releaseAt} (about ${minutes} more minutes, the provider's session cap)`,
+    '',
+    'The call may still be live and billing until then. Check the OpenAI realtime dashboard for the call,',
+    'end it there if it is still running, and look for the provider error in the web pod logs',
+    `(marker ${VOICE_LINE_HELD}).`,
+  ].join('\n');
+  return await deliverEmail(
+    (from) => ({
+      from,
+      to: recipient,
+      subject: `Public profile voice line held past its deadline: ${line.callId}`,
+      text: `${text}\n`,
+      html: `<!doctype html><html><body><pre>${text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')}</pre></body></html>`,
+    }),
+    { environment, transport: options.transport },
+  );
 }
 
 async function readOffer(request: Request): Promise<string> {
@@ -454,6 +544,7 @@ export async function openPublicProfileVoice(
   pendingCalls += 1;
   const create = dependencies.createCall ?? createOpenAIVoiceCall;
   const hangup = dependencies.hangup ?? hangupOpenAIVoiceCall;
+  const alert = dependencies.alert ?? notifyHeldVoiceLine;
   let callId: string | undefined;
   try {
     const call = await create(offer, {
@@ -476,6 +567,9 @@ export async function openPublicProfileVoice(
     // fails the line stays reserved until the provider's own session cap has
     // certainly ended the call, so a replacement can never be admitted while
     // this one may still be live, and a dead line still cannot last forever.
+    // That accepted worst case is never quiet: every failed attempt warns,
+    // exhaustion logs a stable marker and emails the operator, and the
+    // eventual release logs again. Nothing here carries the API key.
     const startedAt = Date.now();
     const end = (attempt: number) => {
       void hangup(call.callId, { apiKey }).then(
@@ -490,14 +584,42 @@ export async function openPublicProfileVoice(
               0,
               startedAt + ASSISTANT_LIMITS.providerSessionCapMs - Date.now(),
             );
+            const line: HeldVoiceLine = {
+              callId: call.callId,
+              attempts: attempt,
+              startedAt: new Date(startedAt).toISOString(),
+              releaseAt: new Date(Date.now() + release).toISOString(),
+              heldSeconds: Math.ceil(release / 1000),
+            };
             console.error(
-              `[public-profile-assistant] voice hang-up failed ${attempt} times; line ${call.callId} stays reserved for ${Math.ceil(release / 1000)}s until the provider session cap`,
+              `[public-profile-assistant] ${VOICE_LINE_HELD} ${JSON.stringify(line)} — hang-up failed ${attempt} times (${errorSummary(error)}); the line stays reserved until the provider session cap`,
             );
-            const expiry = setTimeout(() => calls.delete(id), release);
+            void alert(line).then(
+              (outcome) => {
+                const status = (outcome as { status?: unknown } | null)?.status;
+                if (status !== 'sent')
+                  console.error(
+                    `[public-profile-assistant] ${VOICE_LINE_HELD} alert for ${call.callId} not delivered: ${JSON.stringify(outcome)}`,
+                  );
+              },
+              (cause: unknown) =>
+                console.error(
+                  `[public-profile-assistant] ${VOICE_LINE_HELD} alert for ${call.callId} threw (${errorSummary(cause)})`,
+                ),
+            );
+            const expiry = setTimeout(() => {
+              calls.delete(id);
+              console.error(
+                `[public-profile-assistant] ${VOICE_LINE_RELEASED_BY_CAP} ${JSON.stringify({ callId: call.callId, startedAt: line.startedAt })} — released by the provider session cap, never confirmed hung up`,
+              );
+            }, release);
             expiry.unref?.();
-            calls.set(id, { timer: expiry });
+            calls.set(id, { timer: expiry, held: true });
             return;
           }
+          console.warn(
+            `[public-profile-assistant] voice hang-up attempt ${attempt}/${ASSISTANT_LIMITS.hangupRetries} failed for line ${call.callId} (${errorSummary(error)}); retrying in ${ASSISTANT_LIMITS.hangupRetryMs / 1000}s`,
+          );
           const retry = setTimeout(
             () => end(attempt + 1),
             ASSISTANT_LIMITS.hangupRetryMs,
