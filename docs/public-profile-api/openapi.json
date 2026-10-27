@@ -55,6 +55,14 @@
                         "pdf": {
                           "type": "string",
                           "pattern": "^\\/people\\/[a-z][a-z0-9-]{2,62}\\/resume\\.pdf$"
+                        },
+                        "chat": {
+                          "type": "string",
+                          "pattern": "^\\/api\\/public\\/v1\\/profiles\\/[a-z][a-z0-9-]{2,62}\\/chat$"
+                        },
+                        "voice": {
+                          "type": "string",
+                          "pattern": "^\\/api\\/public\\/v1\\/profiles\\/[a-z][a-z0-9-]{2,62}\\/voice$"
                         }
                       },
                       "required": [

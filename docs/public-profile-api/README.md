@@ -47,6 +47,34 @@ Operational/configuration failures and invalid stored/output payloads return 503
 the same envelope. Error responses never include internal exception details.
 A generic HTML/routing 404 is not a withdrawal signal.
 
+## Profile assistant (optional)
+
+When `IOLAUS_PUBLIC_ASSISTANT_ENABLED=true` (shared hosted, public profiles on),
+the publication also advertises `links.chat`, and `links.voice` once
+`IOLAUS_PUBLIC_ASSISTANT_OPENAI_API_KEY` is set. Both are anonymous `POST`
+endpoints under the same handle and answer only from the published snapshot;
+they never read private records, remember visitors, or take actions.
+
+- `POST /api/public/v1/profiles/{handle}/chat` — JSON `{ "messages": [{ "role":
+  "user" | "assistant", "content": "…" }] }` (≤12 messages, ≤1000 characters
+  each, last one from the visitor). Responds `text/event-stream`: `data:
+  {"token":"…"}` frames followed by `data: {"done":true,"text":"…"}`.
+- `POST /api/public/v1/profiles/{handle}/voice` — `application/sdp` WebRTC
+  offer (≤64 KiB, audio only); responds `201 application/sdp` with the answer
+  and `x-voice-seconds`, the hard call length after which the call is hung up.
+
+Admission: browser requests must carry an `Origin` listed in
+`IOLAUS_PUBLIC_ASSISTANT_ORIGINS` (comma-separated origins; CORS echoes the
+matched origin, never `*`). Per client address: 12 questions per 10 minutes and
+4 calls per hour (IPv6 keyed by /64); per handle: 120 questions per 10 minutes;
+3 concurrent calls per replica. Replies are capped at 350 output tokens (voice
+800). The text model is the configured AI profile named by
+`IOLAUS_PUBLIC_ASSISTANT_PROFILE` (default `cheap`); voice uses
+`IOLAUS_PUBLIC_ASSISTANT_REALTIME_MODEL` (default `gpt-realtime-1.5`) and
+`IOLAUS_PUBLIC_ASSISTANT_VOICE` (default `ash`) directly against OpenAI with
+the dedicated key. Errors use `{ "apiVersion": 1, "error": { "code":
+"ASSISTANT_UNAVAILABLE", "message": "…" } }` with 400/403/404/413/415/429/502/503.
+
 ## Static-site consumer
 
 ```js
