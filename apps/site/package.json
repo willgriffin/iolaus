@@ -7,7 +7,7 @@
     "dev": "pnpm mcp:build-app-resource && vite dev",
     "build": "pnpm mcp:build-app-resource && vite build && tsx scripts/smoke-built-admin.ts",
     "preview": "node build",
-    "check": "pnpm mcp:build-app-resource && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check": "pnpm mcp:build-app-resource && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc --project tsconfig.release.json",
     "test": "pnpm mcp:build-app-resource && vitest run --exclude 'src/lib/components/sources/*.browser.spec.ts' && pnpm test:resume-import-extraction && pnpm test:mcp-apps && pnpm test:browser",
     "test:browser": "vitest --config vitest.browser.config.ts run",
     "test:resume-import-extraction": "node --test scripts/resume-import-extraction.spec.mjs",
