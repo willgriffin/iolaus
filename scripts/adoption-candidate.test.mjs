@@ -250,6 +250,7 @@ test('monitor and migration Secrets and env exclude runtime authentication and a
   const values = Object.fromEntries(
     [...allKeys].map((key) => [key, 'fixture-value']),
   );
+  values.IOLAUS_DEPLOYMENT_PROTOCOL = 'smrt-release-v1';
   for (const role of ['monitor', 'migration']) {
     const environment =
       role === 'monitor'
@@ -279,4 +280,64 @@ test('monitor and migration Secrets and env exclude runtime authentication and a
       ({ name }) => name === 'IOLAUS_WORKSPACE_MODE',
     ),
   );
+});
+
+test('adoption requires explicit protocol while actual helper retains legacy mode only for undefined', async () => {
+  const { releaseDeploymentProtocolEnabled } = await import(
+    './smrt-deployment-schema.mjs'
+  );
+  const { syntheticRuntimeValues } = await import(
+    './adoption-kind-fixture.mjs'
+  );
+  assert.equal(releaseDeploymentProtocolEnabled({}), false);
+  assert.equal(
+    releaseDeploymentProtocolEnabled({
+      IOLAUS_DEPLOYMENT_PROTOCOL: 'smrt-release-v1',
+    }),
+    true,
+  );
+  const runtime = candidateRuntime(images, syntheticAuthContract);
+  const values = {
+    ...syntheticRuntimeValues('a'.repeat(48)),
+    DATABASE_URL: 'postgresql://fixture/iolaus_qualification',
+    IOLAUS_MAINTENANCE_OBSERVER_POLICY: '{}',
+  };
+  for (const actor of ['runtime', 'monitor', 'migration']) {
+    const data = actorSecretData(runtime, values, actor);
+    assert.equal(data.IOLAUS_DEPLOYMENT_PROTOCOL, 'smrt-release-v1');
+    const missing = { ...values };
+    delete missing.IOLAUS_DEPLOYMENT_PROTOCOL;
+    assert.throws(
+      () => actorSecretData(runtime, missing, actor),
+      /Adoption requires explicit/,
+    );
+    for (const invalid of [
+      '',
+      'legacy',
+      'smrt-release-v2',
+      ' smrt-release-v1 ',
+    ]) {
+      assert.throws(() =>
+        releaseDeploymentProtocolEnabled({
+          IOLAUS_DEPLOYMENT_PROTOCOL: invalid,
+        }),
+      );
+      assert.throws(() =>
+        actorSecretData(
+          runtime,
+          { ...values, IOLAUS_DEPLOYMENT_PROTOCOL: invalid },
+          actor,
+        ),
+      );
+    }
+  }
+  for (const name of ['web', 'task', 'schedule'])
+    assert.ok(
+      runtime.workloads[name].env.some(
+        (entry) =>
+          entry.name === 'IOLAUS_DEPLOYMENT_PROTOCOL' &&
+          entry.valueFrom.secretKeyRef.name === 'iolaus-runtime-v1' &&
+          entry.valueFrom.secretKeyRef.key === 'IOLAUS_DEPLOYMENT_PROTOCOL',
+      ),
+    );
 });

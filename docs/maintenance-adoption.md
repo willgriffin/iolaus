@@ -69,7 +69,8 @@ platform-owned names are `iolaus-runtime-v1`, `iolaus-migration-v1`, and
 credential documents are committed. The target enumerates every required key;
 `DATABASE_URL` differs by role. The platform supplies non-secret deployment
 settings in the same immutable configuration contract. Monitor receives only
-DATABASE_URL, SMRT_RUNTIME_PROFILE, SMRT_APP_ID, NODE_ENV, HOME and XDG_CACHE_HOME.
+DATABASE_URL, SMRT_RUNTIME_PROFILE, IOLAUS_DEPLOYMENT_PROTOCOL, SMRT_APP_ID,
+NODE_ENV, HOME and XDG_CACHE_HOME.
 Migration receives those keys plus IOLAUS_WORKSPACE_MODE (the reachable canonical
 schedule seed/reconciliation checks shared mode) and its observer policy. Neither
 actor receives authentication, SMTP, S3, crawler, model or submission credentials.
@@ -161,6 +162,24 @@ required evidence. Flux Git phase publication/acknowledgement is covered by the
 upstream disposable exercise and must be rerun against the released runner; this
 fixture does not impersonate a Flux integration run. Rollout remains held.
 
+## Explicit adoption protocol boundary
+
+The inactive candidate requires `IOLAUS_DEPLOYMENT_PROTOCOL=smrt-release-v1`
+as an explicit key in its versioned immutable named Secrets. Web/task/schedule
+cannot omit this key; the disposable fixture supplies the exact value and its
+Secret producer rejects missing, empty or unsupported values. The same nonsecret
+mode key is included in monitor and migration configuration for consistent
+adoption identity. It is never inferred from a profile, database URL, owner role,
+release label or partial Kubernetes environment.
+
+The new strict role/static-schema startup gates apply only to explicitly opted
+application processes. An undefined protocol variable retains the exact legacy
+hosted startup behavior, including owner-role support and its existing schema
+initialization. Any defined unsupported value (including the empty string) fails
+closed. This is a compatibility boundary preserving the active topology while
+rollout is held; it does not relax the adoption schema/role contract. Existing
+`deploy/self-hosted/base` and production environment wiring remain untouched.
+
 ## Dedicated migration and deployed startup
 
 `pnpm --filter @willgriffin/iolaus-site db:release-migrate -- --maintenance-window`
@@ -220,15 +239,19 @@ not trusted labels or a `writer:false` assertion.
 Static manifests also carry inheritance-only metadata for undecorated
 SmrtClass/SmrtObject/SmrtCollection bases; those are not application tables. Web
 and task startup verify every concrete registered schema against static metadata
-and actual PostgreSQL columns/types/nullability, then use the public read-only
-schema diff to refuse pending changes. Chat's private model closure is registered
+and actual PostgreSQL columns/types/nullability, then attest their declared physical foreign keys and indexes directly through
+read-only `pg_catalog` queries. Chat's private model closure is registered
 with the public metadata-only `ObjectRegistry.registerFromManifest` API; importing
 its full facade would unnecessarily evaluate unrelated same-named message models.
 Released manifests supply transitive prompts/secrets/playbooks/reports metadata.
 The plain-Node scheduler checks its actual persisted jobs/events/agent-schedule
-closure from the same built artifact. All deployed processes require a role denied
-schema/database creation and table ownership; queue recovery and normal queue
-writes occur only after readiness. No startup path creates missing tables.
+closure from the same built artifact. Processes explicitly opted into the adoption
+protocol require a role denied
+schema/database creation and table ownership; their queue recovery and normal
+queue writes occur only after readiness. Their startup paths never create missing
+tables. Legacy hosted startup remains on its existing schema/initialization path
+when the protocol variable is undefined, including support for existing owner
+roles; adopting these gates requires the separate reviewed role cutover.
 
 ## Reproducing migration evidence
 
@@ -243,7 +266,7 @@ its database to the supplied PostgreSQL URL.
 ```bash
 export IOLAUS_RELEASE_TEST_DATABASE_URL='postgresql://<fixture-role>:<fixture-password>@127.0.0.1:<fixture-port>/<fixture-database>'
 pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/db-release-executor.integration.spec.ts scripts/db-release-catalog.integration.spec.ts
-pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/db-release-inspectors.spec.ts src/lib/server/deployment/observer.spec.ts scripts/db-common.spec.ts src/lib/server/application-runtime.spec.ts
+pnpm --filter @willgriffin/iolaus-site exec vitest run scripts/db-release-inspectors.spec.ts src/lib/server/deployment/observer.spec.ts src/lib/server/deployment/observer-http.spec.ts scripts/db-common.spec.ts src/lib/server/application-runtime.spec.ts
 node --test scripts/smrt-deployment-schema.test.mjs
 ```
 
@@ -258,3 +281,24 @@ Kubernetes observation. Pure observer tests verify chart-shaped maintenance and
 failure decisions. The image/Kind workflow is the separate real API/TLS/projected
 identity boundary. Unexecuted image/provider/Flux cases remain unqualified; local
 PostgreSQL success does not authorize rollout.
+
+The migration planner is an owner-oriented DDL tool, not the runtime readiness
+attestor: its information_schema foreign-key views hide existing constraints from
+a runtime principal lacking REFERENCES, even when that principal has full planned
+DML privileges. Readiness therefore reads pg_catalog directly through the public
+query API. It checks ordered FK source/target columns, target schema, actions and
+validation; declared index method, key order, uniqueness, NULLS NOT DISTINCT,
+readiness/validity and predicates. The one published jobs-ready partial predicate
+uses its fixed exact PostgreSQL deparse; unknown expressions/predicates fail
+closed as unsupported. Owning source-provider/accounting guard defaults and NOT
+NULL invariants remain intact; advisory-only planner suggestions never relax them.
+Real fixture tests remove/alter FKs and indexes under the maintenance actor and
+require the nonowner startup attestor to refuse them, then accept restored schema.
+The production web connection callback accepts the legacy owner without protocol,
+refuses that owner with the adoption protocol, and refuses a missing queue table
+under a DDL-denied role. Unrelated provider initialization is isolated in this DB
+startup test; it does not claim real auth/mail/assets readiness qualification.
+The observer parsing tests exercise the production native HTTPS/JSON path using
+raw API List payloads with absent item TypeMeta, validate list/item type agreement,
+assert verified-CA TLS options, and verify projected token rereads for rotation.
+These transport mocks complement, rather than replace, the real Kind/TLS boundary.

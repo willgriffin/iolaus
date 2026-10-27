@@ -34,6 +34,7 @@ export function fixtureDatabaseSql(statement) {
 export function syntheticRuntimeValues(password) {
   return {
     SMRT_RUNTIME_PROFILE: 'self-hosted',
+    IOLAUS_DEPLOYMENT_PROTOCOL: 'smrt-release-v1',
     SMRT_APP_ID: fixtureIdentity.applicationId,
     NODE_ENV: 'production',
     HOME: '/tmp',

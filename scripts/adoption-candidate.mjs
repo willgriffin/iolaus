@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { releaseDeploymentProtocolEnabled } from './smrt-deployment-schema.mjs';
 
 export const podSecurityContext = Object.freeze({
   runAsNonRoot: true,
@@ -30,6 +31,7 @@ const heartbeat = {
 export const actorBaseKeys = Object.freeze([
   'DATABASE_URL',
   'SMRT_RUNTIME_PROFILE',
+  'IOLAUS_DEPLOYMENT_PROTOCOL',
   'SMRT_APP_ID',
   'NODE_ENV',
   'HOME',
@@ -124,6 +126,11 @@ const workerEnv = (contract) => [
 // Both manifest references and actual fixture Secret data use this projection.
 // A role-specific Secret never contains another actor's credentials.
 export function actorSecretData(runtime, values, role) {
+  assert.equal(
+    releaseDeploymentProtocolEnabled(values),
+    true,
+    'Adoption requires explicit IOLAUS_DEPLOYMENT_PROTOCOL=smrt-release-v1.',
+  );
   const environment =
     role === 'runtime'
       ? runtime.workloads.web.env.concat(
