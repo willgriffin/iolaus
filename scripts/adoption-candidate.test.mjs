@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   candidateRuntime,
@@ -153,5 +157,24 @@ test('actual image metadata must bind source, lock, platform, user and public di
     assert.throws(() =>
       assertImageMetadata(altered, images.site, 'revision', 'lock'),
     );
+  }
+});
+
+test('candidate CLI produces parseable JSON with a real trailing newline', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'iolaus-candidate-contract-'));
+  try {
+    const input = join(directory, 'images.json');
+    const output = join(directory, 'target.json');
+    writeFileSync(input, JSON.stringify(images));
+    execFileSync(process.execPath, [
+      fileURLToPath(new URL('./adoption-candidate.mjs', import.meta.url)),
+      input,
+      output,
+    ]);
+    const bytes = readFileSync(output, 'utf8');
+    assert.equal(bytes.at(-1), '\n');
+    assert.deepEqual(JSON.parse(bytes), candidateRuntime(images));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

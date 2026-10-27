@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { requireIsolatedContext, until } from './adoption-kind-fixture.mjs';
+import {
+  fixtureIdentity,
+  fixtureDatabaseUrl,
+  fixtureDatabaseSql,
+  requireIsolatedContext,
+  until,
+} from './adoption-kind-fixture.mjs';
 
 test('qualification refuses arbitrary kube contexts and namespaces', () => {
   requireIsolatedContext('kind-iolaus-236-abc123', 'iolaus-qualification');
@@ -59,4 +65,20 @@ test('inactive adoption workflow never auto-triggers, promotes or touches GitOps
     'utf8',
   );
   assert.doesNotMatch(`${base}\n${production}`, /adoption/);
+});
+
+test('synthetic database matches the hosted application namespace and sends real psql lines', () => {
+  const url = new URL(fixtureDatabaseUrl('iolaus_runtime', 'a'.repeat(48)));
+  assert.equal(
+    url.pathname.slice(1),
+    fixtureIdentity.applicationId.replaceAll('-', '_'),
+  );
+  assert.notEqual(url.pathname, '/iolaus');
+  assert.deepEqual(fixtureDatabaseSql('SELECT 1;').split('\n'), [
+    '\\connect iolaus_qualification',
+    'SELECT 1;',
+    '',
+  ]);
+  assert.doesNotMatch(fixtureDatabaseSql('SELECT 1;'), /\\n/);
+  assert.throws(() => fixtureDatabaseUrl('postgres', 'a'.repeat(48)));
 });

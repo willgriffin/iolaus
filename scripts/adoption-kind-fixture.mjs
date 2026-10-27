@@ -16,6 +16,19 @@ import {
   verifyPublicArtifacts,
 } from './adoption-images.mjs';
 
+export const fixtureIdentity = Object.freeze({
+  applicationId: 'iolaus-qualification',
+  databaseName: 'iolaus_qualification',
+});
+export function fixtureDatabaseUrl(role, password) {
+  assert.match(role, /^iolaus_(maintenance|runtime|monitor)$/);
+  assert.match(password, /^[a-f0-9]{48}$/);
+  return `postgresql://${role}:${password}@postgres.iolaus-fixture.svc.cluster.local:5432/${fixtureIdentity.databaseName}`;
+}
+export function fixtureDatabaseSql(statement) {
+  return `\\connect ${fixtureIdentity.databaseName}\n${statement}\n`;
+}
+
 export function requireIsolatedContext(context, namespace) {
   assert.match(context, /^kind-iolaus-236-[a-z0-9-]+$/);
   assert.equal(namespace, 'iolaus-qualification');
@@ -215,9 +228,9 @@ export async function qualifyKind({
         statement,
       );
     sql(
-      `CREATE ROLE iolaus_maintenance LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_runtime LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_monitor LOGIN PASSWORD '${password}';\nCREATE DATABASE iolaus OWNER iolaus_maintenance;\n`,
+      `CREATE ROLE iolaus_maintenance LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_runtime LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_monitor LOGIN PASSWORD '${password}';\nCREATE DATABASE ${fixtureIdentity.databaseName} OWNER iolaus_maintenance;\n`,
     );
-    sql('\\connect iolaus\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;\n');
+    sql(fixtureDatabaseSql('REVOKE CREATE ON SCHEMA public FROM PUBLIC;'));
     // Real HTTP HeadBucket edge, no readiness override module or passed flag.
     // This endpoint is a synthetic fixture, not qualification of an S3 vendor.
     const assetCode =
@@ -244,11 +257,10 @@ export async function qualifyKind({
       },
       service('assets', 8080),
     ]);
-    const databaseUrl = (role) =>
-      `postgresql://${role}:${password}@postgres.iolaus-fixture.svc.cluster.local:5432/iolaus`;
+    const databaseUrl = (role) => fixtureDatabaseUrl(role, password);
     const values = {
       SMRT_RUNTIME_PROFILE: 'self-hosted',
-      SMRT_APP_ID: 'iolaus-qualification',
+      SMRT_APP_ID: fixtureIdentity.applicationId,
       NODE_ENV: 'production',
       HOME: '/tmp',
       XDG_CACHE_HOME: '/tmp/.cache',
@@ -479,7 +491,9 @@ export async function qualifyKind({
       },
     ]);
     const before = sql(
-      "\\connect iolaus\nSELECT count(*) FROM pg_tables WHERE schemaname='public';\n",
+      fixtureDatabaseSql(
+        "SELECT count(*) FROM pg_tables WHERE schemaname='public';",
+      ),
     ).trim();
     apply(render());
     const jobName = () =>
@@ -490,7 +504,9 @@ export async function qualifyKind({
     );
     assert.equal(
       sql(
-        "\\connect iolaus\nSELECT count(*) FROM pg_tables WHERE schemaname='public';\n",
+        fixtureDatabaseSql(
+          "SELECT count(*) FROM pg_tables WHERE schemaname='public';",
+        ),
       ).trim(),
       before,
       'Refusal must happen before schema or ledger writes.',
@@ -518,7 +534,9 @@ export async function qualifyKind({
     );
     checks.push('actual-wrapper-projected-observer-bootstrap');
     sql(
-      '\\connect iolaus\nGRANT CONNECT ON DATABASE iolaus TO iolaus_runtime, iolaus_monitor;\nGRANT USAGE ON SCHEMA public TO iolaus_runtime, iolaus_monitor;\nGRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO iolaus_runtime;\nGRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO iolaus_runtime;\nGRANT SELECT (status,finished_at,started_at) ON source_crawls TO iolaus_monitor;\nGRANT SELECT (queue,status) ON _smrt_jobs TO iolaus_monitor;\n',
+      fixtureDatabaseSql(
+        `GRANT CONNECT ON DATABASE ${fixtureIdentity.databaseName} TO iolaus_runtime, iolaus_monitor;\nGRANT USAGE ON SCHEMA public TO iolaus_runtime, iolaus_monitor;\nGRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO iolaus_runtime;\nGRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO iolaus_runtime;\nGRANT SELECT (status,finished_at,started_at) ON source_crawls TO iolaus_monitor;\nGRANT SELECT (queue,status) ON _smrt_jobs TO iolaus_monitor;\n`,
+      ),
     );
     release.release.phase = 'verify';
     release.release.sequence++;
