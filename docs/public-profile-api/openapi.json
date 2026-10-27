@@ -627,7 +627,7 @@
     "/api/public/v1/profiles/{handle}/voice": {
       "post": {
         "summary": "Open a bounded WebRTC voice call with the published profile.",
-        "description": "Anonymous; requires the deployment's dedicated voice key. Per client address 4 calls per hour; per handle 12 call starts per hour across all addresses; 3 concurrent calls per replica; the call is hung up after x-voice-seconds. The same Origin allowlist applies.",
+        "description": "Anonymous; requires the deployment's dedicated voice key. Per client address 4 calls per hour; per handle 12 call starts per hour across all addresses; 3 concurrent calls per replica; the server hangs the call up after x-voice-seconds; if the provider cannot be reached for the hang-up the line stays reserved and the call ends at the provider's own 60-minute session cap. The same Origin allowlist applies.",
         "parameters": [
           {
             "name": "handle",
@@ -656,7 +656,7 @@
             "description": "SDP answer for the offer.",
             "headers": {
               "x-voice-seconds": {
-                "description": "Hard call length in seconds; the server hangs up afterwards.",
+                "description": "Seconds after which the server hangs the call up. If the provider cannot be reached for that hang-up, the call ends at the provider's own session cap instead and the line stays reserved meanwhile.",
                 "schema": {
                   "type": "integer"
                 }

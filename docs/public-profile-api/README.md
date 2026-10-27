@@ -61,7 +61,8 @@ they never read private records, remember visitors, or take actions.
   {"token":"…"}` frames followed by `data: {"done":true,"text":"…"}`.
 - `POST /api/public/v1/profiles/{handle}/voice` — `application/sdp` WebRTC
   offer (≤64 KiB, audio only); responds `201 application/sdp` with the answer
-  and `x-voice-seconds`, the hard call length after which the call is hung up.
+  and `x-voice-seconds`, after which the server hangs the call up (see below
+  for what happens when the provider cannot be reached for that hang-up).
 
 Admission: browser requests must carry an `Origin` listed in
 `IOLAUS_PUBLIC_ASSISTANT_ORIGINS` (comma-separated origins; CORS echoes the
@@ -75,7 +76,8 @@ busy; if none succeeds the line stays reserved, with an operator-visible error,
 until the provider's own 60-minute session cap has certainly ended the call,
 and is released then. A replacement call is therefore never admitted while an
 unconfirmed one may still be live, and a dead line cannot outlast the provider
-cap. Worst-case spend per replica is three lines for one provider session each.
+cap. Worst-case spend per replica is three lines for one provider session each;
+enforcing the deadline independently of the hang-up API is tracked in #.
 `OPTIONS` answers the same typed 404 as the profile API while the feature is
 disabled or the handle is malformed, before any origin decision. Replies are capped at 350 output tokens (voice
 800). The text model is the configured AI profile named by
