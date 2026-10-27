@@ -20,6 +20,8 @@ import {
   assistantCorsHeaders,
   assistantErrorResponse,
   assistantInstructions,
+  assistantPreflightResponse,
+  liveVoiceCalls,
   openPublicProfileVoice,
   profileContext,
   publicAssistantEnabled,
@@ -120,6 +122,70 @@ describe('public profile assistant gating and CORS', () => {
       'javascript:alert(1), not a url',
     );
     expect(allowedOrigins().size).toBe(0);
+  });
+
+  it('exposes the call-length header to allow-listed browsers', () => {
+    enable();
+    expect(
+      assistantCorsHeaders(chatRequest({}))['access-control-expose-headers'],
+    ).toBe('x-voice-seconds');
+  });
+
+  it('preflight answers the typed 404 while disabled or for a bad handle, before any origin decision', async () => {
+    const evil = chatRequest({}, { origin: 'https://evil.example' });
+    for (const kind of ['chat', 'voice'] as const) {
+      expect(
+        assistantPreflightResponse(handle, chatRequest({}), kind).status,
+      ).toBe(404);
+      expect(assistantPreflightResponse(handle, evil, kind).status).toBe(404);
+    }
+    enable();
+    expect(
+      assistantPreflightResponse(handle, chatRequest({}), 'chat').status,
+    ).toBe(204);
+    expect(
+      assistantPreflightResponse('../x', chatRequest({}), 'chat').status,
+    ).toBe(404);
+    expect(assistantPreflightResponse(handle, evil, 'chat').status).toBe(403);
+    // Voice preflight needs the voice key too.
+    expect(
+      assistantPreflightResponse(handle, chatRequest({}), 'voice').status,
+    ).toBe(404);
+    enable(true);
+    const ok = assistantPreflightResponse(handle, chatRequest({}), 'voice');
+    expect(ok.status).toBe(204);
+    expect(ok.headers.get('access-control-allow-origin')).toBe(SITE);
+  });
+
+  it('describes both endpoints in the OpenAPI document', () => {
+    const openapi = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../../docs/public-profile-api/openapi.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    for (const kind of ['chat', 'voice']) {
+      const item = openapi.paths[`/api/public/v1/profiles/{handle}/${kind}`];
+      expect(item?.post).toBeDefined();
+      expect(item?.options).toBeDefined();
+      expect(Object.keys(item.post.responses)).toEqual(
+        expect.arrayContaining(['403', '404', '429', '503']),
+      );
+    }
+    expect(
+      openapi.paths['/api/public/v1/profiles/{handle}/chat'].post.responses[
+        '200'
+      ].content['text/event-stream'],
+    ).toBeDefined();
+    expect(
+      openapi.paths['/api/public/v1/profiles/{handle}/voice'].post.responses[
+        '201'
+      ].headers['x-voice-seconds'],
+    ).toBeDefined();
+    expect(openapi.components.schemas.AssistantError).toBeDefined();
   });
 
   it('typed errors never leak internals', async () => {
@@ -408,6 +474,42 @@ describe('voice endpoint', () => {
     }
   });
 
+  it('keeps a slot reserved until the provider confirms the hang-up', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'stuck',
+      }));
+      let failures = 2;
+      const hangup = vi.fn(async () => {
+        if (failures-- > 0) throw new Error('provider timeout');
+      });
+      const deps = { createCall: createCall as never, hangup: hangup as never };
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '30.0.0.1', deps),
+        ),
+      ).toBe(200);
+      expect(liveVoiceCalls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      expect(hangup).toHaveBeenCalledTimes(1);
+      // The first hang-up failed: the line is still counted as busy.
+      expect(liveVoiceCalls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      expect(hangup).toHaveBeenCalledTimes(2);
+      expect(liveVoiceCalls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      expect(hangup).toHaveBeenCalledTimes(3);
+      expect(liveVoiceCalls()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('caps concurrent calls and per-address attempts, and cleans up failed setups', async () => {
     enable(true);
     vi.useFakeTimers();
@@ -435,6 +537,16 @@ describe('voice endpoint', () => {
         );
       }
       expect(await open('7.7.7.7')).toBe(429);
+      // Distinct addresses cannot replenish one handle's starts without bound.
+      resetPublicAssistantState();
+      for (let i = 0; i < ASSISTANT_LIMITS.voicePerHandle; i++) {
+        expect(await open(`20.0.${Math.floor(i / 3)}.${i}`)).toBe(200);
+        await vi.advanceTimersByTimeAsync(
+          ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+        );
+      }
+      expect(await open('21.0.0.1')).toBe(429);
+      resetPublicAssistantState();
       const failing = vi.fn(async () => {
         throw new Error('provider down');
       });

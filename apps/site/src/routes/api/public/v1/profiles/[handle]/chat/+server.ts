@@ -2,6 +2,7 @@ import {
   answerPublicProfileChat,
   assistantCorsHeaders,
   assistantErrorResponse,
+  assistantPreflightResponse,
 } from '$lib/server/public-profile-assistant';
 import type { RequestHandler } from './$types';
 
@@ -20,16 +21,8 @@ export const POST: RequestHandler = async ({
     return assistantErrorResponse(error, safeCors(request));
   }
 };
-export const OPTIONS: RequestHandler = ({ request }) => {
-  try {
-    return new Response(null, {
-      status: 204,
-      headers: assistantCorsHeaders(request),
-    });
-  } catch (error) {
-    return assistantErrorResponse(error);
-  }
-};
+export const OPTIONS: RequestHandler = ({ params, request }) =>
+  assistantPreflightResponse(params.handle, request, 'chat');
 function safeCors(request: Request) {
   try {
     return assistantCorsHeaders(request);

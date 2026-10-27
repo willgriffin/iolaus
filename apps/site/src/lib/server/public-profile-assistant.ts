@@ -43,9 +43,14 @@ export const ASSISTANT_LIMITS = {
   /** The compact profile text the model is grounded in. */
   contextChars: 14_000,
   voicePerAddress: 4,
+  /** Call starts per handle per window, across every address. */
+  voicePerHandle: 12,
   voiceWindowMs: 60 * 60 * 1000,
   voiceConcurrent: 3,
   voiceSeconds: 150,
+  /** Hang-up retries after expiry; the slot stays taken until one succeeds. */
+  hangupRetries: 8,
+  hangupRetryMs: 15_000,
   voiceMaxOutputTokens: 800,
   offerBytes: 65_536,
 } as const;
@@ -111,9 +116,34 @@ export function assistantCorsHeaders(
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'POST, OPTIONS',
     'access-control-allow-headers': 'content-type, accept',
+    'access-control-expose-headers': 'x-voice-seconds',
     'access-control-max-age': '600',
     vary: 'origin',
   };
+}
+
+/**
+ * CORS preflight. A disabled feature or a malformed handle answers the same
+ * typed 404 as the profile API, before any origin decision, so an anonymous
+ * probe learns nothing about which deployments carry the assistant.
+ */
+export function assistantPreflightResponse(
+  handle: string,
+  request: Request,
+  kind: 'chat' | 'voice',
+): Response {
+  try {
+    const enabled =
+      kind === 'voice' ? publicVoiceEnabled() : publicAssistantEnabled();
+    if (!enabled || !publicProfileHandleSchema.safeParse(handle).success)
+      throw new AssistantHttpError(404, 'Profile unavailable.');
+    return new Response(null, {
+      status: 204,
+      headers: assistantCorsHeaders(request),
+    });
+  } catch (error) {
+    return assistantErrorResponse(error);
+  }
 }
 
 export function assistantErrorResponse(
@@ -208,12 +238,25 @@ const voiceByAddress = new WindowRateLimiter(
   ASSISTANT_LIMITS.voicePerAddress,
   ASSISTANT_LIMITS.voiceWindowMs,
 );
+const voiceByHandle = new WindowRateLimiter(
+  ASSISTANT_LIMITS.voicePerHandle,
+  ASSISTANT_LIMITS.voiceWindowMs,
+);
 const calls = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
 let pendingCalls = 0;
+/** Calls whose hang-up has not been confirmed; visible for operators and tests. */
+export function liveVoiceCalls(): number {
+  return calls.size;
+}
 
 /** Test seam: forget every window and live call. */
 export function resetPublicAssistantState() {
-  for (const limiter of [chatByAddress, chatByHandle, voiceByAddress])
+  for (const limiter of [
+    chatByAddress,
+    chatByHandle,
+    voiceByAddress,
+    voiceByHandle,
+  ])
     (limiter as unknown as { windows: Map<string, unknown> }).windows.clear();
   for (const [id, call] of calls) {
     clearTimeout(call.timer);
@@ -391,6 +434,7 @@ export async function openPublicProfileVoice(
   const offer = await readOffer(request);
   if (
     !voiceByAddress.allow(`voice:${clientAddressKey(address)}`) ||
+    !voiceByHandle.allow(`voice:${handle}`) ||
     calls.size + pendingCalls >= ASSISTANT_LIMITS.voiceConcurrent
   )
     throw new AssistantHttpError(429, 'Voice lines are busy.');
@@ -413,10 +457,31 @@ export async function openPublicProfileVoice(
     });
     callId = call.callId;
     const id = randomUUID();
-    const timer = setTimeout(() => {
-      calls.delete(id);
-      void hangup(call.callId, { apiKey }).catch(() => undefined);
-    }, ASSISTANT_LIMITS.voiceSeconds * 1000);
+    // The slot is released only once the provider confirms the hang-up; a
+    // failed hang-up retries and keeps the line counted as busy meanwhile.
+    const end = (attempt: number) => {
+      void hangup(call.callId, { apiKey }).then(
+        () => calls.delete(id),
+        () => {
+          if (attempt >= ASSISTANT_LIMITS.hangupRetries) {
+            console.error(
+              '[public-profile-assistant] voice hang-up failed; slot stays reserved',
+            );
+            return;
+          }
+          const retry = setTimeout(
+            () => end(attempt + 1),
+            ASSISTANT_LIMITS.hangupRetryMs,
+          );
+          retry.unref?.();
+          calls.set(id, { timer: retry });
+        },
+      );
+    };
+    const timer = setTimeout(
+      () => end(1),
+      ASSISTANT_LIMITS.voiceSeconds * 1000,
+    );
     timer.unref?.();
     calls.set(id, { timer });
     return new Response(call.answer, {

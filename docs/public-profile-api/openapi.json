@@ -421,6 +421,423 @@
           }
         }
       }
+    },
+    "/api/public/v1/profiles/{handle}/chat": {
+      "post": {
+        "summary": "Ask the published profile a question; the reply is grounded only in the published snapshot.",
+        "description": "Anonymous. Browser requests must send an Origin listed in IOLAUS_PUBLIC_ASSISTANT_ORIGINS. Per client address 12 questions per 10 minutes; per handle 120 per 10 minutes. Replies are capped at 350 output tokens.",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,62}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "messages"
+                ],
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "role",
+                        "content"
+                      ],
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "assistant"
+                          ]
+                        },
+                        "content": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        }
+                      }
+                    }
+                  }
+                },
+                "description": "Bounded history, newest last; the last message must be from the visitor."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server-sent events: `data: {\"token\": \"…\"}` frames followed by one `data: {\"done\": true, \"text\": \"…\"}`.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body or offer (400), origin not allowed (403), profile unavailable or feature disabled (404), offer too large (413), unsupported media type (415), window or concurrency limit (429), provider failure (502), service or voice unavailable (503).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "options": {
+        "summary": "CORS preflight for an allow-listed origin.",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Allowed origin; echoes access-control-allow-origin, never *."
+          },
+          "403": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/v1/profiles/{handle}/voice": {
+      "post": {
+        "summary": "Open a bounded WebRTC voice call with the published profile.",
+        "description": "Anonymous; requires the deployment's dedicated voice key. Per client address 4 calls per hour; 3 concurrent calls per replica; the call is hung up after x-voice-seconds. The same Origin allowlist applies.",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,62}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/sdp": {
+              "schema": {
+                "type": "string",
+                "maxLength": 65536,
+                "description": "WebRTC SDP offer with an audio media section (starts with v=0)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "SDP answer for the offer.",
+            "headers": {
+              "x-voice-seconds": {
+                "description": "Hard call length in seconds; the server hangs up afterwards.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/sdp": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request body or offer (400), origin not allowed (403), profile unavailable or feature disabled (404), offer too large (413), unsupported media type (415), window or concurrency limit (429), provider failure (502), service or voice unavailable (503).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "options": {
+        "summary": "CORS preflight for an allow-listed origin.",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{2,62}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Allowed origin; echoes access-control-allow-origin, never *."
+          },
+          "403": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed assistant error; never includes internal details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AssistantError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "error"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "ASSISTANT_UNAVAILABLE"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
