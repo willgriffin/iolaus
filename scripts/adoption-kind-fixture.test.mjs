@@ -53,6 +53,8 @@ test('rendered chart applies bind the isolated namespace while explicit fixture 
 
 test('qualification progress accepts static stages and never echoes unknown sensitive input', () => {
   assert.equal(qualificationStageMessage('image-identity'), '[adoption] image-identity');
+  for (const stage of ['worker-sigterm-task', 'worker-sigterm-schedule', 'monitor-check'])
+    assert.equal(qualificationStageMessage(stage), `[adoption] ${stage}`);
   const sensitive = 'fixture-token-that-must-not-be-logged';
   assert.throws(() => qualificationStageMessage(sensitive), (error) => {
     assert.match(error.message, /Unknown qualification stage/);

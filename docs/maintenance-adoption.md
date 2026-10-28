@@ -344,3 +344,8 @@ The observer parsing tests exercise the production native HTTPS/JSON path using
 raw API List payloads with absent item TypeMeta, validate list/item type agreement,
 assert verified-CA TLS options, and verify projected token rereads for rotation.
 These transport mocks complement, rather than replace, the real Kind/TLS boundary.
+
+Qualification reports separate fixed stages for each idle worker shutdown and
+the monitor Job. A failed monitor wait emits only bounded allowlisted Pod states
+and fixed log categories, then rethrows the original failure and cleans up.
+The monitor completion assertion and 90-second wait remain required.

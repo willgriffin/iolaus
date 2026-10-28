@@ -32,6 +32,7 @@ const qualificationStages = new Set([
   'runtime-readiness', 'http-and-operator', 'worker-and-monitor',
   'runtime-readiness-web', 'runtime-readiness-task',
   'runtime-readiness-schedule', 'runtime-readiness-extractor',
+  'worker-sigterm-task', 'worker-sigterm-schedule', 'monitor-check',
   'source-and-extractor', 'evidence', 'cleanup-started', 'cleanup-completed',
 ]);
 let activeQualificationStage = 'preflight';
@@ -810,6 +811,7 @@ export async function qualifyKind({
     // This idle-queue scenario does not claim inflight provider cancellation.
     checkpoint('worker-and-monitor');
     for (const name of ['task', 'schedule']) {
+      checkpoint(`worker-sigterm-${name}`);
       const deployment = get('deployment', `iolaus-${name}`);
       const selection = Object.entries(deployment.spec.selector.matchLabels)
         .map(([key, value]) => `${key}=${value}`)
@@ -841,22 +843,42 @@ export async function qualifyKind({
       );
     }
     checks.push('actual-worker-start-idle-sigterm-clean-exit-and-restart');
-    kubectl(
-      '-n',
-      namespace,
-      'create',
-      'job',
-      'monitor-check',
-      '--from=cronjob/iolaus-monitor',
-    );
-    kubectl(
-      '-n',
-      namespace,
-      'wait',
-      '--for=condition=complete',
-      'job/monitor-check',
-      '--timeout=90s',
-    );
+    checkpoint('monitor-check');
+    try {
+      kubectl(
+        '-n',
+        namespace,
+        'create',
+        'job',
+        'monitor-check',
+        '--from=cronjob/iolaus-monitor',
+      );
+      kubectl(
+        '-n',
+        namespace,
+        'wait',
+        '--for=condition=complete',
+        'job/monitor-check',
+        '--timeout=90s',
+      );
+    } catch (error) {
+      try {
+        const pods = JSON.parse(kubectl('--request-timeout=10s', '-n', namespace,
+          'get', 'pods', '-l', 'job-name=monitor-check', '-o', 'json')).items;
+        console.log(`[adoption] runtime-status ${JSON.stringify({ workload: 'monitor',
+          pods: runtimePodDiagnostics(pods) })}`);
+        for (const pod of pods.slice(0, 2)) {
+          if (!/^monitor-check-[a-z0-9-]+$/.test(pod.metadata.name)) continue;
+          const logs = kubectl('--request-timeout=10s', '-n', namespace,
+            'logs', pod.metadata.name, '--tail=80');
+          console.log(`[adoption] runtime-log-categories ${JSON.stringify({
+            workload: 'monitor', categories: runtimeLogCategories(logs) })}`);
+        }
+      } catch {
+        console.log('[adoption] runtime-diagnostics-unavailable monitor');
+      }
+      throw error;
+    }
     checks.push('actual-monitor-with-column-restricted-database-role');
     checkpoint('source-and-extractor');
     const parityFile = join(scratch, 'parity.json');
