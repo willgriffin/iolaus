@@ -465,8 +465,10 @@ const publicProfileMocks = vi.hoisted(() => ({
   publishPublicProfile: vi.fn(),
   unpublishPublicProfile: vi.fn(),
 }));
+const hostedMocks = vi.hoisted(() => ({ shared: false }));
 vi.mock('./app-config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./app-config.js')>()),
+  isSharedHosted: () => hostedMocks.shared,
   publicProfilesEnabled: () => publicProfileMocks.enabled,
 }));
 vi.mock('./public-profile-service.js', () => ({
@@ -1371,6 +1373,62 @@ describe('MCP public tool policy', () => {
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('resolves an application update through the owner once: a foreign row is a 404 before any guard, and the guards and the commit share one snapshot', async () => {
+    hostedMocks.shared = true;
+    try {
+      // `app-submitted` carries no owner tuple: another owner's row in the
+      // same tenant. A scope change would otherwise hit the "locked
+      // materials" guard and disclose its state.
+      await expect(
+        callMcpToolWithAuthorityFixture({
+          arguments: { id: 'app-submitted', resumeAssetId: 'asset-global' },
+          locals: ownerLocals,
+          name: 'application_update',
+          permissions: ['workflow.profile.manage'],
+          tenantId: 'tenant-1',
+          user: { id: 'user-1' },
+        }),
+      ).rejects.toMatchObject({
+        message: 'Application not found.',
+        status: 404,
+      });
+      expect(
+        applicationConcurrencyMocks.commitApplicationIfCurrent,
+      ).not.toHaveBeenCalled();
+      expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
+
+      // The owner's own draft: guards and commit run on the same object the
+      // scoped lookup returned.
+      const owned = {
+        ...(mcpMocks.applications.get('app-draft') as Record<string, unknown>),
+        candidateProfileId: 'profile-1',
+        ownerUserId: 'user-1',
+        tenantId: 'tenant-1',
+      };
+      mcpMocks.applications.set('app-draft', owned);
+      const response = await callMcpToolWithAuthorityFixture({
+        arguments: { id: 'app-draft', notes: 'Scoped update' },
+        locals: ownerLocals,
+        name: 'application_update',
+        permissions: ['workflow.profile.manage'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      });
+      expect(
+        applicationConcurrencyMocks.commitApplicationIfCurrent,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        applicationConcurrencyMocks.commitApplicationIfCurrent.mock.calls[0][0],
+      ).toBe(mcpMocks.applications.get('app-draft'));
+      expect(JSON.parse(response.content[0].text)).toMatchObject({
+        id: 'app-draft',
+        notes: 'Scoped update',
+      });
+    } finally {
+      hostedMocks.shared = false;
+    }
   });
 
   it('looks up the shared tag vocabulary read-only under the profile capability', async () => {
