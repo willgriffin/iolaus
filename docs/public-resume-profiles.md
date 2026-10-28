@@ -81,4 +81,6 @@ bounded waiting queue; PDF size is limited to 10 MiB.
 
 The [versioned public-profile API](public-profile-api/README.md) exposes only
 the current published snapshot for anonymous static-site consumers, with typed
-withdrawal responses, an opaque revision token, synthetic fixtures and schemas.
+withdrawal responses, an opaque revision token, synthetic fixtures and schemas. With `IOLAUS_PUBLIC_ASSISTANT_ENABLED=true` it also offers a bounded,
+anonymous assistant (text, and voice with a dedicated OpenAI key) that answers
+only from that snapshot; see the API README for its flags and limits.

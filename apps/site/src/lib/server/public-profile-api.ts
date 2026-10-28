@@ -6,6 +6,10 @@ import {
   publicProfileSnapshotSchema,
 } from '$lib/public-profile-contract';
 import { publicProfileApiHeaders } from './public-profile-api-transport';
+import {
+  publicAssistantEnabled,
+  publicVoiceEnabled,
+} from './public-profile-assistant';
 import { getPublicProfile } from './public-profile-service';
 
 function unavailable() {
@@ -46,6 +50,12 @@ export async function publicProfileApiResponse(
       links: {
         profile: `/people/${current.handle}`,
         pdf: `/people/${current.handle}/resume.pdf`,
+        ...(publicAssistantEnabled()
+          ? { chat: `/api/public/v1/profiles/${current.handle}/chat` }
+          : {}),
+        ...(publicVoiceEnabled()
+          ? { voice: `/api/public/v1/profiles/${current.handle}/voice` }
+          : {}),
       },
       profile,
     });

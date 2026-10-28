@@ -9,6 +9,7 @@ import { getSmrtOptions } from '$lib/server/db';
 import { getLocalOAuth } from '$lib/server/local-oauth';
 import {
   isPublicProfileApiPath,
+  isPublicProfileAssistantPath,
   publicProfileApiHeaders,
 } from '$lib/server/public-profile-api-transport';
 import { startPublishedResumePrime } from '$lib/server/resume-prime';
@@ -154,8 +155,41 @@ const authenticatedHandle = sequence(
   authGuard,
 );
 
+/** The profile assistant is credential-free too; its routes own CORS and limits. */
+const assistantHandle: Handle = async ({ event, resolve }) => {
+  let response: Response;
+  if (!['POST', 'OPTIONS'].includes(event.request.method)) {
+    response = new Response(null, {
+      status: 405,
+      headers: { allow: 'POST, OPTIONS' },
+    });
+  } else {
+    try {
+      response = await resolve(event);
+    } catch {
+      response = Response.json(
+        {
+          apiVersion: 1,
+          error: {
+            code: 'ASSISTANT_UNAVAILABLE',
+            message: 'Assistant unavailable.',
+          },
+        },
+        { status: 503 },
+      );
+    }
+  }
+  response.headers.set('cache-control', 'no-store');
+  response.headers.set('x-robots-tag', 'noindex, nofollow');
+  response.headers.delete('set-cookie');
+  response.headers.delete('access-control-allow-credentials');
+  return response;
+};
+
 /** Published profile JSON is credential-free, including stale cookies/bearers. */
 export const handle: Handle = async ({ event, resolve }) => {
+  if (isPublicProfileAssistantPath(event.url.pathname))
+    return assistantHandle({ event, resolve });
   if (!isPublicProfileApiPath(event.url.pathname))
     return authenticatedHandle({ event, resolve });
   let response: Response;
