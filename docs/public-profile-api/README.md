@@ -80,13 +80,13 @@ intervals, and the silencing is re-sent until the provider echoes it, or again
 if the client reconfigures the session back. Silencing is a brake on the
 assistant's spend, not a boundary: only the hang-up API or the provider's own
 60-minute cap tears the media path down. A call's slot is released only on a
-confirmed end: the provider confirms the hang-up, reports the call already gone
-(404/410, the usual case when the visitor hangs up first), or closes the
-websocket normally (code 1000) once the deadline has passed. A normal close
-before the deadline brings the deadline forward through the same retried
-hang-up, since a provider restart can close the link while the session lives
-on; an abnormal or going-away close, a missing code, or a socket that never
-opened confirms nothing. If neither lever ever confirms the end, the line stays
+confirmed end: the provider confirms the hang-up or reports the call already
+gone (404/410, the usual case when the visitor hangs up first). The websocket
+never confirms an end, because a provider restart closes it exactly as a
+finished session does: a normal close (code 1000) before the deadline brings
+the deadline forward through the same retried hang-up, one after the deadline
+changes nothing, and an abnormal or going-away close, a missing code, or a
+socket that never opened is a lost link. If neither lever ever confirms the end, the line stays
 reserved until the provider's own 60-minute session cap has certainly ended the
 call, and is released then. A replacement call is therefore never admitted while
 an unconfirmed one may still be live, and a dead line cannot outlast the
@@ -99,9 +99,8 @@ which could echo the request) and whether the provider has acknowledged the
 silencing; the final failure logs one `console.error` carrying the stable marker
 `VOICE_LINE_HELD` and a JSON record (`callId`, `attempts`, `startedAt`,
 `releaseAt`, `heldSeconds`, `silenced`, the last meaning acknowledged by the
-provider); the eventual release logs `VOICE_LINE_RELEASED_BY_CAP`, or a
-`console.warn` if the provider closes the session first. A lost or never-opened
-monitor logs its close code. Alert on the `VOICE_LINE_` markers in the web pod
+provider); the eventual release logs `VOICE_LINE_RELEASED_BY_CAP`. A lost, never-opened
+or closed monitor logs its close code. Alert on the `VOICE_LINE_` markers in the web pod
 logs; the API key and provider payloads never appear in any of these lines.
 
 `OPTIONS` answers the same typed 404 as the profile API while the feature is

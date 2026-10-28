@@ -455,9 +455,9 @@ export const VOICE_MONITOR_URL = 'wss://api.openai.com/v1/realtime';
 /** `WebSocket.OPEN`. */
 const SOCKET_OPEN = 1;
 /**
- * The one close code that means the provider ended the session itself. 1001
- * (going away) is what a server sends when it drains or restarts, and a
- * missing code says nothing, so both count as a lost link.
+ * The one close code the provider sends on purpose. 1001 (going away) is what
+ * a server sends when it drains or restarts, and a missing code says nothing,
+ * so both count as a lost link.
  */
 const SESSION_ENDED_CLOSE_CODE = 1000;
 /** How often the server re-silences a session the client keeps reconfiguring. */
@@ -531,19 +531,20 @@ interface VoiceMonitorHooks {
   onOpen: () => void;
   /** The provider echoed its session configuration. */
   onSession: (silent: boolean) => void;
-  /** The provider closed the session itself (a clean 1000 after open). */
-  onEnded: () => void;
+  /** The provider closed the link normally (1000) after a successful open. */
+  onClosed: () => void;
 }
 
 /**
  * Watch one call from the provider side. OpenAI Realtime exposes every WebRTC
  * call's session over a websocket keyed by call id; it closes when the
- * session ends, whoever ended it. A normal close (1000) after a successful
- * open is the provider saying the session is over, independent of the
- * hang-up API. Any other close — abnormal, going away, no code, or a socket
- * that never opened — confirms nothing and only loses this second lever.
- * Server events are parsed for the session echo alone and never logged: the
- * socket's close code is the only detail that reaches a line.
+ * session ends, whoever ended it, but a provider restart closes it the same
+ * way while the media session lives on, so no close confirms an end. A
+ * normal close (1000) after a successful open is reported as the provider's
+ * own signal; any other close — abnormal, going away, no code, or a socket
+ * that never opened — is a lost link. Server events are parsed for the
+ * session echo alone and never logged: the socket's close code is the only
+ * detail that reaches a line.
  */
 function watchVoiceCall(
   callId: string,
@@ -587,7 +588,7 @@ function watchVoiceCall(
     if (hooks.released()) return;
     const code = typeof event?.code === 'number' ? event.code : 1005;
     if (opened && code === SESSION_ENDED_CLOSE_CODE) {
-      hooks.onEnded();
+      hooks.onClosed();
       return;
     }
     console.warn(
@@ -670,19 +671,18 @@ export async function openPublicProfileVoice(
     // The deadline has two independent levers. At the deadline the provider
     // websocket silences the session and the hang-up API ends the call; the
     // hang-up is retried on failure, the silencing re-sent until the provider
-    // echoes it. The slot is released only on a confirmed end: a hang-up 2xx,
-    // a provider that says the call is already gone (404/410, the usual case
-    // when the visitor hangs up first), or the provider closing the websocket
-    // normally once the deadline has passed. A normal close before the
-    // deadline brings the deadline forward instead, through the same retried
-    // and alarmed hang-up, since a provider restart can close a link while
-    // the media session lives on. When both levers fail the line stays
-    // reserved until the provider's own session cap has certainly ended the
-    // call, so a replacement is never admitted while this one may still be
-    // live, and a dead line still cannot last forever. That rare worst case
-    // is never quiet: every failed attempt warns, exhaustion logs a stable
-    // marker and the eventual release logs again. Nothing here carries the
-    // API key.
+    // echoes it. Only the hang-up API confirms an end — a 2xx, or a provider
+    // that says the call is already gone (404/410, the usual case when the
+    // visitor hangs up first) — because a provider restart closes the
+    // websocket exactly as a finished session does. A normal close before the
+    // deadline therefore brings the deadline forward through that same
+    // retried and alarmed hang-up; one after it changes nothing. When both
+    // levers fail the line stays reserved until the provider's own session
+    // cap has certainly ended the call, so a replacement is never admitted
+    // while this one may still be live, and a dead line still cannot last
+    // forever. That rare worst case is never quiet: every failed attempt
+    // warns, exhaustion logs a stable marker and the eventual release logs
+    // again. Nothing here carries the API key.
     let released = false;
     let silenceRequested = false;
     let silenceResends = 0;
@@ -765,22 +765,19 @@ export async function openPublicProfileVoice(
         // The client reconfigured the session back: silence it again.
         if (!silent) silence();
       },
-      onEnded: () => {
-        if (!deadlineReached) {
-          // The provider closed the link before the deadline — the visitor
-          // hung up, or the provider restarted under a live call. Only the
-          // hang-up API can tell which, so the deadline comes forward: its
-          // 2xx or 404 releases the line, and failures retry and alarm.
-          clearTimeout(line.timer);
-          end(1);
+      onClosed: () => {
+        if (deadlineReached) {
+          // The hang-up API is already deciding; the link is simply gone.
+          console.warn(
+            `[public-profile-assistant] voice monitor for line ${call.callId} closed (${SESSION_ENDED_CLOSE_CODE}) after the deadline; the hang-up API alone ends this call now`,
+          );
           return;
         }
-        const wasHeld = line.held === true;
-        release();
-        if (wasHeld)
-          console.warn(
-            `[public-profile-assistant] held line ${call.callId} released: the provider closed the session`,
-          );
+        // The visitor hung up, or the provider restarted under a live call.
+        // Only the hang-up API can tell which, so the deadline comes forward:
+        // its 2xx or 404 releases the line, and failures retry and alarm.
+        clearTimeout(line.timer);
+        end(1);
       },
     });
     return new Response(call.answer, {

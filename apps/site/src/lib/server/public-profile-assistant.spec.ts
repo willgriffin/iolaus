@@ -745,7 +745,7 @@ describe('voice endpoint', () => {
     }
   });
 
-  it('silences the session over the provider websocket when the hang-up fails, and frees the line when the provider closes it', async () => {
+  it('silences the session over the provider websocket when the hang-up fails, and keeps the line when the provider closes the link', async () => {
     enable(true);
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -812,21 +812,29 @@ describe('voice endpoint', () => {
       expect(socket.sent).toHaveLength(9);
       expect(socket.events[8].type).toBe('session.update');
       socket.echoSession(true);
-      // The provider closes the session: that is a confirmed end. The line
-      // is released and no further hang-up is attempted.
+      // The provider closes the link normally. After the deadline that is
+      // not a confirmed end — a restart closes it the same way — so the line
+      // stays reserved, the hang-up keeps retrying and exhaustion alarms.
       socket.close(1000);
-      expect(liveVoiceCalls()).toBe(0);
-      expect(heldVoiceLines()).toBe(0);
-      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs * 3);
-      expect(broken).toHaveBeenCalledTimes(3);
-      expect(errorLog).not.toHaveBeenCalled();
+      expect(liveVoiceCalls()).toBe(1);
+      expect(String(warnLog.mock.calls.at(-1)?.[0])).toContain(
+        'closed (1000) after the deadline',
+      );
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(heldVoiceLines()).toBe(1);
+      expect(String(errorLog.mock.calls[0][0])).toContain(VOICE_LINE_HELD);
+      expect(String(errorLog.mock.calls[0][0])).toContain('"silenced":true');
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });
 
-  it('records a silenced held line, and releases it when the provider finally closes the session', async () => {
+  it('records a silenced held line, and keeps it to the cap whatever the monitor does', async () => {
     enable(true);
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -860,17 +868,17 @@ describe('voice endpoint', () => {
       expect(held).toContain(VOICE_LINE_HELD);
       expect(held).toContain('"silenced":true');
       FakeSocket.last.close(1000);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(heldVoiceLines()).toBe(1);
+      const lines = warnLog.mock.calls.map((call) => String(call[0]));
+      expect(lines.at(-1)).toContain('closed (1000) after the deadline');
+      // Only the cap releases a held line, with its marker.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.providerSessionCapMs);
       expect(liveVoiceCalls()).toBe(0);
       expect(heldVoiceLines()).toBe(0);
-      const lines = warnLog.mock.calls.map((call) => String(call[0]));
-      expect(lines.at(-1)).toContain('held line rtc_2 released');
-      // Released by the provider, not by the cap: no cap marker follows.
-      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.providerSessionCapMs);
-      expect(
-        errorLog.mock.calls.some((call) =>
-          String(call[0]).includes(VOICE_LINE_RELEASED_BY_CAP),
-        ),
-      ).toBe(false);
+      expect(String(errorLog.mock.calls.at(-1)?.[0])).toContain(
+        VOICE_LINE_RELEASED_BY_CAP,
+      );
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
