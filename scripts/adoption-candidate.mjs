@@ -285,7 +285,7 @@ export function candidateRuntime(images, reviewedContract) {
     serviceAccountName: 'iolaus-monitor',
     schedule: '*/5 * * * *',
     readinessProbe: { exec: { command: ['node', '--version'] } },
-    resources: resources('250m', '256Mi'),
+    resources: resources('250m', '512Mi'),
   });
   const migration = {
     image: site,
@@ -333,7 +333,7 @@ export function requirePublishedPrerequisites(input) {
     input.chart.reference,
     'oci://ghcr.io/happyvertical/charts/smrt-app',
   );
-  assert.equal(input.chart.version, '0.2.0');
+  assert.equal(input.chart.version, '0.2.1', 'Supported chart version required.');
   assert.match(
     input.chart.ociDigest ?? '',
     /^sha256:[a-f0-9]{64}$/,

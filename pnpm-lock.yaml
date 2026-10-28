@@ -227,7 +227,19 @@ importers:
       '@happyvertical/smrt-places':
         specifier: 0.57.32
         version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(debug@4.4.3(supports-color@7.2.0))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-playbooks':
+        specifier: 0.57.32
+        version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-profiles':
+        specifier: 0.57.32
+        version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-prompts':
+        specifier: 0.57.32
+        version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-reports':
+        specifier: 0.57.32
+        version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-secrets':
         specifier: 0.57.32
         version: 0.57.32(@happyvertical/speech@0.108.0)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-svelte':
@@ -7832,7 +7844,7 @@ snapshots:
       '@happyvertical/logger': 0.108.0
       '@happyvertical/utils': 0.108.0
       '@openpgp/web-stream-tools': 0.3.1(@types/node@24.13.2)(typescript@5.9.3)
-      openpgp: 6.3.2(@openpgp/web-stream-tools@0.3.1(@types/node@26.1.0)(typescript@5.9.3))
+      openpgp: 6.3.2(@openpgp/web-stream-tools@0.3.1(@types/node@24.13.2)(typescript@5.9.3))
       tweetnacl: 1.0.3
       tweetnacl-util: 0.15.1
     transitivePeerDependencies:
@@ -13179,6 +13191,10 @@ snapshots:
       zod: 4.4.3
 
   opencollective-postinstall@2.0.3: {}
+
+  openpgp@6.3.2(@openpgp/web-stream-tools@0.3.1(@types/node@24.13.2)(typescript@5.9.3)):
+    optionalDependencies:
+      '@openpgp/web-stream-tools': 0.3.1(@types/node@24.13.2)(typescript@5.9.3)
 
   openpgp@6.3.2(@openpgp/web-stream-tools@0.3.1(@types/node@26.1.0)(typescript@5.9.3)):
     optionalDependencies:
