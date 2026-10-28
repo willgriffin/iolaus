@@ -23,6 +23,7 @@ import {
   isPublicProfileToolName,
   publicProfileMcpTools,
 } from './public-profile-tools.js';
+import { TAG_LOOKUP_TOOL, tagLookupMcpTool } from './tag-lookup-tool.js';
 import {
   privateWorkspaceCrudOperations,
   publicProfileWorkflowOperations,
@@ -181,8 +182,15 @@ export function isPublicProfileMcpTool(toolName: string): boolean {
   return isPublicProfileToolName(toolName);
 }
 
+export function isTagLookupMcpTool(toolName: string): boolean {
+  return toolName === TAG_LOOKUP_TOOL;
+}
+
 function appWorkflowMcpTools(): MCPTool[] {
-  return publicProfilesEnabled() ? [...publicProfileMcpTools] : [];
+  return [
+    tagLookupMcpTool,
+    ...(publicProfilesEnabled() ? publicProfileMcpTools : []),
+  ];
 }
 
 export function configuredPublicMcpToolPatterns(): string[] {
@@ -254,6 +262,9 @@ export function mcpToolOperations(
 ): readonly McpToolOperation[] | null {
   if (isSourceReadMcpTool(toolName)) return sourceReadOperations;
   if (isPublicProfileMcpTool(toolName)) return publicProfileWorkflowOperations;
+  // The tag vocabulary is read for the owner's own join rows; the same
+  // capability bounds the pickers' callers.
+  if (isTagLookupMcpTool(toolName)) return [...privateWorkspaceCrudOperations];
 
   const resource = resolveMcpToolClass(toolName);
   if (!resource) return null;

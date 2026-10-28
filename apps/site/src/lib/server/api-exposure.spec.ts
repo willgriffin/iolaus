@@ -16,7 +16,6 @@ import {
  * still behind their scoped workflows (tranches b/c of #260).
  */
 const privateEvidenceClasses = [
-  'AgentRun',
   'OpportunityIntelligenceRequest',
   'OpportunityIntelligenceResult',
   'ResumeAchievement',
@@ -27,8 +26,6 @@ const privateEvidenceClasses = [
   'ResumeSkill',
   'ResumeSkillCategory',
   'ResumeSkillGroup',
-  'ResumeTailoringConfig',
-  'Task',
 ];
 
 async function discoverCliResources(): Promise<
@@ -189,8 +186,25 @@ describe('decorator-driven surface exposure', () => {
   });
 
   it('resolves per-action includes from the decorator', () => {
-    expect(resolveApiResource('agentruns')).toBeUndefined();
-    expect(resolveApiResource('applications')).toBeUndefined();
+    // Tranche (b): system-authored records are read-only, applications are
+    // writable but never deletable through MCP.
+    expect([...(resolveApiResource('agentruns')?.actions ?? [])]).toEqual([
+      'list',
+      'get',
+    ]);
+    expect([...(resolveApiResource('applications')?.actions ?? [])]).toEqual([
+      'list',
+      'get',
+      'create',
+      'update',
+      'delete',
+    ]);
+    expect([
+      ...(resolveMcpToolClass('application_delete')?.actions ?? []),
+    ]).toEqual(['list', 'get', 'create', 'update']);
+    // The reusable answer library stays a privacy surface with no generic
+    // CRUD anywhere (candidate-answers.spec.ts).
+    expect(resolveApiResource('candidateanswers')).toBeUndefined();
     expect([
       ...(resolveApiResource('opportunity_intelligence_controls')?.actions ??
         []),
@@ -203,7 +217,6 @@ describe('decorator-driven surface exposure', () => {
     );
     expect(hidden.map((r) => r.className)).toEqual(
       expect.arrayContaining([
-        'CandidateAnswer',
         'CliAuthRequest',
         // Data-surface action state. A preview token IS the authority it
         // confers and an idempotency record holds another principal's action
@@ -219,7 +232,7 @@ describe('decorator-driven surface exposure', () => {
         ...privateEvidenceClasses,
       ]),
     );
-    expect(resolveMcpToolClass('candidateanswer_list')).toBeUndefined();
+    expect(resolveMcpToolClass('resumeposition_list')).toBeUndefined();
     expect(resolveMcpToolClass('candidateprofile_delete')).toBeDefined();
     expect(
       resolveMcpToolClass('candidateprofile_delete')?.actions.has('delete'),

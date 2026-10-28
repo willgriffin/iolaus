@@ -21,9 +21,10 @@ import {
 } from '$lib/server/application-workflow';
 import { syncResumeVariantApplicationApprovals } from '$lib/server/resume-variant-workflow';
 import {
-  createScopedRecord,
   isScopedResourceClass,
   listScopedRecords,
+  runScopedWriteSideEffects,
+  scopeCreatePayload,
 } from '$lib/server/scoped-resource-crud';
 import { getCollection } from '$lib/server/smrt';
 import { syncSourceSchedule } from '$lib/server/source-schedules';
@@ -231,13 +232,13 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   const className = requireResourceClass(resource);
   assertResourceIsWritable(className);
   assertActionExposed(resource, 'create');
-  const payload = await readJsonObjectPayload(request);
-  normalizeAgentPayload(className, payload);
-  if (isScopedResourceClass(className)) {
-    return json(await createScopedRecord(className, payload), {
-      status: 201,
-    });
-  }
+  const rawPayload = await readJsonObjectPayload(request);
+  normalizeAgentPayload(className, rawPayload);
+  // Candidate-owned classes: declared fields only, owner tuple stamped or
+  // enforced; the class-bespoke guards and side effects below still run.
+  const payload = isScopedResourceClass(className)
+    ? scopeCreatePayload(className, rawPayload)
+    : rawPayload;
   const collection = await getCollection(className);
   assertGenericResumeAssetWriteAllowed(className, payload);
 
@@ -254,6 +255,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
   const item = await collection.create(payload);
   await item.save();
+  if (isScopedResourceClass(className)) {
+    await runScopedWriteSideEffects(className);
+  }
   if (className === 'ResumeVariant') {
     await syncResumeVariantApplicationApprovals(
       String(item.id ?? ''),

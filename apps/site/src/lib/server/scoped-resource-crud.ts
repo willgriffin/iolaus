@@ -3,6 +3,7 @@ import { error } from '@sveltejs/kit';
 // Side-effect import: the field allow-list below reads the registry, which
 // must hold every app-owned class on a cold process.
 import '../objects/index.js';
+import { refreshOpportunityAssessmentProjections } from './opportunity-assessment-store.js';
 import { privateRecordWhere } from './private-workspace.js';
 import { invalidatePublishedResumeCache } from './resume-data.js';
 import { queuePublishedCanonicalRefresh } from './resume-source-refresh.js';
@@ -10,6 +11,7 @@ import { getCollection } from './smrt.js';
 import {
   assertWorkspaceResourceWritable,
   isPrivateWorkspaceClass,
+  requireCandidateWorkspaceSubject,
   workspaceRecordAllowed,
   workspaceResourcePayload,
   workspaceResourceWhere,
@@ -102,6 +104,25 @@ export function afterResumeSourceWrite(className: string): void {
   if (!resumeSourceClassNames.has(className)) return;
   invalidatePublishedResumeCache();
   queuePublishedCanonicalRefresh();
+}
+
+/**
+ * Every side effect the admin generic CRUD runs after a candidate-owned
+ * write that is not class-bespoke (`admin-data.ts`): the résumé cache and
+ * canonical refresh for résumé source classes, and the owner's assessment
+ * projection refresh after a `PreferenceRule` change. Bespoke flows (the
+ * `Source` schedule, `ResumeVariant` approval sync, `Application` commit)
+ * stay with their callers.
+ */
+export async function runScopedWriteSideEffects(
+  className: string,
+): Promise<void> {
+  afterResumeSourceWrite(className);
+  if (className === 'PreferenceRule') {
+    await refreshOpportunityAssessmentProjections({
+      subject: requireCandidateWorkspaceSubject(),
+    });
+  }
 }
 
 function serialize(record: unknown): ScopedRecord {
@@ -201,6 +222,51 @@ export async function listScopedRecords(
   return { items: rows.map(serialize), limit, offset, total };
 }
 
+/**
+ * The live record when it exists and the verified subject owns it; `null`
+ * otherwise (a foreign row is indistinguishable from a missing one). Callers
+ * with a class-bespoke write flow (application concurrency commit, résumé
+ * variant reservation) read through this and then run their own logic.
+ */
+export async function findOwnedRecord(
+  className: string,
+  id: string,
+): Promise<(ScopedRecord & Saveable) | null> {
+  return await ownedRecord(className, id);
+}
+
+/**
+ * Validate and scope a create payload without writing it: declared fields
+ * only, the verified owner tuple stamped or enforced. For callers that write
+ * through their own flow.
+ */
+export function scopeCreatePayload(
+  className: string,
+  payload: ScopedRecord,
+): ScopedRecord {
+  assertWorkspaceResourceWritable(className);
+  assertDeclaredFields(className, payload);
+  return workspaceResourcePayload(className, {
+    ...ownershipDefaults(className),
+    ...payload,
+  });
+}
+
+/** Validate and scope an update payload for an already-owned record. */
+export function scopeUpdatePayload(
+  className: string,
+  record: ScopedRecord,
+  payload: ScopedRecord,
+): ScopedRecord {
+  assertWorkspaceResourceWritable(className);
+  assertDeclaredFields(className, payload, { allowId: true });
+  const scoped = workspaceResourcePayload(className, payload);
+  if (Object.hasOwn(scoped, 'id') && String(scoped.id) !== String(record.id)) {
+    error(403, 'Record ownership cannot be changed.');
+  }
+  return scoped;
+}
+
 async function ownedRecord(
   className: string,
   id: string,
@@ -226,18 +292,13 @@ export async function createScopedRecord(
   className: string,
   payload: ScopedRecord,
 ): Promise<ScopedRecord> {
-  assertWorkspaceResourceWritable(className);
-  assertDeclaredFields(className, payload);
-  const scoped = workspaceResourcePayload(className, {
-    ...ownershipDefaults(className),
-    ...payload,
-  });
+  const scoped = scopeCreatePayload(className, payload);
   // With identity and framework controls refused above, the only slug SMRT
   // sees is the one it derives, and a derived slug never adopts a row: a
   // collision moves to a free `-2`, `-3`, … slug and INSERTs.
   const record = await (await scopedCollection(className)).create(scoped);
   await record.save?.();
-  afterResumeSourceWrite(className);
+  await runScopedWriteSideEffects(className);
   return serialize(record);
 }
 
@@ -249,14 +310,10 @@ export async function updateScopedRecord(
   assertWorkspaceResourceWritable(className);
   const record = await ownedRecord(className, id);
   if (!record) error(404, 'Item not found');
-  assertDeclaredFields(className, payload, { allowId: true });
-  const scoped = workspaceResourcePayload(className, payload);
-  if (Object.hasOwn(scoped, 'id') && String(scoped.id) !== String(record.id)) {
-    error(403, 'Record ownership cannot be changed.');
-  }
+  const scoped = scopeUpdatePayload(className, record, payload);
   Object.assign(record, scoped);
   await record.save?.();
-  afterResumeSourceWrite(className);
+  await runScopedWriteSideEffects(className);
   return serialize(record);
 }
 
@@ -271,5 +328,5 @@ export async function deleteScopedRecord(
     error(500, 'This record cannot be deleted.');
   }
   await record.delete();
-  afterResumeSourceWrite(className);
+  await runScopedWriteSideEffects(className);
 }

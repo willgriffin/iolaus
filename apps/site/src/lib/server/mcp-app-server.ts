@@ -47,6 +47,7 @@ import {
   searchPublicOpportunities,
 } from './public-search/index.js';
 import { getRequestScopedSmrtOptions } from './smrt.js';
+import { lookupTags, tagLookupMcpTool } from './tag-lookup-tool.js';
 import {
   withVerifiedWorkspaceSubject,
   workspaceSubjectFromLocals,
@@ -636,6 +637,30 @@ const publicProfileWorkflows: McpWorkflowToolDefinition[] =
             : 'Public résumé status',
   }));
 
+const tagLookupWorkflow: McpWorkflowToolDefinition = {
+  description: tagLookupMcpTool.description,
+  effect: 'read',
+  execute: async ({ arguments: input, principal }) =>
+    jsonResult(
+      await runOwnerWorkflow({
+        execute: async () =>
+          (await lookupTags(input)) as unknown as Record<string, unknown>,
+        operations: [workspaceWorkflowOperation('profile.manage')],
+        principal,
+        profileRequired: true,
+        tool: tagLookupMcpTool.name,
+      }),
+    ),
+  idempotent: true,
+  inputSchema: tagLookupMcpTool.inputSchema as Record<string, unknown> & {
+    type: 'object';
+  },
+  name: tagLookupMcpTool.name,
+  openWorld: false,
+  outputSchema,
+  title: 'Look up tags',
+};
+
 function canUseIolausMcp(
   principal: McpAppPrincipal | null,
 ): principal is IolausMcpPrincipal {
@@ -696,6 +721,7 @@ export const mcpAppServer = createMcpAppServer({
     prepareWorkflow,
     inspectApplicationWorkflow,
     reviewNavigationWorkflow,
+    tagLookupWorkflow,
     ...publicProfileWorkflows,
   ],
 });

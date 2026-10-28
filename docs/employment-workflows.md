@@ -595,6 +595,25 @@ and the application workflow records are not on the generic surfaces today;
 the application package action and the review page own that flow, and
 `docs/surface-parity.md` tracks the remaining tranches.
 
+### Private workspace records
+
+The rest of the candidate-owned model the admin pages edit generically is on
+the same surfaces with the same owner scoping (willgriffin/iolaus#262):
+`Application` (REST/CLI full, MCP without `delete`), `ApplicationMaterialComment`,
+`Task`, `Decision`, `DecisionTag`, `PreferenceRule`, `ResumeTailoringConfig`,
+`ResumeVariant` (MCP without `delete`), `ResumeAsset` (no create; application-
+owned assets stay immutable), and read-only
+`FactIntake`, `FactCandidate`, `EvaluationScore`, `OpportunityAssessment` and
+`AgentRun`. Each class's existing guards run unchanged on the scoped path:
+application updates commit only when current and never record final approval,
+submission or a material lock through a generic write; résumé variant writes
+take the application write reservation and sync approvals; a preference change
+refreshes the owner's assessment projections. On MCP all of them assert
+`workflow.profile.manage`. The shared tag vocabulary is reachable read-only
+through `tag_lookup` (`{ query?, limit? }` → `{ items: [{ id, name, slug,
+context }], truncated }`), which resolves the `tagId` the `*Tag` join rows
+require; the vocabulary itself takes no generic write.
+
 ### Public profile lifecycle tools
 
 The public résumé profile (`docs/public-resume-profiles.md`) is driven by four

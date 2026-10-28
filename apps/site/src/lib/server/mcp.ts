@@ -36,6 +36,7 @@ import {
   isPublicProfileMcpTool,
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
+  isTagLookupMcpTool,
   listMcpTools,
   mcpToolOperations,
 } from './mcp-tools.js';
@@ -67,9 +68,11 @@ import {
 import {
   createScopedRecord,
   deleteScopedRecord,
+  findOwnedRecord,
   getScopedRecord,
   isScopedResourceClass,
   listScopedRecords,
+  runScopedWriteSideEffects,
   updateScopedRecord,
 } from './scoped-resource-crud.js';
 import { getCollection } from './smrt.js';
@@ -78,6 +81,7 @@ import {
   listRootSourceHealth,
   listSourceCrawlStatus,
 } from './source-webmcp.js';
+import { lookupTags } from './tag-lookup-tool.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
 // Registers the curated `workflow.*` permission definitions the public-profile
 // lifecycle tools assert; registration is process-scoped and idempotent.
@@ -135,6 +139,8 @@ async function callSourceReadMcpTool(
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
+
+type Saveable = { save?: () => Promise<unknown> };
 
 function jsonResponse(structuredContent: Record<string, unknown>): MCPResponse {
   return {
@@ -214,18 +220,6 @@ export async function callPublicProfileMcpTool(
     return publicProfileMcpError(cause);
   }
 }
-
-/**
- * Classes with a bespoke generated-write flow in this module (concurrency
- * commit, write reservation, application-owned immutability). They are not
- * exposed today; when one returns to the catalog its flow, not the plain
- * scoped path, must run.
- */
-const bespokeMcpClasses = new Set([
-  'Application',
-  'ResumeAsset',
-  'ResumeVariant',
-]);
 
 /**
  * Execute a generated `<class>_<action>` tool for a candidate-owned class
@@ -421,6 +415,17 @@ async function executeMcpTool(
     }
     return await callSourceReadMcpTool(name, args);
   }
+  if (isTagLookupMcpTool(name)) {
+    if (!user) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    return jsonResponse(
+      (await lookupTags(args)) as unknown as Record<string, unknown>,
+    );
+  }
   if (isPublicProfileMcpTool(name)) {
     if (!user || !locals?.workspaceSubject) {
       throw new McpAccessError(
@@ -432,39 +437,50 @@ async function executeMcpTool(
   }
   const subject = requireCandidateWorkspaceSubject();
   const options = { name, user };
+  // An application update resolves the owned record exactly once, before any
+  // record-dependent guard: a foreign or missing id is a 404 and nothing
+  // about the row is disclosed, and the snapshot the guards validate is the
+  // same snapshot the concurrency commit fences.
+  let ownedApplication: (Record<string, unknown> & Saveable) | null = null;
+  if (options.name === 'application_update') {
+    const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
+    if (!applicationId) {
+      throw new McpAccessError(
+        400,
+        'Application update requires an application id.',
+      );
+    }
+    ownedApplication = await findOwnedRecord('Application', applicationId);
+    if (!ownedApplication) {
+      throw new McpAccessError(404, 'Application not found.');
+    }
+  }
   await assertMcpWorkflowPayload(
     options.name,
     args,
     options.user ?? null,
     subject,
+    ownedApplication
+      ? (JSON.parse(JSON.stringify(ownedApplication)) as Record<
+          string,
+          unknown
+        >)
+      : undefined,
   );
 
+  // Candidate-owned classes never reach `MCPGenerator`: every read and write
+  // below goes through the owner-scoped path. Classes with a bespoke flow
+  // (application concurrency commit, résumé variant reservation) keep that
+  // flow around the scoped read or write.
   const scoped = resolveMcpToolClass(options.name);
-  if (
-    scoped &&
-    isScopedResourceClass(scoped.className) &&
-    !bespokeMcpClasses.has(scoped.className)
-  ) {
-    try {
-      return await executeScopedMcpTool(
-        scoped.className,
-        options.name.slice(mcpToolPrefix(scoped.className).length),
-        args,
-      );
-    } catch (cause) {
-      if (isOwnerAuthorityDenial(cause)) throw cause;
-      return sourceMcpError(cause);
-    }
-  }
+  const scopedClassName =
+    scoped && isScopedResourceClass(scoped.className) ? scoped.className : null;
+  const scopedAction = scopedClassName
+    ? options.name.slice(mcpToolPrefix(scopedClassName).length)
+    : null;
 
-  if (options.name === 'application_update') {
-    const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
-    const application = await (await getCollection('Application')).get(
-      applicationId,
-    );
-    if (!application) {
-      throw new McpAccessError(404, 'Application not found.');
-    }
+  if (options.name === 'application_update' && ownedApplication) {
+    const application = ownedApplication;
     if (
       !(await commitApplicationIfCurrent(
         application as unknown as Record<string, unknown>,
@@ -501,13 +517,26 @@ async function executeMcpTool(
 
   let response: MCPResponse;
   try {
-    response = await createGenerator(options.user).handleToolCall({
-      method: 'tools/call',
-      params: {
-        arguments: args,
-        name: options.name,
-      },
-    });
+    if (scopedClassName && scopedAction) {
+      try {
+        response = await executeScopedMcpTool(
+          scopedClassName,
+          scopedAction,
+          args,
+        );
+      } catch (cause) {
+        if (isOwnerAuthorityDenial(cause)) throw cause;
+        return sourceMcpError(cause);
+      }
+    } else {
+      response = await createGenerator(options.user).handleToolCall({
+        method: 'tools/call',
+        params: {
+          arguments: args,
+          name: options.name,
+        },
+      });
+    }
   } catch (cause) {
     if (resumeVariantReservation) {
       await releaseResumeVariantApplicationWrite(
@@ -598,11 +627,19 @@ async function syncMcpWorkflowSideEffects(
   }
 }
 
+/**
+ * The application snapshot the update guards validate. The bridge resolves
+ * it through the owner-scoped lookup and hands it in, so the guards never
+ * read an unscoped row and the commit fences the very snapshot they saw; a
+ * direct caller without a snapshot gets the owner-scoped read here.
+ */
 async function currentApplicationRecord(
   toolName: string,
   args: Record<string, unknown>,
+  provided?: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
   if (toolName !== 'application_update') return null;
+  if (provided) return provided;
 
   const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
   if (!applicationId) {
@@ -612,8 +649,7 @@ async function currentApplicationRecord(
     );
   }
 
-  const collection = await getCollection('Application');
-  const application = await collection.get(applicationId);
+  const application = await findOwnedRecord('Application', applicationId);
   if (!application) {
     throw new McpAccessError(404, 'Application not found.');
   }
@@ -643,8 +679,7 @@ async function assertMcpResumeAssetWriteAllowed(
   if (!assetId) {
     throw new McpAccessError(400, 'Resume asset write requires an asset id.');
   }
-  const assets = await getCollection('ResumeAsset');
-  const asset = await assets.get(assetId);
+  const asset = await findOwnedRecord('ResumeAsset', assetId);
   if (!asset) throw new McpAccessError(404, 'Resume asset not found.');
   if (
     hasNonEmptyString(
@@ -663,6 +698,7 @@ export async function assertMcpWorkflowPayload(
   args: Record<string, unknown>,
   user?: Pick<User, 'id'> | null,
   subject?: Parameters<typeof syncResumeVariantApplicationApprovals>[1],
+  currentApplication?: Record<string, unknown>,
 ): Promise<void> {
   if (toolName.startsWith('agentrun_') && !isReadOnlyMcpTool(toolName)) {
     throw new McpAccessError(
@@ -741,7 +777,11 @@ export async function assertMcpWorkflowPayload(
     toolName === 'application_create' || toolName === 'application_update';
   if (!isApplicationWrite) return;
 
-  const currentRecord = await currentApplicationRecord(toolName, args);
+  const currentRecord = await currentApplicationRecord(
+    toolName,
+    args,
+    currentApplication,
+  );
 
   if (
     applicationSubmissionRequiresDedicatedAction({
