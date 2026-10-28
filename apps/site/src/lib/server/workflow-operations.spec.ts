@@ -3,6 +3,7 @@ import {
   agentRunAuditOperations,
   opportunityReviewOperations,
   postingPreflightOperations,
+  privateWorkspaceCrudOperations,
   publicProfileWorkflowOperations,
   uniqueWorkflowOperations,
   type WorkflowOperation,
@@ -44,6 +45,12 @@ describe('workflow-operations', () => {
         { action: 'update', collection: 'opportunities' },
       ]),
     ).toBe(true);
+  });
+
+  it('binds owner-scoped private CRUD to the profile capability the hosted member holds', () => {
+    expect(privateWorkspaceCrudOperations).toEqual([
+      { action: 'profile.manage', collection: 'workflow' },
+    ]);
   });
 
   it('binds the public-profile lifecycle tools to the curated page capability only', () => {

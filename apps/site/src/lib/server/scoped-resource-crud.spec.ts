@@ -117,6 +117,7 @@ describe('owner-scoped generic CRUD', () => {
     );
     for (const mock of Object.values(sideEffects)) mock.mockClear();
     store.collection.list.mockClear();
+    store.collection.create.mockClear();
   });
 
   it('classifies candidate-owned classes only', () => {
@@ -177,6 +178,23 @@ describe('owner-scoped generic CRUD', () => {
     await expect(
       createScopedRecord('Achievement', { title: 'Forged', ...theirs }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('refuses server-assigned identity in agent payloads so no natural key can adopt a foreign row', async () => {
+    for (const payload of [
+      { slug: 'exp-theirs', title: 'Adopt' },
+      { context: 'x', title: 'Adopt' },
+      { id: 'exp-theirs', title: 'Adopt' },
+    ]) {
+      await expect(
+        createScopedRecord('Achievement', payload),
+      ).rejects.toMatchObject({ status: 400 });
+    }
+    await expect(
+      updateScopedRecord('Experience', 'exp-mine', { slug: 'exp-theirs' }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(store.collection.create).not.toHaveBeenCalled();
+    expect(store.rows.get('exp-mine')?.save).not.toHaveBeenCalled();
   });
 
   it('runs the admin résumé write side effect for résumé source classes only', async () => {

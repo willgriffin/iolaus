@@ -167,6 +167,20 @@ export const resumeVariantWorkflowSyncOperations = [
 ] as const satisfies readonly WorkflowOperation[];
 
 /**
+ * Owner-scoped generic CRUD on a candidate-owned class
+ * (`scoped-resource-crud.ts`): the generated `<class>_<action>` MCP tools for
+ * the career model. The hosted member role holds the curated `workflow.*`
+ * capabilities and catalog reads only — never generated private CRUD grants
+ * (`role-permissions.ts`), and the admin pages that edit the same records
+ * assert `workflow.profile.manage` (`career-management.ts`). The tools assert
+ * that same capability; the owner predicate, not a per-class grant, bounds
+ * what the write can reach.
+ */
+export const privateWorkspaceCrudOperations = [
+  { action: 'profile.manage', collection: 'workflow' },
+] as const satisfies readonly WorkflowOperation[];
+
+/**
  * `preparePublicProfile()` / `publishPublicProfile()` /
  * `unpublishPublicProfile()` / `getPublicProfileManager()`
  * (`public-profile-service.ts`), behind the `/admin/career/public-profile`

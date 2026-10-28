@@ -129,6 +129,31 @@ function boundedOffset(value: unknown): number {
 }
 
 /**
+ * Identity columns the framework owns. An explicit `slug` (or `context`) on a
+ * new object makes SMRT adopt the existing row carrying that natural key, and
+ * its collision guard checks the tenant, not the owner tuple, so a payload
+ * naming another owner's slug could overwrite and reassign their row. An
+ * explicit `id` would likewise target an existing row. Agents never supply
+ * identity; the server derives it.
+ */
+const serverAssignedIdentityFields = ['id', 'slug', 'context'] as const;
+
+function rejectServerAssignedIdentity(
+  payload: ScopedRecord,
+  allowId = false,
+): void {
+  const supplied = serverAssignedIdentityFields.filter(
+    (key) => Object.hasOwn(payload, key) && !(allowId && key === 'id'),
+  );
+  if (supplied.length) {
+    error(
+      400,
+      `Record identity is assigned by the server; remove ${supplied.join(', ')}.`,
+    );
+  }
+}
+
+/**
  * Default ownership columns for a new private record. In shared-hosted mode
  * `workspaceResourcePayload` forces them; in a private installation the UI
  * form supplies them, so an agent payload that omits them gets the verified
@@ -195,6 +220,7 @@ export async function createScopedRecord(
   payload: ScopedRecord,
 ): Promise<ScopedRecord> {
   assertWorkspaceResourceWritable(className);
+  rejectServerAssignedIdentity(payload);
   const scoped = workspaceResourcePayload(className, {
     ...ownershipDefaults(className),
     ...payload,
@@ -213,6 +239,7 @@ export async function updateScopedRecord(
   assertWorkspaceResourceWritable(className);
   const record = await ownedRecord(className, id);
   if (!record) error(404, 'Item not found');
+  rejectServerAssignedIdentity(payload, true);
   const scoped = workspaceResourcePayload(className, payload);
   if (Object.hasOwn(scoped, 'id') && String(scoped.id) !== String(record.id)) {
     error(403, 'Record ownership cannot be changed.');

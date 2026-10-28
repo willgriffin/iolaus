@@ -101,8 +101,11 @@ candidateProfileId}` ownership tuple and are read by `loadAdminResumeSource()`
 through `NORMALIZED_RESUME_READ_PLAN`. Since #259 the generic surfaces reach
 them through `scoped-resource-crud.ts`: the same owner predicate as
 `admin-data.ts`, a hosted owner allowed without operator authority, the admin
-write side effect on every agent write, and the generated MCP tools routed
-around `MCPGenerator`'s caller-supplied `where`. The UI edits them through the generic
+write side effect on every agent write, server-assigned identity (`id`,
+`slug`, `context` refused in payloads so no natural key can adopt a foreign
+row), the generated MCP tools routed around `MCPGenerator`'s caller-supplied
+`where`, and MCP authorization through `workflow.profile.manage` rather than
+per-class CRUD grants the hosted member role does not hold. The UI edits them through the generic
 `[resource]` pages, `/admin/career` (`save`, `visibility`),
 `/admin/resume` (`updateProfile`, `updateExperience`, `updateEducation`,
 `setDefaultProfile`) and `/admin/candidate-profile-links` (`save`). Admin

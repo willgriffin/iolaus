@@ -24,12 +24,14 @@ import {
   publicProfileMcpTools,
 } from './public-profile-tools.js';
 import {
+  privateWorkspaceCrudOperations,
   publicProfileWorkflowOperations,
   resumeVariantWorkflowSyncOperations,
   sourceWorkflowSyncOperations,
   uniqueWorkflowOperations,
   type WorkflowOperation,
 } from './workflow-operations.js';
+import { isPrivateWorkspaceClass } from './workspace-resource-policy.js';
 
 /**
  * Generated server-MCP tool catalog. This module deliberately has no
@@ -260,6 +262,11 @@ export function mcpToolOperations(
       toolName.slice(mcpToolPrefix(resource.className).length)
     ];
   if (!action) return null;
+  // Candidate-owned classes run through the owner-scoped path under the
+  // curated profile capability, the grant a hosted member actually holds.
+  if (isPrivateWorkspaceClass(resource.className)) {
+    return [...privateWorkspaceCrudOperations];
+  }
   const modelClass =
     ObjectRegistry.getObjectMetadata(resource.className)?.constructor ?? null;
   if (!modelClass) return null;

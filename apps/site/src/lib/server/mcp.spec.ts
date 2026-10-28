@@ -1102,9 +1102,12 @@ describe('MCP public tool policy', () => {
       'tasks.update',
     ]);
     expect(slugs('opportunity_update')).toEqual(['opportunities.update']);
-    expect(slugs('experience_update')).toEqual(['experiences.update']);
+    // Candidate-owned classes assert the curated profile capability the
+    // hosted member role actually holds, never a generated CRUD grant.
+    expect(slugs('experience_update')).toEqual(['workflow.profile.manage']);
+    expect(slugs('experience_list')).toEqual(['workflow.profile.manage']);
     expect(slugs('candidateprofile_update')).toEqual([
-      'candidateprofiles.update',
+      'workflow.profile.manage',
     ]);
     expect(slugs('public_profile_publish')).toEqual([
       'workflow.public-profile.manage',
@@ -1129,7 +1132,7 @@ describe('MCP public tool policy', () => {
       arguments: { id: 'exp-1', summary: 'Scoped' },
       locals: ownerLocals,
       name: 'experience_update',
-      permissions: ['experiences.update'],
+      permissions: ['workflow.profile.manage'],
       tenantId: 'tenant-1',
       user: { id: 'user-1' },
     });
@@ -1154,7 +1157,7 @@ describe('MCP public tool policy', () => {
       arguments: { limit: 10, where: { ownerUserId: 'someone-else' } },
       locals: ownerLocals,
       name: 'experience_list',
-      permissions: ['experiences.read'],
+      permissions: ['workflow.profile.manage'],
       tenantId: 'tenant-1',
       user: { id: 'user-1' },
     });
@@ -1175,7 +1178,7 @@ describe('MCP public tool policy', () => {
         arguments: { id: 'exp-1', summary: 'Denied' },
         locals: ownerLocals,
         name: 'experience_update',
-        permissions: ['experiences.read'],
+        permissions: ['experiences.update', 'opportunities.read'],
         tenantId: 'tenant-1',
         user: { id: 'user-1' },
       }),
@@ -1190,7 +1193,7 @@ describe('MCP public tool policy', () => {
         arguments: { id: 'profile-1', ownerUserId: 'user-2', summary: 'x' },
         locals: ownerLocals,
         name: 'candidateprofile_update',
-        permissions: ['candidateprofiles.update'],
+        permissions: ['workflow.profile.manage'],
         tenantId: 'tenant-1',
         user: { id: 'user-1' },
       }),
