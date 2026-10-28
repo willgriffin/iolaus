@@ -48,6 +48,8 @@ jobs:
           }
           appendFileSync(process.env.GITHUB_ENV,
             `SMRT_RUNNER_REVISION=${pins.runner.revision}\n`);
+          appendFileSync(process.env.GITHUB_ENV,
+            `SMRT_CHART_VERSION=${pins.chart.version}\n`);
           JS
       - name: Install repository toolchain and dependencies
         run: |
@@ -65,7 +67,7 @@ jobs:
             helm /tmp/iolaus-adoption-tools
           /tmp/iolaus-adoption-tools/helm pull \
             oci://ghcr.io/happyvertical/charts/smrt-app \
-            --version 0.2.0 --destination /tmp
+            --version "$SMRT_CHART_VERSION" --destination /tmp
       - name: Validate immutable image inputs
         env:
           SITE_IMAGE: ${{ inputs.site }}
@@ -99,7 +101,8 @@ jobs:
         run: |
           node scripts/adoption-kind-fixture.mjs \
             deploy/self-hosted/adoption/prerequisites.json \
-            /tmp/iolaus-smrt-runner /tmp/smrt-app-0.2.0.tgz \
+            /tmp/iolaus-smrt-runner \
+            "/tmp/smrt-app-$SMRT_CHART_VERSION.tgz" \
             /tmp/iolaus-adoption-images.json \
             /tmp/iolaus-adoption-evidence.json
       - name: Retain executed synthetic qualification evidence

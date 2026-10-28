@@ -111,6 +111,12 @@ test('mutable, local, wrong repository and absent artifacts fail closed', () => 
     ),
   );
   assert.equal(requirePublishedPrerequisites(prereqs), prereqs);
+  for (const version of ['0.2.0', '0.2.2', 'latest', '0.2.1\nINJECT=value', null]) {
+    const unsupported = structuredClone(prereqs);
+    unsupported.chart.version = version;
+    assert.throws(() => requirePublishedPrerequisites(unsupported),
+      /Supported chart version required/);
+  }
   for (const [section, key, error] of [
     ['chart', 'ociDigest', /Public chart OCI digest required/],
     ['chart', 'packageSha256', /Public packaged chart digest required/],

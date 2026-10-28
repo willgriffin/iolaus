@@ -8,12 +8,17 @@ ownership transfer and rollout.
 
 ## Public prerequisites
 
-`deploy/self-hosted/adoption/prerequisites.json` pins the public chart 0.2.0 OCI
+`deploy/self-hosted/adoption/prerequisites.json` pins the public chart 0.2.1 OCI
 manifest, packaged chart SHA256 and runner Git commit from
-[the verified SMRT #4414 publication](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6442258826).
+[the verified SMRT #4433 publication](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6473305779).
 Anonymous registry and Helm pulls verified both digests, all packaged source
 files and phase renders; the public runner source matches the reviewed bytes.
 Chart 0.1.0 cannot supply the required security envelope or observer projection.
+Chart 0.2.0 rejects the required migration settings `SMRT_RUNTIME_PROFILE` and
+`SMRT_APP_ID`; 0.2.1 permits exactly those application settings while keeping
+release identity names reserved. The workflow derives both the pull version and
+archive path from the validated prerequisite record; unsupported versions fail
+before environment export.
 These prerequisite identities enable qualification, not installation or rollout.
 The already pinned Kind node, PostgreSQL and maintenance responder images are
 reused from the upstream disposable exercise; they are platform-resolved and
