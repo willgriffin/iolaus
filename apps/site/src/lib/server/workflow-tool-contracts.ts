@@ -1,5 +1,9 @@
 import type { MCPTool } from '@happyvertical/smrt-core/generators/mcp';
-import type { WorkflowOperation } from './workflow-operations.js';
+import { recommendationDecisions } from '$lib/objects/workflow';
+import {
+  companyResearchOperations,
+  type WorkflowOperation,
+} from './workflow-operations.js';
 import {
   type WorkspaceWorkflowCapability,
   workspaceWorkflowOperation,
@@ -27,6 +31,25 @@ const id = (description: string) => ({
   minLength: 1,
   type: 'string',
 });
+
+/**
+ * The decision vocabulary `processRecommendationTask()` accepts. An enum, so
+ * the value the permission set is derived from is exactly the value the
+ * service receives; no normalization happens between the two.
+ */
+export const recommendationTaskDecisions = [
+  ...recommendationDecisions,
+  'archive',
+] as const;
+
+export function recommendationTaskDecision(
+  args: Record<string, unknown>,
+): string {
+  const value = typeof args.decision === 'string' ? args.decision : '';
+  return (recommendationTaskDecisions as readonly string[]).includes(value)
+    ? value
+    : '';
+}
 
 export interface WorkflowToolContract extends MCPTool {
   /** Curated capabilities and generated permissions the tool asserts. */
@@ -103,7 +126,7 @@ export const workflowToolContracts: readonly WorkflowToolContract[] = [
       $schema: JSON_SCHEMA,
       additionalProperties: false,
       properties: {
-        decision: { maxLength: 64, minLength: 1, type: 'string' },
+        decision: { enum: [...recommendationTaskDecisions], type: 'string' },
         preflightOverrideReason: { maxLength: 1000, type: 'string' },
         reason: { maxLength: 4000, type: 'string' },
         taskId: id('Task id of the review_recommendation task.'),
@@ -115,7 +138,7 @@ export const workflowToolContracts: readonly WorkflowToolContract[] = [
     operations: (args) => [
       cap('application.review'),
       cap('task.sync'),
-      ...(String(args.decision ?? '') === 'accept_to_apply'
+      ...(recommendationTaskDecision(args) === 'accept_to_apply'
         ? [cap('application.prepare')]
         : []),
     ],
@@ -137,13 +160,10 @@ export const workflowToolContracts: readonly WorkflowToolContract[] = [
       type: 'object',
     },
     name: COMPANY_RESEARCH_REQUEST_TOOL,
-    // The page action runs under the session only; the deep-dive action that
-    // performs the same research asserts the review capability.
-    operations: () => [
-      { action: 'read', collection: 'companies' },
-      cap('application.review'),
-      cap('task.sync'),
-    ],
+    // The research writes shared catalog records (company status, careers
+    // source) besides the owner's task, so the generated permissions for
+    // those writes are asserted, as the deep-dive set does for the same call.
+    operations: () => [...companyResearchOperations],
     outputSchema: { additionalProperties: true, type: 'object' },
     readOnly: false,
   },

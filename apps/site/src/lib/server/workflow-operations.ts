@@ -119,6 +119,22 @@ export const opportunityDigDeeperOperations = [
 ] as const satisfies readonly WorkflowOperation[];
 
 /**
+ * `ensureCompanyResearch()` (`application-workflow.ts`): reads and re-statuses
+ * the shared `Company`, looks up or creates its careers `Source`, and lists,
+ * creates or updates its `research_company` task. These are shared-catalog
+ * writes, so the tool that exposes it asserts the generated permissions the
+ * deep-dive set already carries for the same call, not only a curated
+ * capability.
+ */
+export const companyResearchOperations = [
+  { action: 'read', collection: 'companies' },
+  { action: 'update', collection: 'companies' },
+  { action: 'read', collection: 'sources' },
+  { action: 'create', collection: 'sources' },
+  ...taskSyncOperations,
+] as const satisfies readonly WorkflowOperation[];
+
+/**
  * `syncApplicationWorkflowTasks()`: syncs the application's account and stage
  * tasks, and for a submitted application reads its opportunity and moves it
  * to `applied` (`syncSubmittedOpportunityStatus()`). The application record

@@ -82,6 +82,12 @@ describe('owner workflow tools call the page actions’ service functions with t
     expect(
       validateWorkflowToolArguments('fact_intake_create', { rawText: '' }).ok,
     ).toBe(false);
+    expect(
+      validateWorkflowToolArguments('recommendation_task_process', {
+        decision: ' accept_to_apply',
+        taskId: 'task-1',
+      }).ok,
+    ).toBe(false);
     expect(validateWorkflowToolArguments('nope', {}).ok).toBe(false);
   });
 

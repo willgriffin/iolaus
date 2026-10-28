@@ -1557,11 +1557,26 @@ describe('MCP public tool policy', () => {
       'workflow.task.sync',
       'workflow.application.prepare',
     ]);
+    // A padded or unknown decision never reaches the accept branch without
+    // the prepare capability: the schema is an enum and the permission set
+    // and the service see the same canonical value.
+    expect(
+      slugs('recommendation_task_process', { decision: ' accept_to_apply' }),
+    ).toEqual(['workflow.application.review', 'workflow.task.sync']);
     expect(slugs('application_archive')).toEqual([
       'workflow.application.review',
       'workflow.task.sync',
     ]);
     expect(slugs('fact_intake_create')).toEqual(['workflow.profile.manage']);
+    expect(slugs('company_research_request')).toEqual([
+      'companies.read',
+      'companies.update',
+      'sources.read',
+      'sources.create',
+      'tasks.read',
+      'tasks.create',
+      'tasks.update',
+    ]);
 
     const response = await callMcpToolWithAuthorityFixture({
       arguments: {},
@@ -1584,6 +1599,33 @@ describe('MCP public tool policy', () => {
         locals: ownerLocals,
         name: 'recommendation_task_process',
         permissions: ['workflow.application.review', 'workflow.task.sync'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: { decision: ' accept_to_apply', taskId: 'task-1' },
+        locals: ownerLocals,
+        name: 'recommendation_task_process',
+        permissions: ['workflow.application.review', 'workflow.task.sync'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: { companyId: 'co-1' },
+        locals: ownerLocals,
+        name: 'company_research_request',
+        permissions: [
+          'companies.read',
+          'sources.read',
+          'sources.create',
+          'tasks.read',
+          'tasks.create',
+          'tasks.update',
+        ],
         tenantId: 'tenant-1',
         user: { id: 'user-1' },
       }),

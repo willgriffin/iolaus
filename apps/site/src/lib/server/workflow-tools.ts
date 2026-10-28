@@ -31,6 +31,7 @@ import {
   OPPORTUNITY_REVIEW_TOOL,
   RECOMMENDATION_TASK_PROCESS_TOOL,
   RECOMMENDATION_TASKS_SYNC_TOOL,
+  recommendationTaskDecision,
   workflowToolContract,
 } from './workflow-tool-contracts.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
@@ -110,7 +111,8 @@ export async function executeWorkflowTool(
       };
     case RECOMMENDATION_TASK_PROCESS_TOOL:
       return (await processRecommendationTask({
-        decision: text(args.decision),
+        // The same canonical value the permission set was derived from.
+        decision: recommendationTaskDecision(args),
         preflightOverrideReason: text(args.preflightOverrideReason),
         reason: text(args.reason),
         subject,
