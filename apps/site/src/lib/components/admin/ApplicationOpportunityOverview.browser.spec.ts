@@ -149,6 +149,11 @@ it('switches material review controls while keeping final approval explicit', ()
     },
   });
   flushSync();
+  expect(
+    [...target.querySelectorAll('h1, h2, h3')].filter(
+      (heading) => heading.textContent === 'Engineer',
+    ),
+  ).toHaveLength(1);
   const tabs = target.querySelector('.material-tabs')!;
   expect(tabs.querySelector('[aria-current=page]')?.textContent).toBe(
     'Opportunity',

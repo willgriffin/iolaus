@@ -36,7 +36,8 @@ const compensation = $derived.by(() => {
 </script>
 
 <section class="opportunity-overview" aria-label="Opportunity overview">
-  <h2>{text(opportunity, 'title') || 'Role not available'}</h2>
+  <h2>Opportunity</h2>
+  {#if !text(opportunity, 'title')}<p>Role not available.</p>{/if}
   <p>{text(company, 'name') || text(opportunity, 'companyName') || 'Company not stated'}</p>
   <dl>
     <div><dt>Location</dt><dd>{text(opportunity, 'locations') || text(opportunity, 'locationNotes') || 'Location not stated'}</dd></div>
