@@ -983,7 +983,14 @@ function inventorySnapshot(environment, imageRef) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.status !== 0) {
-    throw new Error('The deployed parity inventory could not be verified.');
+    // Bounded tail of the inventory's own diagnostics: the script prints no
+    // secret values, and without it a failure here is not actionable.
+    const tail = `${result.stderr ?? ''}\n${result.stdout ?? ''}`
+      .trim()
+      .slice(-1500);
+    throw new Error(
+      `The deployed parity inventory could not be verified (exit ${result.status}).\n${tail}`,
+    );
   }
   const line = result.stdout
     .trim()

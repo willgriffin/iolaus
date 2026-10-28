@@ -31,12 +31,19 @@ import {
   validateSubmittedApplicationPayload,
 } from './application-workflow.js';
 import {
+  executeJobSearchTool,
+  validateJobSearchToolArguments,
+} from './job-search-tool-dispatch.js';
+import type { JobSearchToolName } from './job-search-tool-operations.js';
+import {
   createGenerator,
+  isJobSearchBridgeMcpTool,
   isPublicMcpTool,
   isPublicProfileMcpTool,
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
   isTagLookupMcpTool,
+  isWorkflowToolName,
   listMcpTools,
   mcpToolOperations,
 } from './mcp-tools.js';
@@ -82,6 +89,10 @@ import {
   listSourceCrawlStatus,
 } from './source-webmcp.js';
 import { lookupTags } from './tag-lookup-tool.js';
+import {
+  executeWorkflowTool,
+  validateWorkflowToolArguments,
+} from './workflow-tools.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
 // Registers the curated `workflow.*` permission definitions the public-profile
 // lifecycle tools assert; registration is process-scoped and idempotent.
@@ -375,7 +386,7 @@ export async function callMcpTool(options: {
       locals,
       async (run) => {
         run.assertToolAllowed(options.name);
-        const operations = mcpToolOperations(options.name);
+        const operations = mcpToolOperations(options.name, args);
         if (!operations) {
           throw new McpAccessError(
             403,
@@ -414,6 +425,36 @@ async function executeMcpTool(
       );
     }
     return await callSourceReadMcpTool(name, args);
+  }
+  if (isJobSearchBridgeMcpTool(name) || isWorkflowToolName(name)) {
+    if (!user || !locals?.workspaceSubject) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    const validation = isWorkflowToolName(name)
+      ? validateWorkflowToolArguments(name, args)
+      : validateJobSearchToolArguments(name as JobSearchToolName, args, 'body');
+    if (!validation.ok) {
+      throw new McpAccessError(400, validation.error);
+    }
+    try {
+      const result = isWorkflowToolName(name)
+        ? await executeWorkflowTool(name, args, user)
+        : await executeJobSearchTool(name as JobSearchToolName, args, {
+            locals,
+            user,
+          });
+      return jsonResponse(
+        (result && typeof result === 'object' && !Array.isArray(result)
+          ? result
+          : { result }) as Record<string, unknown>,
+      );
+    } catch (cause) {
+      if (isOwnerAuthorityDenial(cause)) throw cause;
+      return sourceMcpError(cause);
+    }
   }
   if (isTagLookupMcpTool(name)) {
     if (!user) {
