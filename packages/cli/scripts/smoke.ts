@@ -396,6 +396,30 @@ async function startFakeServer(): Promise<FakeServer> {
               name: 'public_profile_publish',
             },
             {
+              description: 'Browse the opportunity board.',
+              inputSchema: {
+                additionalProperties: false,
+                properties: {
+                  limit: { maximum: 25, minimum: 1, type: 'integer' },
+                },
+                type: 'object',
+              },
+              name: 'job_search_browse_opportunities',
+            },
+            {
+              description: 'Record an opportunity review.',
+              inputSchema: {
+                additionalProperties: false,
+                properties: {
+                  humanReviewStatus: { type: 'string' },
+                  opportunityId: { type: 'string' },
+                },
+                required: ['opportunityId', 'humanReviewStatus'],
+                type: 'object',
+              },
+              name: 'opportunity_review',
+            },
+            {
               description: 'Bounded source crawl status.',
               inputSchema: {
                 anyOf: [{ required: ['crawlId'] }, { required: ['sourceId'] }],
@@ -435,6 +459,32 @@ async function startFakeServer(): Promise<FakeServer> {
                 }),
                 type: 'text',
               },
+            ],
+          });
+          return;
+        }
+        if (body.name === 'job_search_browse_opportunities') {
+          assert(
+            JSON.stringify(body.arguments) === JSON.stringify({ limit: 2 }),
+            'CLI sent invalid browse arguments.',
+          );
+          jsonResponse(response, 200, {
+            content: [{ text: JSON.stringify({ items: [] }), type: 'text' }],
+          });
+          return;
+        }
+        if (body.name === 'opportunity_review') {
+          assert(
+            JSON.stringify(body.arguments) ===
+              JSON.stringify({
+                humanReviewStatus: 'maybe',
+                opportunityId: 'opp-1',
+              }),
+            'CLI sent invalid opportunity review arguments.',
+          );
+          jsonResponse(response, 200, {
+            content: [
+              { text: JSON.stringify({ id: 'decision-1' }), type: 'text' },
             ],
           });
           return;
@@ -884,6 +934,41 @@ async function runSmoke(options: CliSmokeOptions) {
           [experiencesResource.slug, 'delete', createdExperience.id],
           env,
         );
+
+        // Workflow tools (job_search_* bridge and owner tools) ride `mcp call`.
+        const browseTool = toolsResponse.result.tools.find(
+          (tool) => tool.name === 'job_search_browse_opportunities',
+        );
+        assert(
+          browseTool,
+          'job_search_browse_opportunities was not discovered.',
+        );
+        const browseResponse = parseJson<RequestJsonResult<McpCallResult>>(
+          await runCli(['mcp', 'call', browseTool.name, '{"limit":2}'], env),
+        );
+        assert(
+          browseResponse.ok,
+          'job_search_browse_opportunities call failed.',
+        );
+        const reviewTool = toolsResponse.result.tools.find(
+          (tool) => tool.name === 'opportunity_review',
+        );
+        assert(reviewTool, 'opportunity_review was not discovered.');
+        const reviewResponse = parseJson<RequestJsonResult<McpCallResult>>(
+          await runCli(
+            [
+              'mcp',
+              'call',
+              reviewTool.name,
+              JSON.stringify({
+                humanReviewStatus: 'maybe',
+                opportunityId: 'opp-1',
+              }),
+            ],
+            env,
+          ),
+        );
+        assert(reviewResponse.ok, 'opportunity_review call failed.');
 
         // Public profile lifecycle tools ride the same `mcp call` path.
         const statusTool = toolsResponse.result.tools.find(

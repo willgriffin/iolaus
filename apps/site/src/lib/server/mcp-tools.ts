@@ -20,6 +20,12 @@ import {
 } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
+  isJobSearchBridgeMcpTool,
+  isJobSearchToolName,
+  jobSearchBridgeMcpTools,
+  jobSearchToolOperations,
+} from './job-search-tool-operations.js';
+import {
   isPublicProfileToolName,
   publicProfileMcpTools,
 } from './public-profile-tools.js';
@@ -32,6 +38,11 @@ import {
   uniqueWorkflowOperations,
   type WorkflowOperation,
 } from './workflow-operations.js';
+import {
+  isWorkflowToolName,
+  workflowMcpTools,
+  workflowToolContract,
+} from './workflow-tool-contracts.js';
 import { isPrivateWorkspaceClass } from './workspace-resource-policy.js';
 
 /**
@@ -186,12 +197,22 @@ export function isTagLookupMcpTool(toolName: string): boolean {
   return toolName === TAG_LOOKUP_TOOL;
 }
 
+/**
+ * Application-owned workflow tools on the legacy bridge: the `job_search_*`
+ * tools (the same contracts the `/api/job-search` route and WebMCP publish),
+ * the owner workflow tools for former form-only actions, the tag lookup and,
+ * where the feature exists, the public-profile lifecycle.
+ */
 function appWorkflowMcpTools(): MCPTool[] {
   return [
+    ...jobSearchBridgeMcpTools(),
+    ...workflowMcpTools(),
     tagLookupMcpTool,
     ...(publicProfilesEnabled() ? publicProfileMcpTools : []),
   ];
 }
+
+export { isJobSearchBridgeMcpTool, isWorkflowToolName };
 
 export function configuredPublicMcpToolPatterns(): string[] {
   return (process.env[publicToolEnv] ?? '')
@@ -259,8 +280,14 @@ export async function listMcpTools(options: {
  */
 export function mcpToolOperations(
   toolName: string,
+  args: Record<string, unknown> = {},
 ): readonly McpToolOperation[] | null {
   if (isSourceReadMcpTool(toolName)) return sourceReadOperations;
+  if (isJobSearchToolName(toolName)) {
+    return [...jobSearchToolOperations[toolName]];
+  }
+  const workflow = workflowToolContract(toolName);
+  if (workflow) return uniqueWorkflowOperations([...workflow.operations(args)]);
   if (isPublicProfileMcpTool(toolName)) return publicProfileWorkflowOperations;
   // The tag vocabulary is read for the owner's own join rows; the same
   // capability bounds the pickers' callers.

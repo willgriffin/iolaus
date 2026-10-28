@@ -595,6 +595,20 @@ and the application workflow records are not on the generic surfaces today;
 the application package action and the review page own that flow, and
 `docs/surface-parity.md` tracks the remaining tranches.
 
+### Workflow tools from the terminal
+
+Every `job_search_*` tool is also listed on the legacy MCP bridge, so the CLI
+reaches it with `iolaus mcp call <tool> '<json>'` (willgriffin/iolaus#263);
+the bridge validates the same published `inputSchema` and asserts the same
+permission set as `/api/job-search/<action>` (`job-search-tool-operations.ts`).
+The admin form actions that had no agent equivalent are owner-principal tools
+over the same service functions, asserting the capabilities their page actions
+assert: `opportunity_review`, `opportunity_assess`, `recommendation_tasks_sync`,
+`recommendation_task_process`, `company_research_request`, `fact_intake_create`,
+`fact_candidate_accept` and `application_archive`. Their argument shapes are
+their MCP `inputSchema`s (`iolaus mcp tools`). None of them approves or submits
+an application; final approval and submission recording stay on the review page.
+
 ### Private workspace records
 
 The rest of the candidate-owned model the admin pages edit generically is on

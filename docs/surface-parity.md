@@ -165,38 +165,38 @@ is `workflow.profile.manage`; system-authored records are list/get only.
 
 | Capability | UI route / action | CLI | REST | MCP | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Review one opportunity (`humanReviewStatus`, rating, notes) | `[resource]` `reviewOpportunity` | — | `opportunity` update (fields only) | `opportunity_update` (fields only) | partial | Field update is exposed, but it skips `updateOpportunityReview()`'s audit/decision side effects. Tranche (c): `opportunity_review` tool. |
+| Review one opportunity (`humanReviewStatus`, rating, notes) | `[resource]` `reviewOpportunity` | mcp | `POST /api/mcp/call` | `opportunity_review` | exposed | #263: same `updateOpportunityReview()` (immutable Decision revision + audit) under `workflow.application.review`. |
 | Bulk review | `[resource]` `bulkReviewOpportunities`; DataSurface `review` | — | `/api/admin/opportunities/bulk-actions/*` | — | partial | REST-only by policy (bulk mutations preview-then-apply on the DataSurface adapter, see `apps/site/AGENTS.md`). Record as REST-only; CLI reaches it with raw HTTP. |
-| Accept opportunity to apply | `[resource]` `acceptOpportunity` | — | `/api/job-search/record-decision`, `/open-application` | `job_search_open_application` (canonical) | partial | UI also asserts `task.sync`; tranche (c) aligns the capability set and bridges the tool into the legacy catalog for the CLI. |
-| Triage deck window | `[resource]` `triageQueue` | — | `/api/job-search/next-triage-candidate` | — | partial | Single-candidate read vs. deck window; acceptable. Tranche (c) bridges to CLI. |
-| Dig deeper (maybe + intelligence) | `[resource]` `digDeeper` | — | `/api/job-search/dig-deeper` | — | partial | Missing on MCP catalogs and CLI; tranche (c). |
-| Verify posting (preflight) | `[resource]` `verifyPosting` | — | `/api/job-search/verify-posting` | — | partial | Tranche (c) bridge. |
-| Inactive-source sweep (preview / apply) | `[resource]` `previewInactiveOpportunitySweep` / `applyInactiveOpportunitySweep` | — | `/api/job-search/sweep` | — | partial | Tranche (c) bridge. |
-| Opportunity details panel | `[resource]` `loadOpportunityDetails` | — | `/api/job-search/inspect` | `job_search_inspect_opportunity` (canonical) | partial | Tranche (c) bridge for CLI. |
-| Process opportunity with LLM (assessment) | `[resource]` `processOpportunityWithLlm` / `processOpportunity`; DataSurface `process-with-llm`; `POST /api/admin/opportunities/[id]/screening-questions` | — | bulk action + screening-questions route | `refresh_my_matches` (different scope) | partial | Single-opportunity assessment has no tool; tranche (c): `opportunity_assess`. |
-| Create draft application | `[resource]` `createDraftApplication` | — | `/api/job-search/open-application` | `job_search_open_application` | partial | Tranche (c) bridge for CLI. |
-| Create fact intake / accept fact candidate | `[resource]` `createFactIntake` / `acceptFactCandidate` | — | — | — | missing | Tranche (c): `fact_intake_create`, `fact_candidate_accept`. |
-| Sync / process recommendation tasks | `[resource]` `syncRecommendationTasks` / `processRecommendationTask` | — | — | — | missing | Tranche (c). |
-| Crawl source now | `[resource]` `crawlSourceNow` | — | `/api/job-search/crawl-source` | — | partial | Tranche (c) bridge; UI action currently has no capability assertion (REST asserts the full set). |
-| Research company | `[id]` `researchCompany` | — | — | — | missing | Tranche (c): `company_research_request` on `ensureCompanyResearch()`. |
+| Accept opportunity to apply | `[resource]` `acceptOpportunity` | mcp | `/api/job-search/record-decision`, `/open-application` | `job_search_record_decision`, `job_search_open_application` (legacy bridge + canonical) | exposed | #263: bridged with the route's own permission sets. The UI's `acceptOpportunity` additionally asserts `task.sync`; the job-search tools keep their curated sets (recorded difference, same service). |
+| Triage deck window | `[resource]` `triageQueue` | mcp | `/api/job-search/next-triage-candidate` | `job_search_next_triage_candidate` | exposed | #263 bridge; single-candidate read serves the deck window one card at a time. |
+| Dig deeper (maybe + intelligence) | `[resource]` `digDeeper` | mcp | `/api/job-search/dig-deeper` | `job_search_dig_deeper` | exposed | #263 bridge. |
+| Verify posting (preflight) | `[resource]` `verifyPosting` | mcp | `/api/job-search/verify-posting` | `job_search_verify_posting` | exposed | #263 bridge. |
+| Inactive-source sweep (preview / apply) | `[resource]` `previewInactiveOpportunitySweep` / `applyInactiveOpportunitySweep` | mcp | `/api/job-search/sweep` | `job_search_sweep_opportunities` | exposed | #263 bridge (dry run by default). |
+| Opportunity details panel | `[resource]` `loadOpportunityDetails` | mcp | `/api/job-search/inspect` | `job_search_inspect_opportunity` (legacy bridge + canonical) | exposed | #263 bridge. |
+| Process opportunity with LLM (assessment) | `[resource]` `processOpportunityWithLlm` / `processOpportunity`; DataSurface `process-with-llm`; `POST /api/admin/opportunities/[id]/screening-questions` | mcp | `POST /api/mcp/call`; bulk action + screening-questions route | `opportunity_assess` | exposed | #263: same `enqueueOpportunityIntelligenceWithStatus(id, { modes: 'assessment' })` under `workflow.assessment.execute`. |
+| Create draft application | `[resource]` `createDraftApplication` | mcp | `/api/job-search/open-application` | `job_search_open_application` | exposed | #263 bridge. |
+| Create fact intake / accept fact candidate | `[resource]` `createFactIntake` / `acceptFactCandidate` | mcp | `POST /api/mcp/call` | `fact_intake_create`, `fact_candidate_accept` | exposed | #263 under `workflow.profile.manage`. |
+| Sync / process recommendation tasks | `[resource]` `syncRecommendationTasks` / `processRecommendationTask` | mcp | `POST /api/mcp/call` | `recommendation_tasks_sync`, `recommendation_task_process` | exposed | #263; `accept_to_apply` additionally asserts `workflow.application.prepare`, as the page does. |
+| Crawl source now | `[resource]` `crawlSourceNow` | mcp | `/api/job-search/crawl-source` | `job_search_crawl_source` | exposed | #263 bridge with the route's full operator set. The UI action itself still has no capability assertion (recorded; operator-only in hosted mode by resource policy). |
+| Research company | `[id]` `researchCompany` | mcp | `POST /api/mcp/call` | `company_research_request` | exposed | #263 on `ensureCompanyResearch()` under `companies.read` + `workflow.application.review` + `workflow.task.sync` (the deep-dive action's set; the page action is session-only). |
 | Create root source | `/admin/sources/new` `create` | crud (`sources create`) | `/api/sources`, `/api/job-search/create-source` | `source_create` | exposed | |
-| Set source active / source health / crawl status | (list page toggles) | mcp (health, crawl status) | `/api/job-search/*` | `job_search_list_source_health`, `job_search_source_crawl_status` | exposed | `set-source-active` is `source_update` on the generic surfaces. |
-| URL intake (paste a posting or careers URL) | `POST /api/admin/url-intake` (admin shell) | — | `/api/admin/url-intake`, `/api/job-search/import` | — | partial | Tranche (c) bridge of `job_search_import_opportunity`. |
-| Application review: add comments / request tweaks / review material | `/admin/applications/[id]` `addComments`, `requestTweaks`, `reviewMaterial` | — | — | — | missing | Tranche (c): `application_material_*` tools on `application-review.ts`. |
-| Application review: generate packet | `/admin/applications/[id]` `generatePacket` | — | — | — | missing | Tranche (c): `application_generate_packet` (AI budget guard shared). |
-| Application review: archive | `/admin/applications/[id]` `archiveApplication` | — | — | — | missing | Tranche (c). |
-| Application review: provide form answers / revoke reusable answer | `/admin/applications/[id]` `provideAnswers`, `revokeReusableAnswer` | — | — | — | missing | Tranche (c). |
-| Application review: report submission blocker | `/admin/applications/[id]` `reportBlocker` | — | — | — | missing | Tranche (c). |
+| Set source active / source health / crawl status | (list page toggles) | mcp | `/api/job-search/*` | `job_search_set_source_active`, `job_search_list_source_health`, `job_search_source_crawl_status` | exposed | #263 bridges `set-source-active` too. |
+| URL intake (paste a posting or careers URL) | `POST /api/admin/url-intake` (admin shell) | mcp | `/api/admin/url-intake`, `/api/job-search/import` | `job_search_import_opportunity`, `job_search_create_source` | exposed | #263 bridge; the admin URL-intake route's auto-classification stays REST-only (it is a composition of the two tools). |
+| Application review: add comments / request tweaks / review material | `/admin/applications/[id]` `addComments`, `requestTweaks`, `reviewMaterial` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts: `application_material_*` tools on `application-review.ts`. |
+| Application review: generate packet | `/admin/applications/[id]` `generatePacket` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts: `application_generate_packet` (AI budget guard shared). |
+| Application review: archive | `/admin/applications/[id]` `archiveApplication` | mcp | `POST /api/mcp/call` | `application_archive` | exposed | #263 under `workflow.application.review` + `workflow.task.sync`. |
+| Application review: provide form answers / revoke reusable answer | `/admin/applications/[id]` `provideAnswers`, `revokeReusableAnswer` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts. |
+| Application review: report submission blocker | `/admin/applications/[id]` `reportBlocker` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts. |
 | Application review: final approval | `/admin/applications/[id]` `approveFinal` | — | refused | refused | UI-only | Policy: final submission approval is recorded only from the authenticated review page (`docs/employment-workflows.md`, `mcp-apps-test-matrix.md`); both generic paths reject it. `iolaus_open_human_review` hands agents the page. |
 | Application review: record submission | `/admin/applications/[id]` `recordSubmission` | — | refused | refused | UI-only | Same policy as final approval. |
-| Résumé generate / regenerate / publish asset | `/admin/resume` `generate`, `regenerate`, `publish` | — | — | — | missing | Tranche (c): `resume_asset_generate` / `_regenerate` / `_publish` on `resume-admin.ts`. |
-| Skill discovery (discover / confirm / dismiss) | `/admin/resume/skill-discovery` | — | — | — | missing | Tranche (c). |
-| Skill experience map | `/admin/preferences/screening-questions` `saveSkillExperience` | — | — | — | missing | Tranche (c), or covered by a scoped `CandidateProfile` facts update. |
+| Résumé generate / regenerate / publish asset | `/admin/resume` `generate`, `regenerate`, `publish` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts: `resume_asset_generate` / `_regenerate` / `_publish` on `resume-admin.ts`. |
+| Skill discovery (discover / confirm / dismiss) | `/admin/resume/skill-discovery` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts. |
+| Skill experience map | `/admin/preferences/screening-questions` `saveSkillExperience` | — | — | — | missing | Tranche (c2), issue #265: form-shaped service inputs (FormData parsers in the page actions) need their own argument contracts, or covered by a scoped `CandidateProfile` facts update. |
 | Onboarding save | `/admin/onboarding` `save` | — | — | — | partial | Profile fields become `candidateprofile_update` in tranche (a); the orchestration (reusable answers, résumé selection, work-eligibility validation) stays UI-only until tranche (c) decides on an `onboarding_save` tool. |
 | Shortlist manage | `/shortlist` page via `/api/shortlist*` | — | `/api/shortlist`, `/api/shortlist/import` | — | partial | Public-search feature; tranche (c) decides. |
-| Private matches | (no UI) | — | `/api/public/v1/me/matches` | `match_my_profile`, `refresh_my_matches` | tool-only | |
-| Read published résumé structure | (no UI) | — | `/api/job-search/read-resume` | — | tool-only | |
-| Inspect application materials | (review page load) | — | `/api/job-search/inspect-application` | `job_search_inspect_application` | tool-only | |
+| Private matches | (no UI) | — | `/api/public/v1/me/matches` | `match_my_profile`, `refresh_my_matches` (canonical) | tool-only | |
+| Read published résumé structure | (no UI) | mcp | `/api/job-search/read-resume` | `job_search_read_resume` | tool-only | #263 bridge. |
+| Inspect application materials | (review page load) | mcp | `/api/job-search/inspect-application` | `job_search_inspect_application` | tool-only | #263 bridge. |
 | Workspace activity feed | admin shell | — | `/api/admin/activity` | — | partial | Read-only; REST suffices. |
 | Admin assistant chat | `/admin` assistant panel | — | `/api/admin/assistant/*` | — | UI-only | A chat UI over the agent surfaces, not a capability of its own. |
 
@@ -214,20 +214,18 @@ is `workflow.profile.manage`; system-authored records are list/get only.
 
 | Status | Rows |
 | --- | --- |
-| exposed | 40 |
-| partial | 17 |
-| missing | 11 |
+| exposed | 55 |
+| partial | 6 |
+| missing | 7 |
 | UI-only (reason recorded) | 10 |
 | tool-only | 3 |
 
-Missing rows by tranche: (a) 0 (career model and public-profile lifecycle,
-#259), (b) 0 (private workspace CRUD, tag lookup, tailoring configs, #262),
-(c) 11 (workflow tools without any agent surface). The 17 `partial` rows are
-mostly one gap: the sixteen `job_search_*` workflow tools are not in the
-legacy `/api/mcp/call` catalog, so the CLI cannot call them; bridging them
-there (with their existing `jobSearchToolContracts` schemas and
-`executeAsOwnerTool` permission sets) closes most of column `CLI` in one
-change.
+Missing rows: 7, all tranche (c2) (#265): the form-shaped admin actions
+(application review materials, packet generation, answers, blockers, résumé
+asset generation, skill discovery, skill experience map). The 6 `partial`
+rows are REST-only by policy or acceptable as recorded (bulk DataSurface
+actions, résumé import, shortlist, activity feed, account export, onboarding
+orchestration).
 
 ## Tranche plan
 
@@ -236,7 +234,12 @@ change.
   to the legacy MCP catalog and the canonical server; admin-write side
   effects on agent writes.
 - (b) #262 — private workspace CRUD (section C) on the same scoped path, `tag_lookup`, tailoring configs.
-- (c) — one owner-principal tool per remaining form action, built on the
-  page's service function; bridge `job_search_*` into the legacy catalog.
+- (c) #263 — `job_search_*` bridged into the legacy catalog (CLI reach) and
+  eight owner-principal tools for the plain-argument form actions.
+- (c2) #265 — the form-shaped actions (application review materials,
+  packet generation, answers, blockers, résumé asset generation, skill
+  discovery, skill experience, onboarding): each page parses `FormData`
+  into a service-specific shape, so each tool needs its own argument
+  contract and test.
 - (d) — section E stays UI-only; document in `docs/configuration.md` if an
   operator script is wanted instead.

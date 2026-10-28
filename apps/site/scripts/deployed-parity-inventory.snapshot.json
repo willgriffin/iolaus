@@ -136,6 +136,10 @@
         "readOnly": true
       },
       {
+        "name": "application_archive",
+        "readOnly": false
+      },
+      {
         "name": "application_create",
         "readOnly": false
       },
@@ -234,6 +238,10 @@
       {
         "name": "company_list",
         "readOnly": true
+      },
+      {
+        "name": "company_research_request",
+        "readOnly": false
       },
       {
         "name": "company_update",
@@ -536,12 +544,20 @@
         "readOnly": false
       },
       {
+        "name": "fact_candidate_accept",
+        "readOnly": false
+      },
+      {
         "name": "fact_create",
         "readOnly": false
       },
       {
         "name": "fact_get",
         "readOnly": true
+      },
+      {
+        "name": "fact_intake_create",
+        "readOnly": false
       },
       {
         "name": "fact_list",
@@ -628,12 +644,72 @@
         "readOnly": true
       },
       {
+        "name": "job_search_browse_opportunities",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_crawl_source",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_create_source",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_dig_deeper",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_import_opportunity",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_inspect_application",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_inspect_opportunity",
+        "readOnly": false
+      },
+      {
         "name": "job_search_list_source_health",
         "readOnly": true
       },
       {
+        "name": "job_search_next_triage_candidate",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_open_application",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_read_resume",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_record_decision",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_set_source_active",
+        "readOnly": false
+      },
+      {
         "name": "job_search_source_crawl_status",
         "readOnly": true
+      },
+      {
+        "name": "job_search_sweep_opportunities",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_verify_posting",
+        "readOnly": false
+      },
+      {
+        "name": "opportunity_assess",
+        "readOnly": false
       },
       {
         "name": "opportunity_create",
@@ -646,6 +722,10 @@
       {
         "name": "opportunity_list",
         "readOnly": true
+      },
+      {
+        "name": "opportunity_review",
+        "readOnly": false
       },
       {
         "name": "opportunity_update",
@@ -809,6 +889,14 @@
       },
       {
         "name": "projecttag_update",
+        "readOnly": false
+      },
+      {
+        "name": "recommendation_task_process",
+        "readOnly": false
+      },
+      {
+        "name": "recommendation_tasks_sync",
         "readOnly": false
       },
       {
@@ -1795,5 +1883,5 @@
       }
     ]
   },
-  "inventorySha256": "95d1135757c662fd04bf179dd2404d5ea329a5a01460ba271243cbce511a60a3"
+  "inventorySha256": "f7f5f252fdb4f3ca59215f9646389b777cfadfc6f26ed1a854c7745e3db75486"
 }
