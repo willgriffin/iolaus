@@ -57,6 +57,11 @@ Rendered chart applies explicitly select the isolated qualification namespace:
 Helm's `--namespace` alone does not insert `metadata.namespace` into templates.
 JSON fixture lists preserve their explicit namespaces for the database/provider
 fixtures and the application rather than receiving a conflicting override.
+The static schema authority packages `smrt-prompts`, `smrt-secrets`,
+`smrt-playbooks` and `smrt-reports` are direct site dependencies in the same
+published SMRT closure. Their public manifest exports resolve from the schema
+module's location, independently of process cwd or an incidental preload cache.
+Missing or mismatched manifests still refuse startup before database checks.
 
 ## Inactive target
 
