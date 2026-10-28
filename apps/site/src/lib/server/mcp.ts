@@ -36,6 +36,7 @@ import {
   isPublicProfileMcpTool,
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
+  isTagLookupMcpTool,
   listMcpTools,
   mcpToolOperations,
 } from './mcp-tools.js';
@@ -67,9 +68,11 @@ import {
 import {
   createScopedRecord,
   deleteScopedRecord,
+  findOwnedRecord,
   getScopedRecord,
   isScopedResourceClass,
   listScopedRecords,
+  runScopedWriteSideEffects,
   updateScopedRecord,
 } from './scoped-resource-crud.js';
 import { getCollection } from './smrt.js';
@@ -78,6 +81,7 @@ import {
   listRootSourceHealth,
   listSourceCrawlStatus,
 } from './source-webmcp.js';
+import { lookupTags } from './tag-lookup-tool.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
 // Registers the curated `workflow.*` permission definitions the public-profile
 // lifecycle tools assert; registration is process-scoped and idempotent.
@@ -214,18 +218,6 @@ export async function callPublicProfileMcpTool(
     return publicProfileMcpError(cause);
   }
 }
-
-/**
- * Classes with a bespoke generated-write flow in this module (concurrency
- * commit, write reservation, application-owned immutability). They are not
- * exposed today; when one returns to the catalog its flow, not the plain
- * scoped path, must run.
- */
-const bespokeMcpClasses = new Set([
-  'Application',
-  'ResumeAsset',
-  'ResumeVariant',
-]);
 
 /**
  * Execute a generated `<class>_<action>` tool for a candidate-owned class
@@ -421,6 +413,17 @@ async function executeMcpTool(
     }
     return await callSourceReadMcpTool(name, args);
   }
+  if (isTagLookupMcpTool(name)) {
+    if (!user) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    return jsonResponse(
+      (await lookupTags(args)) as unknown as Record<string, unknown>,
+    );
+  }
   if (isPublicProfileMcpTool(name)) {
     if (!user || !locals?.workspaceSubject) {
       throw new McpAccessError(
@@ -439,29 +442,22 @@ async function executeMcpTool(
     subject,
   );
 
+  // Candidate-owned classes never reach `MCPGenerator`: every read and write
+  // below goes through the owner-scoped path. Classes with a bespoke flow
+  // (application concurrency commit, résumé variant reservation) keep that
+  // flow around the scoped read or write.
   const scoped = resolveMcpToolClass(options.name);
-  if (
-    scoped &&
-    isScopedResourceClass(scoped.className) &&
-    !bespokeMcpClasses.has(scoped.className)
-  ) {
-    try {
-      return await executeScopedMcpTool(
-        scoped.className,
-        options.name.slice(mcpToolPrefix(scoped.className).length),
-        args,
-      );
-    } catch (cause) {
-      if (isOwnerAuthorityDenial(cause)) throw cause;
-      return sourceMcpError(cause);
-    }
-  }
+  const scopedClassName =
+    scoped && isScopedResourceClass(scoped.className) ? scoped.className : null;
+  const scopedAction = scopedClassName
+    ? options.name.slice(mcpToolPrefix(scopedClassName).length)
+    : null;
 
   if (options.name === 'application_update') {
     const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
-    const application = await (await getCollection('Application')).get(
-      applicationId,
-    );
+    const application = applicationId
+      ? await findOwnedRecord('Application', applicationId)
+      : null;
     if (!application) {
       throw new McpAccessError(404, 'Application not found.');
     }
@@ -501,13 +497,26 @@ async function executeMcpTool(
 
   let response: MCPResponse;
   try {
-    response = await createGenerator(options.user).handleToolCall({
-      method: 'tools/call',
-      params: {
-        arguments: args,
-        name: options.name,
-      },
-    });
+    if (scopedClassName && scopedAction) {
+      try {
+        response = await executeScopedMcpTool(
+          scopedClassName,
+          scopedAction,
+          args,
+        );
+      } catch (cause) {
+        if (isOwnerAuthorityDenial(cause)) throw cause;
+        return sourceMcpError(cause);
+      }
+    } else {
+      response = await createGenerator(options.user).handleToolCall({
+        method: 'tools/call',
+        params: {
+          arguments: args,
+          name: options.name,
+        },
+      });
+    }
   } catch (cause) {
     if (resumeVariantReservation) {
       await releaseResumeVariantApplicationWrite(
@@ -643,8 +652,7 @@ async function assertMcpResumeAssetWriteAllowed(
   if (!assetId) {
     throw new McpAccessError(400, 'Resume asset write requires an asset id.');
   }
-  const assets = await getCollection('ResumeAsset');
-  const asset = await assets.get(assetId);
+  const asset = await findOwnedRecord('ResumeAsset', assetId);
   if (!asset) throw new McpAccessError(404, 'Resume asset not found.');
   if (
     hasNonEmptyString(

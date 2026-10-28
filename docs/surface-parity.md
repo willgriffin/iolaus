@@ -132,29 +132,33 @@ writes invalidate the published-résumé cache and queue the canonical refresh
 | Public profile: unpublish | `/admin/career/public-profile` `unpublish` | mcp | `POST /api/mcp/call` | `public_profile_unpublish` | exposed | #259. |
 | Public profile: status / pending preview | `/admin/career/public-profile` load, `preview/[id]` | mcp | `POST /api/mcp/call` | `public_profile_status` | exposed | #259 on `getPublicProfileManager()`; the preview PDF bytes stay on the admin route (`previewUrl` is returned). |
 | Legacy `Resume*` classes (`ResumeProfile`, `ResumePosition`, `ResumeAchievement`, `ResumeSkill*`, `ResumeEducation`, `ResumeLink`, `ResumeOtherRole`) | (read fallback only; no dedicated admin page) | — | — | — | UI-only | Legacy read-only fallback (`LEGACY_RESUME_READ_PLAN`) slated for removal; agents write the normalized model. |
-| ResumeTailoringConfig CRUD | `/admin/resume-tailoring-configs` | — | — | — | missing | Tranche (b) with the other résumé-generation records. |
-| Tag vocabulary lookup (`Tag` from smrt-tags, needed for every `*Tag.tagId`) | combo pickers on the tag pages | — | — | — | missing | Tranche (b): bounded read-only tag lookup; `exposablePackages` excludes smrt-tags today. |
+| ResumeTailoringConfig CRUD | `/admin/resume-tailoring-configs` | crud | `/api/resumetailoringconfigs` | `resumetailoringconfig_*` | exposed | #262. |
+| Tag vocabulary lookup (`Tag` from smrt-tags, needed for every `*Tag.tagId`) | combo pickers on the tag pages | mcp | `POST /api/mcp/call` | `tag_lookup` (legacy + canonical) | exposed | #262: bounded read-only lookup (name/slug substring, ≤100 results) under `workflow.profile.manage`; the vocabulary itself stays off generated CRUD. |
 | Résumé import (upload, review, apply, retry) | `/admin/career/import`, `POST /api/admin/resume-import*` | — | `/api/admin/resume-import*` | — | partial | REST only, by design of the multipart upload + reviewed-proposal flow; tranche (c) decides whether an MCP `resume_import_*` wrapper is worth it. |
 
 ## C. Private workspace model (tranche b)
 
 The UI edits these through the generic `[resource]` pages with owner
-scoping. They left the agent surfaces in #138; re-exposing them needs the
-scoped CRUD path from the topology notes.
+scoping. They left the agent surfaces in #138; #262 re-exposes them through
+the same owner-scoped path as the career model, keeping each class's bespoke
+guards (application concurrency commit and approval/submission guards, résumé
+variant reservation and approval sync, application-owned asset immutability,
+assessment projection refresh after a preference change). MCP authorization
+is `workflow.profile.manage`; system-authored records are list/get only.
 
 | Capability | UI route / action | CLI | REST | MCP | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Application CRUD | `/admin/applications` create/update/delete | — | — | — | missing | Tranche (b). The existing guards (`assertApplicationCreatePayload`, `commitApplicationIfCurrent`, no final approval / submission / `materialWriteLock` through generic writes) stay. |
-| ApplicationMaterialComment CRUD | `/admin/application-material-comments` | — | — | — | missing | Tranche (b). |
-| Task CRUD | `/admin/tasks`, `/admin/tasks/new` | — | — | — | missing | Tranche (b). |
-| Decision / DecisionTag CRUD | `/admin/decisions`, `/admin/decision-tags` | — | — | — | missing | Tranche (b). |
-| PreferenceRule CRUD (screening questions, preferences) | `/admin/preferences`, `/admin/preferences/screening-questions` `save` / `delete` | — | — | — | missing | Tranche (b). The screening-question store's optimistic `expectedRevision` becomes the generic revision guard. |
-| ResumeAsset list/get/update/delete | `/admin/resume-assets` | — | — | — | missing | Tranche (b). Application-owned assets stay immutable (guards already in both generic paths). |
-| ResumeVariant CRUD | `/admin/resume-variants` | — | — | — | missing | Tranche (b). Reservation / approval sync guards already in both generic paths. |
-| CandidateAnswer (reusable answers) | `/admin/onboarding` `revokeReusableAnswer`, application `provideAnswers` / `revokeReusableAnswer` | — | — | — | missing | Tranche (b): list/get/update/delete; creation stays with the application workflow. |
-| FactIntake / FactCandidate | `/admin/fact-intakes`, `/admin/fact-candidates` | — | — | — | missing | Tranche (b) read; writes go through the intake tools in D. |
-| EvaluationScore / OpportunityAssessment read | `/admin/evaluation-scores`, assessment panels | — | — | — | missing | Tranche (b): list/get only (system-authored). |
-| AgentRun read | `/admin/agent-runs` | — | — | — | missing | Tranche (b): list/get only; the audit surrogate `(agentruns, read)` already exists in `workflow-operations.ts`. |
+| Application CRUD | `/admin/applications` create/update/delete | crud | `/api/applications` | `application_list/get/create/update` | exposed | #262. Owner-scoped; the existing guards (`assertApplicationCreatePayload`, `commitApplicationIfCurrent`, no final approval / submission / `materialWriteLock` through generic writes) run on the scoped path. MCP omits `delete`. |
+| ApplicationMaterialComment CRUD | `/admin/application-material-comments` | crud | `/api/applicationmaterialcomments` | `applicationmaterialcomment_*` | exposed | #262. |
+| Task CRUD | `/admin/tasks`, `/admin/tasks/new` | crud | `/api/tasks` | `task_*` | exposed | #262. |
+| Decision / DecisionTag CRUD | `/admin/decisions`, `/admin/decision-tags` | crud | `/api/decisions`, `/api/decisiontags` | `decision_*`, `decisiontag_*` | exposed | #262. |
+| PreferenceRule CRUD (screening questions, preferences) | `/admin/preferences`, `/admin/preferences/screening-questions` `save` / `delete` | crud | `/api/preferencerules` | `preferencerule_*` | exposed | #262. Every agent write refreshes the owner's assessment projections, as the admin page does. The screening-question page's optimistic `expectedRevision` stays a page concern. |
+| ResumeAsset list/get/update/delete | `/admin/resume-assets` | crud (no create) | `/api/resumeassets` | `resumeasset_list/get/update` | exposed | #262. Application-owned assets stay immutable; generation stays with the résumé workflow (tranche c). |
+| ResumeVariant CRUD | `/admin/resume-variants` | crud | `/api/resumevariants` | `resumevariant_list/get/create/update` | exposed | #262. Write reservation and approval sync run on the scoped path; MCP omits `delete`. |
+| CandidateAnswer (reusable answers) | `/admin/onboarding` `revokeReusableAnswer`, application `provideAnswers` / `revokeReusableAnswer` | — | — | — | UI-only | Privacy surface by design (`candidate-answers.spec.ts`): no admin CRUD page either; answers are saved and revoked only inside onboarding and the application review flows. A revoke tool is tranche (c) if wanted. |
+| FactIntake / FactCandidate | `/admin/fact-intakes`, `/admin/fact-candidates` | crud (list/get) | `/api/factintakes`, `/api/factcandidates` | `factintake_list/get`, `factcandidate_list/get` | exposed | #262, read-only; writes go through the intake tools in D. |
+| EvaluationScore / OpportunityAssessment read | `/admin/evaluation-scores`, assessment panels | crud (list/get) | `/api/evaluationscores`, `/api/opportunityassessments` | `evaluationscore_list/get`, `opportunityassessment_list/get` | exposed | #262, read-only (system-authored). |
+| AgentRun read | `/admin/agent-runs` | crud (list/get) | `/api/agentruns` | `agentrun_list/get` | exposed | #262, read-only; writes refused everywhere. |
 | MatchModel, RequirementEvidenceDecision, OpportunityRecommendationRank | (no admin page) | — | — | — | UI-only | Internal matching state with no UI editor; `match_my_profile` / `refresh_my_matches` are the agent interface. |
 
 ## D. Workflow actions
@@ -210,15 +214,14 @@ scoped CRUD path from the topology notes.
 
 | Status | Rows |
 | --- | --- |
-| exposed | 28 |
+| exposed | 40 |
 | partial | 17 |
-| missing | 24 |
-| UI-only (reason recorded) | 9 |
+| missing | 11 |
+| UI-only (reason recorded) | 10 |
 | tool-only | 3 |
 
-Missing rows by tranche: (a) 0 (career model and public-profile lifecycle
-shipped in #259), (b) 13 (private workspace CRUD, tag lookup, tailoring
-configs),
+Missing rows by tranche: (a) 0 (career model and public-profile lifecycle,
+#259), (b) 0 (private workspace CRUD, tag lookup, tailoring configs, #262),
 (c) 11 (workflow tools without any agent surface). The 17 `partial` rows are
 mostly one gap: the sixteen `job_search_*` workflow tools are not in the
 legacy `/api/mcp/call` catalog, so the CLI cannot call them; bridging them
@@ -232,7 +235,7 @@ change.
   on the generic paths; add `public_profile_prepare|publish|unpublish|status`
   to the legacy MCP catalog and the canonical server; admin-write side
   effects on agent writes.
-- (b) — private workspace CRUD (section C), tag lookup, tailoring configs.
+- (b) #262 — private workspace CRUD (section C) on the same scoped path, `tag_lookup`, tailoring configs.
 - (c) — one owner-principal tool per remaining form action, built on the
   page's service function; bridge `job_search_*` into the legacy catalog.
 - (d) — section E stays UI-only; document in `docs/configuration.md` if an

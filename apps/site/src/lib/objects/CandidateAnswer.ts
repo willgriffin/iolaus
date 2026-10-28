@@ -18,6 +18,10 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
     'candidate_profile_id',
     'label_key',
   ],
+  // The reusable answer library is a privacy surface: it has no admin CRUD
+  // page and no generic REST, CLI or MCP surface (candidate-answers.spec.ts);
+  // answers are saved and revoked only through onboarding and the
+  // application review flows. docs/surface-parity.md records it as UI-only.
   api: { include: [] },
   cli: { include: [] },
   mcp: { include: [] },

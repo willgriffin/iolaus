@@ -5,9 +5,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
   tableName: 'application_material_comments',
   // Review remarks can expose a candidate's application package and private
   // feedback. Only the subject-bound review service may access them.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  mcp: { include: ['list', 'get', 'create', 'update', 'delete'] },
 })
 @TenantScoped()
 export class ApplicationMaterialComment extends SmrtObject {

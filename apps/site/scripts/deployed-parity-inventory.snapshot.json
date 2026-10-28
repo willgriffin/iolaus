@@ -128,6 +128,50 @@
         "readOnly": false
       },
       {
+        "name": "agentrun_get",
+        "readOnly": true
+      },
+      {
+        "name": "agentrun_list",
+        "readOnly": true
+      },
+      {
+        "name": "application_create",
+        "readOnly": false
+      },
+      {
+        "name": "application_get",
+        "readOnly": true
+      },
+      {
+        "name": "application_list",
+        "readOnly": true
+      },
+      {
+        "name": "application_update",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_create",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_delete",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_get",
+        "readOnly": true
+      },
+      {
+        "name": "applicationmaterialcomment_list",
+        "readOnly": true
+      },
+      {
+        "name": "applicationmaterialcomment_update",
+        "readOnly": false
+      },
+      {
         "name": "attachment_create",
         "readOnly": false
       },
@@ -241,6 +285,46 @@
       },
       {
         "name": "companytag_update",
+        "readOnly": false
+      },
+      {
+        "name": "decision_create",
+        "readOnly": false
+      },
+      {
+        "name": "decision_delete",
+        "readOnly": false
+      },
+      {
+        "name": "decision_get",
+        "readOnly": true
+      },
+      {
+        "name": "decision_list",
+        "readOnly": true
+      },
+      {
+        "name": "decision_update",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_create",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_get",
+        "readOnly": true
+      },
+      {
+        "name": "decisiontag_list",
+        "readOnly": true
+      },
+      {
+        "name": "decisiontag_update",
         "readOnly": false
       },
       {
@@ -364,6 +448,14 @@
         "readOnly": false
       },
       {
+        "name": "evaluationscore_get",
+        "readOnly": true
+      },
+      {
+        "name": "evaluationscore_list",
+        "readOnly": true
+      },
+      {
         "name": "experience_create",
         "readOnly": false
       },
@@ -460,6 +552,14 @@
         "readOnly": false
       },
       {
+        "name": "factcandidate_get",
+        "readOnly": true
+      },
+      {
+        "name": "factcandidate_list",
+        "readOnly": true
+      },
+      {
         "name": "factcontent_create",
         "readOnly": false
       },
@@ -481,6 +581,14 @@
       },
       {
         "name": "factevidence_list",
+        "readOnly": true
+      },
+      {
+        "name": "factintake_get",
+        "readOnly": true
+      },
+      {
+        "name": "factintake_list",
         "readOnly": true
       },
       {
@@ -542,6 +650,14 @@
       {
         "name": "opportunity_update",
         "readOnly": false
+      },
+      {
+        "name": "opportunityassessment_get",
+        "readOnly": true
+      },
+      {
+        "name": "opportunityassessment_list",
+        "readOnly": true
       },
       {
         "name": "opportunitycompany_create",
@@ -616,6 +732,26 @@
         "readOnly": false
       },
       {
+        "name": "preferencerule_create",
+        "readOnly": false
+      },
+      {
+        "name": "preferencerule_delete",
+        "readOnly": false
+      },
+      {
+        "name": "preferencerule_get",
+        "readOnly": true
+      },
+      {
+        "name": "preferencerule_list",
+        "readOnly": true
+      },
+      {
+        "name": "preferencerule_update",
+        "readOnly": false
+      },
+      {
         "name": "project_create",
         "readOnly": false
       },
@@ -673,6 +809,54 @@
       },
       {
         "name": "projecttag_update",
+        "readOnly": false
+      },
+      {
+        "name": "resumeasset_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumeasset_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumeasset_update",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_create",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_delete",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumetailoringconfig_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumetailoringconfig_update",
+        "readOnly": false
+      },
+      {
+        "name": "resumevariant_create",
+        "readOnly": false
+      },
+      {
+        "name": "resumevariant_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumevariant_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumevariant_update",
         "readOnly": false
       },
       {
@@ -802,6 +986,30 @@
       {
         "name": "sourcetag_update",
         "readOnly": false
+      },
+      {
+        "name": "tag_lookup",
+        "readOnly": true
+      },
+      {
+        "name": "task_create",
+        "readOnly": false
+      },
+      {
+        "name": "task_delete",
+        "readOnly": false
+      },
+      {
+        "name": "task_get",
+        "readOnly": true
+      },
+      {
+        "name": "task_list",
+        "readOnly": true
+      },
+      {
+        "name": "task_update",
+        "readOnly": false
       }
     ],
     "rest": [
@@ -840,6 +1048,39 @@
         "className": "AchievementTag",
         "collection": "achievementtags",
         "tableName": "achievement_tags"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "AgentRun",
+        "collection": "agentruns",
+        "tableName": "agent_runs"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Application",
+        "collection": "applications",
+        "tableName": "applications"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ApplicationMaterialComment",
+        "collection": "applicationmaterialcomments",
+        "tableName": "application_material_comments"
       },
       {
         "actions": [
@@ -931,6 +1172,30 @@
           "list",
           "update"
         ],
+        "className": "Decision",
+        "collection": "decisions",
+        "tableName": "decisions"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "DecisionTag",
+        "collection": "decisiontags",
+        "tableName": "decision_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
         "className": "Duty",
         "collection": "duties",
         "tableName": "duties"
@@ -997,6 +1262,15 @@
       },
       {
         "actions": [
+          "get",
+          "list"
+        ],
+        "className": "EvaluationScore",
+        "collection": "evaluationscores",
+        "tableName": "evaluation_scores"
+      },
+      {
+        "actions": [
           "create",
           "delete",
           "get",
@@ -1057,6 +1331,15 @@
       },
       {
         "actions": [
+          "get",
+          "list"
+        ],
+        "className": "FactCandidate",
+        "collection": "factcandidates",
+        "tableName": "fact_candidates"
+      },
+      {
+        "actions": [
           "create",
           "delete",
           "get",
@@ -1076,6 +1359,15 @@
         "className": "FactEvidence",
         "collection": "factevidences",
         "tableName": "fact_evidences"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "FactIntake",
+        "collection": "factintakes",
+        "tableName": "fact_intakes"
       },
       {
         "actions": [
@@ -1121,6 +1413,15 @@
         "className": "Opportunity",
         "collection": "opportunities",
         "tableName": "opportunities"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "OpportunityAssessment",
+        "collection": "opportunityassessments",
+        "tableName": "opportunity_assessments"
       },
       {
         "actions": [
@@ -1187,6 +1488,18 @@
           "list",
           "update"
         ],
+        "className": "PreferenceRule",
+        "collection": "preferencerules",
+        "tableName": "preference_rules"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
         "className": "Project",
         "collection": "projects",
         "tableName": "projects"
@@ -1214,6 +1527,41 @@
         "className": "ProjectTag",
         "collection": "projecttags",
         "tableName": "project_tags"
+      },
+      {
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeAsset",
+        "collection": "resumeassets",
+        "tableName": "resume_assets"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeTailoringConfig",
+        "collection": "resumetailoringconfigs",
+        "tableName": "resume_tailoring_configs"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeVariant",
+        "collection": "resumevariants",
+        "tableName": "resume_variants"
       },
       {
         "actions": [
@@ -1304,6 +1652,18 @@
         "className": "SourceTag",
         "collection": "sourcetags",
         "tableName": "source_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Task",
+        "collection": "tasks",
+        "tableName": "tasks"
       }
     ],
     "webmcp": [
@@ -1435,5 +1795,5 @@
       }
     ]
   },
-  "inventorySha256": "351f87acfd3090f5db7ad27f60fb4f38e408306e4847028712cf9282f9a86896"
+  "inventorySha256": "95d1135757c662fd04bf179dd2404d5ea329a5a01460ba271243cbce511a60a3"
 }

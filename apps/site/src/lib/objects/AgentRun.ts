@@ -5,9 +5,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
   tableName: 'agent_runs',
   // Agent runs are system-authored audit records. Workflow services create and
   // advance them internally; public data surfaces can only inspect them.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get'] },
+  cli: { include: ['list', 'get'] },
+  mcp: { include: ['list', 'get'] },
 })
 @TenantScoped()
 export class AgentRun extends SmrtObject {

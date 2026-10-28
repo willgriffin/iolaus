@@ -203,7 +203,7 @@ describe('owner principal tool catalog', () => {
         'source_update',
       ]),
     );
-    expect(tools).not.toContain('candidateanswer_list');
+    expect(tools).not.toContain('resumeposition_list');
     expect(tools).not.toContain('resumeposition_update');
   });
 

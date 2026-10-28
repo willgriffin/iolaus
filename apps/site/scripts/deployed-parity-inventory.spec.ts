@@ -51,32 +51,37 @@ describe('deployed parity inventory', () => {
     const webMcpNames = inventory.surfaces.webmcp.map((tool) => tool.name);
 
     for (const className of [
-      'AgentRun',
-      'Application',
-      'ApplicationMaterialComment',
-      'CandidateAnswer',
-      'Decision',
-      'EvaluationScore',
-      'PreferenceRule',
-      'ResumeAsset',
+      'CliAuthRequest',
+      'OpportunityIntelligenceRequest',
+      'PublicProfileRevision',
+      'ResumePosition',
       'ResumeProfile',
-      'ResumeVariant',
-      'Task',
     ]) {
       expect(restClasses, className).not.toContain(className);
     }
-    // The owner-scoped career model (#259) is on REST; the profile itself is
-    // never created or deleted through an agent.
+    // The owner-scoped career model (#259) and private workspace (#262) are
+    // on REST; the profile itself is never created or deleted through an
+    // agent and system-authored records take no generic write.
     for (const className of [
       'Achievement',
+      'Application',
       'CandidateProfileLink',
+      'Decision',
       'Education',
       'EmploymentRole',
       'Experience',
+      'PreferenceRule',
       'Project',
+      'ResumeVariant',
+      'Task',
     ]) {
       expect(restClasses, className).toContain(className);
     }
+    expect(
+      inventory.surfaces.rest.find(
+        (resource) => resource.className === 'AgentRun',
+      )?.actions,
+    ).toEqual(['get', 'list']);
     expect(
       inventory.surfaces.rest.find(
         (resource) => resource.className === 'CandidateProfile',

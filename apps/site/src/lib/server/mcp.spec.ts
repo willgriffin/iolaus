@@ -310,6 +310,26 @@ vi.mock('./smrt.js', () => ({
       };
     }
 
+    if (className === 'Tag') {
+      return {
+        list: vi.fn(async () => [
+          {
+            context: 'skill',
+            id: 'tag-ts',
+            name: 'TypeScript',
+            slug: 'typescript',
+          },
+          { context: 'skill', id: 'tag-sv', name: 'Svelte', slug: 'svelte' },
+          {
+            context: 'domain',
+            id: 'tag-ops',
+            name: 'Operations',
+            slug: 'operations',
+          },
+        ]),
+      };
+    }
+
     if (className === 'CandidateProfile') {
       return {
         get: vi.fn(async (id: string) =>
@@ -383,13 +403,56 @@ vi.mock('./source-schedules.js', () => ({
   syncSourceSchedule: scheduleMocks.syncSourceSchedule,
 }));
 
-const scopedCrudMocks = vi.hoisted(() => ({
-  createScopedRecord: vi.fn(),
-  deleteScopedRecord: vi.fn(),
-  getScopedRecord: vi.fn(),
-  listScopedRecords: vi.fn(),
-  updateScopedRecord: vi.fn(),
-}));
+/**
+ * Owner-scoped CRUD stand-in. Writes merge into the same seeded record maps
+ * the former generator stand-in used, so the approval and workflow tests
+ * below keep observing persisted state through the scoped path.
+ */
+const scopedCrudMocks = vi.hoisted(() => {
+  const mapFor = (className: string) =>
+    className === 'Application'
+      ? mcpMocks.applications
+      : className === 'ResumeVariant'
+        ? mcpMocks.resumeVariants
+        : className === 'ResumeAsset'
+          ? mcpMocks.resumeAssets
+          : new Map<string, Record<string, unknown>>();
+  return {
+    createScopedRecord: vi.fn(
+      async (className: string, payload: Record<string, unknown>) => {
+        const id = `${className.toLowerCase()}_create-created`;
+        const record = { ...payload, id };
+        mapFor(className).set(id, record);
+        return record;
+      },
+    ),
+    deleteScopedRecord: vi.fn(async (className: string, id: string) => {
+      mapFor(className).delete(id);
+    }),
+    getScopedRecord: vi.fn(
+      async (className: string, id: string) =>
+        mapFor(className).get(id) ?? null,
+    ),
+    listScopedRecords: vi.fn(async (className: string) => ({
+      items: [...mapFor(className).values()],
+      limit: 50,
+      offset: 0,
+      total: mapFor(className).size,
+    })),
+    updateScopedRecord: vi.fn(
+      async (
+        className: string,
+        id: string,
+        payload: Record<string, unknown>,
+      ): Promise<Record<string, unknown>> => {
+        const records = mapFor(className);
+        const record = { ...(records.get(id) ?? { id }), ...payload, id };
+        records.set(id, record);
+        return record;
+      },
+    ),
+  };
+});
 vi.mock('./scoped-resource-crud.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./scoped-resource-crud.js')>()),
   ...scopedCrudMocks,
@@ -552,10 +615,11 @@ describe('MCP public tool policy', () => {
     expect(names).toContain('candidateprofile_update');
     expect(names).toContain('public_profile_prepare');
     expect(names).toContain('public_profile_status');
-    expect(names).not.toContain('application_update');
-    expect(names).not.toContain('resumevariant_update');
-    expect(names).not.toContain('resumeprofile_list');
+    // Tranche (b): the private workspace rides the same scoped path.
+    expect(names).toContain('application_update');
+    expect(names).toContain('resumevariant_update');
     expect(names).not.toContain('candidateanswer_list');
+    expect(names).not.toContain('resumeprofile_list');
     expect(names).not.toContain('user_list');
     publicProfileMocks.enabled = false;
     try {
@@ -1112,18 +1176,20 @@ describe('MCP public tool policy', () => {
     expect(slugs('public_profile_publish')).toEqual([
       'workflow.public-profile.manage',
     ]);
+    expect(slugs('tag_lookup')).toEqual(['workflow.profile.manage']);
     expect(slugs('job_search_list_source_health')).toEqual([
       'sources.read',
       'sourcecrawls.read',
     ]);
-    expect(mcpToolOperations('application_update')).toBeNull();
-    expect(mcpToolOperations('resumevariant_update')).toBeNull();
-    expect(mcpToolOperations('resumeprofile_update')).toBeNull();
+    expect(slugs('application_update')).toEqual(['workflow.profile.manage']);
+    expect(slugs('resumevariant_update')).toEqual(['workflow.profile.manage']);
     expect(mcpToolOperations('candidateanswer_list')).toBeNull();
+    expect(mcpToolOperations('resumeprofile_update')).toBeNull();
+    expect(mcpToolOperations('resumeposition_list')).toBeNull();
   });
 
   it('runs career-model tools through the owner-scoped CRUD, never the generator', async () => {
-    for (const mock of Object.values(scopedCrudMocks)) mock.mockReset();
+    for (const mock of Object.values(scopedCrudMocks)) mock.mockClear();
     scopedCrudMocks.updateScopedRecord.mockResolvedValueOnce({
       id: 'exp-1',
       summary: 'Scoped',
@@ -1187,7 +1253,7 @@ describe('MCP public tool policy', () => {
   });
 
   it('rejects CandidateProfile fields outside the agent contract before the scoped write', async () => {
-    for (const mock of Object.values(scopedCrudMocks)) mock.mockReset();
+    for (const mock of Object.values(scopedCrudMocks)) mock.mockClear();
     await expect(
       callMcpToolWithAuthorityFixture({
         arguments: { id: 'profile-1', ownerUserId: 'user-2', summary: 'x' },
@@ -1307,6 +1373,40 @@ describe('MCP public tool policy', () => {
     ).rejects.toMatchObject({ status: 401 });
   });
 
+  it('looks up the shared tag vocabulary read-only under the profile capability', async () => {
+    const result = await callMcpToolWithAuthorityFixture({
+      arguments: { limit: 1, query: 'sv' },
+      locals: ownerLocals,
+      name: 'tag_lookup',
+      permissions: ['workflow.profile.manage'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(result.structuredContent).toEqual({
+      items: [
+        { context: 'skill', id: 'tag-sv', name: 'Svelte', slug: 'svelte' },
+      ],
+      limit: 1,
+      query: 'sv',
+      scanned: 3,
+      truncated: false,
+    });
+    expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: {},
+        locals: ownerLocals,
+        name: 'tag_lookup',
+        permissions: ['opportunities.read'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    expect(
+      (await listMcpTools({ authenticated: false })).map((t) => t.name),
+    ).not.toContain('tag_lookup');
+  });
+
   it('maps public-profile service failures to the bridge error contract', async () => {
     const { PublicProfileStoreError } = await import(
       './public-profile-store.js'
@@ -1329,11 +1429,11 @@ describe('MCP public tool policy', () => {
     ).rejects.toMatchObject({ message: 'Publication changed.', status: 409 });
   });
 
-  it('rejects private generic CRUD before authorization or execution', async () => {
+  it('rejects legacy private CRUD before authorization or execution', async () => {
     for (const name of [
-      'application_update',
-      'resumevariant_update',
       'resumeprofile_list',
+      'resumeprofile_update',
+      'resumeposition_list',
       'candidateanswer_list',
     ]) {
       await expect(

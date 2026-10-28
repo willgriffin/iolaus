@@ -629,6 +629,7 @@ describe('Iolaus MCP Apps server', () => {
       'public_profile_unpublish',
       'refresh_my_matches',
       'search_opportunities',
+      'tag_lookup',
     ]);
     expect(secondCatalog.result.tools).toEqual(firstCatalog.result.tools);
     const forged = {
@@ -695,6 +696,7 @@ describe('Iolaus MCP Apps server', () => {
       'public_profile_unpublish',
       'refresh_my_matches',
       'search_opportunities',
+      'tag_lookup',
     ]);
     expect(
       tools.find((tool) => tool.name === 'job_search_browse_opportunities')

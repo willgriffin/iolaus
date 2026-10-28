@@ -7,9 +7,12 @@ import type { AutoSubmitApplicationJobArgs } from '../server/auto-submit-applica
   tableName: 'applications',
   // Applications include personal answers and approval records. They travel
   // only through owner-scoped workflows, never generic generated resources.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  mcp: { include: ['list', 'get', 'create', 'update'] },
 })
 @TenantScoped()
 export class Application extends SmrtObject {
