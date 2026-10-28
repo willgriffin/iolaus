@@ -1,6 +1,6 @@
 import type { User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
-import { jobSearchToolContracts } from '$lib/job-search-tool-schemas';
+import { jobSearchToolContracts } from '../job-search-tool-schemas.js';
 import { inspectJobApplication } from './application-inspect-webmcp.js';
 import type { JobSearchToolName } from './job-search-tool-operations.js';
 import {

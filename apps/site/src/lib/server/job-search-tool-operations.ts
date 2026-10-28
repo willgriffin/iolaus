@@ -1,6 +1,6 @@
 import type { MCPTool } from '@happyvertical/smrt-core/generators/mcp';
-import { jobSearchToolContracts } from '$lib/job-search-tool-schemas';
-import { jobSearchWebMcpToolDefinitions } from '$lib/webmcp';
+import { jobSearchToolContracts } from '../job-search-tool-schemas.js';
+import { jobSearchWebMcpToolDefinitions } from '../webmcp.js';
 import {
   type WorkspaceWorkflowCapability,
   workspaceWorkflowOperation,

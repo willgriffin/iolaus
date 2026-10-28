@@ -1,5 +1,5 @@
 import type { MCPTool } from '@happyvertical/smrt-core/generators/mcp';
-import { recommendationDecisions } from '$lib/objects/workflow';
+import { recommendationDecisions } from '../objects/workflow.js';
 import {
   companyResearchOperations,
   type WorkflowOperation,
