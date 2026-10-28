@@ -92,8 +92,9 @@ call, and is released then. A replacement call is therefore never admitted while
 an unconfirmed one may still be live, and a dead line cannot outlast the
 provider cap.
 
-That residual case needs both the hang-up API and the websocket to fail, and it
-is never silent. Each retried hang-up attempt logs a `console.warn` with the
+A held line needs every hang-up attempt to fail; the websocket only limits what
+the call costs meanwhile (`silenced` says whether the provider acknowledged
+that). The case is never silent. Each retried hang-up attempt logs a `console.warn` with the
 attempt count, the provider's HTTP status and error class (never its message,
 which could echo the request) and whether the provider has acknowledged the
 silencing; the final failure logs one `console.error` carrying the stable marker

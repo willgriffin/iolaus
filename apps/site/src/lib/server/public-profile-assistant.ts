@@ -696,7 +696,7 @@ export async function openPublicProfileVoice(
       closeQuietly(line.monitor);
     };
     const silence = () => {
-      if (released || silenced || silenceResends > SILENCE_RESENDS) return;
+      if (released || silenced || silenceResends >= SILENCE_RESENDS) return;
       if (silenceVoiceCall(line.monitor)) {
         silenceResends += silenceRequested ? 1 : 0;
         silenceRequested = true;
