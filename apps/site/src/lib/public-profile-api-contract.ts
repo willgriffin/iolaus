@@ -12,6 +12,15 @@ export const publicProfileApiSchema = z
       .object({
         profile: z.string().regex(/^\/people\/[a-z][a-z0-9-]{2,62}$/u),
         pdf: z.string().regex(/^\/people\/[a-z][a-z0-9-]{2,62}\/resume\.pdf$/u),
+        // Advertised only while the profile assistant is enabled.
+        chat: z
+          .string()
+          .regex(/^\/api\/public\/v1\/profiles\/[a-z][a-z0-9-]{2,62}\/chat$/u)
+          .optional(),
+        voice: z
+          .string()
+          .regex(/^\/api\/public\/v1\/profiles\/[a-z][a-z0-9-]{2,62}\/voice$/u)
+          .optional(),
       })
       .strict(),
     profile: publicProfileSnapshotSchema.omit({ version: true }),

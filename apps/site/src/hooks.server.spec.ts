@@ -221,6 +221,60 @@ describe('server bearer-session handling', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it('admits the profile assistant anonymously for POST/OPTIONS only and strips credentials', async () => {
+    const { handle } = await import('./hooks.server');
+    for (const pathname of [
+      '/api/public/v1/profiles/avery-example/chat',
+      '/api/public/v1/profiles/avery-example/voice',
+    ]) {
+      const requestEvent = event(null, pathname);
+      requestEvent.request = new Request(requestEvent.url, {
+        method: 'POST',
+        headers: { authorization: 'broken credential' },
+      });
+      const resolve = vi.fn(
+        async () =>
+          new Response('data: {}\n\n', {
+            headers: {
+              'set-cookie': 'session=extended',
+              'access-control-allow-credentials': 'true',
+            },
+          }),
+      );
+      const response = await handle({ event: requestEvent, resolve } as never);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.has('set-cookie')).toBe(false);
+      expect(response.headers.has('access-control-allow-credentials')).toBe(
+        false,
+      );
+      // The route decides CORS from its allowlist; the hook never widens it.
+      expect(response.headers.has('access-control-allow-origin')).toBe(false);
+    }
+    expect(mocks.verifyWorkspaceSubject).not.toHaveBeenCalled();
+    expect(mocks.withBearerSessionContext).not.toHaveBeenCalled();
+    const requestEvent = event(
+      null,
+      '/api/public/v1/profiles/avery-example/chat',
+    );
+    requestEvent.request = new Request(requestEvent.url, { method: 'GET' });
+    const resolve = vi.fn();
+    const response = await handle({ event: requestEvent, resolve } as never);
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('POST, OPTIONS');
+    expect(resolve).not.toHaveBeenCalled();
+    const failing = event(null, '/api/public/v1/profiles/avery-example/voice');
+    failing.request = new Request(failing.url, { method: 'POST' });
+    const failed = await handle({
+      event: failing,
+      resolve: async () => {
+        throw new Error('private configuration failure');
+      },
+    } as never);
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error.code).toBe('ASSISTANT_UNAVAILABLE');
+  });
+
   afterAll(() => {
     for (const name of environmentNames) {
       const original = originalEnvironment[name];
