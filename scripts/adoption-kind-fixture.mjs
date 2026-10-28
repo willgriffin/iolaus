@@ -33,7 +33,7 @@ const qualificationStages = new Set([
   'runtime-readiness-web', 'runtime-readiness-task',
   'runtime-readiness-schedule', 'runtime-readiness-extractor',
   'worker-sigterm-task', 'worker-sigterm-schedule', 'monitor-check',
-  'source-and-extractor', 'evidence', 'cleanup-started', 'cleanup-completed',
+  'source-and-extractor', 'source-parity', 'extractor-envelope', 'evidence', 'cleanup-started', 'cleanup-completed',
 ]);
 let activeQualificationStage = 'preflight';
 export function qualificationStageMessage(stage) {
@@ -88,6 +88,13 @@ export function runtimeLogCategories(log) {
     ['provider-mismatch', /code=provider_mismatch\b/],
     ['provider-unavailable', /code=provider_unavailable\b/],
   ].filter(([, pattern]) => pattern.test(log)).map(([category]) => category);
+}
+
+// Child parity diagnostics are fixed codes, never raw error text or log lines.
+export function parityFailureStage(error) {
+  const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString('utf8')
+    : typeof error?.stderr === 'string' ? error.stderr : '';
+  return stderr.match(/^IOLAUS_PARITY_FAILURE_STAGE=(startup|candidate-image-provenance|reviewed-inventory|candidate-image-source-filesystem|scenario-execution|candidate-inventory|post-validation)\r?$/m)?.[1] ?? null;
 }
 
 // Only this disposable fixture receives the workflow's temporary read token.
@@ -242,7 +249,11 @@ export async function qualifyKind({
         timeout: 360_000,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } catch {
+    } catch (error) {
+      if (binary === 'node' && args[0] === 'scripts/deployed-parity.mjs') {
+        const stage = parityFailureStage(error);
+        if (stage) console.log(`[adoption] parity-stage ${stage}`);
+      }
       throw new Error(
         `Qualification command failed: ${binary.split('/').at(-1)} ${args[0]}`,
       );
@@ -881,6 +892,7 @@ export async function qualifyKind({
     }
     checks.push('actual-monitor-with-column-restricted-database-role');
     checkpoint('source-and-extractor');
+    checkpoint('source-parity');
     const parityFile = join(scratch, 'parity.json');
     run('node', [
       'scripts/deployed-parity.mjs',
@@ -896,6 +908,7 @@ export async function qualifyKind({
       parity.candidateImageProvenance.sourceTreeSha256,
       parity.sourceTreeSha256,
     );
+    checkpoint('extractor-envelope');
     run('node', [
       'scripts/resume-extractor-candidate.mjs',
       resolvedImages.extractor,

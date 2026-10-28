@@ -354,3 +354,8 @@ The inactive monitor uses a 512 MiB memory limit with a 256 MiB request and
 250m CPU limit. Actual Kind qualification observed the Node/tsx monitor
 OOM-killed at 256 MiB after both idle worker shutdown checks passed. The
 count-only database grants and required monitor completion check are unchanged.
+
+The adoption workflow runs the same host network-isolation prerequisite as
+normal candidate CI before source-parity checks. Parity keeps its enforced
+outbound-network denial; failure diagnostics expose only its fixed stage code,
+with separate source-parity and extractor-envelope checkpoints.

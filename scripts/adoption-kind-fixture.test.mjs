@@ -13,7 +13,20 @@ import {
   qualificationApplyArguments,
   runtimePodDiagnostics,
   runtimeLogCategories,
+  parityFailureStage,
 } from './adoption-kind-fixture.mjs';
+
+test('child parity diagnostics accept only complete fixed stage markers', () => {
+  const sensitive = 'private-token-that-must-not-be-printed';
+  for (const stage of ['startup', 'candidate-image-provenance', 'reviewed-inventory',
+    'candidate-image-source-filesystem', 'scenario-execution', 'candidate-inventory', 'post-validation']) {
+    assert.equal(parityFailureStage({ stderr: Buffer.from(`${sensitive}\nIOLAUS_PARITY_FAILURE_STAGE=${stage}\n${sensitive}`) }), stage);
+  }
+  for (const stderr of [sensitive, `IOLAUS_PARITY_FAILURE_STAGE=${sensitive}`,
+    'IOLAUS_PARITY_FAILURE_STAGE=startup extra', 'prefix IOLAUS_PARITY_FAILURE_STAGE=startup', null])
+    assert.equal(parityFailureStage({ stderr }), null);
+  assert.equal(parityFailureStage(null), null);
+});
 
 test('runtime diagnostics expose only bounded fixed states and log categories, never sensitive strings', () => {
   const sensitive = 'private-token-and-database-url';

@@ -55,6 +55,8 @@ jobs:
         run: |
           npm install --global pnpm@11.25.0
           pnpm install --frozen-lockfile
+      - name: Verify host network isolation prerequisite
+        run: scripts/ci/prepare-parity-isolation.sh
       - name: Fetch pinned public runner and exact packaged chart
         run: |
           runner=/tmp/iolaus-smrt-runner
