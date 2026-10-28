@@ -227,9 +227,48 @@ function preferenceRuleResource(): CliResource {
   };
 }
 
+function experienceResource(): CliResource {
+  const experienceSchema = {
+    additionalProperties: true,
+    properties: {
+      experienceKey: { type: 'string' },
+      summary: { type: 'string' },
+      sortOrder: { type: 'number' },
+      useOnResume: { type: 'boolean' },
+    },
+    type: 'object',
+  };
+  return {
+    apiPath: 'experiences',
+    className: 'Experience',
+    commands: [
+      command('list', 'GET', 'collection'),
+      command('get', 'GET', 'item'),
+      command('create', 'POST', 'collection', experienceSchema),
+      command('update', 'PUT', 'item', experienceSchema),
+      command('delete', 'DELETE', 'item'),
+    ],
+    label: 'Experience',
+    slug: 'experiences',
+  };
+}
+
 async function startFakeServer(): Promise<FakeServer> {
   const records = new Map<string, Record<string, unknown>>();
   let nextId = 1;
+  /** Owner-scoped résumé rows: the server stamps the tuple, never the CLI. */
+  const experiences = new Map<string, Record<string, unknown>>([
+    [
+      'exp-1',
+      {
+        candidateProfileId: 'profile-1',
+        experienceKey: 'acme',
+        id: 'exp-1',
+        ownerUserId: 'smoke-user',
+        tenantId: 'tenant-1',
+      },
+    ],
+  ]);
 
   const server = createServer(async (request, response) => {
     try {
@@ -252,11 +291,65 @@ async function startFakeServer(): Promise<FakeServer> {
 
       if (request.method === 'GET' && url.pathname === '/api/_resources') {
         jsonResponse(response, 200, {
-          resources: [preferenceRuleResource()],
+          resources: [preferenceRuleResource(), experienceResource()],
           user: { authenticated: true },
           warnings: [],
         });
         return;
+      }
+
+      if (url.pathname === '/api/experiences') {
+        if (request.method === 'GET') {
+          const items = Array.from(experiences.values());
+          jsonResponse(response, 200, {
+            count: items.length,
+            items,
+            limit: 50,
+            offset: 0,
+          });
+          return;
+        }
+        if (request.method === 'POST') {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          assert(
+            !('ownerUserId' in body) && !('tenantId' in body),
+            'CLI must not send ownership columns for a résumé record.',
+          );
+          const id = `exp-${experiences.size + 1}`;
+          const record = {
+            ...body,
+            candidateProfileId: 'profile-1',
+            id,
+            ownerUserId: 'smoke-user',
+            tenantId: 'tenant-1',
+          };
+          experiences.set(id, record);
+          jsonResponse(response, 201, record);
+          return;
+        }
+      }
+      const experienceMatch = url.pathname.match(
+        /^\/api\/experiences\/([^/]+)$/,
+      );
+      if (experienceMatch) {
+        const id = decodeURIComponent(experienceMatch[1]);
+        const found = experiences.get(id);
+        if (!found) {
+          jsonResponse(response, 404, { error: 'Item not found' });
+          return;
+        }
+        if (request.method === 'PUT') {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const updated = { ...found, ...body, id };
+          experiences.set(id, updated);
+          jsonResponse(response, 200, updated);
+          return;
+        }
+        if (request.method === 'DELETE') {
+          experiences.delete(id);
+          jsonResponse(response, 200, { success: true });
+          return;
+        }
       }
 
       if (request.method === 'GET' && url.pathname === '/api/mcp/tools') {
@@ -279,6 +372,28 @@ async function startFakeServer(): Promise<FakeServer> {
                 type: 'object',
               },
               name: 'job_search_list_source_health',
+            },
+            {
+              description: 'Public résumé profile state.',
+              inputSchema: {
+                additionalProperties: false,
+                properties: {},
+                type: 'object',
+              },
+              name: 'public_profile_status',
+            },
+            {
+              description: 'Publish a prepared public résumé preview.',
+              inputSchema: {
+                additionalProperties: false,
+                properties: {
+                  expectedRevision: { minimum: 0, type: 'integer' },
+                  revisionId: { format: 'uuid', type: 'string' },
+                },
+                required: ['revisionId', 'expectedRevision'],
+                type: 'object',
+              },
+              name: 'public_profile_publish',
             },
             {
               description: 'Bounded source crawl status.',
@@ -318,6 +433,45 @@ async function startFakeServer(): Promise<FakeServer> {
                   items: [{ id: 'source-1', provider: 'greenhouse' }],
                   providers: [{ created: 3, provider: 'greenhouse' }],
                 }),
+                type: 'text',
+              },
+            ],
+          });
+          return;
+        }
+        if (body.name === 'public_profile_status') {
+          jsonResponse(response, 200, {
+            content: [
+              {
+                text: JSON.stringify({
+                  identity: {
+                    handle: 'smoke',
+                    revision: 2,
+                    status: 'published',
+                  },
+                  prepared: null,
+                  profiles: [{ id: 'profile-1', label: 'Smoke' }],
+                  publicUrl: '/people/smoke',
+                }),
+                type: 'text',
+              },
+            ],
+          });
+          return;
+        }
+        if (body.name === 'public_profile_publish') {
+          assert(
+            JSON.stringify(body.arguments) ===
+              JSON.stringify({
+                expectedRevision: 2,
+                revisionId: '22222222-2222-4222-8222-222222222222',
+              }),
+            'CLI sent invalid public profile publish arguments.',
+          );
+          jsonResponse(response, 200, {
+            content: [
+              {
+                text: JSON.stringify({ published: true, revision: 3 }),
                 type: 'text',
               },
             ],
@@ -681,6 +835,90 @@ async function runSmoke(options: CliSmokeOptions) {
           !sourceCrawlText.includes('super-secret'),
         'Source crawl status MCP call did not preserve sanitized errors.',
       );
+
+      // Career model (#259): discovered as ordinary CRUD resources; the
+      // server, not the CLI, owns the ownership tuple.
+      const experiencesResource = resources.resources.find(
+        (resource) => resource.className === 'Experience',
+      );
+      assert(experiencesResource, 'Experience resource was not discovered.');
+      for (const name of ['list', 'get', 'create', 'update', 'delete']) {
+        findCommand(experiencesResource, name);
+      }
+      if (!options.server) {
+        const listed = parseJson<{ items: Array<{ id: string }> }>(
+          await runCli([experiencesResource.slug, 'list'], env),
+        );
+        assert(
+          listed.items.some((item) => item.id === 'exp-1'),
+          'experiences list did not return the owned record.',
+        );
+        const createdExperience = parseJson<{
+          id?: string;
+          ownerUserId?: string;
+        }>(
+          await runCli(
+            [
+              experiencesResource.slug,
+              'create',
+              JSON.stringify({ experienceKey: 'smoke', summary: 'Smoke' }),
+            ],
+            env,
+          ),
+        );
+        assert(
+          createdExperience.id &&
+            createdExperience.ownerUserId === 'smoke-user',
+          'experiences create did not return an owner-stamped record.',
+        );
+        await runCli(
+          [
+            experiencesResource.slug,
+            'update',
+            createdExperience.id,
+            JSON.stringify({ summary: 'Smoke updated' }),
+          ],
+          env,
+        );
+        await runCli(
+          [experiencesResource.slug, 'delete', createdExperience.id],
+          env,
+        );
+
+        // Public profile lifecycle tools ride the same `mcp call` path.
+        const statusTool = toolsResponse.result.tools.find(
+          (tool) => tool.name === 'public_profile_status',
+        );
+        assert(statusTool, 'public_profile_status tool was not discovered.');
+        const statusResponse = parseJson<RequestJsonResult<McpCallResult>>(
+          await runCli(['mcp', 'call', statusTool.name, '{}'], env),
+        );
+        assert(statusResponse.ok, 'public_profile_status call failed.');
+        const publishTool = toolsResponse.result.tools.find(
+          (tool) => tool.name === 'public_profile_publish',
+        );
+        assert(publishTool, 'public_profile_publish tool was not discovered.');
+        assert(
+          Array.isArray(publishTool.inputSchema?.required) &&
+            publishTool.inputSchema.required.includes('expectedRevision'),
+          'public_profile_publish did not preserve its revision fence.',
+        );
+        const publishResponse = parseJson<RequestJsonResult<McpCallResult>>(
+          await runCli(
+            [
+              'mcp',
+              'call',
+              publishTool.name,
+              JSON.stringify({
+                expectedRevision: 2,
+                revisionId: '22222222-2222-4222-8222-222222222222',
+              }),
+            ],
+            env,
+          ),
+        );
+        assert(publishResponse.ok, 'public_profile_publish call failed.');
+      }
 
       successMessage = `CLI smoke passed against ${
         fakeServer ? 'fake local API' : server

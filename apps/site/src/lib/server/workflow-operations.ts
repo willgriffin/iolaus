@@ -11,7 +11,17 @@
  * MCP catalog can load it without a cycle through the principal seam.
  */
 
-export type WorkflowOperationAction = 'create' | 'delete' | 'read' | 'update';
+/**
+ * A generated CRUD action on a model collection, or a curated workspace
+ * capability slug (`workflow.<capability>`, asserted as the action of the
+ * `workflow` collection — see `workspace-workflow-capabilities.ts`).
+ */
+export type WorkflowOperationAction =
+  | 'create'
+  | 'delete'
+  | 'read'
+  | 'update'
+  | `${string}.${string}`;
 
 export interface WorkflowOperation {
   action: WorkflowOperationAction;
@@ -154,6 +164,19 @@ export const resumeVariantWorkflowSyncOperations = [
   { action: 'read', collection: 'applications' },
   { action: 'update', collection: 'applications' },
   ...applicationWorkflowSyncOperations,
+] as const satisfies readonly WorkflowOperation[];
+
+/**
+ * `preparePublicProfile()` / `publishPublicProfile()` /
+ * `unpublishPublicProfile()` / `getPublicProfileManager()`
+ * (`public-profile-service.ts`), behind the `/admin/career/public-profile`
+ * form actions and the `public_profile_*` tools. The service asserts the
+ * curated `workflow.public-profile.manage` capability at every fence and
+ * reads the owner's candidate profiles and publication rows inside it; it
+ * grants no generic CRUD, so the tools assert exactly what the page asserts.
+ */
+export const publicProfileWorkflowOperations = [
+  { action: 'public-profile.manage', collection: 'workflow' },
 ] as const satisfies readonly WorkflowOperation[];
 
 /**

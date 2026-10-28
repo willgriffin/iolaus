@@ -3,6 +3,7 @@ import {
   agentRunAuditOperations,
   opportunityReviewOperations,
   postingPreflightOperations,
+  publicProfileWorkflowOperations,
   uniqueWorkflowOperations,
   type WorkflowOperation,
 } from './workflow-operations';
@@ -43,6 +44,15 @@ describe('workflow-operations', () => {
         { action: 'update', collection: 'opportunities' },
       ]),
     ).toBe(true);
+  });
+
+  it('binds the public-profile lifecycle tools to the curated page capability only', () => {
+    // The service asserts `workflow.public-profile.manage` at every fence and
+    // grants no generic CRUD, so the tools must assert exactly that and no
+    // collection permission the admin page does not require.
+    expect(publicProfileWorkflowOperations).toEqual([
+      { action: 'public-profile.manage', collection: 'workflow' },
+    ]);
   });
 
   it('deduplicates operations while preserving order', () => {

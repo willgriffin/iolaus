@@ -148,6 +148,11 @@ const mcpMocks = vi.hoisted(() => {
         'user_list',
         'source_create',
         'source_update',
+        'candidateprofile_list',
+        'candidateprofile_update',
+        'experience_list',
+        'experience_update',
+        'achievement_delete',
       ].map((name) => ({
         description: name,
         inputSchema: { properties: {}, type: 'object' },
@@ -305,6 +310,21 @@ vi.mock('./smrt.js', () => ({
       };
     }
 
+    if (className === 'CandidateProfile') {
+      return {
+        get: vi.fn(async (id: string) =>
+          id === 'profile-1'
+            ? {
+                active: true,
+                id,
+                ownerUserId: 'user-1',
+                tenantId: 'tenant-1',
+              }
+            : null,
+        ),
+      };
+    }
+
     throw new Error(`Unexpected collection: ${className}`);
   }),
 }));
@@ -362,6 +382,54 @@ const applicationConcurrencyMocks = vi.hoisted(() => ({
 vi.mock('./source-schedules.js', () => ({
   syncSourceSchedule: scheduleMocks.syncSourceSchedule,
 }));
+
+const scopedCrudMocks = vi.hoisted(() => ({
+  createScopedRecord: vi.fn(),
+  deleteScopedRecord: vi.fn(),
+  getScopedRecord: vi.fn(),
+  listScopedRecords: vi.fn(),
+  updateScopedRecord: vi.fn(),
+}));
+vi.mock('./scoped-resource-crud.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./scoped-resource-crud.js')>()),
+  ...scopedCrudMocks,
+}));
+
+const publicProfileMocks = vi.hoisted(() => ({
+  enabled: true,
+  getPublicProfileManager: vi.fn(),
+  preparePublicProfile: vi.fn(),
+  publishPublicProfile: vi.fn(),
+  unpublishPublicProfile: vi.fn(),
+}));
+vi.mock('./app-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./app-config.js')>()),
+  publicProfilesEnabled: () => publicProfileMocks.enabled,
+}));
+vi.mock('./public-profile-service.js', () => ({
+  getPublicProfileManager: publicProfileMocks.getPublicProfileManager,
+  preparePublicProfile: publicProfileMocks.preparePublicProfile,
+  publishPublicProfile: publicProfileMocks.publishPublicProfile,
+  unpublishPublicProfile: publicProfileMocks.unpublishPublicProfile,
+}));
+
+/** Hook-verified locals as the legacy bridge route now hands them over. */
+const ownerLocals = {
+  membership: {
+    roleId: 'role-1',
+    status: 'active',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  },
+  permissions: ownerPermissions,
+  tenantId: 'tenant-1',
+  user: { id: 'user-1' },
+  workspaceSubject: {
+    profileId: 'profile-1',
+    tenantId: 'tenant-1',
+    userId: 'user-1',
+  },
+};
 
 vi.mock('./source-webmcp.js', () => ({
   listRootSourceHealth: sourceReadMocks.sourceHealth,
@@ -478,11 +546,26 @@ describe('MCP public tool policy', () => {
     // candidate-owned model stays behind the scoped workspace workflows.
     expect(names).toContain('source_update');
     expect(names).toContain('opportunity_update');
+    // The owner-scoped career model (#259) and the public-profile lifecycle.
+    expect(names).toContain('experience_update');
+    expect(names).toContain('achievement_delete');
+    expect(names).toContain('candidateprofile_update');
+    expect(names).toContain('public_profile_prepare');
+    expect(names).toContain('public_profile_status');
     expect(names).not.toContain('application_update');
     expect(names).not.toContain('resumevariant_update');
     expect(names).not.toContain('resumeprofile_list');
     expect(names).not.toContain('candidateanswer_list');
     expect(names).not.toContain('user_list');
+    publicProfileMocks.enabled = false;
+    try {
+      const privateInstall = await listMcpTools({ authenticated: true });
+      expect(
+        privateInstall.some((tool) => tool.name.startsWith('public_profile_')),
+      ).toBe(false);
+    } finally {
+      publicProfileMocks.enabled = true;
+    }
     const extensions = authenticated.filter((tool) =>
       tool.name.startsWith('job_search_'),
     );
@@ -1019,6 +1102,13 @@ describe('MCP public tool policy', () => {
       'tasks.update',
     ]);
     expect(slugs('opportunity_update')).toEqual(['opportunities.update']);
+    expect(slugs('experience_update')).toEqual(['experiences.update']);
+    expect(slugs('candidateprofile_update')).toEqual([
+      'candidateprofiles.update',
+    ]);
+    expect(slugs('public_profile_publish')).toEqual([
+      'workflow.public-profile.manage',
+    ]);
     expect(slugs('job_search_list_source_health')).toEqual([
       'sources.read',
       'sourcecrawls.read',
@@ -1027,6 +1117,213 @@ describe('MCP public tool policy', () => {
     expect(mcpToolOperations('resumevariant_update')).toBeNull();
     expect(mcpToolOperations('resumeprofile_update')).toBeNull();
     expect(mcpToolOperations('candidateanswer_list')).toBeNull();
+  });
+
+  it('runs career-model tools through the owner-scoped CRUD, never the generator', async () => {
+    for (const mock of Object.values(scopedCrudMocks)) mock.mockReset();
+    scopedCrudMocks.updateScopedRecord.mockResolvedValueOnce({
+      id: 'exp-1',
+      summary: 'Scoped',
+    });
+    const response = await callMcpToolWithAuthorityFixture({
+      arguments: { id: 'exp-1', summary: 'Scoped' },
+      locals: ownerLocals,
+      name: 'experience_update',
+      permissions: ['experiences.update'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(response.structuredContent).toEqual({
+      id: 'exp-1',
+      summary: 'Scoped',
+    });
+    expect(scopedCrudMocks.updateScopedRecord).toHaveBeenCalledWith(
+      'Experience',
+      'exp-1',
+      { summary: 'Scoped' },
+    );
+    expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
+
+    scopedCrudMocks.listScopedRecords.mockResolvedValueOnce({
+      items: [{ id: 'exp-1' }],
+      limit: 10,
+      offset: 0,
+      total: 1,
+    });
+    const listed = await callMcpToolWithAuthorityFixture({
+      arguments: { limit: 10, where: { ownerUserId: 'someone-else' } },
+      locals: ownerLocals,
+      name: 'experience_list',
+      permissions: ['experiences.read'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(listed.structuredContent).toMatchObject({
+      data: [{ id: 'exp-1' }],
+      meta: { count: 1, limit: 10, offset: 0, total: 1 },
+    });
+    // The caller filter reaches the scoped list, which merges the owner
+    // tuple over it; the generator (which would honour it) is never used.
+    expect(scopedCrudMocks.listScopedRecords).toHaveBeenCalledWith(
+      'Experience',
+      expect.objectContaining({ where: { ownerUserId: 'someone-else' } }),
+    );
+    expect(mcpMocks.generatorHandleToolCall).not.toHaveBeenCalled();
+
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: { id: 'exp-1', summary: 'Denied' },
+        locals: ownerLocals,
+        name: 'experience_update',
+        permissions: ['experiences.read'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    expect(scopedCrudMocks.updateScopedRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects CandidateProfile fields outside the agent contract before the scoped write', async () => {
+    for (const mock of Object.values(scopedCrudMocks)) mock.mockReset();
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: { id: 'profile-1', ownerUserId: 'user-2', summary: 'x' },
+        locals: ownerLocals,
+        name: 'candidateprofile_update',
+        permissions: ['candidateprofiles.update'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(scopedCrudMocks.updateScopedRecord).not.toHaveBeenCalled();
+  });
+
+  it('dispatches the public-profile lifecycle tools to the page service with the verified locals', async () => {
+    publicProfileMocks.preparePublicProfile.mockResolvedValueOnce({
+      baseRevision: 2,
+      handle: 'synthetic-nurse',
+      id: 'f32dcdee-f946-4a2f-a735-409617081d12',
+      pdfBytes: 1234,
+      snapshot: { name: 'Synthetic Nurse' },
+    });
+    const prepareArgs = {
+      handle: 'synthetic-nurse',
+      profileId: 'profile-1',
+      visibility: {
+        contacts: { email: false, links: true, location: false, phone: false },
+        sections: {
+          education: true,
+          experience: true,
+          other: false,
+          skills: true,
+        },
+      },
+    };
+    const prepared = await callMcpToolWithAuthorityFixture({
+      arguments: prepareArgs,
+      locals: ownerLocals,
+      name: 'public_profile_prepare',
+      permissions: ['workflow.public-profile.manage'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(publicProfileMocks.preparePublicProfile).toHaveBeenCalledWith(
+      ownerLocals,
+      prepareArgs,
+    );
+    expect(prepared.structuredContent).toMatchObject({
+      baseRevision: 2,
+      pdfBytes: 1234,
+      previewUrl:
+        '/admin/career/public-profile/preview/f32dcdee-f946-4a2f-a735-409617081d12',
+      revisionId: 'f32dcdee-f946-4a2f-a735-409617081d12',
+    });
+
+    publicProfileMocks.publishPublicProfile.mockResolvedValueOnce({
+      revision: 3,
+    });
+    const published = await callMcpToolWithAuthorityFixture({
+      arguments: {
+        expectedRevision: 2,
+        revisionId: 'f32dcdee-f946-4a2f-a735-409617081d12',
+      },
+      locals: ownerLocals,
+      name: 'public_profile_publish',
+      permissions: ['workflow.public-profile.manage'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(published.structuredContent).toEqual({
+      published: true,
+      revision: 3,
+    });
+
+    publicProfileMocks.getPublicProfileManager.mockResolvedValueOnce({
+      identity: null,
+      prepared: null,
+      profiles: [],
+      publicUrl: null,
+    });
+    const status = await callMcpToolWithAuthorityFixture({
+      arguments: {},
+      locals: ownerLocals,
+      name: 'public_profile_status',
+      permissions: ['workflow.public-profile.manage'],
+      tenantId: 'tenant-1',
+      user: { id: 'user-1' },
+    });
+    expect(status.structuredContent).toEqual({
+      identity: null,
+      prepared: null,
+      profiles: [],
+      publicUrl: null,
+    });
+
+    // The page capability is required; nothing runs without it.
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: { expectedRevision: 3 },
+        locals: ownerLocals,
+        name: 'public_profile_unpublish',
+        permissions: ['opportunities.read'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    expect(publicProfileMocks.unpublishPublicProfile).not.toHaveBeenCalled();
+
+    // Without hook-verified locals (no workspace subject) the tool refuses.
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: {},
+        name: 'public_profile_status',
+        permissions: ['workflow.public-profile.manage'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('maps public-profile service failures to the bridge error contract', async () => {
+    const { PublicProfileStoreError } = await import(
+      './public-profile-store.js'
+    );
+    publicProfileMocks.publishPublicProfile.mockRejectedValueOnce(
+      new PublicProfileStoreError('conflict', 'Publication changed.'),
+    );
+    await expect(
+      callMcpToolWithAuthorityFixture({
+        arguments: {
+          expectedRevision: 1,
+          revisionId: 'f32dcdee-f946-4a2f-a735-409617081d12',
+        },
+        locals: ownerLocals,
+        name: 'public_profile_publish',
+        permissions: ['workflow.public-profile.manage'],
+        tenantId: 'tenant-1',
+        user: { id: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ message: 'Publication changed.', status: 409 });
   });
 
   it('rejects private generic CRUD before authorization or execution', async () => {

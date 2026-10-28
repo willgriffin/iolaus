@@ -98,7 +98,11 @@ CLI column: `crud` means `iolaus <slug> list|get|create|update|delete`
 
 All classes here are `@TenantScoped`, carry the `{tenantId, ownerUserId,
 candidateProfileId}` ownership tuple and are read by `loadAdminResumeSource()`
-through `NORMALIZED_RESUME_READ_PLAN`. The UI edits them through the generic
+through `NORMALIZED_RESUME_READ_PLAN`. Since #259 the generic surfaces reach
+them through `scoped-resource-crud.ts`: the same owner predicate as
+`admin-data.ts`, a hosted owner allowed without operator authority, the admin
+write side effect on every agent write, and the generated MCP tools routed
+around `MCPGenerator`'s caller-supplied `where`. The UI edits them through the generic
 `[resource]` pages, `/admin/career` (`save`, `visibility`),
 `/admin/resume` (`updateProfile`, `updateExperience`, `updateEducation`,
 `setDefaultProfile`) and `/admin/candidate-profile-links` (`save`). Admin
@@ -108,22 +112,22 @@ writes invalidate the published-résumé cache and queue the canonical refresh
 
 | Capability | UI route / action | CLI | REST | MCP | Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| CandidateProfile read/update (identity, contacts, summary, `useOnResume`, `isDefault`) | `/admin/candidate-profiles`, `/admin/career` `save` (profile), `/admin/resume` `updateProfile`, `setDefaultProfile`, `/admin/onboarding` `save` | — | — | — | missing | Tranche (a): list/get/update only, never create/delete (onboarding creates). Every field is `sensitive`; scoped to the verified owner's own profile. |
-| CandidateProfileLink CRUD | `/admin/candidate-profile-links` `save`, `/admin/career` `save` (links) | — | — | — | missing | Tranche (a). |
-| Experience CRUD | `/admin/experience`, `/admin/career` `save`, `/admin/resume` `updateExperience` | — | — | — | missing | Tranche (a). |
-| ExperienceRole / ExperienceCompany CRUD | `/admin/experience-roles`, `/admin/experience-companies` | — | — | — | missing | Tranche (a). `companyId` references the shared `Company` catalog. |
-| EmploymentRole / EmploymentRoleTag CRUD | `/admin/roles`, `/admin/role-tags` | — | — | — | missing | Tranche (a). |
-| Project / ProjectTag / ProjectAttachment CRUD | `/admin/projects`, `/admin/project-tags`, `/admin/project-attachments`; `/admin/experience/[id]/edit` `createRelatedProject` / `updateRelatedProject` | — | — | — | missing | Tranche (a). |
-| Duty / DutyTag CRUD | `/admin/duties`, `/admin/duty-tags` | — | — | — | missing | Tranche (a). |
-| Achievement / AchievementTag / AchievementAttachment CRUD | `/admin/achievements`, `/admin/achievement-tags`, `/admin/achievement-attachments`; `/admin/experience/[id]/edit` `createRelatedProjectBullet` / `updateRelatedProjectBullet` | — | — | — | missing | Tranche (a). |
-| Education / EducationTag CRUD | `/admin/education`, `/admin/education-tags`, `/admin/resume` `updateEducation` | — | — | — | missing | Tranche (a). |
-| SkillCategory / SkillCategoryMember / SkillGroup / SkillGroupMember CRUD | `/admin/skill-categories`, `/admin/skills`, `/admin/skill-groups`, `/admin/skill-group-members` | — | — | — | missing | Tranche (a). `SkillGroup.evidenceJson` is sensitive. |
-| Attachment CRUD (file metadata) | `/admin/attachments` | — | — | — | missing | Tranche (a) metadata only; the upload path stays UI/REST. |
-| Résumé visibility toggles (`useOnResume`) | `/admin/career` `visibility` | — | — | — | missing | Covered by `update` on the classes above once exposed. |
-| Public profile: prepare preview | `/admin/career/public-profile` `prepare` | — | — | — | missing | Tranche (a): `public_profile_prepare` on `preparePublicProfile()`; keeps the 20-per-48 h limit and artifact checks. |
-| Public profile: publish prepared revision | `/admin/career/public-profile` `publish` | — | — | — | missing | Tranche (a): `public_profile_publish` on `publishPublicProfile()` (revision id + expected base revision). |
-| Public profile: unpublish | `/admin/career/public-profile` `unpublish` | — | — | — | missing | Tranche (a): `public_profile_unpublish`. |
-| Public profile: status / pending preview | `/admin/career/public-profile` load, `preview/[id]` | — | — | — | missing | Tranche (a): `public_profile_status` on `getPublicProfileManager()`; the preview PDF bytes stay on the admin route. |
+| CandidateProfile read/update (identity, contacts, summary, `useOnResume`) | `/admin/candidate-profiles`, `/admin/career` `save` (profile), `/admin/resume` `updateProfile`, `/admin/onboarding` `save` | crud (list/get/update) | `/api/candidateprofiles` | `candidateprofile_list/get/update` | exposed | #259. Scoped to the verified owner's own profile; agent writes accept only the career-editor allow-list (`agent-field-contract.ts`). `setDefaultProfile` / `active` stay on the résumé page (single-default invariant); onboarding creates. |
+| CandidateProfileLink CRUD | `/admin/candidate-profile-links` `save`, `/admin/career` `save` (links) | crud | `/api/candidateprofilelinks` | `candidateprofilelink_*` | exposed | #259. |
+| Experience CRUD | `/admin/experience`, `/admin/career` `save`, `/admin/resume` `updateExperience` | crud | `/api/experiences` | `experience_*` | exposed | #259. |
+| ExperienceRole / ExperienceCompany CRUD | `/admin/experience-roles`, `/admin/experience-companies` | crud | `/api/experienceroles`, `/api/experiencecompanies` | `experiencerole_*`, `experiencecompany_*` | exposed | #259. `companyId` references the shared `Company` catalog. |
+| EmploymentRole / EmploymentRoleTag CRUD | `/admin/roles`, `/admin/role-tags` | crud | `/api/employmentroles`, `/api/employmentroletags` | `employmentrole_*`, `employmentroletag_*` | exposed | #259. |
+| Project / ProjectTag / ProjectAttachment CRUD | `/admin/projects`, `/admin/project-tags`, `/admin/project-attachments`; `/admin/experience/[id]/edit` `createRelatedProject` / `updateRelatedProject` | crud | `/api/projects`, `/api/projecttags`, `/api/projectattachments` | `project_*`, `projecttag_*`, `projectattachment_*` | exposed | #259. |
+| Duty / DutyTag CRUD | `/admin/duties`, `/admin/duty-tags` | crud | `/api/duties`, `/api/dutytags` | `duty_*`, `dutytag_*` | exposed | #259. |
+| Achievement / AchievementTag / AchievementAttachment CRUD | `/admin/achievements`, `/admin/achievement-tags`, `/admin/achievement-attachments`; `/admin/experience/[id]/edit` `createRelatedProjectBullet` / `updateRelatedProjectBullet` | crud | `/api/achievements`, `/api/achievementtags`, `/api/achievementattachments` | `achievement_*`, `achievementtag_*`, `achievementattachment_*` | exposed | #259. |
+| Education / EducationTag CRUD | `/admin/education`, `/admin/education-tags`, `/admin/resume` `updateEducation` | crud | `/api/educations`, `/api/educationtags` | `education_*`, `educationtag_*` | exposed | #259. |
+| SkillCategory / SkillCategoryMember / SkillGroup / SkillGroupMember CRUD | `/admin/skill-categories`, `/admin/skills`, `/admin/skill-groups`, `/admin/skill-group-members` | crud | `/api/skillcategories`, `/api/skillcategorymembers`, `/api/skillgroups`, `/api/skillgroupmembers` | `skillcategory_*`, `skillcategorymember_*`, `skillgroup_*`, `skillgroupmember_*` | exposed | #259. `SkillGroup.evidenceJson` follows the JSON field contract. |
+| Attachment CRUD (file metadata) | `/admin/attachments` | crud | `/api/attachments` | `attachment_*` | exposed | #259, metadata only; the upload path stays on the admin route. |
+| Résumé visibility toggles (`useOnResume`) | `/admin/career` `visibility` | crud (update) | `update` on the classes above | `<class>_update` | exposed | #259: `useOnResume` is a writable field on every class above. |
+| Public profile: prepare preview | `/admin/career/public-profile` `prepare` | mcp | `POST /api/mcp/call` | `public_profile_prepare` (legacy + canonical) | exposed | #259. Same `preparePublicProfile()`; 20-per-48 h limit and artifact checks shared. Listed only where public profiles are enabled. |
+| Public profile: publish prepared revision | `/admin/career/public-profile` `publish` | mcp | `POST /api/mcp/call` | `public_profile_publish` | exposed | #259. `{ revisionId, expectedRevision }`; stale revision is 409. |
+| Public profile: unpublish | `/admin/career/public-profile` `unpublish` | mcp | `POST /api/mcp/call` | `public_profile_unpublish` | exposed | #259. |
+| Public profile: status / pending preview | `/admin/career/public-profile` load, `preview/[id]` | mcp | `POST /api/mcp/call` | `public_profile_status` | exposed | #259 on `getPublicProfileManager()`; the preview PDF bytes stay on the admin route (`previewUrl` is returned). |
 | Legacy `Resume*` classes (`ResumeProfile`, `ResumePosition`, `ResumeAchievement`, `ResumeSkill*`, `ResumeEducation`, `ResumeLink`, `ResumeOtherRole`) | (read fallback only; no dedicated admin page) | — | — | — | UI-only | Legacy read-only fallback (`LEGACY_RESUME_READ_PLAN`) slated for removal; agents write the normalized model. |
 | ResumeTailoringConfig CRUD | `/admin/resume-tailoring-configs` | — | — | — | missing | Tranche (b) with the other résumé-generation records. |
 | Tag vocabulary lookup (`Tag` from smrt-tags, needed for every `*Tag.tagId`) | combo pickers on the tag pages | — | — | — | missing | Tranche (b): bounded read-only tag lookup; `exposablePackages` excludes smrt-tags today. |
@@ -203,14 +207,15 @@ scoped CRUD path from the topology notes.
 
 | Status | Rows |
 | --- | --- |
-| exposed | 12 |
+| exposed | 28 |
 | partial | 17 |
-| missing | 40 |
+| missing | 24 |
 | UI-only (reason recorded) | 9 |
 | tool-only | 3 |
 
-Missing rows by tranche: (a) 16 (career model, public-profile lifecycle),
-(b) 13 (private workspace CRUD, tag lookup, tailoring configs),
+Missing rows by tranche: (a) 0 (career model and public-profile lifecycle
+shipped in #259), (b) 13 (private workspace CRUD, tag lookup, tailoring
+configs),
 (c) 11 (workflow tools without any agent surface). The 17 `partial` rows are
 mostly one gap: the sixteen `job_search_*` workflow tools are not in the
 legacy `/api/mcp/call` catalog, so the CLI cannot call them; bridging them

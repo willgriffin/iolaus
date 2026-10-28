@@ -1,5 +1,6 @@
 import type { MCPResponse } from '@happyvertical/smrt-core/generators/mcp';
 import type { User } from '@happyvertical/smrt-users';
+import { ZodError } from 'zod';
 import {
   AgentFieldContractError,
   normalizeAgentWritablePayload,
@@ -32,18 +33,45 @@ import {
 import {
   createGenerator,
   isPublicMcpTool,
+  isPublicProfileMcpTool,
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
   listMcpTools,
   mcpToolOperations,
 } from './mcp-tools.js';
-import { isOwnerAuthorityDenial, runAsOwner } from './owner-principal.js';
+import {
+  isOwnerAuthorityDenial,
+  type OwnerPrincipalLocals,
+  runAsOwner,
+} from './owner-principal.js';
+import {
+  getPublicProfileManager,
+  type PublicProfileActorSource,
+  preparePublicProfile,
+  publishPublicProfile,
+  unpublishPublicProfile,
+} from './public-profile-service.js';
+import { PublicProfileStoreError } from './public-profile-store.js';
+import {
+  PUBLIC_PROFILE_PREPARE_TOOL,
+  PUBLIC_PROFILE_PUBLISH_TOOL,
+  PUBLIC_PROFILE_STATUS_TOOL,
+  PUBLIC_PROFILE_UNPUBLISH_TOOL,
+} from './public-profile-tools.js';
 import {
   releaseResumeVariantApplicationWrite,
   reserveResumeVariantApplicationWrite,
   resumeVariantWriteViolation,
   syncResumeVariantApplicationApprovals,
 } from './resume-variant-workflow.js';
+import {
+  createScopedRecord,
+  deleteScopedRecord,
+  getScopedRecord,
+  isScopedResourceClass,
+  listScopedRecords,
+  updateScopedRecord,
+} from './scoped-resource-crud.js';
 import { getCollection } from './smrt.js';
 import { syncSourceSchedule } from './source-schedules.js';
 import {
@@ -51,6 +79,9 @@ import {
   listSourceCrawlStatus,
 } from './source-webmcp.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
+// Registers the curated `workflow.*` permission definitions the public-profile
+// lifecycle tools assert; registration is process-scoped and idempotent.
+import './workspace-workflow-capabilities.js';
 
 export {
   configuredPublicMcpToolPatterns,
@@ -103,6 +134,151 @@ async function callSourceReadMcpTool(
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function jsonResponse(structuredContent: Record<string, unknown>): MCPResponse {
+  return {
+    content: [{ text: JSON.stringify(structuredContent), type: 'text' }],
+    structuredContent,
+  };
+}
+
+/**
+ * Translate a service failure (SvelteKit `error()`, zod input rejection, or a
+ * publication store conflict) into the bridge's error contract, exactly as the
+ * form action maps them for the browser.
+ */
+function publicProfileMcpError(cause: unknown): never {
+  if (cause instanceof ZodError) {
+    throw new McpAccessError(
+      400,
+      'Check the public profile arguments and try again.',
+    );
+  }
+  if (cause instanceof PublicProfileStoreError) {
+    const status =
+      cause.code === 'conflict' || cause.code === 'handle_taken'
+        ? 409
+        : cause.code === 'limit'
+          ? 429
+          : cause.code === 'validation'
+            ? 400
+            : 404;
+    throw new McpAccessError(status, cause.message);
+  }
+  if (isOwnerAuthorityDenial(cause)) throw cause;
+  return sourceMcpError(cause);
+}
+
+/**
+ * Run one public-profile lifecycle tool against the same service functions
+ * the `/admin/career/public-profile` form actions call. Shared by the legacy
+ * bridge (hook-verified locals) and the canonical MCP server (explicit
+ * re-verified subject), so neither surface can bypass the preview step, the
+ * preparation limit or the artifact checks.
+ */
+export async function callPublicProfileMcpTool(
+  name: string,
+  args: Record<string, unknown>,
+  actor: PublicProfileActorSource,
+): Promise<MCPResponse> {
+  try {
+    switch (name) {
+      case PUBLIC_PROFILE_PREPARE_TOOL: {
+        const prepared = await preparePublicProfile(actor, args);
+        return jsonResponse({
+          baseRevision: prepared.baseRevision,
+          handle: prepared.handle,
+          pdfBytes: prepared.pdfBytes,
+          previewUrl: `/admin/career/public-profile/preview/${encodeURIComponent(prepared.id)}`,
+          revisionId: prepared.id,
+          snapshot: prepared.snapshot,
+        });
+      }
+      case PUBLIC_PROFILE_PUBLISH_TOOL:
+        return jsonResponse({
+          published: true,
+          ...(await publishPublicProfile(actor, args)),
+        });
+      case PUBLIC_PROFILE_UNPUBLISH_TOOL:
+        return jsonResponse({
+          unpublished: true,
+          ...(await unpublishPublicProfile(actor, args)),
+        });
+      case PUBLIC_PROFILE_STATUS_TOOL:
+        return jsonResponse(await getPublicProfileManager(actor));
+      default:
+        throw new McpAccessError(404, `Unknown MCP tool: ${name}`);
+    }
+  } catch (cause) {
+    return publicProfileMcpError(cause);
+  }
+}
+
+/**
+ * Classes with a bespoke generated-write flow in this module (concurrency
+ * commit, write reservation, application-owned immutability). They are not
+ * exposed today; when one returns to the catalog its flow, not the plain
+ * scoped path, must run.
+ */
+const bespokeMcpClasses = new Set([
+  'Application',
+  'ResumeAsset',
+  'ResumeVariant',
+]);
+
+/**
+ * Execute a generated `<class>_<action>` tool for a candidate-owned class
+ * through the owner-scoped CRUD shared with `/api/[resource]`, never through
+ * `MCPGenerator`, whose list honours a caller-supplied `where`.
+ */
+async function executeScopedMcpTool(
+  className: string,
+  action: string,
+  args: Record<string, unknown>,
+): Promise<MCPResponse> {
+  const id = hasNonEmptyString(args.id) ? args.id.trim() : '';
+  switch (action) {
+    case 'list': {
+      const page = await listScopedRecords(className, {
+        limit: args.limit,
+        offset: args.offset,
+        orderBy: args.orderBy,
+        where: args.where,
+      });
+      return jsonResponse({
+        data: page.items,
+        meta: {
+          count: page.items.length,
+          limit: page.limit,
+          offset: page.offset,
+          total: page.total,
+        },
+      });
+    }
+    case 'get': {
+      if (!id) throw new McpAccessError(400, 'id is required.');
+      const record = await getScopedRecord(className, id);
+      if (!record) throw new McpAccessError(404, 'Object not found');
+      return jsonResponse(record);
+    }
+    case 'create':
+      return jsonResponse(await createScopedRecord(className, args));
+    case 'update': {
+      if (!id) throw new McpAccessError(400, 'ID is required for update');
+      const { id: _ignored, ...payload } = args;
+      return jsonResponse(await updateScopedRecord(className, id, payload));
+    }
+    case 'delete':
+      if (!id) throw new McpAccessError(400, 'ID is required for delete');
+      await deleteScopedRecord(className, id);
+      return jsonResponse({
+        message: 'Object deleted successfully',
+        success: true,
+      });
+    default:
+      throw new McpAccessError(404, `Unknown MCP action: ${action}`);
+  }
 }
 
 function dateValue(value: unknown): Date | null {
@@ -162,6 +338,13 @@ function normalizeMcpAgentPayload(
 
 export async function callMcpTool(options: {
   arguments?: unknown;
+  /**
+   * The hook-verified request locals. When present the principal runs under
+   * the verified workspace subject, which the scoped generated tools and the
+   * public-profile lifecycle tools require; otherwise it binds from the
+   * user/tenant pair alone (sufficient for catalog tools).
+   */
+  locals?: OwnerPrincipalLocals;
   name: string;
   permissions?: App.Locals['permissions'];
   tenantId?: App.Locals['tenantId'];
@@ -186,13 +369,16 @@ export async function callMcpTool(options: {
   }
 
   const user = options.user;
-  try {
-    return await runAsOwner(
-      {
+  const locals: OwnerPrincipalLocals = options.locals?.workspaceSubject
+    ? options.locals
+    : {
         permissions: options.permissions,
         tenantId: options.tenantId,
         user,
-      },
+      };
+  try {
+    return await runAsOwner(
+      locals,
       async (run) => {
         run.assertToolAllowed(options.name);
         const operations = mcpToolOperations(options.name);
@@ -205,7 +391,7 @@ export async function callMcpTool(options: {
         for (const operation of operations) {
           await run.assertOperation(operation.collection, operation.action);
         }
-        return await executeMcpTool(options.name, args, user);
+        return await executeMcpTool(options.name, args, user, locals);
       },
       {
         action: 'mcp.tools/call',
@@ -224,6 +410,7 @@ async function executeMcpTool(
   name: string,
   args: Record<string, unknown>,
   user: Pick<User, 'id'> | null,
+  locals?: OwnerPrincipalLocals,
 ): Promise<MCPResponse> {
   if (isSourceReadMcpTool(name)) {
     if (!user) {
@@ -234,6 +421,15 @@ async function executeMcpTool(
     }
     return await callSourceReadMcpTool(name, args);
   }
+  if (isPublicProfileMcpTool(name)) {
+    if (!user || !locals?.workspaceSubject) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    return await callPublicProfileMcpTool(name, args, locals);
+  }
   const subject = requireCandidateWorkspaceSubject();
   const options = { name, user };
   await assertMcpWorkflowPayload(
@@ -242,6 +438,24 @@ async function executeMcpTool(
     options.user ?? null,
     subject,
   );
+
+  const scoped = resolveMcpToolClass(options.name);
+  if (
+    scoped &&
+    isScopedResourceClass(scoped.className) &&
+    !bespokeMcpClasses.has(scoped.className)
+  ) {
+    try {
+      return await executeScopedMcpTool(
+        scoped.className,
+        options.name.slice(mcpToolPrefix(scoped.className).length),
+        args,
+      );
+    } catch (cause) {
+      if (isOwnerAuthorityDenial(cause)) throw cause;
+      return sourceMcpError(cause);
+    }
+  }
 
   if (options.name === 'application_update') {
     const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';

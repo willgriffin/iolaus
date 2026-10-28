@@ -22,18 +22,23 @@ import {
   publicSearchPageSchema,
 } from '$lib/public-opportunity-contract.js';
 import { administrativeSessionFailure } from './administrative-auth.js';
-import { getConfiguredMcpServerName } from './app-config.js';
+import {
+  getConfiguredMcpServerName,
+  publicProfilesEnabled,
+} from './app-config.js';
 import { inspectJobApplication } from './application-inspect-webmcp.js';
 import {
   browseJobOpportunities,
   inspectJobOpportunity,
   openJobApplication,
 } from './job-search-webmcp.js';
+import { callPublicProfileMcpTool } from './mcp.js';
 import {
   getMyOpportunityMatches,
   refreshOpportunityMatches,
 } from './opportunity-matching.js';
 import { runAsOwner } from './owner-principal.js';
+import { publicProfileMcpTools } from './public-profile-tools.js';
 import {
   consumePublicSearchBudget,
   getPublicOpportunity,
@@ -583,6 +588,54 @@ const reviewNavigationWorkflow: McpWorkflowToolDefinition = {
   ui: { resourceUri: IOLAUS_MCP_APP_RESOURCE, visibility: ['app'] },
 };
 
+/**
+ * The public-profile lifecycle on the canonical server. Each tool re-enters
+ * the owner principal, re-verifies the request-minted subject, then calls the
+ * same service functions as the admin form actions with that subject bound
+ * explicitly (the server has no request locals to hand the service).
+ */
+const publicProfileWorkflows: McpWorkflowToolDefinition[] =
+  publicProfileMcpTools.map((tool) => ({
+    description: tool.description,
+    effect: tool.name === 'public_profile_status' ? 'read' : 'write',
+    execute: async ({ arguments: input, principal }) => {
+      const owner = asOwnerPrincipal(principal, true);
+      const response = await runOwnerWorkflow({
+        execute: async () =>
+          await callPublicProfileMcpTool(tool.name, input, {
+            locals: {
+              permissions: owner.permissions,
+              tenantId: owner.tenantId,
+              user: { id: owner.id },
+            },
+            subject: workspaceSubjectForOwner(owner),
+          }),
+        operations: [workspaceWorkflowOperation('public-profile.manage')],
+        principal,
+        profileRequired: true,
+        tool: tool.name,
+      });
+      return response.structuredContent
+        ? jsonResult(response.structuredContent as Record<string, unknown>)
+        : response;
+    },
+    idempotent: tool.name === 'public_profile_status',
+    inputSchema: tool.inputSchema as Record<string, unknown> & {
+      type: 'object';
+    },
+    name: tool.name,
+    openWorld: false,
+    outputSchema,
+    title:
+      tool.name === 'public_profile_prepare'
+        ? 'Prepare public résumé preview'
+        : tool.name === 'public_profile_publish'
+          ? 'Publish public résumé'
+          : tool.name === 'public_profile_unpublish'
+            ? 'Unpublish public résumé'
+            : 'Public résumé status',
+  }));
+
 function canUseIolausMcp(
   principal: McpAppPrincipal | null,
 ): principal is IolausMcpPrincipal {
@@ -627,7 +680,9 @@ export const mcpAppServer = createMcpAppServer({
   // private workflows, or the embedded resource public.
   toolPolicy: ({ principal, tool }) =>
     (principal == null && PUBLIC_MCP_TOOL_NAMES.has(tool.name)) ||
-    canUseIolausMcp(principal),
+    (canUseIolausMcp(principal) &&
+      // The public-profile lifecycle exists only where the feature does.
+      (!tool.name.startsWith('public_profile_') || publicProfilesEnabled())),
   workflowTools: [
     publicSearchWorkflow,
     publicOpportunityWorkflow,
@@ -641,6 +696,7 @@ export const mcpAppServer = createMcpAppServer({
     prepareWorkflow,
     inspectApplicationWorkflow,
     reviewNavigationWorkflow,
+    ...publicProfileWorkflows,
   ],
 });
 

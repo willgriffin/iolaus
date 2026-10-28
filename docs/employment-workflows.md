@@ -63,6 +63,15 @@ Common agent-facing JSON-string fields:
 - `SourceCrawl.filtersJson`
 - `SourceCrawl.preferenceSnapshotJson`
 - `SourceCrawlItem.rawJson`
+- `SkillGroup.evidenceJson` (array)
+
+`CandidateProfile` accepts only an explicit allow-list through agent writes:
+`name`, `firstName`, `lastName`, `title`, `email`, `phone`, `location`,
+`linkedinUrl`, `githubUrl`, `workAuthorization`, `summary`, `useOnResume`.
+Any other key (ownership, onboarding and consent timestamps, résumé-asset
+selection, `active`, `isDefault`, the structured facts and preferences JSON)
+is rejected with 400; those change only through onboarding and the résumé
+workflows.
 
 Relationship references remain SMRT ids, but admin fields should prefer
 validated pickers where a local app-owned resource exists. Opportunity
@@ -532,35 +541,74 @@ work. Before re-enabling, inspect failed/cancelled jobs and the originating
 `SourceCrawl`/`SourceCrawlItem` provenance, choose a deliberately small cap, and
 verify queued counts after one crawl.
 
-## Resume Variant Agent Path
+## Career Model Agent Path
 
-Agents can read and maintain variants through the discovered REST/CLI resource
-`resumevariants` (REST also accepts the table-name spelling
-`resume_variants`) and MCP tools named `resumevariant_list`,
-`resumevariant_get`, `resumevariant_create`, and `resumevariant_update`.
 Surface exposure is decorator-driven: the `api` / `cli` / `mcp` includes on
-each `@smrt()` class decide what REST, the CLI, and MCP expose, so the resume
-content classes (`ResumeProfile`, `ResumePosition`, `ResumeSkill`, ...) are
-reachable the same way, and a class with an empty include stays off every
-surface.
+each `@smrt()` class decide what REST, the CLI and MCP expose, and a class with
+an empty include stays off every surface. `docs/surface-parity.md` is the
+authoritative per-capability matrix.
 
-Typical tailored-application flow:
+The normalized career model the résumé is assembled from is exposed on all
+three surfaces (willgriffin/iolaus#259). Every read and write is scoped to the
+verified workspace subject — the same `{ tenantId, ownerUserId,
+candidateProfileId }` predicate the admin pages apply — and runs the admin
+write side effect (published-résumé cache invalidation and the canonical PDF
+refresh). A hosted owner reaches these records without operator authority; a
+caller-supplied `where`, `ownerUserId` or `candidateProfileId` never widens
+the scope. Agent writes stamp the owner tuple when it is omitted.
 
-1. Create or update a `ResumeVariant` with `opportunityId`, `companyId`,
-   optional `applicationId`, `tailoringConfigId`, `titleOverride`,
-   `summaryOverride`, `emphasizeTags`, `excludeTags`, `includePositionIds`,
-   and `excludePositionIds`.
-2. Set `Application.resumeMode` to `generate_tailored` and, when preselecting a
-   variant, set `Application.resumeVariantId` to that variant.
-3. Run the application package action. It generates local artifacts only,
-   records `Application.resumeAssetId`, and refreshes the variant artifact
-   fields.
-4. Keep the application in `awaiting_will` until Will approves the packet.
-   Generated variants are never submission approval by themselves.
+| Class (REST slug / MCP prefix) | Actions | Writable fields | Ordering / placement |
+| --- | --- | --- | --- |
+| `CandidateProfile` (`candidateprofiles`, `candidateprofile_`) | list, get, update | allow-list above | — |
+| `CandidateProfileLink` (`candidateprofilelinks`) | full | `label`, `href`, `useOnResume` | `sortOrder` |
+| `Experience` (`experiences`) | full | `experienceKey`, `url`, `summary`, `startDate`, `endDate`, `startPrecision`, `endPrecision`, `weight`, `useOnResume` | `sortOrder` |
+| `ExperienceRole` (`experienceroles`) | full | `experienceId`, `roleId`, `titleSnapshot`, dates and precisions, `summary`, `isPrimary` | `sortOrder` |
+| `ExperienceCompany` (`experiencecompanies`) | full | `experienceId`, `companyId` (shared catalog), `relationship`, `companyNameSnapshot`, `companyHrefSnapshot`, `isPrimary` | `sortOrder` |
+| `EmploymentRole` (`employmentroles`) | full | `roleKey`, `roleSlug`, `label`, `description` | `sortOrder` |
+| `Project` (`projects`) | full | `experienceId`, `projectKey`, `name`, `url`, `summary`, dates and precisions, `useOnResume` | `sortOrder` |
+| `Duty` (`duties`) | full | `experienceId`, `projectId`, `title`, `body`, `useOnResume` | `sortOrder` |
+| `Achievement` (`achievements`) | full | `experienceId`, `projectId`, `title`, `body`, `metric`, `useOnResume` | `sortOrder`, `resumePlacement` (`auto`, or the section it must render in) |
+| `Education` (`educations`) | full | `title`, `institution`, `detail`, dates and precisions, `useOnResume` | `sortOrder` |
+| `SkillCategory` (`skillcategories`) / `SkillGroup` (`skillgroups`) | full | `categoryKey` or `groupKey`, `label`, `blurb` (group), `evidenceJson` (group), `useOnResume` | `sortOrder` |
+| `SkillCategoryMember` / `SkillGroupMember` | full | `categoryId` or `groupId`, `tagId`, `label`, `useOnResume` (category member) | `sortOrder` |
+| `Attachment`, `ProjectAttachment`, `AchievementAttachment` | full | metadata (`title`, `caption`, `altText`, `visibility`, `usage`, the parent id, `attachmentId`); the upload itself stays on the admin route | `sortOrder` |
+| `ExperienceTag`, `ProjectTag`, `AchievementTag`, `DutyTag`, `EducationTag`, `EmploymentRoleTag` | full | the parent id, `tagId`, `tagRole` | — |
 
-Archived variants are historical records. Package generation rejects an
-explicitly selected archived variant and will not reuse archived variants when
-choosing a fallback for the application or opportunity.
+Tag joins are one row per `(parent, tagId)`; there is no array-valued tag field
+on these classes. `tagId` references the shared tag vocabulary, which is not yet
+discoverable through the agent surfaces (tranche (b) in the parity matrix).
+Dates accept ISO strings; `startPrecision` / `endPrecision` take `day`,
+`month`, `year`, and `endPrecision` also takes `present`. The legacy `Resume*`
+classes stay off every surface; they are the read-only fallback slated for
+removal.
+
+Tailored résumé variants (`ResumeVariant`), generated assets (`ResumeAsset`)
+and the application workflow records are not on the generic surfaces today;
+the application package action and the review page own that flow, and
+`docs/surface-parity.md` tracks the remaining tranches.
+
+### Public profile lifecycle tools
+
+The public résumé profile (`docs/public-resume-profiles.md`) is driven by four
+owner-principal tools, present on the legacy `/api/mcp/call` catalog (so
+`iolaus mcp call <tool> '<json>'` works from a terminal) and on the canonical
+`POST /api/mcp` server, only where public profiles are enabled:
+
+1. `public_profile_status` — identity (handle, status, revision), the owned
+   candidate profiles that can be published, the pending prepared preview and
+   the public URL.
+2. `public_profile_prepare` `{ profileId, handle, visibility }` — captures the
+   current résumé facts, renders the PDF and stores a prepared revision;
+   returns `revisionId`, `baseRevision`, `pdfBytes`, the snapshot and the
+   admin `previewUrl`. At most 20 previews per 48 hours.
+3. `public_profile_publish` `{ revisionId, expectedRevision }` — publishes the
+   reviewed preview after re-checking the artifact; a moved revision is a 409.
+4. `public_profile_unpublish` `{ expectedRevision }` — withdraws the current
+   publication.
+
+All four call the same service functions as the `/admin/career/public-profile`
+form actions under `workflow.public-profile.manage`, so nothing becomes public
+without a prepared revision, and the limits and integrity checks are shared.
 
 ## Agent Contract Smoke
 

@@ -13,9 +13,18 @@ import {
   mcpToolPrefix,
   resolveMcpToolClass,
 } from './api-exposure.js';
-import { getAppConfig, getConfiguredMcpServerName } from './app-config.js';
+import {
+  getAppConfig,
+  getConfiguredMcpServerName,
+  publicProfilesEnabled,
+} from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
+  isPublicProfileToolName,
+  publicProfileMcpTools,
+} from './public-profile-tools.js';
+import {
+  publicProfileWorkflowOperations,
   resumeVariantWorkflowSyncOperations,
   sourceWorkflowSyncOperations,
   uniqueWorkflowOperations,
@@ -161,6 +170,19 @@ export function isSourceReadMcpTool(toolName: string): boolean {
   return sourceReadToolNames.has(toolName);
 }
 
+/**
+ * The public-profile lifecycle tools exist only where the feature does: a
+ * private installation has no public profiles, so it lists none of them and
+ * a direct call is an unknown tool rather than a 404 from the service.
+ */
+export function isPublicProfileMcpTool(toolName: string): boolean {
+  return isPublicProfileToolName(toolName);
+}
+
+function appWorkflowMcpTools(): MCPTool[] {
+  return publicProfilesEnabled() ? [...publicProfileMcpTools] : [];
+}
+
 export function configuredPublicMcpToolPatterns(): string[] {
   return (process.env[publicToolEnv] ?? '')
     .split(',')
@@ -208,9 +230,11 @@ export async function listMcpTools(options: {
   const allowedTools = tools.filter((tool) => isAllowedCoreTool(tool.name));
 
   if (options.authenticated) {
-    return [...allowedTools, ...sourceReadMcpTools].sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
+    return [
+      ...allowedTools,
+      ...sourceReadMcpTools,
+      ...appWorkflowMcpTools(),
+    ].sort((left, right) => left.name.localeCompare(right.name));
   }
 
   return allowedTools.filter((tool) => isPublicMcpTool(tool.name));
@@ -227,6 +251,7 @@ export function mcpToolOperations(
   toolName: string,
 ): readonly McpToolOperation[] | null {
   if (isSourceReadMcpTool(toolName)) return sourceReadOperations;
+  if (isPublicProfileMcpTool(toolName)) return publicProfileWorkflowOperations;
 
   const resource = resolveMcpToolClass(toolName);
   if (!resource) return null;

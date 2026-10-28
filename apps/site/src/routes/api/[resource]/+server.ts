@@ -20,6 +20,11 @@ import {
   validateSubmittedApplicationPayload,
 } from '$lib/server/application-workflow';
 import { syncResumeVariantApplicationApprovals } from '$lib/server/resume-variant-workflow';
+import {
+  createScopedRecord,
+  isScopedResourceClass,
+  listScopedRecords,
+} from '$lib/server/scoped-resource-crud';
 import { getCollection } from '$lib/server/smrt';
 import { syncSourceSchedule } from '$lib/server/source-schedules';
 import {
@@ -28,9 +33,11 @@ import {
 } from '$lib/server/workspace-resource-policy';
 
 function requireResourceClass(resource: string): string {
-  assertGenericResourceAccess();
   const resolved = resolveApiResource(resource);
   if (!resolved) throw error(404, 'Resource not found');
+  // Candidate-owned classes are owner-scoped below; the catalog keeps the
+  // hosted operator gate.
+  assertGenericResourceAccess(resolved.className);
   return resolved.className;
 }
 
@@ -202,6 +209,16 @@ export const GET: RequestHandler = async ({ params, url }) => {
   const resource = requireResourceParam(params.resource);
   const className = requireResourceClass(resource);
   assertActionExposed(resource, 'list');
+  if (isScopedResourceClass(className)) {
+    const page = await listScopedRecords(className, { limit, offset });
+    return json({
+      count: page.total,
+      data: page.items,
+      items: page.items,
+      limit: page.limit,
+      offset: page.offset,
+    });
+  }
   const collection = await getCollection(className);
   const items = await collection.list({ limit, offset });
   const count = await collection.count();
@@ -214,9 +231,14 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   const className = requireResourceClass(resource);
   assertResourceIsWritable(className);
   assertActionExposed(resource, 'create');
-  const collection = await getCollection(className);
   const payload = await readJsonObjectPayload(request);
   normalizeAgentPayload(className, payload);
+  if (isScopedResourceClass(className)) {
+    return json(await createScopedRecord(className, payload), {
+      status: 201,
+    });
+  }
+  const collection = await getCollection(className);
   assertGenericResumeAssetWriteAllowed(className, payload);
 
   if (

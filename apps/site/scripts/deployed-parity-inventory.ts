@@ -154,10 +154,17 @@ export async function buildDeployedParityInventory() {
       readOnly: 'readOnly' in definition ? definition.readOnly : null,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+  // Candidate-owned classes that have no owner-scoped generic path yet
+  // (docs/surface-parity.md tranche b). The career model and the owner's own
+  // profile are exposed through `scoped-resource-crud.ts` since #259.
   const forbiddenRestClasses = new Set([
+    'Application',
     'CandidateAnswer',
-    'CandidateProfile',
-    'CandidateProfileLink',
+    'PreferenceRule',
+    'ResumeAsset',
+    'ResumeProfile',
+    'ResumeVariant',
+    'Task',
   ]);
   const exposedPrivateClass = rest.find((resource) =>
     forbiddenRestClasses.has(resource.className),
@@ -165,6 +172,17 @@ export async function buildDeployedParityInventory() {
   if (exposedPrivateClass) {
     throw new Error(
       `Private class ${exposedPrivateClass.className} must remain off generated REST.`,
+    );
+  }
+  const profile = rest.find(
+    (resource) => resource.className === 'CandidateProfile',
+  );
+  if (
+    profile &&
+    (profile.actions.includes('create') || profile.actions.includes('delete'))
+  ) {
+    throw new Error(
+      'CandidateProfile must never expose create or delete on generated REST.',
     );
   }
   const unsafeWebMcpTool = webmcp.find(

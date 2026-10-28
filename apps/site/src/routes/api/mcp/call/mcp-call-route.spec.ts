@@ -138,6 +138,9 @@ describe('/api/mcp/call', () => {
     expect(response.status).toBe(400);
     expect(routeMocks.callMcpTool).toHaveBeenCalledWith({
       arguments: [],
+      // The hook-verified locals ride along so the bridge can bind the
+      // workspace subject for owner-scoped and public-profile tools.
+      locals: ownerLocals,
       name: 'source_update',
       permissions: ['sources.update'],
       tenantId: 'tenant-1',

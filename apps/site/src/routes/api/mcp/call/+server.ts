@@ -47,6 +47,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     return json(
       await callMcpTool({
         arguments: body.arguments,
+        // The hook-verified locals carry the workspace subject the generated
+        // tools for candidate-owned classes and the public-profile lifecycle
+        // tools are scoped by; the principal still binds from user/tenant.
+        locals,
         name,
         permissions: locals.permissions,
         tenantId: locals.tenantId,
