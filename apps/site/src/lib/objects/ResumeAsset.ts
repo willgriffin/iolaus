@@ -3,9 +3,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'resume_assets',
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get', 'update', 'delete'] },
+  cli: { include: ['list', 'get', 'update', 'delete'] },
+  mcp: { include: ['list', 'get', 'update'] },
 })
 @TenantScoped()
 export class ResumeAsset extends SmrtObject {

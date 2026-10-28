@@ -13,6 +13,7 @@ import {
 import {
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
+  isTagLookupMcpTool,
   listMcpTools,
 } from '../src/lib/server/mcp-tools.js';
 
@@ -123,7 +124,9 @@ export async function buildDeployedParityInventory() {
     .map((tool) => ({
       name: tool.name,
       readOnly:
-        isReadOnlyMcpTool(tool.name) || isSourceReadMcpTool(tool.name),
+        isReadOnlyMcpTool(tool.name) ||
+        isSourceReadMcpTool(tool.name) ||
+        isTagLookupMcpTool(tool.name),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
   const opportunity = rest.find(
@@ -154,10 +157,37 @@ export async function buildDeployedParityInventory() {
       readOnly: 'readOnly' in definition ? definition.readOnly : null,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+  // Classes that stay off generated REST: the legacy résumé fallback, the
+  // provider ledgers and system state (docs/surface-parity.md). Candidate-
+  // owned classes are exposed only through `scoped-resource-crud.ts`.
   const forbiddenRestClasses = new Set([
+    'AccountDeletionRecord',
+    'AdminAssistantTurn',
+    'AiUserBudget',
+    'AiUserSpendEntry',
     'CandidateAnswer',
-    'CandidateProfile',
-    'CandidateProfileLink',
+    'CliAuthRequest',
+    'DataSurfaceIdempotencyRecord',
+    'DataSurfacePreviewToken',
+    'HostedInvite',
+    'MatchModel',
+    'OpportunityIntelligenceRequest',
+    'OpportunityIntelligenceResult',
+    'PublicProfileIdentity',
+    'PublicProfileRevision',
+    'ResumeAchievement',
+    'ResumeEducation',
+    'ResumeImport',
+    'ResumeImportJob',
+    'ResumeImportQuarantine',
+    'ResumeImportWriteOperation',
+    'ResumeLink',
+    'ResumeOtherRole',
+    'ResumePosition',
+    'ResumeProfile',
+    'ResumeSkill',
+    'ResumeSkillCategory',
+    'ResumeSkillGroup',
   ]);
   const exposedPrivateClass = rest.find((resource) =>
     forbiddenRestClasses.has(resource.className),
@@ -166,6 +196,30 @@ export async function buildDeployedParityInventory() {
     throw new Error(
       `Private class ${exposedPrivateClass.className} must remain off generated REST.`,
     );
+  }
+  // System-authored or workflow-created records never take a generic write.
+  const writeBounds: Record<string, readonly string[]> = {
+    AgentRun: ['get', 'list'],
+    CandidateProfile: ['get', 'list', 'update'],
+    EvaluationScore: ['get', 'list'],
+    FactCandidate: ['get', 'list'],
+    FactIntake: ['get', 'list'],
+    OpportunityAssessment: ['get', 'list'],
+    OpportunityIntelligenceControl: ['get', 'list'],
+    ResumeAsset: ['delete', 'get', 'list', 'update'],
+    SourceCrawl: ['get', 'list'],
+    SourceCrawlItem: ['get', 'list'],
+  };
+  for (const [className, allowed] of Object.entries(writeBounds)) {
+    const resource = rest.find((entry) => entry.className === className);
+    const extra = resource?.actions.filter(
+      (action) => !allowed.includes(action),
+    );
+    if (extra?.length) {
+      throw new Error(
+        `${className} must not expose ${extra.join(', ')} on generated REST.`,
+      );
+    }
   }
   const unsafeWebMcpTool = webmcp.find(
     (tool) =>

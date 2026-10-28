@@ -11,7 +11,17 @@
  * MCP catalog can load it without a cycle through the principal seam.
  */
 
-export type WorkflowOperationAction = 'create' | 'delete' | 'read' | 'update';
+/**
+ * A generated CRUD action on a model collection, or a curated workspace
+ * capability slug (`workflow.<capability>`, asserted as the action of the
+ * `workflow` collection — see `workspace-workflow-capabilities.ts`).
+ */
+export type WorkflowOperationAction =
+  | 'create'
+  | 'delete'
+  | 'read'
+  | 'update'
+  | `${string}.${string}`;
 
 export interface WorkflowOperation {
   action: WorkflowOperationAction;
@@ -109,6 +119,25 @@ export const opportunityDigDeeperOperations = [
 ] as const satisfies readonly WorkflowOperation[];
 
 /**
+ * `ensureCompanyResearch()` (`application-workflow.ts`): reads and re-statuses
+ * the shared `Company`, looks up or creates its careers `Source`, and lists,
+ * creates or updates the owner's `research_company` task. The shared-catalog
+ * writes assert their generated permissions (company update, careers source
+ * read/create); the private task workflow asserts the curated capabilities
+ * the admin actions assert for it (`application.review`, which authorizes
+ * the deep dive that performs the same research, and `task.sync`), never a
+ * generic private task CRUD grant.
+ */
+export const companyResearchOperations = [
+  { action: 'read', collection: 'companies' },
+  { action: 'update', collection: 'companies' },
+  { action: 'read', collection: 'sources' },
+  { action: 'create', collection: 'sources' },
+  { action: 'application.review', collection: 'workflow' },
+  { action: 'task.sync', collection: 'workflow' },
+] as const satisfies readonly WorkflowOperation[];
+
+/**
  * `syncApplicationWorkflowTasks()`: syncs the application's account and stage
  * tasks, and for a submitted application reads its opportunity and moves it
  * to `applied` (`syncSubmittedOpportunityStatus()`). The application record
@@ -154,6 +183,33 @@ export const resumeVariantWorkflowSyncOperations = [
   { action: 'read', collection: 'applications' },
   { action: 'update', collection: 'applications' },
   ...applicationWorkflowSyncOperations,
+] as const satisfies readonly WorkflowOperation[];
+
+/**
+ * Owner-scoped generic CRUD on a candidate-owned class
+ * (`scoped-resource-crud.ts`): the generated `<class>_<action>` MCP tools for
+ * the career model. The hosted member role holds the curated `workflow.*`
+ * capabilities and catalog reads only — never generated private CRUD grants
+ * (`role-permissions.ts`), and the admin pages that edit the same records
+ * assert `workflow.profile.manage` (`career-management.ts`). The tools assert
+ * that same capability; the owner predicate, not a per-class grant, bounds
+ * what the write can reach.
+ */
+export const privateWorkspaceCrudOperations = [
+  { action: 'profile.manage', collection: 'workflow' },
+] as const satisfies readonly WorkflowOperation[];
+
+/**
+ * `preparePublicProfile()` / `publishPublicProfile()` /
+ * `unpublishPublicProfile()` / `getPublicProfileManager()`
+ * (`public-profile-service.ts`), behind the `/admin/career/public-profile`
+ * form actions and the `public_profile_*` tools. The service asserts the
+ * curated `workflow.public-profile.manage` capability at every fence and
+ * reads the owner's candidate profiles and publication rows inside it; it
+ * grants no generic CRUD, so the tools assert exactly what the page asserts.
+ */
+export const publicProfileWorkflowOperations = [
+  { action: 'public-profile.manage', collection: 'workflow' },
 ] as const satisfies readonly WorkflowOperation[];
 
 /**

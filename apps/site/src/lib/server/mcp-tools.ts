@@ -13,14 +13,37 @@ import {
   mcpToolPrefix,
   resolveMcpToolClass,
 } from './api-exposure.js';
-import { getAppConfig, getConfiguredMcpServerName } from './app-config.js';
+import {
+  getAppConfig,
+  getConfiguredMcpServerName,
+  publicProfilesEnabled,
+} from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
+  isJobSearchBridgeMcpTool,
+  isJobSearchToolName,
+  jobSearchBridgeMcpTools,
+  jobSearchToolOperations,
+} from './job-search-tool-operations.js';
+import {
+  isPublicProfileToolName,
+  publicProfileMcpTools,
+} from './public-profile-tools.js';
+import { TAG_LOOKUP_TOOL, tagLookupMcpTool } from './tag-lookup-tool.js';
+import {
+  privateWorkspaceCrudOperations,
+  publicProfileWorkflowOperations,
   resumeVariantWorkflowSyncOperations,
   sourceWorkflowSyncOperations,
   uniqueWorkflowOperations,
   type WorkflowOperation,
 } from './workflow-operations.js';
+import {
+  isWorkflowToolName,
+  workflowMcpTools,
+  workflowToolContract,
+} from './workflow-tool-contracts.js';
+import { isPrivateWorkspaceClass } from './workspace-resource-policy.js';
 
 /**
  * Generated server-MCP tool catalog. This module deliberately has no
@@ -161,6 +184,36 @@ export function isSourceReadMcpTool(toolName: string): boolean {
   return sourceReadToolNames.has(toolName);
 }
 
+/**
+ * The public-profile lifecycle tools exist only where the feature does: a
+ * private installation has no public profiles, so it lists none of them and
+ * a direct call is an unknown tool rather than a 404 from the service.
+ */
+export function isPublicProfileMcpTool(toolName: string): boolean {
+  return isPublicProfileToolName(toolName);
+}
+
+export function isTagLookupMcpTool(toolName: string): boolean {
+  return toolName === TAG_LOOKUP_TOOL;
+}
+
+/**
+ * Application-owned workflow tools on the legacy bridge: the `job_search_*`
+ * tools (the same contracts the `/api/job-search` route and WebMCP publish),
+ * the owner workflow tools for former form-only actions, the tag lookup and,
+ * where the feature exists, the public-profile lifecycle.
+ */
+function appWorkflowMcpTools(): MCPTool[] {
+  return [
+    ...jobSearchBridgeMcpTools(),
+    ...workflowMcpTools(),
+    tagLookupMcpTool,
+    ...(publicProfilesEnabled() ? publicProfileMcpTools : []),
+  ];
+}
+
+export { isJobSearchBridgeMcpTool, isWorkflowToolName };
+
 export function configuredPublicMcpToolPatterns(): string[] {
   return (process.env[publicToolEnv] ?? '')
     .split(',')
@@ -208,9 +261,11 @@ export async function listMcpTools(options: {
   const allowedTools = tools.filter((tool) => isAllowedCoreTool(tool.name));
 
   if (options.authenticated) {
-    return [...allowedTools, ...sourceReadMcpTools].sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
+    return [
+      ...allowedTools,
+      ...sourceReadMcpTools,
+      ...appWorkflowMcpTools(),
+    ].sort((left, right) => left.name.localeCompare(right.name));
   }
 
   return allowedTools.filter((tool) => isPublicMcpTool(tool.name));
@@ -225,8 +280,18 @@ export async function listMcpTools(options: {
  */
 export function mcpToolOperations(
   toolName: string,
+  args: Record<string, unknown> = {},
 ): readonly McpToolOperation[] | null {
   if (isSourceReadMcpTool(toolName)) return sourceReadOperations;
+  if (isJobSearchToolName(toolName)) {
+    return [...jobSearchToolOperations[toolName]];
+  }
+  const workflow = workflowToolContract(toolName);
+  if (workflow) return uniqueWorkflowOperations([...workflow.operations(args)]);
+  if (isPublicProfileMcpTool(toolName)) return publicProfileWorkflowOperations;
+  // The tag vocabulary is read for the owner's own join rows; the same
+  // capability bounds the pickers' callers.
+  if (isTagLookupMcpTool(toolName)) return [...privateWorkspaceCrudOperations];
 
   const resource = resolveMcpToolClass(toolName);
   if (!resource) return null;
@@ -235,6 +300,11 @@ export function mcpToolOperations(
       toolName.slice(mcpToolPrefix(resource.className).length)
     ];
   if (!action) return null;
+  // Candidate-owned classes run through the owner-scoped path under the
+  // curated profile capability, the grant a hosted member actually holds.
+  if (isPrivateWorkspaceClass(resource.className)) {
+    return [...privateWorkspaceCrudOperations];
+  }
   const modelClass =
     ObjectRegistry.getObjectMetadata(resource.className)?.constructor ?? null;
   if (!modelClass) return null;

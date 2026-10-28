@@ -36,6 +36,20 @@ records carry record IDs, fixed editable fields and read-only presentation metad
 excluded even if an adapter ignores its query predicate. Unsafe stored links are
 never rendered as clickable links, and new link values accept HTTP, HTTPS or mailto.
 
+## Agent surfaces
+
+Everything the career pages edit is also reachable through the `iolaus` CLI
+(`iolaus experiences list`, `iolaus achievements create '<json>'`, …
+discovered from `/api/_resources`), the `/api/<slug>` REST routes and the
+generated MCP tools (`experience_update`, `achievement_delete`, …). Those
+surfaces apply the same owner predicate as these pages — a hosted owner sees
+and changes only records carrying their own tenant, user and selected profile
+— and run the same write side effect (published-résumé cache invalidation and
+the canonical PDF refresh). The profile record itself accepts only the career
+editor's fields through agents. The per-class field contract is in
+`docs/employment-workflows.md` ("Career Model Agent Path") and the status of
+every capability in `docs/surface-parity.md`.
+
 Focused regressions live in `career-management.spec.ts`, `career-presentation.spec.ts`,
 `resume-canonical-membership.spec.ts`, `resume-data.spec.ts`, `CareerResume.spec.ts`,
 and `career-route.spec.ts`. Browser validation uses isolated fictional owner data

@@ -7,7 +7,128 @@ import {
   fixtureDatabaseSql,
   requireIsolatedContext,
   until,
+  qualificationRegistryPullSecrets,
+  assertRegistryPullIsolation,
+  qualificationStageMessage,
+  qualificationApplyArguments,
+  runtimePodDiagnostics,
+  runtimeLogCategories,
+  parityFailureStage,
 } from './adoption-kind-fixture.mjs';
+
+test('child parity diagnostics accept only complete fixed stage markers', () => {
+  const sensitive = 'private-token-that-must-not-be-printed';
+  for (const stage of ['startup', 'candidate-image-provenance', 'reviewed-inventory',
+    'candidate-image-source-filesystem', 'scenario-execution', 'candidate-inventory', 'post-validation']) {
+    assert.equal(parityFailureStage({ stderr: Buffer.from(`${sensitive}\nIOLAUS_PARITY_FAILURE_STAGE=${stage}\n${sensitive}`) }), stage);
+  }
+  for (const stderr of [sensitive, `IOLAUS_PARITY_FAILURE_STAGE=${sensitive}`,
+    'IOLAUS_PARITY_FAILURE_STAGE=startup extra', 'prefix IOLAUS_PARITY_FAILURE_STAGE=startup', null])
+    assert.equal(parityFailureStage({ stderr }), null);
+  assert.equal(parityFailureStage(null), null);
+});
+
+test('runtime diagnostics expose only bounded fixed states and log categories, never sensitive strings', () => {
+  const sensitive = 'private-token-and-database-url';
+  const pods = [{ metadata: { name: sensitive }, spec: { env: sensitive }, status: {
+    phase: 'Running', message: sensitive,
+    conditions: [{ type: 'PodScheduled', status: 'True', message: sensitive }],
+    containerStatuses: [{ name: sensitive, ready: false, restartCount: 2,
+      state: { waiting: { reason: 'CrashLoopBackOff', message: sensitive } } },
+    { ready: false, restartCount: sensitive, state: { terminated: { reason: sensitive, exitCode: sensitive } } }],
+  } }];
+  const result = runtimePodDiagnostics(pods);
+  assert.deepEqual(result, [{ phase: 'Running', scheduled: true, containers: [
+    { ready: false, restarts: 2, state: 'CrashLoopBackOff', exitCode: null },
+    { ready: false, restarts: null, state: 'Unknown', exitCode: null },
+  ] }]);
+  assert.ok(!JSON.stringify(result).includes(sensitive));
+  assert.equal(runtimePodDiagnostics(Array(20).fill(pods[0])).length, 8);
+  assert.deepEqual(runtimeLogCategories(`permission denied ${sensitive}; Deployment schema is not ready: ${sensitive}`),
+    ['schema-not-ready', 'permission-denied']);
+  assert.deepEqual(runtimeLogCategories(sensitive), []);
+  assert.deepEqual(runtimeLogCategories(`component=assets code=provider_unavailable ${sensitive}`),
+    ['component-assets', 'provider-unavailable']);
+});
+
+test('rendered chart applies bind the isolated namespace while explicit fixture lists retain theirs', () => {
+  const args = ['/isolated/kubeconfig', 'kind-iolaus-236-abc123', 'iolaus-qualification'];
+  assert.deepEqual(qualificationApplyArguments(...args, true), [
+    '--kubeconfig', args[0], '--context', args[1],
+    '--namespace', args[2], 'apply', '-f', '-',
+  ]);
+  assert.deepEqual(qualificationApplyArguments(...args, false), [
+    '--kubeconfig', args[0], '--context', args[1], 'apply', '-f', '-',
+  ]);
+  assert.throws(() => qualificationApplyArguments(args[0], 'production', args[2], true));
+  assert.throws(() => qualificationApplyArguments(args[0], args[1], 'default', true));
+});
+
+test('qualification progress accepts static stages and never echoes unknown sensitive input', () => {
+  assert.equal(qualificationStageMessage('image-identity'), '[adoption] image-identity');
+  for (const stage of ['worker-sigterm-task', 'worker-sigterm-schedule', 'monitor-check'])
+    assert.equal(qualificationStageMessage(stage), `[adoption] ${stage}`);
+  const sensitive = 'fixture-token-that-must-not-be-logged';
+  assert.throws(() => qualificationStageMessage(sensitive), (error) => {
+    assert.match(error.message, /Unknown qualification stage/);
+    assert.ok(!error.message.includes(sensitive));
+    return true;
+  });
+});
+
+test('ephemeral registry pull credentials are scoped to the two disposable namespaces', () => {
+  assert.deepEqual(qualificationRegistryPullSecrets({}), []);
+  for (const environment of [
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture' },
+    { IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'fixture-read-token' },
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture', IOLAUS_QUALIFICATION_REGISTRY_TOKEN: '' },
+    { IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture', IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'bad\ntoken' },
+  ]) {
+    assert.throws(() => qualificationRegistryPullSecrets(environment), (error) => {
+      assert.match(error.message, /Complete ephemeral registry pull identity required/);
+      assert.ok(!error.message.includes('bad\ntoken'));
+      return true;
+    });
+  }
+  const secrets = qualificationRegistryPullSecrets({
+    IOLAUS_QUALIFICATION_REGISTRY_ACTOR: 'fixture',
+    IOLAUS_QUALIFICATION_REGISTRY_TOKEN: 'fixture-read-token',
+  });
+  assert.deepEqual(secrets.map(({ metadata }) => metadata.namespace),
+    ['iolaus-fixture', fixtureIdentity.applicationId]);
+  for (const secret of secrets) {
+    assert.equal(secret.type, 'kubernetes.io/dockerconfigjson');
+    assert.equal(secret.immutable, true);
+    const config = JSON.parse(Buffer.from(secret.data['.dockerconfigjson'], 'base64'));
+    assert.deepEqual(Object.keys(config.auths), ['ghcr.io']);
+    assert.equal(Buffer.from(config.auths['ghcr.io'].auth, 'base64').toString(),
+      'fixture:fixture-read-token');
+  }
+});
+
+test('registry pull authority never becomes application environment or mounted credentials', () => {
+  const name = 'iolaus-qualification-registry';
+  const pod = { spec: {
+    imagePullSecrets: [{ name }],
+    containers: [{ name: 'app', env: [], envFrom: [] }], volumes: [],
+  } };
+  assertRegistryPullIsolation(pod, name);
+  assertRegistryPullIsolation({ spec: { containers: [{ name: 'public' }] } }, name, false);
+  for (const inject of [
+    (p) => p.spec.containers[0].env.push({ name: 'TOKEN', valueFrom: { secretKeyRef: { name, key: '.dockerconfigjson' } } }),
+    (p) => p.spec.containers[0].env.push({ name: 'GITHUB_TOKEN', value: 'fixture' }),
+    (p) => p.spec.containers[0].envFrom.push({ secretRef: { name } }),
+    (p) => { p.spec.initContainers = [{ name: 'init', envFrom: [{ secretRef: { name } }] }]; },
+    (p) => p.spec.volumes.push({ name: 'creds', secret: { secretName: name } }),
+    (p) => p.spec.volumes.push({ name: 'creds', projected: { sources: [{ secret: { name } }] } }),
+    (p) => p.spec.imagePullSecrets.push({ name: 'unapproved-registry' }),
+    (p) => { p.spec.imagePullSecrets = []; },
+  ]) {
+    const injected = structuredClone(pod); inject(injected);
+    assert.throws(() => assertRegistryPullIsolation(injected, name));
+  }
+  assert.throws(() => assertRegistryPullIsolation(pod, name, false));
+});
 
 test('qualification refuses arbitrary kube contexts and namespaces', () => {
   requireIsolatedContext('kind-iolaus-236-abc123', 'iolaus-qualification');
@@ -53,6 +174,9 @@ test('inactive adoption workflow never auto-triggers, promotes or touches GitOps
     workflow,
     /packages: write|contents: write|git push|imagetools create|kubeconfig.*secrets\./,
   );
+  assert.match(workflow, /packages: read/);
+  assert.match(workflow, /logout: true/);
+  assert.match(workflow, /IOLAUS_QUALIFICATION_REGISTRY_TOKEN: \$\{\{ github\.token \}\}/);
   const base = readFileSync(
     new URL('../deploy/self-hosted/base/kustomization.yaml', import.meta.url),
     'utf8',

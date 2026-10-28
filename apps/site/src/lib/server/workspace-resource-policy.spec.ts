@@ -111,9 +111,21 @@ describe('shared workspace resource boundary', () => {
   it('keeps catalog mutation and raw generated access operator-only', () => {
     expect(() => assertWorkspaceResourceWritable('Opportunity')).toThrow();
     expect(() => assertGenericResourceAccess()).toThrow();
+    expect(() => assertGenericResourceAccess('Opportunity')).toThrow();
+    expect(() => assertGenericResourceAccess('Fact')).toThrow();
     expect(() => assertWorkspaceResourceWritable('Application')).not.toThrow();
     state.operator = true;
     expect(() => assertWorkspaceResourceWritable('Opportunity')).not.toThrow();
+  });
+  it('lets a hosted owner reach candidate-owned classes generically, scoped by the policy', () => {
+    // Parity with the admin pages: the owner edits their résumé records
+    // without operator authority, but only through the owner predicate.
+    for (const className of ['Experience', 'Achievement', 'CandidateProfile']) {
+      expect(() => assertGenericResourceAccess(className)).not.toThrow();
+      expect(Object.keys(workspaceResourceWhere(className))).toContain(
+        'ownerUserId',
+      );
+    }
   });
   it('denies broad facts and governance controls even with a workspace', () => {
     expect(() => workspaceResourceWhere('Fact')).toThrow();

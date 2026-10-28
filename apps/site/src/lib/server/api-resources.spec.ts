@@ -49,39 +49,41 @@ describe('apiResourceClasses', () => {
     }
   });
 
+  it('resolves the owner-scoped career model under canonical and table spellings', () => {
+    // Opted in by #259; the routes scope every read and write to the
+    // verified workspace subject (scoped-resource-crud.ts).
+    expect(getApiResourceClass('candidateprofiles')).toBe('CandidateProfile');
+    expect(getApiResourceClass('candidate_profiles')).toBe('CandidateProfile');
+    expect(getApiResourceClass('candidateprofilelinks')).toBe(
+      'CandidateProfileLink',
+    );
+    expect(getApiResourceClass('experiences')).toBe('Experience');
+    expect(getApiResourceClass('achievements')).toBe('Achievement');
+    expect(getApiResourceClass('skill_categories')).toBe('SkillCategory');
+  });
+
+  it('resolves the owner-scoped private workspace classes (tranche b)', () => {
+    expect(getApiResourceClass('applications')).toBe('Application');
+    expect(getApiResourceClass('tasks')).toBe('Task');
+    expect(getApiResourceClass('decisions')).toBe('Decision');
+    expect(getApiResourceClass('preferencerules')).toBe('PreferenceRule');
+    expect(getApiResourceClass('resume_variants')).toBe('ResumeVariant');
+    expect(getApiResourceClass('candidate_answers')).toBeUndefined();
+    expect(getApiResourceClass('agentruns')).toBe('AgentRun');
+    expect(getApiResourceClass('resumeprofiles')).toBeUndefined();
+    expect(getApiResourceClass('resume_positions')).toBeUndefined();
+  });
+
   it('exposes only public company research under its alternate table spelling', () => {
     expect(getApiResourceClass('company_research')).toBe('CompanyResearch');
   });
 
   it('keeps decorator-hidden and foreign classes off REST', () => {
-    expect(getApiResourceClass('decisions')).toBeUndefined();
-    expect(getApiResourceClass('decisiontags')).toBeUndefined();
-    expect(getApiResourceClass('candidateanswers')).toBeUndefined();
-    expect(getApiResourceClass('candidate_answers')).toBeUndefined();
-    expect(getApiResourceClass('candidateprofiles')).toBeUndefined();
-    expect(getApiResourceClass('candidate_profiles')).toBeUndefined();
-    expect(getApiResourceClass('candidateprofilelinks')).toBeUndefined();
-    expect(getApiResourceClass('candidate_profile_links')).toBeUndefined();
     expect(getApiResourceClass('cliauthrequests')).toBeUndefined();
     expect(getApiResourceClass('people')).toBeUndefined();
     expect(getApiResourceClass('employmentpersons')).toBeUndefined();
-    expect(getApiResourceClass('experiences')).toBeUndefined();
-    expect(getApiResourceClass('achievements')).toBeUndefined();
-    expect(getApiResourceClass('resumetailoringconfigs')).toBeUndefined();
     expect(getApiResourceClass('resumeprofiles')).toBeUndefined();
     expect(getApiResourceClass('resumepositions')).toBeUndefined();
-    expect(getApiResourceClass('tasks')).toBeUndefined();
-    expect(getApiResourceClass('agentruns')).toBeUndefined();
-    expect(getApiResourceClass('applications')).toBeUndefined();
-    expect(
-      getApiResourceClass('application_material_comments'),
-    ).toBeUndefined();
-    expect(getApiResourceClass('evaluationscores')).toBeUndefined();
-    expect(getApiResourceClass('factcandidates')).toBeUndefined();
-    expect(getApiResourceClass('factintakes')).toBeUndefined();
-    expect(getApiResourceClass('preferencerules')).toBeUndefined();
-    expect(getApiResourceClass('resumeassets')).toBeUndefined();
-    expect(getApiResourceClass('resumevariants')).toBeUndefined();
     expect(getApiResourceClass('users')).toBeUndefined();
     expect(getApiResourceClass('profiles')).toBeUndefined();
     expect(getApiResourceClass('sessions')).toBeUndefined();

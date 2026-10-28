@@ -1,7 +1,7 @@
 {
   "schema": "iolaus-deployed-parity-inventory:v1",
   "dependencies": {
-    "lockfileSha256": "bacba32f6ad882ca5d4ac914c7e6e2326850ae9efde72f461eeb390775a371d3",
+    "lockfileSha256": "d3831e1c67837e74326118b05520b6966fa079e4d1baa8682ebded2ff0107ecc",
     "smrt": {
       "@happyvertical/smrt-agents": "0.57.32",
       "@happyvertical/smrt-app-mcp": "0.57.32",
@@ -18,8 +18,12 @@
       "@happyvertical/smrt-mcp-apps": "0.57.32",
       "@happyvertical/smrt-mcp-openai": "0.57.32",
       "@happyvertical/smrt-places": "0.57.32",
+      "@happyvertical/smrt-playbooks": "0.57.32",
       "@happyvertical/smrt-profiles": "0.57.32",
+      "@happyvertical/smrt-prompts": "0.57.32",
+      "@happyvertical/smrt-reports": "0.57.32",
       "@happyvertical/smrt-scanner": "0.57.32",
+      "@happyvertical/smrt-secrets": "0.57.32",
       "@happyvertical/smrt-svelte": "0.57.32",
       "@happyvertical/smrt-tags": "0.57.32",
       "@happyvertical/smrt-tenancy": "0.57.32",
@@ -43,8 +47,12 @@
       "@happyvertical/smrt-mcp-apps": "0.57.32",
       "@happyvertical/smrt-mcp-openai": "0.57.32",
       "@happyvertical/smrt-places": "0.57.32",
+      "@happyvertical/smrt-playbooks": "0.57.32",
       "@happyvertical/smrt-profiles": "0.57.32",
+      "@happyvertical/smrt-prompts": "0.57.32",
+      "@happyvertical/smrt-reports": "0.57.32",
       "@happyvertical/smrt-scanner": "0.57.32",
+      "@happyvertical/smrt-secrets": "0.57.32",
       "@happyvertical/smrt-svelte": "0.57.32",
       "@happyvertical/smrt-tags": "0.57.32",
       "@happyvertical/smrt-tenancy": "0.57.32",
@@ -60,6 +68,166 @@
     ],
     "mcp": [
       {
+        "name": "achievement_create",
+        "readOnly": false
+      },
+      {
+        "name": "achievement_delete",
+        "readOnly": false
+      },
+      {
+        "name": "achievement_get",
+        "readOnly": true
+      },
+      {
+        "name": "achievement_list",
+        "readOnly": true
+      },
+      {
+        "name": "achievement_update",
+        "readOnly": false
+      },
+      {
+        "name": "achievementattachment_create",
+        "readOnly": false
+      },
+      {
+        "name": "achievementattachment_delete",
+        "readOnly": false
+      },
+      {
+        "name": "achievementattachment_get",
+        "readOnly": true
+      },
+      {
+        "name": "achievementattachment_list",
+        "readOnly": true
+      },
+      {
+        "name": "achievementattachment_update",
+        "readOnly": false
+      },
+      {
+        "name": "achievementtag_create",
+        "readOnly": false
+      },
+      {
+        "name": "achievementtag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "achievementtag_get",
+        "readOnly": true
+      },
+      {
+        "name": "achievementtag_list",
+        "readOnly": true
+      },
+      {
+        "name": "achievementtag_update",
+        "readOnly": false
+      },
+      {
+        "name": "agentrun_get",
+        "readOnly": true
+      },
+      {
+        "name": "agentrun_list",
+        "readOnly": true
+      },
+      {
+        "name": "application_archive",
+        "readOnly": false
+      },
+      {
+        "name": "application_create",
+        "readOnly": false
+      },
+      {
+        "name": "application_get",
+        "readOnly": true
+      },
+      {
+        "name": "application_list",
+        "readOnly": true
+      },
+      {
+        "name": "application_update",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_create",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_delete",
+        "readOnly": false
+      },
+      {
+        "name": "applicationmaterialcomment_get",
+        "readOnly": true
+      },
+      {
+        "name": "applicationmaterialcomment_list",
+        "readOnly": true
+      },
+      {
+        "name": "applicationmaterialcomment_update",
+        "readOnly": false
+      },
+      {
+        "name": "attachment_create",
+        "readOnly": false
+      },
+      {
+        "name": "attachment_delete",
+        "readOnly": false
+      },
+      {
+        "name": "attachment_get",
+        "readOnly": true
+      },
+      {
+        "name": "attachment_list",
+        "readOnly": true
+      },
+      {
+        "name": "attachment_update",
+        "readOnly": false
+      },
+      {
+        "name": "candidateprofile_get",
+        "readOnly": true
+      },
+      {
+        "name": "candidateprofile_list",
+        "readOnly": true
+      },
+      {
+        "name": "candidateprofile_update",
+        "readOnly": false
+      },
+      {
+        "name": "candidateprofilelink_create",
+        "readOnly": false
+      },
+      {
+        "name": "candidateprofilelink_delete",
+        "readOnly": false
+      },
+      {
+        "name": "candidateprofilelink_get",
+        "readOnly": true
+      },
+      {
+        "name": "candidateprofilelink_list",
+        "readOnly": true
+      },
+      {
+        "name": "candidateprofilelink_update",
+        "readOnly": false
+      },
+      {
         "name": "company_create",
         "readOnly": false
       },
@@ -70,6 +238,10 @@
       {
         "name": "company_list",
         "readOnly": true
+      },
+      {
+        "name": "company_research_request",
+        "readOnly": false
       },
       {
         "name": "company_update",
@@ -124,6 +296,258 @@
         "readOnly": false
       },
       {
+        "name": "decision_create",
+        "readOnly": false
+      },
+      {
+        "name": "decision_delete",
+        "readOnly": false
+      },
+      {
+        "name": "decision_get",
+        "readOnly": true
+      },
+      {
+        "name": "decision_list",
+        "readOnly": true
+      },
+      {
+        "name": "decision_update",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_create",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "decisiontag_get",
+        "readOnly": true
+      },
+      {
+        "name": "decisiontag_list",
+        "readOnly": true
+      },
+      {
+        "name": "decisiontag_update",
+        "readOnly": false
+      },
+      {
+        "name": "duty_create",
+        "readOnly": false
+      },
+      {
+        "name": "duty_delete",
+        "readOnly": false
+      },
+      {
+        "name": "duty_get",
+        "readOnly": true
+      },
+      {
+        "name": "duty_list",
+        "readOnly": true
+      },
+      {
+        "name": "duty_update",
+        "readOnly": false
+      },
+      {
+        "name": "dutytag_create",
+        "readOnly": false
+      },
+      {
+        "name": "dutytag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "dutytag_get",
+        "readOnly": true
+      },
+      {
+        "name": "dutytag_list",
+        "readOnly": true
+      },
+      {
+        "name": "dutytag_update",
+        "readOnly": false
+      },
+      {
+        "name": "education_create",
+        "readOnly": false
+      },
+      {
+        "name": "education_delete",
+        "readOnly": false
+      },
+      {
+        "name": "education_get",
+        "readOnly": true
+      },
+      {
+        "name": "education_list",
+        "readOnly": true
+      },
+      {
+        "name": "education_update",
+        "readOnly": false
+      },
+      {
+        "name": "educationtag_create",
+        "readOnly": false
+      },
+      {
+        "name": "educationtag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "educationtag_get",
+        "readOnly": true
+      },
+      {
+        "name": "educationtag_list",
+        "readOnly": true
+      },
+      {
+        "name": "educationtag_update",
+        "readOnly": false
+      },
+      {
+        "name": "employmentrole_create",
+        "readOnly": false
+      },
+      {
+        "name": "employmentrole_delete",
+        "readOnly": false
+      },
+      {
+        "name": "employmentrole_get",
+        "readOnly": true
+      },
+      {
+        "name": "employmentrole_list",
+        "readOnly": true
+      },
+      {
+        "name": "employmentrole_update",
+        "readOnly": false
+      },
+      {
+        "name": "employmentroletag_create",
+        "readOnly": false
+      },
+      {
+        "name": "employmentroletag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "employmentroletag_get",
+        "readOnly": true
+      },
+      {
+        "name": "employmentroletag_list",
+        "readOnly": true
+      },
+      {
+        "name": "employmentroletag_update",
+        "readOnly": false
+      },
+      {
+        "name": "evaluationscore_get",
+        "readOnly": true
+      },
+      {
+        "name": "evaluationscore_list",
+        "readOnly": true
+      },
+      {
+        "name": "experience_create",
+        "readOnly": false
+      },
+      {
+        "name": "experience_delete",
+        "readOnly": false
+      },
+      {
+        "name": "experience_get",
+        "readOnly": true
+      },
+      {
+        "name": "experience_list",
+        "readOnly": true
+      },
+      {
+        "name": "experience_update",
+        "readOnly": false
+      },
+      {
+        "name": "experiencecompany_create",
+        "readOnly": false
+      },
+      {
+        "name": "experiencecompany_delete",
+        "readOnly": false
+      },
+      {
+        "name": "experiencecompany_get",
+        "readOnly": true
+      },
+      {
+        "name": "experiencecompany_list",
+        "readOnly": true
+      },
+      {
+        "name": "experiencecompany_update",
+        "readOnly": false
+      },
+      {
+        "name": "experiencerole_create",
+        "readOnly": false
+      },
+      {
+        "name": "experiencerole_delete",
+        "readOnly": false
+      },
+      {
+        "name": "experiencerole_get",
+        "readOnly": true
+      },
+      {
+        "name": "experiencerole_list",
+        "readOnly": true
+      },
+      {
+        "name": "experiencerole_update",
+        "readOnly": false
+      },
+      {
+        "name": "experiencetag_create",
+        "readOnly": false
+      },
+      {
+        "name": "experiencetag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "experiencetag_get",
+        "readOnly": true
+      },
+      {
+        "name": "experiencetag_list",
+        "readOnly": true
+      },
+      {
+        "name": "experiencetag_update",
+        "readOnly": false
+      },
+      {
+        "name": "fact_candidate_accept",
+        "readOnly": false
+      },
+      {
         "name": "fact_create",
         "readOnly": false
       },
@@ -132,12 +556,24 @@
         "readOnly": true
       },
       {
+        "name": "fact_intake_create",
+        "readOnly": false
+      },
+      {
         "name": "fact_list",
         "readOnly": true
       },
       {
         "name": "fact_update",
         "readOnly": false
+      },
+      {
+        "name": "factcandidate_get",
+        "readOnly": true
+      },
+      {
+        "name": "factcandidate_list",
+        "readOnly": true
       },
       {
         "name": "factcontent_create",
@@ -161,6 +597,14 @@
       },
       {
         "name": "factevidence_list",
+        "readOnly": true
+      },
+      {
+        "name": "factintake_get",
+        "readOnly": true
+      },
+      {
+        "name": "factintake_list",
         "readOnly": true
       },
       {
@@ -200,12 +644,72 @@
         "readOnly": true
       },
       {
+        "name": "job_search_browse_opportunities",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_crawl_source",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_create_source",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_dig_deeper",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_import_opportunity",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_inspect_application",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_inspect_opportunity",
+        "readOnly": false
+      },
+      {
         "name": "job_search_list_source_health",
         "readOnly": true
       },
       {
+        "name": "job_search_next_triage_candidate",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_open_application",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_read_resume",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_record_decision",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_set_source_active",
+        "readOnly": false
+      },
+      {
         "name": "job_search_source_crawl_status",
         "readOnly": true
+      },
+      {
+        "name": "job_search_sweep_opportunities",
+        "readOnly": false
+      },
+      {
+        "name": "job_search_verify_posting",
+        "readOnly": false
+      },
+      {
+        "name": "opportunity_assess",
+        "readOnly": false
       },
       {
         "name": "opportunity_create",
@@ -220,8 +724,20 @@
         "readOnly": true
       },
       {
+        "name": "opportunity_review",
+        "readOnly": false
+      },
+      {
         "name": "opportunity_update",
         "readOnly": false
+      },
+      {
+        "name": "opportunityassessment_get",
+        "readOnly": true
+      },
+      {
+        "name": "opportunityassessment_list",
+        "readOnly": true
       },
       {
         "name": "opportunitycompany_create",
@@ -296,6 +812,222 @@
         "readOnly": false
       },
       {
+        "name": "preferencerule_create",
+        "readOnly": false
+      },
+      {
+        "name": "preferencerule_delete",
+        "readOnly": false
+      },
+      {
+        "name": "preferencerule_get",
+        "readOnly": true
+      },
+      {
+        "name": "preferencerule_list",
+        "readOnly": true
+      },
+      {
+        "name": "preferencerule_update",
+        "readOnly": false
+      },
+      {
+        "name": "project_create",
+        "readOnly": false
+      },
+      {
+        "name": "project_delete",
+        "readOnly": false
+      },
+      {
+        "name": "project_get",
+        "readOnly": true
+      },
+      {
+        "name": "project_list",
+        "readOnly": true
+      },
+      {
+        "name": "project_update",
+        "readOnly": false
+      },
+      {
+        "name": "projectattachment_create",
+        "readOnly": false
+      },
+      {
+        "name": "projectattachment_delete",
+        "readOnly": false
+      },
+      {
+        "name": "projectattachment_get",
+        "readOnly": true
+      },
+      {
+        "name": "projectattachment_list",
+        "readOnly": true
+      },
+      {
+        "name": "projectattachment_update",
+        "readOnly": false
+      },
+      {
+        "name": "projecttag_create",
+        "readOnly": false
+      },
+      {
+        "name": "projecttag_delete",
+        "readOnly": false
+      },
+      {
+        "name": "projecttag_get",
+        "readOnly": true
+      },
+      {
+        "name": "projecttag_list",
+        "readOnly": true
+      },
+      {
+        "name": "projecttag_update",
+        "readOnly": false
+      },
+      {
+        "name": "recommendation_task_process",
+        "readOnly": false
+      },
+      {
+        "name": "recommendation_tasks_sync",
+        "readOnly": false
+      },
+      {
+        "name": "resumeasset_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumeasset_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumeasset_update",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_create",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_delete",
+        "readOnly": false
+      },
+      {
+        "name": "resumetailoringconfig_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumetailoringconfig_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumetailoringconfig_update",
+        "readOnly": false
+      },
+      {
+        "name": "resumevariant_create",
+        "readOnly": false
+      },
+      {
+        "name": "resumevariant_get",
+        "readOnly": true
+      },
+      {
+        "name": "resumevariant_list",
+        "readOnly": true
+      },
+      {
+        "name": "resumevariant_update",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategory_create",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategory_delete",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategory_get",
+        "readOnly": true
+      },
+      {
+        "name": "skillcategory_list",
+        "readOnly": true
+      },
+      {
+        "name": "skillcategory_update",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategorymember_create",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategorymember_delete",
+        "readOnly": false
+      },
+      {
+        "name": "skillcategorymember_get",
+        "readOnly": true
+      },
+      {
+        "name": "skillcategorymember_list",
+        "readOnly": true
+      },
+      {
+        "name": "skillcategorymember_update",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroup_create",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroup_delete",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroup_get",
+        "readOnly": true
+      },
+      {
+        "name": "skillgroup_list",
+        "readOnly": true
+      },
+      {
+        "name": "skillgroup_update",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroupmember_create",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroupmember_delete",
+        "readOnly": false
+      },
+      {
+        "name": "skillgroupmember_get",
+        "readOnly": true
+      },
+      {
+        "name": "skillgroupmember_list",
+        "readOnly": true
+      },
+      {
+        "name": "skillgroupmember_update",
+        "readOnly": false
+      },
+      {
         "name": "source_create",
         "readOnly": false
       },
@@ -342,9 +1074,136 @@
       {
         "name": "sourcetag_update",
         "readOnly": false
+      },
+      {
+        "name": "tag_lookup",
+        "readOnly": true
+      },
+      {
+        "name": "task_create",
+        "readOnly": false
+      },
+      {
+        "name": "task_delete",
+        "readOnly": false
+      },
+      {
+        "name": "task_get",
+        "readOnly": true
+      },
+      {
+        "name": "task_list",
+        "readOnly": true
+      },
+      {
+        "name": "task_update",
+        "readOnly": false
       }
     ],
     "rest": [
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Achievement",
+        "collection": "achievements",
+        "tableName": "achievements"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "AchievementAttachment",
+        "collection": "achievementattachments",
+        "tableName": "achievement_attachments"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "AchievementTag",
+        "collection": "achievementtags",
+        "tableName": "achievement_tags"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "AgentRun",
+        "collection": "agentruns",
+        "tableName": "agent_runs"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Application",
+        "collection": "applications",
+        "tableName": "applications"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ApplicationMaterialComment",
+        "collection": "applicationmaterialcomments",
+        "tableName": "application_material_comments"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Attachment",
+        "collection": "attachments",
+        "tableName": "attachments"
+      },
+      {
+        "actions": [
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "CandidateProfile",
+        "collection": "candidateprofiles",
+        "tableName": "candidate_profiles"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "CandidateProfileLink",
+        "collection": "candidateprofilelinks",
+        "tableName": "candidate_profile_links"
+      },
       {
         "actions": [
           "create",
@@ -401,9 +1260,171 @@
           "list",
           "update"
         ],
+        "className": "Decision",
+        "collection": "decisions",
+        "tableName": "decisions"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "DecisionTag",
+        "collection": "decisiontags",
+        "tableName": "decision_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Duty",
+        "collection": "duties",
+        "tableName": "duties"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "DutyTag",
+        "collection": "dutytags",
+        "tableName": "duty_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Education",
+        "collection": "educations",
+        "tableName": "education"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "EducationTag",
+        "collection": "educationtags",
+        "tableName": "education_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "EmploymentRole",
+        "collection": "employmentroles",
+        "tableName": "employment_roles"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "EmploymentRoleTag",
+        "collection": "employmentroletags",
+        "tableName": "employment_role_tags"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "EvaluationScore",
+        "collection": "evaluationscores",
+        "tableName": "evaluation_scores"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Experience",
+        "collection": "experiences",
+        "tableName": "experiences"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ExperienceCompany",
+        "collection": "experiencecompanies",
+        "tableName": "experience_companies"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ExperienceRole",
+        "collection": "experienceroles",
+        "tableName": "experience_roles"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ExperienceTag",
+        "collection": "experiencetags",
+        "tableName": "experience_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
         "className": "Fact",
         "collection": "facts",
         "tableName": "facts"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "FactCandidate",
+        "collection": "factcandidates",
+        "tableName": "fact_candidates"
       },
       {
         "actions": [
@@ -426,6 +1447,15 @@
         "className": "FactEvidence",
         "collection": "factevidences",
         "tableName": "fact_evidences"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "FactIntake",
+        "collection": "factintakes",
+        "tableName": "fact_intakes"
       },
       {
         "actions": [
@@ -471,6 +1501,15 @@
         "className": "Opportunity",
         "collection": "opportunities",
         "tableName": "opportunities"
+      },
+      {
+        "actions": [
+          "get",
+          "list"
+        ],
+        "className": "OpportunityAssessment",
+        "collection": "opportunityassessments",
+        "tableName": "opportunity_assessments"
       },
       {
         "actions": [
@@ -537,6 +1576,137 @@
           "list",
           "update"
         ],
+        "className": "PreferenceRule",
+        "collection": "preferencerules",
+        "tableName": "preference_rules"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Project",
+        "collection": "projects",
+        "tableName": "projects"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ProjectAttachment",
+        "collection": "projectattachments",
+        "tableName": "project_attachments"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ProjectTag",
+        "collection": "projecttags",
+        "tableName": "project_tags"
+      },
+      {
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeAsset",
+        "collection": "resumeassets",
+        "tableName": "resume_assets"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeTailoringConfig",
+        "collection": "resumetailoringconfigs",
+        "tableName": "resume_tailoring_configs"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "ResumeVariant",
+        "collection": "resumevariants",
+        "tableName": "resume_variants"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "SkillCategory",
+        "collection": "skillcategories",
+        "tableName": "skill_categories"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "SkillCategoryMember",
+        "collection": "skillcategorymembers",
+        "tableName": "skill_category_members"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "SkillGroup",
+        "collection": "skillgroups",
+        "tableName": "skill_groups"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "SkillGroupMember",
+        "collection": "skillgroupmembers",
+        "tableName": "skill_group_members"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
         "className": "Source",
         "collection": "sources",
         "tableName": "sources"
@@ -570,6 +1740,18 @@
         "className": "SourceTag",
         "collection": "sourcetags",
         "tableName": "source_tags"
+      },
+      {
+        "actions": [
+          "create",
+          "delete",
+          "get",
+          "list",
+          "update"
+        ],
+        "className": "Task",
+        "collection": "tasks",
+        "tableName": "tasks"
       }
     ],
     "webmcp": [
@@ -701,5 +1883,5 @@
       }
     ]
   },
-  "inventorySha256": "f5109f9dae3176b2e4c00dc836b95d7dad1fd3968608a2461a128917e4e60acd"
+  "inventorySha256": "f7f5f252fdb4f3ca59215f9646389b777cfadfc6f26ed1a854c7745e3db75486"
 }

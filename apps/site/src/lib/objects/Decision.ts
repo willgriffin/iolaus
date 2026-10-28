@@ -5,9 +5,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
   tableName: 'decisions',
   // A human decision contains a candidate's private preferences and should
   // only be reached through a verified workspace workflow.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  mcp: { include: ['list', 'get', 'create', 'update', 'delete'] },
 })
 @TenantScoped()
 export class Decision extends SmrtObject {

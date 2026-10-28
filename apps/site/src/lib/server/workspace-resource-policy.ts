@@ -127,14 +127,26 @@ export function assertWorkspaceResourceWritable(className: string): void {
   }
 }
 
-/** Raw catalog records contain legacy operator fields; hosted users use the dedicated projections. */
-export function assertGenericResourceAccess(): void {
+/**
+ * Raw catalog records contain legacy operator fields; hosted users use the
+ * dedicated projections. A candidate-owned class is the exception: the generic
+ * surfaces scope it to the verified workspace subject (`scopedResourceCrud`),
+ * so a hosted owner may reach their own résumé records without operator
+ * authority, exactly as the admin pages allow.
+ */
+export function assertGenericResourceAccess(className?: string): void {
+  if (className && privateWorkspaceClasses.has(className)) return;
   if (isSharedHosted() && !isCurrentWorkspaceOperator()) {
     error(
       403,
       'Use the workspace workflow for candidate data and opportunity results.',
     );
   }
+}
+
+/** True for a class whose generic reads and writes must be owner-scoped. */
+export function isPrivateWorkspaceClass(className: string): boolean {
+  return privateWorkspaceClasses.has(className);
 }
 
 export function requireCandidateWorkspaceSubject() {

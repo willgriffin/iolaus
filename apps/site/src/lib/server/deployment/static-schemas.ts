@@ -1,17 +1,25 @@
-import { loadExternalManifestSync } from '@happyvertical/smrt-core';
+import { createRequire } from 'node:module';
+import { loadManifestFromPathSync } from '@happyvertical/smrt-core';
 import { readDeploymentSchemas } from '../../../../../../scripts/smrt-deployment-schema.mjs';
 import { getIolausSourceRoot } from '../runtime-paths.js';
 
-/** Optional transitive runtime modules are not included in the app scanner's
- * model import graph. Their released public manifests remain static authority. */
+const requireSite = createRequire(import.meta.url);
+
+/** These declared schema dependencies may be absent from the model import
+ * graph. Resolve their public manifests from this module, never process.cwd(). */
 export async function readApplicationDeploymentSchemas() {
   const schemas = await readDeploymentSchemas(getIolausSourceRoot());
   for (const suffix of ['prompts', 'secrets', 'playbooks', 'reports']) {
-    const manifest = loadExternalManifestSync(`@happyvertical/smrt-${suffix}`, {
-      warn: false,
-    });
-    if (!manifest)
+    const packageName = `@happyvertical/smrt-${suffix}`;
+    let manifestPath: string;
+    try {
+      manifestPath = requireSite.resolve(`${packageName}/manifest.json`);
+    } catch {
       throw new Error(`Missing released static schema manifest: ${suffix}.`);
+    }
+    const manifest = loadManifestFromPathSync(manifestPath);
+    if (!manifest || manifest.packageName !== packageName)
+      throw new Error(`Invalid released static schema manifest: ${suffix}.`);
     for (const object of Object.values(manifest.objects)) {
       if (object.schema) schemas.push(object.schema);
     }

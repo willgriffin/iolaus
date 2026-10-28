@@ -3,12 +3,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
 
 @smrt({
   tableName: 'candidate_profile_links',
-  // Profile links can identify a candidate's personal accounts. The
-  // authenticated onboarding and resume services access them directly; broad
-  // generated API, CLI, MCP, and WebMCP surfaces do not expose them.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned résumé record: the generic REST, CLI and MCP surfaces
+  // scope every read and write to the verified workspace subject
+  // (scoped-resource-crud.ts); see docs/surface-parity.md.
+  api: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  cli: { include: ['list', 'get', 'create', 'update', 'delete'] },
+  mcp: { include: ['list', 'get', 'create', 'update', 'delete'] },
 })
 @TenantScoped()
 export class CandidateProfileLink extends SmrtObject {

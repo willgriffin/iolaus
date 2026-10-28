@@ -77,6 +77,34 @@ The first reserved handle is immutable. At most 20 previews can be prepared in
 48 hours per identity. PDF rendering uses two concurrent render slots and a
 bounded waiting queue; PDF size is limited to 10 MiB.
 
+## Agent and terminal access
+
+The same lifecycle is available without the admin forms through four
+owner-principal tools — `public_profile_status`, `public_profile_prepare`,
+`public_profile_publish`, `public_profile_unpublish` — listed on the
+authenticated MCP catalogs only when the feature is enabled. From a terminal
+signed in with `iolaus auth login`:
+
+```bash
+iolaus mcp call public_profile_status '{}'
+```
+
+```bash
+iolaus mcp call public_profile_prepare '{"profileId":"<owned profile id>","handle":"<handle>","visibility":{"contacts":{"email":false,"phone":false,"location":true,"links":true},"sections":{"experience":true,"education":true,"other":true,"skills":true}}}'
+```
+
+```bash
+iolaus mcp call public_profile_publish '{"revisionId":"<revisionId from prepare>","expectedRevision":<baseRevision from prepare>}'
+```
+
+They call the same service functions as the form actions: preparation still
+captures an immutable snapshot and renders the PDF before anything is stored,
+the 20-previews-per-48-hours limit and the 10 MiB artifact bound apply, publish
+re-reads and hashes the exact reviewed PDF, and a stale `expectedRevision` is
+refused. The prepared preview can be reviewed at the returned admin
+`previewUrl` before publishing. See `docs/employment-workflows.md` for the
+argument shapes and `docs/surface-parity.md` for the parity record.
+
 ## External websites
 
 The [versioned public-profile API](public-profile-api/README.md) exposes only

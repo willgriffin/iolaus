@@ -50,28 +50,43 @@ describe('deployed parity inventory', () => {
     );
     const webMcpNames = inventory.surfaces.webmcp.map((tool) => tool.name);
 
-    expect(restClasses).not.toEqual(
-      expect.arrayContaining([
-        'Achievement',
-        'AgentRun',
-        'Application',
-        'ApplicationMaterialComment',
-        'CandidateAnswer',
-        'CandidateProfile',
-        'CandidateProfileLink',
-        'Decision',
-        'Education',
-        'EmploymentRole',
-        'EvaluationScore',
-        'Experience',
-        'PreferenceRule',
-        'Project',
-        'ResumeAsset',
-        'ResumeProfile',
-        'ResumeVariant',
-        'Task',
-      ]),
-    );
+    for (const className of [
+      'CliAuthRequest',
+      'OpportunityIntelligenceRequest',
+      'PublicProfileRevision',
+      'ResumePosition',
+      'ResumeProfile',
+    ]) {
+      expect(restClasses, className).not.toContain(className);
+    }
+    // The owner-scoped career model (#259) and private workspace (#262) are
+    // on REST; the profile itself is never created or deleted through an
+    // agent and system-authored records take no generic write.
+    for (const className of [
+      'Achievement',
+      'Application',
+      'CandidateProfileLink',
+      'Decision',
+      'Education',
+      'EmploymentRole',
+      'Experience',
+      'PreferenceRule',
+      'Project',
+      'ResumeVariant',
+      'Task',
+    ]) {
+      expect(restClasses, className).toContain(className);
+    }
+    expect(
+      inventory.surfaces.rest.find(
+        (resource) => resource.className === 'AgentRun',
+      )?.actions,
+    ).toEqual(['get', 'list']);
+    expect(
+      inventory.surfaces.rest.find(
+        (resource) => resource.className === 'CandidateProfile',
+      )?.actions,
+    ).toEqual(['get', 'list', 'update']);
     expect(webMcpNames).not.toEqual(
       expect.arrayContaining([
         expect.stringMatching(/(?:^|[_-])(?:approve|submit)(?:$|[_-])/u),

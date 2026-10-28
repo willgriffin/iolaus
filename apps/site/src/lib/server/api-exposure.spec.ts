@@ -10,27 +10,14 @@ import {
   resolveMcpToolClass,
 } from './api-exposure';
 
+/**
+ * Candidate-owned classes that stay off the generic surfaces: audit and
+ * provider ledgers, the legacy résumé fallback, and the records that are
+ * still behind their scoped workflows (tranches b/c of #260).
+ */
 const privateEvidenceClasses = [
-  'Achievement',
-  'AchievementAttachment',
-  'AchievementTag',
-  'AgentRun',
   'OpportunityIntelligenceRequest',
   'OpportunityIntelligenceResult',
-  'Attachment',
-  'Duty',
-  'DutyTag',
-  'Education',
-  'EducationTag',
-  'EmploymentRole',
-  'EmploymentRoleTag',
-  'Experience',
-  'ExperienceCompany',
-  'ExperienceRole',
-  'ExperienceTag',
-  'Project',
-  'ProjectAttachment',
-  'ProjectTag',
   'ResumeAchievement',
   'ResumeEducation',
   'ResumeLink',
@@ -39,12 +26,6 @@ const privateEvidenceClasses = [
   'ResumeSkill',
   'ResumeSkillCategory',
   'ResumeSkillGroup',
-  'ResumeTailoringConfig',
-  'SkillCategory',
-  'SkillCategoryMember',
-  'SkillGroup',
-  'SkillGroupMember',
-  'Task',
 ];
 
 async function discoverCliResources(): Promise<
@@ -109,6 +90,78 @@ describe('decorator-driven surface exposure', () => {
     }
   });
 
+  it('exposes the owner-scoped career model on REST, CLI and MCP (#259)', async () => {
+    const rest = new Map(
+      listApiExposedResources().map((r) => [r.className, r]),
+    );
+    const mcp = new Map(listMcpExposedResources().map((r) => [r.className, r]));
+    const cli = new Map(
+      (await discoverCliResources()).map((resource) => [
+        resource.className,
+        resource,
+      ]),
+    );
+    const full = ['list', 'get', 'create', 'update', 'delete'];
+    for (const className of [
+      'Achievement',
+      'AchievementAttachment',
+      'AchievementTag',
+      'Attachment',
+      'CandidateProfileLink',
+      'Duty',
+      'DutyTag',
+      'Education',
+      'EducationTag',
+      'EmploymentRole',
+      'EmploymentRoleTag',
+      'Experience',
+      'ExperienceCompany',
+      'ExperienceRole',
+      'ExperienceTag',
+      'Project',
+      'ProjectAttachment',
+      'ProjectTag',
+      'SkillCategory',
+      'SkillCategoryMember',
+      'SkillGroup',
+      'SkillGroupMember',
+    ]) {
+      expect([...(rest.get(className)?.apiActions ?? [])], className).toEqual(
+        full,
+      );
+      expect([...(mcp.get(className)?.mcpActions ?? [])], className).toEqual(
+        full,
+      );
+      expect(
+        cli
+          .get(className)
+          ?.commands.map((c) => c.commandName)
+          .sort(),
+        className,
+      ).toEqual([...full].sort());
+    }
+    // The owner's profile is never created or deleted through an agent.
+    const profileActions = ['list', 'get', 'update'];
+    expect([...(rest.get('CandidateProfile')?.apiActions ?? [])]).toEqual(
+      profileActions,
+    );
+    expect([...(mcp.get('CandidateProfile')?.mcpActions ?? [])]).toEqual(
+      profileActions,
+    );
+    expect(
+      cli
+        .get('CandidateProfile')
+        ?.commands.map((c) => c.commandName)
+        .sort(),
+    ).toEqual([...profileActions].sort());
+    expect(resolveMcpToolClass('achievement_delete')?.className).toBe(
+      'Achievement',
+    );
+    expect(resolveMcpToolClass('candidateprofile_update')?.className).toBe(
+      'CandidateProfile',
+    );
+  });
+
   it('keeps candidate evidence and audit records off generic REST and MCP surfaces', () => {
     const rest = new Set(listApiExposedResources().map((r) => r.className));
     const mcp = new Set(listMcpExposedResources().map((r) => r.className));
@@ -116,8 +169,8 @@ describe('decorator-driven surface exposure', () => {
       expect(rest.has(className), className).toBe(false);
       expect(mcp.has(className), className).toBe(false);
     }
-    expect(resolveApiResource('experiences')).toBeUndefined();
-    expect(resolveMcpToolClass('achievement_list')).toBeUndefined();
+    expect(resolveApiResource('resumeprofiles')).toBeUndefined();
+    expect(resolveMcpToolClass('resumeposition_list')).toBeUndefined();
   });
 
   it('marks mixed provider-ledger tables sensitive for native feed suppression', () => {
@@ -133,8 +186,25 @@ describe('decorator-driven surface exposure', () => {
   });
 
   it('resolves per-action includes from the decorator', () => {
-    expect(resolveApiResource('agentruns')).toBeUndefined();
-    expect(resolveApiResource('applications')).toBeUndefined();
+    // Tranche (b): system-authored records are read-only, applications are
+    // writable but never deletable through MCP.
+    expect([...(resolveApiResource('agentruns')?.actions ?? [])]).toEqual([
+      'list',
+      'get',
+    ]);
+    expect([...(resolveApiResource('applications')?.actions ?? [])]).toEqual([
+      'list',
+      'get',
+      'create',
+      'update',
+      'delete',
+    ]);
+    expect([
+      ...(resolveMcpToolClass('application_delete')?.actions ?? []),
+    ]).toEqual(['list', 'get', 'create', 'update']);
+    // The reusable answer library stays a privacy surface with no generic
+    // CRUD anywhere (candidate-answers.spec.ts).
+    expect(resolveApiResource('candidateanswers')).toBeUndefined();
     expect([
       ...(resolveApiResource('opportunity_intelligence_controls')?.actions ??
         []),
@@ -147,9 +217,6 @@ describe('decorator-driven surface exposure', () => {
     );
     expect(hidden.map((r) => r.className)).toEqual(
       expect.arrayContaining([
-        'CandidateAnswer',
-        'CandidateProfile',
-        'CandidateProfileLink',
         'CliAuthRequest',
         // Data-surface action state. A preview token IS the authority it
         // confers and an idempotency record holds another principal's action
@@ -165,9 +232,11 @@ describe('decorator-driven surface exposure', () => {
         ...privateEvidenceClasses,
       ]),
     );
-    expect(resolveMcpToolClass('candidateanswer_list')).toBeUndefined();
-    expect(resolveMcpToolClass('candidateprofile_get')).toBeUndefined();
-    expect(resolveMcpToolClass('candidateprofilelink_get')).toBeUndefined();
+    expect(resolveMcpToolClass('resumeposition_list')).toBeUndefined();
+    expect(resolveMcpToolClass('candidateprofile_delete')).toBeDefined();
+    expect(
+      resolveMcpToolClass('candidateprofile_delete')?.actions.has('delete'),
+    ).toBe(false);
     expect(resolveMcpToolClass('cliauthrequest_get')).toBeUndefined();
     expect(resolveMcpToolClass('datasurfacepreviewtoken_list')).toBeUndefined();
     expect(

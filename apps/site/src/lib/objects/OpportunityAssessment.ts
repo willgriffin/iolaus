@@ -15,9 +15,12 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
     'opportunity_id',
     'assessment_fingerprint',
   ],
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Candidate-owned record: the generic REST, CLI and MCP surfaces scope every
+  // read and write to the verified workspace subject (scoped-resource-crud.ts)
+  // and keep this class's guards; see docs/surface-parity.md.
+  api: { include: ['list', 'get'] },
+  cli: { include: ['list', 'get'] },
+  mcp: { include: ['list', 'get'] },
 })
 @TenantScoped()
 export class OpportunityAssessment extends SmrtObject {

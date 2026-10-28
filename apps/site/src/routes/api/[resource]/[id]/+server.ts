@@ -33,6 +33,13 @@ import {
   resumeVariantDeleteViolation,
   syncResumeVariantApplicationApprovals,
 } from '$lib/server/resume-variant-workflow';
+import {
+  findOwnedRecord,
+  getScopedRecord,
+  isScopedResourceClass,
+  runScopedWriteSideEffects,
+  scopeUpdatePayload,
+} from '$lib/server/scoped-resource-crud';
 import { getCollection } from '$lib/server/smrt';
 import {
   deleteSourceSchedule,
@@ -40,13 +47,16 @@ import {
 } from '$lib/server/source-schedules';
 import {
   assertGenericResourceAccess,
+  assertWorkspaceResourceWritable,
   requireCandidateWorkspaceSubject,
 } from '$lib/server/workspace-resource-policy';
 
 function requireResourceClass(resource: string): string {
-  assertGenericResourceAccess();
   const resolved = resolveApiResource(resource);
   if (!resolved) throw error(404, 'Resource not found');
+  // Candidate-owned classes are owner-scoped below; the catalog keeps the
+  // hosted operator gate.
+  assertGenericResourceAccess(resolved.className);
   return resolved.className;
 }
 
@@ -95,12 +105,25 @@ function requireParam(value: string | undefined, label: string): string {
   return value;
 }
 
-async function getResourceItem(resource: string, id: string) {
-  const collection = await getCollection(requireResourceClass(resource));
-  const item = await collection.get(id);
+type RouteRecord = Record<string, unknown> & {
+  delete: () => Promise<unknown>;
+  id?: unknown;
+  save: () => Promise<unknown>;
+};
+
+async function getResourceItem(
+  resource: string,
+  id: string,
+): Promise<RouteRecord> {
+  const className = requireResourceClass(resource);
+  // A candidate-owned class resolves only the verified owner's record; a
+  // foreign row is indistinguishable from a missing one.
+  const item = isScopedResourceClass(className)
+    ? await findOwnedRecord(className, id)
+    : await (await getCollection(className)).get(id);
   if (!item) throw error(404, 'Item not found');
 
-  return item;
+  return item as unknown as RouteRecord;
 }
 
 function serializeRecord(record: unknown): Record<string, unknown> {
@@ -297,9 +320,15 @@ function assertApplicationUpdatePayload(
 
 export const GET: RequestHandler = async ({ params }) => {
   const resource = requireParam(params.resource, 'Resource');
-  requireResourceClass(resource);
+  const className = requireResourceClass(resource);
   assertActionExposed(resource, 'get');
-  return json(await getResourceItem(resource, requireParam(params.id, 'Item')));
+  const id = requireParam(params.id, 'Item');
+  if (isScopedResourceClass(className)) {
+    const record = await getScopedRecord(className, id);
+    if (!record) error(404, 'Item not found');
+    return json(record);
+  }
+  return json(await getResourceItem(resource, id));
 };
 
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
@@ -307,15 +336,24 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
   const className = requireResourceClass(resource);
   assertResourceIsWritable(className);
   assertActionExposed(resource, 'update');
-  const payload = await readJsonObjectPayload(request);
+  const rawPayload = await readJsonObjectPayload(request);
   const id = requireParam(params.id, 'Item');
   const item = await getResourceItem(resource, id);
+  normalizeAgentPayload(className, rawPayload);
+  // Candidate-owned classes: declared fields only, ownership unchangeable;
+  // the class-bespoke guards and side effects below still run.
+  const payload = isScopedResourceClass(className)
+    ? scopeUpdatePayload(
+        className,
+        item as unknown as Record<string, unknown>,
+        rawPayload,
+      )
+    : rawPayload;
   assertApplicationOwnedResumeAssetIsImmutable(
     className,
     serializeRecord(item),
     payload,
   );
-  normalizeAgentPayload(className, payload);
   if (
     (className === 'Application' || className === 'Source') &&
     Object.hasOwn(payload, 'accountStatus')
@@ -400,6 +438,9 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
     );
     await syncSourceAccountTasks(item as unknown as Record<string, unknown>);
   }
+  if (isScopedResourceClass(className)) {
+    await runScopedWriteSideEffects(className);
+  }
 
   return json(item);
 };
@@ -410,6 +451,9 @@ export const DELETE: RequestHandler = async ({ params }) => {
   assertResourceIsWritable(className);
   assertActionExposed(resource, 'delete');
   const id = requireParam(params.id, 'Item');
+  if (isScopedResourceClass(className)) {
+    assertWorkspaceResourceWritable(className);
+  }
   const item = await getResourceItem(resource, id);
   assertApplicationOwnedResumeAssetIsImmutable(
     className,
@@ -427,6 +471,9 @@ export const DELETE: RequestHandler = async ({ params }) => {
   await item.delete();
   if (className === 'Source') {
     await deleteSourceSchedule(id);
+  }
+  if (isScopedResourceClass(className)) {
+    await runScopedWriteSideEffects(className);
   }
 
   return json({ success: true });

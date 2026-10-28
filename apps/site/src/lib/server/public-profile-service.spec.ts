@@ -25,7 +25,11 @@ vi.mock('@happyvertical/smrt-core', async (original) => ({
   ...(await original<typeof import('@happyvertical/smrt-core')>()),
   resolveDatabase: vi.fn(async () => ({})),
 }));
-vi.mock('./app-config.js', () => ({ isSharedHosted: () => true }));
+vi.mock('./app-config.js', () => ({
+  isSharedHosted: () => true,
+  publicProfilesEnabled: () =>
+    process.env.IOLAUS_PUBLIC_PROFILES_ENABLED === 'true',
+}));
 vi.mock('./db.js', () => ({ getDbConfig: () => ({}) }));
 vi.mock('./owner-principal.js', () => ({ runAsOwner: mocks.owner }));
 vi.mock('./workspace-workflow-capabilities.js', () => ({

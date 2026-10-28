@@ -1,5 +1,6 @@
 import type { MCPResponse } from '@happyvertical/smrt-core/generators/mcp';
 import type { User } from '@happyvertical/smrt-users';
+import { ZodError } from 'zod';
 import {
   AgentFieldContractError,
   normalizeAgentWritablePayload,
@@ -30,27 +31,72 @@ import {
   validateSubmittedApplicationPayload,
 } from './application-workflow.js';
 import {
+  executeJobSearchTool,
+  validateJobSearchToolArguments,
+} from './job-search-tool-dispatch.js';
+import type { JobSearchToolName } from './job-search-tool-operations.js';
+import {
   createGenerator,
+  isJobSearchBridgeMcpTool,
   isPublicMcpTool,
+  isPublicProfileMcpTool,
   isReadOnlyMcpTool,
   isSourceReadMcpTool,
+  isTagLookupMcpTool,
+  isWorkflowToolName,
   listMcpTools,
   mcpToolOperations,
 } from './mcp-tools.js';
-import { isOwnerAuthorityDenial, runAsOwner } from './owner-principal.js';
+import {
+  isOwnerAuthorityDenial,
+  type OwnerPrincipalLocals,
+  runAsOwner,
+} from './owner-principal.js';
+import {
+  getPublicProfileManager,
+  type PublicProfileActorSource,
+  preparePublicProfile,
+  publishPublicProfile,
+  unpublishPublicProfile,
+} from './public-profile-service.js';
+import { PublicProfileStoreError } from './public-profile-store.js';
+import {
+  PUBLIC_PROFILE_PREPARE_TOOL,
+  PUBLIC_PROFILE_PUBLISH_TOOL,
+  PUBLIC_PROFILE_STATUS_TOOL,
+  PUBLIC_PROFILE_UNPUBLISH_TOOL,
+} from './public-profile-tools.js';
 import {
   releaseResumeVariantApplicationWrite,
   reserveResumeVariantApplicationWrite,
   resumeVariantWriteViolation,
   syncResumeVariantApplicationApprovals,
 } from './resume-variant-workflow.js';
+import {
+  createScopedRecord,
+  deleteScopedRecord,
+  findOwnedRecord,
+  getScopedRecord,
+  isScopedResourceClass,
+  listScopedRecords,
+  runScopedWriteSideEffects,
+  updateScopedRecord,
+} from './scoped-resource-crud.js';
 import { getCollection } from './smrt.js';
 import { syncSourceSchedule } from './source-schedules.js';
 import {
   listRootSourceHealth,
   listSourceCrawlStatus,
 } from './source-webmcp.js';
+import { lookupTags } from './tag-lookup-tool.js';
+import {
+  executeWorkflowTool,
+  validateWorkflowToolArguments,
+} from './workflow-tools.js';
 import { requireCandidateWorkspaceSubject } from './workspace-resource-policy.js';
+// Registers the curated `workflow.*` permission definitions the public-profile
+// lifecycle tools assert; registration is process-scoped and idempotent.
+import './workspace-workflow-capabilities.js';
 
 export {
   configuredPublicMcpToolPatterns,
@@ -103,6 +149,141 @@ async function callSourceReadMcpTool(
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+type Saveable = { save?: () => Promise<unknown> };
+
+function jsonResponse(structuredContent: Record<string, unknown>): MCPResponse {
+  return {
+    content: [{ text: JSON.stringify(structuredContent), type: 'text' }],
+    structuredContent,
+  };
+}
+
+/**
+ * Translate a service failure (SvelteKit `error()`, zod input rejection, or a
+ * publication store conflict) into the bridge's error contract, exactly as the
+ * form action maps them for the browser.
+ */
+function publicProfileMcpError(cause: unknown): never {
+  if (cause instanceof ZodError) {
+    throw new McpAccessError(
+      400,
+      'Check the public profile arguments and try again.',
+    );
+  }
+  if (cause instanceof PublicProfileStoreError) {
+    const status =
+      cause.code === 'conflict' || cause.code === 'handle_taken'
+        ? 409
+        : cause.code === 'limit'
+          ? 429
+          : cause.code === 'validation'
+            ? 400
+            : 404;
+    throw new McpAccessError(status, cause.message);
+  }
+  if (isOwnerAuthorityDenial(cause)) throw cause;
+  return sourceMcpError(cause);
+}
+
+/**
+ * Run one public-profile lifecycle tool against the same service functions
+ * the `/admin/career/public-profile` form actions call. Shared by the legacy
+ * bridge (hook-verified locals) and the canonical MCP server (explicit
+ * re-verified subject), so neither surface can bypass the preview step, the
+ * preparation limit or the artifact checks.
+ */
+export async function callPublicProfileMcpTool(
+  name: string,
+  args: Record<string, unknown>,
+  actor: PublicProfileActorSource,
+): Promise<MCPResponse> {
+  try {
+    switch (name) {
+      case PUBLIC_PROFILE_PREPARE_TOOL: {
+        const prepared = await preparePublicProfile(actor, args);
+        return jsonResponse({
+          baseRevision: prepared.baseRevision,
+          handle: prepared.handle,
+          pdfBytes: prepared.pdfBytes,
+          previewUrl: `/admin/career/public-profile/preview/${encodeURIComponent(prepared.id)}`,
+          revisionId: prepared.id,
+          snapshot: prepared.snapshot,
+        });
+      }
+      case PUBLIC_PROFILE_PUBLISH_TOOL:
+        return jsonResponse({
+          published: true,
+          ...(await publishPublicProfile(actor, args)),
+        });
+      case PUBLIC_PROFILE_UNPUBLISH_TOOL:
+        return jsonResponse({
+          unpublished: true,
+          ...(await unpublishPublicProfile(actor, args)),
+        });
+      case PUBLIC_PROFILE_STATUS_TOOL:
+        return jsonResponse(await getPublicProfileManager(actor));
+      default:
+        throw new McpAccessError(404, `Unknown MCP tool: ${name}`);
+    }
+  } catch (cause) {
+    return publicProfileMcpError(cause);
+  }
+}
+
+/**
+ * Execute a generated `<class>_<action>` tool for a candidate-owned class
+ * through the owner-scoped CRUD shared with `/api/[resource]`, never through
+ * `MCPGenerator`, whose list honours a caller-supplied `where`.
+ */
+async function executeScopedMcpTool(
+  className: string,
+  action: string,
+  args: Record<string, unknown>,
+): Promise<MCPResponse> {
+  const id = hasNonEmptyString(args.id) ? args.id.trim() : '';
+  switch (action) {
+    case 'list': {
+      const page = await listScopedRecords(className, {
+        limit: args.limit,
+        offset: args.offset,
+        orderBy: args.orderBy,
+        where: args.where,
+      });
+      return jsonResponse({
+        data: page.items,
+        meta: {
+          count: page.items.length,
+          limit: page.limit,
+          offset: page.offset,
+          total: page.total,
+        },
+      });
+    }
+    case 'get': {
+      if (!id) throw new McpAccessError(400, 'id is required.');
+      const record = await getScopedRecord(className, id);
+      if (!record) throw new McpAccessError(404, 'Object not found');
+      return jsonResponse(record);
+    }
+    case 'create':
+      return jsonResponse(await createScopedRecord(className, args));
+    case 'update': {
+      if (!id) throw new McpAccessError(400, 'ID is required for update');
+      const { id: _ignored, ...payload } = args;
+      return jsonResponse(await updateScopedRecord(className, id, payload));
+    }
+    case 'delete':
+      if (!id) throw new McpAccessError(400, 'ID is required for delete');
+      await deleteScopedRecord(className, id);
+      return jsonResponse({
+        message: 'Object deleted successfully',
+        success: true,
+      });
+    default:
+      throw new McpAccessError(404, `Unknown MCP action: ${action}`);
+  }
 }
 
 function dateValue(value: unknown): Date | null {
@@ -162,6 +343,13 @@ function normalizeMcpAgentPayload(
 
 export async function callMcpTool(options: {
   arguments?: unknown;
+  /**
+   * The hook-verified request locals. When present the principal runs under
+   * the verified workspace subject, which the scoped generated tools and the
+   * public-profile lifecycle tools require; otherwise it binds from the
+   * user/tenant pair alone (sufficient for catalog tools).
+   */
+  locals?: OwnerPrincipalLocals;
   name: string;
   permissions?: App.Locals['permissions'];
   tenantId?: App.Locals['tenantId'];
@@ -186,16 +374,19 @@ export async function callMcpTool(options: {
   }
 
   const user = options.user;
-  try {
-    return await runAsOwner(
-      {
+  const locals: OwnerPrincipalLocals = options.locals?.workspaceSubject
+    ? options.locals
+    : {
         permissions: options.permissions,
         tenantId: options.tenantId,
         user,
-      },
+      };
+  try {
+    return await runAsOwner(
+      locals,
       async (run) => {
         run.assertToolAllowed(options.name);
-        const operations = mcpToolOperations(options.name);
+        const operations = mcpToolOperations(options.name, args);
         if (!operations) {
           throw new McpAccessError(
             403,
@@ -205,7 +396,7 @@ export async function callMcpTool(options: {
         for (const operation of operations) {
           await run.assertOperation(operation.collection, operation.action);
         }
-        return await executeMcpTool(options.name, args, user);
+        return await executeMcpTool(options.name, args, user, locals);
       },
       {
         action: 'mcp.tools/call',
@@ -224,6 +415,7 @@ async function executeMcpTool(
   name: string,
   args: Record<string, unknown>,
   user: Pick<User, 'id'> | null,
+  locals?: OwnerPrincipalLocals,
 ): Promise<MCPResponse> {
   if (isSourceReadMcpTool(name)) {
     if (!user) {
@@ -234,23 +426,102 @@ async function executeMcpTool(
     }
     return await callSourceReadMcpTool(name, args);
   }
+  if (isJobSearchBridgeMcpTool(name) || isWorkflowToolName(name)) {
+    if (!user || !locals?.workspaceSubject) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    const validation = isWorkflowToolName(name)
+      ? validateWorkflowToolArguments(name, args)
+      : validateJobSearchToolArguments(name as JobSearchToolName, args, 'body');
+    if (!validation.ok) {
+      throw new McpAccessError(400, validation.error);
+    }
+    try {
+      const result = isWorkflowToolName(name)
+        ? await executeWorkflowTool(name, args, user)
+        : await executeJobSearchTool(name as JobSearchToolName, args, {
+            locals,
+            user,
+          });
+      return jsonResponse(
+        (result && typeof result === 'object' && !Array.isArray(result)
+          ? result
+          : { result }) as Record<string, unknown>,
+      );
+    } catch (cause) {
+      if (isOwnerAuthorityDenial(cause)) throw cause;
+      return sourceMcpError(cause);
+    }
+  }
+  if (isTagLookupMcpTool(name)) {
+    if (!user) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    return jsonResponse(
+      (await lookupTags(args)) as unknown as Record<string, unknown>,
+    );
+  }
+  if (isPublicProfileMcpTool(name)) {
+    if (!user || !locals?.workspaceSubject) {
+      throw new McpAccessError(
+        401,
+        `Authentication is required for MCP tool: ${name}`,
+      );
+    }
+    return await callPublicProfileMcpTool(name, args, locals);
+  }
   const subject = requireCandidateWorkspaceSubject();
   const options = { name, user };
+  // An application update resolves the owned record exactly once, before any
+  // record-dependent guard: a foreign or missing id is a 404 and nothing
+  // about the row is disclosed, and the snapshot the guards validate is the
+  // same snapshot the concurrency commit fences.
+  let ownedApplication: (Record<string, unknown> & Saveable) | null = null;
+  if (options.name === 'application_update') {
+    const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
+    if (!applicationId) {
+      throw new McpAccessError(
+        400,
+        'Application update requires an application id.',
+      );
+    }
+    ownedApplication = await findOwnedRecord('Application', applicationId);
+    if (!ownedApplication) {
+      throw new McpAccessError(404, 'Application not found.');
+    }
+  }
   await assertMcpWorkflowPayload(
     options.name,
     args,
     options.user ?? null,
     subject,
+    ownedApplication
+      ? (JSON.parse(JSON.stringify(ownedApplication)) as Record<
+          string,
+          unknown
+        >)
+      : undefined,
   );
 
-  if (options.name === 'application_update') {
-    const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
-    const application = await (await getCollection('Application')).get(
-      applicationId,
-    );
-    if (!application) {
-      throw new McpAccessError(404, 'Application not found.');
-    }
+  // Candidate-owned classes never reach `MCPGenerator`: every read and write
+  // below goes through the owner-scoped path. Classes with a bespoke flow
+  // (application concurrency commit, résumé variant reservation) keep that
+  // flow around the scoped read or write.
+  const scoped = resolveMcpToolClass(options.name);
+  const scopedClassName =
+    scoped && isScopedResourceClass(scoped.className) ? scoped.className : null;
+  const scopedAction = scopedClassName
+    ? options.name.slice(mcpToolPrefix(scopedClassName).length)
+    : null;
+
+  if (options.name === 'application_update' && ownedApplication) {
+    const application = ownedApplication;
     if (
       !(await commitApplicationIfCurrent(
         application as unknown as Record<string, unknown>,
@@ -287,13 +558,26 @@ async function executeMcpTool(
 
   let response: MCPResponse;
   try {
-    response = await createGenerator(options.user).handleToolCall({
-      method: 'tools/call',
-      params: {
-        arguments: args,
-        name: options.name,
-      },
-    });
+    if (scopedClassName && scopedAction) {
+      try {
+        response = await executeScopedMcpTool(
+          scopedClassName,
+          scopedAction,
+          args,
+        );
+      } catch (cause) {
+        if (isOwnerAuthorityDenial(cause)) throw cause;
+        return sourceMcpError(cause);
+      }
+    } else {
+      response = await createGenerator(options.user).handleToolCall({
+        method: 'tools/call',
+        params: {
+          arguments: args,
+          name: options.name,
+        },
+      });
+    }
   } catch (cause) {
     if (resumeVariantReservation) {
       await releaseResumeVariantApplicationWrite(
@@ -384,11 +668,19 @@ async function syncMcpWorkflowSideEffects(
   }
 }
 
+/**
+ * The application snapshot the update guards validate. The bridge resolves
+ * it through the owner-scoped lookup and hands it in, so the guards never
+ * read an unscoped row and the commit fences the very snapshot they saw; a
+ * direct caller without a snapshot gets the owner-scoped read here.
+ */
 async function currentApplicationRecord(
   toolName: string,
   args: Record<string, unknown>,
+  provided?: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
   if (toolName !== 'application_update') return null;
+  if (provided) return provided;
 
   const applicationId = hasNonEmptyString(args.id) ? args.id.trim() : '';
   if (!applicationId) {
@@ -398,8 +690,7 @@ async function currentApplicationRecord(
     );
   }
 
-  const collection = await getCollection('Application');
-  const application = await collection.get(applicationId);
+  const application = await findOwnedRecord('Application', applicationId);
   if (!application) {
     throw new McpAccessError(404, 'Application not found.');
   }
@@ -429,8 +720,7 @@ async function assertMcpResumeAssetWriteAllowed(
   if (!assetId) {
     throw new McpAccessError(400, 'Resume asset write requires an asset id.');
   }
-  const assets = await getCollection('ResumeAsset');
-  const asset = await assets.get(assetId);
+  const asset = await findOwnedRecord('ResumeAsset', assetId);
   if (!asset) throw new McpAccessError(404, 'Resume asset not found.');
   if (
     hasNonEmptyString(
@@ -449,6 +739,7 @@ export async function assertMcpWorkflowPayload(
   args: Record<string, unknown>,
   user?: Pick<User, 'id'> | null,
   subject?: Parameters<typeof syncResumeVariantApplicationApprovals>[1],
+  currentApplication?: Record<string, unknown>,
 ): Promise<void> {
   if (toolName.startsWith('agentrun_') && !isReadOnlyMcpTool(toolName)) {
     throw new McpAccessError(
@@ -527,7 +818,11 @@ export async function assertMcpWorkflowPayload(
     toolName === 'application_create' || toolName === 'application_update';
   if (!isApplicationWrite) return;
 
-  const currentRecord = await currentApplicationRecord(toolName, args);
+  const currentRecord = await currentApplicationRecord(
+    toolName,
+    args,
+    currentApplication,
+  );
 
   if (
     applicationSubmissionRequiresDedicatedAction({

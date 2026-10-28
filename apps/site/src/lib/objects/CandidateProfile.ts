@@ -6,12 +6,13 @@ import { TenantScoped, tenantId } from '@happyvertical/smrt-tenancy';
   // A canonical onboarding profile is unique per authenticated owner in a
   // tenant; it is never a process-wide singleton.
   conflictColumns: ['tenant_id', 'owner_user_id', 'profile_key'],
-  // Profile fields are private candidate context. The authenticated onboarding
-  // and application services access them directly; broad generated APIs, CLI,
-  // MCP, and WebMCP must not expose even a partial profile record.
-  api: { include: [] },
-  cli: { include: [] },
-  mcp: { include: [] },
+  // Profile fields are private candidate context. The generic REST, CLI and
+  // MCP surfaces expose only the owner's own verified profile (never a list
+  // across owners), with the agent-writable field allow-list in
+  // agent-field-contract.ts; onboarding creates it and nothing deletes it.
+  api: { include: ['list', 'get', 'update'] },
+  cli: { include: ['list', 'get', 'update'] },
+  mcp: { include: ['list', 'get', 'update'] },
 })
 @TenantScoped()
 export class CandidateProfile extends SmrtObject {

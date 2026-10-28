@@ -290,28 +290,28 @@ describe('generic resource API routes', () => {
       invoke: () => Promise<unknown>;
     }> = [
       {
-        name: 'an anonymous private task list',
+        name: 'an anonymous legacy résumé profile list',
         invoke: async () =>
           await collectionGet({
-            params: { resource: 'tasks' },
-            url: new URL('https://iolaus.localhost/api/tasks'),
+            params: { resource: 'resumeprofiles' },
+            url: new URL('https://iolaus.localhost/api/resumeprofiles'),
           } as never),
       },
       {
-        name: 'an authenticated application creation',
+        name: 'an authenticated legacy résumé position creation',
         invoke: async () =>
           await collectionPost({
             locals: { user: { id: 'user-1' } },
-            params: { resource: 'applications' },
-            request: jsonRequest({ status: 'draft' }),
+            params: { resource: 'resumepositions' },
+            request: jsonRequest({ role: 'Engineer' }),
           } as never),
       },
       {
-        name: 'a forged profile ownership update',
+        name: 'a forged legacy résumé profile ownership update',
         invoke: async () =>
           await itemPut({
             locals: { user: { id: 'user-1' } },
-            params: { id: 'profile-2', resource: 'candidateprofiles' },
+            params: { id: 'profile-2', resource: 'resumeprofiles' },
             request: jsonRequest({
               candidateProfileId: 'profile-2',
               ownerUserId: 'user-2',
@@ -320,11 +320,11 @@ describe('generic resource API routes', () => {
           } as never),
       },
       {
-        name: 'a foreign score deletion',
+        name: 'a legacy résumé skill deletion',
         invoke: async () =>
           await itemDelete({
             locals: { user: { id: 'user-1' } },
-            params: { id: 'score-2', resource: 'evaluationscores' },
+            params: { id: 'skill-2', resource: 'resumeskills' },
           } as never),
       },
     ];
@@ -364,5 +364,219 @@ vi.mock('$lib/server/workspace-subject.js', () => ({
     userId: 'user-1',
     profileId: 'profile-1',
   }),
-  isCurrentWorkspaceOperator: () => true,
+  isCurrentWorkspaceOperator: () => hostedMocks.operator,
 }));
+
+const hostedMocks = vi.hoisted(() => ({ operator: true, shared: false }));
+vi.mock('$lib/server/app-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/app-config')>()),
+  isSharedHosted: () => hostedMocks.shared,
+}));
+
+const scopedMocks = vi.hoisted(() => ({
+  getScopedRecord: vi.fn(),
+  listScopedRecords: vi.fn(),
+  runScopedWriteSideEffects: vi.fn(async () => undefined),
+}));
+vi.mock('$lib/server/scoped-resource-crud', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('$lib/server/scoped-resource-crud')
+  >()),
+  ...scopedMocks,
+}));
+const ownedTuple = {
+  candidateProfileId: 'profile-1',
+  ownerUserId: 'user-1',
+  tenantId: 'tenant-1',
+};
+
+describe('owner-scoped candidate resource routes (#259, #262)', () => {
+  beforeEach(() => {
+    hostedMocks.operator = false;
+    hostedMocks.shared = true;
+    routeMocks.collections.clear();
+    routeMocks.getCollection.mockClear();
+    scopedMocks.getScopedRecord.mockReset();
+    scopedMocks.listScopedRecords.mockReset();
+    scopedMocks.runScopedWriteSideEffects.mockClear();
+    applicationConcurrencyMocks.commitApplicationIfCurrent.mockClear();
+    scopedMocks.listScopedRecords.mockResolvedValue({
+      items: [{ id: 'exp-1', summary: 'Mine' }],
+      limit: 25,
+      offset: 0,
+      total: 1,
+    });
+    scopedMocks.getScopedRecord.mockResolvedValue({ id: 'exp-1' });
+  });
+
+  it('lets a hosted owner reach career records through the scoped path, never an unscoped collection read', async () => {
+    const experiences = routeMocks.collection([
+      { id: 'exp-1', summary: 'Mine', ...ownedTuple },
+      { id: 'exp-2', summary: 'Theirs', ...ownedTuple, ownerUserId: 'user-2' },
+    ]);
+    const achievements = routeMocks.collection();
+    routeMocks.collections.set('Experience', experiences);
+    routeMocks.collections.set('Achievement', achievements);
+
+    const list = await collectionGet({
+      params: { resource: 'experiences' },
+      url: new URL('https://iolaus.localhost/api/experiences?limit=25'),
+    } as never);
+    expect(await list.json()).toMatchObject({
+      count: 1,
+      items: [{ id: 'exp-1' }],
+      limit: 25,
+    });
+    expect(scopedMocks.listScopedRecords).toHaveBeenCalledWith('Experience', {
+      limit: 25,
+      offset: 0,
+    });
+    expect(experiences.list).not.toHaveBeenCalled();
+
+    const created = await collectionPost({
+      locals: { user: { id: 'user-1' } },
+      params: { resource: 'achievements' },
+      request: jsonRequest({ title: 'Shipped it' }),
+    } as never);
+    expect(created.status).toBe(201);
+    // The owner tuple is stamped by the server, never taken from the body.
+    expect(achievements.create).toHaveBeenCalledWith({
+      title: 'Shipped it',
+      ...ownedTuple,
+    });
+    expect(scopedMocks.runScopedWriteSideEffects).toHaveBeenCalledWith(
+      'Achievement',
+    );
+
+    const updated = await itemPut({
+      locals: { user: { id: 'user-1' } },
+      params: { id: 'exp-1', resource: 'experiences' },
+      request: jsonRequest({ summary: 'Changed' }),
+    } as never);
+    expect(await updated.json()).toMatchObject({
+      id: 'exp-1',
+      summary: 'Changed',
+    });
+    // A same-tenant foreign row is indistinguishable from a missing one.
+    await expect(
+      itemPut({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'exp-2', resource: 'experiences' },
+        request: jsonRequest({ summary: 'Taken' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      collectionPost({
+        locals: { user: { id: 'user-1' } },
+        params: { resource: 'achievements' },
+        request: jsonRequest({ title: 'Forged', ownerUserId: 'user-2' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      collectionPost({
+        locals: { user: { id: 'user-1' } },
+        params: { resource: 'achievements' },
+        request: jsonRequest({ title: 'Adopt', slug: 'exp-2' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 400 });
+
+    const deleted = await itemDelete({
+      locals: { user: { id: 'user-1' } },
+      params: { id: 'exp-1', resource: 'experiences' },
+    } as never);
+    expect(await deleted.json()).toEqual({ success: true });
+    expect(experiences.records.some((row) => row.id === 'exp-1')).toBe(false);
+    await expect(
+      itemDelete({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'exp-2', resource: 'experiences' },
+      } as never),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(experiences.records.some((row) => row.id === 'exp-2')).toBe(true);
+  });
+
+  it('keeps the application guards and the owner scope together on the private workspace path (#262)', async () => {
+    const applications = routeMocks.collection([
+      { id: 'app-1', status: 'draft', ...ownedTuple },
+      { id: 'app-2', status: 'draft', ...ownedTuple, ownerUserId: 'user-2' },
+    ]);
+    routeMocks.collections.set('Application', applications);
+    // Foreign application: 404 before any guard or commit.
+    await expect(
+      itemPut({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'app-2', resource: 'applications' },
+        request: jsonRequest({ notes: 'x' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(
+      applicationConcurrencyMocks.commitApplicationIfCurrent,
+    ).not.toHaveBeenCalled();
+    // Owned application: the existing guards still run before the commit.
+    await expect(
+      itemPut({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'app-1', resource: 'applications' },
+        request: jsonRequest({ materialWriteLock: 'locked' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 403 });
+    const updated = await itemPut({
+      locals: { user: { id: 'user-1' } },
+      params: { id: 'app-1', resource: 'applications' },
+      request: jsonRequest({ approvalNotes: 'Looks fine' }),
+    } as never);
+    expect(updated.status).toBe(200);
+    expect(
+      applicationConcurrencyMocks.commitApplicationIfCurrent,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'app-1' }),
+      expect.objectContaining({ approvalNotes: 'Looks fine' }),
+    );
+    // Create: the server stamps the owner tuple and the create guards run.
+    const created = await collectionPost({
+      locals: { user: { id: 'user-1' } },
+      params: { resource: 'applications' },
+      request: jsonRequest({ opportunityId: 'opp-1' }),
+    } as never);
+    expect(created.status).toBe(201);
+    expect(applications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opportunityId: 'opp-1',
+        status: 'draft',
+        ...ownedTuple,
+      }),
+    );
+  });
+
+  it('keeps the shared catalog operator-only for the same hosted owner', async () => {
+    await expect(
+      collectionGet({
+        params: { resource: 'sources' },
+        url: new URL('https://iolaus.localhost/api/sources'),
+      } as never),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(routeMocks.getCollection).not.toHaveBeenCalled();
+  });
+
+  it('rejects profile fields outside the agent contract before the scoped write', async () => {
+    const profiles = routeMocks.collection([
+      { id: 'profile-1', ownerUserId: 'user-1', tenantId: 'tenant-1' },
+    ]);
+    routeMocks.collections.set('CandidateProfile', profiles);
+    await expect(
+      itemPut({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'profile-1', resource: 'candidateprofiles' },
+        request: jsonRequest({ ownerUserId: 'user-2', summary: 'x' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(profiles.records[0].save).not.toHaveBeenCalled();
+    await expect(
+      collectionPost({
+        locals: { user: { id: 'user-1' } },
+        params: { resource: 'candidateprofiles' },
+        request: jsonRequest({ name: 'Second profile' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 405 });
+  });
+});
