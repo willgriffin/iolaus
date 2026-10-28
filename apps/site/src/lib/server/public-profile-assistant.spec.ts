@@ -128,6 +128,25 @@ class FakeSocket {
   get events() {
     return this.sent.map((data) => JSON.parse(data) as Record<string, unknown>);
   }
+  /** A server event from the provider. */
+  receive(event: Record<string, unknown>) {
+    this.emit('message', { data: JSON.stringify(event) });
+  }
+  /** The provider echoes the session as the last `session.update` left it. */
+  echoSession(silent: boolean) {
+    this.receive({
+      type: 'session.updated',
+      session: {
+        type: 'realtime',
+        max_output_tokens: silent ? 1 : 800,
+        audio: {
+          input: {
+            turn_detection: silent ? null : { type: 'semantic_vad' },
+          },
+        },
+      },
+    });
+  }
 }
 const status = (promise: Promise<unknown>) =>
   promise.then(
@@ -770,22 +789,36 @@ describe('voice endpoint', () => {
       expect(update.audio).toEqual({ input: { turn_detection: null } });
       expect(String(update.instructions)).toContain('Do not speak');
       expect(JSON.stringify(socket.sent)).not.toContain('sk-');
-      // Still reserved: silenced is not ended.
+      // Still reserved: silenced is not ended. Until the provider echoes the
+      // configuration nothing is claimed about it.
       expect(liveVoiceCalls()).toBe(1);
       expect(String(warnLog.mock.calls[0][0])).toContain(
-        'session silenced over the provider websocket',
+        'session not confirmed silenced over the provider websocket',
       );
-      // Silencing is sent once; retries do not repeat it.
+      // Without an echo the next attempt re-sends the silencing.
       await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
       expect(broken).toHaveBeenCalledTimes(2);
-      expect(socket.sent).toHaveLength(3);
+      expect(socket.sent).toHaveLength(6);
+      // The provider echoes the silent session: acknowledged, no more sends.
+      socket.echoSession(true);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      expect(broken).toHaveBeenCalledTimes(3);
+      expect(socket.sent).toHaveLength(6);
+      expect(String(warnLog.mock.calls[2][0])).toContain(
+        'session silenced over the provider websocket',
+      );
+      // The client reconfigures the session back: it is silenced again.
+      socket.echoSession(false);
+      expect(socket.sent).toHaveLength(9);
+      expect(socket.events[8].type).toBe('session.update');
+      socket.echoSession(true);
       // The provider closes the session: that is a confirmed end. The line
       // is released and no further hang-up is attempted.
       socket.close(1000);
       expect(liveVoiceCalls()).toBe(0);
       expect(heldVoiceLines()).toBe(0);
       await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs * 3);
-      expect(broken).toHaveBeenCalledTimes(2);
+      expect(broken).toHaveBeenCalledTimes(3);
       expect(errorLog).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
@@ -816,14 +849,17 @@ describe('voice endpoint', () => {
       ).toBe(200);
       FakeSocket.last.open();
       await vi.advanceTimersByTimeAsync(
-        ASSISTANT_LIMITS.voiceSeconds * 1000 +
-          ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      FakeSocket.last.echoSession(true);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
       );
       expect(heldVoiceLines()).toBe(1);
       const held = String(errorLog.mock.calls[0][0]);
       expect(held).toContain(VOICE_LINE_HELD);
       expect(held).toContain('"silenced":true');
-      FakeSocket.last.close(1005);
+      FakeSocket.last.close(1000);
       expect(liveVoiceCalls()).toBe(0);
       expect(heldVoiceLines()).toBe(0);
       const lines = warnLog.mock.calls.map((call) => String(call[0]));
@@ -865,14 +901,17 @@ describe('voice endpoint', () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(liveVoiceCalls()).toBe(1);
       first.close(1000);
-      expect(liveVoiceCalls()).toBe(0);
-      // One hang-up still tidies the provider record; its 404 is expected.
+      // Before the deadline a close only brings the deadline forward: the
+      // hang-up API decides, and its 404 is the confirmed end.
       expect(hangup).toHaveBeenCalledWith('rtc_1', { apiKey: 'sk-test' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(liveVoiceCalls()).toBe(0);
       await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.voiceSeconds * 1000);
       expect(hangup).toHaveBeenCalledTimes(1);
       expect(warnLog).not.toHaveBeenCalled();
-      // A lost link, or a socket that never opened, confirms nothing: the
-      // line stays busy until the hang-up API answers at the deadline.
+      // A lost link, a going-away close, or a socket that never opened
+      // confirms nothing: the line stays busy until the hang-up API answers
+      // at the deadline.
       expect(
         await status(
           openPublicProfileVoice(handle, voiceRequest(), '45.0.0.2', deps),
@@ -886,19 +925,125 @@ describe('voice endpoint', () => {
         ),
       ).toBe(200);
       FakeSocket.last.close(1006);
-      expect(liveVoiceCalls()).toBe(2);
-      expect(warnLog).toHaveBeenCalledTimes(2);
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '45.0.0.4', deps),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      FakeSocket.last.close(1001);
+      expect(liveVoiceCalls()).toBe(3);
+      expect(warnLog).toHaveBeenCalledTimes(3);
       expect(String(warnLog.mock.calls[0][0])).toContain('lost (close 1006)');
       expect(String(warnLog.mock.calls[1][0])).toContain(
         'never opened (close 1006)',
       );
+      expect(String(warnLog.mock.calls[2][0])).toContain('lost (close 1001)');
       for (const call of warnLog.mock.calls)
         expect(String(call[0])).not.toContain('sk-');
       await vi.advanceTimersByTimeAsync(
         ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
       );
-      expect(hangup).toHaveBeenCalledTimes(3);
+      expect(hangup).toHaveBeenCalledTimes(4);
       expect(liveVoiceCalls()).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps and alarms a line the provider closed early when the hang-up then fails', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_9',
+      }));
+      const broken = vi.fn(async () => {
+        throw Object.assign(new Error('upstream'), { status: 502 });
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '46.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      await vi.advanceTimersByTimeAsync(20_000);
+      // A provider restart closes the link normally while the media session
+      // may live on: the line stays reserved and the hang-up retries as if
+      // the deadline had come.
+      FakeSocket.last.close(1000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(String(warnLog.mock.calls[0][0])).toContain('attempt 1/');
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+      expect(heldVoiceLines()).toBe(1);
+      expect(String(errorLog.mock.calls[0][0])).toContain(VOICE_LINE_HELD);
+      // The original deadline timer was replaced, not doubled.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.voiceSeconds * 1000);
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('silences a session the moment a late monitor opens after the deadline', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_7',
+      }));
+      const broken = vi.fn(async () => {
+        throw new Error('upstream');
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '47.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      const socket = FakeSocket.last;
+      // Every hang-up attempt is spent while the monitor is still connecting.
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 +
+          ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(heldVoiceLines()).toBe(1);
+      expect(socket.sent).toEqual([]);
+      socket.open();
+      expect(socket.events.map((event) => event.type)).toEqual([
+        'response.cancel',
+        'output_audio_buffer.clear',
+        'session.update',
+      ]);
+      // A monitor that opens for a line within its deadline sends nothing.
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '47.0.0.2', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      expect(FakeSocket.last.sent).toEqual([]);
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
