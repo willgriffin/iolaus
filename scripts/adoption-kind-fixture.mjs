@@ -22,6 +22,118 @@ export const fixtureIdentity = Object.freeze({
   applicationId: 'iolaus-qualification',
   databaseName: 'iolaus_qualification',
 });
+const qualificationStages = new Set([
+  'preflight', 'public-artifacts', 'image-identity', 'toolchain', 'kind-create',
+  'fixture-setup', 'fixture-postgres-pod', 'fixture-postgres-ready',
+  'fixture-postgres-roles', 'fixture-postgres-schema', 'fixture-assets',
+  'fixture-service-accounts', 'fixture-observer', 'fixture-maintenance-render',
+  'fixture-maintenance-ready', 'fixture-actor-secrets',
+  'missing-schema-refusal', 'writer-refusal', 'clean-migration',
+  'runtime-readiness', 'http-and-operator', 'worker-and-monitor',
+  'runtime-readiness-web', 'runtime-readiness-task',
+  'runtime-readiness-schedule', 'runtime-readiness-extractor',
+  'worker-sigterm-task', 'worker-sigterm-schedule', 'monitor-check',
+  'source-and-extractor', 'source-parity', 'extractor-envelope', 'evidence', 'cleanup-started', 'cleanup-completed',
+]);
+let activeQualificationStage = 'preflight';
+export function qualificationStageMessage(stage) {
+  assert.ok(qualificationStages.has(stage), 'Unknown qualification stage.');
+  return `[adoption] ${stage}`;
+}
+function checkpoint(stage) {
+  const message = qualificationStageMessage(stage);
+  activeQualificationStage = stage;
+  console.log(message);
+}
+
+// Keep failure diagnostics useful without printing Pod specs, messages or logs.
+export function runtimePodDiagnostics(pods) {
+  const phases = new Set(['Pending', 'Running', 'Succeeded', 'Failed', 'Unknown']);
+  const reasons = new Set(['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull',
+    'CreateContainerConfigError', 'CreateContainerError', 'ContainerCreating',
+    'OOMKilled', 'Error', 'Completed']);
+  const number = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return pods.slice(0, 8).map((pod) => ({
+    phase: phases.has(pod.status?.phase) ? pod.status.phase : 'Unknown',
+    scheduled: pod.status?.conditions?.some((c) => c.type === 'PodScheduled' && c.status === 'True') === true,
+    containers: (pod.status?.containerStatuses ?? []).slice(0, 8).map((c) => {
+      const state = c.state?.waiting ?? c.state?.terminated;
+      return {
+        ready: c.ready === true,
+        restarts: number(c.restartCount),
+        state: reasons.has(state?.reason) ? state.reason : c.state?.running ? 'Running' : 'Unknown',
+        exitCode: number(c.state?.terminated?.exitCode),
+      };
+    }),
+  }));
+}
+
+export function runtimeLogCategories(log) {
+  return [
+    ['schema-not-ready', /Deployment schema is not ready:/i],
+    ['permission-denied', /permission denied|must be owner/i],
+    ['auth-not-ready', /authentication provider is not ready/i],
+    ['storage-mentioned', /HeadBucket|S3|storage is not ready/i],
+    ['read-only-filesystem', /EACCES|EROFS|read-only file system/i],
+    ['module-not-found', /MODULE_NOT_FOUND|Cannot find module/i],
+    ['out-of-memory', /heap out of memory|allocation failed/i],
+    ['connection-refused', /ECONNREFUSED|connection refused/i],
+    ['runtime-configuration', /Unable to load SMRT runtime configuration|configuration.*required/i],
+    ['database-schema-error', /relation .* does not exist|column .* does not exist/i],
+    ['component-database', /component=database\b/],
+    ['component-authentication', /component=authentication\b/],
+    ['component-assets', /component=assets\b/],
+    ['component-secrets', /component=secrets\b/],
+    ['invalid-configuration', /code=invalid_configuration\b/],
+    ['provider-mismatch', /code=provider_mismatch\b/],
+    ['provider-unavailable', /code=provider_unavailable\b/],
+  ].filter(([, pattern]) => pattern.test(log)).map(([category]) => category);
+}
+
+// Child parity diagnostics are fixed codes, never raw error text or log lines.
+export function parityFailureStage(error) {
+  const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString('utf8')
+    : typeof error?.stderr === 'string' ? error.stderr : '';
+  return stderr.match(/^IOLAUS_PARITY_FAILURE_STAGE=(startup|candidate-image-provenance|reviewed-inventory|candidate-image-source-filesystem|scenario-execution|candidate-inventory|post-validation)\r?$/m)?.[1] ?? null;
+}
+
+// Only this disposable fixture receives the workflow's temporary read token.
+// The returned objects are sent to the fresh API on stdin, never to a file/log.
+export function qualificationRegistryPullSecrets(environment) {
+  const actor = environment.IOLAUS_QUALIFICATION_REGISTRY_ACTOR;
+  const token = environment.IOLAUS_QUALIFICATION_REGISTRY_TOKEN;
+  if (actor === undefined && token === undefined) return [];
+  assert.ok(typeof actor === 'string' && /^[\w-]+(?:\[bot\])?$/.test(actor),
+    'Complete ephemeral registry pull identity required.');
+  assert.ok(typeof token === 'string' && token.length > 0 && !/[\r\n]/.test(token),
+    'Complete ephemeral registry pull identity required.');
+  const config = JSON.stringify({ auths: { 'ghcr.io': {
+    auth: Buffer.from(`${actor}:${token}`).toString('base64'),
+  } } });
+  return ['iolaus-fixture', fixtureIdentity.applicationId].map((namespace) => ({
+    apiVersion: 'v1', kind: 'Secret',
+    metadata: { name: 'iolaus-qualification-registry', namespace },
+    type: 'kubernetes.io/dockerconfigjson', immutable: true,
+    data: { '.dockerconfigjson': Buffer.from(config).toString('base64') },
+  }));
+}
+
+export function assertRegistryPullIsolation(pod, secretName, needsPull = true) {
+  assert.deepEqual(pod.spec.imagePullSecrets?.map(({ name }) => name) ?? [],
+    needsPull ? [secretName] : []);
+  for (const container of [...pod.spec.containers, ...(pod.spec.initContainers ?? [])]) {
+    assert.ok(!(container.env ?? []).some((entry) =>
+      entry.valueFrom?.secretKeyRef?.name === secretName ||
+      ['GITHUB_TOKEN', 'IOLAUS_QUALIFICATION_REGISTRY_TOKEN'].includes(entry.name)),
+    'Registry pull credentials must not enter container environment.');
+    assert.ok(!(container.envFrom ?? []).some((entry) => entry.secretRef?.name === secretName),
+      'Registry pull credentials must not enter container environment.');
+  }
+  assert.ok(!(pod.spec.volumes ?? []).some((volume) =>
+    volume.secret?.secretName === secretName ||
+    volume.projected?.sources?.some((source) => source.secret?.name === secretName)),
+  'Registry pull credentials must not be mounted into containers.');
+}
 export function fixtureDatabaseUrl(role, password) {
   assert.match(role, /^iolaus_(maintenance|runtime|monitor)$/);
   assert.match(password, /^[a-f0-9]{48}$/);
@@ -75,6 +187,16 @@ export function requireIsolatedContext(context, namespace) {
   assert.match(context, /^kind-iolaus-236-[a-z0-9-]+$/);
   assert.equal(namespace, 'iolaus-qualification');
 }
+export function qualificationApplyArguments(kubeconfig, context, namespace, rendered) {
+  requireIsolatedContext(context, namespace);
+  return [
+    '--kubeconfig', kubeconfig, '--context', context,
+    // Helm's --namespace does not inject metadata.namespace into templates.
+    // Explicit JSON fixture lists span both synthetic namespaces instead.
+    ...(rendered ? ['--namespace', namespace] : []),
+    'apply', '-f', '-',
+  ];
+}
 export function terminalJobFailure(job) {
   return (
     (job.status?.failed ?? 0) > 0 &&
@@ -103,6 +225,7 @@ export async function qualifyKind({
   images,
   output,
 }) {
+  checkpoint('preflight');
   requirePublishedPrerequisites(prerequisites);
   for (const name of ['postgresImage', 'kindNodeImage', 'maintenanceImage']) {
     assert.match(
@@ -113,6 +236,11 @@ export async function qualifyKind({
   }
   assert.equal(process.platform, 'linux');
   assert.equal(process.arch, 'x64');
+  const registrySecrets = qualificationRegistryPullSecrets(process.env);
+  delete process.env.IOLAUS_QUALIFICATION_REGISTRY_TOKEN;
+  delete process.env.IOLAUS_QUALIFICATION_REGISTRY_ACTOR;
+  const imagePullSecrets = registrySecrets.length
+    ? [{ name: registrySecrets[0].metadata.name }] : [];
   const run = (binary, args, input) => {
     try {
       return execFileSync(binary, args, {
@@ -121,12 +249,17 @@ export async function qualifyKind({
         timeout: 360_000,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } catch {
+    } catch (error) {
+      if (binary === 'node' && args[0] === 'scripts/deployed-parity.mjs') {
+        const stage = parityFailureStage(error);
+        if (stage) console.log(`[adoption] parity-stage ${stage}`);
+      }
       throw new Error(
         `Qualification command failed: ${binary.split('/').at(-1)} ${args[0]}`,
       );
     }
   };
+  checkpoint('public-artifacts');
   const shared = await verifyPublicArtifacts({
     prerequisites,
     runnerRoot,
@@ -143,6 +276,7 @@ export async function qualifyKind({
   const source = run('git', ['rev-parse', 'HEAD']).trim();
   const tree = run('git', ['rev-parse', 'HEAD^{tree}']).trim();
   const lock = sha256(readFileSync('pnpm-lock.yaml'));
+  checkpoint('image-identity');
   const resolvedImages = resolveImages(images, source, lock);
   prerequisites = structuredClone(prerequisites);
   for (const name of ['postgresImage', 'kindNodeImage', 'maintenanceImage'])
@@ -157,6 +291,7 @@ export async function qualifyKind({
   const namespace = 'iolaus-qualification';
   requireIsolatedContext(context, namespace);
   const kubeconfig = join(scratch, 'kubeconfig');
+  checkpoint('toolchain');
   const toolchain = await import(
     pathToFileURL(join(runnerRoot, 'scripts/deployment-toolchain.mjs'))
   );
@@ -178,7 +313,8 @@ export async function qualifyKind({
   const apply = (objects) =>
     run(
       tools.kubectl,
-      ['--kubeconfig', kubeconfig, '--context', context, 'apply', '-f', '-'],
+      qualificationApplyArguments(kubeconfig, context, namespace,
+        typeof objects === 'string'),
       typeof objects === 'string'
         ? objects
         : JSON.stringify({ apiVersion: 'v1', kind: 'List', items: objects }),
@@ -193,6 +329,7 @@ export async function qualifyKind({
       !run(tools.kind, ['get', 'clusters']).trim().split(/\s+/).includes(name),
     );
     created = true;
+    checkpoint('kind-create');
     run(tools.kind, [
       'create',
       'cluster',
@@ -219,6 +356,11 @@ export async function qualifyKind({
       ],
       'synthetic-only',
     );
+    checkpoint('fixture-setup');
+    if (registrySecrets.length) {
+      apply(registrySecrets);
+    }
+    checkpoint('fixture-postgres-pod');
     const password = randomBytes(24).toString('hex');
     const fixturePod = {
       apiVersion: 'v1',
@@ -232,7 +374,9 @@ export async function qualifyKind({
             image: prerequisites.fixture.postgresImage,
             env: [{ name: 'POSTGRES_PASSWORD', value: password }],
             readinessProbe: {
-              exec: { command: ['pg_isready', '-U', 'postgres'] },
+              // The image bootstraps a temporary Unix-only server first.
+              // Only the final TCP listener can serve application clients.
+              exec: { command: ['pg_isready', '-h', '127.0.0.1', '-U', 'postgres'] },
             },
             ports: [{ containerPort: 5432 }],
           },
@@ -247,6 +391,7 @@ export async function qualifyKind({
     });
     fixturePod.metadata.labels.app = 'postgres';
     apply([fixturePod, service('postgres', 5432)]);
+    checkpoint('fixture-postgres-ready');
     kubectl(
       '-n',
       'iolaus-fixture',
@@ -278,10 +423,13 @@ export async function qualifyKind({
         ],
         statement,
       );
+    checkpoint('fixture-postgres-roles');
     sql(
       `CREATE ROLE iolaus_maintenance LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_runtime LOGIN PASSWORD '${password}';\nCREATE ROLE iolaus_monitor LOGIN PASSWORD '${password}';\nCREATE DATABASE ${fixtureIdentity.databaseName} OWNER iolaus_maintenance;\n`,
     );
+    checkpoint('fixture-postgres-schema');
     sql(fixtureDatabaseSql('REVOKE CREATE ON SCHEMA public FROM PUBLIC;'));
+    checkpoint('fixture-assets');
     // Real HTTP HeadBucket edge, no readiness override module or passed flag.
     // This endpoint is a synthetic fixture, not qualification of an S3 vendor.
     const assetCode =
@@ -297,6 +445,7 @@ export async function qualifyKind({
         },
         spec: {
           automountServiceAccountToken: false,
+          imagePullSecrets,
           containers: [
             {
               name: 'assets',
@@ -310,6 +459,7 @@ export async function qualifyKind({
     ]);
     const databaseUrl = (role) => fixtureDatabaseUrl(role, password);
     const values = syntheticRuntimeValues(password);
+    checkpoint('fixture-service-accounts');
     apply(
       ['iolaus-runtime', 'iolaus-monitor', 'iolaus-migration-observer'].map(
         (sa) => ({
@@ -317,9 +467,11 @@ export async function qualifyKind({
           kind: 'ServiceAccount',
           metadata: { name: sa, namespace },
           automountServiceAccountToken: false,
+          imagePullSecrets,
         }),
       ),
     );
+    checkpoint('fixture-observer');
     apply([
       {
         apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -418,7 +570,9 @@ export async function qualifyKind({
         ...(only ? ['--show-only', only] : []),
       ]);
     };
+    checkpoint('fixture-maintenance-render');
     apply(render('templates/maintenance.yaml'));
+    checkpoint('fixture-maintenance-ready');
     kubectl(
       '-n',
       namespace,
@@ -436,6 +590,7 @@ export async function qualifyKind({
       serviceAccountName: 'default',
       migrationServiceAccountName: 'iolaus-migration-observer',
     });
+    checkpoint('fixture-actor-secrets');
     apply(
       ['runtime', 'migration', 'monitor'].map((role) => ({
         apiVersion: 'v1',
@@ -454,6 +609,7 @@ export async function qualifyKind({
         ),
       })),
     );
+    checkpoint('missing-schema-refusal');
     apply([
       {
         apiVersion: 'v1',
@@ -497,6 +653,7 @@ export async function qualifyKind({
     );
     checks.push('actual-runtime-missing-schema-refusal-without-ddl');
     // An unrelated active Pod must prevent schema/ledger creation.
+    checkpoint('writer-refusal');
     apply([
       {
         apiVersion: 'v1',
@@ -504,6 +661,7 @@ export async function qualifyKind({
         metadata: { name: 'unknown-writer', namespace },
         spec: {
           automountServiceAccountToken: false,
+          imagePullSecrets,
           containers: [
             {
               name: 'writer',
@@ -548,6 +706,7 @@ export async function qualifyKind({
       '--wait=true',
       '--timeout=60s',
     );
+    checkpoint('clean-migration');
     release.release.attempt = 2;
     apply(render());
     await until(
@@ -561,18 +720,36 @@ export async function qualifyKind({
         `GRANT CONNECT ON DATABASE ${fixtureIdentity.databaseName} TO iolaus_runtime, iolaus_monitor;\nGRANT USAGE ON SCHEMA public TO iolaus_runtime, iolaus_monitor;\nGRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO iolaus_runtime;\nGRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO iolaus_runtime;\nGRANT SELECT (status,finished_at,started_at) ON source_crawls TO iolaus_monitor;\nGRANT SELECT (queue,status) ON _smrt_jobs TO iolaus_monitor;\n`,
       ),
     );
+    checkpoint('runtime-readiness');
     release.release.phase = 'verify';
     release.release.sequence++;
     apply(render());
-    for (const name of ['web', 'task', 'schedule', 'extractor'])
-      kubectl(
-        '-n',
-        namespace,
-        'rollout',
-        'status',
-        `deployment/iolaus-${name}`,
-        '--timeout=180s',
-      );
+    try {
+      for (const name of ['web', 'task', 'schedule', 'extractor']) {
+        checkpoint(`runtime-readiness-${name}`);
+        kubectl('-n', namespace, 'rollout', 'status',
+          `deployment/iolaus-${name}`, '--timeout=180s');
+      }
+    } catch (error) {
+      for (const name of ['web', 'task', 'schedule', 'extractor']) {
+        try {
+          const pods = JSON.parse(kubectl('--request-timeout=10s', '-n', namespace, 'get', 'pods', '-l',
+            `app.kubernetes.io/instance=iolaus,smrt.happyvertical.com/workload=${name}`,
+            '-o', 'json')).items;
+          console.log(`[adoption] runtime-status ${JSON.stringify({ workload: name,
+            pods: runtimePodDiagnostics(pods) })}`);
+          for (const pod of pods.slice(0, 2)) {
+            if (!/^iolaus-(web|task|schedule|extractor)-[a-z0-9-]+$/.test(pod.metadata.name)) continue;
+            const logs = kubectl('--request-timeout=10s', '-n', namespace, 'logs', pod.metadata.name, '--tail=80');
+            console.log(`[adoption] runtime-log-categories ${JSON.stringify({
+              workload: name, categories: runtimeLogCategories(logs) })}`);
+          }
+        } catch {
+          console.log(`[adoption] runtime-diagnostics-unavailable ${name}`);
+        }
+      }
+      throw error;
+    }
     for (const name of ['web', 'task', 'schedule', 'extractor']) {
       const pods = JSON.parse(
         kubectl(
@@ -593,6 +770,18 @@ export async function qualifyKind({
           runtime.workloads[name].image.split('@')[1],
         );
     }
+    if (registrySecrets.length) {
+      for (const ns of ['iolaus-fixture', namespace]) {
+        const pods = JSON.parse(kubectl('-n', ns, 'get', 'pods', '-o', 'json')).items;
+        for (const pod of pods) {
+          const needsPull = pod.spec.containers.some(({ image }) =>
+            Object.values(resolvedImages).includes(image));
+          assertRegistryPullIsolation(pod, registrySecrets[0].metadata.name, needsPull);
+        }
+      }
+      checks.push('ephemeral-read-only-registry-pull-without-container-credential-projection');
+    }
+    checkpoint('http-and-operator');
     const webPod = get('deployment', 'iolaus-web').spec.selector.matchLabels;
     const selector = Object.entries(webPod)
       .map(([key, value]) => `${key}=${value}`)
@@ -631,7 +820,9 @@ export async function qualifyKind({
     checks.push('actual-image-shared-operator-projection-and-allowlist-revalidation');
     // SIGTERM must produce a clean exit after the actual worker started.
     // This idle-queue scenario does not claim inflight provider cancellation.
+    checkpoint('worker-and-monitor');
     for (const name of ['task', 'schedule']) {
+      checkpoint(`worker-sigterm-${name}`);
       const deployment = get('deployment', `iolaus-${name}`);
       const selection = Object.entries(deployment.spec.selector.matchLabels)
         .map(([key, value]) => `${key}=${value}`)
@@ -663,23 +854,45 @@ export async function qualifyKind({
       );
     }
     checks.push('actual-worker-start-idle-sigterm-clean-exit-and-restart');
-    kubectl(
-      '-n',
-      namespace,
-      'create',
-      'job',
-      'monitor-check',
-      '--from=cronjob/iolaus-monitor',
-    );
-    kubectl(
-      '-n',
-      namespace,
-      'wait',
-      '--for=condition=complete',
-      'job/monitor-check',
-      '--timeout=90s',
-    );
+    checkpoint('monitor-check');
+    try {
+      kubectl(
+        '-n',
+        namespace,
+        'create',
+        'job',
+        'monitor-check',
+        '--from=cronjob/iolaus-monitor',
+      );
+      kubectl(
+        '-n',
+        namespace,
+        'wait',
+        '--for=condition=complete',
+        'job/monitor-check',
+        '--timeout=90s',
+      );
+    } catch (error) {
+      try {
+        const pods = JSON.parse(kubectl('--request-timeout=10s', '-n', namespace,
+          'get', 'pods', '-l', 'job-name=monitor-check', '-o', 'json')).items;
+        console.log(`[adoption] runtime-status ${JSON.stringify({ workload: 'monitor',
+          pods: runtimePodDiagnostics(pods) })}`);
+        for (const pod of pods.slice(0, 2)) {
+          if (!/^monitor-check-[a-z0-9-]+$/.test(pod.metadata.name)) continue;
+          const logs = kubectl('--request-timeout=10s', '-n', namespace,
+            'logs', pod.metadata.name, '--tail=80');
+          console.log(`[adoption] runtime-log-categories ${JSON.stringify({
+            workload: 'monitor', categories: runtimeLogCategories(logs) })}`);
+        }
+      } catch {
+        console.log('[adoption] runtime-diagnostics-unavailable monitor');
+      }
+      throw error;
+    }
     checks.push('actual-monitor-with-column-restricted-database-role');
+    checkpoint('source-and-extractor');
+    checkpoint('source-parity');
     const parityFile = join(scratch, 'parity.json');
     run('node', [
       'scripts/deployed-parity.mjs',
@@ -695,6 +908,7 @@ export async function qualifyKind({
       parity.candidateImageProvenance.sourceTreeSha256,
       parity.sourceTreeSha256,
     );
+    checkpoint('extractor-envelope');
     run('node', [
       'scripts/resume-extractor-candidate.mjs',
       resolvedImages.extractor,
@@ -745,15 +959,21 @@ export async function qualifyKind({
       scope: 'synthetic-kind-image-qualification',
       providerVendorEffectsQualified: false,
     };
+    checkpoint('evidence');
     writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`, {
       flag: 'wx',
     });
     return evidence;
   } finally {
-    if (created) run(tools.kind, ['delete', 'cluster', '--name', name]);
-    rmSync(scratch, { force: true, recursive: true });
-    process.env.PATH = originalPath;
-    process.chdir(root);
+    console.log(qualificationStageMessage('cleanup-started'));
+    try {
+      if (created) run(tools.kind, ['delete', 'cluster', '--name', name]);
+    } finally {
+      rmSync(scratch, { force: true, recursive: true });
+      process.env.PATH = originalPath;
+      process.chdir(root);
+    }
+    console.log(qualificationStageMessage('cleanup-completed'));
   }
 }
 
@@ -781,7 +1001,7 @@ if (
     )
     .catch(() => {
       console.error(
-        'Iolaus synthetic adoption qualification failed; no success receipt is authorized.',
+        `Iolaus synthetic adoption qualification failed at ${activeQualificationStage}; no success receipt is authorized.`,
       );
       process.exitCode = 1;
     });

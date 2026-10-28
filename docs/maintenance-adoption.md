@@ -8,12 +8,17 @@ ownership transfer and rollout.
 
 ## Public prerequisites
 
-`deploy/self-hosted/adoption/prerequisites.json` pins the public chart 0.2.0 OCI
+`deploy/self-hosted/adoption/prerequisites.json` pins the public chart 0.2.1 OCI
 manifest, packaged chart SHA256 and runner Git commit from
-[the verified SMRT #4414 publication](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6442258826).
+[the verified SMRT #4433 publication](https://github.com/happyvertical/smrt/issues/4305#issuecomment-6473305779).
 Anonymous registry and Helm pulls verified both digests, all packaged source
 files and phase renders; the public runner source matches the reviewed bytes.
 Chart 0.1.0 cannot supply the required security envelope or observer projection.
+Chart 0.2.0 rejects the required migration settings `SMRT_RUNTIME_PROFILE` and
+`SMRT_APP_ID`; 0.2.1 permits exactly those application settings while keeping
+release identity names reserved. The workflow derives both the pull version and
+archive path from the validated prerequisite record; unsupported versions fail
+before environment export.
 These prerequisite identities enable qualification, not installation or rollout.
 The already pinned Kind node, PostgreSQL and maintenance responder images are
 reused from the upstream disposable exercise; they are platform-resolved and
@@ -22,13 +27,41 @@ No unpublished worktree supplies CI code. The public runner checkout must have
 its exact approved origin, revision and clean tree. OCI manifest bytes must hash
 to their requested digest and bind the packaged chart layer bytes.
 
-The image inputs must be public `ghcr.io/willgriffin/iolaus/site@sha256:…` and
+The image inputs must be published `ghcr.io/willgriffin/iolaus/site@sha256:…` and
 `ghcr.io/willgriffin/iolaus/resume-import-extraction@sha256:…` artifacts from the
-exact checked-out source commit and frozen lock. Availability of this exact public
-image pair is an external prerequisite; this workflow does not build or publish it. An index is resolved to exactly
+exact checked-out source commit and frozen lock. Availability of this exact
+image pair is an external prerequisite; this workflow does not build or publish it.
+The site package may remain private. After fetching the public chart and runner,
+manual CI authenticates using its temporary `GITHUB_TOKEN` with only
+`contents: read` and `packages: read`.
+The fixture sends immutable pull Secrets directly to its two freshly created
+namespaces and binds them to its ServiceAccounts. They are never application
+environment or mounted credentials, never written to evidence or manifest files,
+and are deleted with Kind; the login action logs out at job completion. The raw
+token is removed from the fixture's child-process environment. No personal token,
+package visibility change, existing-cluster credential or registry write is used.
+An index is resolved to exactly
 one Linux/amd64 platform manifest; both index and child bytes are digest checked.
 A local Docker ID, mutable tag, wrong architecture, unknown source or wrong lock
 fails. No release-image promotion wiring changes in this preparation.
+Docker's familiar Hub names and optional tag spelling are normalized only when
+matching inspected repository+digest identity; registry bytes and the exact
+requested digest remain authoritative. Static `[adoption]` stage checkpoints
+locate a failure without emitting credential-bearing child stderr. Cleanup
+completion is logged only after the disposable cluster is deleted.
+Runtime rollout failures identify the workload and emit bounded allowlisted Pod
+states and fixed log-pattern categories before teardown. Pod names/specs,
+condition messages and raw child logs remain suppressed; categories are
+diagnostic hints, never qualification receipts.
+Rendered chart applies explicitly select the isolated qualification namespace:
+Helm's `--namespace` alone does not insert `metadata.namespace` into templates.
+JSON fixture lists preserve their explicit namespaces for the database/provider
+fixtures and the application rather than receiving a conflicting override.
+The static schema authority packages `smrt-prompts`, `smrt-secrets`,
+`smrt-playbooks` and `smrt-reports` are direct site dependencies in the same
+published SMRT closure. Their public manifest exports resolve from the schema
+module's location, independently of process cwd or an incidental preload cache.
+Missing or mismatched manifests still refuse startup before database checks.
 
 ## Inactive target
 
@@ -134,7 +167,7 @@ A synthetic fixture receipt is not production rollout approval.
 ## Actual-image qualification
 
 Run the manual **Inactive adoption image qualification** workflow using the
-reviewed pins and matching public final-source image pair. It creates one uniquely named disposable Kind cluster,
+reviewed pins and matching final-source image pair. It creates one uniquely named disposable Kind cluster,
 never reads a default kubeconfig or accepts an arbitrary namespace, and destroys
 the cluster in `finally`. PostgreSQL and the synthetic provider HTTP endpoint
 live outside the dedicated application namespace, so they cannot be mistaken
@@ -311,3 +344,18 @@ The observer parsing tests exercise the production native HTTPS/JSON path using
 raw API List payloads with absent item TypeMeta, validate list/item type agreement,
 assert verified-CA TLS options, and verify projected token rereads for rotation.
 These transport mocks complement, rather than replace, the real Kind/TLS boundary.
+
+Qualification reports separate fixed stages for each idle worker shutdown and
+the monitor Job. A failed monitor wait emits only bounded allowlisted Pod states
+and fixed log categories, then rethrows the original failure and cleans up.
+The monitor completion assertion and 90-second wait remain required.
+
+The inactive monitor uses a 512 MiB memory limit with a 256 MiB request and
+250m CPU limit. Actual Kind qualification observed the Node/tsx monitor
+OOM-killed at 256 MiB after both idle worker shutdown checks passed. The
+count-only database grants and required monitor completion check are unchanged.
+
+The adoption workflow runs the same host network-isolation prerequisite as
+normal candidate CI before source-parity checks. Parity keeps its enforced
+outbound-network denial; failure diagnostics expose only its fixed stage code,
+with separate source-parity and extractor-envelope checkpoints.

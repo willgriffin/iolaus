@@ -1,7 +1,7 @@
 {
   "schema": "iolaus-deployed-parity-inventory:v1",
   "dependencies": {
-    "lockfileSha256": "bacba32f6ad882ca5d4ac914c7e6e2326850ae9efde72f461eeb390775a371d3",
+    "lockfileSha256": "d3831e1c67837e74326118b05520b6966fa079e4d1baa8682ebded2ff0107ecc",
     "smrt": {
       "@happyvertical/smrt-agents": "0.57.32",
       "@happyvertical/smrt-app-mcp": "0.57.32",
@@ -18,8 +18,12 @@
       "@happyvertical/smrt-mcp-apps": "0.57.32",
       "@happyvertical/smrt-mcp-openai": "0.57.32",
       "@happyvertical/smrt-places": "0.57.32",
+      "@happyvertical/smrt-playbooks": "0.57.32",
       "@happyvertical/smrt-profiles": "0.57.32",
+      "@happyvertical/smrt-prompts": "0.57.32",
+      "@happyvertical/smrt-reports": "0.57.32",
       "@happyvertical/smrt-scanner": "0.57.32",
+      "@happyvertical/smrt-secrets": "0.57.32",
       "@happyvertical/smrt-svelte": "0.57.32",
       "@happyvertical/smrt-tags": "0.57.32",
       "@happyvertical/smrt-tenancy": "0.57.32",
@@ -43,8 +47,12 @@
       "@happyvertical/smrt-mcp-apps": "0.57.32",
       "@happyvertical/smrt-mcp-openai": "0.57.32",
       "@happyvertical/smrt-places": "0.57.32",
+      "@happyvertical/smrt-playbooks": "0.57.32",
       "@happyvertical/smrt-profiles": "0.57.32",
+      "@happyvertical/smrt-prompts": "0.57.32",
+      "@happyvertical/smrt-reports": "0.57.32",
       "@happyvertical/smrt-scanner": "0.57.32",
+      "@happyvertical/smrt-secrets": "0.57.32",
       "@happyvertical/smrt-svelte": "0.57.32",
       "@happyvertical/smrt-tags": "0.57.32",
       "@happyvertical/smrt-tenancy": "0.57.32",
@@ -1427,5 +1435,5 @@
       }
     ]
   },
-  "inventorySha256": "dd950a15e036ae2ccbe382e664cf61d85f6f3266d12887b9ce8c57287a9c6f60"
+  "inventorySha256": "351f87acfd3090f5db7ad27f60fb4f38e408306e4847028712cf9282f9a86896"
 }

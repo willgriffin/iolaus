@@ -545,23 +545,25 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', {
   it('stops a dispatched assessment at the fresh native permission fence after revocation', async () => {
     const workspace = await createWorkspace('revalidated-revocation');
     const persistence = vi.fn(async () => undefined);
+    // Resolve fixture identity before dispatch; revocation stays inside the
+    // native handler, after its original permission check has succeeded.
+    if (!database) throw new Error('TaskRunner fixture is unavailable.');
+    const permissions = await PermissionCollection.create({ db: database });
+    const rolePermissions = await RolePermissionCollection.create({
+      db: database,
+    });
+    const permission = await permissions.findBySlug(
+      deriveOperationPermissionSlug(
+        workspaceWorkflowOperation('assessment.execute').collection,
+        workspaceWorkflowOperation('assessment.execute').action,
+      ),
+    );
+    if (!permission?.id) throw new Error('Assessment capability is missing.');
+    const grant = (await rolePermissions.findByRole(workspace.roleId)).find(
+      (entry) => entry.permissionId === permission.id,
+    );
+    if (!grant) throw new Error('Assessment capability grant is missing.');
     fixture.processor.mockImplementationOnce(async () => {
-      if (!database) throw new Error('TaskRunner fixture is unavailable.');
-      const permissions = await PermissionCollection.create({ db: database });
-      const rolePermissions = await RolePermissionCollection.create({
-        db: database,
-      });
-      const permission = await permissions.findBySlug(
-        deriveOperationPermissionSlug(
-          workspaceWorkflowOperation('assessment.execute').collection,
-          workspaceWorkflowOperation('assessment.execute').action,
-        ),
-      );
-      if (!permission?.id) throw new Error('Assessment capability is missing.');
-      const grant = (await rolePermissions.findByRole(workspace.roleId)).find(
-        (entry) => entry.permissionId === permission.id,
-      );
-      if (!grant) throw new Error('Assessment capability grant is missing.');
       await grant.delete();
       const { runAsRevalidatedJobWorkspaceSubject } = await import(
         './job-workspace-subject.js'
