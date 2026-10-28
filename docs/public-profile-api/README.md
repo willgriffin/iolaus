@@ -61,35 +61,49 @@ they never read private records, remember visitors, or take actions.
   {"token":"…"}` frames followed by `data: {"done":true,"text":"…"}`.
 - `POST /api/public/v1/profiles/{handle}/voice` — `application/sdp` WebRTC
   offer (≤64 KiB, audio only); responds `201 application/sdp` with the answer
-  and `x-voice-seconds`, after which the server hangs the call up (see below
-  for what happens when the provider cannot be reached for that hang-up).
+  and `x-voice-seconds`, the deadline after which the server ends the call
+  (see below for how that deadline is enforced).
 
 Admission: browser requests must carry an `Origin` listed in
 `IOLAUS_PUBLIC_ASSISTANT_ORIGINS` (comma-separated origins; CORS echoes the
 matched origin, never `*`). Per client address: 12 questions per 10 minutes and
 4 calls per hour (IPv6 keyed by /64); per handle: 120 questions per 10 minutes
-and 12 call starts per hour; 3 concurrent calls per replica. A call's slot is
-released when the provider confirms the hang-up or reports the call already
-gone (404/410, the usual case when the visitor hangs up first); other failures
-are attempted eight times at 15 s intervals while the line stays counted as
-busy; if none succeeds the line stays reserved until the provider's own
-60-minute session cap has certainly ended the call, and is released then. A
-replacement call is therefore never admitted while an unconfirmed one may still
-be live, and a dead line cannot outlast the provider cap. Worst-case spend per
-replica is three lines for one provider session each; enforcing the deadline
-independently of the hang-up API is tracked in #247.
+and 12 call starts per hour; 3 concurrent calls per replica.
 
-That worst case is an accepted risk, so it is never silent. Each retried
-hang-up attempt logs a `console.warn` with the attempt count and the provider's
-HTTP status and error class (never its message, which could echo the request);
-the final failure logs one `console.error` carrying the stable marker `VOICE_LINE_HELD`
-and a JSON record (`callId`, `attempts`, `startedAt`, `releaseAt`,
-`heldSeconds`), then emails the operator at `IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL`
-(falling back to an email `IOLAUS_SUPPORT_URL`) over the configured SMTP; an
-undeliverable or unconfigured alert is logged under the same marker. The
-eventual release logs `VOICE_LINE_RELEASED_BY_CAP`. Alert on the
-`VOICE_LINE_` markers in the web pod logs and set the alert address in the
-deployment; the API key never appears in any of these lines.
+The deadline has two independent levers. Each call is also watched from the
+provider side over OpenAI Realtime's per-call websocket (keyed by call id, the
+key sent as a header). At `x-voice-seconds` the server silences the session over
+that websocket (the current reply cancelled, queued audio dropped, turn
+detection off, no room for another answer) and hangs the call up through the
+provider's hang-up API; a failed hang-up is attempted eight times at 15 s
+intervals, and the silencing is re-sent until the provider echoes it, or again
+if the client reconfigures the session back. Silencing is a brake on the
+assistant's spend, not a boundary: only the hang-up API or the provider's own
+60-minute cap tears the media path down. A call's slot is released only on a
+confirmed end: the provider confirms the hang-up or reports the call already
+gone (404/410, the usual case when the visitor hangs up first). The websocket
+never confirms an end, because a provider restart closes it exactly as a
+finished session does: a normal close (code 1000) before the deadline brings
+the deadline forward through the same retried hang-up, one after the deadline
+changes nothing, and an abnormal or going-away close, a missing code, or a
+socket that never opened is a lost link. If neither lever ever confirms the end, the line stays
+reserved until the provider's own 60-minute session cap has certainly ended the
+call, and is released then. A replacement call is therefore never admitted while
+an unconfirmed one may still be live, and a dead line cannot outlast the
+provider cap.
+
+A held line needs every hang-up attempt to fail; the websocket only limits what
+the call costs meanwhile (`silenced` says whether the provider acknowledged
+that). The case is never silent. Each retried hang-up attempt logs a `console.warn` with the
+attempt count, the provider's HTTP status and error class (never its message,
+which could echo the request) and whether the provider has acknowledged the
+silencing; the final failure logs one `console.error` carrying the stable marker
+`VOICE_LINE_HELD` and a JSON record (`callId`, `attempts`, `startedAt`,
+`releaseAt`, `heldSeconds`, `silenced`, the last meaning acknowledged by the
+provider); the eventual release logs `VOICE_LINE_RELEASED_BY_CAP`. A lost, never-opened
+or closed monitor logs its close code. Alert on the `VOICE_LINE_` markers in the web pod
+logs; the API key and provider payloads never appear in any of these lines.
+
 `OPTIONS` answers the same typed 404 as the profile API while the feature is
 disabled or the handle is malformed, before any origin decision. Replies are capped at 350 output tokens (voice
 800). The text model is the configured AI profile named by

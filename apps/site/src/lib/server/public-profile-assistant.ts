@@ -6,6 +6,10 @@
  * only ever sees the published snapshot.
  */
 import { randomUUID } from 'node:crypto';
+import type {
+  SpeechWebSocket,
+  SpeechWebSocketConstructor,
+} from '@happyvertical/speech';
 import {
   createOpenAIVoiceCall,
   hangupOpenAIVoiceCall,
@@ -19,12 +23,6 @@ import {
 } from '$lib/public-profile-contract';
 import { resolveAiProfileClient } from './ai-config.js';
 import { isSharedHosted } from './app-config.js';
-import {
-  deliverEmail,
-  getSupportEmail,
-  type InviteEmailOutcome,
-  type InviteTransport,
-} from './hosted-invite-email.js';
 import { clientAddressKey, WindowRateLimiter } from './login-rate-limit.js';
 import { getPublicProfile } from './public-profile-service.js';
 
@@ -36,9 +34,6 @@ export const PUBLIC_ASSISTANT_OPENAI_KEY_ENV =
 export const PUBLIC_ASSISTANT_REALTIME_MODEL_ENV =
   'IOLAUS_PUBLIC_ASSISTANT_REALTIME_MODEL';
 export const PUBLIC_ASSISTANT_VOICE_ENV = 'IOLAUS_PUBLIC_ASSISTANT_VOICE';
-/** Where a held voice line is reported; falls back to the support address. */
-export const PUBLIC_ASSISTANT_ALERT_EMAIL_ENV =
-  'IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL';
 /** Stable log markers for a line that outlives its deadline; alert on them. */
 export const VOICE_LINE_HELD = 'VOICE_LINE_HELD';
 export const VOICE_LINE_RELEASED_BY_CAP = 'VOICE_LINE_RELEASED_BY_CAP';
@@ -64,9 +59,10 @@ export const ASSISTANT_LIMITS = {
   hangupRetries: 8,
   hangupRetryMs: 15_000,
   /**
-   * OpenAI Realtime ends every session at 60 minutes. When no hang-up attempt
-   * is ever confirmed, a line is released only once that provider cap has
-   * certainly passed since the call started.
+   * OpenAI Realtime ends every session at 60 minutes. When neither the
+   * hang-up API nor the provider websocket ever confirms the end, a line is
+   * released only once that provider cap has certainly passed since the call
+   * started.
    */
   providerSessionCapMs: 60 * 60 * 1000,
   voiceMaxOutputTokens: 800,
@@ -260,12 +256,15 @@ const voiceByHandle = new WindowRateLimiter(
   ASSISTANT_LIMITS.voicePerHandle,
   ASSISTANT_LIMITS.voiceWindowMs,
 );
-const calls = new Map<
-  string,
-  { timer: ReturnType<typeof setTimeout>; held?: boolean }
->();
+/** One admitted call: its next timer, its provider-side monitor, its state. */
+interface VoiceLine {
+  timer: ReturnType<typeof setTimeout>;
+  monitor?: SpeechWebSocket;
+  held?: boolean;
+}
+const calls = new Map<string, VoiceLine>();
 let pendingCalls = 0;
-/** Calls whose hang-up has not been confirmed; visible for operators and tests. */
+/** Calls whose end has not been confirmed; visible for operators and tests. */
 export function liveVoiceCalls(): number {
   return calls.size;
 }
@@ -309,8 +308,16 @@ export function resetPublicAssistantState() {
   for (const [id, call] of calls) {
     clearTimeout(call.timer);
     calls.delete(id);
+    closeQuietly(call.monitor);
   }
   pendingCalls = 0;
+}
+function closeQuietly(socket: SpeechWebSocket | undefined) {
+  try {
+    socket?.close();
+  } catch {
+    // Already closed, or never opened: nothing to release.
+  }
 }
 
 async function publishedProfile(handle: string) {
@@ -439,65 +446,156 @@ export async function answerPublicProfileChat(
 export interface AssistantVoiceDependencies {
   createCall?: typeof createOpenAIVoiceCall;
   hangup?: typeof hangupOpenAIVoiceCall;
-  alert?: (line: HeldVoiceLine) => Promise<unknown>;
+  /** The websocket that watches each call from the provider side; the runtime's by default. */
+  webSocket?: SpeechWebSocketConstructor;
 }
 
-/** A voice line no hang-up attempt confirmed; everything an operator needs, no key. */
+/** Where a call's provider-side session is watched; the key travels as a header. */
+export const VOICE_MONITOR_URL = 'wss://api.openai.com/v1/realtime';
+/** `WebSocket.OPEN`. */
+const SOCKET_OPEN = 1;
+/**
+ * The one close code the provider sends on purpose. 1001 (going away) is what
+ * a server sends when it drains or restarts, and a missing code says nothing,
+ * so both count as a lost link.
+ */
+const SESSION_ENDED_CLOSE_CODE = 1000;
+/** How often the server re-silences a session the client keeps reconfiguring. */
+const SILENCE_RESENDS = 20;
+
+/** A voice line no end was ever confirmed for; everything an operator needs, no key. */
 export interface HeldVoiceLine {
   callId: string;
   attempts: number;
   startedAt: string;
   releaseAt: string;
   heldSeconds: number;
+  /** Whether the provider acknowledged the silencing over its websocket. */
+  silenced: boolean;
+}
+
+/** The session configuration that keeps the assistant from answering again. */
+const SILENT_SESSION = {
+  type: 'realtime',
+  instructions: 'This call has ended. Do not speak.',
+  // biome-ignore lint/style/useNamingConvention: provider wire format
+  max_output_tokens: 1,
+  // biome-ignore lint/style/useNamingConvention: provider wire format
+  audio: { input: { turn_detection: null } },
+} as const;
+
+/**
+ * The deadline, enforced over the provider websocket instead of the hang-up
+ * API: the current reply is cancelled, queued audio dropped, and the session
+ * reconfigured so no further turn is detected or answered. The media path
+ * itself can only be torn down by the hang-up API or the provider's own cap,
+ * and a client holding the session's events channel could reconfigure it
+ * back (the monitor then re-silences it), so this is a brake on the
+ * assistant's spend, not a boundary. Returns whether the commands reached
+ * the socket; the provider's `session.updated` echo is what confirms them.
+ */
+function silenceVoiceCall(socket: SpeechWebSocket | undefined): boolean {
+  if (!socket || socket.readyState !== SOCKET_OPEN) return false;
+  try {
+    socket.send(JSON.stringify({ type: 'response.cancel' }));
+    socket.send(JSON.stringify({ type: 'output_audio_buffer.clear' }));
+    socket.send(
+      JSON.stringify({ type: 'session.update', session: SILENT_SESSION }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a `session.updated` echo describes a silenced session. */
+function sessionIsSilent(event: unknown): boolean {
+  const session = (event as { session?: unknown } | null)?.session as
+    | {
+        // biome-ignore lint/style/useNamingConvention: provider wire format
+        max_output_tokens?: unknown;
+        // biome-ignore lint/style/useNamingConvention: provider wire format
+        audio?: { input?: { turn_detection?: unknown } };
+      }
+    | undefined;
+  return (
+    session?.max_output_tokens === SILENT_SESSION.max_output_tokens &&
+    session.audio?.input?.turn_detection === null
+  );
+}
+
+interface VoiceMonitorHooks {
+  /** The line was already released on another confirmation. */
+  released: () => boolean;
+  /** The socket opened; the deadline may already have passed. */
+  onOpen: () => void;
+  /** The provider echoed its session configuration. */
+  onSession: (silent: boolean) => void;
+  /** The provider closed the link normally (1000) after a successful open. */
+  onClosed: () => void;
 }
 
 /**
- * Ring the bell for a held line: one email to `IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL`
- * (or the support address) over the configured SMTP. Never throws; a missing
- * recipient or failed delivery is itself logged under the same marker so a
- * log alert still fires.
+ * Watch one call from the provider side. OpenAI Realtime exposes every WebRTC
+ * call's session over a websocket keyed by call id; it closes when the
+ * session ends, whoever ended it, but a provider restart closes it the same
+ * way while the media session lives on, so no close confirms an end. A
+ * normal close (1000) after a successful open is reported as the provider's
+ * own signal; any other close — abnormal, going away, no code, or a socket
+ * that never opened — is a lost link. Server events are parsed for the
+ * session echo alone and never logged: the socket's close code is the only
+ * detail that reaches a line.
  */
-export async function notifyHeldVoiceLine(
-  line: HeldVoiceLine,
-  options: { environment?: Environment; transport?: InviteTransport } = {},
-): Promise<InviteEmailOutcome> {
-  const environment = options.environment ?? process.env;
-  const configured = environment[PUBLIC_ASSISTANT_ALERT_EMAIL_ENV]
-    ?.trim()
-    .replace(/^mailto:/iu, '');
-  const recipient =
-    configured && /^[^\s@/:?]+@[^\s@/:?]+\.[^\s@/:?]+$/u.test(configured)
-      ? configured
-      : getSupportEmail(environment);
-  if (!recipient)
-    return {
-      status: 'skipped',
-      reason: `no alert recipient (${PUBLIC_ASSISTANT_ALERT_EMAIL_ENV} or an email IOLAUS_SUPPORT_URL)`,
-    };
-  const minutes = Math.ceil(line.heldSeconds / 60);
-  const text = [
-    `A public-profile voice call could not be hung up after ${line.attempts} attempts.`,
-    '',
-    `Call: ${line.callId}`,
-    `Started: ${line.startedAt}`,
-    `Line reserved until: ${line.releaseAt} (about ${minutes} more minutes, the provider's session cap)`,
-    '',
-    'The call may still be live and billing until then. Check the OpenAI realtime dashboard for the call,',
-    'end it there if it is still running, and look for the provider error in the web pod logs',
-    `(marker ${VOICE_LINE_HELD}).`,
-  ].join('\n');
-  return await deliverEmail(
-    (from) => ({
-      from,
-      to: recipient,
-      subject: `Public profile voice line held past its deadline: ${line.callId}`,
-      text: `${text}\n`,
-      html: `<!doctype html><html><body><pre>${text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')}</pre></body></html>`,
-    }),
-    { environment, transport: options.transport },
-  );
+function watchVoiceCall(
+  callId: string,
+  apiKey: string,
+  Socket: SpeechWebSocketConstructor,
+  hooks: VoiceMonitorHooks,
+): SpeechWebSocket | undefined {
+  let socket: SpeechWebSocket;
+  try {
+    socket = new Socket(
+      `${VOICE_MONITOR_URL}?call_id=${encodeURIComponent(callId)}`,
+      { protocols: [], headers: { authorization: `Bearer ${apiKey}` } },
+    );
+  } catch (error) {
+    console.warn(
+      `[public-profile-assistant] voice monitor could not open for line ${callId} (${errorSummary(error)}); only the hang-up API bounds this call`,
+    );
+    return undefined;
+  }
+  let opened = false;
+  socket.addEventListener('open', () => {
+    opened = true;
+    if (!hooks.released()) hooks.onOpen();
+  });
+  socket.addEventListener('message', (message) => {
+    if (hooks.released()) return;
+    let event: { type?: unknown } | null = null;
+    try {
+      event = JSON.parse(String(message.data));
+    } catch {
+      return;
+    }
+    if (event?.type === 'session.updated' || event?.type === 'session.created')
+      hooks.onSession(sessionIsSilent(event));
+  });
+  socket.addEventListener('error', () => {
+    // A close event follows; it decides.
+  });
+  socket.addEventListener('close', (event) => {
+    // The line was released on another confirmation and closed this socket.
+    if (hooks.released()) return;
+    const code = typeof event?.code === 'number' ? event.code : 1005;
+    if (opened && code === SESSION_ENDED_CLOSE_CODE) {
+      hooks.onClosed();
+      return;
+    }
+    console.warn(
+      `[public-profile-assistant] voice monitor for line ${callId} ${opened ? 'lost' : 'never opened'} (close ${code}); only the hang-up API bounds this call now`,
+    );
+  });
+  return socket;
 }
 
 async function readOffer(request: Request): Promise<string> {
@@ -550,7 +648,9 @@ export async function openPublicProfileVoice(
   pendingCalls += 1;
   const create = dependencies.createCall ?? createOpenAIVoiceCall;
   const hangup = dependencies.hangup ?? hangupOpenAIVoiceCall;
-  const alert = dependencies.alert ?? notifyHeldVoiceLine;
+  const Socket =
+    dependencies.webSocket ??
+    (globalThis.WebSocket as unknown as SpeechWebSocketConstructor);
   let callId: string | undefined;
   try {
     const call = await create(offer, {
@@ -567,80 +667,119 @@ export async function openPublicProfileVoice(
     });
     callId = call.callId;
     const id = randomUUID();
-    // The slot is released when the provider confirms the hang-up, or says
-    // the call is already gone (the visitor usually hangs up first). Other
-    // failures retry and keep the line counted as busy; when every attempt
-    // fails the line stays reserved until the provider's own session cap has
-    // certainly ended the call, so a replacement can never be admitted while
-    // this one may still be live, and a dead line still cannot last forever.
-    // That accepted worst case is never quiet: every failed attempt warns,
-    // exhaustion logs a stable marker and emails the operator, and the
-    // eventual release logs again. Nothing here carries the API key.
     const startedAt = Date.now();
-    const end = (attempt: number) => {
-      void hangup(call.callId, { apiKey }).then(
-        () => calls.delete(id),
-        (error: unknown) => {
-          if (callAlreadyGone(error)) {
-            calls.delete(id);
-            return;
-          }
-          if (attempt >= ASSISTANT_LIMITS.hangupRetries) {
-            const release = Math.max(
-              0,
-              startedAt + ASSISTANT_LIMITS.providerSessionCapMs - Date.now(),
-            );
-            const line: HeldVoiceLine = {
-              callId: call.callId,
-              attempts: attempt,
-              startedAt: new Date(startedAt).toISOString(),
-              releaseAt: new Date(Date.now() + release).toISOString(),
-              heldSeconds: Math.ceil(release / 1000),
-            };
-            console.error(
-              `[public-profile-assistant] ${VOICE_LINE_HELD} ${JSON.stringify(line)} — hang-up failed ${attempt} times (${errorSummary(error)}); the line stays reserved until the provider session cap`,
-            );
-            const expiry = setTimeout(() => {
-              calls.delete(id);
-              console.error(
-                `[public-profile-assistant] ${VOICE_LINE_RELEASED_BY_CAP} ${JSON.stringify({ callId: call.callId, startedAt: line.startedAt })} — released by the provider session cap, never confirmed hung up`,
-              );
-            }, release);
-            expiry.unref?.();
-            calls.set(id, { timer: expiry, held: true });
-            void alert(line).then(
-              (outcome) => {
-                const status = (outcome as { status?: unknown } | null)?.status;
-                if (status !== 'sent')
-                  console.error(
-                    `[public-profile-assistant] ${VOICE_LINE_HELD} alert for ${call.callId} not delivered: ${JSON.stringify(outcome)}`,
-                  );
-              },
-              (cause: unknown) =>
-                console.error(
-                  `[public-profile-assistant] ${VOICE_LINE_HELD} alert for ${call.callId} threw (${errorSummary(cause)})`,
-                ),
-            );
-            return;
-          }
-          console.warn(
-            `[public-profile-assistant] voice hang-up attempt ${attempt}/${ASSISTANT_LIMITS.hangupRetries} failed for line ${call.callId} (${errorSummary(error)}); retrying in ${ASSISTANT_LIMITS.hangupRetryMs / 1000}s`,
-          );
-          const retry = setTimeout(
-            () => end(attempt + 1),
-            ASSISTANT_LIMITS.hangupRetryMs,
-          );
-          retry.unref?.();
-          calls.set(id, { timer: retry });
-        },
-      );
+    // The deadline has two independent levers. At the deadline the provider
+    // websocket silences the session and the hang-up API ends the call; the
+    // hang-up is retried on failure, the silencing re-sent until the provider
+    // echoes it. Only the hang-up API confirms an end — a 2xx, or a provider
+    // that says the call is already gone (404/410, the usual case when the
+    // visitor hangs up first) — because a provider restart closes the
+    // websocket exactly as a finished session does. A normal close before the
+    // deadline therefore brings the deadline forward through that same
+    // retried and alarmed hang-up; one after it changes nothing. When both
+    // levers fail the line stays reserved until the provider's own session
+    // cap has certainly ended the call, so a replacement is never admitted
+    // while this one may still be live, and a dead line still cannot last
+    // forever. That rare worst case is never quiet: every failed attempt
+    // warns, exhaustion logs a stable marker and the eventual release logs
+    // again. Nothing here carries the API key.
+    let released = false;
+    let silenceRequested = false;
+    let silenceResends = 0;
+    let silenced = false;
+    let deadlineReached = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      clearTimeout(line.timer);
+      calls.delete(id);
+      closeQuietly(line.monitor);
     };
-    const timer = setTimeout(
-      () => end(1),
-      ASSISTANT_LIMITS.voiceSeconds * 1000,
-    );
-    timer.unref?.();
-    calls.set(id, { timer });
+    const silence = () => {
+      if (released || silenced || silenceResends >= SILENCE_RESENDS) return;
+      if (silenceVoiceCall(line.monitor)) {
+        silenceResends += silenceRequested ? 1 : 0;
+        silenceRequested = true;
+      }
+    };
+    const end = (attempt: number) => {
+      if (released) return;
+      deadlineReached = true;
+      silence();
+      void hangup(call.callId, { apiKey }).then(release, (error: unknown) => {
+        if (released) return;
+        if (callAlreadyGone(error)) {
+          release();
+          return;
+        }
+        if (attempt >= ASSISTANT_LIMITS.hangupRetries) {
+          const remaining = Math.max(
+            0,
+            startedAt + ASSISTANT_LIMITS.providerSessionCapMs - Date.now(),
+          );
+          const held: HeldVoiceLine = {
+            callId: call.callId,
+            attempts: attempt,
+            startedAt: new Date(startedAt).toISOString(),
+            releaseAt: new Date(Date.now() + remaining).toISOString(),
+            heldSeconds: Math.ceil(remaining / 1000),
+            silenced,
+          };
+          console.error(
+            `[public-profile-assistant] ${VOICE_LINE_HELD} ${JSON.stringify(held)} — hang-up failed ${attempt} times (${errorSummary(error)}); the line stays reserved until the provider session cap`,
+          );
+          line.held = true;
+          line.timer = setTimeout(() => {
+            release();
+            console.error(
+              `[public-profile-assistant] ${VOICE_LINE_RELEASED_BY_CAP} ${JSON.stringify({ callId: call.callId, startedAt: held.startedAt })} — released by the provider session cap, never confirmed ended`,
+            );
+          }, remaining);
+          line.timer.unref?.();
+          return;
+        }
+        console.warn(
+          `[public-profile-assistant] voice hang-up attempt ${attempt}/${ASSISTANT_LIMITS.hangupRetries} failed for line ${call.callId} (${errorSummary(error)}); session ${silenced ? 'silenced' : 'not confirmed silenced'} over the provider websocket; retrying in ${ASSISTANT_LIMITS.hangupRetryMs / 1000}s`,
+        );
+        line.timer = setTimeout(
+          () => end(attempt + 1),
+          ASSISTANT_LIMITS.hangupRetryMs,
+        );
+        line.timer.unref?.();
+      });
+    };
+    const line: VoiceLine = {
+      timer: setTimeout(() => end(1), ASSISTANT_LIMITS.voiceSeconds * 1000),
+    };
+    line.timer.unref?.();
+    calls.set(id, line);
+    line.monitor = watchVoiceCall(call.callId, apiKey, Socket, {
+      released: () => released,
+      // A monitor that opens late still enforces a deadline already passed.
+      onOpen: () => {
+        if (deadlineReached) silence();
+      },
+      onSession: (silent) => {
+        if (!silenceRequested) return;
+        silenced = silent;
+        // The client reconfigured the session back: silence it again.
+        if (!silent) silence();
+      },
+      onClosed: () => {
+        if (deadlineReached) {
+          // The hang-up API is already deciding; the link is simply gone.
+          console.warn(
+            `[public-profile-assistant] voice monitor for line ${call.callId} closed (${SESSION_ENDED_CLOSE_CODE}) after the deadline; the hang-up API alone ends this call now`,
+          );
+          return;
+        }
+        // The visitor hung up, or the provider restarted under a live call.
+        // Only the hang-up API can tell which, so the deadline comes forward:
+        // its 2xx or 404 releases the line, and failures retry and alarm.
+        clearTimeout(line.timer);
+        end(1);
+      },
+    });
     return new Response(call.answer, {
       status: 201,
       headers: {

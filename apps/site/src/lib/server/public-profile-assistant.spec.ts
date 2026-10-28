@@ -11,7 +11,6 @@ vi.mock('./public-profile-service', () => ({
 vi.mock('./app-config', () => ({ isSharedHosted: mocks.shared }));
 
 import { publicProfileApiSchema } from '$lib/public-profile-api-contract';
-import type { InviteMessage } from './hosted-invite-email';
 import { publicProfileApiResponse } from './public-profile-api';
 import {
   ASSISTANT_LIMITS,
@@ -22,10 +21,8 @@ import {
   assistantErrorResponse,
   assistantInstructions,
   assistantPreflightResponse,
-  type HeldVoiceLine,
   heldVoiceLines,
   liveVoiceCalls,
-  notifyHeldVoiceLine,
   openPublicProfileVoice,
   profileContext,
   publicAssistantEnabled,
@@ -34,6 +31,7 @@ import {
   sseFrames,
   VOICE_LINE_HELD,
   VOICE_LINE_RELEASED_BY_CAP,
+  VOICE_MONITOR_URL,
 } from './public-profile-assistant';
 
 const fixture = JSON.parse(
@@ -80,6 +78,76 @@ const voiceRequest = (body: string = offer, type = 'application/sdp') =>
     body,
   });
 const read = (response: Response) => response.text();
+/**
+ * The provider-side websocket for one call, as the server sees it: it opens
+ * only when a test says so, records what the server sends, and can be closed
+ * cleanly (the provider ended the session) or dropped (the link was lost).
+ */
+class FakeSocket {
+  static instances: FakeSocket[] = [];
+  static get last() {
+    return FakeSocket.instances.at(-1) as FakeSocket;
+  }
+  readyState = 0;
+  bufferedAmount = 0;
+  sent: string[] = [];
+  private listeners = new Map<string, Array<(event: unknown) => void>>();
+  constructor(
+    readonly url: string,
+    readonly init: { protocols: string[]; headers: Record<string, string> },
+  ) {
+    FakeSocket.instances.push(this);
+  }
+  addEventListener(type: string, listener: (event: unknown) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  private emit(type: string, event: unknown) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+  open() {
+    this.readyState = 1;
+    this.emit('open', {});
+  }
+  send(data: string) {
+    if (this.readyState !== 1) throw new Error('socket not open');
+    this.sent.push(data);
+  }
+  /** The server hangs up its side; the provider answers with a clean close. */
+  close(code = 1000, reason = '') {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.emit('close', { code, reason });
+  }
+  /** The link is lost mid-call. */
+  drop(reason = 'Bearer sk-test') {
+    this.readyState = 3;
+    this.emit('error', { message: reason });
+    this.emit('close', { code: 1006, reason });
+  }
+  /** Everything the server sent, parsed. */
+  get events() {
+    return this.sent.map((data) => JSON.parse(data) as Record<string, unknown>);
+  }
+  /** A server event from the provider. */
+  receive(event: Record<string, unknown>) {
+    this.emit('message', { data: JSON.stringify(event) });
+  }
+  /** The provider echoes the session as the last `session.update` left it. */
+  echoSession(silent: boolean) {
+    this.receive({
+      type: 'session.updated',
+      session: {
+        type: 'realtime',
+        max_output_tokens: silent ? 1 : 800,
+        audio: {
+          input: {
+            turn_detection: silent ? null : { type: 'semantic_vad' },
+          },
+        },
+      },
+    });
+  }
+}
 const status = (promise: Promise<unknown>) =>
   promise.then(
     () => 200,
@@ -91,8 +159,13 @@ beforeEach(() => {
   mocks.profile.mockResolvedValue(current());
   mocks.shared.mockReturnValue(true);
   resetPublicAssistantState();
+  FakeSocket.instances = [];
+  vi.stubGlobal('WebSocket', FakeSocket);
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe('public profile assistant gating and CORS', () => {
   it('is off unless shared hosting, public profiles and the assistant flag agree', () => {
@@ -471,10 +544,19 @@ describe('voice endpoint', () => {
       expect(response.headers.get('content-type')).toBe('application/sdp');
       expect(await read(response)).toBe('v=0\r\nanswer');
       expect(hangup).not.toHaveBeenCalled();
+      // The call is watched from the provider side too; the key travels as a
+      // header, never in the URL.
+      expect(FakeSocket.instances).toHaveLength(1);
+      expect(FakeSocket.last.url).toBe(`${VOICE_MONITOR_URL}?call_id=call-1`);
+      expect(FakeSocket.last.init.headers.authorization).toBe('Bearer sk-test');
+      FakeSocket.last.open();
       await vi.advanceTimersByTimeAsync(
         ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
       );
       expect(hangup).toHaveBeenCalledWith('call-1', { apiKey: 'sk-test' });
+      expect(liveVoiceCalls()).toBe(0);
+      // A confirmed hang-up closes the monitor.
+      expect(FakeSocket.last.readyState).toBe(3);
     } finally {
       vi.useRealTimers();
     }
@@ -521,9 +603,6 @@ describe('voice endpoint', () => {
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const alert = vi.fn(
-      async (_line: HeldVoiceLine) => ({ status: 'sent' }) as const,
-    );
     try {
       const createCall = vi.fn(async () => ({
         answer: 'v=0',
@@ -555,7 +634,6 @@ describe('voice endpoint', () => {
           openPublicProfileVoice(handle, voiceRequest(), '40.0.0.2', {
             createCall: createCall as never,
             hangup: broken as never,
-            alert,
           }),
         ),
       ).toBe(200);
@@ -570,34 +648,29 @@ describe('voice endpoint', () => {
           `attempt ${i}/${ASSISTANT_LIMITS.hangupRetries}`,
         );
         expect(heldVoiceLines()).toBe(0);
-        expect(alert).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
       }
       expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
-      // Still reserved: the call may be live until the provider's own cap,
-      // and that is an alarm — a marked error line plus the operator email.
+      // Still reserved: the monitor never opened and no hang-up was confirmed,
+      // so the call may be live until the provider's own cap. That is the
+      // alarm: a marked error line with a JSON record of the line.
       expect(liveVoiceCalls()).toBe(1);
       expect(heldVoiceLines()).toBe(1);
       expect(errorLog).toHaveBeenCalledTimes(1);
       const held = String(errorLog.mock.calls[0][0]);
       expect(held).toContain(VOICE_LINE_HELD);
       expect(held).toContain('"callId":"call-2"');
+      expect(held).toContain('"attempts":8');
+      expect(held).toContain('"silenced":false');
+      expect(held).toMatch(/"heldSeconds":[1-9]/u);
       expect(held).toContain('(502 Error)');
       expect(held).not.toContain('upstream');
       expect(held).not.toContain('sk-');
-      expect(alert).toHaveBeenCalledTimes(1);
-      expect(alert.mock.calls[0][0]).toMatchObject({
-        callId: 'call-2',
-        attempts: ASSISTANT_LIMITS.hangupRetries,
-      });
-      expect(alert.mock.calls[0][0].heldSeconds).toBeGreaterThan(0);
-      expect(JSON.stringify(alert.mock.calls[0][0])).not.toContain('sk-');
       expect(
         await status(
           openPublicProfileVoice(handle, voiceRequest(), '40.0.0.3', {
             createCall: createCall as never,
             hangup: broken as never,
-            alert,
           }),
         ),
       ).toBe(200);
@@ -634,18 +707,19 @@ describe('voice endpoint', () => {
           { status: 401, code: 'E_UPSTREAM<script>' },
         );
       });
-      const alert = vi.fn(
-        async (_line: HeldVoiceLine) => ({ status: 'sent' }) as const,
-      );
       expect(
         await status(
           openPublicProfileVoice(handle, voiceRequest(), '42.0.0.1', {
             createCall: createCall as never,
             hangup: leaky as never,
-            alert,
           }),
         ),
       ).toBe(200);
+      // The monitor link is lost with provider text that echoes the key.
+      FakeSocket.last.open();
+      FakeSocket.last.drop(
+        'Authorization: Bearer sk-test {"error":"<b>sk-test</b>"}',
+      );
       await vi.advanceTimersByTimeAsync(
         ASSISTANT_LIMITS.voiceSeconds * 1000 +
           ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
@@ -653,138 +727,335 @@ describe('voice endpoint', () => {
       const lines = [...warnLog.mock.calls, ...errorLog.mock.calls].map(
         (call) => String(call[0]),
       );
-      expect(lines.length).toBe(ASSISTANT_LIMITS.hangupRetries);
+      // One line for the lost monitor, one per hang-up attempt.
+      expect(lines.length).toBe(ASSISTANT_LIMITS.hangupRetries + 1);
+      expect(lines[0]).toContain('lost (close 1006)');
       for (const line of lines) {
         expect(line).not.toContain('sk-');
         expect(line).not.toContain('Bearer');
         expect(line).not.toContain('Authorization');
         expect(line).not.toContain('<');
-        expect(line).toContain('401 E_UPSTREAMscript');
       }
-      expect(JSON.stringify(alert.mock.calls[0][0])).not.toContain('sk-');
+      for (const line of lines.slice(1))
+        expect(line).toContain('401 E_UPSTREAMscript');
+      expect(FakeSocket.last.url).not.toContain('sk-');
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });
 
-  it('logs, under the same marker, an alert that could not be delivered', async () => {
+  it('silences the session over the provider websocket when the hang-up fails, and keeps the line when the provider closes the link', async () => {
     enable(true);
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const createCall = vi.fn(async () => ({ answer: 'v=0', callId: 'c' }));
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_1',
+      }));
       const broken = vi.fn(async () => {
-        throw new Error('upstream');
-      });
-      const alert = vi.fn(async () => {
-        throw new Error('smtp down');
+        throw Object.assign(new Error('upstream'), { status: 503 });
       });
       expect(
         await status(
-          openPublicProfileVoice(handle, voiceRequest(), '41.0.0.1', {
+          openPublicProfileVoice(handle, voiceRequest(), '43.0.0.1', {
             createCall: createCall as never,
             hangup: broken as never,
-            alert,
           }),
         ),
       ).toBe(200);
+      const socket = FakeSocket.last;
+      socket.open();
+      // Nothing is sent while the call is within its deadline.
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 - 5,
+      );
+      expect(socket.sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10);
+      // The deadline: the hang-up fails, so the session is silenced from the
+      // provider side — the reply cancelled, queued audio dropped, turn
+      // detection off and no room for another answer.
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(socket.events.map((event) => event.type)).toEqual([
+        'response.cancel',
+        'output_audio_buffer.clear',
+        'session.update',
+      ]);
+      const update = socket.events[2].session as Record<string, unknown>;
+      expect(update.type).toBe('realtime');
+      expect(update.max_output_tokens).toBe(1);
+      expect(update.audio).toEqual({ input: { turn_detection: null } });
+      expect(String(update.instructions)).toContain('Do not speak');
+      expect(JSON.stringify(socket.sent)).not.toContain('sk-');
+      // Still reserved: silenced is not ended. Until the provider echoes the
+      // configuration nothing is claimed about it.
+      expect(liveVoiceCalls()).toBe(1);
+      expect(String(warnLog.mock.calls[0][0])).toContain(
+        'session not confirmed silenced over the provider websocket',
+      );
+      // Without an echo the next attempt re-sends the silencing.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      expect(broken).toHaveBeenCalledTimes(2);
+      expect(socket.sent).toHaveLength(6);
+      // The provider echoes the silent session: acknowledged, no more sends.
+      socket.echoSession(true);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.hangupRetryMs + 1);
+      expect(broken).toHaveBeenCalledTimes(3);
+      expect(socket.sent).toHaveLength(6);
+      expect(String(warnLog.mock.calls[2][0])).toContain(
+        'session silenced over the provider websocket',
+      );
+      // The client reconfigures the session back: it is silenced again.
+      socket.echoSession(false);
+      expect(socket.sent).toHaveLength(9);
+      expect(socket.events[8].type).toBe('session.update');
+      socket.echoSession(true);
+      // The provider closes the link normally. After the deadline that is
+      // not a confirmed end — a restart closes it the same way — so the line
+      // stays reserved, the hang-up keeps retrying and exhaustion alarms.
+      socket.close(1000);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(String(warnLog.mock.calls.at(-1)?.[0])).toContain(
+        'closed (1000) after the deadline',
+      );
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(heldVoiceLines()).toBe(1);
+      expect(String(errorLog.mock.calls[0][0])).toContain(VOICE_LINE_HELD);
+      expect(String(errorLog.mock.calls[0][0])).toContain('"silenced":true');
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('records a silenced held line, and keeps it to the cap whatever the monitor does', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_2',
+      }));
+      const broken = vi.fn(async () => {
+        throw new Error('upstream');
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '44.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      FakeSocket.last.echoSession(true);
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(heldVoiceLines()).toBe(1);
+      const held = String(errorLog.mock.calls[0][0]);
+      expect(held).toContain(VOICE_LINE_HELD);
+      expect(held).toContain('"silenced":true');
+      FakeSocket.last.close(1000);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(heldVoiceLines()).toBe(1);
+      const lines = warnLog.mock.calls.map((call) => String(call[0]));
+      expect(lines.at(-1)).toContain('closed (1000) after the deadline');
+      // Only the cap releases a held line, with its marker.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.providerSessionCapMs);
+      expect(liveVoiceCalls()).toBe(0);
+      expect(heldVoiceLines()).toBe(0);
+      expect(String(errorLog.mock.calls.at(-1)?.[0])).toContain(
+        VOICE_LINE_RELEASED_BY_CAP,
+      );
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases a line the provider closes before the deadline, and keeps one a lost link says nothing about', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: `rtc_${createCall.mock.calls.length}`,
+      }));
+      const hangup = vi.fn(async () => {
+        throw Object.assign(new Error('gone'), { status: 404 });
+      });
+      const deps = { createCall: createCall as never, hangup: hangup as never };
+      // The visitor hangs up a minute in: the provider closes the session.
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '45.0.0.1', deps),
+        ),
+      ).toBe(200);
+      const first = FakeSocket.last;
+      first.open();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(liveVoiceCalls()).toBe(1);
+      first.close(1000);
+      // Before the deadline a close only brings the deadline forward: the
+      // hang-up API decides, and its 404 is the confirmed end.
+      expect(hangup).toHaveBeenCalledWith('rtc_1', { apiKey: 'sk-test' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(liveVoiceCalls()).toBe(0);
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.voiceSeconds * 1000);
+      expect(hangup).toHaveBeenCalledTimes(1);
+      expect(warnLog).not.toHaveBeenCalled();
+      // A lost link, a going-away close, or a socket that never opened
+      // confirms nothing: the line stays busy until the hang-up API answers
+      // at the deadline.
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '45.0.0.2', deps),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      FakeSocket.last.drop();
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '45.0.0.3', deps),
+        ),
+      ).toBe(200);
+      FakeSocket.last.close(1006);
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '45.0.0.4', deps),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      FakeSocket.last.close(1001);
+      expect(liveVoiceCalls()).toBe(3);
+      expect(warnLog).toHaveBeenCalledTimes(3);
+      expect(String(warnLog.mock.calls[0][0])).toContain('lost (close 1006)');
+      expect(String(warnLog.mock.calls[1][0])).toContain(
+        'never opened (close 1006)',
+      );
+      expect(String(warnLog.mock.calls[2][0])).toContain('lost (close 1001)');
+      for (const call of warnLog.mock.calls)
+        expect(String(call[0])).not.toContain('sk-');
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.voiceSeconds * 1000 + 1,
+      );
+      expect(hangup).toHaveBeenCalledTimes(4);
+      expect(liveVoiceCalls()).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps and alarms a line the provider closed early when the hang-up then fails', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_9',
+      }));
+      const broken = vi.fn(async () => {
+        throw Object.assign(new Error('upstream'), { status: 502 });
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '46.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      await vi.advanceTimersByTimeAsync(20_000);
+      // A provider restart closes the link normally while the media session
+      // may live on: the line stays reserved and the hang-up retries as if
+      // the deadline had come.
+      FakeSocket.last.close(1000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(liveVoiceCalls()).toBe(1);
+      expect(String(warnLog.mock.calls[0][0])).toContain('attempt 1/');
+      await vi.advanceTimersByTimeAsync(
+        ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
+      );
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+      expect(heldVoiceLines()).toBe(1);
+      expect(String(errorLog.mock.calls[0][0])).toContain(VOICE_LINE_HELD);
+      // The original deadline timer was replaced, not doubled.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_LIMITS.voiceSeconds * 1000);
+      expect(broken).toHaveBeenCalledTimes(ASSISTANT_LIMITS.hangupRetries);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('silences a session the moment a late monitor opens after the deadline', async () => {
+    enable(true);
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const createCall = vi.fn(async () => ({
+        answer: 'v=0',
+        callId: 'rtc_7',
+      }));
+      const broken = vi.fn(async () => {
+        throw new Error('upstream');
+      });
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '47.0.0.1', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      const socket = FakeSocket.last;
+      // Every hang-up attempt is spent while the monitor is still connecting.
       await vi.advanceTimersByTimeAsync(
         ASSISTANT_LIMITS.voiceSeconds * 1000 +
           ASSISTANT_LIMITS.hangupRetries * (ASSISTANT_LIMITS.hangupRetryMs + 1),
       );
-      expect(alert).toHaveBeenCalledTimes(1);
-      const lines = errorLog.mock.calls.map((call) => String(call[0]));
-      expect(lines.filter((l) => l.includes(VOICE_LINE_HELD))).toHaveLength(2);
-      expect(lines.some((l) => l.includes('alert for c threw'))).toBe(true);
       expect(heldVoiceLines()).toBe(1);
+      expect(socket.sent).toEqual([]);
+      socket.open();
+      expect(socket.events.map((event) => event.type)).toEqual([
+        'response.cancel',
+        'output_audio_buffer.clear',
+        'session.update',
+      ]);
+      // A monitor that opens for a line within its deadline sends nothing.
+      expect(
+        await status(
+          openPublicProfileVoice(handle, voiceRequest(), '47.0.0.2', {
+            createCall: createCall as never,
+            hangup: broken as never,
+          }),
+        ),
+      ).toBe(200);
+      FakeSocket.last.open();
+      expect(FakeSocket.last.sent).toEqual([]);
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
-  });
-
-  describe('notifyHeldVoiceLine', () => {
-    const line = {
-      callId: 'rtc_123',
-      attempts: 8,
-      startedAt: '2026-10-27T10:00:00.000Z',
-      releaseAt: '2026-10-27T11:00:00.000Z',
-      heldSeconds: 3_300,
-    };
-    const smtp = {
-      SMTP_HOST: 'smtp.example',
-      SMTP_USER: 'u',
-      SMTP_PASSWORD: 'p',
-      SMTP_FROM: 'alerts@example',
-    };
-
-    it('emails the configured alert address with the call, no secrets', async () => {
-      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
-      expect(
-        await notifyHeldVoiceLine(line, {
-          environment: {
-            ...smtp,
-            IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL: 'mailto:ops@example.com',
-            IOLAUS_PUBLIC_ASSISTANT_OPENAI_API_KEY: 'sk-secret',
-          },
-          transport: { sendMail },
-        }),
-      ).toEqual({ status: 'sent' });
-      expect(sendMail).toHaveBeenCalledTimes(1);
-      const message = sendMail.mock.calls[0][0];
-      expect(message.to).toBe('ops@example.com');
-      expect(message.from).toBe('alerts@example');
-      expect(message.subject).toContain('rtc_123');
-      expect(message.text).toContain('8 attempts');
-      expect(message.text).toContain('2026-10-27T11:00:00.000Z');
-      expect(message.text).toContain(VOICE_LINE_HELD);
-      expect(JSON.stringify(message)).not.toContain('sk-secret');
-    });
-
-    it('falls back to an email support address', async () => {
-      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
-      await notifyHeldVoiceLine(line, {
-        environment: { ...smtp, IOLAUS_SUPPORT_URL: 'mailto:help@example.com' },
-        transport: { sendMail },
-      });
-      expect(sendMail.mock.calls[0][0].to).toBe('help@example.com');
-    });
-
-    it('skips, naming the missing setting, when nobody can be told', async () => {
-      const sendMail = vi.fn(async (_message: InviteMessage) => undefined);
-      const outcome = await notifyHeldVoiceLine(line, {
-        environment: {
-          ...smtp,
-          IOLAUS_SUPPORT_URL: 'https://example.com/help',
-        },
-        transport: { sendMail },
-      });
-      expect(outcome.status).toBe('skipped');
-      expect(JSON.stringify(outcome)).toContain(
-        'IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL',
-      );
-      expect(sendMail).not.toHaveBeenCalled();
-    });
-
-    it('reports an SMTP failure without throwing', async () => {
-      const outcome = await notifyHeldVoiceLine(line, {
-        environment: {
-          ...smtp,
-          IOLAUS_PUBLIC_ASSISTANT_ALERT_EMAIL: 'ops@example.com',
-        },
-        transport: {
-          sendMail: async () => {
-            throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
-          },
-        },
-      });
-      expect(outcome).toEqual({
-        status: 'failed',
-        reason: 'SMTP delivery failed (ECONNREFUSED)',
-      });
-    });
   });
 
   it('does not spend a handle or address start on a request turned away by busy lines', async () => {
