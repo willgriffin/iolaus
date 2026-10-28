@@ -26,7 +26,28 @@ function renderApplicationReview(requiresOverride: boolean) {
         comments: [],
         company: { name: 'Acme' },
         finalApprovalMaterialsCurrent: false,
-        materials: [],
+        materials: ['packet', 'resume', 'cover_letter', 'answers'].map(
+          (materialType) => ({
+            materialType,
+            label:
+              {
+                packet: 'Packet',
+                resume: 'Resume',
+                cover_letter: 'Cover letter',
+                answers: 'Answers',
+              }[materialType] ?? materialType,
+            body: '',
+            href: '',
+            materialRecordId: materialType,
+            materialRecordType: 'ResumeAsset',
+            materialVersion: '1',
+            path: '',
+            pdfHref: '',
+            pdfPath: '',
+            reviewStatus: 'not_reviewed' as const,
+            title: '',
+          }),
+        ),
         opportunity: { title: 'Senior software engineer' },
         preflight: { requiresOverride },
         submissionOptions: { methods: [], roles: [] },
@@ -60,4 +81,22 @@ describe('application review packet generation', () => {
       /<header class="review-header(?: [^"]*)?">[\s\S]*name="preflightOverrideReason"[\s\S]*?<\/header>/,
     );
   });
+});
+
+it('defaults to Opportunity and hides internal packet and material-only actions', () => {
+  const { body } = renderApplicationReview(false);
+  const tabs =
+    body.match(/<nav[^>]*class="material-tabs[^>]*>([\s\S]*?)<\/nav>/)?.[1] ??
+    '';
+  expect(tabs).toMatch(/aria-current="page"[^>]*>Opportunity/);
+  expect(tabs).toMatch(
+    /Opportunity[\s\S]*Resume[\s\S]*Cover letter[\s\S]*Q&amp;A/,
+  );
+  expect(tabs).not.toContain('Packet');
+  expect(body).toContain('Opportunity overview');
+  expect(body).not.toContain('Packet comments');
+  expect(body).not.toContain('Mark material reviewed');
+  expect(body).not.toContain('Save comments');
+  expect(body).toContain('name="finalSubmissionIntent"');
+  expect(body).toContain('value="final_submission"');
 });
