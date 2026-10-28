@@ -38,8 +38,7 @@ const id = (description: string) => ({
  * service receives; no normalization happens between the two.
  */
 export const recommendationTaskDecisions = [
-  ...recommendationDecisions,
-  'archive',
+  ...new Set<string>([...recommendationDecisions, 'archive']),
 ] as const;
 
 export function recommendationTaskDecision(

@@ -1573,9 +1573,8 @@ describe('MCP public tool policy', () => {
       'companies.update',
       'sources.read',
       'sources.create',
-      'tasks.read',
-      'tasks.create',
-      'tasks.update',
+      'workflow.application.review',
+      'workflow.task.sync',
     ]);
 
     const response = await callMcpToolWithAuthorityFixture({
@@ -1613,23 +1612,35 @@ describe('MCP public tool policy', () => {
         user: { id: 'user-1' },
       }),
     ).rejects.toMatchObject({ status: 400 });
-    await expect(
-      callMcpToolWithAuthorityFixture({
-        arguments: { companyId: 'co-1' },
-        locals: ownerLocals,
-        name: 'company_research_request',
-        permissions: [
-          'companies.read',
-          'sources.read',
-          'sources.create',
-          'tasks.read',
-          'tasks.create',
-          'tasks.update',
-        ],
-        tenantId: 'tenant-1',
-        user: { id: 'user-1' },
-      }),
-    ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    // Company research needs both the shared-catalog write grants and the
+    // curated private-workflow capabilities; any one missing is refused.
+    const researchGrants = [
+      'companies.read',
+      'companies.update',
+      'sources.read',
+      'sources.create',
+      'workflow.application.review',
+      'workflow.task.sync',
+    ];
+    for (const missing of [
+      'companies.update',
+      'sources.create',
+      'workflow.application.review',
+      'workflow.task.sync',
+    ]) {
+      await expect(
+        callMcpToolWithAuthorityFixture({
+          arguments: { companyId: 'co-1' },
+          locals: ownerLocals,
+          name: 'company_research_request',
+          permissions: researchGrants.filter((grant) => grant !== missing),
+          tenantId: 'tenant-1',
+          user: { id: 'user-1' },
+        }),
+        missing,
+      ).rejects.toMatchObject({ message: 'Forbidden', status: 403 });
+    }
+    expect(bridgeMocks.executeWorkflowTool).toHaveBeenCalledTimes(1);
     await expect(
       callMcpToolWithAuthorityFixture({
         arguments: { humanReviewStatus: 'maybe' },

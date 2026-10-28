@@ -121,17 +121,20 @@ export const opportunityDigDeeperOperations = [
 /**
  * `ensureCompanyResearch()` (`application-workflow.ts`): reads and re-statuses
  * the shared `Company`, looks up or creates its careers `Source`, and lists,
- * creates or updates its `research_company` task. These are shared-catalog
- * writes, so the tool that exposes it asserts the generated permissions the
- * deep-dive set already carries for the same call, not only a curated
- * capability.
+ * creates or updates the owner's `research_company` task. The shared-catalog
+ * writes assert their generated permissions (company update, careers source
+ * read/create); the private task workflow asserts the curated capabilities
+ * the admin actions assert for it (`application.review`, which authorizes
+ * the deep dive that performs the same research, and `task.sync`), never a
+ * generic private task CRUD grant.
  */
 export const companyResearchOperations = [
   { action: 'read', collection: 'companies' },
   { action: 'update', collection: 'companies' },
   { action: 'read', collection: 'sources' },
   { action: 'create', collection: 'sources' },
-  ...taskSyncOperations,
+  { action: 'application.review', collection: 'workflow' },
+  { action: 'task.sync', collection: 'workflow' },
 ] as const satisfies readonly WorkflowOperation[];
 
 /**
