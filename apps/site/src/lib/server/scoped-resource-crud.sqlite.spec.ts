@@ -115,6 +115,15 @@ describe('owner-scoped CRUD on native SQLite with two owners in one tenant', () 
       await expect(
         createScopedRecord('Achievement', { id: mineId, title: 'Adopted' }),
       ).rejects.toMatchObject({ status: 400 });
+      // SMRT's own adoption switch smuggled in as a payload key: the derived
+      // slug of the same title would adopt A's row if the flag were applied.
+      await expect(
+        createScopedRecord('Achievement', {
+          _adoptNaturalKey: true,
+          title: 'Shipped the thing',
+        }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(await rowById(mineId)).toMatchObject({ owner_user_id: 'user-a' });
       // B's own create with the same human title gets its own row.
       const theirs = await createScopedRecord('Achievement', {
         title: 'Shipped the thing',

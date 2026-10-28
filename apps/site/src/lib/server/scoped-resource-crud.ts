@@ -1,4 +1,8 @@
+import { ObjectRegistry } from '@happyvertical/smrt-core';
 import { error } from '@sveltejs/kit';
+// Side-effect import: the field allow-list below reads the registry, which
+// must hold every app-owned class on a cold process.
+import '../objects/index.js';
 import { privateRecordWhere } from './private-workspace.js';
 import { invalidatePublishedResumeCache } from './resume-data.js';
 import { queuePublishedCanonicalRefresh } from './resume-source-refresh.js';
@@ -129,26 +133,29 @@ function boundedOffset(value: unknown): number {
 }
 
 /**
- * Identity columns the framework owns. An explicit `slug` (or `context`) on a
+ * An agent payload may carry only the class's declared `@field()` names.
+ * Everything else is refused up front: the framework identity columns (`id`,
+ * `slug`, `context`, timestamps) and, above all, SMRT's own instance controls
+ * such as `_adoptNaturalKey` or `_insertOnly`, which `collection.create()`
+ * would otherwise apply as options. An explicit slug or an adoption flag on a
  * new object makes SMRT adopt the existing row carrying that natural key, and
- * its collision guard checks the tenant, not the owner tuple, so a payload
- * naming another owner's slug could overwrite and reassign their row. An
- * explicit `id` would likewise target an existing row. Agents never supply
- * identity; the server derives it.
+ * its collision guard checks the tenant, not the owner tuple, so such a
+ * payload could overwrite and reassign another owner's row. The server
+ * derives identity; the caller names only domain fields.
  */
-const serverAssignedIdentityFields = ['id', 'slug', 'context'] as const;
-
-function rejectServerAssignedIdentity(
+function assertDeclaredFields(
+  className: string,
   payload: ScopedRecord,
-  allowId = false,
+  options: { allowId?: boolean } = {},
 ): void {
-  const supplied = serverAssignedIdentityFields.filter(
-    (key) => Object.hasOwn(payload, key) && !(allowId && key === 'id'),
+  const declared = ObjectRegistry.getFields(className);
+  const rejected = Object.keys(payload).filter(
+    (key) => !declared.has(key) && !(options.allowId && key === 'id'),
   );
-  if (supplied.length) {
+  if (rejected.length) {
     error(
       400,
-      `Record identity is assigned by the server; remove ${supplied.join(', ')}.`,
+      `Unknown or server-managed fields for ${className}: ${rejected.sort().join(', ')}. Record identity is assigned by the server.`,
     );
   }
 }
@@ -220,11 +227,14 @@ export async function createScopedRecord(
   payload: ScopedRecord,
 ): Promise<ScopedRecord> {
   assertWorkspaceResourceWritable(className);
-  rejectServerAssignedIdentity(payload);
+  assertDeclaredFields(className, payload);
   const scoped = workspaceResourcePayload(className, {
     ...ownershipDefaults(className),
     ...payload,
   });
+  // With identity and framework controls refused above, the only slug SMRT
+  // sees is the one it derives, and a derived slug never adopts a row: a
+  // collision moves to a free `-2`, `-3`, … slug and INSERTs.
   const record = await (await scopedCollection(className)).create(scoped);
   await record.save?.();
   afterResumeSourceWrite(className);
@@ -239,7 +249,7 @@ export async function updateScopedRecord(
   assertWorkspaceResourceWritable(className);
   const record = await ownedRecord(className, id);
   if (!record) error(404, 'Item not found');
-  rejectServerAssignedIdentity(payload, true);
+  assertDeclaredFields(className, payload, { allowId: true });
   const scoped = workspaceResourcePayload(className, payload);
   if (Object.hasOwn(scoped, 'id') && String(scoped.id) !== String(record.id)) {
     error(403, 'Record ownership cannot be changed.');

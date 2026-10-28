@@ -574,9 +574,10 @@ the scope. Agent writes stamp the owner tuple when it is omitted.
 | `Attachment`, `ProjectAttachment`, `AchievementAttachment` | full | metadata (`title`, `caption`, `altText`, `visibility`, `usage`, the parent id, `attachmentId`); the upload itself stays on the admin route | `sortOrder` |
 | `ExperienceTag`, `ProjectTag`, `AchievementTag`, `DutyTag`, `EducationTag`, `EmploymentRoleTag` | full | the parent id, `tagId`, `tagRole` | — |
 
-Record identity (`id`, `slug`, `context`) is assigned by the server: a payload
-that supplies one is refused with 400, so no agent write can adopt another
-record's natural key. On MCP these tools assert the curated
+Agent payloads may carry only the class's declared fields listed above; any
+other key — record identity (`id`, `slug`, `context`), timestamps, or a
+framework control such as `_adoptNaturalKey` — is refused with 400, so no
+agent write can adopt another record's natural key. On MCP these tools assert the curated
 `workflow.profile.manage` capability (the grant a hosted member holds and the
 one the `/admin/career` editor asserts), not a per-class CRUD grant; the owner
 predicate bounds the write.
