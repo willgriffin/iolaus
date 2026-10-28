@@ -285,7 +285,7 @@ export function candidateRuntime(images, reviewedContract) {
     serviceAccountName: 'iolaus-monitor',
     schedule: '*/5 * * * *',
     readinessProbe: { exec: { command: ['node', '--version'] } },
-    resources: resources('250m', '256Mi'),
+    resources: resources('250m', '512Mi'),
   });
   const migration = {
     image: site,

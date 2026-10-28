@@ -349,3 +349,8 @@ Qualification reports separate fixed stages for each idle worker shutdown and
 the monitor Job. A failed monitor wait emits only bounded allowlisted Pod states
 and fixed log categories, then rethrows the original failure and cleans up.
 The monitor completion assertion and 90-second wait remain required.
+
+The inactive monitor uses a 512 MiB memory limit with a 256 MiB request and
+250m CPU limit. Actual Kind qualification observed the Node/tsx monitor
+OOM-killed at 256 MiB after both idle worker shutdown checks passed. The
+count-only database grants and required monitor completion check are unchanged.
