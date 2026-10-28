@@ -17,6 +17,14 @@ function items(key: string): string[] {
     .map((line) => line.replace(/^[-*•]\s*/, '').trim())
     .filter(Boolean);
 }
+const modalOpportunity = $derived(
+  opportunity
+    ? {
+        ...opportunity,
+        companyName: text(company, 'name') || text(opportunity, 'companyName'),
+      }
+    : null,
+);
 const postingUrl = $derived(
   text(opportunity, 'postingUrl') || text(opportunity, 'applyUrl'),
 );
@@ -67,8 +75,8 @@ const compensation = $derived.by(() => {
     {/if}
   </div>
 </section>
-{#if opportunity && postingOpen}
-  <OpportunityTriageModal bind:open={postingOpen} singleOpportunity={opportunity} readOnly />
+{#if modalOpportunity && postingOpen}
+  <OpportunityTriageModal bind:open={postingOpen} singleOpportunity={modalOpportunity} readOnly />
 {/if}
 
 <style>

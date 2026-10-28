@@ -55,6 +55,8 @@ it('shows stored facts and opens the existing modal without any triage side effe
   expect(dialog.getAttribute('aria-label')).toBe(
     'Original opportunity posting',
   );
+  expect(dialog.textContent).toContain('Acme');
+  expect(dialog.textContent).not.toContain('Unknown company');
   expect(dialog.textContent).toContain('Original full posting');
   expect(dialog.textContent).not.toContain('Review notes');
   expect(dialog.querySelector('[aria-label="Nope"]')).toBeNull();
