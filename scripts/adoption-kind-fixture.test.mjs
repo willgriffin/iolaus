@@ -11,7 +11,32 @@ import {
   assertRegistryPullIsolation,
   qualificationStageMessage,
   qualificationApplyArguments,
+  runtimePodDiagnostics,
+  runtimeLogCategories,
 } from './adoption-kind-fixture.mjs';
+
+test('runtime diagnostics expose only bounded fixed states and log categories, never sensitive strings', () => {
+  const sensitive = 'private-token-and-database-url';
+  const pods = [{ metadata: { name: sensitive }, spec: { env: sensitive }, status: {
+    phase: 'Running', message: sensitive,
+    conditions: [{ type: 'PodScheduled', status: 'True', message: sensitive }],
+    containerStatuses: [{ name: sensitive, ready: false, restartCount: 2,
+      state: { waiting: { reason: 'CrashLoopBackOff', message: sensitive } } },
+    { ready: false, restartCount: sensitive, state: { terminated: { reason: sensitive, exitCode: sensitive } } }],
+  } }];
+  const result = runtimePodDiagnostics(pods);
+  assert.deepEqual(result, [{ phase: 'Running', scheduled: true, containers: [
+    { ready: false, restarts: 2, state: 'CrashLoopBackOff', exitCode: null },
+    { ready: false, restarts: null, state: 'Unknown', exitCode: null },
+  ] }]);
+  assert.ok(!JSON.stringify(result).includes(sensitive));
+  assert.equal(runtimePodDiagnostics(Array(20).fill(pods[0])).length, 8);
+  assert.deepEqual(runtimeLogCategories(`permission denied ${sensitive}; Deployment schema is not ready: ${sensitive}`),
+    ['schema-not-ready', 'permission-denied']);
+  assert.deepEqual(runtimeLogCategories(sensitive), []);
+  assert.deepEqual(runtimeLogCategories(`component=assets code=provider_unavailable ${sensitive}`),
+    ['component-assets', 'provider-unavailable']);
+});
 
 test('rendered chart applies bind the isolated namespace while explicit fixture lists retain theirs', () => {
   const args = ['/isolated/kubeconfig', 'kind-iolaus-236-abc123', 'iolaus-qualification'];

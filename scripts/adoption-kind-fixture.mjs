@@ -30,6 +30,8 @@ const qualificationStages = new Set([
   'fixture-maintenance-ready', 'fixture-actor-secrets',
   'missing-schema-refusal', 'writer-refusal', 'clean-migration',
   'runtime-readiness', 'http-and-operator', 'worker-and-monitor',
+  'runtime-readiness-web', 'runtime-readiness-task',
+  'runtime-readiness-schedule', 'runtime-readiness-extractor',
   'source-and-extractor', 'evidence', 'cleanup-started', 'cleanup-completed',
 ]);
 let activeQualificationStage = 'preflight';
@@ -41,6 +43,50 @@ function checkpoint(stage) {
   const message = qualificationStageMessage(stage);
   activeQualificationStage = stage;
   console.log(message);
+}
+
+// Keep failure diagnostics useful without printing Pod specs, messages or logs.
+export function runtimePodDiagnostics(pods) {
+  const phases = new Set(['Pending', 'Running', 'Succeeded', 'Failed', 'Unknown']);
+  const reasons = new Set(['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull',
+    'CreateContainerConfigError', 'CreateContainerError', 'ContainerCreating',
+    'OOMKilled', 'Error', 'Completed']);
+  const number = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return pods.slice(0, 8).map((pod) => ({
+    phase: phases.has(pod.status?.phase) ? pod.status.phase : 'Unknown',
+    scheduled: pod.status?.conditions?.some((c) => c.type === 'PodScheduled' && c.status === 'True') === true,
+    containers: (pod.status?.containerStatuses ?? []).slice(0, 8).map((c) => {
+      const state = c.state?.waiting ?? c.state?.terminated;
+      return {
+        ready: c.ready === true,
+        restarts: number(c.restartCount),
+        state: reasons.has(state?.reason) ? state.reason : c.state?.running ? 'Running' : 'Unknown',
+        exitCode: number(c.state?.terminated?.exitCode),
+      };
+    }),
+  }));
+}
+
+export function runtimeLogCategories(log) {
+  return [
+    ['schema-not-ready', /Deployment schema is not ready:/i],
+    ['permission-denied', /permission denied|must be owner/i],
+    ['auth-not-ready', /authentication provider is not ready/i],
+    ['storage-mentioned', /HeadBucket|S3|storage is not ready/i],
+    ['read-only-filesystem', /EACCES|EROFS|read-only file system/i],
+    ['module-not-found', /MODULE_NOT_FOUND|Cannot find module/i],
+    ['out-of-memory', /heap out of memory|allocation failed/i],
+    ['connection-refused', /ECONNREFUSED|connection refused/i],
+    ['runtime-configuration', /Unable to load SMRT runtime configuration|configuration.*required/i],
+    ['database-schema-error', /relation .* does not exist|column .* does not exist/i],
+    ['component-database', /component=database\b/],
+    ['component-authentication', /component=authentication\b/],
+    ['component-assets', /component=assets\b/],
+    ['component-secrets', /component=secrets\b/],
+    ['invalid-configuration', /code=invalid_configuration\b/],
+    ['provider-mismatch', /code=provider_mismatch\b/],
+    ['provider-unavailable', /code=provider_unavailable\b/],
+  ].filter(([, pattern]) => pattern.test(log)).map(([category]) => category);
 }
 
 // Only this disposable fixture receives the workflow's temporary read token.
@@ -666,15 +712,32 @@ export async function qualifyKind({
     release.release.phase = 'verify';
     release.release.sequence++;
     apply(render());
-    for (const name of ['web', 'task', 'schedule', 'extractor'])
-      kubectl(
-        '-n',
-        namespace,
-        'rollout',
-        'status',
-        `deployment/iolaus-${name}`,
-        '--timeout=180s',
-      );
+    try {
+      for (const name of ['web', 'task', 'schedule', 'extractor']) {
+        checkpoint(`runtime-readiness-${name}`);
+        kubectl('-n', namespace, 'rollout', 'status',
+          `deployment/iolaus-${name}`, '--timeout=180s');
+      }
+    } catch (error) {
+      for (const name of ['web', 'task', 'schedule', 'extractor']) {
+        try {
+          const pods = JSON.parse(kubectl('--request-timeout=10s', '-n', namespace, 'get', 'pods', '-l',
+            `app.kubernetes.io/instance=iolaus,smrt.happyvertical.com/workload=${name}`,
+            '-o', 'json')).items;
+          console.log(`[adoption] runtime-status ${JSON.stringify({ workload: name,
+            pods: runtimePodDiagnostics(pods) })}`);
+          for (const pod of pods.slice(0, 2)) {
+            if (!/^iolaus-(web|task|schedule|extractor)-[a-z0-9-]+$/.test(pod.metadata.name)) continue;
+            const logs = kubectl('--request-timeout=10s', '-n', namespace, 'logs', pod.metadata.name, '--tail=80');
+            console.log(`[adoption] runtime-log-categories ${JSON.stringify({
+              workload: name, categories: runtimeLogCategories(logs) })}`);
+          }
+        } catch {
+          console.log(`[adoption] runtime-diagnostics-unavailable ${name}`);
+        }
+      }
+      throw error;
+    }
     for (const name of ['web', 'task', 'schedule', 'extractor']) {
       const pods = JSON.parse(
         kubectl(

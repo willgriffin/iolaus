@@ -49,6 +49,10 @@ matching inspected repository+digest identity; registry bytes and the exact
 requested digest remain authoritative. Static `[adoption]` stage checkpoints
 locate a failure without emitting credential-bearing child stderr. Cleanup
 completion is logged only after the disposable cluster is deleted.
+Runtime rollout failures identify the workload and emit bounded allowlisted Pod
+states and fixed log-pattern categories before teardown. Pod names/specs,
+condition messages and raw child logs remain suppressed; categories are
+diagnostic hints, never qualification receipts.
 Rendered chart applies explicitly select the isolated qualification namespace:
 Helm's `--namespace` alone does not insert `metadata.namespace` into templates.
 JSON fixture lists preserve their explicit namespaces for the database/provider
