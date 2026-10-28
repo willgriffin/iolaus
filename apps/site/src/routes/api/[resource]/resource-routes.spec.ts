@@ -307,11 +307,11 @@ describe('generic resource API routes', () => {
           } as never),
       },
       {
-        name: 'a forged profile ownership update',
+        name: 'a forged legacy résumé profile ownership update',
         invoke: async () =>
           await itemPut({
             locals: { user: { id: 'user-1' } },
-            params: { id: 'profile-2', resource: 'candidateprofiles' },
+            params: { id: 'profile-2', resource: 'resumeprofiles' },
             request: jsonRequest({
               candidateProfileId: 'profile-2',
               ownerUserId: 'user-2',
@@ -364,5 +364,129 @@ vi.mock('$lib/server/workspace-subject.js', () => ({
     userId: 'user-1',
     profileId: 'profile-1',
   }),
-  isCurrentWorkspaceOperator: () => true,
+  isCurrentWorkspaceOperator: () => hostedMocks.operator,
 }));
+
+const hostedMocks = vi.hoisted(() => ({ operator: true, shared: false }));
+vi.mock('$lib/server/app-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/app-config')>()),
+  isSharedHosted: () => hostedMocks.shared,
+}));
+
+const scopedMocks = vi.hoisted(() => ({
+  createScopedRecord: vi.fn(),
+  deleteScopedRecord: vi.fn(),
+  getScopedRecord: vi.fn(),
+  listScopedRecords: vi.fn(),
+  updateScopedRecord: vi.fn(),
+}));
+vi.mock('$lib/server/scoped-resource-crud', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('$lib/server/scoped-resource-crud')
+  >()),
+  ...scopedMocks,
+}));
+
+describe('owner-scoped career resource routes (#259)', () => {
+  beforeEach(() => {
+    hostedMocks.operator = false;
+    hostedMocks.shared = true;
+    routeMocks.collections.clear();
+    routeMocks.getCollection.mockClear();
+    for (const mock of Object.values(scopedMocks)) mock.mockReset();
+    scopedMocks.listScopedRecords.mockResolvedValue({
+      items: [{ id: 'exp-1', summary: 'Mine' }],
+      limit: 25,
+      offset: 0,
+      total: 1,
+    });
+    scopedMocks.getScopedRecord.mockResolvedValue({ id: 'exp-1' });
+    scopedMocks.createScopedRecord.mockImplementation(
+      async (_className: string, payload: Record<string, unknown>) => ({
+        id: 'exp-new',
+        ...payload,
+      }),
+    );
+    scopedMocks.updateScopedRecord.mockImplementation(
+      async (
+        _className: string,
+        id: string,
+        payload: Record<string, unknown>,
+      ) => ({ id, ...payload }),
+    );
+    scopedMocks.deleteScopedRecord.mockResolvedValue(undefined);
+  });
+
+  it('lets a hosted owner reach career records through the scoped path, never the raw collection', async () => {
+    const list = await collectionGet({
+      params: { resource: 'experiences' },
+      url: new URL('https://iolaus.localhost/api/experiences?limit=25'),
+    } as never);
+    expect(await list.json()).toMatchObject({
+      count: 1,
+      items: [{ id: 'exp-1' }],
+      limit: 25,
+    });
+    expect(scopedMocks.listScopedRecords).toHaveBeenCalledWith('Experience', {
+      limit: 25,
+      offset: 0,
+    });
+
+    const created = await collectionPost({
+      locals: { user: { id: 'user-1' } },
+      params: { resource: 'achievements' },
+      request: jsonRequest({ title: 'Shipped it' }),
+    } as never);
+    expect(created.status).toBe(201);
+    expect(scopedMocks.createScopedRecord).toHaveBeenCalledWith('Achievement', {
+      title: 'Shipped it',
+    });
+
+    const updated = await itemPut({
+      locals: { user: { id: 'user-1' } },
+      params: { id: 'exp-1', resource: 'experiences' },
+      request: jsonRequest({ summary: 'Changed' }),
+    } as never);
+    expect(await updated.json()).toEqual({ id: 'exp-1', summary: 'Changed' });
+
+    const deleted = await itemDelete({
+      locals: { user: { id: 'user-1' } },
+      params: { id: 'exp-1', resource: 'experiences' },
+    } as never);
+    expect(await deleted.json()).toEqual({ success: true });
+    expect(scopedMocks.deleteScopedRecord).toHaveBeenCalledWith(
+      'Experience',
+      'exp-1',
+    );
+    // The raw collection is never touched for a candidate-owned class.
+    expect(routeMocks.getCollection).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shared catalog operator-only for the same hosted owner', async () => {
+    await expect(
+      collectionGet({
+        params: { resource: 'sources' },
+        url: new URL('https://iolaus.localhost/api/sources'),
+      } as never),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(routeMocks.getCollection).not.toHaveBeenCalled();
+  });
+
+  it('rejects profile fields outside the agent contract before the scoped write', async () => {
+    await expect(
+      itemPut({
+        locals: { user: { id: 'user-1' } },
+        params: { id: 'profile-1', resource: 'candidateprofiles' },
+        request: jsonRequest({ ownerUserId: 'user-2', summary: 'x' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(scopedMocks.updateScopedRecord).not.toHaveBeenCalled();
+    await expect(
+      collectionPost({
+        locals: { user: { id: 'user-1' } },
+        params: { resource: 'candidateprofiles' },
+        request: jsonRequest({ name: 'Second profile' }),
+      } as never),
+    ).rejects.toMatchObject({ status: 405 });
+  });
+});

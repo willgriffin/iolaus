@@ -50,28 +50,38 @@ describe('deployed parity inventory', () => {
     );
     const webMcpNames = inventory.surfaces.webmcp.map((tool) => tool.name);
 
-    expect(restClasses).not.toEqual(
-      expect.arrayContaining([
-        'Achievement',
-        'AgentRun',
-        'Application',
-        'ApplicationMaterialComment',
-        'CandidateAnswer',
-        'CandidateProfile',
-        'CandidateProfileLink',
-        'Decision',
-        'Education',
-        'EmploymentRole',
-        'EvaluationScore',
-        'Experience',
-        'PreferenceRule',
-        'Project',
-        'ResumeAsset',
-        'ResumeProfile',
-        'ResumeVariant',
-        'Task',
-      ]),
-    );
+    for (const className of [
+      'AgentRun',
+      'Application',
+      'ApplicationMaterialComment',
+      'CandidateAnswer',
+      'Decision',
+      'EvaluationScore',
+      'PreferenceRule',
+      'ResumeAsset',
+      'ResumeProfile',
+      'ResumeVariant',
+      'Task',
+    ]) {
+      expect(restClasses, className).not.toContain(className);
+    }
+    // The owner-scoped career model (#259) is on REST; the profile itself is
+    // never created or deleted through an agent.
+    for (const className of [
+      'Achievement',
+      'CandidateProfileLink',
+      'Education',
+      'EmploymentRole',
+      'Experience',
+      'Project',
+    ]) {
+      expect(restClasses, className).toContain(className);
+    }
+    expect(
+      inventory.surfaces.rest.find(
+        (resource) => resource.className === 'CandidateProfile',
+      )?.actions,
+    ).toEqual(['get', 'list', 'update']);
     expect(webMcpNames).not.toEqual(
       expect.arrayContaining([
         expect.stringMatching(/(?:^|[_-])(?:approve|submit)(?:$|[_-])/u),

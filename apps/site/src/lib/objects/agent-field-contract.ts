@@ -63,6 +63,12 @@ const agentJsonFieldContracts = [
     },
   },
   {
+    className: 'SkillGroup',
+    fields: {
+      evidenceJson: '[]',
+    },
+  },
+  {
     className: 'SourceCrawl',
     fields: {
       filtersJson: '{}',
@@ -83,6 +89,36 @@ const agentJsonFieldContracts = [
     },
   },
 ] as const;
+
+/**
+ * Classes whose generic writes accept only an explicit field allow-list.
+ * `CandidateProfile` carries onboarding, consent and artifact-selection state
+ * that only the onboarding and résumé workflows may change; agents edit the
+ * identity, contact and summary facts the `/admin/career` editor exposes.
+ */
+const agentWritableFieldAllowLists: Record<string, readonly string[]> = {
+  CandidateProfile: [
+    'id',
+    'name',
+    'firstName',
+    'lastName',
+    'title',
+    'email',
+    'phone',
+    'location',
+    'linkedinUrl',
+    'githubUrl',
+    'workAuthorization',
+    'summary',
+    'useOnResume',
+  ],
+};
+
+export function agentWritableFields(
+  className: string,
+): readonly string[] | undefined {
+  return agentWritableFieldAllowLists[className];
+}
 
 export const agentListFieldDescription =
   'Newline-delimited list. API and MCP writes may send string[]; writes are stored one item per line.';
@@ -200,6 +236,19 @@ export function normalizeAgentWritablePayload(
   className: string,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
+  const allowed = agentWritableFieldAllowLists[className];
+  if (allowed) {
+    const rejected = Object.keys(payload).filter(
+      (key) => !allowed.includes(key),
+    );
+    if (rejected.length) {
+      throw new AgentFieldContractError(
+        `${className} agent writes accept only ${allowed
+          .filter((key) => key !== 'id')
+          .join(', ')}; rejected: ${rejected.sort().join(', ')}.`,
+      );
+    }
+  }
   const listFields =
     agentListFieldContracts.find((contract) => contract.className === className)
       ?.fields ?? [];

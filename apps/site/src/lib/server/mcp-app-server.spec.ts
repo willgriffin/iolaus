@@ -73,6 +73,18 @@ vi.mock('./application-inspect-webmcp.js', () => ({
   inspectJobApplication: workflows.inspectApplication,
 }));
 
+const publicProfile = vi.hoisted(() => ({
+  call: vi.fn(),
+  enabled: true,
+}));
+vi.mock('./app-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./app-config.js')>()),
+  publicProfilesEnabled: () => publicProfile.enabled,
+}));
+vi.mock('./mcp.js', () => ({
+  callPublicProfileMcpTool: publicProfile.call,
+}));
+
 const owner = {
   id: 'owner-1',
   kind: 'human',
@@ -273,6 +285,116 @@ describe('Iolaus MCP Apps server', () => {
     expect(result.isError).not.toBe(true);
     expect(workflows.getProfile).toHaveBeenCalledWith(subject.profileId);
     expect(workflows.inspectApplication).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the public-profile lifecycle through the page service with a re-verified explicit subject', async () => {
+    publicProfile.call.mockReset();
+    publicProfile.enabled = true;
+    const subject = { ...nativeSubject };
+    // Grant the page capability natively; the inspect grant alone is refused
+    // below.
+    const options = { db: workflows.database };
+    const manage = await (await PermissionCollection.create(options)).create({
+      name: 'Publish public profile',
+      slug: 'workflow.public-profile.manage',
+    });
+    if (!manage.id) throw new Error('Missing native permission ID');
+    await (await RolePermissionCollection.create(options)).addPermission(
+      roleId,
+      manage.id,
+    );
+    workflows.getProfile.mockResolvedValue({
+      active: true,
+      id: subject.profileId,
+      ownerUserId: subject.userId,
+      tenantId: subject.tenantId,
+    });
+    publicProfile.call.mockImplementation(
+      async (
+        _name: string,
+        _args: Record<string, unknown>,
+        actor: { subject: Record<string, unknown> },
+      ) => {
+        // The service receives the subject bound by the native principal
+        // context, never one read from arguments or a stale tenant context.
+        expect(actor.subject).toEqual(subject);
+        expect(getCurrentTenant()?.metadata?.workspaceSubject).toEqual(subject);
+        return {
+          content: [{ text: '{"identity":null}', type: 'text' }],
+          structuredContent: { identity: null },
+        };
+      },
+    );
+    const principal = resolveMcpAppPrincipal({
+      ...subjectLocals(subject),
+      permissions: ['workflow.public-profile.manage'],
+    });
+    const result = await withTenant(
+      {
+        tenantId: subject.tenantId,
+        userId: subject.userId,
+        metadata: {
+          workspaceSubject: { ...subject, profileId: 'untrusted-prior' },
+        },
+      },
+      async () =>
+        await mcpAppServer.callTool({
+          name: 'public_profile_status',
+          arguments: {},
+          principal,
+        }),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({ identity: null });
+    expect(publicProfile.call).toHaveBeenCalledWith(
+      'public_profile_status',
+      {},
+      expect.objectContaining({
+        locals: expect.objectContaining({
+          tenantId: subject.tenantId,
+          user: { id: subject.userId },
+        }),
+        subject,
+      }),
+    );
+
+    await expect(
+      mcpAppServer.callTool({
+        name: 'public_profile_publish',
+        arguments: {
+          expectedRevision: 1,
+          revisionId: '11111111-1111-4111-8111-111111111111',
+        },
+        principal: resolveMcpAppPrincipal({
+          ...subjectLocals(subject),
+          permissions: ['workflow.application.inspect'],
+        }),
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: 'The granted scope does not permit this operation.',
+    });
+    expect(publicProfile.call).toHaveBeenCalledTimes(1);
+
+    // Where public profiles are disabled the tools are not advertised and a
+    // direct call is an unknown tool.
+    publicProfile.enabled = false;
+    try {
+      const tools = await mcpAppServer.listTools({ principal });
+      expect(
+        tools.some((tool) => tool.name.startsWith('public_profile_')),
+      ).toBe(false);
+      await expect(
+        mcpAppServer.callTool({
+          name: 'public_profile_status',
+          arguments: {},
+          principal,
+        }),
+      ).rejects.toThrow(/not permitted|not found|unknown/iu);
+    } finally {
+      publicProfile.enabled = true;
+    }
+    expect(publicProfile.call).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -501,6 +623,10 @@ describe('Iolaus MCP Apps server', () => {
       'job_search_open_application',
       'list_facets',
       'match_my_profile',
+      'public_profile_prepare',
+      'public_profile_publish',
+      'public_profile_status',
+      'public_profile_unpublish',
       'refresh_my_matches',
       'search_opportunities',
     ]);
@@ -563,6 +689,10 @@ describe('Iolaus MCP Apps server', () => {
       'job_search_open_application',
       'list_facets',
       'match_my_profile',
+      'public_profile_prepare',
+      'public_profile_publish',
+      'public_profile_status',
+      'public_profile_unpublish',
       'refresh_my_matches',
       'search_opportunities',
     ]);

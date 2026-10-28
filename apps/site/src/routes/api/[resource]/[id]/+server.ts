@@ -33,6 +33,12 @@ import {
   resumeVariantDeleteViolation,
   syncResumeVariantApplicationApprovals,
 } from '$lib/server/resume-variant-workflow';
+import {
+  deleteScopedRecord,
+  getScopedRecord,
+  isScopedResourceClass,
+  updateScopedRecord,
+} from '$lib/server/scoped-resource-crud';
 import { getCollection } from '$lib/server/smrt';
 import {
   deleteSourceSchedule,
@@ -44,9 +50,11 @@ import {
 } from '$lib/server/workspace-resource-policy';
 
 function requireResourceClass(resource: string): string {
-  assertGenericResourceAccess();
   const resolved = resolveApiResource(resource);
   if (!resolved) throw error(404, 'Resource not found');
+  // Candidate-owned classes are owner-scoped below; the catalog keeps the
+  // hosted operator gate.
+  assertGenericResourceAccess(resolved.className);
   return resolved.className;
 }
 
@@ -297,9 +305,15 @@ function assertApplicationUpdatePayload(
 
 export const GET: RequestHandler = async ({ params }) => {
   const resource = requireParam(params.resource, 'Resource');
-  requireResourceClass(resource);
+  const className = requireResourceClass(resource);
   assertActionExposed(resource, 'get');
-  return json(await getResourceItem(resource, requireParam(params.id, 'Item')));
+  const id = requireParam(params.id, 'Item');
+  if (isScopedResourceClass(className)) {
+    const record = await getScopedRecord(className, id);
+    if (!record) error(404, 'Item not found');
+    return json(record);
+  }
+  return json(await getResourceItem(resource, id));
 };
 
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
@@ -309,6 +323,10 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
   assertActionExposed(resource, 'update');
   const payload = await readJsonObjectPayload(request);
   const id = requireParam(params.id, 'Item');
+  if (isScopedResourceClass(className)) {
+    normalizeAgentPayload(className, payload);
+    return json(await updateScopedRecord(className, id, payload));
+  }
   const item = await getResourceItem(resource, id);
   assertApplicationOwnedResumeAssetIsImmutable(
     className,
@@ -410,6 +428,10 @@ export const DELETE: RequestHandler = async ({ params }) => {
   assertResourceIsWritable(className);
   assertActionExposed(resource, 'delete');
   const id = requireParam(params.id, 'Item');
+  if (isScopedResourceClass(className)) {
+    await deleteScopedRecord(className, id);
+    return json({ success: true });
+  }
   const item = await getResourceItem(resource, id);
   assertApplicationOwnedResumeAssetIsImmutable(
     className,

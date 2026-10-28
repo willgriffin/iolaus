@@ -312,6 +312,16 @@ export function isSharedHosted(
   );
 }
 
+/** Public résumé profiles are an opt-in feature of a shared hosted install. */
+export function publicProfilesEnabled(
+  environment: AppConfigEnvironment = process.env,
+): boolean {
+  return (
+    isSharedHosted(environment) &&
+    environment.IOLAUS_PUBLIC_PROFILES_ENABLED === 'true'
+  );
+}
+
 function configuredPublicUrl(environment: AppConfigEnvironment): URL | null {
   const rawUrl = stringValue(environment.IOLAUS_PUBLIC_URL);
   if (!rawUrl) return null;

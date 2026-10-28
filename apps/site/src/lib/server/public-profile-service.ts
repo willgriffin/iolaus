@@ -6,7 +6,7 @@ import {
   publicProfileSnapshotSchema,
   publicProfileVisibilitySchema,
 } from '$lib/public-profile-contract.js';
-import { isSharedHosted } from './app-config.js';
+import { publicProfilesEnabled } from './app-config.js';
 import { getDbConfig } from './db.js';
 import { type OwnerPrincipalLocals, runAsOwner } from './owner-principal.js';
 import {
@@ -24,31 +24,63 @@ import { getCollection } from './smrt.js';
 import {
   resolveWorkspaceSubjectForProfile,
   type WorkspaceSubject,
+  withVerifiedWorkspaceSubject,
   workspaceSubjectFromLocals,
 } from './workspace-subject.js';
 import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
 export function requirePublicProfilesEnabled() {
-  if (
-    !isSharedHosted() ||
-    process.env.IOLAUS_PUBLIC_PROFILES_ENABLED !== 'true'
-  )
-    error(404, 'Not found');
+  if (!publicProfilesEnabled()) error(404, 'Not found');
 }
 async function store() {
   return createPublicProfileStore(await resolveDatabase(getDbConfig()));
 }
+
+/**
+ * Who is acting. A request handler passes its hook-verified `locals`. The
+ * canonical MCP server has no such locals — its principal was minted by the
+ * OAuth resource adapter — so it passes the principal's locals slice plus the
+ * subject it already re-verified; that subject is re-bound with
+ * `withVerifiedWorkspaceSubject` inside the fresh principal context, never
+ * trusted as given. Tool arguments can supply neither.
+ */
+export interface PublicProfileActor {
+  locals: OwnerPrincipalLocals;
+  subject: WorkspaceSubject;
+}
+export type PublicProfileActorSource =
+  | OwnerPrincipalLocals
+  | PublicProfileActor;
+
+function isExplicitActor(
+  source: PublicProfileActorSource,
+): source is PublicProfileActor {
+  return (
+    'subject' in source &&
+    'locals' in source &&
+    typeof source.subject === 'object' &&
+    source.subject !== null
+  );
+}
+
 async function authorized<T>(
-  locals: OwnerPrincipalLocals,
+  source: PublicProfileActorSource,
   action: string,
   fn: (subject: WorkspaceSubject) => Promise<T>,
 ): Promise<T> {
   requirePublicProfilesEnabled();
+  const locals = isExplicitActor(source) ? source.locals : source;
   return await runAsOwner(
     locals,
     async (run) => {
       const operation = workspaceWorkflowOperation('public-profile.manage');
       await run.assertOperation(operation.collection, operation.action);
+      if (isExplicitActor(source)) {
+        return await withVerifiedWorkspaceSubject(
+          source.subject,
+          async (verified) => await fn(verified),
+        );
+      }
       return await fn(workspaceSubjectFromLocals(locals));
     },
     { action: `public-profile.${action}` },
@@ -71,7 +103,9 @@ const unpublishSchema = z
   .object({ expectedRevision: z.number().int().nonnegative() })
   .strict();
 
-export async function getPublicProfileManager(locals: OwnerPrincipalLocals) {
+export async function getPublicProfileManager(
+  locals: PublicProfileActorSource,
+) {
   return await authorized(locals, 'manager', async (subject) => {
     const collection = await getCollection('CandidateProfile');
     const records = await collection.list({
@@ -133,7 +167,7 @@ export async function getPublicProfileManager(locals: OwnerPrincipalLocals) {
 }
 
 export async function preparePublicProfile(
-  locals: OwnerPrincipalLocals,
+  locals: PublicProfileActorSource,
   input: unknown,
 ) {
   requirePublicProfilesEnabled();
@@ -211,6 +245,7 @@ export async function preparePublicProfile(
       snapshot: revision.snapshot,
       baseRevision: revision.baseRevision,
       handle: captured.identity.handle,
+      pdfBytes: body.byteLength,
     };
   } catch (cause) {
     if (attemptedWrite) {
@@ -229,7 +264,7 @@ export async function preparePublicProfile(
 }
 
 export async function publishPublicProfile(
-  locals: OwnerPrincipalLocals,
+  locals: PublicProfileActorSource,
   input: unknown,
 ) {
   const parsed = publishSchema.parse(input);
@@ -249,7 +284,7 @@ export async function publishPublicProfile(
   });
 }
 export async function unpublishPublicProfile(
-  locals: OwnerPrincipalLocals,
+  locals: PublicProfileActorSource,
   input: unknown,
 ) {
   const parsed = unpublishSchema.parse(input);

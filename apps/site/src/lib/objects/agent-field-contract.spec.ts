@@ -8,6 +8,33 @@ import {
 } from './agent-field-contract';
 
 describe('agent field contract', () => {
+  it('restricts CandidateProfile agent writes to the career editor fields', () => {
+    const payload = {
+      id: 'profile-1',
+      ownerUserId: 'someone-else',
+      resumeAssetId: 'asset-9',
+      summary: 'Updated summary',
+    };
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', payload),
+    ).toThrow(AgentFieldContractError);
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', {
+        id: 'profile-1',
+        summary: 'Updated summary',
+        useOnResume: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it('normalizes SkillGroup evidence as a JSON array field', () => {
+    const payload: Record<string, unknown> = {
+      evidenceJson: [{ source: 'project', ref: 'p-1' }],
+    };
+    normalizeAgentWritablePayload('SkillGroup', payload);
+    expect(payload.evidenceJson).toBe('[{"ref":"p-1","source":"project"}]');
+  });
+
   it('serializes list fields as newline-delimited unique items', () => {
     expect(parseAgentListField(' TypeScript \n\nSvelte\nTypeScript ')).toEqual([
       'TypeScript',
