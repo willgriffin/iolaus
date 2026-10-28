@@ -133,6 +133,16 @@ export function requireIsolatedContext(context, namespace) {
   assert.match(context, /^kind-iolaus-236-[a-z0-9-]+$/);
   assert.equal(namespace, 'iolaus-qualification');
 }
+export function qualificationApplyArguments(kubeconfig, context, namespace, rendered) {
+  requireIsolatedContext(context, namespace);
+  return [
+    '--kubeconfig', kubeconfig, '--context', context,
+    // Helm's --namespace does not inject metadata.namespace into templates.
+    // Explicit JSON fixture lists span both synthetic namespaces instead.
+    ...(rendered ? ['--namespace', namespace] : []),
+    'apply', '-f', '-',
+  ];
+}
 export function terminalJobFailure(job) {
   return (
     (job.status?.failed ?? 0) > 0 &&
@@ -245,7 +255,8 @@ export async function qualifyKind({
   const apply = (objects) =>
     run(
       tools.kubectl,
-      ['--kubeconfig', kubeconfig, '--context', context, 'apply', '-f', '-'],
+      qualificationApplyArguments(kubeconfig, context, namespace,
+        typeof objects === 'string'),
       typeof objects === 'string'
         ? objects
         : JSON.stringify({ apiVersion: 'v1', kind: 'List', items: objects }),

@@ -10,7 +10,21 @@ import {
   qualificationRegistryPullSecrets,
   assertRegistryPullIsolation,
   qualificationStageMessage,
+  qualificationApplyArguments,
 } from './adoption-kind-fixture.mjs';
+
+test('rendered chart applies bind the isolated namespace while explicit fixture lists retain theirs', () => {
+  const args = ['/isolated/kubeconfig', 'kind-iolaus-236-abc123', 'iolaus-qualification'];
+  assert.deepEqual(qualificationApplyArguments(...args, true), [
+    '--kubeconfig', args[0], '--context', args[1],
+    '--namespace', args[2], 'apply', '-f', '-',
+  ]);
+  assert.deepEqual(qualificationApplyArguments(...args, false), [
+    '--kubeconfig', args[0], '--context', args[1], 'apply', '-f', '-',
+  ]);
+  assert.throws(() => qualificationApplyArguments(args[0], 'production', args[2], true));
+  assert.throws(() => qualificationApplyArguments(args[0], args[1], 'default', true));
+});
 
 test('qualification progress accepts static stages and never echoes unknown sensitive input', () => {
   assert.equal(qualificationStageMessage('image-identity'), '[adoption] image-identity');
