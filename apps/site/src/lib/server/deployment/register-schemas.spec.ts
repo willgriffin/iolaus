@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+// deployment -> server -> lib -> src -> site -> apps -> <repository root>
 const repositoryRoot = fileURLToPath(
-  new URL('../../../../../', import.meta.url),
+  new URL('../../../../../../', import.meta.url),
 );
 const siteRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
