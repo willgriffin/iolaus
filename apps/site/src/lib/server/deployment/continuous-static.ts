@@ -714,6 +714,7 @@ export function continuousStaticUids(
     if (pods.length !== p.replicas) fail();
     for (const pod of pods) {
       const meta = objectMetadata(pod, input.namespace);
+      if (meta.annotations !== undefined) same(meta.annotations, {});
       same(meta.labels, hash);
       same(normalizeSpec(pod.spec, true), expectedPodEnvelope(p));
       const ps = fields(pod.status);

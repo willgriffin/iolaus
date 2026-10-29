@@ -183,6 +183,20 @@ describe('strict continuous static graph', () => {
       '{"a":{"c":3,"d":4},"b":2}',
     );
   });
+  it('rejects otherwise valid static Pods with admission network annotations', () => {
+    const f = fixture();
+    set(f.pod, 'metadata.annotations', {
+      'k8s.v1.cni.cncf.io/networks': 'writer-network',
+    });
+    expect(() => check(f)).toThrow(
+      'Continuous static identity, envelope or isolation is unverified.',
+    );
+  });
+  it('accepts empty static Pod annotations like the closed template envelope', () => {
+    const f = fixture();
+    set(f.pod, 'metadata.annotations', {});
+    expect(() => check(f)).not.toThrow();
+  });
   it('matches native selector cloning independently of full template and Pod labels', () => {
     const f = fixture();
     expect(f.policy.selectorLabels).toEqual({ appName: 'legal' });

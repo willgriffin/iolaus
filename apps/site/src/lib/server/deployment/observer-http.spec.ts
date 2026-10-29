@@ -696,6 +696,51 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
       'Kubernetes observer inventory read failed.',
     );
   });
+  it('accepts a fresh retry lease with independently terminal migration history in native lists', async () => {
+    withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    const jobs = inventory.payloads.get('jobs') as {
+        items: Record<string, unknown>[];
+      },
+      pods = inventory.payloads.get('pods') as {
+        items: Record<string, unknown>[];
+      };
+    const labels = { 'app.kubernetes.io/instance': 'site' };
+    jobs.items.push({
+      metadata: {
+        name: 'old-migration',
+        uid: 'old-job',
+        namespace: 'test',
+        labels,
+      },
+      spec: {},
+      status: { active: 0, conditions: [{ type: 'Failed', status: 'True' }] },
+    });
+    const previous = {
+      metadata: {
+        name: 'old-pod',
+        uid: 'old-pod',
+        namespace: 'test',
+        labels,
+        ownerReferences: [
+          {
+            kind: 'Job',
+            name: 'old-migration',
+            uid: 'old-job',
+            controller: true,
+          },
+        ],
+      },
+      spec: {},
+      status: { phase: 'Failed' },
+    };
+    pods.items.push(previous);
+    await expect(observeWriterExclusion(identity)).resolves.toBeUndefined();
+    previous.status.phase = 'Running';
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      /writer Pod/,
+    );
+  });
   it('waits for authenticated null enrollment before first DB factory and never retries issued expiry', async () => {
     const f = withWriterFence(inventory);
     vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);

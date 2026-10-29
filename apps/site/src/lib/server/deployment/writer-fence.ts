@@ -423,8 +423,49 @@ function producerProof(
     fail();
   return String(pm.uid);
 }
+/** The same terminal conditions used by the independent namespace observer. */
+function terminalHistory(
+  o: Fields,
+  context: WriterFenceContext,
+  instance: string,
+): boolean {
+  const meta = object(o.metadata);
+  if (
+    meta.uid === context.migrationJobUid ||
+    meta.uid === context.migrationPodUid
+  )
+    return false;
+  if (o.kind !== 'Job' && o.kind !== 'Pod') return false;
+  const status = object(o.status ?? {});
+  const terminal =
+    o.kind === 'Pod'
+      ? status.phase === 'Succeeded' || status.phase === 'Failed'
+      : (status.active ?? 0) === 0 &&
+        Array.isArray(status.conditions) &&
+        status.conditions.some((raw) => {
+          const c = object(raw);
+          return (
+            (c.type === 'Complete' || c.type === 'Failed') &&
+            c.status === 'True'
+          );
+        });
+  if (!terminal) return false;
+  alive(o, context.namespace, String(o.kind));
+  if (object(meta.labels)['app.kubernetes.io/instance'] !== instance) fail();
+  return true;
+}
 function bindMap(u: Fields, context: WriterFenceContext): boolean {
   const objects = context.objects.map(object);
+  const own = objects.filter(
+    (o) =>
+      o.kind === 'Pod' && object(o.metadata).uid === context.migrationPodUid,
+  );
+  if (own.length !== 1) fail();
+  const instance = object(object(own[0].metadata).labels)[
+    'app.kubernetes.io/instance'
+  ];
+  if (!text(instance)) fail();
+  const active = objects.filter((o) => !terminalHistory(o, context, instance));
   const match = (kind: string, name: unknown, uid: unknown, spec: unknown) => {
     const found = objects.filter(
       (o) =>
@@ -463,7 +504,9 @@ function bindMap(u: Fields, context: WriterFenceContext): boolean {
   }
   const others = objects.filter(
     (o) =>
-      o.kind === 'Pod' && object(o.metadata).uid !== context.migrationPodUid,
+      o.kind === 'Pod' &&
+      object(o.metadata).uid !== context.migrationPodUid &&
+      !terminalHistory(o, context, instance),
   );
   if (others.length !== u.readOnlyPods.length) fail();
   for (const raw of u.readOnlyPods) {
@@ -478,7 +521,12 @@ function bindMap(u: Fields, context: WriterFenceContext): boolean {
     seen.add(e.uid);
     match('Pod', e.name, e.uid, e.specIdentity);
   }
-  if (objects.filter((o) => o.kind === 'Job').length !== 1) fail();
+  const activeJobs = active.filter((o) => o.kind === 'Job');
+  if (
+    activeJobs.length !== 1 ||
+    object(activeJobs[0].metadata).uid !== context.migrationJobUid
+  )
+    fail();
   if (u.migration === null) return false;
   const migration = object(u.migration);
   exact(migration, [

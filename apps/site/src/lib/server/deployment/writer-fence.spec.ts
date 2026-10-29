@@ -62,7 +62,12 @@ function fixture() {
   const ownJob = {
     kind: 'Job',
     apiVersion: 'batch/v1',
-    metadata: { name: 'migration', uid: 'job-1', namespace: 'test' },
+    metadata: {
+      name: 'migration',
+      uid: 'job-1',
+      namespace: 'test',
+      labels: { 'app.kubernetes.io/instance': 'site' },
+    },
     spec: { template: { spec: { serviceAccountName: 'observer' } } },
   };
   const ownPod = {
@@ -72,6 +77,7 @@ function fixture() {
       name: 'migrator',
       uid: 'pod-1',
       namespace: 'test',
+      labels: { 'app.kubernetes.io/instance': 'site' },
       ownerReferences: [
         { kind: 'Job', name: 'migration', uid: 'job-1', controller: true },
       ],
@@ -163,7 +169,7 @@ function fixture() {
   };
   const nativeContext = {
     ...context,
-    objects: [ownJob, ownPod],
+    objects: [ownJob, ownPod] as unknown[],
     producerObjects: [producerPod, producerController, program],
   };
   const fence: Obj = {
@@ -590,5 +596,111 @@ describe('active native attempt contract', () => {
         true,
       ),
     ).toThrow('Fresh native writer-fence lease is unverified.');
+  });
+});
+
+describe('independently proven retained migration and CronJob history', () => {
+  function history(phase = 'Succeeded', condition = 'Complete') {
+    return [
+      {
+        kind: 'Job',
+        apiVersion: 'batch/v1',
+        metadata: {
+          name: 'previous-attempt',
+          uid: 'previous-job',
+          namespace: 'test',
+          labels: { 'app.kubernetes.io/instance': 'site' },
+        },
+        spec: {},
+        status: {
+          active: 0,
+          conditions: [{ type: condition, status: 'True' }],
+        },
+      },
+      {
+        kind: 'Pod',
+        apiVersion: 'v1',
+        metadata: {
+          name: 'previous-pod',
+          uid: 'previous-pod',
+          namespace: 'test',
+          labels: { 'app.kubernetes.io/instance': 'site' },
+          ownerReferences: [
+            {
+              kind: 'Job',
+              name: 'previous-attempt',
+              uid: 'previous-job',
+              controller: true,
+            },
+          ],
+        },
+        spec: {},
+        status: { phase },
+      },
+    ];
+  }
+  it.each([
+    ['Succeeded', 'Complete'],
+    ['Failed', 'Failed'],
+  ])('allows a new attempt with retained %s history', (phase, condition) => {
+    const f = fixture();
+    f.context.objects.push(
+      ...(history(phase, condition) as typeof f.context.objects),
+    );
+    expect(() => check(f)).not.toThrow();
+  });
+  it('allows independently terminal CronJob history without treating it as an active readonly Pod', () => {
+    const f = fixture(),
+      objects = history();
+    set(objects[0], 'metadata.ownerReferences', [
+      { kind: 'CronJob', name: 'monitor', uid: 'monitor', controller: true },
+    ]);
+    f.context.objects.push(...(objects as typeof f.context.objects));
+    expect(() => check(f)).not.toThrow();
+  });
+  it.each([
+    ['status.active', 1],
+    ['status.conditions', []],
+    ['status.conditions', [{ type: ['Complete'], status: 'True' }]],
+    ['status.conditions', [{ type: 'Complete', status: 'False' }]],
+    ['metadata.deletionTimestamp', 'now'],
+    ['metadata.namespace', 'foreign'],
+    ['metadata.labels', { 'app.kubernetes.io/instance': 'foreign' }],
+    ['metadata.uid', ''],
+  ])('refuses unproven terminal Job at %s', (path, value) => {
+    const f = fixture(),
+      objects = history();
+    set(objects[0], path, value);
+    f.context.objects.push(...(objects as typeof f.context.objects));
+    expect(() => check(f)).toThrow();
+  });
+  it.each([
+    ['status.phase', 'Running'],
+    ['status.phase', 'Pending'],
+    ['status.phase', 'Unknown'],
+    ['status.phase', ['Succeeded']],
+    ['metadata.deletionTimestamp', 'now'],
+    ['metadata.namespace', 'foreign'],
+    ['metadata.labels', { 'app.kubernetes.io/instance': 'foreign' }],
+    ['metadata.uid', ''],
+  ])('refuses unproven terminal Pod at %s', (path, value) => {
+    const f = fixture(),
+      objects = history();
+    set(objects[1], path, value);
+    f.context.objects.push(...(objects as typeof f.context.objects));
+    expect(() => check(f)).toThrow();
+  });
+  it.each([
+    ['jobUid', 'previous-job'],
+    ['podUid', 'previous-pod'],
+  ] as const)('does not use terminal history to exempt stale current %s', (key, value) => {
+    const f = fixture();
+    f.context.objects.push(
+      ...(history('Failed', 'Failed') as typeof f.context.objects),
+    );
+    f.uids.migration[key] = value;
+    f.configMap.data['uids.json'] = JSON.stringify(f.uids);
+    f.lease.uidMapIdentity = hash(f.uids);
+    expect(() => check(f)).toThrow();
   });
 });
