@@ -366,7 +366,8 @@ export function renderPublicProfileHtml(
   li { position:relative; margin:0 0 1.5pt; padding-left:1.1em; break-inside:avoid; }
   p { orphans:2; widows:2; }
   li::before { content:"\\2022"; position:absolute; left:.15em; color:var(--profile-muted); }
-  ul ul li::before { content:"\\25E6"; }
+  /* En dash: inside the embedded latin subset, so no fallback face is needed. */
+  ul ul li::before { content:"\\2013"; }
   ul.projects { padding-left:1.1em; margin-top:3pt; border-left:1px solid var(--profile-rule); }
   /* A project item holds a sub-list, so it may paginate; the first bullet stays with the project line. */
   ul.projects > li { padding-left:0; break-inside:auto; }
