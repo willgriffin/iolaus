@@ -131,5 +131,5 @@ let { snapshot }: { snapshot: PublicProfileSnapshotV1 } = $props();
   /* Print pins light and paginates like the PDF: headings keep their first
      lines, lists flow.  The toggle selector must be repeated here so this
      rule ties its specificity and wins by source order. */
-  @media print { .profile, :global(:root[data-color-scheme]) .profile { --profile-bg: #ffffff; --profile-ink: #1a1814; --profile-ink-soft: #3a3630; --profile-muted: #5c584f; --profile-rule: #d6d1c2; --profile-accent: #1a1814; } a { text-decoration: none; } h2, h3 { break-after: avoid; } .keep, li { break-inside: avoid; } p { orphans: 2; widows: 2; } }
+  @media print { .profile, :global(:root[data-color-scheme]) .profile { --profile-bg: #ffffff; --profile-ink: #1a1814; --profile-ink-soft: #3a3630; --profile-muted: #5c584f; --profile-rule: #d6d1c2; --profile-accent: #1a1814; } a { text-decoration: none; } h2, h3 { break-after: avoid; } .keep, li { break-inside: avoid; } ul.projects > li { break-inside: auto; } ul.projects > li > ul { break-before: avoid; } p { orphans: 2; widows: 2; } }
 </style>

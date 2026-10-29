@@ -428,6 +428,9 @@ describe('public profile projection and rendering', () => {
     expect(styles).toContain('@page { size: letter; margin: 18mm; }');
     expect(styles).toMatch(/\.keep \{ break-inside:avoid; \}/u);
     expect(styles).toMatch(/li \{[^}]*break-inside:avoid/u);
+    // A project item carries its own sub-list, so it must stay free to paginate.
+    expect(styles).toMatch(/ul\.projects > li \{[^}]*break-inside:auto/u);
+    expect(styles).toMatch(/ul\.projects > li > ul \{ break-before:avoid; \}/u);
     expect(styles).toMatch(/h2 \{[^}]*break-after:avoid/u);
     expect(styles).toMatch(/h3 \{[^}]*break-after:avoid/u);
     expect(styles).not.toMatch(/article \{[^}]*break-inside/u);

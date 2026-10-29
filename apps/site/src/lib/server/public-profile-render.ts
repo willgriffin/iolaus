@@ -368,7 +368,9 @@ export function renderPublicProfileHtml(
   li::before { content:"\\2022"; position:absolute; left:.15em; color:var(--profile-muted); }
   ul ul li::before { content:"\\25E6"; }
   ul.projects { padding-left:1.1em; margin-top:3pt; border-left:1px solid var(--profile-rule); }
-  ul.projects > li { padding-left:0; }
+  /* A project item holds a sub-list, so it may paginate; the first bullet stays with the project line. */
+  ul.projects > li { padding-left:0; break-inside:auto; }
+  ul.projects > li > ul { break-before:avoid; }
   ul.projects > li::before { content:none; }
   ul.projects > li { margin-bottom:2pt; }
   ul.projects strong { font:600 10pt/1.3 var(--profile-sans); }
