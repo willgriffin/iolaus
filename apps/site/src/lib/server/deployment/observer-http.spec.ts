@@ -848,6 +848,57 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
     );
     expect(native.request).toHaveBeenCalledTimes(13);
   });
+  it('accepts native dormant unlabeled RS history but still rejects its live child', async () => {
+    const deployments = inventory.payloads.get('deployments') as {
+        items: { metadata: { name: string; uid: string } }[];
+      },
+      sets = inventory.payloads.get('replicasets') as { items: unknown[] },
+      pods = inventory.payloads.get('pods') as { items: unknown[] };
+    const parent = deployments.items[0];
+    const old = {
+      metadata: {
+        name: 'maintenance-old-history',
+        uid: 'maintenance-old-history',
+        namespace: 'test',
+        labels: { appName: 'maintenance' },
+        ownerReferences: [
+          {
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            name: parent.metadata.name,
+            uid: parent.metadata.uid,
+            controller: true,
+            blockOwnerDeletion: true,
+          },
+        ],
+      },
+      spec: { replicas: 0 },
+      status: { replicas: 0 },
+    };
+    sets.items.push(old);
+    await expect(observeWriterExclusion(identity)).resolves.toBeUndefined();
+    pods.items.push({
+      metadata: {
+        name: 'history-live-child',
+        uid: 'history-live-child',
+        namespace: 'test',
+        labels: { 'app.kubernetes.io/instance': 'site' },
+        ownerReferences: [
+          {
+            apiVersion: 'apps/v1',
+            kind: 'ReplicaSet',
+            name: old.metadata.name,
+            uid: old.metadata.uid,
+            controller: true,
+          },
+        ],
+      },
+      status: { phase: 'Running' },
+    });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      /writer Pod/,
+    );
+  });
   it('rereads a rotating projected token before each request in a single poll', async () => {
     let sequence = 0;
     const read = native.readFile.getMockImplementation();

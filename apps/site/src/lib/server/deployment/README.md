@@ -88,3 +88,15 @@ With the lease guard active, the native producer uses a numeric positive attempt
 The app requires its environment attempt to be canonical positive integer text
 and compares the numeric value exactly; padded, nonnumeric and unsafe attempts
 are rejected. The optional guard's absence preserves legacy attempt handling.
+
+## Dormant legacy ReplicaSets
+
+Helm adoption labels the parent Deployment but does not rewrite retained child
+ReplicaSet metadata. An instance label may be absent only on a native apps/v1
+ReplicaSet with desired/current replicas zero and all reported ready counters
+zero, not deleting, whose single native apps/v1 Deployment controller reference
+exactly matches a live same-namespace parent in the current Helm release. An
+explicit foreign, empty or malformed instance label is refused. This is an
+ancestry check for dormant history, not a static nonwriter exception. Every Pod
+is still independently checked, so a live child blocks migration even when its
+ReplicaSet reports zero. The current UID/spec fence map remains unchanged.

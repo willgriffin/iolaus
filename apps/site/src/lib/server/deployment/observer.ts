@@ -54,10 +54,12 @@ interface KubeObject {
     deletionTimestamp?: string;
     labels?: Record<string, string>;
     ownerReferences?: {
+      apiVersion?: string;
       kind: string;
       uid: string;
       name: string;
       controller?: boolean;
+      blockOwnerDeletion?: boolean;
     }[];
   };
   spec?: {
@@ -79,6 +81,8 @@ interface KubeObject {
     active?: number;
     conditions?: { type: string; status: string }[];
     readyReplicas?: number;
+    availableReplicas?: number;
+    fullyLabeledReplicas?: number;
   };
 }
 
@@ -266,6 +270,92 @@ export interface ObserverSnapshot {
   networkPolicies?: unknown[];
 }
 
+/** Retained old children are not relabelled when Helm adopts their parent. */
+function dormantLegacyReplicaSet(
+  object: KubeObject,
+  snapshot: ObserverSnapshot,
+  instance: string,
+): boolean {
+  const meta = object.metadata,
+    labels = meta.labels;
+  const validName = (value: unknown): value is string =>
+    typeof value === 'string' &&
+    value.length <= 253 &&
+    value
+      .split('.')
+      .every((part) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part));
+  const validUid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[a-zA-Z0-9.-]{1,253}$/.test(value);
+  if (
+    object.kind !== 'ReplicaSet' ||
+    object.apiVersion !== 'apps/v1' ||
+    !validName(meta.name) ||
+    !validUid(meta.uid) ||
+    meta.namespace !== snapshot.namespace ||
+    meta.deletionTimestamp != null ||
+    (labels !== undefined &&
+      (labels === null ||
+        typeof labels !== 'object' ||
+        Array.isArray(labels))) ||
+    Object.hasOwn(labels ?? {}, 'app.kubernetes.io/instance') ||
+    !object.spec ||
+    typeof object.spec !== 'object' ||
+    Array.isArray(object.spec) ||
+    !object.status ||
+    typeof object.status !== 'object' ||
+    Array.isArray(object.status) ||
+    object.spec.replicas !== 0 ||
+    object.status.replicas !== 0 ||
+    [
+      object.status.readyReplicas,
+      object.status.availableReplicas,
+      object.status.fullyLabeledReplicas,
+    ].some((count) => count !== undefined && count !== 0)
+  )
+    return false;
+  const owners = meta.ownerReferences;
+  if (!Array.isArray(owners) || owners.length !== 1) return false;
+  const owner = owners[0];
+  if (
+    !owner ||
+    typeof owner !== 'object' ||
+    Array.isArray(owner) ||
+    owner.apiVersion !== 'apps/v1' ||
+    owner.kind !== 'Deployment' ||
+    owner.controller !== true ||
+    !validName(owner.name) ||
+    !validUid(owner.uid) ||
+    owner.uid === meta.uid ||
+    Object.keys(owner).some(
+      (key) =>
+        ![
+          'apiVersion',
+          'kind',
+          'name',
+          'uid',
+          'controller',
+          'blockOwnerDeletion',
+        ].includes(key),
+    ) ||
+    ('blockOwnerDeletion' in owner &&
+      typeof owner.blockOwnerDeletion !== 'boolean')
+  )
+    return false;
+  const parents = snapshot.objects.filter(
+    (parent) =>
+      parent.kind === 'Deployment' &&
+      parent.apiVersion === 'apps/v1' &&
+      parent.metadata.name === owner.name &&
+      parent.metadata.uid === owner.uid &&
+      parent.metadata.namespace === snapshot.namespace,
+  );
+  return (
+    parents.length === 1 &&
+    parents[0].metadata.deletionTimestamp == null &&
+    parents[0].metadata.labels?.['app.kubernetes.io/instance'] === instance
+  );
+}
+
 /** Dedicated namespace: unknown controllers and terminating writers fail closed. */
 export function assertWriterExclusion(
   snapshot: ObserverSnapshot,
@@ -331,7 +421,8 @@ export function assertWriterExclusion(
     if (
       !object.metadata.uid ||
       object.metadata.namespace !== snapshot.namespace ||
-      object.metadata.labels?.['app.kubernetes.io/instance'] !== instance
+      (object.metadata.labels?.['app.kubernetes.io/instance'] !== instance &&
+        !dormantLegacyReplicaSet(object, snapshot, instance))
     )
       throw new Error('Unknown workload in migration namespace.');
     if (object.metadata.deletionTimestamp)
