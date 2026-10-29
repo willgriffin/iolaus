@@ -3,6 +3,8 @@ import type {
   PublicProfileSnapshotV1,
   PublicProfileVisibility,
 } from '../public-profile-contract.js';
+import { formatPublicProfileDateRange } from '../public-profile-dates.js';
+import { PUBLIC_PROFILE_FONT_FACES } from './public-profile-fonts.js';
 
 /**
  * A deliberately small, presentation-safe resume document.  This mirrors the
@@ -235,7 +237,17 @@ function link(label: string, url: string): string {
   return `<a href="${escapeHtml(url)}" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
-/** Shared body for an owner preview and the anonymous public page. */
+/**
+ * Shared body for an owner preview and the anonymous public page.
+ *
+ * The document is one table so that Chromium repeats the `<thead>` running
+ * header (name, left) at the top of every printed page; the masthead on page
+ * one sits over the first instance with its own background so the name is not
+ * shown twice there.  `.keep` wraps a heading with its date line and summary
+ * so a heading never ends a page alone, while bullet lists are free to flow
+ * across pages.  Section order (summary, skills, experience, education,
+ * additional) and the type hierarchy are mirrored by `PublicProfileResume.svelte`.
+ */
 export function renderPublicProfileBody(
   snapshot: PublicProfileSnapshotV1,
 ): string {
@@ -249,58 +261,128 @@ export function renderPublicProfileBody(
     }),
   ]
     .filter(Boolean)
-    .join('<span aria-hidden="true"> · </span>');
+    .join('<span class="sep" aria-hidden="true">·</span>');
+  const heading = (
+    lead: string,
+    follow: string | undefined,
+    when: string,
+  ): string =>
+    `<h3><span class="lead">${text(lead)}</span>${follow ? `<span class="follow">${text(follow)}</span>` : ''}${when ? `<span class="when">${text(when)}</span>` : ''}</h3>`;
+  const bullets = (items: readonly string[] | undefined): string =>
+    items?.length
+      ? `<ul>${items.map((bullet) => `<li>${text(bullet)}</li>`).join('')}</ul>`
+      : '';
   const positions = snapshot.experience
     .map(
-      (position) => `
-    <article><h3>${text(position.role)}${position.company ? ` <span>at ${text(position.company)}</span>` : ''}</h3>
-    <p class="muted">${text(position.start)}${position.start && position.end ? ' – ' : ''}${text(position.end)}</p>
-    ${position.summary ? `<p>${text(position.summary)}</p>` : ''}
-    ${position.bullets.length ? `<ul>${position.bullets.map((bullet) => `<li>${text(bullet)}</li>`).join('')}</ul>` : ''}
-    ${position.projects
-      .map((project) => {
-        const url = safePublicUrl(project.url);
-        return `<section class="project"><strong>${url ? link(project.name, url) : text(project.name)}</strong>${project.summary ? `<p>${text(project.summary)}</p>` : ''}${project.bullets?.length ? `<ul>${project.bullets.map((bullet) => `<li>${text(bullet)}</li>`).join('')}</ul>` : ''}</section>`;
-      })
-      .join('')}
+      (position) => `<article>
+      <div class="keep">${heading(position.role, position.company, formatPublicProfileDateRange(position.start, position.end))}${position.summary ? `<p>${text(position.summary)}</p>` : ''}</div>
+      ${bullets(position.bullets)}
+      ${
+        position.projects.length
+          ? `<ul class="projects">${position.projects
+              .map((project) => {
+                const url = safePublicUrl(project.url);
+                return `<li><strong>${url ? link(project.name, url) : text(project.name)}</strong>${project.summary ? ` <span class="dash" aria-hidden="true">—</span> ${text(project.summary)}` : ''}${bullets(project.bullets)}</li>`;
+              })
+              .join('')}</ul>`
+          : ''
+      }
     </article>`,
     )
     .join('');
   const education = snapshot.education
     .map(
       (entry) =>
-        `<article><h3>${text(entry.credential)}</h3><p>${text(entry.institution)}</p>${entry.summary ? `<p>${text(entry.summary)}</p>` : ''}</article>`,
+        `<article class="keep">${heading(entry.institution, entry.credential, formatPublicProfileDateRange(entry.start, entry.end))}${entry.summary ? `<p>${text(entry.summary)}</p>` : ''}</article>`,
     )
     .join('');
   const other = snapshot.other
     .map(
       (entry) =>
-        `<li><strong>${text(entry.label)}</strong>: ${text(entry.value)}</li>`,
+        `<li><strong>${text(entry.label)}</strong> ${text(entry.value)}</li>`,
     )
     .join('');
   const skills = snapshot.skills
     .map(
       (group) =>
-        `<li><strong>${text(group.label)}</strong>: ${group.skills.map(text).join(', ')}</li>`,
+        `<li><strong>${text(group.label)}</strong> ${group.skills.map(text).join(', ')}</li>`,
     )
     .join('');
-  return `<main><header><h1>${text(snapshot.name)}</h1><p class="title">${text(snapshot.title)}</p>${contact ? `<p class="contact">${contact}</p>` : ''}</header>
+  return `<main><table class="doc"><thead><tr><th class="running"><span>${text(snapshot.name)}</span></th></tr></thead><tbody><tr><td>
+    <header class="masthead"><h1>${text(snapshot.name)}</h1><p class="title">${text(snapshot.title)}</p>${contact ? `<p class="contact">${contact}</p>` : ''}</header>
     ${snapshot.summary ? `<section><h2>Profile</h2><p>${text(snapshot.summary)}</p></section>` : ''}
+    ${skills ? `<section class="skills"><h2>Skills</h2><ul>${skills}</ul></section>` : ''}
     ${positions ? `<section><h2>Experience</h2>${positions}</section>` : ''}
     ${education ? `<section><h2>Education</h2>${education}</section>` : ''}
-    ${other ? `<section><h2>Additional experience</h2><ul>${other}</ul></section>` : ''}
-    ${skills ? `<section><h2>Skills</h2><ul>${skills}</ul></section>` : ''}
-  </main>`;
+    ${other ? `<section class="other"><h2>Additional experience</h2><ul>${other}</ul></section>` : ''}
+  </td></tr></tbody></table></main>`;
 }
+
+/** Embedded OFL faces, so the headless container never falls back to Courier. */
+function fontFaces(): string {
+  return PUBLIC_PROFILE_FONT_FACES.map(
+    (face) =>
+      `@font-face { font-family:"${face.family}"; font-style:${face.style}; font-weight:${face.weight}; font-display:block; src:url(data:font/woff2;base64,${face.data}) format("woff2"); }`,
+  ).join('\n  ');
+}
+
+/** Letter page, 18mm margins; the PDF renderer passes the same margins. */
+export const PUBLIC_PROFILE_PAGE_MARGIN = '18mm';
 
 /** A standalone, network-free trusted document for page responses and PDF. */
 export function renderPublicProfileHtml(
   snapshot: PublicProfileSnapshotV1,
 ): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${text(snapshot.name)} · ${text(snapshot.title)}</title><style>
-  :root { --profile-bg:#fbfaf7; --profile-ink:#1a1814; --profile-ink-soft:#3a3630; --profile-muted:#5c584f; --profile-rule:#d6d1c2; --profile-accent:#8a3f1f; }
+  ${fontFaces()}
+  :root { --profile-bg:#fbfaf7; --profile-ink:#1a1814; --profile-ink-soft:#3a3630; --profile-muted:#5c584f; --profile-rule:#d6d1c2; --profile-accent:#8a3f1f; --profile-serif:"Source Serif 4",Georgia,"Times New Roman",serif; --profile-sans:"Inter Tight","Liberation Sans",Arial,sans-serif; --profile-running:9mm; }
   @media (prefers-color-scheme: dark) { :root { --profile-bg:#15140f; --profile-ink:#f1ede2; --profile-ink-soft:#d5d0c2; --profile-muted:#a8a397; --profile-rule:#3d3a30; --profile-accent:#f0a880; } }
-  @page { size: letter; margin: .55in; } * { box-sizing: border-box; } body { background:var(--profile-bg); color:var(--profile-ink); font: 11pt/1.5 system-ui,sans-serif; margin:0; } main { max-width: 760px; margin:auto; } h1,h2,h3,p { margin:0 0 .5rem; } h1 { font-size:2rem; } h2 { border-bottom:1px solid var(--profile-rule); margin-top:1.6rem; padding-bottom:.2rem; } h3 { font-size:1.05rem; } article { break-inside:avoid; margin: 0 0 1rem; } .title { color:var(--profile-ink-soft); font-size:1.2rem; } .contact,.muted { color:var(--profile-muted); } a { color:var(--profile-accent); overflow-wrap:anywhere; } ul { margin:.35rem 0; padding-left:1.25rem; } .project { margin:.65rem 0 .65rem 1rem; } @media print { :root { --profile-bg:#ffffff; --profile-ink:#1a1814; --profile-ink-soft:#3a3630; --profile-muted:#5c584f; --profile-rule:#d6d1c2; } a { color:inherit; text-decoration:none; } }
+  @page { size: letter; margin: ${PUBLIC_PROFILE_PAGE_MARGIN}; }
+  * { box-sizing: border-box; }
+  body { background:var(--profile-bg); color:var(--profile-ink); font:10.5pt/1.35 var(--profile-serif); margin:0; -webkit-font-smoothing:antialiased; }
+  main { max-width:7.5in; margin:auto; }
+  table.doc { width:100%; border-collapse:collapse; }
+  table.doc thead { display:table-header-group; }
+  table.doc th, table.doc td { padding:0; text-align:left; font-weight:inherit; vertical-align:top; }
+  .running { height:var(--profile-running); font:500 8pt/1 var(--profile-sans); color:var(--profile-muted); }
+  /* Top padding keeps the glyph ink inside the box: Chromium paints the ink overflow of the next page's repeated header at the foot of the page before it. */
+  .running span { display:block; padding:4pt 0 3pt; border-bottom:1px solid var(--profile-rule); }
+  .masthead { position:relative; z-index:1; background:var(--profile-bg); margin-top:calc(-1 * var(--profile-running) - 3mm); padding:3mm 0 2pt; }
+  h1, h2, h3, p, ul { margin:0; }
+  h1 { font:600 22pt/1.1 var(--profile-sans); letter-spacing:-.01em; }
+  .title { font:500 11pt/1.3 var(--profile-sans); color:var(--profile-ink-soft); margin-top:3pt; }
+  .contact { font:9pt/1.4 var(--profile-sans); color:var(--profile-muted); margin-top:4pt; }
+  .contact .sep { padding:0 .45em; }
+  h2 { font:600 8.5pt/1.2 var(--profile-sans); letter-spacing:.09em; text-transform:uppercase; color:var(--profile-ink-soft); border-bottom:1px solid var(--profile-rule); margin:11pt 0 5pt; padding-bottom:2.5pt; break-after:avoid; }
+  section:first-of-type h2 { margin-top:7pt; }
+  h3 { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:.5em; font:600 10.5pt/1.3 var(--profile-sans); break-after:avoid; }
+  h3 .follow { font-weight:500; color:var(--profile-ink-soft); }
+  h3 .follow::before { content:"·"; color:var(--profile-muted); margin-right:.5em; }
+  h3 .when { margin-left:auto; font:500 9pt/1.3 var(--profile-sans); color:var(--profile-muted); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .keep { break-inside:avoid; }
+  article { margin:0 0 7pt; }
+  article .keep p { margin-top:1.5pt; }
+  ul { list-style:none; padding-left:0; margin-top:2pt; }
+  li { position:relative; margin:0 0 1.5pt; padding-left:1.1em; break-inside:avoid; }
+  p { orphans:2; widows:2; }
+  li::before { content:"\\2022"; position:absolute; left:.15em; color:var(--profile-muted); }
+  ul ul li::before { content:"\\25E6"; }
+  ul.projects { padding-left:1.1em; margin-top:3pt; border-left:1px solid var(--profile-rule); }
+  ul.projects > li { padding-left:0; }
+  ul.projects > li::before { content:none; }
+  ul.projects > li { margin-bottom:2pt; }
+  ul.projects strong { font:600 10pt/1.3 var(--profile-sans); }
+  ul.projects .dash { color:var(--profile-muted); }
+  ul.projects ul { font-size:9.5pt; margin-top:1pt; }
+  .skills ul, .other ul { margin-top:0; }
+  .skills li, .other li { padding-left:0; }
+  .skills li::before, .other li::before { content:none; }
+  .skills li { font-size:9.5pt; line-height:1.35; margin-bottom:1pt; }
+  .skills strong, .other strong { font:600 8.5pt/1.3 var(--profile-sans); color:var(--profile-ink-soft); margin-right:.2em; }
+  .other li { margin-bottom:2pt; }
+  a { color:var(--profile-accent); overflow-wrap:anywhere; text-decoration:none; }
+  @media screen { main { padding:0 1.25rem; } }
+  @media print { :root { --profile-bg:#ffffff; --profile-ink:#1a1814; --profile-ink-soft:#3a3630; --profile-muted:#5c584f; --profile-rule:#d6d1c2; --profile-accent:#1a1814; } a { color:inherit; } }
   </style></head><body>${renderPublicProfileBody(snapshot)}</body></html>`;
 }
 
@@ -338,10 +420,10 @@ export async function renderPublicProfilePdf(
     return await renderHtmlToPdf(renderPublicProfileHtml(snapshot), {
       format: 'Letter',
       margin: {
-        top: '0.55in',
-        bottom: '0.55in',
-        left: '0.55in',
-        right: '0.55in',
+        top: PUBLIC_PROFILE_PAGE_MARGIN,
+        bottom: PUBLIC_PROFILE_PAGE_MARGIN,
+        left: PUBLIC_PROFILE_PAGE_MARGIN,
+        right: PUBLIC_PROFILE_PAGE_MARGIN,
       },
       launchTimeoutMs: 60_000,
     });
