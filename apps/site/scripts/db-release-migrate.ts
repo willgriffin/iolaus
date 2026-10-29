@@ -1,35 +1,41 @@
-// Manifest preload + complete model registration must precede schema inspection.
-import './db-common.js';
-import { ObjectRegistry, resolveDatabase } from '@happyvertical/smrt-core';
-import { getDbConfig } from '../src/lib/server/db.js';
-import { releaseIdentity } from '../src/lib/server/deployment/observer.js';
+import {
+  releaseIdentity,
+  waitForWriterFenceEnrollment,
+} from '../src/lib/server/deployment/observer.js';
 import {
   assertDeploymentSchemaReady,
   releaseDeploymentProtocolEnabled,
 } from '../../../scripts/smrt-deployment-schema.mjs';
-import { withSmrtDatabaseMigrationLock } from './db-common.js';
 import { parseDbMigrateOptions } from './db-migrate-options.js';
-import { createReleaseSafetyCheck } from './db-release-safety.js';
-import {
-  finalizeReleaseIntegrity,
-  prepareReleaseSchema,
-  verifyReleaseIntegrity,
-} from './db-release-schema.js';
-import { releaseCatalog } from './db-release-catalog.js';
-import { executeReleaseCatalog } from './db-release-executor.js';
 
 const { maintenanceWindow } = parseDbMigrateOptions(process.argv.slice(2));
 if (!maintenanceWindow)
   throw new Error('Dedicated release migration requires --maintenance-window.');
-if (getDbConfig().type !== 'postgres')
-  throw new Error(
-    'Dedicated release migration supports PostgreSQL only; local onboarding is unchanged.',
-  );
 if (!releaseDeploymentProtocolEnabled())
   throw new Error(
     'Dedicated release migration requires IOLAUS_DEPLOYMENT_PROTOCOL=smrt-release-v1.',
   );
 const identity = releaseIdentity();
+await waitForWriterFenceEnrollment(identity);
+// No database-related import or initialization precedes native enrollment.
+// Preserve manifest preload before evaluating any model/schema closure.
+const { withSmrtDatabaseMigrationLock } = await import('./db-common.js');
+const { ObjectRegistry, resolveDatabase } = await import(
+  '@happyvertical/smrt-core'
+);
+const { getDbConfig } = await import('../src/lib/server/db.js');
+const { createReleaseSafetyCheck } = await import('./db-release-safety.js');
+const {
+  finalizeReleaseIntegrity,
+  prepareReleaseSchema,
+  verifyReleaseIntegrity,
+} = await import('./db-release-schema.js');
+const { releaseCatalog } = await import('./db-release-catalog.js');
+const { executeReleaseCatalog } = await import('./db-release-executor.js');
+if (getDbConfig().type !== 'postgres')
+  throw new Error(
+    'Dedicated release migration supports PostgreSQL only; local onboarding is unchanged.',
+  );
 const database = await resolveDatabase(getDbConfig());
 try {
   const checkSafety = createReleaseSafetyCheck(identity);

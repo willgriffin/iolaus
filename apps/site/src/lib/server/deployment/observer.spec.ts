@@ -282,3 +282,167 @@ describe('chart maintenance nonwriter exception', () => {
     expect(() => maintenanceObserverPolicy('')).toThrow(/policy/);
   });
 });
+
+describe('native dormant ReplicaSet history after parent adoption', () => {
+  function retained() {
+    const snapshot = fixture();
+    snapshot.namespace = 'jobgeni';
+    for (const object of snapshot.objects) {
+      object.metadata.namespace = 'jobgeni';
+      if (object.metadata.labels)
+        object.metadata.labels['app.kubernetes.io/instance'] = 'jobgeni';
+    }
+    snapshot.objects[1].metadata.name = 'jobgeni-migration-r1-a1';
+    const migrationOwner = snapshot.objects[0].metadata.ownerReferences?.[0];
+    if (migrationOwner) migrationOwner.name = 'jobgeni-migration-r1-a1';
+    const parent = snapshot.objects[2];
+    parent.apiVersion = 'apps/v1';
+    parent.metadata.name = 'jobgeni-schedule-worker';
+    parent.metadata.uid = 'f47979fc-b9d9-4432-aa60-554f516e93ee';
+    const old: ObserverSnapshot['objects'][number] = {
+      apiVersion: 'apps/v1',
+      kind: 'ReplicaSet',
+      metadata: {
+        name: 'jobgeni-schedule-worker-5f5577f896',
+        uid: '5c5c4444-b6fc-457e-87da-82018f4e0c1f',
+        namespace: 'jobgeni',
+        labels: {
+          appName: 'jobgeni-schedule-worker',
+          'pod-template-hash': '5f5577f896',
+        },
+        ownerReferences: [
+          {
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            name: parent.metadata.name,
+            uid: parent.metadata.uid,
+            controller: true,
+            blockOwnerDeletion: true,
+          },
+        ],
+      },
+      spec: {
+        replicas: 0,
+        template: {
+          spec: {
+            containers: [
+              {
+                image: `ghcr.io/willgriffin/iolaus/site@sha256:${'1'.repeat(64)}`,
+              },
+            ],
+          },
+        },
+      },
+      status: { replicas: 0 },
+    };
+    snapshot.objects.push(old);
+    return { snapshot, old, parent };
+  }
+  function set(raw: unknown, path: string, value: unknown) {
+    let current = raw as Record<string, unknown>;
+    const parts = path.split('.');
+    for (const part of parts.slice(0, -1))
+      current = current[part] as Record<string, unknown>;
+    current[parts[parts.length - 1]] = value;
+  }
+  it('accepts retained native zero ReplicaSet without instance label after parent adoption', () => {
+    const f = retained();
+    expect(() => assertWriterExclusion(f.snapshot, identity)).not.toThrow();
+  });
+  it('accepts explicit zero ready counters and absent labels only through the verified parent', () => {
+    const f = retained();
+    f.old.metadata.labels = undefined;
+    f.old.status = {
+      replicas: 0,
+      readyReplicas: 0,
+      availableReplicas: 0,
+      fullyLabeledReplicas: 0,
+    };
+    expect(() => assertWriterExclusion(f.snapshot, identity)).not.toThrow();
+  });
+  it.each([
+    ['apiVersion', 'extensions/v1beta1'],
+    ['metadata.namespace', 'foreign'],
+    ['metadata.uid', ''],
+    ['metadata.name', ''],
+    ['metadata.name', 'invalid..name'],
+    ['metadata.deletionTimestamp', 'now'],
+    ['metadata.labels', { 'app.kubernetes.io/instance': 'foreign' }],
+    ['metadata.labels', { 'app.kubernetes.io/instance': '' }],
+    ['metadata.labels', { 'app.kubernetes.io/instance': null }],
+    ['metadata.labels', { 'app.kubernetes.io/instance': undefined }],
+    ['metadata.labels', null],
+    ['spec.replicas', 1],
+    ['spec.replicas', undefined],
+    ['spec.replicas', '0'],
+    ['status', undefined],
+    ['status', []],
+    ['spec', []],
+    ['status.replicas', 1],
+    ['status.replicas', undefined],
+    ['status.replicas', null],
+    ['status.readyReplicas', 1],
+    ['status.readyReplicas', null],
+    ['status.availableReplicas', 1],
+    ['status.fullyLabeledReplicas', 1],
+    ['metadata.ownerReferences', []],
+    ['metadata.ownerReferences.0.uid', 'foreign'],
+    ['metadata.ownerReferences.0.name', 'other'],
+    ['metadata.ownerReferences.0.apiVersion', 'v1'],
+    ['metadata.ownerReferences.0.kind', 'StatefulSet'],
+    ['metadata.ownerReferences.0.controller', false],
+    ['metadata.ownerReferences.0.blockOwnerDeletion', 'true'],
+    ['metadata.ownerReferences.0', null],
+  ])('denies unsafe or malformed retained RS %s', (path, value) => {
+    const f = retained();
+    set(f.old, path, value);
+    expect(() => assertWriterExclusion(f.snapshot, identity)).toThrow();
+  });
+  it.each([
+    ['metadata.namespace', 'foreign'],
+    ['metadata.uid', 'recreated-parent'],
+    ['metadata.labels', { 'app.kubernetes.io/instance': 'foreign' }],
+    ['metadata.deletionTimestamp', 'now'],
+    ['apiVersion', 'extensions/v1beta1'],
+  ])('denies unverified adopted parent %s', (path, value) => {
+    const f = retained();
+    set(f.parent, path, value);
+    expect(() => assertWriterExclusion(f.snapshot, identity)).toThrow();
+  });
+  it('denies multiple owners and ambiguous duplicate parent identities', () => {
+    const f = retained();
+    f.old.metadata.ownerReferences?.push({
+      ...f.old.metadata.ownerReferences[0],
+    });
+    expect(() => assertWriterExclusion(f.snapshot, identity)).toThrow();
+    const duplicate = retained();
+    duplicate.snapshot.objects.push(structuredClone(duplicate.parent));
+    expect(() => assertWriterExclusion(duplicate.snapshot, identity)).toThrow();
+  });
+  it('still denies a live child of an otherwise eligible dormant legacy RS', () => {
+    const f = retained();
+    f.snapshot.objects.push({
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: {
+        name: 'old-live-child',
+        uid: 'old-live-child',
+        namespace: 'jobgeni',
+        labels: { 'app.kubernetes.io/instance': 'jobgeni' },
+        ownerReferences: [
+          {
+            apiVersion: 'apps/v1',
+            kind: 'ReplicaSet',
+            name: f.old.metadata.name,
+            uid: f.old.metadata.uid,
+            controller: true,
+          },
+        ],
+      },
+      status: { phase: 'Running' },
+    });
+    expect(() => assertWriterExclusion(f.snapshot, identity)).toThrow(
+      /writer Pod/,
+    );
+  });
+});
