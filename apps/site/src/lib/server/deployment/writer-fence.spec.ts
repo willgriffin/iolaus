@@ -17,11 +17,6 @@ function fixture() {
     maintenanceDatabase: 'postgres',
     targetDatabase: 'jobgeni_prod',
   };
-  const uids = {
-    migrationJobUid: 'job-1',
-    migrationPodUid: 'pod-1',
-    approvedEpoch: 'epoch-1',
-  };
   const policy: WriterFenceLeasePolicy = {
     configMapName: 'writer-fence',
     configMapUid: 'cm-1',
@@ -37,9 +32,19 @@ function fixture() {
     producer: {
       namespace: 'platform',
       serviceAccount: 'fence-keeper',
-      podUid: 'keeper-1',
+      controller: {
+        kind: 'Job',
+        name: 'keeper-job',
+        uid: 'keeper-job-1',
+        specIdentity: '0'.repeat(64),
+      },
+      program: {
+        name: 'keeper-program',
+        uid: 'program-1',
+        sha256: hash({ 'keeper.mjs': 'approved' }),
+        image: `keeper@sha256:${'1'.repeat(64)}`,
+      },
     },
-    uidMapIdentity: hash(uids),
     pgVisibilityQualificationIdentity: 'b'.repeat(64),
     planIdentity: 'c'.repeat(64),
     fenceContractId: 'jobgeni-fence-v1',
@@ -50,9 +55,116 @@ function fixture() {
   const context = {
     namespace: 'test',
     release: 'r1',
-    attempt: 'a1',
+    attempt: '1',
     migrationJobUid: 'job-1',
     migrationPodUid: 'pod-1',
+  };
+  const ownJob = {
+    kind: 'Job',
+    apiVersion: 'batch/v1',
+    metadata: { name: 'migration', uid: 'job-1', namespace: 'test' },
+    spec: { template: { spec: { serviceAccountName: 'observer' } } },
+  };
+  const ownPod = {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name: 'migrator',
+      uid: 'pod-1',
+      namespace: 'test',
+      ownerReferences: [
+        { kind: 'Job', name: 'migration', uid: 'job-1', controller: true },
+      ],
+    },
+    spec: { serviceAccountName: 'observer' },
+  };
+  const producerSpec = {
+    serviceAccountName: 'fence-keeper',
+    containers: [
+      {
+        name: 'keeper',
+        image: policy.producer.program.image,
+        volumeMounts: [
+          { name: 'program', mountPath: '/program', readOnly: true },
+        ],
+      },
+    ],
+    volumes: [{ name: 'program', configMap: { name: 'keeper-program' } }],
+  };
+  const producerController = {
+    kind: 'Job',
+    apiVersion: 'batch/v1',
+    metadata: {
+      name: 'keeper-job',
+      uid: 'keeper-job-1',
+      namespace: 'platform',
+    },
+    spec: { template: { spec: producerSpec } },
+  };
+  policy.producer.controller.specIdentity = hash(producerController.spec);
+  const producerPod = {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name: 'keeper-pod',
+      uid: 'keeper-1',
+      namespace: 'platform',
+      ownerReferences: [
+        {
+          kind: 'Job',
+          name: 'keeper-job',
+          uid: 'keeper-job-1',
+          controller: true,
+        },
+      ],
+    },
+    spec: { ...structuredClone(producerSpec), nodeName: 'node-1' },
+    status: {
+      phase: 'Running',
+      conditions: [{ type: 'Ready', status: 'True' }],
+      containerStatuses: [
+        {
+          name: 'keeper',
+          image: policy.producer.program.image,
+          imageID: policy.producer.program.image,
+          ready: true,
+          state: { running: {} },
+        },
+      ],
+    },
+  };
+  const program = {
+    kind: 'ConfigMap',
+    apiVersion: 'v1',
+    metadata: {
+      name: 'keeper-program',
+      uid: 'program-1',
+      namespace: 'platform',
+    },
+    immutable: true,
+    data: { 'keeper.mjs': 'approved' },
+  };
+  const uids = {
+    apiVersion: 'jobgeni.happyvertical.com/writer-fence-uids-v1',
+    epoch: policy.epoch,
+    namespaceUid: policy.namespaceUid,
+    configMapUid: policy.configMapUid,
+    migration: {
+      jobName: 'migration',
+      jobUid: 'job-1',
+      jobSpecIdentity: hash(ownJob.spec),
+      podName: 'migrator',
+      podUid: 'pod-1',
+      podSpecIdentity: hash(ownPod.spec),
+    },
+    controllers: [],
+    readOnlyPods: [],
+    producer: { podName: 'keeper-pod', podUid: 'keeper-1' },
+  };
+  const nativeContext = {
+    ...context,
+    objects: [ownJob, ownPod],
+    producerObjects: [producerPod, producerController, program],
   };
   const fence: Obj = {
     apiVersion: 'smrt.happyvertical.com/writer-fence-v1',
@@ -88,12 +200,18 @@ function fixture() {
         'epoch',
         'phase',
         'producer',
-        'uidMapIdentity',
         'configMapUid',
         'pgVisibilityQualificationIdentity',
       ].map((key) => [key, structuredClone((policy as unknown as Obj)[key])]),
     ),
     ...context,
+    attempt: Number(context.attempt),
+    producer: {
+      namespace: policy.producer.namespace,
+      serviceAccount: policy.producer.serviceAccount,
+      podUid: 'keeper-1',
+    },
+    uidMapIdentity: hash(uids),
     observedAt: now - 1000,
     expiresAt: now + 19000,
     fence,
@@ -113,7 +231,19 @@ function fixture() {
       'lease.json': JSON.stringify(lease),
     },
   };
-  return { policy, context, fence, lease, configMap };
+  return {
+    policy,
+    context: nativeContext,
+    fence,
+    lease,
+    configMap,
+    uids,
+    producerPod,
+    producerController,
+    program,
+    ownPod,
+    ownJob,
+  };
 }
 function set(raw: unknown, path: string, value: unknown) {
   const parts = path.split('.');
@@ -298,5 +428,167 @@ describe('fresh exact app/platform lease and upstream inner fence', () => {
         now,
       ),
     ).toThrow();
+  });
+});
+
+describe('constructible native enrollment and restart', () => {
+  it('constructs policy before migrationPod birth and enrolls later without changing policy', () => {
+    const f = fixture(),
+      admitted = JSON.stringify(f.policy);
+    f.configMap.data['lease.json'] = 'null';
+    f.configMap.data['uids.json'] = JSON.stringify({
+      ...f.uids,
+      migration: null,
+    });
+    expect(() =>
+      verifyWriterFenceLease(f.configMap, f.policy, f.context, now, true),
+    ).toThrow('Native writer-fence enrollment is pending.');
+    expect(() =>
+      verifyWriterFenceLease(f.configMap, f.policy, f.context, now),
+    ).toThrow('Fresh native writer-fence lease is unverified.');
+    f.configMap.data['uids.json'] = JSON.stringify(f.uids);
+    expect(() => check(f)).not.toThrow();
+    expect(JSON.stringify(f.policy)).toBe(admitted);
+  });
+  it('admits a native keeper Pod restart under the same stable controller policy, rejecting old lease', () => {
+    const f = fixture(),
+      admitted = JSON.stringify(f.policy);
+    f.producerPod.metadata.uid = 'keeper-2';
+    expect(() => check(f)).toThrow();
+    f.uids.producer.podUid = 'keeper-2';
+    f.configMap.data['uids.json'] = JSON.stringify(f.uids);
+    expect(() => check(f)).toThrow();
+    set(f.lease, 'producer.podUid', 'keeper-2');
+    f.lease.uidMapIdentity = hash(f.uids);
+    expect(() => check(f)).not.toThrow();
+    expect(JSON.stringify(f.policy)).toBe(admitted);
+  });
+  it.each([
+    'metadata.ownerReferences.0.uid',
+    'spec.serviceAccountName',
+    'spec.containers.0.image',
+    'status.containerStatuses.0.imageID',
+  ])('rejects producer Pod drift %s', (path) => {
+    const f = fixture();
+    set(f.producerPod, path, 'foreign');
+    expect(() => check(f)).toThrow();
+  });
+  it('rejects program or controller replacement and unknown workload map despite recomputed hash', () => {
+    for (const change of [
+      (f: ReturnType<typeof fixture>) => {
+        f.program.data['keeper.mjs'] = 'other';
+      },
+      (f: ReturnType<typeof fixture>) => {
+        f.producerController.metadata.uid = 'replacement';
+      },
+      (f: ReturnType<typeof fixture>) => {
+        set(f.uids, 'migration.podUid', 'foreign');
+      },
+      (f: ReturnType<typeof fixture>) => {
+        set(f.uids, 'controllers', [
+          {
+            kind: 'Deployment',
+            name: 'writer',
+            uid: 'writer',
+            specIdentity: 'a'.repeat(64),
+          },
+        ]);
+      },
+    ]) {
+      const f = fixture();
+      change(f);
+      f.configMap.data['uids.json'] = JSON.stringify(f.uids);
+      f.lease.uidMapIdentity = hash(f.uids);
+      expect(() => check(f)).toThrow();
+    }
+  });
+});
+
+describe('producer enrollment graph completeness', () => {
+  it('accepts exact Deployment->ReplicaSet->Pod ownership with the same pinned template', () => {
+    const f = fixture();
+    const deployment = {
+      ...f.producerController,
+      kind: 'Deployment',
+      apiVersion: 'apps/v1',
+    };
+    f.policy.producer.controller.kind = 'Deployment';
+    f.policy.producer.controller.specIdentity = hash(deployment.spec);
+    const rs = {
+      kind: 'ReplicaSet',
+      apiVersion: 'apps/v1',
+      metadata: {
+        name: 'keeper-rs',
+        uid: 'keeper-rs-1',
+        namespace: 'platform',
+        ownerReferences: [
+          {
+            kind: 'Deployment',
+            name: 'keeper-job',
+            uid: 'keeper-job-1',
+            controller: true,
+          },
+        ],
+      },
+      spec: structuredClone(deployment.spec),
+    };
+    f.producerPod.metadata.ownerReferences = [
+      {
+        kind: 'ReplicaSet',
+        name: 'keeper-rs',
+        uid: 'keeper-rs-1',
+        controller: true,
+      },
+    ];
+    f.context.producerObjects = [
+      f.producerPod,
+      deployment,
+      f.program,
+      rs,
+    ] as typeof f.context.producerObjects;
+    expect(() => check(f)).not.toThrow();
+    rs.metadata.ownerReferences[0].uid = 'foreign';
+    expect(() => check(f)).toThrow();
+  });
+  it('hashes immutable program data in sorted key order rather than API map insertion order', () => {
+    const f = fixture();
+    const data = { z: 'last', a: 'first' };
+    set(f.program, 'data', data);
+    f.policy.producer.program.sha256 = hash({ a: 'first', z: 'last' });
+    expect(() => check(f)).not.toThrow();
+  });
+  it('rejects unknown producer API type and extra Pod spec fields', () => {
+    for (const mutate of [
+      (f: ReturnType<typeof fixture>) => {
+        f.producerPod.apiVersion = 'wrong';
+      },
+      (f: ReturnType<typeof fixture>) =>
+        set(f.producerPod, 'spec.hostNetwork', true),
+    ]) {
+      const f = fixture();
+      mutate(f);
+      expect(() => check(f)).toThrow();
+    }
+  });
+});
+
+describe('active native attempt contract', () => {
+  it.each([
+    'a1',
+    '01',
+    '0',
+    '-1',
+    '9007199254740992',
+  ])('rejects noncanonical or unsafe environment attempt %s', (attempt) => {
+    const f = fixture();
+    expect(() =>
+      verifyWriterFenceLease(
+        f.configMap,
+        f.policy,
+        { ...f.context, attempt },
+        now,
+        true,
+      ),
+    ).toThrow('Fresh native writer-fence lease is unverified.');
   });
 });

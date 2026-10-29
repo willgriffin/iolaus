@@ -11,7 +11,10 @@ import {
   canonical,
   expectedPodEnvelope,
 } from './continuous-static.js';
-import { observeWriterExclusion } from './observer.js';
+import {
+  observeWriterExclusion,
+  waitForWriterFenceEnrollment,
+} from './observer.js';
 import type { WriterFenceLeasePolicy } from './writer-fence.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
@@ -19,7 +22,7 @@ const identity = {
   application: 'iolaus',
   environment: 'test',
   release: 'r1',
-  attempt: 'a1',
+  attempt: '1',
 };
 const ca =
   '-----BEGIN CERTIFICATE-----\nprojected-ca\n-----END CERTIFICATE-----';
@@ -59,12 +62,12 @@ function rawInventory() {
       labels: {
         ...labels,
         'smrt.happyvertical.com/component': 'migration',
-        'smrt.happyvertical.com/attempt': 'a1',
+        'smrt.happyvertical.com/attempt': '1',
       },
       ownerReferences: [
         {
           kind: 'Job',
-          name: 'site-migration-r1-a1',
+          name: 'site-migration-r1-1',
           uid: 'job-1',
           controller: true,
         },
@@ -132,7 +135,7 @@ function rawInventory() {
       [
         'jobs',
         list('Job', 'batch/v1', [
-          { metadata: metadata('site-migration-r1-a1', 'job-1') },
+          { metadata: metadata('site-migration-r1-1', 'job-1') },
         ]),
       ],
       ['cronjobs', list('CronJob', 'batch/v1', [])],
@@ -287,10 +290,76 @@ function withContinuous(inventory: ReturnType<typeof rawInventory>) {
 }
 
 function withWriterFence(inventory: ReturnType<typeof rawInventory>) {
-  const hash = (value: unknown) =>
-    createHash('sha256').update(JSON.stringify(value)).digest('hex');
-  const contract = { protected: 'platform-native-fence-contract' };
-  const uids = { job: 'job-1', pod: 'pod-1', epoch: 'epoch-1' };
+  const hash = (v: unknown) =>
+    createHash('sha256').update(JSON.stringify(v)).digest('hex');
+  const contract = { protected: 'platform-native-fence-contract' },
+    programData = { 'keeper.mjs': 'approved' };
+  const image = `keeper@sha256:${'1'.repeat(64)}`;
+  const producerSpec = {
+    serviceAccountName: 'keeper',
+    containers: [
+      {
+        name: 'keeper',
+        image,
+        volumeMounts: [
+          { name: 'program', mountPath: '/program', readOnly: true },
+        ],
+      },
+    ],
+    volumes: [{ name: 'program', configMap: { name: 'keeper-program' } }],
+  };
+  const controller = {
+    kind: 'Job',
+    apiVersion: 'batch/v1',
+    metadata: {
+      name: 'keeper-job',
+      uid: 'keeper-job-1',
+      namespace: 'platform',
+    },
+    spec: { template: { spec: producerSpec } },
+  };
+  const producerPod = {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name: 'keeper-pod',
+      uid: 'keeper-1',
+      namespace: 'platform',
+      ownerReferences: [
+        {
+          kind: 'Job',
+          name: 'keeper-job',
+          uid: 'keeper-job-1',
+          controller: true,
+        },
+      ],
+    },
+    spec: { ...structuredClone(producerSpec), nodeName: 'node-1' },
+    status: {
+      phase: 'Running',
+      conditions: [{ type: 'Ready', status: 'True' }],
+      containerStatuses: [
+        {
+          name: 'keeper',
+          image,
+          imageID: image,
+          ready: true,
+          state: { running: {} },
+        },
+      ],
+    },
+  };
+  const program = {
+    kind: 'ConfigMap',
+    apiVersion: 'v1',
+    metadata: {
+      name: 'keeper-program',
+      uid: 'program-1',
+      namespace: 'platform',
+    },
+    immutable: true,
+    data: programData,
+  };
   const policy: WriterFenceLeasePolicy = {
     configMapName: 'writer-fence',
     configMapUid: 'fence-cm',
@@ -306,15 +375,67 @@ function withWriterFence(inventory: ReturnType<typeof rawInventory>) {
     producer: {
       namespace: 'platform',
       serviceAccount: 'keeper',
-      podUid: 'keeper-1',
+      controller: {
+        kind: 'Job',
+        name: 'keeper-job',
+        uid: 'keeper-job-1',
+        specIdentity: hash(controller.spec),
+      },
+      program: {
+        name: 'keeper-program',
+        uid: 'program-1',
+        sha256: hash(programData),
+        image,
+      },
     },
-    uidMapIdentity: hash(uids),
     pgVisibilityQualificationIdentity: 'b'.repeat(64),
     planIdentity: 'c'.repeat(64),
     fenceContractId: 'fence-v1',
     fenceContractIdentity: 'd'.repeat(64),
     namespacePolicyIdentity: 'e'.repeat(64),
     databasePolicyIdentity: 'f'.repeat(64),
+  };
+  const pods = (
+    inventory.payloads.get('pods') as {
+      items: { metadata: { name: string; uid: string }; spec: unknown }[];
+    }
+  ).items;
+  const jobs = (
+    inventory.payloads.get('jobs') as {
+      items: { metadata: { name: string; uid: string }; spec?: unknown }[];
+    }
+  ).items;
+  jobs[0].spec = {};
+  const deployments = (
+    inventory.payloads.get('deployments') as {
+      items: { metadata: { name: string; uid: string }; spec: unknown }[];
+    }
+  ).items;
+  const uids = {
+    apiVersion: 'jobgeni.happyvertical.com/writer-fence-uids-v1',
+    epoch: policy.epoch,
+    namespaceUid: policy.namespaceUid,
+    configMapUid: policy.configMapUid,
+    migration: {
+      jobName: jobs[0].metadata.name,
+      jobUid: jobs[0].metadata.uid,
+      jobSpecIdentity: hash(jobs[0].spec),
+      podName: pods[0].metadata.name,
+      podUid: pods[0].metadata.uid,
+      podSpecIdentity: hash(pods[0].spec),
+    },
+    controllers: deployments.map((o) => ({
+      kind: 'Deployment',
+      name: o.metadata.name,
+      uid: o.metadata.uid,
+      specIdentity: hash(o.spec),
+    })),
+    readOnlyPods: pods.slice(1).map((o) => ({
+      name: o.metadata.name,
+      uid: o.metadata.uid,
+      specIdentity: hash(o.spec),
+    })),
+    producer: { podName: 'keeper-pod', podUid: 'keeper-1' },
   };
   const observedAt = Date.now();
   const lease = {
@@ -328,14 +449,18 @@ function withWriterFence(inventory: ReturnType<typeof rawInventory>) {
     maintenanceDatabase: policy.maintenanceDatabase,
     targetDatabase: policy.targetDatabase,
     release: 'r1',
-    attempt: 'a1',
+    attempt: 1,
     adoptionId: policy.adoptionId,
     epoch: policy.epoch,
     phase: policy.phase,
     migrationJobUid: 'job-1',
     migrationPodUid: 'pod-1',
-    producer: policy.producer,
-    uidMapIdentity: policy.uidMapIdentity,
+    producer: {
+      namespace: 'platform',
+      serviceAccount: 'keeper',
+      podUid: 'keeper-1',
+    },
+    uidMapIdentity: hash(uids),
     configMapUid: policy.configMapUid,
     pgVisibilityQualificationIdentity: policy.pgVisibilityQualificationIdentity,
     observedAt,
@@ -379,8 +504,14 @@ function withWriterFence(inventory: ReturnType<typeof rawInventory>) {
     ...JSON.parse(inventory.policy),
     writerFenceLease: policy,
   });
-  inventory.payloads.set(policy.configMapName, config);
-  return { policy, lease, config };
+  for (const [key, value] of [
+    ['writer-fence', config],
+    ['keeper-pod', producerPod],
+    ['keeper-job', controller],
+    ['keeper-program', program],
+  ] as const)
+    inventory.payloads.set(key, value);
+  return { policy, lease, config, uids, producerPod };
 }
 
 describe('native Kubernetes observer HTTP/parsing boundary', () => {
@@ -522,17 +653,17 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
     const f = withWriterFence(inventory);
     vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
     await observeWriterExclusion(identity);
-    expect(native.request.mock.calls.at(-1)?.[0].path).toBe(
+    expect(native.request.mock.calls.map(([o]) => o.path)).toContain(
       '/api/v1/namespaces/test/configmaps/writer-fence',
     );
-    expect(native.request).toHaveBeenCalledTimes(10);
+    expect(native.request).toHaveBeenCalledTimes(13);
     token = 'refreshed-phase-token';
     f.lease.expiresAt = 1;
     f.config.data['lease.json'] = JSON.stringify(f.lease);
     await expect(observeWriterExclusion(identity)).rejects.toThrow(
       'Fresh native writer-fence lease is unverified.',
     );
-    expect(native.request).toHaveBeenCalledTimes(20);
+    expect(native.request).toHaveBeenCalledTimes(26);
     expect(native.request.mock.calls.at(-1)?.[0]).toMatchObject({
       ca,
       rejectUnauthorized: true,
@@ -564,6 +695,68 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
     await expect(observeWriterExclusion(identity)).rejects.toThrow(
       'Kubernetes observer inventory read failed.',
     );
+  });
+  it('waits for authenticated null enrollment before first DB factory and never retries issued expiry', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    f.config.data['lease.json'] = 'null';
+    const factory = vi.fn();
+    const startup = waitForWriterFenceEnrollment(identity).then(factory);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(factory).not.toHaveBeenCalled();
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    await startup;
+    expect(factory).toHaveBeenCalledOnce();
+    expect(
+      native.request.mock.calls.filter(([o]) =>
+        o.path.endsWith('/writer-fence'),
+      ).length,
+    ).toBeGreaterThan(1);
+    f.lease.expiresAt = 1;
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    factory.mockClear();
+    const calls = native.request.mock.calls.length;
+    await expect(
+      waitForWriterFenceEnrollment(identity).then(factory),
+    ).rejects.toThrow('Fresh native writer-fence lease is unverified.');
+    expect(factory).not.toHaveBeenCalled();
+    expect(native.request.mock.calls.length - calls).toBe(13);
+  });
+  it('bounds authenticated pending enrollment to thirty seconds without opening a database', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    f.config.data['lease.json'] = 'null';
+    let clock = 0;
+    const time = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const original = native.request.getMockImplementation();
+    if (!original) throw new Error('Missing request fixture');
+    native.request.mockImplementation(
+      (options: { path: string }, callback: (res: unknown) => void) =>
+        original(options, (response: unknown) => {
+          if (options.path.endsWith('/keeper-program')) clock = 30000;
+          callback(response);
+        }),
+    );
+    const factory = vi.fn();
+    try {
+      await expect(
+        waitForWriterFenceEnrollment(identity).then(factory),
+      ).rejects.toThrow('Writer-fence startup enrollment timed out.');
+      expect(factory).not.toHaveBeenCalled();
+    } finally {
+      time.mockRestore();
+    }
+  });
+  it('does not retry a foreign enrollment even when its lease is null', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    f.uids.migration.podUid = 'foreign';
+    f.config.data['uids.json'] = JSON.stringify(f.uids);
+    f.config.data['lease.json'] = 'null';
+    await expect(waitForWriterFenceEnrollment(identity)).rejects.toThrow(
+      'Fresh native writer-fence lease is unverified.',
+    );
+    expect(native.request).toHaveBeenCalledTimes(13);
   });
   it('rereads a rotating projected token before each request in a single poll', async () => {
     let sequence = 0;

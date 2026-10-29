@@ -9,7 +9,9 @@ import {
 import {
   validateWriterFenceLeasePolicy,
   verifyWriterFenceLease,
+  WriterFenceEnrollmentPending,
   type WriterFenceLeasePolicy,
+  writerFenceProducerPodName,
 } from './writer-fence.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
@@ -377,6 +379,7 @@ async function readNativeInventory({
   host,
   port,
   ca,
+  deadline,
 }: {
   api: string;
   resource: string;
@@ -384,6 +387,7 @@ async function readNativeInventory({
   host: string;
   port: string;
   ca: string;
+  deadline?: number;
 }): Promise<NativeInventory> {
   // A projected token may rotate during a bounded inventory poll.
   const requestToken = (
@@ -393,6 +397,12 @@ async function readNativeInventory({
   ).trim();
   if (!/^[a-zA-Z0-9._-]{1,65536}$/.test(requestToken))
     throw new Error('Migration observer projection is incomplete.');
+  const remaining =
+    deadline === undefined
+      ? 5000
+      : Math.min(5000, Math.ceil(deadline - performance.now()));
+  if (remaining <= 0)
+    throw new Error('Writer-fence startup enrollment timed out.');
   return await new Promise<NativeInventory>((resolve, reject) => {
     const req = request(
       {
@@ -416,6 +426,7 @@ async function readNativeInventory({
             );
         });
         response.on('end', () => {
+          clearTimeout(timer);
           if (response.statusCode !== 200)
             return reject(
               new Error('Kubernetes observer inventory read refused.'),
@@ -440,6 +451,12 @@ async function readNativeInventory({
     req.on('error', () =>
       reject(new Error('Kubernetes observer TLS/read failed.')),
     );
+    const timer = setTimeout(
+      () => req.destroy(new Error('Observer request deadline exceeded.')),
+      remaining,
+    );
+    req.on('close', () => clearTimeout(timer));
+    req.on('error', () => clearTimeout(timer));
     req.end();
   }).catch(() => {
     throw new Error('Kubernetes observer inventory read failed.');
@@ -447,8 +464,10 @@ async function readNativeInventory({
 }
 
 /** Fresh TLS-verified API reads; credentials are reread for native token rotation. */
-export async function observeWriterExclusion(
+async function observeWriterExclusionOnce(
   identity: ReleaseIdentity,
+  allowPending = false,
+  deadline?: number,
 ): Promise<void> {
   const policy = maintenanceObserverPolicy();
   const [token, ca, namespace, podName, podUid] = await Promise.all(
@@ -523,6 +542,7 @@ export async function observeWriterExclusion(
       host,
       port,
       ca,
+      deadline,
     });
     if (resource.startsWith('configmaps/')) {
       if (result.kind !== kind || result.apiVersion !== apiVersion)
@@ -590,13 +610,81 @@ export async function observeWriterExclusion(
       host,
       port,
       ca,
+      deadline,
     });
-    verifyWriterFenceLease(lease, policy.writerFenceLease, {
-      namespace,
-      release: identity.release,
-      attempt: identity.attempt,
-      migrationJobUid: job.uid,
-      migrationPodUid: podUid,
-    });
+    const p = policy.writerFenceLease;
+    const producerPodName = writerFenceProducerPodName(lease, p, namespace);
+    const get = (api: string, resource: string) =>
+      readNativeInventory({
+        api,
+        resource,
+        namespace: p.producer.namespace,
+        host,
+        port,
+        ca,
+        deadline,
+      });
+    const producerPod = await get('api/v1', `pods/${producerPodName}`);
+    const controller = await get(
+      p.producer.controller.kind === 'Job' ? 'apis/batch/v1' : 'apis/apps/v1',
+      `${p.producer.controller.kind === 'Job' ? 'jobs' : 'deployments'}/${p.producer.controller.name}`,
+    );
+    const program = await get(
+      'api/v1',
+      `configmaps/${p.producer.program.name}`,
+    );
+    const producerObjects: unknown[] = [producerPod, controller, program];
+    if (p.producer.controller.kind === 'Deployment') {
+      const refs = (producerPod as KubeObject).metadata?.ownerReferences;
+      const rs = refs?.find(
+        (r) => r.kind === 'ReplicaSet' && r.controller === true,
+      );
+      if (!rs || !/^[a-z0-9][a-z0-9.-]{0,252}$/.test(rs.name))
+        throw new Error('Fresh native writer-fence lease is unverified.');
+      producerObjects.push(await get('apis/apps/v1', `replicasets/${rs.name}`));
+    }
+    verifyWriterFenceLease(
+      lease,
+      p,
+      {
+        namespace,
+        release: identity.release,
+        attempt: identity.attempt,
+        migrationJobUid: job.uid,
+        migrationPodUid: podUid,
+        objects,
+        producerObjects,
+      },
+      Date.now(),
+      allowPending,
+    );
+  }
+}
+
+/** Mutation callbacks never retry an expired, changed or missing lease. */
+export async function observeWriterExclusion(
+  identity: ReleaseIdentity,
+): Promise<void> {
+  await observeWriterExclusionOnce(identity);
+}
+/** Run before database modules/factories: only authenticated null enrollment is retried. */
+export async function waitForWriterFenceEnrollment(
+  identity: ReleaseIdentity,
+): Promise<void> {
+  if (!maintenanceObserverPolicy().writerFenceLease) return;
+  const deadline = performance.now() + 30_000;
+  for (;;) {
+    try {
+      await observeWriterExclusionOnce(identity, true, deadline);
+      return;
+    } catch (error) {
+      if (!(error instanceof WriterFenceEnrollmentPending)) throw error;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0)
+        throw new Error('Writer-fence startup enrollment timed out.');
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(250, remaining)),
+      );
+    }
   }
 }

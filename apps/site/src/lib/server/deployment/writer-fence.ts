@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonical } from './continuous-static.js';
 
 /** Independently admitted pins from the protected migration policy, never the lease. */
 export interface WriterFenceLeasePolicy {
@@ -13,8 +14,17 @@ export interface WriterFenceLeasePolicy {
   adoptionId: string;
   epoch: string;
   phase: 'migrate';
-  producer: { namespace: string; serviceAccount: string; podUid: string };
-  uidMapIdentity: string;
+  producer: {
+    namespace: string;
+    serviceAccount: string;
+    controller: {
+      kind: 'Job' | 'Deployment';
+      name: string;
+      uid: string;
+      specIdentity: string;
+    };
+    program: { name: string; uid: string; sha256: string; image: string };
+  };
   pgVisibilityQualificationIdentity: string;
   planIdentity: string;
   fenceContractId: string;
@@ -28,6 +38,8 @@ export interface WriterFenceContext {
   attempt: string;
   migrationJobUid: string;
   migrationPodUid: string;
+  objects: unknown[];
+  producerObjects: unknown[];
 }
 export interface WriterFence {
   apiVersion: 'smrt.happyvertical.com/writer-fence-v1';
@@ -65,7 +77,6 @@ const policyKeys = [
   'epoch',
   'phase',
   'producer',
-  'uidMapIdentity',
   'pgVisibilityQualificationIdentity',
   'planIdentity',
   'fenceContractId',
@@ -75,7 +86,6 @@ const policyKeys = [
 ];
 const hashKeys = [
   'contractIdentity',
-  'uidMapIdentity',
   'pgVisibilityQualificationIdentity',
   'planIdentity',
   'fenceContractIdentity',
@@ -83,6 +93,11 @@ const hashKeys = [
   'databasePolicyIdentity',
 ];
 const producerKeys = ['namespace', 'serviceAccount', 'podUid'];
+export class WriterFenceEnrollmentPending extends Error {
+  constructor() {
+    super('Native writer-fence enrollment is pending.');
+  }
+}
 function fail(): never {
   throw new Error('Fresh native writer-fence lease is unverified.');
 }
@@ -113,7 +128,9 @@ function json(value: unknown): unknown {
   }
 }
 function hash(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== 'string') fail();
+  return createHash('sha256').update(serialized).digest('hex');
 }
 export function validateWriterFenceLeasePolicy(
   raw: unknown,
@@ -135,11 +152,23 @@ export function validateWriterFenceLeasePolicy(
   )
     fail();
   const producer = object(p.producer);
-  exact(producer, producerKeys);
+  exact(producer, ['namespace', 'serviceAccount', 'controller', 'program']);
+  const controller = object(producer.controller),
+    program = object(producer.program);
+  exact(controller, ['kind', 'name', 'uid', 'specIdentity']);
+  exact(program, ['name', 'uid', 'sha256', 'image']);
   if (
     !name(producer.namespace) ||
     !name(producer.serviceAccount) ||
-    !text(producer.podUid)
+    !['Job', 'Deployment'].includes(String(controller.kind)) ||
+    !name(controller.name) ||
+    !text(controller.uid) ||
+    !sha(controller.specIdentity) ||
+    !name(program.name) ||
+    !text(program.uid) ||
+    !sha(program.sha256) ||
+    typeof program.image !== 'string' ||
+    !/^[^\s@]+@sha256:[a-f0-9]{64}$/.test(program.image)
   )
     fail();
 }
@@ -156,20 +185,12 @@ function fresh(observedAt: unknown, expiresAt: unknown, now: number): void {
     fail();
 }
 
-/** Reports a held hard fence only. Never creates, renews, releases, or caches it. */
-export function verifyWriterFenceLease(
+function enrollment(
   rawConfigMap: unknown,
   p: WriterFenceLeasePolicy,
-  context: WriterFenceContext,
-  now = Date.now(),
-): WriterFence {
+  context: Pick<WriterFenceContext, 'namespace'>,
+) {
   validateWriterFenceLeasePolicy(p);
-  if (
-    !Number.isSafeInteger(now) ||
-    now < lifetime ||
-    !Object.values(context).every(text)
-  )
-    fail();
   const cm = object(rawConfigMap);
   const meta = object(cm.metadata);
   if (
@@ -188,9 +209,332 @@ export function verifyWriterFenceLease(
   exact(data, ['contract.json', 'uids.json', 'lease.json']);
   const contract = object(json(data['contract.json']));
   const uids = object(json(data['uids.json']));
-  if (hash(contract) !== p.contractIdentity || hash(uids) !== p.uidMapIdentity)
+  if (hash(contract) !== p.contractIdentity) fail();
+  exact(uids, [
+    'apiVersion',
+    'epoch',
+    'namespaceUid',
+    'configMapUid',
+    'migration',
+    'controllers',
+    'readOnlyPods',
+    'producer',
+  ]);
+  if (
+    uids.apiVersion !== 'jobgeni.happyvertical.com/writer-fence-uids-v1' ||
+    uids.epoch !== p.epoch ||
+    uids.namespaceUid !== p.namespaceUid ||
+    uids.configMapUid !== p.configMapUid
+  )
     fail();
-  const lease = object(json(data['lease.json']));
+  const enrolledProducer = object(uids.producer);
+  exact(enrolledProducer, ['podName', 'podUid']);
+  if (!name(enrolledProducer.podName) || !text(enrolledProducer.podUid)) fail();
+  return { uids, lease: json(data['lease.json']) };
+}
+export function writerFenceProducerPodName(
+  raw: unknown,
+  p: WriterFenceLeasePolicy,
+  namespace: string,
+): string {
+  return String(
+    object(enrollment(raw, p, { namespace }).uids.producer).podName,
+  );
+}
+function alive(raw: unknown, namespace: string, kind?: string): Fields {
+  const o = object(raw),
+    m = object(o.metadata);
+  if (
+    (kind && o.kind !== kind) ||
+    m.namespace !== namespace ||
+    !name(m.name) ||
+    !text(m.uid) ||
+    m.deletionTimestamp != null
+  )
+    fail();
+  return m;
+}
+function owner(o: Fields, kind: string, parent: Fields): void {
+  const refs = object(o.metadata).ownerReferences;
+  if (!Array.isArray(refs) || refs.length !== 1) fail();
+  const ref = object(refs[0]);
+  if (
+    ref.controller !== true ||
+    ref.kind !== kind ||
+    ref.uid !== parent.uid ||
+    ref.name !== parent.name
+  )
+    fail();
+}
+function producerProof(
+  p: WriterFenceLeasePolicy,
+  u: Fields,
+  objects: unknown[],
+): string {
+  const native = objects.map(object),
+    enrolled = object(u.producer);
+  if (native.length !== (p.producer.controller.kind === 'Job' ? 3 : 4)) fail();
+  const versions = new Map([
+    ['Pod', 'v1'],
+    ['ConfigMap', 'v1'],
+    ['Job', 'batch/v1'],
+    ['Deployment', 'apps/v1'],
+    ['ReplicaSet', 'apps/v1'],
+  ]);
+  for (const o of native)
+    if (
+      !versions.has(String(o.kind)) ||
+      o.apiVersion !== versions.get(String(o.kind))
+    )
+      fail();
+  const find = (kind: string, id: string) => {
+    const matches = native.filter(
+      (o) => o.kind === kind && object(o.metadata).name === id,
+    );
+    if (matches.length !== 1) fail();
+    return matches[0];
+  };
+  const c = find(p.producer.controller.kind, p.producer.controller.name),
+    cm = alive(c, p.producer.namespace, p.producer.controller.kind);
+  if (
+    (cm.ownerReferences != null &&
+      (!Array.isArray(cm.ownerReferences) || cm.ownerReferences.length > 0)) ||
+    cm.uid !== p.producer.controller.uid ||
+    hash(c.spec) !== p.producer.controller.specIdentity
+  )
+    fail();
+  const pod = find('Pod', String(enrolled.podName)),
+    pm = alive(pod, p.producer.namespace, 'Pod');
+  if (pm.uid !== enrolled.podUid) fail();
+  let template = object(object(c.spec).template);
+  if (c.kind === 'Deployment') {
+    const sets = native.filter((o) => o.kind === 'ReplicaSet');
+    if (sets.length !== 1) fail();
+    const rs = sets[0],
+      rm = alive(rs, p.producer.namespace, 'ReplicaSet');
+    owner(rs, 'Deployment', cm);
+    owner(pod, 'ReplicaSet', rm);
+    const rsSpec = object(object(object(rs.spec).template).spec);
+    if (canonical(rsSpec) !== canonical(template.spec)) fail();
+    template = object(object(rs.spec).template);
+  } else owner(pod, 'Job', cm);
+  const ps = structuredClone(object(pod.spec)),
+    expected = structuredClone(object(template.spec));
+  if (typeof ps.nodeName !== 'string' || !name(ps.nodeName)) fail();
+  delete ps.nodeName;
+  for (const x of [ps, expected]) {
+    if (x.serviceAccount !== undefined) {
+      if (x.serviceAccount !== x.serviceAccountName) fail();
+      delete x.serviceAccount;
+    }
+    if (x.priority === 0) delete x.priority;
+    if (x.preemptionPolicy === 'PreemptLowerPriority')
+      delete x.preemptionPolicy;
+  }
+  if (ps.tolerations !== undefined && expected.tolerations === undefined) {
+    const defaults = [
+      'node.kubernetes.io/not-ready',
+      'node.kubernetes.io/unreachable',
+    ].map((key) => ({
+      key,
+      operator: 'Exists',
+      effect: 'NoExecute',
+      tolerationSeconds: 300,
+    }));
+    if (canonical(ps.tolerations) !== canonical(defaults)) fail();
+    delete ps.tolerations;
+  }
+  if (
+    canonical(ps) !== canonical(expected) ||
+    ps.serviceAccountName !== p.producer.serviceAccount
+  )
+    fail();
+  const containers = ps.containers;
+  if (
+    !Array.isArray(containers) ||
+    containers.length !== 1 ||
+    object(containers[0]).image !== p.producer.program.image
+  )
+    fail();
+  const status = object(pod.status);
+  if (
+    status.phase !== 'Running' ||
+    !Array.isArray(status.conditions) ||
+    !status.conditions.some((raw) => {
+      const c = object(raw);
+      return c.type === 'Ready' && c.status === 'True';
+    })
+  )
+    fail();
+  const states = status.containerStatuses;
+  if (!Array.isArray(states) || states.length !== 1) fail();
+  const state = object(states[0]),
+    digest = p.producer.program.image.split('@')[1];
+  if (
+    state.name !== object(containers[0]).name ||
+    state.ready !== true ||
+    state.image !== p.producer.program.image ||
+    ![
+      p.producer.program.image,
+      `docker-pullable://${p.producer.program.image}`,
+      digest,
+      `containerd://${digest}`,
+    ].includes(String(state.imageID)) ||
+    !object(state.state).running
+  )
+    fail();
+  object(object(state.state).running);
+  const program = find('ConfigMap', p.producer.program.name),
+    progMeta = alive(program, p.producer.namespace, 'ConfigMap');
+  if (
+    progMeta.uid !== p.producer.program.uid ||
+    program.immutable !== true ||
+    (program.binaryData !== undefined &&
+      Object.keys(object(program.binaryData)).length) ||
+    hash(
+      Object.fromEntries(
+        Object.entries(object(program.data)).sort(([a], [b]) =>
+          a < b ? -1 : a > b ? 1 : 0,
+        ),
+      ),
+    ) !== p.producer.program.sha256
+  )
+    fail();
+  const volumes = ps.volumes,
+    mounts = object(containers[0]).volumeMounts;
+  if (!Array.isArray(volumes) || !Array.isArray(mounts)) fail();
+  const refs = volumes
+    .map(object)
+    .filter(
+      (v) =>
+        v.configMap && object(v.configMap).name === p.producer.program.name,
+    );
+  if (
+    refs.length !== 1 ||
+    !mounts
+      .map(object)
+      .some(
+        (m) =>
+          m.name === refs[0].name &&
+          m.mountPath === '/program' &&
+          m.readOnly === true,
+      )
+  )
+    fail();
+  return String(pm.uid);
+}
+function bindMap(u: Fields, context: WriterFenceContext): boolean {
+  const objects = context.objects.map(object);
+  const match = (kind: string, name: unknown, uid: unknown, spec: unknown) => {
+    const found = objects.filter(
+      (o) =>
+        o.kind === kind &&
+        object(o.metadata).name === name &&
+        object(o.metadata).uid === uid,
+    );
+    if (found.length !== 1) fail();
+    alive(found[0], context.namespace, kind);
+    if (hash(found[0].spec) !== spec) fail();
+    return found[0];
+  };
+  if (
+    !Array.isArray(u.controllers) ||
+    u.controllers.length > 64 ||
+    !Array.isArray(u.readOnlyPods) ||
+    u.readOnlyPods.length > 64
+  )
+    fail();
+  const controllers = objects.filter((o) =>
+    ['Deployment', 'CronJob'].includes(String(o.kind)),
+  );
+  if (controllers.length !== u.controllers.length) fail();
+  const seen = new Set();
+  for (const raw of u.controllers) {
+    const e = object(raw);
+    exact(e, ['kind', 'name', 'uid', 'specIdentity']);
+    if (
+      !['Deployment', 'CronJob'].includes(String(e.kind)) ||
+      !sha(e.specIdentity) ||
+      seen.has(e.uid)
+    )
+      fail();
+    seen.add(e.uid);
+    match(String(e.kind), e.name, e.uid, e.specIdentity);
+  }
+  const others = objects.filter(
+    (o) =>
+      o.kind === 'Pod' && object(o.metadata).uid !== context.migrationPodUid,
+  );
+  if (others.length !== u.readOnlyPods.length) fail();
+  for (const raw of u.readOnlyPods) {
+    const e = object(raw);
+    exact(e, ['name', 'uid', 'specIdentity']);
+    if (
+      !sha(e.specIdentity) ||
+      seen.has(e.uid) ||
+      e.uid === context.migrationPodUid
+    )
+      fail();
+    seen.add(e.uid);
+    match('Pod', e.name, e.uid, e.specIdentity);
+  }
+  if (objects.filter((o) => o.kind === 'Job').length !== 1) fail();
+  if (u.migration === null) return false;
+  const migration = object(u.migration);
+  exact(migration, [
+    'jobName',
+    'jobUid',
+    'jobSpecIdentity',
+    'podName',
+    'podUid',
+    'podSpecIdentity',
+  ]);
+  if (
+    migration.jobUid !== context.migrationJobUid ||
+    migration.podUid !== context.migrationPodUid ||
+    !sha(migration.jobSpecIdentity) ||
+    !sha(migration.podSpecIdentity)
+  )
+    fail();
+  const job = match(
+      'Job',
+      migration.jobName,
+      migration.jobUid,
+      migration.jobSpecIdentity,
+    ),
+    pod = match(
+      'Pod',
+      migration.podName,
+      migration.podUid,
+      migration.podSpecIdentity,
+    );
+  owner(pod, 'Job', object(job.metadata));
+  return true;
+}
+/** Reports a held hard fence only. Never creates, renews, releases, or caches it. */
+export function verifyWriterFenceLease(
+  rawConfigMap: unknown,
+  p: WriterFenceLeasePolicy,
+  context: WriterFenceContext,
+  now = Date.now(),
+  allowPending = false,
+): WriterFence {
+  if (!Number.isSafeInteger(now) || now < lifetime) fail();
+  if (
+    !/^[1-9][0-9]{0,15}$/.test(context.attempt) ||
+    !Number.isSafeInteger(Number(context.attempt))
+  )
+    fail();
+  const { uids, lease: rawLease } = enrollment(rawConfigMap, p, context);
+  const producerUid = producerProof(p, uids, context.producerObjects);
+  const enrolled = bindMap(uids, context);
+  if (rawLease === null) {
+    if (allowPending) throw new WriterFenceEnrollmentPending();
+    fail();
+  }
+  if (!enrolled) fail();
+  const lease = object(rawLease);
+
   exact(lease, [
     'apiVersion',
     'source',
@@ -227,7 +571,6 @@ export function verifyWriterFenceLease(
     'adoptionId',
     'epoch',
     'phase',
-    'uidMapIdentity',
     'configMapUid',
     'pgVisibilityQualificationIdentity',
   ] as const)
@@ -235,15 +578,20 @@ export function verifyWriterFenceLease(
   for (const key of [
     'namespace',
     'release',
-    'attempt',
     'migrationJobUid',
     'migrationPodUid',
   ] as const)
     if (lease[key] !== context[key]) fail();
+  if (lease.attempt !== Number(context.attempt)) fail();
   const producer = object(lease.producer);
   exact(producer, producerKeys);
-  for (const key of producerKeys)
-    if (producer[key] !== p.producer[key as keyof typeof p.producer]) fail();
+  if (
+    producer.namespace !== p.producer.namespace ||
+    producer.serviceAccount !== p.producer.serviceAccount ||
+    producer.podUid !== producerUid ||
+    lease.uidMapIdentity !== hash(uids)
+  )
+    fail();
   fresh(lease.observedAt, lease.expiresAt, now);
   const fence = object(lease.fence);
   // Kept exactly aligned with SMRT scripts/deployment/adopt.mjs writer-fence-v1.
