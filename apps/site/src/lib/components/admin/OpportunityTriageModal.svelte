@@ -115,6 +115,7 @@ let {
   candidateSkills = [],
   search = '',
   singleOpportunity = null,
+  readOnly = false,
   onClose,
   onDecision,
 }: {
@@ -125,6 +126,8 @@ let {
   search?: string;
   /** A server-loaded list record reviewed alone, without reading the queue. */
   singleOpportunity?: AdminRecord | null;
+  /** Display a captured posting without triage reads or writes. */
+  readOnly?: boolean;
   /** Called on Esc and the close button. */
   onClose?: () => void;
   /** Fired only after a single-opportunity review write succeeds. */
@@ -351,7 +354,7 @@ function startSession(): void {
   atEnd = singleOpportunity !== null;
   refillTick = 0;
   lastRefillKey = '0:0:0';
-  if (!singleOpportunity) void refill();
+  if (!singleOpportunity && !readOnly) void refill();
 }
 
 /**
@@ -360,7 +363,7 @@ function startSession(): void {
  * hands `loadTriageQueue` the list's filter parameters verbatim.
  */
 async function refill(): Promise<void> {
-  if (singleOpportunity || refilling) return;
+  if (readOnly || singleOpportunity || refilling) return;
   refilling = true;
   loading = true;
   const token = sessionToken;
@@ -720,7 +723,7 @@ function openPosting(): void {
 }
 
 function handleAction(action: TriageShortcutAction): void {
-  if (singleOpportunity && busy) return;
+  if (readOnly || (singleOpportunity && busy)) return;
   switch (action) {
     case 'digDeeper':
       decide('digDeeper');
@@ -748,7 +751,7 @@ function handleAction(action: TriageShortcutAction): void {
  * closed: the list underneath owns the keyboard then.
  */
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.defaultPrevented) return;
+  if (readOnly || event.defaultPrevented) return;
   if (!triageDeckAcceptsKeys({ open })) return;
   const action = triageShortcutFor({
     altKey: event.altKey,
@@ -776,7 +779,7 @@ function isDraggableOrigin(target: EventTarget | null): boolean {
 }
 
 function startDrag(event: PointerEvent): void {
-  if (!current) return;
+  if (readOnly || !current) return;
   if (event.button !== 0 || !event.isPrimary) return;
   if (!isDraggableOrigin(event.target)) return;
   // Capture the pointer so a swipe that strays off the card still reports its
@@ -865,7 +868,7 @@ const shortlistHref = $derived.by(() => {
     {open}
     size="full"
     closeOnBackdrop={false}
-    ariaLabel="Triage opportunities"
+    ariaLabel={readOnly ? 'Original opportunity posting' : 'Triage opportunities'}
     onClose={close}
   >
   {#snippet header()}
@@ -875,7 +878,7 @@ const shortlistHref = $derived.by(() => {
           <ExternalLink size={16} strokeWidth={2.2} /> Open opportunity
         </a>
       {/if}
-      <button type="button" class="close" onclick={close} aria-label="Close triage">
+      <button type="button" class="close" onclick={close} aria-label={readOnly ? 'Close posting' : 'Close triage'}>
         <X size={18} strokeWidth={2.4} /> Close
       </button>
     </div>
@@ -923,6 +926,7 @@ const shortlistHref = $derived.by(() => {
       <OpportunityTriageCard
         record={current}
         {candidateSkills}
+        {readOnly}
         {busy}
         canUndo={lastUndo !== null}
         undoLabel={lastUndo?.label ?? ''}
@@ -946,6 +950,7 @@ const shortlistHref = $derived.by(() => {
   {/if}
 
   {#snippet footer()}
+    {#if !readOnly}
     <div class="deck-actions">
       {#each DECK_ACTIONS as deckAction}
         <div class={`slot ${deckAction.tone}`}>
@@ -970,6 +975,7 @@ const shortlistHref = $derived.by(() => {
         </div>
       {/each}
     </div>
+    {/if}
   {/snippet}
   </Modal>
 </div>

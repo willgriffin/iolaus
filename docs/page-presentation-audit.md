@@ -18,7 +18,7 @@ admin pages share the workspace header; they do not need route-local chrome.
 | `/admin/[resource]/[id]/edit` | Uses the shared record-form presentation. |
 | `/admin/[resource]/new` | Uses the shared record-form presentation. |
 | `/admin/account` | Keeps data-export and destructive-account-management headings and warnings, with a shared-header return to Overview. |
-| `/admin/applications/[id]` | Keep the application review workspace title, materials, and decision headings. |
+| `/admin/applications/[id]` | Default to Opportunity with stored posting facts, summary, responsibilities and qualifications. Resume, Cover letter and Q&A carry material review. View full posting reuses the opportunity modal in read-only mode; the packet stays internal. Keep the explicit final-submission decision and material fingerprints. |
 | `/admin/candidate-profile-links` | Removed duplicate visible route chrome; retained an accessible page label and added a shared-header return to Resume. |
 | `/admin/career` | Keeps the resume manager, removed its obsolete local breadcrumb-hiding rule, and adds a shared-header return to Overview. |
 | `/admin/career/public-profile` | Removed duplicate visible route chrome; retained an accessible page label, publishing state, privacy warnings, setup headings, and a shared-header return to Resume. |

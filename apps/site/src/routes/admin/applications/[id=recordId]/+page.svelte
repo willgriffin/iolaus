@@ -9,6 +9,7 @@ import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import Save from '@lucide/svelte/icons/save';
 import Send from '@lucide/svelte/icons/send';
 import { enhance } from '$app/forms';
+import ApplicationOpportunityOverview from '$lib/components/admin/ApplicationOpportunityOverview.svelte';
 import { renderSafeMarkdown } from '$lib/markdown-preview';
 
 type RecordLike = Record<string, unknown> & { id?: string };
@@ -167,7 +168,15 @@ function submissionMethodFromApplyMethod(value: string): string {
   return value;
 }
 
-let activeMaterialType = $state('');
+let activeMaterialType = $state('opportunity');
+const visibleMaterials = $derived(
+  data.materials.filter(
+    (material: ReviewMaterial) => material.materialType !== 'packet',
+  ),
+);
+function tabLabel(material: ReviewMaterial): string {
+  return material.materialType === 'answers' ? 'Q&A' : material.label;
+}
 const resumeMaterial = $derived(
   data.materials.find(
     (material: ReviewMaterial) => material.materialType === 'resume',
@@ -216,14 +225,15 @@ const applicationTitle = $derived(
 
 $effect(() => {
   if (
-    data.materials.some(
+    activeMaterialType === 'opportunity' ||
+    visibleMaterials.some(
       (material: ReviewMaterial) =>
         material.materialType === activeMaterialType,
     )
   ) {
     return;
   }
-  activeMaterialType = data.materials[0]?.materialType ?? '';
+  activeMaterialType = 'opportunity';
 });
 </script>
 
@@ -258,7 +268,8 @@ $effect(() => {
 
   <div class="review-main">
     <nav class="material-tabs" aria-label="Application materials">
-      {#each data.materials as material}
+      <button type="button" class:active={activeMaterialType === 'opportunity'} aria-current={activeMaterialType === 'opportunity' ? 'page' : undefined} onclick={() => activeMaterialType = 'opportunity'}>Opportunity</button>
+      {#each visibleMaterials as material}
         <button
           type="button"
           class:active={activeMaterialType === material.materialType}
@@ -267,13 +278,16 @@ $effect(() => {
             activeMaterialType = material.materialType;
           }}
         >
-          {material.label}
+          {tabLabel(material)}
         </button>
       {/each}
     </nav>
 
     <section class="materials-list" aria-label="Application materials">
-      {#each data.materials as material}
+      {#if activeMaterialType === 'opportunity'}
+        <ApplicationOpportunityOverview opportunity={data.opportunity} company={data.company} />
+      {/if}
+      {#each visibleMaterials as material}
         {@const dataTitle = materialDataTitle(material)}
         <article
           class="material-section"
@@ -501,19 +515,23 @@ $effect(() => {
 	          <CheckCircle2 size={16} strokeWidth={2.2} />
 	          <span>Approve final submission</span>
 	        </button>
+	        {#if activeMaterialType !== 'opportunity'}
 	        <input name="materialType" type="hidden" value={activeMaterialType} />
 	        <button class="secondary-button" type="submit" formaction="?/reviewMaterial">
 	          <CheckCircle2 size={16} strokeWidth={2.2} />
 	          <span>Mark material reviewed</span>
 	        </button>
+        {/if}
 	        <button class="secondary-button warning" type="submit" formaction="?/requestTweaks">
 	          <RefreshCw size={16} strokeWidth={2.2} />
 	          <span>Request tweaks</span>
 	        </button>
+        {#if activeMaterialType !== 'opportunity'}
 	        <button class="secondary-button" type="submit" formaction="?/addComments">
 	          <Save size={16} strokeWidth={2.2} />
 	          <span>Save comments</span>
 	        </button>
+        {/if}
 	      </div>
 	      <label>
 	        <span>Final approval notes</span>
