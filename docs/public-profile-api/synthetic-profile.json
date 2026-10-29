@@ -31,7 +31,8 @@
           {
             "name": "Community toolkit",
             "summary": "A synthetic project.",
-            "url": "https://example.org/toolkit"
+            "url": "https://example.org/toolkit",
+            "bullets": ["Onboarding: Cut volunteer setup time: 2 days to 1 hour"]
           }
         ]
       }

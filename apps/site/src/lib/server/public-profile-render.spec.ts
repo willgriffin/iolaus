@@ -4,6 +4,7 @@ const pdf = vi.hoisted(() => ({ renderHtmlToPdf: vi.fn() }));
 vi.mock('@happyvertical/pdf', () => pdf);
 
 import type { ResumeSource } from '@willgriffin/iolaus-resume';
+import { publicProfileSnapshotSchema } from '../public-profile-contract.js';
 import {
   projectPublicProfileSnapshot,
   renderPublicProfileBody,
@@ -75,6 +76,21 @@ const source: ResumeSource = {
                 kind: 'document',
               },
             ],
+            achievements: [
+              {
+                id: 'PRIVATE_PROJECT_ACHIEVEMENT_ID',
+                title: 'Alerting',
+                body: 'Cut false alarms with tuned thresholds.',
+                metric: '40%',
+                tags: ['PRIVATE_TAG'],
+              },
+              { title: '  ', body: '', tags: [] },
+            ],
+          },
+          {
+            id: 'PRIVATE_PROJECT_ID',
+            name: 'Field tablets',
+            summary: 'Replaced paper checklists.',
             achievements: [],
           },
         ],
@@ -139,6 +155,7 @@ describe('public profile projection and rendering', () => {
       'PRIVATE_DUTY_ID',
       'PRIVATE_ACHIEVEMENT_ID',
       'PRIVATE_PROJECT_ID',
+      'PRIVATE_PROJECT_ACHIEVEMENT_ID',
       'PRIVATE_ATTACHMENT_ID',
       'PRIVATE_CATEGORY_ID',
       'PRIVATE_SKILL_ID',
@@ -178,6 +195,56 @@ describe('public profile projection and rendering', () => {
     expect(snapshot.education).toEqual([]);
     expect(snapshot.other).toEqual([]);
     expect(snapshot.skills).toEqual([]);
+  });
+
+  it('projects project achievements as bullets, caps them, and omits the key when empty', () => {
+    const snapshot = projectPublicProfileSnapshot({ source });
+    const [telemetry, tablets] = snapshot.experience[0]?.projects ?? [];
+
+    expect(telemetry).toEqual({
+      name: 'Grid telemetry',
+      summary: 'Modernized regional monitoring.',
+      url: 'https://projects.example/telemetry',
+      bullets: ['Alerting: Cut false alarms with tuned thresholds.: 40%'],
+    });
+    expect(tablets).toEqual({
+      name: 'Field tablets',
+      summary: 'Replaced paper checklists.',
+    });
+    expect(tablets).not.toHaveProperty('bullets');
+    expect(Object.isFrozen(telemetry?.bullets)).toBe(true);
+    expect(publicProfileSnapshotSchema.safeParse(snapshot).success).toBe(true);
+
+    const [position] = source.experience.positions;
+    const [project] = position?.projects ?? [];
+    if (!position || !project) throw new Error('fixture position missing');
+    const capped = projectPublicProfileSnapshot({
+      source: {
+        ...source,
+        experience: {
+          ...source.experience,
+          positions: [
+            {
+              ...position,
+              projects: [
+                {
+                  ...project,
+                  achievements: Array.from({ length: 35 }, (_, index) => ({
+                    title: `Win ${index}`,
+                    body: 'x'.repeat(5_000),
+                    tags: [],
+                  })),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const bullets = capped.experience[0]?.projects[0]?.bullets ?? [];
+    expect(bullets).toHaveLength(30);
+    expect(bullets[0]).toHaveLength(4_000);
+    expect(bullets[0]?.startsWith('Win 0: xxx')).toBe(true);
   });
 
   it.each([
@@ -230,6 +297,10 @@ describe('public profile projection and rendering', () => {
       expect(body).not.toContain(hidden);
     }
     expect(html).toContain('https://projects.example/telemetry');
+    expect(body).toContain(
+      '<p>Modernized regional monitoring.</p><ul><li>Alerting: Cut false alarms with tuned thresholds.: 40%</li></ul></section>',
+    );
+    expect(body).toContain('<p>Replaced paper checklists.</p></section>');
   });
 
   it('paints the standalone document from its own palette in both colour schemes', () => {
