@@ -466,8 +466,14 @@ function bindMap(u: Fields, context: WriterFenceContext): boolean {
   ];
   if (!text(instance)) fail();
   const active = objects.filter((o) => !terminalHistory(o, context, instance));
-  const match = (kind: string, name: unknown, uid: unknown, spec: unknown) => {
-    const found = objects.filter(
+  const match = (
+    kind: string,
+    name: unknown,
+    uid: unknown,
+    spec: unknown,
+    candidates = objects,
+  ) => {
+    const found = candidates.filter(
       (o) =>
         o.kind === kind &&
         object(o.metadata).name === name &&
@@ -519,7 +525,7 @@ function bindMap(u: Fields, context: WriterFenceContext): boolean {
     )
       fail();
     seen.add(e.uid);
-    match('Pod', e.name, e.uid, e.specIdentity);
+    match('Pod', e.name, e.uid, e.specIdentity, others);
   }
   const activeJobs = active.filter((o) => o.kind === 'Job');
   if (

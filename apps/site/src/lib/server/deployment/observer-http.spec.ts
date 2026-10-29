@@ -696,6 +696,51 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
       'Kubernetes observer inventory read failed.',
     );
   });
+  it('rejects a terminal maintenance map entry that leaves its approved active replacement unbound', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    const pods = inventory.payloads.get('pods') as {
+      items: Record<string, unknown>[];
+    };
+    const current = pods.items[1] as {
+      metadata: { name: string; uid: string };
+      spec: unknown;
+    };
+    const old = structuredClone(pods.items[1]);
+    old.metadata = {
+      ...(old.metadata as Record<string, unknown>),
+      name: 'old-maintenance',
+      uid: 'old-maintenance',
+    };
+    old.status = { phase: 'Succeeded' };
+    pods.items.push(old);
+    const hash = (value: unknown) =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    f.uids.readOnlyPods = [
+      {
+        name: 'old-maintenance',
+        uid: 'old-maintenance',
+        specIdentity: hash(old.spec),
+      },
+    ];
+    f.config.data['uids.json'] = JSON.stringify(f.uids);
+    f.lease.uidMapIdentity = hash(f.uids);
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Fresh native writer-fence lease is unverified.',
+    );
+    f.uids.readOnlyPods = [
+      {
+        name: current.metadata.name,
+        uid: current.metadata.uid,
+        specIdentity: hash(current.spec),
+      },
+    ];
+    f.config.data['uids.json'] = JSON.stringify(f.uids);
+    f.lease.uidMapIdentity = hash(f.uids);
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    await expect(observeWriterExclusion(identity)).resolves.toBeUndefined();
+  });
   it('accepts a fresh retry lease with independently terminal migration history in native lists', async () => {
     withWriterFence(inventory);
     vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);

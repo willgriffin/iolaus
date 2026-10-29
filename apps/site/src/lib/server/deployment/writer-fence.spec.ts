@@ -704,3 +704,61 @@ describe('independently proven retained migration and CronJob history', () => {
     expect(() => check(f)).toThrow();
   });
 });
+
+describe('active readonly map bijection', () => {
+  const readonlyPod = (name: string, uid: string, phase = 'Running') => ({
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name,
+      uid,
+      namespace: 'test',
+      labels: { 'app.kubernetes.io/instance': 'site' },
+    },
+    spec: {
+      serviceAccountName: 'maintenance',
+      automountServiceAccountToken: false,
+    },
+    status: { phase },
+  });
+  const entry = (pod: ReturnType<typeof readonlyPod>) => ({
+    name: pod.metadata.name,
+    uid: pod.metadata.uid,
+    specIdentity: hash(pod.spec),
+  });
+  const map = (
+    f: ReturnType<typeof fixture>,
+    entries: ReturnType<typeof entry>[],
+  ) => {
+    set(f.uids, 'readOnlyPods', entries);
+    f.configMap.data['uids.json'] = JSON.stringify(f.uids);
+    f.lease.uidMapIdentity = hash(f.uids);
+  };
+  it.each([
+    'Succeeded',
+    'Failed',
+  ])('rejects mapped %s history until the active replacement is freshly enrolled', (phase) => {
+    const f = fixture(),
+      old = readonlyPod('old-maintenance', 'old-maintenance', phase),
+      replacement = readonlyPod('current-maintenance', 'current-maintenance');
+    f.context.objects.push(old, replacement);
+    map(f, [entry(old)]);
+    expect(() => check(f)).toThrow(
+      'Fresh native writer-fence lease is unverified.',
+    );
+    map(f, [entry(replacement)]);
+    expect(() => check(f)).not.toThrow();
+  });
+  it('requires a unique mapping for every active readonly Pod', () => {
+    const f = fixture(),
+      a = readonlyPod('a', 'a'),
+      b = readonlyPod('b', 'b');
+    f.context.objects.push(a, b);
+    map(f, [entry(a), entry(a)]);
+    expect(() => check(f)).toThrow();
+    map(f, [entry(a)]);
+    expect(() => check(f)).toThrow();
+    map(f, [entry(a), entry(b)]);
+    expect(() => check(f)).not.toThrow();
+  });
+});
