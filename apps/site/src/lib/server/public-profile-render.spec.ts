@@ -6,6 +6,10 @@ vi.mock('@happyvertical/pdf', () => pdf);
 import type { ResumeSource } from '@willgriffin/iolaus-resume';
 import { publicProfileSnapshotSchema } from '../public-profile-contract.js';
 import {
+  formatPublicProfileDate,
+  formatPublicProfileDateRange,
+} from '../public-profile-dates.js';
+import {
   projectPublicProfileSnapshot,
   renderPublicProfileBody,
   renderPublicProfileHtml,
@@ -34,7 +38,7 @@ const source: ResumeSource = {
         id: 'PRIVATE_POSITION_ID',
         role: 'Operations Lead',
         company: 'Northwind Renewables',
-        start: '2021',
+        start: '2021-03',
         end: 'Present',
         blurb: 'Coordinates field reliability and customer operations.',
         duties: [
@@ -283,7 +287,10 @@ describe('public profile projection and rendering', () => {
     expect(html).toContain(body);
     expect(pdf.renderHtmlToPdf).toHaveBeenCalledWith(
       html,
-      expect.objectContaining({ format: 'Letter' }),
+      expect.objectContaining({
+        format: 'Letter',
+        margin: { top: '18mm', bottom: '18mm', left: '18mm', right: '18mm' },
+      }),
     );
     for (const hidden of [
       'avery@example.invalid',
@@ -298,9 +305,11 @@ describe('public profile projection and rendering', () => {
     }
     expect(html).toContain('https://projects.example/telemetry');
     expect(body).toContain(
-      '<p>Modernized regional monitoring.</p><ul><li>Alerting: Cut false alarms with tuned thresholds.: 40%</li></ul></section>',
+      '<span class="dash" aria-hidden="true">—</span> Modernized regional monitoring.<ul><li>Alerting: Cut false alarms with tuned thresholds.: 40%</li></ul></li>',
     );
-    expect(body).toContain('<p>Replaced paper checklists.</p></section>');
+    expect(body).toContain(
+      '<li><strong>Field tablets</strong> <span class="dash" aria-hidden="true">—</span> Replaced paper checklists.</li></ul>',
+    );
   });
 
   it('paints the standalone document from its own palette in both colour schemes', () => {
@@ -332,5 +341,99 @@ describe('public profile projection and rendering', () => {
     expect(styles).toMatch(/body \{[^}]*background:var\(--profile-bg\)/u);
     expect(styles).toMatch(/body \{[^}]*color:var\(--profile-ink\)/u);
     expect(styles).not.toMatch(/color:#[0-9a-f]{3,6}/iu);
+  });
+
+  it.each([
+    ['2024-12', 'Dec 2024'],
+    ['2003-09', 'Sep 2003'],
+    ['2008', '2008'],
+    ['2021-13', '2021'],
+    ['Present', 'Present'],
+    [' 2019-06 ', 'Jun 2019'],
+    [undefined, ''],
+  ])('formats a snapshot date for display: %s', (value, expected) => {
+    expect(formatPublicProfileDate(value)).toBe(expected);
+  });
+
+  it('joins a date range with an en dash and drops a missing side', () => {
+    expect(formatPublicProfileDateRange('2024-12', 'Present')).toBe(
+      'Dec 2024 – Present',
+    );
+    expect(formatPublicProfileDateRange('2003-09', '2008')).toBe(
+      'Sep 2003 – 2008',
+    );
+    expect(formatPublicProfileDateRange(undefined, '2023')).toBe('2023');
+    expect(formatPublicProfileDateRange(undefined, undefined)).toBe('');
+  });
+
+  it('puts formatted dates on the heading line and lays sections out in reading order', () => {
+    const snapshot = projectPublicProfileSnapshot({ source });
+    const body = renderPublicProfileBody(snapshot);
+
+    expect(body).toContain(
+      '<h3><span class="lead">Operations Lead</span><span class="follow">Northwind Renewables</span><span class="when">Mar 2021 – Present</span></h3>',
+    );
+    expect(body).not.toContain('2021-03');
+    // Institution leads, credential follows, detail paragraph beneath.
+    expect(body).toContain(
+      '<article class="keep"><h3><span class="lead">Example Polytechnic</span><span class="follow">BSc Industrial Engineering</span></h3><p>Systems design and operations.</p></article>',
+    );
+    // Heading, date, and summary stay together; bullet lists may break.
+    expect(body).toMatch(
+      /<div class="keep"><h3>.*<\/h3><p>Coordinates field reliability and customer operations\.<\/p><\/div>\s*<ul><li>/u,
+    );
+    // Projects are a compact list: name, summary on the same line, sub-bullets.
+    expect(body).toContain(
+      '<ul class="projects"><li><strong><a href="https://projects.example/telemetry" rel="noopener noreferrer">Grid telemetry</a></strong> <span class="dash" aria-hidden="true">—</span> Modernized regional monitoring.<ul><li>Alerting: Cut false alarms with tuned thresholds.: 40%</li></ul></li><li><strong>Field tablets</strong> <span class="dash" aria-hidden="true">—</span> Replaced paper checklists.</li></ul>',
+    );
+    const order = [
+      '<h2>Profile</h2>',
+      '<h2>Skills</h2>',
+      '<h2>Experience</h2>',
+      '<h2>Education</h2>',
+      '<h2>Additional experience</h2>',
+    ].map((marker) => body.indexOf(marker));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(body).toContain(
+      '<li><strong>Operations</strong> Incident command</li>',
+    );
+    // Running header repeats the name on every printed page.
+    expect(body).toMatch(
+      /<thead><tr><th class="running"><span>Avery Rivera<\/span><\/th><\/tr><\/thead>/u,
+    );
+  });
+
+  it('embeds its serif and sans faces so the PDF never falls back to a monospace font', () => {
+    const html = renderPublicProfileHtml(
+      projectPublicProfileSnapshot({ source }),
+    );
+    const styles = html.slice(
+      html.indexOf('<style>'),
+      html.indexOf('</style>'),
+    );
+    const faces = styles.match(/@font-face \{[^}]*\}/gu) ?? [];
+    expect(faces.length).toBeGreaterThanOrEqual(3);
+    for (const family of ['"Source Serif 4"', '"Inter Tight"']) {
+      const face = faces.find((rule) => rule.includes(`font-family:${family}`));
+      expect(face).toMatch(
+        /src:url\(data:font\/woff2;base64,[A-Za-z0-9+/=]{1000,}\) format\("woff2"\)/u,
+      );
+    }
+    expect(styles).toMatch(/--profile-serif:"Source Serif 4"[^;]*serif;/u);
+    expect(styles).toMatch(
+      /body \{[^}]*font:10\.5pt\/1\.35 var\(--profile-serif\)/u,
+    );
+    expect(styles).not.toMatch(/monospace/u);
+    expect(styles).toContain('@page { size: letter; margin: 18mm; }');
+    expect(styles).toMatch(/\.keep \{ break-inside:avoid; \}/u);
+    expect(styles).toMatch(/li \{[^}]*break-inside:avoid/u);
+    // A project item carries its own sub-list, so it must stay free to paginate.
+    expect(styles).toMatch(/ul\.projects > li \{[^}]*break-inside:auto/u);
+    expect(styles).toMatch(/ul\.projects > li > ul \{ break-before:avoid; \}/u);
+    expect(styles).toMatch(/h2 \{[^}]*break-after:avoid/u);
+    expect(styles).toMatch(/h3 \{[^}]*break-after:avoid/u);
+    expect(styles).not.toMatch(/article \{[^}]*break-inside/u);
+    expect(html).not.toContain('https://fonts.g');
   });
 });
