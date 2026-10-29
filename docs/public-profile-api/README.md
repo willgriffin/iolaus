@@ -26,7 +26,10 @@ There is no list, draft, previous revision, or private source-record endpoint.
   can be empty because sections were excluded. Do not enrich from private data
   or invent missing sections. Text is plain data: escape it in HTML and validate
   HTTP(S) links before rendering. Fields such as education dates and experience
-  summary are optional. The synthetic fixture includes optional-field omissions.
+  summary are optional. Each experience project may carry an optional
+  `bullets` array (project-level achievements, in the same shape as position
+  bullets); revisions prepared before that field existed omit it, so treat an
+  absent array as empty. The synthetic fixture includes optional-field omissions.
 
 ## Responses and browser behavior
 

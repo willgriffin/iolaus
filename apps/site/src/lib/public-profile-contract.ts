@@ -52,7 +52,14 @@ export const publicProfileVisibilitySchema = z
   .strict();
 
 const publicProjectSchema = z
-  .object({ name: text, summary: text, url: safeUrl.optional() })
+  .object({
+    name: text,
+    summary: text,
+    url: safeUrl.optional(),
+    // Optional for backward compatibility with revisions published before
+    // project achievements were projected.
+    bullets: z.array(text.max(8_000)).max(40).optional(),
+  })
   .strict();
 
 export const publicProfileSnapshotSchema = z

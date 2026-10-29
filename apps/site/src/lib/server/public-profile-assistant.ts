@@ -195,10 +195,13 @@ export function profileContext(profile: PublishedProfile): string {
       );
       if (job.summary) lines.push(`  ${job.summary}`);
       for (const bullet of job.bullets) lines.push(`  • ${bullet}`);
-      for (const project of job.projects)
+      for (const project of job.projects) {
         lines.push(
           `  Project: ${project.name} — ${project.summary}${project.url ? ` (${project.url})` : ''}`,
         );
+        for (const bullet of project.bullets ?? [])
+          lines.push(`    • ${bullet}`);
+      }
     }
   }
   if (profile.skills.length) {

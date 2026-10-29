@@ -65,6 +65,34 @@ function isVisible(
   return selection?.[key] ?? defaultValue;
 }
 
+/** Public bullet text for a position or project: duties, then achievements. */
+function projectBullets(
+  duties: ReadonlyArray<{ body?: string }>,
+  achievements: ReadonlyArray<{
+    title?: string;
+    body?: string;
+    metric?: string;
+  }>,
+): string[] {
+  return [
+    ...duties
+      .slice(0, MAX_BULLETS)
+      .map((duty) => boundedText(duty.body, MAX_TEXT)),
+    ...achievements
+      .slice(0, MAX_BULLETS)
+      .map((achievement) =>
+        boundedText(
+          [achievement.title, achievement.body, achievement.metric]
+            .filter(Boolean)
+            .join(': '),
+          MAX_TEXT,
+        ),
+      ),
+  ]
+    .filter(Boolean)
+    .slice(0, MAX_BULLETS);
+}
+
 /**
  * Produces the exact data that a public revision may render.  The projection
  * uses an allowlist, so private ResumeSource fields can never accidentally
@@ -121,32 +149,16 @@ export function projectPublicProfileSnapshot(
                 summary:
                   boundedText(position.blurb, MAX_TEXT) ||
                   'Selected experience.',
-                bullets: [
-                  ...(position.duties ?? [])
-                    .slice(0, MAX_BULLETS)
-                    .map((duty) => boundedText(duty.body, MAX_TEXT)),
-                  ...position.achievements
-                    .slice(0, MAX_BULLETS)
-                    .map((achievement) =>
-                      boundedText(
-                        [
-                          achievement.title,
-                          achievement.body,
-                          achievement.metric,
-                        ]
-                          .filter(Boolean)
-                          .join(': '),
-                        MAX_TEXT,
-                      ),
-                    ),
-                ]
-                  .filter(Boolean)
-                  .slice(0, MAX_BULLETS),
+                bullets: projectBullets(
+                  position.duties ?? [],
+                  position.achievements,
+                ),
                 projects: (position.projects ?? [])
                   .slice(0, MAX_PROJECTS)
                   .flatMap((project) => {
                     const name = boundedText(project.name);
                     const summary = boundedText(project.summary, MAX_TEXT);
+                    const bullets = projectBullets([], project.achievements);
                     return name && summary
                       ? [
                           {
@@ -155,6 +167,7 @@ export function projectPublicProfileSnapshot(
                             ...(safePublicUrl(project.url)
                               ? { url: safePublicUrl(project.url) }
                               : {}),
+                            ...(bullets.length ? { bullets } : {}),
                           },
                         ]
                       : [];
@@ -247,7 +260,7 @@ export function renderPublicProfileBody(
     ${position.projects
       .map((project) => {
         const url = safePublicUrl(project.url);
-        return `<section class="project"><strong>${url ? link(project.name, url) : text(project.name)}</strong>${project.summary ? `<p>${text(project.summary)}</p>` : ''}</section>`;
+        return `<section class="project"><strong>${url ? link(project.name, url) : text(project.name)}</strong>${project.summary ? `<p>${text(project.summary)}</p>` : ''}${project.bullets?.length ? `<ul>${project.bullets.map((bullet) => `<li>${text(bullet)}</li>`).join('')}</ul>` : ''}</section>`;
       })
       .join('')}
     </article>`,
