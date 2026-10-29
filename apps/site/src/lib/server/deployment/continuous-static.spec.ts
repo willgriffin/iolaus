@@ -17,10 +17,16 @@ type Obj = Record<string, unknown>;
 const digest = '1'.repeat(64);
 function fixture() {
   const data = { 'index.html': '<h1>legal</h1>' };
-  const labels = { 'app.kubernetes.io/instance': 'site', component: 'legal' };
+  const selectorLabels = { appName: 'legal' };
+  const labels = {
+    ...selectorLabels,
+    'app.kubernetes.io/instance': 'site',
+    component: 'legal',
+    'app.kubernetes.io/part-of': 'public',
+  };
   const policy: ContinuousStaticWorkload = {
     deploymentName: 'site-legal',
-    selectorLabels: labels,
+    selectorLabels,
     podLabels: labels,
     serviceAccountName: 'static',
     image: `nginx@sha256:${digest}`,
@@ -82,7 +88,7 @@ function fixture() {
     metadata: meta('site-legal', 'dep'),
     spec: {
       replicas: 1,
-      selector: { matchLabels: labels },
+      selector: { matchLabels: selectorLabels },
       strategy: {
         type: 'RollingUpdate',
         rollingUpdate: { maxUnavailable: 0, maxSurge: 1 },
@@ -104,7 +110,9 @@ function fixture() {
     }),
     spec: {
       replicas: 1,
-      selector: { matchLabels: hashLabels },
+      selector: {
+        matchLabels: { ...selectorLabels, 'pod-template-hash': 'hash1' },
+      },
       template: {
         metadata: { labels: hashLabels },
         spec: structuredClone(spec),
@@ -174,6 +182,31 @@ describe('strict continuous static graph', () => {
     expect(canonical({ b: 2, a: { d: 4, c: 3 } })).toBe(
       '{"a":{"c":3,"d":4},"b":2}',
     );
+  });
+  it('matches native selector cloning independently of full template and Pod labels', () => {
+    const f = fixture();
+    expect(f.policy.selectorLabels).toEqual({ appName: 'legal' });
+    expect(f.policy.podLabels).toEqual({
+      appName: 'legal',
+      'app.kubernetes.io/instance': 'site',
+      component: 'legal',
+      'app.kubernetes.io/part-of': 'public',
+    });
+    expect(() => check(f)).not.toThrow();
+  });
+  it.each([
+    {
+      appName: 'legal',
+      component: 'legal',
+      'pod-template-hash': 'hash1',
+    },
+    { appName: 'foreign', 'pod-template-hash': 'hash1' },
+    { appName: 'legal', 'pod-template-hash': 'wrong' },
+    { appName: 'legal' },
+  ])('rejects extra/wrong ReplicaSet selector or hash %j', (matchLabels) => {
+    const f = fixture();
+    set(f.replicaSet, 'spec.selector', { matchLabels });
+    expect(() => check(f)).toThrow();
   });
   it('allows only documented API defaults, never arbitrary PodSpec fields', () => {
     const f = fixture();

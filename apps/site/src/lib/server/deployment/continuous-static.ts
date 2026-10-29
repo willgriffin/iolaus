@@ -692,7 +692,13 @@ export function continuousStaticUids(
     assertTemplate(rs, p, input.namespace);
     const hash = fields(fields(rss.template).metadata).labels;
     const selector = fields(rss.selector);
-    same(selector, { matchLabels: hash });
+    // Kubernetes clones the Deployment selector separately from full template labels.
+    same(selector, {
+      matchLabels: {
+        ...p.selectorLabels,
+        'pod-template-hash': fields(hash)['pod-template-hash'],
+      },
+    });
     const rsStatus = fields(rs.status);
     same(rsStatus.replicas, p.replicas);
     same(rsStatus.readyReplicas, p.replicas);
