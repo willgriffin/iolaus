@@ -12,6 +12,7 @@ import {
   expectedPodEnvelope,
 } from './continuous-static.js';
 import { observeWriterExclusion } from './observer.js';
+import type { WriterFenceLeasePolicy } from './writer-fence.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
 const identity = {
@@ -285,6 +286,103 @@ function withContinuous(inventory: ReturnType<typeof rawInventory>) {
   return inventory;
 }
 
+function withWriterFence(inventory: ReturnType<typeof rawInventory>) {
+  const hash = (value: unknown) =>
+    createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const contract = { protected: 'platform-native-fence-contract' };
+  const uids = { job: 'job-1', pod: 'pod-1', epoch: 'epoch-1' };
+  const policy: WriterFenceLeasePolicy = {
+    configMapName: 'writer-fence',
+    configMapUid: 'fence-cm',
+    namespaceUid: 'namespace-1',
+    sourceRevision: 'a'.repeat(40),
+    contractIdentity: hash(contract),
+    databaseHost: 'postgres.platform.svc.cluster.local',
+    maintenanceDatabase: 'postgres',
+    targetDatabase: 'jobgeni_prod',
+    adoptionId: 'adopt-1',
+    epoch: 'epoch-1',
+    phase: 'migrate',
+    producer: {
+      namespace: 'platform',
+      serviceAccount: 'keeper',
+      podUid: 'keeper-1',
+    },
+    uidMapIdentity: hash(uids),
+    pgVisibilityQualificationIdentity: 'b'.repeat(64),
+    planIdentity: 'c'.repeat(64),
+    fenceContractId: 'fence-v1',
+    fenceContractIdentity: 'd'.repeat(64),
+    namespacePolicyIdentity: 'e'.repeat(64),
+    databasePolicyIdentity: 'f'.repeat(64),
+  };
+  const observedAt = Date.now();
+  const lease = {
+    apiVersion: 'iolaus.happyvertical.com/writer-fence-lease-v1',
+    source: 'smrt.happyvertical.com/writer-fence-v1',
+    sourceRevision: policy.sourceRevision,
+    contractIdentity: policy.contractIdentity,
+    namespace: 'test',
+    namespaceUid: policy.namespaceUid,
+    databaseHost: policy.databaseHost,
+    maintenanceDatabase: policy.maintenanceDatabase,
+    targetDatabase: policy.targetDatabase,
+    release: 'r1',
+    attempt: 'a1',
+    adoptionId: policy.adoptionId,
+    epoch: policy.epoch,
+    phase: policy.phase,
+    migrationJobUid: 'job-1',
+    migrationPodUid: 'pod-1',
+    producer: policy.producer,
+    uidMapIdentity: policy.uidMapIdentity,
+    configMapUid: policy.configMapUid,
+    pgVisibilityQualificationIdentity: policy.pgVisibilityQualificationIdentity,
+    observedAt,
+    expiresAt: observedAt + 20000,
+    fence: {
+      apiVersion: 'smrt.happyvertical.com/writer-fence-v1',
+      contractId: policy.fenceContractId,
+      contractIdentity: policy.fenceContractIdentity,
+      adoptionId: policy.adoptionId,
+      planIdentity: policy.planIdentity,
+      namespace: 'test',
+      epoch: policy.epoch,
+      observedAt,
+      expiresAt: observedAt + 20000,
+      namespacePolicyIdentity: policy.namespacePolicyIdentity,
+      databasePolicyIdentity: policy.databasePolicyIdentity,
+      observations: ['namespace', 'database'].map((scope) => ({
+        scope,
+        identity: hash(scope),
+        observedAt,
+        activeWriters: 0,
+      })),
+    },
+  };
+  const config = {
+    kind: 'ConfigMap',
+    apiVersion: 'v1',
+    metadata: {
+      name: policy.configMapName,
+      uid: policy.configMapUid,
+      namespace: 'test',
+      resourceVersion: '1',
+    },
+    data: {
+      'contract.json': JSON.stringify(contract),
+      'uids.json': JSON.stringify(uids),
+      'lease.json': JSON.stringify(lease),
+    },
+  };
+  inventory.policy = JSON.stringify({
+    ...JSON.parse(inventory.policy),
+    writerFenceLease: policy,
+  });
+  inventory.payloads.set(policy.configMapName, config);
+  return { policy, lease, config };
+}
+
 describe('native Kubernetes observer HTTP/parsing boundary', () => {
   let inventory: ReturnType<typeof rawInventory>;
   let token: string;
@@ -418,6 +516,53 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
     native.readFile.mockRejectedValue(new Error('canary-secret-token'));
     await expect(observeWriterExclusion(identity)).rejects.toThrow(
       'Migration observer projection is incomplete.',
+    );
+  });
+  it('fetches the named precreated lease afresh at every mutation safety callback with rotating credentials', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    await observeWriterExclusion(identity);
+    expect(native.request.mock.calls.at(-1)?.[0].path).toBe(
+      '/api/v1/namespaces/test/configmaps/writer-fence',
+    );
+    expect(native.request).toHaveBeenCalledTimes(10);
+    token = 'refreshed-phase-token';
+    f.lease.expiresAt = 1;
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Fresh native writer-fence lease is unverified.',
+    );
+    expect(native.request).toHaveBeenCalledTimes(20);
+    expect(native.request.mock.calls.at(-1)?.[0]).toMatchObject({
+      ca,
+      rejectUnauthorized: true,
+      timeout: 5000,
+      headers: { authorization: 'Bearer refreshed-phase-token' },
+    });
+    expect(
+      native.request.mock.calls.every(
+        ([options]) => !options.method || options.method === 'GET',
+      ),
+    ).toBe(true);
+  });
+  it('denies fresh lease with the wrong approved native migration UID', async () => {
+    const f = withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    f.lease.migrationPodUid = 'forged-pod';
+    f.config.data['lease.json'] = JSON.stringify(f.lease);
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Fresh native writer-fence lease is unverified.',
+    );
+  });
+  it('fails closed on refused lease reads and never reflects producer response data', async () => {
+    withWriterFence(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    refusedResource = 'writer-fence';
+    inventory.payloads.set('writer-fence', {
+      message: 'canary-sensitive-producer-state',
+    });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Kubernetes observer inventory read failed.',
     );
   });
   it('rereads a rotating projected token before each request in a single poll', async () => {

@@ -6,6 +6,11 @@ import {
   continuousStaticUids,
   validateContinuousStaticPolicies,
 } from './continuous-static.js';
+import {
+  validateWriterFenceLeasePolicy,
+  verifyWriterFenceLease,
+  type WriterFenceLeasePolicy,
+} from './writer-fence.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
 const labelPrefix = 'smrt.happyvertical.com/';
@@ -90,6 +95,7 @@ export interface MaintenanceObserverPolicy {
   serviceAccountName: string;
   migrationServiceAccountName: string;
   continuousStaticWorkloads?: ContinuousStaticWorkload[];
+  writerFenceLease?: WriterFenceLeasePolicy;
 }
 export function maintenanceObserverPolicy(
   raw = process.env.IOLAUS_MAINTENANCE_OBSERVER_POLICY,
@@ -110,7 +116,10 @@ export function maintenanceObserverPolicy(
   if (
     !value ||
     Object.keys(value).some(
-      (key) => ![...keys, 'continuousStaticWorkloads'].includes(key),
+      (key) =>
+        ![...keys, 'continuousStaticWorkloads', 'writerFenceLease'].includes(
+          key,
+        ),
     ) ||
     Object.keys(value).length < keys.length ||
     keys.some(
@@ -128,6 +137,13 @@ export function maintenanceObserverPolicy(
   if (value.continuousStaticWorkloads !== undefined) {
     try {
       validateContinuousStaticPolicies(value.continuousStaticWorkloads);
+    } catch {
+      throw new Error('Maintenance observer policy is missing or invalid.');
+    }
+  }
+  if (value.writerFenceLease !== undefined) {
+    try {
+      validateWriterFenceLeasePolicy(value.writerFenceLease);
     } catch {
       throw new Error('Maintenance observer policy is missing or invalid.');
     }
@@ -348,6 +364,88 @@ export function assertWriterExclusion(
   }
 }
 
+interface NativeInventory {
+  items?: KubeObject[];
+  metadata?: { continue?: string };
+  kind?: string;
+  apiVersion?: string;
+}
+async function readNativeInventory({
+  api,
+  resource,
+  namespace,
+  host,
+  port,
+  ca,
+}: {
+  api: string;
+  resource: string;
+  namespace: string;
+  host: string;
+  port: string;
+  ca: string;
+}): Promise<NativeInventory> {
+  // A projected token may rotate during a bounded inventory poll.
+  const requestToken = (
+    await readFile(`${projection}/token`, 'utf8').catch(() => {
+      throw new Error('Migration observer projection is incomplete.');
+    })
+  ).trim();
+  if (!/^[a-zA-Z0-9._-]{1,65536}$/.test(requestToken))
+    throw new Error('Migration observer projection is incomplete.');
+  return await new Promise<NativeInventory>((resolve, reject) => {
+    const req = request(
+      {
+        hostname: host,
+        port,
+        method: 'GET',
+        path: `/${api}/namespaces/${encodeURIComponent(namespace)}/${resource}`,
+        ca,
+        rejectUnauthorized: true,
+        headers: { authorization: `Bearer ${requestToken}` },
+        timeout: 5000,
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          body += chunk;
+          if (body.length > 4 * 1024 * 1024)
+            req.destroy(
+              new Error('Observer response exceeds bounded inventory.'),
+            );
+        });
+        response.on('end', () => {
+          if (response.statusCode !== 200)
+            return reject(
+              new Error('Kubernetes observer inventory read refused.'),
+            );
+          try {
+            const parsed: unknown = JSON.parse(body);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+              throw new Error('Invalid inventory');
+            resolve(parsed as NativeInventory);
+          } catch {
+            reject(new Error('Kubernetes observer inventory is invalid.'));
+          }
+        });
+        response.on('error', () =>
+          reject(new Error('Kubernetes observer TLS/read failed.')),
+        );
+      },
+    );
+    req.on('timeout', () =>
+      req.destroy(new Error('Kubernetes observer read timed out.')),
+    );
+    req.on('error', () =>
+      reject(new Error('Kubernetes observer TLS/read failed.')),
+    );
+    req.end();
+  }).catch(() => {
+    throw new Error('Kubernetes observer inventory read failed.');
+  });
+}
+
 /** Fresh TLS-verified API reads; credentials are reread for native token rotation. */
 export async function observeWriterExclusion(
   identity: ReleaseIdentity,
@@ -418,65 +516,13 @@ export async function observeWriterExclusion(
         ]
       : []),
   ]) {
-    // A projected token may rotate during a bounded inventory poll.
-    const requestToken = (
-      await readFile(`${projection}/token`, 'utf8').catch(() => {
-        throw new Error('Migration observer projection is incomplete.');
-      })
-    ).trim();
-    if (!/^[a-zA-Z0-9._-]{1,65536}$/.test(requestToken))
-      throw new Error('Migration observer projection is incomplete.');
-    const result = await new Promise<{
-      items?: KubeObject[];
-      metadata?: { continue?: string };
-      kind?: string;
-      apiVersion?: string;
-    }>((resolve, reject) => {
-      const req = request(
-        {
-          hostname: host,
-          port,
-          path: `/${api}/namespaces/${encodeURIComponent(namespace)}/${resource}`,
-          ca,
-          rejectUnauthorized: true,
-          headers: { authorization: `Bearer ${requestToken}` },
-          timeout: 5000,
-        },
-        (response) => {
-          let body = '';
-          response.setEncoding('utf8');
-          response.on('data', (chunk: string) => {
-            body += chunk;
-            if (body.length > 4 * 1024 * 1024)
-              req.destroy(
-                new Error('Observer response exceeds bounded inventory.'),
-              );
-          });
-          response.on('end', () => {
-            if (response.statusCode !== 200)
-              return reject(
-                new Error('Kubernetes observer inventory read refused.'),
-              );
-            try {
-              resolve(JSON.parse(body));
-            } catch {
-              reject(new Error('Kubernetes observer inventory is invalid.'));
-            }
-          });
-          response.on('error', () =>
-            reject(new Error('Kubernetes observer TLS/read failed.')),
-          );
-        },
-      );
-      req.on('timeout', () =>
-        req.destroy(new Error('Kubernetes observer read timed out.')),
-      );
-      req.on('error', () =>
-        reject(new Error('Kubernetes observer TLS/read failed.')),
-      );
-      req.end();
-    }).catch(() => {
-      throw new Error('Kubernetes observer inventory read failed.');
+    const result = await readNativeInventory({
+      api,
+      resource,
+      namespace,
+      host,
+      port,
+      ca,
     });
     if (resource.startsWith('configmaps/')) {
       if (result.kind !== kind || result.apiVersion !== apiVersion)
@@ -525,4 +571,32 @@ export async function observeWriterExclusion(
     identity,
     policy,
   );
+  if (policy.writerFenceLease) {
+    const migrationPod = objects.find(
+      (object) =>
+        object.kind === 'Pod' &&
+        object.metadata.name === podName &&
+        object.metadata.uid === podUid,
+    );
+    const job = migrationPod?.metadata.ownerReferences?.find(
+      (owner) => owner.kind === 'Job' && owner.controller === true,
+    );
+    if (!job) throw new Error('Fresh native writer-fence lease is unverified.');
+    // Separate GET after workload proof: never reuse a lease from an earlier phase.
+    const lease = await readNativeInventory({
+      api: 'api/v1',
+      resource: `configmaps/${policy.writerFenceLease.configMapName}`,
+      namespace,
+      host,
+      port,
+      ca,
+    });
+    verifyWriterFenceLease(lease, policy.writerFenceLease, {
+      namespace,
+      release: identity.release,
+      attempt: identity.attempt,
+      migrationJobUid: job.uid,
+      migrationPodUid: podUid,
+    });
+  }
 }
