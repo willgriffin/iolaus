@@ -57,6 +57,7 @@ let {
   record,
   candidateSkills = [],
   busy = false,
+  readOnly = false,
   canUndo = false,
   undoLabel = '',
   onAction,
@@ -65,6 +66,7 @@ let {
   record: AdminRecord;
   candidateSkills?: string[];
   busy?: boolean;
+  readOnly?: boolean;
   canUndo?: boolean;
   undoLabel?: string;
   onAction: (action: TriageShortcutAction) => void;
@@ -216,11 +218,13 @@ const facts = $derived(
       <p class="meta">
         <span><Building2 size={14} strokeWidth={2.2} /> {company || 'Unknown company'}</span>
         <span><MapPin size={14} strokeWidth={2.2} /> {locations || 'Location not stated'}</span>
+        {#if !readOnly}
         {#if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
         {:else if score !== null}
           <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
           <span class="badge muted"><Sparkles size={12} strokeWidth={2.4} /> {completeReview?.evidenceFit ? completeReviewLabel(completeReview) : unavailableCompleteReview ? 'Complete review needs refresh' : hasCurrentPartialAssessment ? 'Partial assessment' : assessmentMatchReadinessLabel(assessment)}</span>
+        {/if}
         {/if}
       </p>
       {#if postingUrl}
@@ -240,7 +244,8 @@ const facts = $derived(
     </section>
   </div>
 
-  <aside class="card-aside" aria-label="Decision">
+  <aside class="card-aside" aria-label={readOnly ? 'Posting facts' : 'Decision'}>
+    {#if !readOnly}
     <OpportunityScreeningSummary {record} />
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
@@ -265,6 +270,7 @@ const facts = $derived(
       <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
+    {/if}
     <section class="panel" aria-label="Facts">
       <h3>Facts</h3>
       {#if facts.length}
@@ -312,6 +318,7 @@ const facts = $derived(
       {/if}
     </section>
 
+    {#if !readOnly}
     <section class="panel" aria-label="Review">
       <label class="field">
         <span>Review notes</span>
@@ -348,6 +355,7 @@ const facts = $derived(
         {/each}
       </dl>
     </section>
+    {/if}
   </aside>
 </article>
 

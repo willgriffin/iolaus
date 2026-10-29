@@ -17,6 +17,7 @@ export default defineConfig({
       'src/lib/components/sources/*.browser.spec.ts',
       'src/lib/components/SearchTriageRace.browser.spec.ts',
       'src/lib/components/admin/CareerResume.browser.spec.ts',
+      'src/lib/components/admin/ApplicationOpportunityOverview.browser.spec.ts',
       'src/lib/components/admin/AdminResourcePageHeader.browser.spec.ts',
       'src/lib/components/admin/AdminRecordViewPageHeader.browser.spec.ts',
       'src/lib/components/admin/ResumeImport.browser.spec.ts',

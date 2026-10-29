@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { getPDFReader } from '@happyvertical/pdf';
 import {
   type APIRequestContext,
   test as base,
@@ -122,7 +123,7 @@ async function generatePacket(page: Page) {
   ).toBeVisible();
 }
 
-async function inspectMaterialPdf(page: Page, material: 'Packet' | 'Resume') {
+async function inspectMaterialPdf(page: Page, material: 'Resume') {
   await page
     .getByRole('navigation', { name: 'Application materials' })
     .getByRole('button', { name: material, exact: true })
@@ -138,26 +139,76 @@ async function inspectMaterialPdf(page: Page, material: 'Packet' | 'Resume') {
   expect(response.headers()['content-type']).toContain('application/pdf');
   expect((await response.body()).subarray(0, 5).toString()).toBe('%PDF-');
   await active.getByText('Text source', { exact: true }).click();
-  await expect(active.locator('pre')).toContainText(
-    material === 'Resume' ? 'Jordan Example' : 'Application packet',
-  );
-  if (material === 'Packet') {
-    // The fictional posting supplies no verified visa, EOR or relocation
-    // assertion. Default booleans must not invent an employer denial.
-    await expect(active.locator('pre')).toContainText(
-      '- Visa/EOR possible: Unknown',
-    );
-    await expect(active.locator('pre')).toContainText(
-      '- Relocation supported: Unknown',
-    );
-    await expect(active.locator('pre')).not.toContainText(
-      '- Visa/EOR possible: no',
-    );
-    await expect(active.locator('pre')).not.toContainText(
-      '- Relocation supported: no',
-    );
-  }
+  await expect(active.locator('pre')).toContainText('Jordan Example');
   return href;
+}
+
+async function inspectInternalPacketPdf(
+  page: Page,
+  application: Record<string, unknown>,
+) {
+  expect(application.packetAssetId).toBeTruthy();
+  const href = `/admin/resume-assets/${application.packetAssetId}/pdf`;
+  const response = await page.context().request.get(href);
+  expect(response.status(), 'Internal packet PDF download').toBe(200);
+  expect(response.headers()['content-type']).toContain('application/pdf');
+  const bytes = await response.body();
+  expect(bytes.subarray(0, 5).toString()).toBe('%PDF-');
+  const reader = await getPDFReader({ provider: 'unpdf' });
+  const text = await reader.extractText(new Uint8Array(bytes), {
+    skipOCRFallback: true,
+  });
+  expect(text).toContain('Application packet');
+  // Internal packet content retains source-grounded employer support.
+  expect(text).toMatch(/Visa\/EOR possible:\s*Unknown/);
+  expect(text).toMatch(/Relocation supported:\s*Unknown/);
+  expect(text).not.toMatch(/Visa\/EOR possible:\s*no/);
+  expect(text).not.toMatch(/Relocation supported:\s*no/);
+  return href;
+}
+
+async function inspectOpportunityOverview(page: Page) {
+  const tabs = page.getByRole('navigation', { name: 'Application materials' });
+  await expect(tabs.getByRole('button')).toHaveText([
+    'Opportunity',
+    'Resume',
+    'Cover letter',
+    'Q&A',
+  ]);
+  await expect(
+    tabs.getByRole('button', { name: 'Opportunity', exact: true }),
+  ).toHaveAttribute('aria-current', 'page');
+  await expect(
+    page.getByRole('button', { name: 'Mark material reviewed', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Save comments', exact: true }),
+  ).toHaveCount(0);
+  const overview = page.getByRole('region', { name: 'Opportunity overview' });
+  await expect(overview).toBeVisible();
+  await overview
+    .getByRole('button', { name: 'View full posting', exact: true })
+    .click();
+  const posting = page.getByRole('dialog', {
+    name: 'Original opportunity posting',
+  });
+  await expect(posting).toBeVisible();
+  await expect(
+    posting.getByRole('heading', { name: 'Job description', exact: true }),
+  ).toBeVisible();
+  await expect(
+    posting.getByRole('button', { name: 'Nope', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    posting.getByRole('button', { name: 'Dig deeper', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    posting.getByRole('textbox', { name: 'Review notes' }),
+  ).toHaveCount(0);
+  await posting
+    .getByRole('button', { name: 'Close posting', exact: true })
+    .click();
+  await expect(posting).not.toBeVisible();
 }
 
 test('owner prepares a draft with a selected resume and a tailored reviewable package without approving or submitting', async ({
@@ -296,8 +347,15 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
     page.getByRole('heading', { name: title, exact: true }),
   ).toBeVisible();
   await generatePacket(page);
-  const defaultPacketPdf = await inspectMaterialPdf(page, 'Packet');
+  await inspectOpportunityOverview(page);
+  const defaultPacketPdf = await inspectInternalPacketPdf(
+    page,
+    await privateApplication(context.request, applicationId),
+  );
   const defaultResumePdf = await inspectMaterialPdf(page, 'Resume');
+  await expect(
+    page.getByRole('button', { name: 'Mark material reviewed', exact: true }),
+  ).toBeVisible();
   const defaultPackage = await privateApplication(
     context.request,
     applicationId,
@@ -325,7 +383,10 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
     .click();
   await generatePacket(page);
   const tailoredResumePdf = await inspectMaterialPdf(page, 'Resume');
-  const tailoredPacketPdf = await inspectMaterialPdf(page, 'Packet');
+  const tailoredPacketPdf = await inspectInternalPacketPdf(
+    page,
+    await privateApplication(context.request, applicationId),
+  );
   const tailoredPackage = await privateApplication(
     context.request,
     applicationId,
