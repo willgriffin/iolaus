@@ -29,6 +29,7 @@ let canonical = $derived(`/people/${encodeURIComponent(data.handle)}`);
   @media (prefers-color-scheme: dark) { .public-profile-page { --profile-bg: #15140f; --profile-accent: #f0a880; } }
   :global(:root[data-color-scheme='dark']) .public-profile-page { --profile-bg: #15140f; --profile-accent: #f0a880; }
   :global(:root[data-color-scheme='light']) .public-profile-page { --profile-bg: #fbfaf7; --profile-accent: #8a3f1f; }
+  @media print { .public-profile-page, :global(:root[data-color-scheme]) .public-profile-page { --profile-bg: #ffffff; --profile-accent: #1a1814; } }
   .download { width: min(100%, 48rem); margin: 0 auto; padding: 0 clamp(1rem, 4vw, 3rem) 2rem; }
   .download a { color: var(--profile-accent); text-decoration: underline; text-underline-offset: .15em; }
   a:focus-visible { outline: 2px solid var(--profile-accent); outline-offset: 3px; }

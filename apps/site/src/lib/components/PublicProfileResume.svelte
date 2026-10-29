@@ -69,5 +69,7 @@ let { snapshot }: { snapshot: PublicProfileSnapshotV1 } = $props();
   }
   .profile { width: min(100%, 48rem); margin: 0 auto; padding: clamp(1rem, 4vw, 3rem); background: var(--profile-bg); color: var(--profile-ink); overflow-wrap: anywhere; }
   h1, h2, h3, p { margin: 0 0 .65rem; } h1 { font-size: clamp(2rem, 8vw, 3rem); line-height: 1.1; } h2 { margin-top: 2rem; padding-bottom: .35rem; border-bottom: 1px solid var(--profile-rule); } h3 { font-size: 1.05rem; } p, li { line-height: 1.55; } .title { color: var(--profile-ink-soft); font-size: 1.2rem; } .contact { display: flex; flex-wrap: wrap; gap: .5rem 1rem; } a { color: var(--profile-accent); text-decoration: underline; text-underline-offset: .15em; } .muted { color: var(--profile-muted); } article { margin: 0 0 1.5rem; } ul { padding-left: 1.3rem; } .project { margin: .8rem 0 .8rem 1rem; } :is(a):focus-visible { outline: 2px solid var(--profile-accent); outline-offset: 3px; }
-  @media print { .profile { --profile-bg: #ffffff; --profile-ink: #1a1814; --profile-ink-soft: #3a3630; --profile-muted: #5c584f; --profile-rule: #d6d1c2; --profile-accent: #1a1814; } a { text-decoration: none; } }
+  /* Print pins light.  The toggle selector must be repeated here so this rule
+     ties its specificity and wins by source order. */
+  @media print { .profile, :global(:root[data-color-scheme]) .profile { --profile-bg: #ffffff; --profile-ink: #1a1814; --profile-ink-soft: #3a3630; --profile-muted: #5c584f; --profile-rule: #d6d1c2; --profile-accent: #1a1814; } a { text-decoration: none; } }
 </style>
