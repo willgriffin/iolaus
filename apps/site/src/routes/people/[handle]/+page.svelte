@@ -17,7 +17,19 @@ let canonical = $derived(`/people/${encodeURIComponent(data.handle)}`);
 <PublicSiteHeader signedIn={data.signedIn}/>
 
 
-<PublicProfileResume snapshot={data.snapshot} />
-<p class="download"><a href={`${canonical}/resume.pdf`}>Download resume as PDF</a></p>
+<div class="public-profile-page">
+  <PublicProfileResume snapshot={data.snapshot} />
+  <p class="download"><a href={`${canonical}/resume.pdf`}>Download resume as PDF</a></p>
+</div>
 
-<style>.download { width: min(100%, 48rem); margin: 0 auto 2rem; padding: 0 clamp(1rem, 4vw, 3rem); } a:focus-visible { outline: 2px solid var(--smrt-color-primary, #075985); outline-offset: 3px; }</style>
+<style>
+  /* Mirrors the palette owned by PublicProfileResume so the page edge, the
+     download link, and the resume surface agree in both colour schemes. */
+  .public-profile-page { --profile-bg: #fbfaf7; --profile-accent: #8a3f1f; background: var(--profile-bg); min-height: 100vh; }
+  @media (prefers-color-scheme: dark) { .public-profile-page { --profile-bg: #15140f; --profile-accent: #f0a880; } }
+  :global(:root[data-color-scheme='dark']) .public-profile-page { --profile-bg: #15140f; --profile-accent: #f0a880; }
+  :global(:root[data-color-scheme='light']) .public-profile-page { --profile-bg: #fbfaf7; --profile-accent: #8a3f1f; }
+  .download { width: min(100%, 48rem); margin: 0 auto; padding: 0 clamp(1rem, 4vw, 3rem) 2rem; }
+  .download a { color: var(--profile-accent); text-decoration: underline; text-underline-offset: .15em; }
+  a:focus-visible { outline: 2px solid var(--profile-accent); outline-offset: 3px; }
+</style>
