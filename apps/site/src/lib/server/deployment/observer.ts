@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request } from 'node:https';
+import {
+  type ContinuousStaticWorkload,
+  continuousStaticUids,
+  validateContinuousStaticPolicies,
+} from './continuous-static.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
 const labelPrefix = 'smrt.happyvertical.com/';
@@ -84,6 +89,7 @@ export interface MaintenanceObserverPolicy {
   configSha256: string;
   serviceAccountName: string;
   migrationServiceAccountName: string;
+  continuousStaticWorkloads?: ContinuousStaticWorkload[];
 }
 export function maintenanceObserverPolicy(
   raw = process.env.IOLAUS_MAINTENANCE_OBSERVER_POLICY,
@@ -103,7 +109,10 @@ export function maintenanceObserverPolicy(
   ];
   if (
     !value ||
-    Object.keys(value).length !== keys.length ||
+    Object.keys(value).some(
+      (key) => ![...keys, 'continuousStaticWorkloads'].includes(key),
+    ) ||
+    Object.keys(value).length < keys.length ||
     keys.some(
       (key) =>
         typeof value[key as keyof MaintenanceObserverPolicy] !== 'string',
@@ -116,6 +125,13 @@ export function maintenanceObserverPolicy(
     )
   )
     throw new Error('Maintenance observer policy is missing or invalid.');
+  if (value.continuousStaticWorkloads !== undefined) {
+    try {
+      validateContinuousStaticPolicies(value.continuousStaticWorkloads);
+    } catch {
+      throw new Error('Maintenance observer policy is missing or invalid.');
+    }
+  }
   return value;
 }
 function assertMaintenanceSpec(
@@ -228,6 +244,8 @@ export interface ObserverSnapshot {
   podUid: string;
   objects: KubeObject[];
   maintenanceConfig?: KubeObject;
+  continuousConfigMaps?: unknown[];
+  networkPolicies?: unknown[];
 }
 
 /** Dedicated namespace: unknown controllers and terminating writers fail closed. */
@@ -285,6 +303,12 @@ export function assertWriterExclusion(
   const nonwriters = policy
     ? maintenanceUids(snapshot, identity, policy)
     : new Set<string>();
+  if (policy?.continuousStaticWorkloads)
+    for (const uid of continuousStaticUids(
+      snapshot,
+      policy.continuousStaticWorkloads,
+    ))
+      nonwriters.add(uid);
   for (const object of snapshot.objects) {
     if (
       !object.metadata.uid ||
@@ -331,7 +355,11 @@ export async function observeWriterExclusion(
   const policy = maintenanceObserverPolicy();
   const [token, ca, namespace, podName, podUid] = await Promise.all(
     ['token', 'ca.crt', 'namespace', 'pod-name', 'pod-uid'].map(async (file) =>
-      (await readFile(`${projection}/${file}`, 'utf8')).trim(),
+      (
+        await readFile(`${projection}/${file}`, 'utf8').catch(() => {
+          throw new Error('Migration observer projection is incomplete.');
+        })
+      ).trim(),
     ),
   );
   if (
@@ -348,6 +376,8 @@ export async function observeWriterExclusion(
     throw new Error('Kubernetes service endpoint is unavailable.');
   const objects: KubeObject[] = [];
   let maintenanceConfig: KubeObject | undefined;
+  const continuousConfigMaps: KubeObject[] = [];
+  const networkPolicies: KubeObject[] = [];
   for (const [api, resource, kind, apiVersion] of [
     ['api/v1', 'pods', 'Pod', 'v1'],
     ['apis/apps/v1', 'deployments', 'Deployment', 'apps/v1'],
@@ -368,7 +398,34 @@ export async function observeWriterExclusion(
       'ConfigMap',
       'v1',
     ],
+    ...(policy.continuousStaticWorkloads
+      ? [
+          [
+            'apis/networking.k8s.io/v1',
+            'networkpolicies',
+            'NetworkPolicy',
+            'networking.k8s.io/v1',
+          ],
+          ...[
+            ...new Set(
+              policy.continuousStaticWorkloads.flatMap((workload) =>
+                workload.readOnlyConfigMaps.map(
+                  (config) => config.configMapName,
+                ),
+              ),
+            ),
+          ].map((name) => ['api/v1', `configmaps/${name}`, 'ConfigMap', 'v1']),
+        ]
+      : []),
   ]) {
+    // A projected token may rotate during a bounded inventory poll.
+    const requestToken = (
+      await readFile(`${projection}/token`, 'utf8').catch(() => {
+        throw new Error('Migration observer projection is incomplete.');
+      })
+    ).trim();
+    if (!/^[a-zA-Z0-9._-]{1,65536}$/.test(requestToken))
+      throw new Error('Migration observer projection is incomplete.');
     const result = await new Promise<{
       items?: KubeObject[];
       metadata?: { continue?: string };
@@ -382,7 +439,7 @@ export async function observeWriterExclusion(
           path: `/${api}/namespaces/${encodeURIComponent(namespace)}/${resource}`,
           ca,
           rejectUnauthorized: true,
-          headers: { authorization: `Bearer ${token}` },
+          headers: { authorization: `Bearer ${requestToken}` },
           timeout: 5000,
         },
         (response) => {
@@ -406,7 +463,9 @@ export async function observeWriterExclusion(
               reject(new Error('Kubernetes observer inventory is invalid.'));
             }
           });
-          response.on('error', reject);
+          response.on('error', () =>
+            reject(new Error('Kubernetes observer TLS/read failed.')),
+          );
         },
       );
       req.on('timeout', () =>
@@ -416,11 +475,15 @@ export async function observeWriterExclusion(
         reject(new Error('Kubernetes observer TLS/read failed.')),
       );
       req.end();
+    }).catch(() => {
+      throw new Error('Kubernetes observer inventory read failed.');
     });
     if (resource.startsWith('configmaps/')) {
       if (result.kind !== kind || result.apiVersion !== apiVersion)
         throw new Error('Maintenance ConfigMap inventory is invalid.');
-      maintenanceConfig = result as KubeObject;
+      if (resource === `configmaps/${policy.releaseName}-maintenance`)
+        maintenanceConfig = result as KubeObject;
+      else continuousConfigMaps.push(result as KubeObject);
       continue;
     }
     if (
@@ -444,11 +507,21 @@ export async function observeWriterExclusion(
         throw new Error(
           'Kubernetes observer item type conflicts with requested inventory.',
         );
-      objects.push({ ...item, kind, apiVersion });
+      if (kind === 'NetworkPolicy')
+        networkPolicies.push({ ...item, kind, apiVersion });
+      else objects.push({ ...item, kind, apiVersion });
     }
   }
   assertWriterExclusion(
-    { namespace, podName, podUid, objects, maintenanceConfig },
+    {
+      namespace,
+      podName,
+      podUid,
+      objects,
+      maintenanceConfig,
+      continuousConfigMaps,
+      networkPolicies,
+    },
     identity,
     policy,
   );

@@ -6,6 +6,11 @@ const native = vi.hoisted(() => ({ readFile: vi.fn(), request: vi.fn() }));
 vi.mock('node:fs/promises', () => ({ readFile: native.readFile }));
 vi.mock('node:https', () => ({ request: native.request }));
 
+import {
+  type ContinuousStaticWorkload,
+  canonical,
+  expectedPodEnvelope,
+} from './continuous-static.js';
 import { observeWriterExclusion } from './observer.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
@@ -147,11 +152,146 @@ function rawInventory() {
   };
 }
 
+function withContinuous(inventory: ReturnType<typeof rawInventory>) {
+  const labels = { 'app.kubernetes.io/instance': 'site', component: 'legal' };
+  const data = { 'index.html': 'public legal page' };
+  const policy: ContinuousStaticWorkload = {
+    deploymentName: 'site-legal',
+    selectorLabels: labels,
+    podLabels: labels,
+    serviceAccountName: 'static',
+    image: `static@sha256:${'2'.repeat(64)}`,
+    containerName: 'legal',
+    command: ['static-server'],
+    args: [],
+    replicas: 1,
+    runAsUser: 101,
+    runAsGroup: 101,
+    port: 8080,
+    terminationGracePeriodSeconds: 30,
+    resources: {
+      requests: { cpu: '10m', memory: '16Mi' },
+      limits: { cpu: '100m', memory: '64Mi' },
+    },
+    probes: { readinessProbe: null, livenessProbe: null, startupProbe: null },
+    nodeSelector: {
+      'kubernetes.io/os': 'linux',
+      'kubernetes.io/arch': 'amd64',
+    },
+    readOnlyConfigMaps: [
+      {
+        volumeName: 'legal',
+        configMapName: 'legal-v1',
+        hash: createHash('sha256')
+          .update(canonical({ data, binaryData: {} }))
+          .digest('hex'),
+        mountPath: '/public',
+        items: [{ key: 'index.html', path: 'index.html' }],
+      },
+    ],
+  };
+  const metadata = (name: string, uid: string, extra = {}) => ({
+    name,
+    uid,
+    namespace: 'test',
+    generation: 1,
+    labels,
+    ...extra,
+  });
+  const owner = (kind: string, name: string, uid: string) => [
+    { kind, name, uid, controller: true },
+  ];
+  const spec = expectedPodEnvelope(policy);
+  const podLabels = { ...labels, 'pod-template-hash': 'hash1' };
+  const add = (resource: string, item: unknown) => {
+    const payload = inventory.payloads.get(resource) as { items: unknown[] };
+    payload.items.push(item);
+  };
+  add('deployments', {
+    metadata: metadata('site-legal', 'legal-dep'),
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: labels },
+      strategy: {
+        type: 'RollingUpdate',
+        rollingUpdate: { maxUnavailable: 0, maxSurge: 1 },
+      },
+      template: { metadata: { labels }, spec },
+    },
+    status: {
+      observedGeneration: 1,
+      replicas: 1,
+      readyReplicas: 1,
+      updatedReplicas: 1,
+      availableReplicas: 1,
+    },
+  });
+  add('replicasets', {
+    metadata: metadata('legal-rs', 'legal-rs', {
+      ownerReferences: owner('Deployment', 'site-legal', 'legal-dep'),
+    }),
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: podLabels },
+      template: { metadata: { labels: podLabels }, spec },
+    },
+    status: { observedGeneration: 1, replicas: 1, readyReplicas: 1 },
+  });
+  add('pods', {
+    metadata: metadata('legal-pod', 'legal-pod', {
+      labels: podLabels,
+      ownerReferences: owner('ReplicaSet', 'legal-rs', 'legal-rs'),
+    }),
+    spec: { ...spec, nodeName: 'node-1' },
+    status: {
+      phase: 'Running',
+      conditions: [{ type: 'Ready', status: 'True' }],
+      containerStatuses: [
+        {
+          name: 'legal',
+          image: policy.image,
+          imageID: `docker-pullable://${policy.image}`,
+          ready: true,
+          state: { running: {} },
+        },
+      ],
+    },
+  });
+  inventory.payloads.set('legal-v1', {
+    kind: 'ConfigMap',
+    apiVersion: 'v1',
+    metadata: metadata('legal-v1', 'legal-cm'),
+    immutable: true,
+    data,
+  });
+  inventory.payloads.set('networkpolicies', {
+    kind: 'NetworkPolicyList',
+    apiVersion: 'networking.k8s.io/v1',
+    items: [
+      {
+        metadata: metadata('static-isolation', 'isolation'),
+        spec: {
+          podSelector: { matchLabels: labels },
+          policyTypes: ['Egress'],
+          egress: [],
+        },
+      },
+    ],
+  });
+  inventory.policy = JSON.stringify({
+    ...JSON.parse(inventory.policy),
+    continuousStaticWorkloads: [policy],
+  });
+  return inventory;
+}
+
 describe('native Kubernetes observer HTTP/parsing boundary', () => {
   let inventory: ReturnType<typeof rawInventory>;
   let token: string;
+  let refusedResource: string | undefined;
   beforeEach(() => {
     inventory = rawInventory();
+    refusedResource = undefined;
     token = 'projected-token-1';
     vi.stubEnv('KUBERNETES_SERVICE_HOST', '10.0.0.1');
     vi.stubEnv('KUBERNETES_SERVICE_PORT_HTTPS', '443');
@@ -176,7 +316,10 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
             end: () =>
               queueMicrotask(() => {
                 const response = Object.assign(new EventEmitter(), {
-                  statusCode: 200,
+                  statusCode:
+                    options.path.split('/').at(-1) === refusedResource
+                      ? 403
+                      : 200,
                   setEncoding: vi.fn(),
                 });
                 callback(response);
@@ -209,16 +352,88 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
         headers: { authorization: 'Bearer projected-token-1' },
         timeout: 5000,
       });
-    expect(native.readFile.mock.calls.map(([path]) => path).sort()).toEqual(
-      ['token', 'ca.crt', 'namespace', 'pod-name', 'pod-uid']
-        .map((name) => `${projection}/${name}`)
-        .sort(),
-    );
+    expect(
+      native.readFile.mock.calls.filter(
+        ([path]) => path === `${projection}/token`,
+      ),
+    ).toHaveLength(10);
     token = 'projected-token-2';
     await observeWriterExclusion(identity);
-    expect(native.readFile).toHaveBeenCalledTimes(10);
+    expect(native.readFile).toHaveBeenCalledTimes(28);
     expect(native.request.mock.calls.at(-1)?.[0].headers.authorization).toBe(
       'Bearer projected-token-2',
+    );
+  });
+  it('reads every exact immutable static config and the complete native NetworkPolicy list', async () => {
+    inventory = withContinuous(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    await observeWriterExclusion(identity);
+    expect(native.request).toHaveBeenCalledTimes(11);
+    expect(
+      native.request.mock.calls.map(([options]) => options.path),
+    ).toContain('/apis/networking.k8s.io/v1/namespaces/test/networkpolicies');
+    expect(
+      native.request.mock.calls.map(([options]) => options.path),
+    ).toContain('/api/v1/namespaces/test/configmaps/legal-v1');
+  });
+  it.each([
+    'networkpolicies',
+    'legal-v1',
+  ])('denies a refused %s API read without reflecting response values', async (resource) => {
+    inventory = withContinuous(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    refusedResource = resource;
+    inventory.payloads.set(resource, { message: 'canary-secret-api-response' });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Kubernetes observer inventory read failed.',
+    );
+  });
+  it('denies a paginated NetworkPolicy list and a mismatched static config type', async () => {
+    inventory = withContinuous(inventory);
+    vi.stubEnv('IOLAUS_MAINTENANCE_OBSERVER_POLICY', inventory.policy);
+    inventory.payloads.set('networkpolicies', {
+      ...inventory.payloads.get('networkpolicies'),
+      metadata: { continue: 'next' },
+    });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      /incomplete/,
+    );
+    inventory.payloads.set('networkpolicies', {
+      ...inventory.payloads.get('networkpolicies'),
+      metadata: {},
+    });
+    inventory.payloads.set('legal-v1', {
+      ...inventory.payloads.get('legal-v1'),
+      kind: 'Secret',
+    });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(/inventory/);
+  });
+  it('redacts native request construction errors and projected credential read errors', async () => {
+    native.request.mockImplementation(() => {
+      throw new Error('canary-secret-token');
+    });
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Kubernetes observer inventory read failed.',
+    );
+    native.readFile.mockRejectedValue(new Error('canary-secret-token'));
+    await expect(observeWriterExclusion(identity)).rejects.toThrow(
+      'Migration observer projection is incomplete.',
+    );
+  });
+  it('rereads a rotating projected token before each request in a single poll', async () => {
+    let sequence = 0;
+    const read = native.readFile.getMockImplementation();
+    if (!read) throw new Error('Missing test projection mock.');
+    native.readFile.mockImplementation(async (path: string) =>
+      path === `${projection}/token` ? `rotated-${++sequence}` : read(path),
+    );
+    await observeWriterExclusion(identity);
+    expect(
+      native.request.mock.calls.map(
+        ([options]) => options.headers.authorization,
+      ),
+    ).toEqual(
+      Array.from({ length: 9 }, (_, index) => `Bearer rotated-${index + 2}`),
     );
   });
   it.each([
@@ -241,7 +456,7 @@ describe('native Kubernetes observer HTTP/parsing boundary', () => {
     vi.stubEnv('KUBERNETES_TOKEN', 'untrusted-env-token');
     native.readFile.mockRejectedValue(new Error('Missing projection'));
     await expect(observeWriterExclusion(identity)).rejects.toThrow(
-      'Missing projection',
+      'Migration observer projection is incomplete.',
     );
     expect(native.request).not.toHaveBeenCalled();
   });
