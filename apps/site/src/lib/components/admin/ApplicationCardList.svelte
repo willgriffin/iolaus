@@ -189,6 +189,7 @@ const cards = $derived(
   }
 
   .card {
+    cursor: pointer;
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr) auto;
     align-items: center;
