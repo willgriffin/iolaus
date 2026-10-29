@@ -302,4 +302,35 @@ describe('public profile projection and rendering', () => {
     );
     expect(body).toContain('<p>Replaced paper checklists.</p></section>');
   });
+
+  it('paints the standalone document from its own palette in both colour schemes', () => {
+    const html = renderPublicProfileHtml(
+      projectPublicProfileSnapshot({ source }),
+    );
+    const styles = html.slice(
+      html.indexOf('<style>'),
+      html.indexOf('</style>'),
+    );
+    const tokens = [
+      '--profile-bg',
+      '--profile-ink',
+      '--profile-muted',
+      '--profile-rule',
+      '--profile-accent',
+    ];
+    const lightRoot = styles.match(/:root \{([^}]*)\}/u)?.[1] ?? '';
+    const darkRoot =
+      styles.match(
+        /@media \(prefers-color-scheme: dark\) \{ :root \{([^}]*)\}/u,
+      )?.[1] ?? '';
+    for (const token of tokens) {
+      expect(lightRoot).toContain(`${token}:`);
+      expect(darkRoot).toContain(`${token}:`);
+    }
+    // Background and ink both come from the tokens, so a theme wrapper or a
+    // dark system scheme can never leave light ink on a dark surface.
+    expect(styles).toMatch(/body \{[^}]*background:var\(--profile-bg\)/u);
+    expect(styles).toMatch(/body \{[^}]*color:var\(--profile-ink\)/u);
+    expect(styles).not.toMatch(/color:#[0-9a-f]{3,6}/iu);
+  });
 });
