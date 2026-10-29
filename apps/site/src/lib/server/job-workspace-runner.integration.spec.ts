@@ -160,6 +160,10 @@ function twoJobBarrier(): () => Promise<void> {
   };
 }
 
+// Ceiling only: the wait resolves as soon as the job reaches a terminal event,
+// so the generous budget costs nothing locally but survives a loaded CI runner.
+const TERMINAL_JOB_BUDGET_MS = 25_000;
+
 async function waitForTerminalJob(
   runner: TaskRunner,
   jobId: string,
@@ -176,7 +180,7 @@ async function waitForTerminalJob(
         timeout = setTimeout(() => {
           cleanup();
           reject(new Error(`Timed out waiting for queued job ${jobId}.`));
-        }, 3_000);
+        }, TERMINAL_JOB_BUDGET_MS);
       },
       (error) => {
         cleanup();
@@ -205,7 +209,8 @@ async function waitForTerminalJob(
 }
 
 describe('TaskRunner workspace-subject dispatch (SQLite)', {
-  timeout: 20_000,
+  // 10s native startup handshake + terminal wait budget + headroom.
+  timeout: 45_000,
 }, () => {
   let database: DatabaseInterface | undefined;
   let directory: string | undefined;
