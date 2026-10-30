@@ -110,6 +110,8 @@ const agentWritableFieldAllowLists: Record<string, readonly string[]> = {
     'githubUrl',
     'workAuthorization',
     'summary',
+    'assistantNotes',
+    'assistantContactEmail',
     'useOnResume',
   ],
 };
@@ -232,6 +234,42 @@ export function serializeAgentJsonField(
   }
 }
 
+/** Upper bound for the owner's assistant notes; the assistant context is capped separately. */
+export const ASSISTANT_NOTES_MAX_CHARS = 12_000;
+const ASSISTANT_EMAIL_PATTERN = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/u;
+
+function validateAssistantFields(payload: Record<string, unknown>) {
+  if (Object.hasOwn(payload, 'assistantNotes')) {
+    const notes = payload.assistantNotes;
+    if (notes == null) payload.assistantNotes = '';
+    else if (typeof notes !== 'string')
+      throw new AgentFieldContractError('assistantNotes must be a string.');
+    else if (notes.length > ASSISTANT_NOTES_MAX_CHARS)
+      throw new AgentFieldContractError(
+        `assistantNotes accepts at most ${ASSISTANT_NOTES_MAX_CHARS} characters.`,
+      );
+  }
+  if (Object.hasOwn(payload, 'assistantContactEmail')) {
+    const email = payload.assistantContactEmail;
+    if (email == null) payload.assistantContactEmail = '';
+    else if (typeof email !== 'string')
+      throw new AgentFieldContractError(
+        'assistantContactEmail must be a string.',
+      );
+    else {
+      const trimmed = email.trim();
+      if (
+        trimmed &&
+        (trimmed.length > 254 || !ASSISTANT_EMAIL_PATTERN.test(trimmed))
+      )
+        throw new AgentFieldContractError(
+          'assistantContactEmail must be a single email address or empty.',
+        );
+      payload.assistantContactEmail = trimmed;
+    }
+  }
+}
+
 export function normalizeAgentWritablePayload(
   className: string,
   payload: Record<string, unknown>,
@@ -249,6 +287,7 @@ export function normalizeAgentWritablePayload(
       );
     }
   }
+  if (className === 'CandidateProfile') validateAssistantFields(payload);
   const listFields =
     agentListFieldContracts.find((contract) => contract.className === className)
       ?.fields ?? [];

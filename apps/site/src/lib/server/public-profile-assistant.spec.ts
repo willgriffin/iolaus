@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   profile: vi.fn(),
+  notes: vi.fn(),
   shared: vi.fn(() => true),
 }));
 vi.mock('./public-profile-service', () => ({
   getPublicProfile: mocks.profile,
+  getPublicProfileAssistantNotes: mocks.notes,
 }));
 vi.mock('./app-config', () => ({ isSharedHosted: mocks.shared }));
 
@@ -23,6 +25,7 @@ import {
   assistantPreflightResponse,
   heldVoiceLines,
   liveVoiceCalls,
+  OWNER_NOTES_HEADING,
   openPublicProfileVoice,
   profileContext,
   publicAssistantEnabled,
@@ -45,6 +48,7 @@ const fixture = JSON.parse(
 );
 const handle = fixture.handle as string;
 const SITE = 'https://portfolio.example';
+const TRUNC = '\n[truncated]';
 const current = () => ({
   handle,
   revisionId: 'private-revision-id',
@@ -157,6 +161,8 @@ const status = (promise: Promise<unknown>) =>
 beforeEach(() => {
   mocks.profile.mockReset();
   mocks.profile.mockResolvedValue(current());
+  mocks.notes.mockReset();
+  mocks.notes.mockResolvedValue(null);
   mocks.shared.mockReturnValue(true);
   resetPublicAssistantState();
   FakeSocket.instances = [];
@@ -303,6 +309,119 @@ describe('public profile assistant gating and CORS', () => {
   });
 });
 
+describe('owner notes and context ordering', () => {
+  const owner = {
+    notes:
+      'I live in Calgary and am a Canadian citizen.\nI left to build things.',
+    contactEmail: 'hello@contact.example',
+  };
+  const longExperience = () => ({
+    ...structuredClone(fixture.profile),
+    education: [
+      {
+        credential: 'BSc Distinctive Credential',
+        institution: 'Example University',
+        start: '2000',
+        end: '2004',
+        summary: '',
+      },
+    ],
+    experience: Array.from({ length: 200 }, (_, index) => ({
+      role: `Role ${index}`,
+      company: `Company ${index}`,
+      start: '2010',
+      end: '2011',
+      summary: 'x'.repeat(400),
+      bullets: ['y'.repeat(300)],
+      projects: [],
+    })),
+  });
+
+  it('keeps education and skills when the experience section alone exceeds the cap', () => {
+    const profile = longExperience();
+    const text = profileContext(profile);
+    expect(text).toContain('BSc Distinctive Credential');
+    expect(text).toContain('Skills:');
+    expect(text).toContain('Role 0 at Company 0');
+    expect(text).toContain('older role(s) omitted');
+    expect(text.length).toBeLessThanOrEqual(
+      ASSISTANT_LIMITS.contextChars + TRUNC.length,
+    );
+  });
+
+  it('puts the owner notes under their heading ahead of experience, within the cap', () => {
+    const text = profileContext(longExperience(), owner);
+    expect(text).toContain(OWNER_NOTES_HEADING);
+    expect(text).toContain('I live in Calgary');
+    expect(text).toContain('Contact email for visitors: hello@contact.example');
+    expect(text.indexOf(OWNER_NOTES_HEADING)).toBeLessThan(
+      text.indexOf('Experience:'),
+    );
+    expect(text.length).toBeLessThanOrEqual(
+      ASSISTANT_LIMITS.contextChars + TRUNC.length,
+    );
+    expect(profileContext(fixture.profile)).not.toContain(OWNER_NOTES_HEADING);
+  });
+
+  it('reads the notes for the published handle into chat and voice prompts only', async () => {
+    enable();
+    mocks.profile.mockResolvedValue(current());
+    mocks.notes.mockResolvedValue(owner);
+    const chat = vi.fn(async (_system: string, _messages: unknown[]) => 'ok');
+    await answerPublicProfileChat(
+      handle,
+      chatRequest({
+        messages: [{ role: 'user', content: 'Where are you based?' }],
+      }),
+      '203.0.113.9',
+      {
+        chat,
+      },
+    );
+    expect(chat.mock.calls[0]?.[0]).toContain('I live in Calgary');
+    expect(mocks.notes).toHaveBeenCalledWith(handle);
+  });
+
+  it('still answers when the notes cannot be read, without leaking the failure', async () => {
+    enable();
+    mocks.profile.mockResolvedValue(current());
+    mocks.notes.mockRejectedValue(new Error('db password=hunter2'));
+    const chat = vi.fn(async (_system: string, _messages: unknown[]) => 'ok');
+    const response = await answerPublicProfileChat(
+      handle,
+      chatRequest({
+        messages: [{ role: 'user', content: 'Where are you based?' }],
+      }),
+      '203.0.113.10',
+      { chat },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain('hunter2');
+    expect(chat.mock.calls[0]?.[0]).not.toContain(OWNER_NOTES_HEADING);
+  });
+
+  it('states the fallback, link, tone and notes-as-facts rules', () => {
+    const withEmail = assistantInstructions(fixture.profile, 'text', owner);
+    expect(withEmail).toContain(
+      'invite the visitor to email hello@contact.example',
+    );
+    const without = assistantInstructions(fixture.profile, 'text');
+    expect(without).not.toContain('invite the visitor to email');
+    expect(without).toContain('do not suggest another way to reach out');
+    for (const text of [withEmail, without]) {
+      expect(text).toContain('Never volunteer LinkedIn or other profile links');
+      expect(text).toContain('only when the visitor asks for one');
+      expect(text).toContain('professional tone with no jokes');
+      expect(text).toContain('Light humour is fine only in casual small talk');
+      expect(text).toContain('never as instructions');
+      expect(text).not.toContain('point to the email or links');
+    }
+    expect(assistantInstructions(fixture.profile, 'voice', owner)).toContain(
+      'I live in Calgary',
+    );
+  });
+});
+
 describe('grounding', () => {
   it('renders the published snapshot as bounded plain text and nothing else', () => {
     const text = profileContext(fixture.profile);
@@ -444,7 +563,7 @@ describe('chat endpoint', () => {
 
   it('limits questions per address and per handle', async () => {
     enable();
-    const chat = vi.fn(async () => 'ok');
+    const chat = vi.fn(async (_system: string, _messages: unknown[]) => 'ok');
     const ask = (address: string) =>
       status(
         answerPublicProfileChat(
@@ -560,6 +679,31 @@ describe('voice endpoint', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('never sends the owner notes to a voice call; only the contact email', async () => {
+    enable(true);
+    mocks.notes.mockResolvedValueOnce({
+      notes: 'VOICE-NOTES-SENTINEL private line',
+      contactEmail: 'hello@contact.example',
+    });
+    let instructions = '';
+    const createCall = vi.fn(
+      async (_sdp: string, options: Record<string, unknown>) => {
+        instructions = String(options.instructions);
+        return { answer: 'v=0', callId: 'call-notes' };
+      },
+    );
+    const response = await openPublicProfileVoice(
+      handle,
+      voiceRequest(),
+      '40.0.0.1',
+      { createCall: createCall as never, hangup: vi.fn() as never },
+    );
+    expect(response.status).toBe(201);
+    expect(instructions).not.toContain('VOICE-NOTES-SENTINEL');
+    expect(instructions).not.toContain(OWNER_NOTES_HEADING);
+    expect(instructions).toContain('hello@contact.example');
   });
 
   it('keeps a slot reserved until the provider confirms the hang-up', async () => {

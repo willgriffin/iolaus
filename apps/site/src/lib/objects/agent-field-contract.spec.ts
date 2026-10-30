@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgentFieldContractError,
+  ASSISTANT_NOTES_MAX_CHARS,
   normalizeAgentWritablePayload,
   parseAgentListField,
   serializeAgentJsonField,
@@ -25,6 +26,32 @@ describe('agent field contract', () => {
         useOnResume: true,
       }),
     ).not.toThrow();
+  });
+
+  it('accepts and validates the assistant notes and contact email', () => {
+    const payload: Record<string, unknown> = {
+      id: 'profile-1',
+      assistantNotes: 'I live in Calgary.\nOpen to relocation.',
+      assistantContactEmail: ' hello@contact.example ',
+    };
+    normalizeAgentWritablePayload('CandidateProfile', payload);
+    expect(payload.assistantContactEmail).toBe('hello@contact.example');
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', {
+        assistantContactEmail: 'not an email',
+      }),
+    ).toThrow(AgentFieldContractError);
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', {
+        assistantNotes: 'x'.repeat(ASSISTANT_NOTES_MAX_CHARS + 1),
+      }),
+    ).toThrow(AgentFieldContractError);
+    const cleared: Record<string, unknown> = {
+      assistantNotes: null,
+      assistantContactEmail: '',
+    };
+    normalizeAgentWritablePayload('CandidateProfile', cleared);
+    expect(cleared).toEqual({ assistantNotes: '', assistantContactEmail: '' });
   });
 
   it('normalizes SkillGroup evidence as a JSON array field', () => {
