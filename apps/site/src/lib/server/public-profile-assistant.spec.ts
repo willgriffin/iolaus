@@ -681,6 +681,31 @@ describe('voice endpoint', () => {
     }
   });
 
+  it('never sends the owner notes to a voice call; only the contact email', async () => {
+    enable(true);
+    mocks.notes.mockResolvedValueOnce({
+      notes: 'VOICE-NOTES-SENTINEL private line',
+      contactEmail: 'hello@contact.example',
+    });
+    let instructions = '';
+    const createCall = vi.fn(
+      async (_sdp: string, options: Record<string, unknown>) => {
+        instructions = String(options.instructions);
+        return { answer: 'v=0', callId: 'call-notes' };
+      },
+    );
+    const response = await openPublicProfileVoice(
+      handle,
+      voiceRequest(),
+      '40.0.0.1',
+      { createCall: createCall as never, hangup: vi.fn() as never },
+    );
+    expect(response.status).toBe(201);
+    expect(instructions).not.toContain('VOICE-NOTES-SENTINEL');
+    expect(instructions).not.toContain(OWNER_NOTES_HEADING);
+    expect(instructions).toContain('hello@contact.example');
+  });
+
   it('keeps a slot reserved until the provider confirms the hang-up', async () => {
     enable(true);
     vi.useFakeTimers();

@@ -267,6 +267,13 @@ export function profileContext(
   return text.length > limit ? `${text.slice(0, limit)}${TRUNCATED}` : text;
 }
 
+/** What a voice call may carry: the browser can read the session config. */
+export function voiceOwner(
+  owner?: AssistantOwnerNotes | null,
+): AssistantOwnerNotes | null {
+  return owner ? { ...owner, notes: '' } : null;
+}
+
 export const OWNER_NOTES_HEADING =
   "Owner's notes for the assistant (answer in first person, use only when relevant)";
 
@@ -734,7 +741,9 @@ export async function openPublicProfileVoice(
         process.env[PUBLIC_ASSISTANT_REALTIME_MODEL_ENV]?.trim() ||
         'gpt-realtime-1.5',
       voice: process.env[PUBLIC_ASSISTANT_VOICE_ENV]?.trim() || 'ash',
-      instructions: assistantInstructions(profile, 'voice', owner),
+      // Realtime echoes the session instructions to the browser, so the
+      // owner's notes stay out of voice; only the contact email goes in.
+      instructions: assistantInstructions(profile, 'voice', voiceOwner(owner)),
       maxOutputTokens: ASSISTANT_LIMITS.voiceMaxOutputTokens,
       transcriptionModel: 'gpt-4o-mini-transcribe',
       turnDetection: { type: 'semantic_vad', eagerness: 'auto' },

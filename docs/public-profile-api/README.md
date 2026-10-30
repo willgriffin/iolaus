@@ -135,7 +135,9 @@ tool; send empty strings to clear them).
 
 Privacy boundary: the notes and email are never part of the published snapshot,
 this API's JSON, the static-site snapshot, the résumé HTML or PDF, or any log or
-error message. Only the assistant's server-side prompt contains them. They are
+error message. Only the text assistant's server-side prompt contains the notes.
+Voice calls carry only the contact email, because OpenAI Realtime echoes the
+session instructions to the browser. They are
 read live, at question time, from the profile a currently published revision was
 captured from (`public-profile-store.ts` `resolveAssistantNotes`: the profile
 must belong to the publication's tenant and owner). Withdrawing or deleting the
