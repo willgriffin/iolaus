@@ -170,6 +170,23 @@ describe('public profile projection and rendering', () => {
       expect(serialized).not.toContain(sentinel);
   });
 
+  it('never carries assistant notes or the assistant contact email into a snapshot', () => {
+    const polluted = structuredClone(source) as unknown as {
+      profile: Record<string, unknown>;
+    };
+    polluted.profile.assistantNotes = 'PRIVATE_ASSISTANT_NOTES_SENTINEL';
+    polluted.profile.assistantContactEmail =
+      'assistant-sentinel@example.invalid';
+    const serialized = JSON.stringify(
+      projectPublicProfileSnapshot({
+        source: polluted as unknown as typeof source,
+        contacts: { email: 'avery@example.invalid' },
+      }),
+    );
+    expect(serialized).not.toContain('PRIVATE_ASSISTANT_NOTES_SENTINEL');
+    expect(serialized).not.toContain('assistant-sentinel');
+  });
+
   it('includes only opted-in contacts, selected sections, and safe external links', () => {
     const snapshot = projectPublicProfileSnapshot({
       source,

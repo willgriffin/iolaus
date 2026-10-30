@@ -55,8 +55,9 @@ A generic HTML/routing 404 is not a withdrawal signal.
 When `IOLAUS_PUBLIC_ASSISTANT_ENABLED=true` (shared hosted, public profiles on),
 the publication also advertises `links.chat`, and `links.voice` once
 `IOLAUS_PUBLIC_ASSISTANT_OPENAI_API_KEY` is set. Both are anonymous `POST`
-endpoints under the same handle and answer only from the published snapshot;
-they never read private records, remember visitors, or take actions.
+endpoints under the same handle and answer from the published snapshot plus the
+owner's optional assistant notes (below); they read no other private record,
+remember no visitors, and take no actions.
 
 - `POST /api/public/v1/profiles/{handle}/chat` — JSON `{ "messages": [{ "role":
   "user" | "assistant", "content": "…" }] }` (≤12 messages, ≤1000 characters
@@ -115,6 +116,45 @@ disabled or the handle is malformed, before any origin decision. Replies are cap
 `IOLAUS_PUBLIC_ASSISTANT_VOICE` (default `ash`) directly against OpenAI with
 the dedicated key. Errors use `{ "apiVersion": 1, "error": { "code":
 "ASSISTANT_UNAVAILABLE", "message": "…" } }` with 400/403/404/413/415/429/502/503.
+
+### Owner's assistant notes
+
+The owner may keep plain-text notes for the assistant that do not belong on the
+résumé (location, work authorisation, motivation, behavioural stories) and an
+optional assistant contact email. They are the `assistantNotes` (≤12,000
+characters) and `assistantContactEmail` fields of the owner's `CandidateProfile`,
+written through the same agent surfaces as other profile fields:
+
+```bash
+node packages/cli/dist/data-cli.js candidateprofile update <id> \
+  '{"assistantNotes":"Based in Calgary…\nCanadian citizen…","assistantContactEmail":"hello@example.com"}'
+```
+
+(also `PATCH /api/candidateprofiles/<id>` and the `candidateprofile_update` MCP
+tool; send empty strings to clear them).
+
+Privacy boundary: the notes and email are never part of the published snapshot,
+this API's JSON, the static-site snapshot, the résumé HTML or PDF, or any log or
+error message. Only the assistant's server-side prompt contains them. They are
+read live, at question time, from the profile a currently published revision was
+captured from (`public-profile-store.ts` `resolveAssistantNotes`: the profile
+must belong to the publication's tenant and owner). Withdrawing or deleting the
+publication stops the assistant altogether; saving the field is the owner's
+explicit action. Whatever the assistant says in a reply is by design visible to
+that visitor, so write only what you are happy to have said in your own voice.
+
+The prompt places the notes under "Owner's notes for the assistant" and treats
+them as facts about the candidate, never as instructions. When neither the
+résumé nor the notes answer a question the assistant says so and, if a contact
+email is set, invites the visitor to email it; it never volunteers LinkedIn or
+other profile links (only when asked), and keeps a professional tone with no
+portrait or head jokes for hiring questions.
+
+The context is capped at 40,000 characters (about 10k tokens; replies stay
+capped at 350 output tokens and the 25 s reply timeout is unchanged). Sections
+are ordered contact/summary, education, skills, other, notes, then experience
+newest first; only experience is cut, whole roles at a time, so a long history
+cannot starve education, skills or notes.
 
 ## Static-site consumer
 

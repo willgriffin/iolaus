@@ -64,6 +64,16 @@ export class CandidateProfile extends SmrtObject {
   sponsorshipRequired = 'unknown';
   @field({ type: 'text', sensitive: true })
   summary = '';
+  /**
+   * Owner-authored plain-text notes only the public profile assistant reads
+   * (location, work authorisation, motivation, stories). Never part of the
+   * public snapshot, résumé, PDF or llms.txt; see public-profile-assistant.ts.
+   */
+  @field({ type: 'text', sensitive: true })
+  assistantNotes = '';
+  /** Optional address the assistant invites visitors to email when stuck. */
+  @field({ type: 'text', sensitive: true })
+  assistantContactEmail = '';
   /** Excludes only the profile summary; resume identity/contact remains required. */
   @field({ type: 'boolean' })
   useOnResume = true;

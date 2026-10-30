@@ -361,6 +361,15 @@ export async function getPublicProfile(handle: string) {
     revisionId: current.revision.id,
   };
 }
+/**
+ * Owner-only assistant notes for a published handle. Server-side use only:
+ * the assistant's model context. Deliberately not part of getPublicProfile()
+ * or any serializer, route or snapshot.
+ */
+export async function getPublicProfileAssistantNotes(handle: string) {
+  requirePublicProfilesEnabled();
+  return await (await store()).resolveAssistantNotes(handle);
+}
 export async function getPublicProfilePdf(handle: string) {
   requirePublicProfilesEnabled();
   const persistence = await store();

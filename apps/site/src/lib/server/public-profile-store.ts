@@ -628,6 +628,42 @@ export function createPublicProfileStore(database: Database) {
         return Number((response as { rowCount?: unknown }).rowCount ?? 0);
       });
     },
+    /**
+     * The owner's private assistant notes for a currently published handle,
+     * for the assistant's server-side context only. Never part of a snapshot
+     * or any public serializer. The profile must be the one the published
+     * revision was captured from, and belong to the identity's tenant and
+     * owner; an unpublished, withdrawn or tombstoned handle yields null.
+     */
+    async resolveAssistantNotes(
+      rawHandle: string,
+    ): Promise<{ notes: string; contactEmail: string } | null> {
+      let handle: string;
+      try {
+        handle = normalizePublicProfileHandle(rawHandle);
+      } catch {
+        return null;
+      }
+      const row = rows(
+        await database.query(
+          `SELECT p.assistant_notes AS "notes", p.assistant_contact_email AS "contactEmail"
+         FROM public_profile_identities i
+         JOIN public_profile_revisions r ON CAST(r.publication_id AS TEXT) = CAST(i.id AS TEXT)
+           AND CAST(r.revision_id AS TEXT) = CAST(i.current_revision_id AS TEXT)
+         JOIN candidate_profiles p ON CAST(p.id AS TEXT) = CAST(r.source_profile_id AS TEXT)
+           AND CAST(p.tenant_id AS TEXT) = CAST(i.tenant_id AS TEXT)
+           AND CAST(p.owner_user_id AS TEXT) = CAST(i.owner_user_id AS TEXT)
+         WHERE i.handle = ? AND i.deleted_at IS NULL AND i.current_revision_id IS NOT NULL
+         LIMIT 1`,
+          [handle],
+        ),
+      )[0];
+      if (!row) return null;
+      return {
+        notes: string(row.notes).trim(),
+        contactEmail: string(row.contactEmail).trim(),
+      };
+    },
     async resolvePublic(
       rawHandle: string,
     ): Promise<ResolvedPublicProfile | null> {
