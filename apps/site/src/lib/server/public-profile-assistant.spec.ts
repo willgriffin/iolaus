@@ -23,6 +23,7 @@ import {
   assistantErrorResponse,
   assistantInstructions,
   assistantPreflightResponse,
+  avoidTopicsRule,
   heldVoiceLines,
   liveVoiceCalls,
   OWNER_NOTES_HEADING,
@@ -418,6 +419,34 @@ describe('owner notes and context ordering', () => {
     }
     expect(assistantInstructions(fixture.profile, 'voice', owner)).toContain(
       'I live in Calgary',
+    );
+  });
+});
+
+describe('owner avoid-topics rule', () => {
+  it('turns the list into a rule and stays out of the prompt when empty', () => {
+    expect(avoidTopicsRule(null)).toBe('');
+    expect(
+      avoidTopicsRule({ notes: '', contactEmail: '', avoidTopics: ' \n' }),
+    ).toBe('');
+    const rule = avoidTopicsRule({
+      notes: '',
+      contactEmail: '',
+      avoidTopics: '- Cambridge CELTA\n* Japanese course\nUBC Sauder course',
+    });
+    expect(rule).toContain(
+      'Cambridge CELTA; Japanese course; UBC Sauder course',
+    );
+    expect(rule).toContain('only if the visitor names it');
+    const instructions = assistantInstructions(fixture.profile, 'text', {
+      notes: '',
+      contactEmail: '',
+      avoidTopics: 'Cambridge CELTA',
+    });
+    expect(instructions).toContain('asked you not to bring up');
+    expect(instructions).toContain('Cambridge CELTA');
+    expect(assistantInstructions(fixture.profile, 'text', null)).not.toContain(
+      'asked you not to bring up',
     );
   });
 });

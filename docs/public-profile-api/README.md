@@ -133,6 +133,12 @@ node packages/cli/dist/data-cli.js candidateprofile update <id> \
 (also `PATCH /api/candidateprofiles/<id>` and the `candidateprofile_update` MCP
 tool; send empty strings to clear them).
 
+`assistantAvoidTopics` (≤2,000 characters, one topic per line) is a
+don't-mention list. Unlike the notes, which the assistant treats as facts, it is
+applied as a rule: the assistant leaves those topics out of every answer, even
+when they appear in the résumé, unless the visitor names one specifically. Use
+it for minor résumé items you don't want raised.
+
 Privacy boundary: the notes and email are never part of the published snapshot,
 this API's JSON, the static-site snapshot, the résumé HTML or PDF, or any log or
 error message. Only the assistant's prompt contains them. Treat the notes as

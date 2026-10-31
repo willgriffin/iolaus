@@ -112,6 +112,7 @@ const agentWritableFieldAllowLists: Record<string, readonly string[]> = {
     'summary',
     'assistantNotes',
     'assistantContactEmail',
+    'assistantAvoidTopics',
     'useOnResume',
   ],
 };
@@ -236,6 +237,8 @@ export function serializeAgentJsonField(
 
 /** Upper bound for the owner's assistant notes; the assistant context is capped separately. */
 export const ASSISTANT_NOTES_MAX_CHARS = 12_000;
+/** Upper bound for the owner's don't-mention list. */
+export const ASSISTANT_AVOID_TOPICS_MAX_CHARS = 2_000;
 const ASSISTANT_EMAIL_PATTERN = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/u;
 
 function validateAssistantFields(payload: Record<string, unknown>) {
@@ -247,6 +250,18 @@ function validateAssistantFields(payload: Record<string, unknown>) {
     else if (notes.length > ASSISTANT_NOTES_MAX_CHARS)
       throw new AgentFieldContractError(
         `assistantNotes accepts at most ${ASSISTANT_NOTES_MAX_CHARS} characters.`,
+      );
+  }
+  if (Object.hasOwn(payload, 'assistantAvoidTopics')) {
+    const topics = payload.assistantAvoidTopics;
+    if (topics == null) payload.assistantAvoidTopics = '';
+    else if (typeof topics !== 'string')
+      throw new AgentFieldContractError(
+        'assistantAvoidTopics must be a string.',
+      );
+    else if (topics.length > ASSISTANT_AVOID_TOPICS_MAX_CHARS)
+      throw new AgentFieldContractError(
+        `assistantAvoidTopics accepts at most ${ASSISTANT_AVOID_TOPICS_MAX_CHARS} characters.`,
       );
   }
   if (Object.hasOwn(payload, 'assistantContactEmail')) {
