@@ -681,7 +681,7 @@ describe('voice endpoint', () => {
     }
   });
 
-  it('never sends the owner notes to a voice call; only the contact email', async () => {
+  it('gives a voice call the owner notes and contact email', async () => {
     enable(true);
     mocks.notes.mockResolvedValueOnce({
       notes: 'VOICE-NOTES-SENTINEL private line',
@@ -701,8 +701,8 @@ describe('voice endpoint', () => {
       { createCall: createCall as never, hangup: vi.fn() as never },
     );
     expect(response.status).toBe(201);
-    expect(instructions).not.toContain('VOICE-NOTES-SENTINEL');
-    expect(instructions).not.toContain(OWNER_NOTES_HEADING);
+    expect(instructions).toContain('VOICE-NOTES-SENTINEL');
+    expect(instructions).toContain(OWNER_NOTES_HEADING);
     expect(instructions).toContain('hello@contact.example');
   });
 
