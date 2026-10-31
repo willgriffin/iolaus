@@ -111,4 +111,4 @@ The [versioned public-profile API](public-profile-api/README.md) exposes only
 the current published snapshot for anonymous static-site consumers, with typed
 withdrawal responses, an opaque revision token, synthetic fixtures and schemas. With `IOLAUS_PUBLIC_ASSISTANT_ENABLED=true` it also offers a bounded,
 anonymous assistant (text, and voice with a dedicated OpenAI key) that answers
-from that snapshot and the owner's server-only assistant notes (never published); see the API README for its flags, limits and privacy boundary.
+from that snapshot and the owner's assistant notes (never published, but visitor-readable on voice calls); see the API README for its flags, limits and privacy boundary.
