@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgentFieldContractError,
+  ASSISTANT_AVOID_TOPICS_MAX_CHARS,
   ASSISTANT_NOTES_MAX_CHARS,
   normalizeAgentWritablePayload,
   parseAgentListField,
@@ -52,6 +53,27 @@ describe('agent field contract', () => {
     };
     normalizeAgentWritablePayload('CandidateProfile', cleared);
     expect(cleared).toEqual({ assistantNotes: '', assistantContactEmail: '' });
+  });
+
+  it('accepts and bounds the assistant avoid-topics list', () => {
+    const payload: Record<string, unknown> = {
+      assistantAvoidTopics: 'CELTA\nJapanese course',
+    };
+    normalizeAgentWritablePayload('CandidateProfile', payload);
+    expect(payload.assistantAvoidTopics).toBe('CELTA\nJapanese course');
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', {
+        assistantAvoidTopics: 'x'.repeat(ASSISTANT_AVOID_TOPICS_MAX_CHARS + 1),
+      }),
+    ).toThrow(AgentFieldContractError);
+    expect(() =>
+      normalizeAgentWritablePayload('CandidateProfile', {
+        assistantAvoidTopics: 42,
+      }),
+    ).toThrow(AgentFieldContractError);
+    const cleared: Record<string, unknown> = { assistantAvoidTopics: null };
+    normalizeAgentWritablePayload('CandidateProfile', cleared);
+    expect(cleared).toEqual({ assistantAvoidTopics: '' });
   });
 
   it('normalizes SkillGroup evidence as a JSON array field', () => {

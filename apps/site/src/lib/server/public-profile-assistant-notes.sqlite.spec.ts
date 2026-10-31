@@ -77,9 +77,9 @@ describe('assistant notes stay server-side', () => {
     email = SECRET_EMAIL,
   ) {
     await database.query(
-      `INSERT INTO candidate_profiles (id, slug, context, tenant_id, owner_user_id, assistant_notes, assistant_contact_email)
-       VALUES (?, ?, '', ?, ?, ?, ?)`,
-      [id, `slug-${id}`, tenantId, ownerUserId, notes, email],
+      `INSERT INTO candidate_profiles (id, slug, context, tenant_id, owner_user_id, assistant_notes, assistant_contact_email, assistant_avoid_topics)
+       VALUES (?, ?, '', ?, ?, ?, ?, ?)`,
+      [id, `slug-${id}`, tenantId, ownerUserId, notes, email, 'Minor course'],
     );
   }
   async function publish(handle: string, sourceProfileId: string) {
@@ -107,6 +107,7 @@ describe('assistant notes stay server-side', () => {
     expect(await store.resolveAssistantNotes('Avery-Notes')).toEqual({
       notes: SECRET_NOTES,
       contactEmail: SECRET_EMAIL,
+      avoidTopics: 'Minor course',
     });
     expect(await store.resolveAssistantNotes('not a handle!')).toBeNull();
     await store.unpublish(owner, 1);

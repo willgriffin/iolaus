@@ -635,9 +635,11 @@ export function createPublicProfileStore(database: Database) {
      * revision was captured from, and belong to the identity's tenant and
      * owner; an unpublished, withdrawn or tombstoned handle yields null.
      */
-    async resolveAssistantNotes(
-      rawHandle: string,
-    ): Promise<{ notes: string; contactEmail: string } | null> {
+    async resolveAssistantNotes(rawHandle: string): Promise<{
+      notes: string;
+      contactEmail: string;
+      avoidTopics: string;
+    } | null> {
       let handle: string;
       try {
         handle = normalizePublicProfileHandle(rawHandle);
@@ -646,7 +648,8 @@ export function createPublicProfileStore(database: Database) {
       }
       const row = rows(
         await database.query(
-          `SELECT p.assistant_notes AS "notes", p.assistant_contact_email AS "contactEmail"
+          `SELECT p.assistant_notes AS "notes", p.assistant_contact_email AS "contactEmail",
+           p.assistant_avoid_topics AS "avoidTopics"
          FROM public_profile_identities i
          JOIN public_profile_revisions r ON CAST(r.publication_id AS TEXT) = CAST(i.id AS TEXT)
            AND CAST(r.revision_id AS TEXT) = CAST(i.current_revision_id AS TEXT)
@@ -662,6 +665,7 @@ export function createPublicProfileStore(database: Database) {
       return {
         notes: string(row.notes).trim(),
         contactEmail: string(row.contactEmail).trim(),
+        avoidTopics: string(row.avoidTopics).trim(),
       };
     },
     async resolvePublic(

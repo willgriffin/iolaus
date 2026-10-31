@@ -68,8 +68,8 @@ Common agent-facing JSON-string fields:
 `CandidateProfile` accepts only an explicit allow-list through agent writes:
 `name`, `firstName`, `lastName`, `title`, `email`, `phone`, `location`,
 `linkedinUrl`, `githubUrl`, `workAuthorization`, `summary`, `assistantNotes`,
-`assistantContactEmail`, `useOnResume`. The last two feed only the public
-profile assistant and are never published (see
+`assistantContactEmail`, `assistantAvoidTopics`, `useOnResume`. The three
+`assistant*` fields feed only the public profile assistant and are never published (see
 `docs/public-profile-api/README.md`).
 Any other key (ownership, onboarding and consent timestamps, résumé-asset
 selection, `active`, `isDefault`, the structured facts and preferences JSON)

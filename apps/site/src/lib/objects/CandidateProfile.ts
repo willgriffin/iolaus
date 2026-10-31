@@ -74,6 +74,12 @@ export class CandidateProfile extends SmrtObject {
   /** Optional address the assistant invites visitors to email when stuck. */
   @field({ type: 'text', sensitive: true })
   assistantContactEmail = '';
+  /**
+   * Owner-authored topics, one per line, the assistant must not raise unless
+   * the visitor names one (e.g. minor résumé items). A rule, unlike the notes.
+   */
+  @field({ type: 'text', sensitive: true })
+  assistantAvoidTopics = '';
   /** Excludes only the profile summary; resume identity/contact remains required. */
   @field({ type: 'boolean' })
   useOnResume = true;
