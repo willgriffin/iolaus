@@ -48,3 +48,10 @@ When the hook uses PostgreSQL row-level security, the streamed reads reopen
 the verified session and check the same tenant, user, and owned profile before
 reading. The stream uses its own scoped transaction because the hook's
 transaction ends when it returns the response.
+
+Home selects one window of up to 90 candidates per bucket and hydrates the
+combined set once. It shares a request-local eligibility snapshot and verified
+assessment inputs across both buckets. Card hydration reads only the current
+owned assessment, application exclusion, and company label. Application task
+labels use the linked posting title and company. The detail route keeps its
+full context reads.

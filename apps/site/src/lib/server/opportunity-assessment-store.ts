@@ -188,6 +188,36 @@ export function opportunityAssessmentPreferencesFingerprint(
     .digest('hex');
 }
 
+async function loadAssessmentReadMaterial(subject: WorkspaceSubject) {
+  const [evidence, preferences] = await Promise.all([
+    loadWorkspaceCandidateEvidence(subject),
+    loadOpportunityAssessmentPreferences(subject),
+  ]);
+  return { evidence, preferences };
+}
+
+function assessmentReadFingerprints(
+  material: Awaited<ReturnType<typeof loadAssessmentReadMaterial>>,
+) {
+  return {
+    assessmentCandidateMaterialFingerprint: material.evidence.fingerprint,
+    assessmentPreferencesFingerprint:
+      opportunityAssessmentPreferencesFingerprint(material.preferences),
+  };
+}
+
+/** One owner-bound snapshot for selecting and projecting overview cards. */
+export async function loadOpportunityAssessmentReader(
+  subject: WorkspaceSubject,
+) {
+  const material = await loadAssessmentReadMaterial(subject);
+  return {
+    query: assessmentReadFingerprints(material),
+    project: (opportunities: AssessmentProjectionRequest['opportunities']) =>
+      readAssessmentProjections({ opportunities, subject }, material),
+  };
+}
+
 /**
  * The only query-time cache inputs for subject-scoped assessment rows. This
  * performs bounded private reads and never requests a model decision.
@@ -199,22 +229,17 @@ export async function loadOpportunityAssessmentQueryContext(
   assessmentPreferencesFingerprint: string;
   questionRecommendationScope: ScreeningQuestionRecommendationScope;
 }> {
-  const [evidence, preferences] = await Promise.all([
-    loadWorkspaceCandidateEvidence(subject),
-    loadOpportunityAssessmentPreferences(subject),
-  ]);
+  const material = await loadAssessmentReadMaterial(subject);
   const { loadCurrentScreeningQuestionRecommendationScope } = await import(
     './screening-question-assessment-service.js'
   );
   const questionRecommendationScope =
     await loadCurrentScreeningQuestionRecommendationScope(subject, {
-      loadCandidate: async () => evidence,
+      loadCandidate: async () => material.evidence,
     });
   return {
     questionRecommendationScope,
-    assessmentCandidateMaterialFingerprint: evidence.fingerprint,
-    assessmentPreferencesFingerprint:
-      opportunityAssessmentPreferencesFingerprint(preferences),
+    ...assessmentReadFingerprints(material),
   };
 }
 
@@ -417,14 +442,25 @@ export async function hasOpportunityAssessment(input: {
  * Loads only source-current, UI-safe projections for one verified workspace.
  * Raw assessment JSON and candidate evidence never leave this server helper.
  */
-export async function loadCurrentOpportunityAssessmentProjections(input: {
+type AssessmentProjectionRequest = {
   opportunities: Array<{
     id: unknown;
     sourceContentFingerprint: unknown;
     sourceContentVersion: unknown;
   }>;
   subject: WorkspaceSubject;
-}): Promise<Map<string, unknown>> {
+};
+
+export function loadCurrentOpportunityAssessmentProjections(
+  input: AssessmentProjectionRequest,
+): Promise<Map<string, unknown>> {
+  return readAssessmentProjections(input);
+}
+
+async function readAssessmentProjections(
+  input: AssessmentProjectionRequest,
+  material?: Awaited<ReturnType<typeof loadAssessmentReadMaterial>>,
+): Promise<Map<string, unknown>> {
   const expected = new Map(
     input.opportunities
       .map((opportunity) => {
@@ -445,10 +481,8 @@ export async function loadCurrentOpportunityAssessmentProjections(input: {
   // A posting-current result is still stale when any private candidate fact or
   // evidence changes. Load this once for the entire requested page and rerank
   // with current local preferences; neither operation invokes a provider.
-  const [evidence, preferences] = await Promise.all([
-    loadWorkspaceCandidateEvidence(input.subject),
-    loadOpportunityAssessmentPreferences(input.subject),
-  ]);
+  const { evidence, preferences } =
+    material ?? (await loadAssessmentReadMaterial(input.subject));
   const candidate = candidateWorkEligibilityFromProfile(evidence.candidate);
   const rows = await listPrivateRecords(
     'OpportunityAssessment',
