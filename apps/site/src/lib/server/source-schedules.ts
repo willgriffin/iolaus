@@ -280,12 +280,42 @@ export async function syncSourceSchedule(
       : {}),
   });
 
-  source.nextCheckAt = schedule.nextRun;
-  if (options.saveSource !== false && typeof source.save === 'function') {
+  // A cadence whose schedule shared mode disables is crawled by the operator
+  // crawl-due job, which owns `nextCheckAt`; clearing it here made every such
+  // source look due again on each sync (#286). Keep that value, but never later
+  // than the cadence's own next run, so a shortened cadence still takes effect.
+  // Only a live schedule, or no cadence at all, defines the next check outright.
+  let nextCheckAt: Date | string | null = schedule.nextRun;
+  if (!schedule.enabled && schedule.cron) {
+    const cadenceNext = nextRunForCron(
+      schedule.cron,
+      options.now ?? new Date(),
+    );
+    const kept = instantOf(source.nextCheckAt);
+    nextCheckAt =
+      kept !== null && kept > cadenceNext.getTime()
+        ? cadenceNext
+        : (source.nextCheckAt ?? null);
+  }
+  const changed = instantOf(source.nextCheckAt) !== instantOf(nextCheckAt);
+  source.nextCheckAt = nextCheckAt;
+  // Saving an unchanged source still rewrites its row, appends a change-feed
+  // entry and refreshes every search document under it, so skip it (#286).
+  if (
+    changed &&
+    options.saveSource !== false &&
+    typeof source.save === 'function'
+  ) {
     await source.save();
   }
 
   return schedule;
+}
+
+function instantOf(value: Date | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const time = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(time) ? time : null;
 }
 
 export async function deleteSourceSchedule(

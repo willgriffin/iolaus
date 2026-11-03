@@ -412,8 +412,9 @@ async function seedEmploymentTagContexts(tags: TagCollection) {
     'source',
     'credential',
   ]) {
-    const tag = await tags.getOrCreate(context, context);
-    await tag.save();
+    // getOrCreate persists a new tag; re-saving an existing one is a no-op
+    // rewrite on every migrate (#286).
+    await tags.getOrCreate(context, context);
   }
 }
 
@@ -442,7 +443,6 @@ async function seedEmploymentPlaceTypes(placeTypes: PlaceTypeCollection) {
     { slug: 'metro', name: 'Metro' },
     { slug: 'remote_region', name: 'Remote Region' },
   ]) {
-    const type = await placeTypes.getOrCreate(placeType.slug, placeType.name);
-    await type.save();
+    await placeTypes.getOrCreate(placeType.slug, placeType.name);
   }
 }
