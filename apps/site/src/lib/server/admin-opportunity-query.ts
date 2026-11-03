@@ -347,6 +347,7 @@ function latestReviewJoinSql(
   dialect: OpportunityQueryDialect,
   workspaceSubject: WorkspaceSubject | undefined,
   values: unknown[],
+  catalogWide = false,
 ): string {
   const subjectWhere = privateSubjectWhereSql('d', workspaceSubject, values);
   if (dialect === 'sqlite') {
@@ -360,14 +361,22 @@ function latestReviewJoinSql(
         LIMIT 1
       )`;
   }
-  return `LEFT JOIN LATERAL (
-    SELECT
-      d.decision,
+  const projection = `d.decision,
       d.human_rating,
       d.reason AS human_review_notes,
       d.created_at AS reviewed_at,
       d.decider_profile_id AS reviewed_by_profile_id,
-      d.decider_user_id AS reviewed_by_user_id
+      d.decider_user_id AS reviewed_by_user_id`;
+  if (catalogWide) {
+    return `LEFT JOIN (
+      SELECT DISTINCT ON (d.opportunity_id) d.opportunity_id, ${projection}
+      FROM decisions d
+      WHERE ${subjectWhere}
+      ORDER BY d.opportunity_id, d.created_at DESC NULLS LAST, d.id DESC
+    ) latest_review ON latest_review.opportunity_id = CAST(o.id AS TEXT)`;
+  }
+  return `LEFT JOIN LATERAL (
+    SELECT ${projection}
     FROM decisions d
     WHERE d.opportunity_id = CAST(o.id AS TEXT)
       AND (${subjectWhere})
@@ -385,19 +394,25 @@ function latestAssessmentJoinSql(
   dialect: OpportunityQueryDialect,
   query: OpportunityQuery,
   values: unknown[],
+  catalogWide = false,
 ): string {
   const candidateFingerprint = query.assessmentCandidateMaterialFingerprint;
   const preferencesFingerprint = query.assessmentPreferencesFingerprint;
-  const currentAssessment =
+  const ownedCurrentAssessment =
     candidateFingerprint && preferencesFingerprint
       ? `${privateSubjectWhereSql('oa', query.workspaceSubject, values)}
-          AND oa.opportunity_id = CAST(o.id AS TEXT)
           AND oa.status = 'current'
           AND oa.contract_version = ${pushParam(values, OPPORTUNITY_ASSESSMENT_VERSION)}
-          AND oa.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
-          AND oa.source_content_version = COALESCE(o.source_content_version, 0)
           AND oa.candidate_material_fingerprint = ${pushParam(values, candidateFingerprint)}
           AND oa.preferences_fingerprint = ${pushParam(values, preferencesFingerprint)}`
+      : 'FALSE';
+  const matchesSource = (alias: string) =>
+    `${alias}.opportunity_id = CAST(o.id AS TEXT)
+          AND ${alias}.source_content_fingerprint = COALESCE(o.source_content_fingerprint, '')
+          AND ${alias}.source_content_version = COALESCE(o.source_content_version, 0)`;
+  const currentAssessment =
+    candidateFingerprint && preferencesFingerprint
+      ? `(${ownedCurrentAssessment}) AND ${matchesSource('oa')}`
       : 'FALSE';
   if (dialect === 'sqlite') {
     return `LEFT JOIN opportunity_assessments latest_assessment
@@ -409,13 +424,25 @@ function latestAssessmentJoinSql(
         LIMIT 1
       )`;
   }
-  return `LEFT JOIN LATERAL (
-    SELECT
-      oa.eligibility_bucket,
+  const projection = `oa.eligibility_bucket,
       oa.eligibility_priority,
       oa.excluded,
       oa.fit_score,
-      oa.match_readiness
+      oa.match_readiness`;
+  if (catalogWide) {
+    // Keep one row per exact source revision. Newer stale revisions cannot
+    // hide the current assessment, and the outer join still sees live source.
+    return `LEFT JOIN (
+      SELECT DISTINCT ON (oa.opportunity_id, oa.source_content_fingerprint, oa.source_content_version)
+        oa.opportunity_id, oa.source_content_fingerprint, oa.source_content_version, ${projection}
+      FROM opportunity_assessments oa
+      WHERE ${ownedCurrentAssessment}
+      ORDER BY oa.opportunity_id, oa.source_content_fingerprint, oa.source_content_version,
+        oa.updated_at DESC NULLS LAST, oa.id DESC
+    ) latest_assessment ON ${matchesSource('latest_assessment')}`;
+  }
+  return `LEFT JOIN LATERAL (
+    SELECT ${projection}
     FROM opportunity_assessments oa
     WHERE ${currentAssessment}
     ORDER BY oa.updated_at DESC NULLS LAST, oa.id DESC
@@ -1445,6 +1472,7 @@ export function createOpportunityWhereSql(
     string,
     CurrentScreenedOpportunityExclusion
   > = new Map(),
+  catalogWideJoins = false,
 ): {
   joins: string[];
   values: unknown[];
@@ -1468,7 +1496,9 @@ export function createOpportunityWhereSql(
   });
   const joins: string[] = [];
   if (filters.needsAssessment) {
-    joins.push(latestAssessmentJoinSql(dialect, query, values));
+    joins.push(
+      latestAssessmentJoinSql(dialect, query, values, catalogWideJoins),
+    );
   }
   if (filters.needsRecommendationRank) {
     const rankJoin = recommendationRankJoinSql(query, values);
@@ -1480,7 +1510,14 @@ export function createOpportunityWhereSql(
     );
   }
   if (review.needsReview || filters.needsReview) {
-    joins.push(latestReviewJoinSql(dialect, query.workspaceSubject, values));
+    joins.push(
+      latestReviewJoinSql(
+        dialect,
+        query.workspaceSubject,
+        values,
+        catalogWideJoins,
+      ),
+    );
   }
   const screen = screeningWhereSql(
     query.reviewFilter,
@@ -1816,6 +1853,7 @@ export async function listOpportunityPageIds({
   const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
     ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
     : new Map();
+  const catalogWideJoins = scoreSource === 'assessment';
   const query = createOpportunityWhereSql(
     {
       candidateSkills,
@@ -1830,6 +1868,7 @@ export async function listOpportunityPageIds({
     dialect,
     sourceEligibility,
     screeningExclusions,
+    catalogWideJoins,
   );
   const needsAssessmentForSort =
     (filters.sort === 'best' &&
@@ -1856,6 +1895,7 @@ export async function listOpportunityPageIds({
           workspaceSubject,
         },
         query.values,
+        catalogWideJoins,
       ),
     );
   }
@@ -1864,7 +1904,12 @@ export async function listOpportunityPageIds({
     !query.joins.some((join) => join.includes('latest_review'))
   ) {
     query.joins.push(
-      latestReviewJoinSql(dialect, workspaceSubject, query.values),
+      latestReviewJoinSql(
+        dialect,
+        workspaceSubject,
+        query.values,
+        catalogWideJoins,
+      ),
     );
   }
   const sourceEligibilityPriority =
