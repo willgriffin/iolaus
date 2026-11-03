@@ -7,7 +7,7 @@ import {
 } from '$lib/admin/header-actions';
 import type { AdminOverview } from '$lib/admin/overview';
 
-let { overview } = $props<{ overview: AdminOverview }>();
+let { overview } = $props<{ overview: Promise<AdminOverview> }>();
 const adminHeader = getContext<AdminHeaderActions | undefined>(
   ADMIN_HEADER_ACTIONS,
 );
@@ -36,49 +36,70 @@ function dueDate(value: string): string {
 
 <svelte:head><title>Overview — Employment Search</title></svelte:head>
 
+{#snippet loading(label: string)}
+  <div class="loading" role="status">
+    <p>{label}</p>
+    {#each [1, 2, 3] as row (row)}
+      <div class="skeleton" aria-hidden="true"></div>
+    {/each}
+  </div>
+{/snippet}
+
 <div class="overview" data-testid="admin-overview">
   <div class="overview-columns">
     <section aria-labelledby="overview-tasks">
       <header class="section-heading"><div><h2 id="overview-tasks">Priority tasks</h2><p>Overdue work and actions waiting on you come first.</p></div><a href="/admin/tasks">All tasks</a></header>
-      {#if overview.tasks.length}
-        <ol class="task-list">
-          {#each overview.tasks as task (task.id)}
-            <li>
-              <a class="record-link" href={task.href}>
-                <span class="record-title">{task.title}</span>
-                <span class="record-meta"><span class="priority">{task.priority}</span><span>{task.assignee}</span><span>{task.status}</span>{#if dueDate(task.dueAt)}<span>Due {dueDate(task.dueAt)}</span>{/if}</span>
-              </a>
-            </li>
-          {/each}
-        </ol>
-      {:else}
-        <p class="empty-state">No active tasks to show. Review new opportunities or check your applications.</p>
-      {/if}
+      {#await overview}
+        {@render loading('Loading priority tasks…')}
+      {:then data}
+        {#if data.tasks.length}
+          <ol class="task-list">
+            {#each data.tasks as task (task.id)}
+              <li>
+                <a class="record-link" href={task.href}>
+                  <span class="record-title">{task.title}</span>
+                  <span class="record-meta"><span class="priority">{task.priority}</span><span>{task.assignee}</span><span>{task.status}</span>{#if dueDate(task.dueAt)}<span>Due {dueDate(task.dueAt)}</span>{/if}</span>
+                </a>
+              </li>
+            {/each}
+          </ol>
+        {:else}
+          <p class="empty-state">No active tasks to show. Review new opportunities or check your applications.</p>
+        {/if}
+      {:catch}
+        <p role="status">Could not load priority tasks. You can still open All tasks.</p>
+      {/await}
     </section>
 
     <section aria-labelledby="overview-opportunities">
       <header class="section-heading"><div><h2 id="overview-opportunities">Best new opportunities</h2><p>Current match scores for your work location, excluding existing applications.</p></div><a href="/admin/opportunities?review=unsorted&amp;sort=score&amp;excludeExpired=1&amp;excludeStale=1">All new opportunities</a></header>
-      {#if overview.opportunities.length}
-        <ol class="opportunity-list">
-          {#each overview.opportunities as opportunity (opportunity.id)}
-            <li><a class="record-link opportunity-link" href={opportunity.href}>
-              <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span></div>
-              <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
-            </a></li>
-          {/each}
-        </ol>
-      {:else}
-        <p class="empty-state">No new assessed matches to show yet. Opportunities awaiting assessment appear below.</p>
-      {/if}
+      {#await overview}
+        {@render loading('Loading opportunities…')}
+      {:then data}
+        {#if data.opportunities.length}
+          <ol class="opportunity-list">
+            {#each data.opportunities as opportunity (opportunity.id)}
+              <li><a class="record-link opportunity-link" href={opportunity.href}>
+                <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span></div>
+                <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
+              </a></li>
+            {/each}
+          </ol>
+        {:else}
+          <p class="empty-state">No new assessed matches to show yet. Opportunities awaiting assessment appear below.</p>
+        {/if}
 
-      {#if overview.pendingOpportunities.length}
-        <h3>Awaiting assessment or eligibility</h3>
-        <ul class="pending-list">
-          {#each overview.pendingOpportunities as opportunity (opportunity.id)}
-            <li><a class="record-link" href={opportunity.href}><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}<span>{opportunity.readiness}</span></span><span class="eligibility">{opportunity.eligibility} · Score unavailable</span></a></li>
-          {/each}
-        </ul>
-      {/if}
+        {#if data.pendingOpportunities.length}
+          <h3>Awaiting assessment or eligibility</h3>
+          <ul class="pending-list">
+            {#each data.pendingOpportunities as opportunity (opportunity.id)}
+              <li><a class="record-link" href={opportunity.href}><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}<span>{opportunity.readiness}</span></span><span class="eligibility">{opportunity.eligibility} · Score unavailable</span></a></li>
+            {/each}
+          </ul>
+        {/if}
+      {:catch}
+        <p role="status">Could not load recommendations. You can still open All new opportunities.</p>
+      {/await}
     </section>
   </div>
   <nav class="section-menu" aria-label="Workspace sections">
@@ -115,6 +136,8 @@ function dueDate(value: string): string {
   .match { display: grid; justify-items: end; gap: var(--smrt-spacing-1); }
   .match strong { color: var(--smrt-color-primary); font-size: 1.4rem; }
   .match span { font-size: .7rem; color: var(--smrt-color-on-surface-variant); }
+  .loading { display: grid; gap: var(--smrt-spacing-2); margin-top: var(--smrt-spacing-4); }
+  .skeleton { height: 3.5rem; border-radius: var(--smrt-radius-medium); background: var(--smrt-color-surface-container-high); }
   .empty-state { padding: var(--smrt-spacing-3) 0; }
   .section-menu { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--smrt-spacing-3); }
   .section-menu a { display: grid; gap: var(--smrt-spacing-1); padding: var(--smrt-spacing-3); border: 1px solid var(--smrt-color-outline-variant); border-radius: var(--smrt-radius-medium); text-decoration: none; min-height: 44px; font-weight: 600; }

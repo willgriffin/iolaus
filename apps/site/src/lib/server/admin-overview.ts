@@ -170,6 +170,7 @@ export async function loadAdminOverview(
         candidateSkills: [],
         workspaceSubject: subject,
         reviewFilter: 'unsorted',
+        scoreSource: 'assessment',
         filters: {
           ...DEFAULT_OPPORTUNITY_FILTERS,
           excludeExpired: true,

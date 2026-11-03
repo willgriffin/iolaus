@@ -1778,25 +1778,31 @@ export async function listOpportunityPageIds({
   offset,
   reviewFilter,
   search,
+  scoreSource,
   triageRejectDepriority,
   questionRecommendationScope: suppliedQuestionRecommendationScope,
   workspaceSubject,
 }: WorkspaceOpportunityQuery & {
   limit: number;
   offset: number;
+  /** Read-only surfaces can sort by the same assessment score they display. */
+  scoreSource?: 'assessment';
 }): Promise<string[]> {
   if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
-  const questionRecommendationScope =
+  let questionRecommendationScope = suppliedQuestionRecommendationScope;
+  if (scoreSource === 'assessment') {
+    questionRecommendationScope = undefined;
+  } else if (
     needsQuestionRecommendationScope(filters) &&
-    suppliedQuestionRecommendationScope?.matchingMaterialFingerprint ===
-      undefined
-      ? await loadCurrentRecommendationScope(
-          workspaceSubject,
-          suppliedQuestionRecommendationScope,
-        )
-      : suppliedQuestionRecommendationScope;
+    questionRecommendationScope?.matchingMaterialFingerprint === undefined
+  ) {
+    questionRecommendationScope = await loadCurrentRecommendationScope(
+      workspaceSubject,
+      questionRecommendationScope,
+    );
+  }
   const sourceEligibility =
     needsSourceEligibility(filters) ||
     (filters.sort === 'best' &&

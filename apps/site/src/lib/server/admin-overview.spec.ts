@@ -279,7 +279,7 @@ describe('subject-scoped admin overview', () => {
     );
   });
 
-  it('uses verified subject and current fingerprints for native ranking and private projections', async () => {
+  it('reads the current assessment score and private projections for the verified workspace', async () => {
     await loadAdminOverview(subjectA);
     expect(mocks.loadOpportunityAssessmentQueryContext).toHaveBeenCalledWith(
       subjectA,
@@ -290,6 +290,7 @@ describe('subject-scoped admin overview', () => {
         assessmentCandidateMaterialFingerprint: 'evidence',
         assessmentPreferencesFingerprint: 'preferences',
         reviewFilter: 'unsorted',
+        scoreSource: 'assessment',
         filters: expect.objectContaining({
           excludeExpired: true,
           excludeStale: true,
