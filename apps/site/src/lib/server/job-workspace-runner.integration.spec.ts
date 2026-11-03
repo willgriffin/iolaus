@@ -65,6 +65,7 @@ vi.mock('./auto-submit-application-job.js', () => ({
 
 // Registers the actual application Opportunity type that TaskRunner resolves.
 import './smrt.js';
+import { runAsRevalidatedJobWorkspaceSubject } from './job-workspace-subject.js';
 import { getCollection } from './smrt.js';
 import { workspaceWorkflowOperation } from './workspace-workflow-capabilities.js';
 
@@ -554,9 +555,7 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', {
     // native handler, after its original permission check has succeeded.
     if (!database) throw new Error('TaskRunner fixture is unavailable.');
     const permissions = await PermissionCollection.create({ db: database });
-    const rolePermissions = await RolePermissionCollection.create({
-      db: database,
-    });
+    const fixtureDatabase = database;
     const permission = await permissions.findBySlug(
       deriveOperationPermissionSlug(
         workspaceWorkflowOperation('assessment.execute').collection,
@@ -564,15 +563,16 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', {
       ),
     );
     if (!permission?.id) throw new Error('Assessment capability is missing.');
-    const grant = (await rolePermissions.findByRole(workspace.roleId)).find(
-      (entry) => entry.permissionId === permission.id,
-    );
-    if (!grant) throw new Error('Assessment capability grant is missing.');
+    const permissionId = permission.id;
     fixture.processor.mockImplementationOnce(async () => {
-      await grant.delete();
-      const { runAsRevalidatedJobWorkspaceSubject } = await import(
-        './job-workspace-subject.js'
+      // Model a revocation committed by a separate administrative action.
+      // This fixture changes only the grant row, without unrelated cascade
+      // and model lifecycle work inside the running job.
+      const revoked = await fixtureDatabase.query(
+        'DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ? RETURNING id',
+        [workspace.roleId, permissionId],
       );
+      expect(revoked.rows).toHaveLength(1);
       await runAsRevalidatedJobWorkspaceSubject(
         workspace.subject,
         'assessment.execute',
@@ -589,7 +589,7 @@ describe('TaskRunner workspace-subject dispatch (SQLite)', {
     );
 
     expect(fixture.processor).toHaveBeenCalledTimes(1);
-    expect(terminal.error).toBeDefined();
+    expect(terminal.error?.message).toMatch(/permission denied/i);
     expect(persistence).not.toHaveBeenCalled();
   });
 
