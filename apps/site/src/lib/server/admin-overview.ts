@@ -6,39 +6,59 @@ import {
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import {
+  type AdminRecord,
   listAdminRecords,
   requireAdminResource,
   serializeRecord,
 } from './admin-data';
-import { listOpportunityPageIds } from './admin-opportunity-query';
-import { attachOpportunityContext } from './admin-resource-route';
-import { loadOpportunityAssessmentQueryContext } from './opportunity-assessment-store';
+import {
+  listOpportunityPageIds,
+  loadCurrentSourceOpportunityEligibility,
+} from './admin-opportunity-query';
+import { loadOpportunityAssessmentReader } from './opportunity-assessment-store';
 import { listPrivateRecords } from './private-workspace';
 import {
+  type CandidateWorkspaceSubject,
   requireCandidateWorkspaceSubject,
   type WorkspaceSubject,
 } from './workspace-subject';
 
-/** Read-only dashboard; all private reads retain the hook-verified subject. */
-export async function loadAdminOverview(
-  workspaceSubject: WorkspaceSubject,
-): Promise<AdminOverview> {
-  const subject = requireCandidateWorkspaceSubject(workspaceSubject);
-  const [tasks, assessmentContext] = await Promise.all([
-    listPrivateRecords('Task', subject, {
-      where: { 'status in': ['open', 'in_progress', 'blocked'] },
-      orderBy: 'due_at ASC',
-      limit: 250,
-    }),
-    loadOpportunityAssessmentQueryContext(subject),
-  ]);
-  const overview: AdminOverview = {
-    tasks: prioritizeOverviewTasks(tasks.map(serializeRecord)),
-    opportunities: [],
-    pendingOpportunities: [],
-  };
+async function companyNames(
+  postings: AdminRecord[],
+): Promise<Map<string, string>> {
+  const ids = [
+    ...new Set(
+      postings.flatMap((posting) =>
+        typeof posting.companyId === 'string' && posting.companyId
+          ? [posting.companyId]
+          : [],
+      ),
+    ),
+  ];
+  if (!ids.length) return new Map();
+  const companies = await listAdminRecords(requireAdminResource('companies'), {
+    where: { 'id in': ids },
+    limit: ids.length,
+    select: ['id', 'name'],
+  });
+  return new Map(
+    companies.flatMap((company) =>
+      typeof company.id === 'string' && typeof company.name === 'string'
+        ? [[company.id, company.name] as const]
+        : [],
+    ),
+  );
+}
+
+async function loadOverviewTasks(subject: CandidateWorkspaceSubject) {
+  const tasks = await listPrivateRecords('Task', subject, {
+    where: { 'status in': ['open', 'in_progress', 'blocked'] },
+    orderBy: 'due_at ASC',
+    limit: 250,
+  });
+  const overviewTasks = prioritizeOverviewTasks(tasks.map(serializeRecord));
   const resource = requireAdminResource('opportunities');
-  const displayedTaskIds = new Set(overview.tasks.map((task) => task.id));
+  const displayedTaskIds = new Set(overviewTasks.map((task) => task.id));
   const displayedTasks = tasks.filter((task) =>
     displayedTaskIds.has(String(task.id)),
   );
@@ -111,7 +131,7 @@ export async function loadAdminOverview(
     ...opportunityTargets.map((opportunity) => `Opportunity:${opportunity.id}`),
     ...companies.map((company) => `Company:${company.id}`),
   ]);
-  for (const task of overview.tasks) {
+  for (const task of overviewTasks) {
     const target = targetByTaskId.get(task.id);
     if (target && validTargets.has(`${target.recordClass}:${target.recordId}`))
       task.href = target.href;
@@ -128,18 +148,17 @@ export async function loadAdminOverview(
       ),
     ];
     const postings = opportunityIds.length
-      ? await attachOpportunityContext(
-          await listAdminRecords(resource, {
-            where: { 'id in': opportunityIds },
-            limit: opportunityIds.length,
-          }),
-          { includeActivity: false, workspaceSubject: subject },
-        )
+      ? await listAdminRecords(resource, {
+          where: { 'id in': opportunityIds },
+          limit: opportunityIds.length,
+          select: ['id', 'title', 'companyId'],
+        })
       : [];
     const postingById = new Map(
       postings.map((posting) => [posting.id, posting]),
     );
-    for (const task of overview.tasks) {
+    const names = await companyNames(postings);
+    for (const task of overviewTasks) {
       const record = displayedTasks.find(
         (candidate) => candidate.id === task.id,
       );
@@ -152,62 +171,119 @@ export async function loadAdminOverview(
         typeof record?.applicationId === 'string' &&
         task.title.endsWith(record.applicationId)
       ) {
-        const context = `${posting.title}${posting.companyName ? ` · ${posting.companyName}` : ''}`;
+        const name = names.get(String(posting.companyId));
+        const context = `${posting.title}${name ? ` · ${name}` : ''}`;
         task.title = `${task.title.slice(0, -record.applicationId.length)}${context}`;
       }
     }
   }
-  // Keep startup work bounded. Continue past existing applications rather than
-  // letting a needs_input review make an active draft look like a new posting.
-  for (const pending of [false, true]) {
-    const target = pending
-      ? overview.pendingOpportunities
-      : overview.opportunities;
-    const desired = pending ? 3 : 6;
-    for (let page = 0; page < 3 && target.length < desired; page += 1) {
-      const ids = await listOpportunityPageIds({
-        ...assessmentContext,
-        candidateSkills: [],
-        workspaceSubject: subject,
-        reviewFilter: 'unsorted',
-        scoreSource: 'assessment',
-        filters: {
-          ...DEFAULT_OPPORTUNITY_FILTERS,
-          excludeExpired: true,
-          excludeStale: true,
-          eligibilityBuckets: pending
-            ? ['eligible', 'sponsorship_possible', 'unknown']
-            : ['eligible', 'sponsorship_possible'],
-          sort: pending ? 'newest' : 'score',
-        },
-        limit: 30,
-        offset: page * 30,
-      });
-      if (!ids.length) break;
-      const records = await listAdminRecords(resource, {
-        where: { 'id in': ids },
-        limit: ids.length,
-      });
-      const byId = new Map(records.map((record) => [record.id, record]));
-      const contextual = await attachOpportunityContext(
-        ids.flatMap((id) => {
-          const record = byId.get(id);
-          return record ? [record] : [];
-        }),
-        { includeActivity: false, workspaceSubject: subject },
-      );
-      for (const record of contextual) {
-        const card = overviewOpportunity(record);
-        if (
-          card &&
-          (card.fitScore === null) === pending &&
-          !target.some((existing) => existing.id === card.id)
-        )
-          target.push(card);
-        if (target.length === desired) break;
-      }
-      if (ids.length < 30) break;
-    }
-  }
-  return overview;
+  return overviewTasks;
+}
+
+async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
+  const [reader, sourceEligibility] = await Promise.all([
+    loadOpportunityAssessmentReader(subject),
+    loadCurrentSourceOpportunityEligibility(subject),
+  ]);
+  const list = (pending: boolean) =>
+    listOpportunityPageIds({
+      ...reader.query,
+      candidateSkills: [],
+      workspaceSubject: subject,
+      reviewFilter: 'unsorted',
+      scoreSource: 'assessment',
+      sourceEligibilitySnapshot: sourceEligibility,
+      filters: {
+        ...DEFAULT_OPPORTUNITY_FILTERS,
+        excludeExpired: true,
+        excludeStale: true,
+        eligibilityBuckets: pending
+          ? ['eligible', 'sponsorship_possible', 'unknown']
+          : ['eligible', 'sponsorship_possible'],
+        sort: pending ? 'newest' : 'score',
+      },
+      // Preserve the same ordered window as the former three pages of 30.
+      limit: 90,
+      offset: 0,
+    });
+  const [scoredIds, pendingIds] = await Promise.all([list(false), list(true)]);
+  const ids = [...new Set([...scoredIds, ...pendingIds])];
+  if (!ids.length) return { opportunities: [], pendingOpportunities: [] };
+
+  const [postings, applications] = await Promise.all([
+    listAdminRecords(requireAdminResource('opportunities'), {
+      where: { 'id in': ids },
+      limit: ids.length,
+      select: [
+        'id',
+        'title',
+        'status',
+        'locations',
+        'companyId',
+        'sourceContentFingerprint',
+        'sourceContentVersion',
+      ],
+    }),
+    listPrivateRecords('Application', subject, {
+      where: { 'opportunityId in': ids },
+      select: [
+        'id',
+        'opportunityId',
+        'tenantId',
+        'ownerUserId',
+        'candidateProfileId',
+      ],
+    }),
+  ]);
+  const applicationsByOpportunity = new Set(
+    applications.map((row) => row.opportunityId),
+  );
+  const unclaimed = postings.filter(
+    (posting) => !applicationsByOpportunity.has(posting.id),
+  );
+  const [names, projections] = await Promise.all([
+    companyNames(unclaimed),
+    reader.project(
+      unclaimed.map((posting) => ({
+        id: posting.id,
+        sourceContentFingerprint: posting.sourceContentFingerprint,
+        sourceContentVersion: posting.sourceContentVersion,
+      })),
+    ),
+  ]);
+  const byId = new Map(
+    unclaimed.map((posting) => [
+      posting.id,
+      overviewOpportunity({
+        ...posting,
+        companyName: names.get(String(posting.companyId)),
+        location: posting.locations,
+        assessmentProjection: projections.get(String(posting.id)),
+      }),
+    ]),
+  );
+  const cards = (orderedIds: string[], pending: boolean, limit: number) =>
+    [...new Set(orderedIds)]
+      .flatMap((id) => {
+        const card = byId.get(id);
+        return card && (card.fitScore === null) === pending ? [card] : [];
+      })
+      .slice(0, limit);
+
+  return {
+    opportunities: cards(scoredIds, false, 6),
+    pendingOpportunities: cards(pendingIds, true, 3),
+  };
+}
+
+/** Read-only dashboard; all private reads retain the hook-verified subject. */
+export async function loadAdminOverview(
+  workspaceSubject: WorkspaceSubject,
+): Promise<AdminOverview> {
+  const subject = requireCandidateWorkspaceSubject(workspaceSubject);
+  const [tasks, cards] = await Promise.all([
+    loadOverviewTasks(subject),
+    loadOverviewOpportunities(subject),
+  ]);
+  return { tasks, ...cards };
 }

@@ -1779,6 +1779,7 @@ export async function listOpportunityPageIds({
   reviewFilter,
   search,
   scoreSource,
+  sourceEligibilitySnapshot,
   triageRejectDepriority,
   questionRecommendationScope: suppliedQuestionRecommendationScope,
   workspaceSubject,
@@ -1787,6 +1788,8 @@ export async function listOpportunityPageIds({
   offset: number;
   /** Read-only surfaces can sort by the same assessment score they display. */
   scoreSource?: 'assessment';
+  /** Reuse the live eligibility snapshot across windows for the same subject. */
+  sourceEligibilitySnapshot?: Map<string, CurrentSourceOpportunityEligibility>;
 }): Promise<string[]> {
   if (!hasCandidateWorkspaceSubject(workspaceSubject)) return [];
   const db = await queryDatabase();
@@ -1807,7 +1810,8 @@ export async function listOpportunityPageIds({
     needsSourceEligibility(filters) ||
     (filters.sort === 'best' &&
       !questionRecommendationScope?.questionScreeningEnabled)
-      ? await loadCurrentSourceOpportunityEligibility(workspaceSubject)
+      ? (sourceEligibilitySnapshot ??
+        (await loadCurrentSourceOpportunityEligibility(workspaceSubject)))
       : new Map();
   const screeningExclusions = opportunityScreeningReviewMode(reviewFilter)
     ? await loadCurrentScreenedOpportunityExclusions(workspaceSubject)
