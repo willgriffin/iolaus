@@ -37,6 +37,12 @@ const OPPORTUNITY_INDEX_BUILD_LOCK_TIMEOUT = '15s';
 const OPPORTUNITY_INDEX_BUILD_STATEMENT_TIMEOUT = '15min';
 const OPPORTUNITY_QUERY_INDEXES = [
   {
+    // Match the public catalog join while retaining legacy text company IDs.
+    name: 'idx_companies_id_text',
+    statement: `CREATE INDEX CONCURRENTLY idx_companies_id_text
+      ON companies ((CAST(id AS TEXT)))`,
+  },
+  {
     name: 'idx_evaluation_scores_opportunity_fingerprint_updated',
     statement: `CREATE INDEX CONCURRENTLY idx_evaluation_scores_opportunity_fingerprint_updated
       ON evaluation_scores (
@@ -1495,7 +1501,7 @@ export function createOpportunityWhereSql(
 }
 
 /**
- * The list's score and application joins are on the hot path for every page.
+ * The private list and public catalog joins are on the hot path for every page.
  * SMRT schema migrations own tables and columns; these application indexes are
  * deliberately idempotent supplemental query indexes.
  */

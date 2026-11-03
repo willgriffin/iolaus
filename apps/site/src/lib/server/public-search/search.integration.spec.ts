@@ -14,6 +14,7 @@ vi.mock('../db.js', () => ({
 }));
 
 import { publicJobPosting } from '../../public-job-posting.js';
+import { ensureOpportunityListQueryIndexes } from '../admin-opportunity-query.js';
 import { ensureOpportunityAnalysisSchema } from '../opportunity-analysis-schema.js';
 import { deterministicOpportunityAnalysis } from '../opportunity-analysis-source.js';
 import { publishOpportunityAnalysis } from '../opportunity-analysis-store.js';
@@ -941,6 +942,85 @@ for (const dialect of ['sqlite', 'postgres'] as const)
       }, 120000);
     },
   );
+it.runIf(Boolean(pgUrl))(
+  'searches 6,400 public jobs under the PostgreSQL reader timeout',
+  async () => {
+    const { db } = await fixture('postgres');
+    await db.query(
+      'CREATE TABLE evaluation_scores (opportunity_id text, source_content_fingerprint text, updated_at timestamptz, score integer)',
+    );
+    await db.query(
+      'CREATE TABLE applications (opportunity_id text, updated_at timestamptz)',
+    );
+    await ensureOpportunityListQueryIndexes(db as never);
+    await db.query(`INSERT INTO companies (id,name)
+    SELECT md5('company-' || n)::uuid, 'Synthetic Company ' || n
+    FROM generate_series(1,825) n`);
+    await db.query(`INSERT INTO opportunity_analyses
+    (id,opportunity_id,source_content_fingerprint,source_content_version,analysis_version,status,normalized_title,skills_json,requirements_json)
+    SELECT md5('analysis-' || n)::uuid, md5('job-' || n)::uuid, 'fp', 1,
+      'opportunity-analysis/v1', 'deterministic',
+      CASE WHEN n % 10 = 0 THEN 'PostgreSQL Engineer' ELSE 'Platform Engineer' END,
+      '[]', '[]'
+    FROM generate_series(1,6400) n`);
+    await db.query(`INSERT INTO opportunities
+    (id,source_id,company_id,title,posting_url,status,posted_at,current_analysis_id,source_content_fingerprint,source_content_version)
+    SELECT md5('job-' || n)::uuid, 'source',
+      CASE WHEN n % 20 = 0 THEN 'legacy-company' ELSE md5('company-' || (1 + n % 825))::uuid::text END,
+      'PostgreSQL Engineer', 'https://example.test/job/' || n, 'active',
+      '2026-10-07T00:00:00Z', md5('analysis-' || n)::uuid, 'fp', 1
+    FROM generate_series(1,6400) n`);
+    await db.query('ANALYZE');
+
+    await db.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='search_test_public') THEN
+      CREATE ROLE search_test_public LOGIN;
+    END IF;
+  END $$`);
+    await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
+    await db.query(
+      'GRANT SELECT ON jobgeni_public_search_v1 TO search_test_public',
+    );
+    await db.query(
+      'GRANT EXECUTE ON FUNCTION search_public_catalog(tsquery) TO search_test_public',
+    );
+    await db.query(
+      "ALTER ROLE search_test_public SET statement_timeout='500ms'",
+    );
+    const roleUrl = new URL(pgUrl!);
+    roleUrl.username = 'search_test_public';
+    roleUrl.password = '';
+    roleUrl.searchParams.set('statement_timeout', '500');
+    const restricted = await resolveDatabase({
+      type: 'postgres',
+      url: roleUrl.href,
+      max: 1,
+    });
+    expect(
+      JSON.stringify(await restricted.query('SHOW statement_timeout')),
+    ).toContain('500ms');
+    // Also verify the release installed the index: a different plan on a fast
+    // test machine could otherwise hide the regression.
+    const index = await db.query(
+      "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_companies_id_text'",
+    );
+    expect(JSON.stringify(index)).toContain('(id)::text');
+    const reader = createPublicSearchReader(
+      restricted as unknown as PublicDatabase,
+      'postgres',
+      secret,
+    );
+    const browse = await reader.search({ limit: 20 });
+    expect(browse.total_estimate).toBe(6400);
+    expect(browse.items).toHaveLength(20);
+
+    const filtered = await reader.search({ q: 'postgresql', limit: 20 });
+    expect(filtered.total_estimate).toBe(640);
+    expect(filtered.items).toHaveLength(20);
+  },
+  30_000,
+);
+
 it('public modules do not import private services or raw private objects', () => {
   const root = join(process.cwd(), 'src/lib/server/public-search');
   for (const name of readdirSync(root).filter(
