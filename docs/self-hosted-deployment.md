@@ -366,7 +366,16 @@ root). Board reconciliation (relisting/closing vanished postings) still needs a
 verified workspace subject in shared mode and is reported as an error; new postings
 are ingested. Also set `IOLAUS_WORKSPACE_MODE=shared` on the `migrate` init
 containers: without it, `db:migrate` registers the private-mode score-refresh schedule
-and enables unbound source schedules that fail every run in shared mode.
+and enables unbound source schedules that fail every run in shared mode. A shared
+`db:migrate` disables a score-refresh schedule left over from a private-mode run,
+and leaves the `nextCheckAt` this job writes in place.
+
+`db:migrate` also runs in the monitor CronJob's init container every five minutes,
+so a repeat run must write nothing. The search index is reconciled by diff: a
+document is rewritten only when the content hash of its public catalog row
+changes, only departed documents are deleted, and the generation moves only
+when one of those wrote. The source-schedule sync and repair passes skip rows
+that already hold their target values.
 
 ## Operational safety
 
