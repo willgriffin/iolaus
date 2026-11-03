@@ -196,13 +196,45 @@ async function persistScoreRefreshCursor(
   control.scoreRefreshCursor = cursor;
 }
 
+/**
+ * A schedule registered before an install became shared (or by a migrate that
+ * ran without the shared mode) still fires every minute, and every run fails
+ * the shared-mode guard, rewriting the schedule and a job each time (#286).
+ * Disable it once; an already-disabled row is left untouched.
+ */
+async function disableSharedScoreRefreshSchedule(db?: Database): Promise<void> {
+  const database = db ?? (await resolveDatabase(getDbConfig()));
+  const schedules = await AgentScheduleCollection.create({ db: database });
+  const schedule = await schedules.get({
+    context: '',
+    slug: OPPORTUNITY_SCORE_REFRESH_SCHEDULE_ID,
+  });
+  if (
+    !schedule ||
+    schedule.agentType !==
+      '@willgriffin/iolaus-site:OpportunityIntelligenceControl' ||
+    schedule.method !== OPPORTUNITY_SCORE_REFRESH_METHOD ||
+    (schedule.enabled === false &&
+      schedule.status === 'disabled' &&
+      schedule.nextRun == null)
+  )
+    return;
+  schedule.enabled = false;
+  schedule.status = 'disabled';
+  schedule.nextRun = null;
+  await schedule.save();
+}
+
 export async function ensureOpportunityScoreRefreshSchedule(
   db?: Database,
 ): Promise<void> {
   // Shared hosting never runs the global refresh on a schedule, so there is
   // nothing to register; migrations must still complete on a shared install.
   const { isSharedHosted } = await import('./app-config.js');
-  if (isSharedHosted()) return;
+  if (isSharedHosted()) {
+    await disableSharedScoreRefreshSchedule(db);
+    return;
+  }
   const database = db ?? (await resolveDatabase(getDbConfig()));
   await ensureOpportunityIntelligenceControl();
   const controls = (await getCollection(

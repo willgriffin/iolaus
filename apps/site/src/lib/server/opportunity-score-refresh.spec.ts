@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
     sourceContentFingerprint: opportunity.sourceContentFingerprint,
     sourceContentVersion: 1,
   })),
+  scheduleGet: vi.fn<() => Promise<Record<string, unknown> | null>>(
+    async () => null,
+  ),
   shared: false,
 }));
 
@@ -24,7 +27,10 @@ vi.mock('@happyvertical/smrt-core', () => ({
 }));
 vi.mock('@happyvertical/smrt-agents', () => ({
   AgentScheduleCollection: {
-    create: vi.fn(async () => ({ getOrUpsert: vi.fn() })),
+    create: vi.fn(async () => ({
+      get: mocks.scheduleGet,
+      getOrUpsert: vi.fn(),
+    })),
   },
 }));
 vi.mock('./db.js', () => ({
@@ -66,6 +72,8 @@ describe('saved opportunity score refresh', () => {
     mocks.query.mockReset();
     mocks.collectionOptions.mockClear();
     mocks.scoreMaterial.mockClear();
+    mocks.scheduleGet.mockReset();
+    mocks.scheduleGet.mockResolvedValue(null);
   });
 
   it('rejects the shared global refresh before any database query', async () => {
@@ -91,6 +99,34 @@ describe('saved opportunity score refresh', () => {
       ensureOpportunityScoreRefreshSchedule({} as never),
     ).resolves.toBeUndefined();
     expect(mocks.query).not.toHaveBeenCalled();
+  });
+
+  it('disables a stale every-minute schedule once on shared installs (#286)', async () => {
+    mocks.shared = true;
+    const schedule = {
+      agentType: '@willgriffin/iolaus-site:OpportunityIntelligenceControl',
+      enabled: true,
+      method: 'refreshSavedEvaluationScores',
+      nextRun: new Date(),
+      save: vi.fn(async () => {}),
+      status: 'active',
+    };
+    mocks.scheduleGet.mockResolvedValue(schedule);
+    const { ensureOpportunityScoreRefreshSchedule } = await import(
+      './opportunity-score-refresh'
+    );
+
+    await ensureOpportunityScoreRefreshSchedule({} as never);
+    expect(schedule).toMatchObject({
+      enabled: false,
+      nextRun: null,
+      status: 'disabled',
+    });
+    expect(schedule.save).toHaveBeenCalledOnce();
+
+    // Already disabled: a repeat migrate writes nothing.
+    await ensureOpportunityScoreRefreshSchedule({} as never);
+    expect(schedule.save).toHaveBeenCalledOnce();
   });
 
   it('pages, persists the target, and queues one fenced score refresh', async () => {
