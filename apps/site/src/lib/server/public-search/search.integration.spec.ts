@@ -384,6 +384,143 @@ for (const dialect of ['sqlite', 'postgres'] as const)
           : (aclAfter.rows ?? []);
         expect(aclAfterRows[0]?.acl).toBe(aclBeforeRows[0]?.acl);
       });
+      it('writes zero index rows for a no-op rebuild or no-op entity writes, and diffs real changes (#286)', async () => {
+        const { db, seed, reader } = await fixture(dialect);
+        await seed(12);
+        const rowsOf = (result: unknown) =>
+          (Array.isArray(result)
+            ? result
+            : ((result as { rows?: unknown[] }).rows ?? [])) as Array<
+            Record<string, unknown>
+          >;
+        const scalar = async (sql: string) =>
+          Number(Object.values(rowsOf(await db.query(sql))[0] ?? {})[0]);
+        // Count every write the index table receives from here on.
+        await db.query('CREATE TABLE search_doc_audit (op TEXT)');
+        if (dialect === 'postgres') {
+          await db.query(
+            `CREATE FUNCTION audit_search_docs() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO search_doc_audit VALUES (TG_OP); RETURN NULL; END $$`,
+          );
+          await db.query(
+            'CREATE TRIGGER audit_search_docs AFTER INSERT OR UPDATE OR DELETE ON public_opportunity_search_documents FOR EACH ROW EXECUTE FUNCTION audit_search_docs()',
+          );
+        } else {
+          for (const op of ['INSERT', 'UPDATE', 'DELETE'])
+            await db.query(
+              `CREATE TRIGGER audit_search_docs_${op.toLowerCase()} AFTER ${op} ON public_opportunity_search_documents BEGIN INSERT INTO search_doc_audit VALUES ('${op}'); END`,
+            );
+        }
+        const writes = () => scalar('SELECT COUNT(*) FROM search_doc_audit');
+        const generation = () =>
+          scalar('SELECT generation FROM public_search_generation WHERE id=1');
+        const before = await generation();
+        // PostgreSQL stamps xmax on every row a statement locks, and a no-op
+        // ON CONFLICT DO UPDATE still locks (and WAL-logs) its conflict rows.
+        const lockStamps = () =>
+          dialect === 'postgres'
+            ? db
+                .query(
+                  'SELECT id,xmax::text AS xmax FROM public_opportunity_search_documents ORDER BY id',
+                )
+                .then(rowsOf)
+            : Promise.resolve([]);
+        const stampsBefore = await lockStamps();
+
+        // The rebuild every migrate runs, and writes that leave every public
+        // document as it was: none of them may touch the index.
+        await ensurePublicSearchSchema(db, dialect);
+        await ensurePublicSearchSchema(db, dialect);
+        await db.query('UPDATE sources SET is_active=is_active');
+        await db.query('UPDATE companies SET name=name');
+        await db.query('UPDATE opportunities SET updated_at=updated_at');
+        await db.query(
+          "UPDATE opportunity_analyses SET status=status WHERE status='deterministic'",
+        );
+        expect(await writes()).toBe(0);
+        expect(await generation()).toBe(before);
+        expect(await lockStamps()).toEqual(stampsBefore);
+        expect((await reader.search({ limit: 20 })).items).toHaveLength(12);
+
+        // A real content change rewrites exactly that document, once.
+        await db.query(
+          "UPDATE opportunity_analyses SET normalized_title='Rust Engineer' WHERE opportunity_id=$1",
+          jobId(0, dialect),
+        );
+        expect(await writes()).toBe(1);
+        expect(await generation()).toBe(before + 1);
+        expect(
+          (await reader.search({ q: 'rust', limit: 20 })).items.map(
+            (item) => item.id,
+          ),
+        ).toEqual([jobId(0, dialect)]);
+
+        // A filter/facet-only change is a content change too: the cached
+        // facets and cursors key on the generation.
+        await db.query(
+          "UPDATE opportunity_analyses SET work_mode='onsite' WHERE opportunity_id=$1",
+          jobId(3, dialect),
+        );
+        expect(await writes()).toBe(2);
+        expect(await generation()).toBe(before + 2);
+        await db.query(
+          "UPDATE opportunity_analyses SET work_mode='remote' WHERE opportunity_id=$1",
+          jobId(3, dialect),
+        );
+        const settled = await writes();
+        const settledGeneration = await generation();
+
+        // A posting that leaves the catalog loses only its own document.
+        await db.query(
+          "UPDATE opportunities SET status='archived' WHERE id=$1",
+          jobId(1, dialect),
+        );
+        expect((await writes()) - settled).toBe(1);
+        expect(await generation()).toBe(settledGeneration + 1);
+        expect(
+          await scalar(
+            'SELECT COUNT(*) FROM public_opportunity_search_documents',
+          ),
+        ).toBe(11);
+
+        // The rebuild converges a drifted or pre-hash index by diff, bumps the
+        // generation once, then goes quiet.
+        await db.query(
+          "UPDATE public_opportunity_search_documents SET search_document='stale',content_hash=NULL WHERE id=$1",
+          jobId(2, dialect),
+        );
+        await db.query(
+          "INSERT INTO public_opportunity_search_documents(id,search_document) VALUES('gone','orphan')",
+        );
+        const drifted = await writes();
+        const driftedGeneration = await generation();
+        await ensurePublicSearchSchema(db, dialect);
+        expect((await writes()) - drifted).toBe(2);
+        expect(await generation()).toBe(driftedGeneration + 1);
+        await ensurePublicSearchSchema(db, dialect);
+        expect((await writes()) - drifted).toBe(2);
+        expect(await generation()).toBe(driftedGeneration + 1);
+        expect(
+          await scalar(
+            "SELECT COUNT(*) FROM public_opportunity_search_documents WHERE search_document='stale' OR id='gone'",
+          ),
+        ).toBe(0);
+
+        // Unlisting a source removes every document under it; relisting restores them.
+        await db.query('UPDATE sources SET public_listing=FALSE');
+        expect(
+          await scalar(
+            'SELECT COUNT(*) FROM public_opportunity_search_documents',
+          ),
+        ).toBe(0);
+        expect((await reader.search({ limit: 20 })).items).toHaveLength(0);
+        await db.query('UPDATE sources SET public_listing=TRUE');
+        expect(
+          await scalar(
+            'SELECT COUNT(*) FROM public_opportunity_search_documents',
+          ),
+        ).toBe(11);
+        expect(await generation()).toBe(driftedGeneration + 3);
+      });
       it('FTS, filters, facets, cursors, live visibility, private golden isolation, role ACL and benchmark', async () => {
         const { db, seed, reader } = await fixture(dialect);
         await seed(55);
