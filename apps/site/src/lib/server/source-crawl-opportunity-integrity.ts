@@ -67,10 +67,11 @@ export async function prepareSourceCrawlOpportunityReference(
       `Unsupported source_crawl_items.opportunity_id type ${dataType || '<missing>'}.`,
     );
   }
+  // Rows that are already NULL must not match: this runs on every migrate.
   await db.query(`
     UPDATE source_crawl_items
     SET opportunity_id = NULL
-    WHERE BTRIM(COALESCE(opportunity_id, '')) = ''
+    WHERE opportunity_id IS NOT NULL AND BTRIM(opportunity_id) = ''
   `);
   const invalid = await db.query(`
     SELECT id::text AS id, opportunity_id

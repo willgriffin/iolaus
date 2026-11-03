@@ -235,9 +235,11 @@ export async function backfillSourceProvenance(
     WHERE COALESCE(NULLIF(BTRIM(source_role), ''), 'unknown') NOT IN (
         'root', 'posting_derived'
       )
-      OR (
-        source_role = 'unknown'
-        AND is_active IS DISTINCT FROM FALSE
+      -- Skip rows already in the target state; this runs on every migrate.
+      AND (
+        source_role IS DISTINCT FROM 'unknown'
+        OR is_active IS DISTINCT FROM FALSE
+        OR parent_source_id IS NOT NULL
       )
   `);
   const counts = await db.query(`
