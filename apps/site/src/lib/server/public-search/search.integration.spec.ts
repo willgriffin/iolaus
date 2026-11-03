@@ -959,7 +959,9 @@ it.runIf(Boolean(pgUrl))(
     await db.query(`INSERT INTO opportunity_analyses
     (id,opportunity_id,source_content_fingerprint,source_content_version,analysis_version,status,normalized_title,skills_json,requirements_json)
     SELECT md5('analysis-' || n)::uuid, md5('job-' || n)::uuid, 'fp', 1,
-      'opportunity-analysis/v1', 'deterministic', 'PostgreSQL Engineer', '[]', '[]'
+      'opportunity-analysis/v1', 'deterministic',
+      CASE WHEN n % 10 = 0 THEN 'PostgreSQL Engineer' ELSE 'Platform Engineer' END,
+      '[]', '[]'
     FROM generate_series(1,6400) n`);
     await db.query(`INSERT INTO opportunities
     (id,source_id,company_id,title,posting_url,status,posted_at,current_analysis_id,source_content_fingerprint,source_content_version)
@@ -1008,9 +1010,13 @@ it.runIf(Boolean(pgUrl))(
       'postgres',
       secret,
     );
-    const result = await reader.search({ q: 'postgresql', limit: 20 });
-    expect(result.total_estimate).toBe(6400);
-    expect(result.items).toHaveLength(20);
+    const browse = await reader.search({ limit: 20 });
+    expect(browse.total_estimate).toBe(6400);
+    expect(browse.items).toHaveLength(20);
+
+    const filtered = await reader.search({ q: 'postgresql', limit: 20 });
+    expect(filtered.total_estimate).toBe(640);
+    expect(filtered.items).toHaveLength(20);
   },
   30_000,
 );
