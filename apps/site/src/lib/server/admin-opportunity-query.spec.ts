@@ -2746,6 +2746,15 @@ describe('admin-opportunity-query', () => {
       reviewFilter: 'unsorted',
     };
 
+    it('invalidates fingerprints from before catalog matching was removed', async () => {
+      const { createOpportunityQueryFingerprint } = await import(
+        './admin-opportunity-query'
+      );
+      expect(createOpportunityQueryFingerprint(baseQuery)).not.toBe(
+        '9ebb8bbde2981e90cd54f86db1ee44e6ee330e04c12498cf523f7624c4c80a2a',
+      );
+    });
+
     it('is stable across repeated calls on an equivalent query', async () => {
       const { createOpportunityQueryFingerprint } = await import(
         './admin-opportunity-query'

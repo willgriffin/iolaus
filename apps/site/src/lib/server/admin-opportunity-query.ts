@@ -215,42 +215,23 @@ function needsQuestionRecommendationScope(
   );
 }
 
-/** Refresh zero-provider ranks from current source/profile material at the read boundary. */
-async function loadCurrentRecommendationScope(
-  subject: WorkspaceSubject & { profileId: string },
-  supplied?: QuestionRecommendationScope,
-): Promise<QuestionRecommendationScope> {
-  const screening =
-    supplied ??
-    (await loadCurrentScreeningQuestionRecommendationScope(subject));
-  const { refreshOpportunityMatches } = await import(
-    './opportunity-matching.js'
-  );
-  const match = await refreshOpportunityMatches(subject);
-  return {
-    ...screening,
-    questionScreeningEnabled:
-      screening.questionScreeningEnabled || Boolean(match.materialFingerprint),
-    matchingMaterialFingerprint: match.materialFingerprint,
-  };
-}
-
+// Keep catalog matching on its dedicated path. List, count, and selection
+// queries only need the current workspace's screening scope.
 async function withQuestionRecommendationScope<T extends OpportunityQuery>(
   query: T,
 ): Promise<T> {
   if (
-    query.questionRecommendationScope?.matchingMaterialFingerprint !==
-      undefined ||
+    query.questionRecommendationScope ||
     !needsQuestionRecommendationScope(query.filters) ||
     !hasCandidateWorkspaceSubject(query.workspaceSubject)
   )
     return query;
   return {
     ...query,
-    questionRecommendationScope: await loadCurrentRecommendationScope(
-      query.workspaceSubject,
-      query.questionRecommendationScope,
-    ),
+    questionRecommendationScope:
+      await loadCurrentScreeningQuestionRecommendationScope(
+        query.workspaceSubject,
+      ),
   };
 }
 
@@ -1667,9 +1648,13 @@ function canonicalOpportunityQuery(query: OpportunityQuery): string {
 export function createOpportunityQueryFingerprint(
   query: OpportunityQuery,
 ): string {
-  return createHash('sha256')
-    .update(canonicalOpportunityQuery(query))
-    .digest('hex');
+  return (
+    createHash('sha256')
+      // Expire selections previewed under the former catalog-matching order.
+      .update('opportunity-query/v2\n')
+      .update(canonicalOpportunityQuery(query))
+      .digest('hex')
+  );
 }
 
 /**
@@ -1836,12 +1821,10 @@ export async function listOpportunityPageIds({
     questionRecommendationScope = undefined;
   } else if (
     needsQuestionRecommendationScope(filters) &&
-    questionRecommendationScope?.matchingMaterialFingerprint === undefined
+    !questionRecommendationScope
   ) {
-    questionRecommendationScope = await loadCurrentRecommendationScope(
-      workspaceSubject,
-      questionRecommendationScope,
-    );
+    questionRecommendationScope =
+      await loadCurrentScreeningQuestionRecommendationScope(workspaceSubject);
   }
   const sourceEligibility =
     needsSourceEligibility(filters) ||
