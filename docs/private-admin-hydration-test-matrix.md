@@ -55,3 +55,8 @@ assessment inputs across both buckets. Card hydration reads only the current
 owned assessment, application exclusion, and company label. Application task
 labels use the linked posting title and company. The detail route keeps its
 full context reads.
+For PostgreSQL Home windows, select the latest owned review and assessment
+per exact source revision in sets before joining the catalog. The native SQL
+regression compares these results with the existing lateral query, including
+newer stale and foreign rows and a newer owned review. SQLite keeps the
+correlated plan.

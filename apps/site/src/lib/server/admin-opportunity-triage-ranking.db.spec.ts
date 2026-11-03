@@ -571,6 +571,46 @@ function runSuite(
       expect(refresh).not.toHaveBeenCalled();
     });
 
+    it('preserves the owned current revision and latest review when selecting a Home window', async () => {
+      const schema = config.type === 'postgres' ? 'pg_temp.' : '';
+      await database.query(`INSERT INTO ${schema}opportunity_assessments
+        (id, opportunity_id, tenant_id, owner_user_id, candidate_profile_id,
+         source_content_fingerprint, source_content_version,
+         candidate_material_fingerprint, preferences_fingerprint, contract_version,
+         status, eligibility_bucket, eligibility_priority, fit_score, match_readiness, excluded, updated_at)
+        VALUES
+        ('newer-stale', 'recommend-96', 'tenant-a', 'user-a', 'profile-a', 'stale-source', 2, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'conflicting', 9, 0, 'assessable', TRUE, '2026-06-01'),
+        ('newer-foreign', 'recommend-96', 'tenant-a', 'user-a', 'profile-b', 'current-recommend', 1, 'candidate-material', 'preferences', '${OPPORTUNITY_ASSESSMENT_VERSION}', 'current', 'conflicting', 9, 0, 'assessable', TRUE, '2026-06-02')`);
+      await database.query(`INSERT INTO ${schema}decisions
+        (id, opportunity_id, tenant_id, owner_user_id, candidate_profile_id, decision, created_at)
+        VALUES
+        ('older-owned', 'recommend-96', 'tenant-a', 'user-a', 'profile-a', 'reject', '2026-05-01'),
+        ('latest-owned', 'recommend-96', 'tenant-a', 'user-a', 'profile-a', 'needs_input', '2026-05-02'),
+        ('latest-foreign', 'recommend-96', 'tenant-a', 'user-a', 'profile-b', 'reject', '2026-05-03'),
+        ('excluded-owned', 'score-96-tie', 'tenant-a', 'user-a', 'profile-a', 'reject', '2026-05-01')`);
+      const { listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const options = {
+        ...query(),
+        filters: {
+          ...query().filters,
+          eligibilityBuckets: ['eligible' as const],
+        },
+        limit: 3,
+        offset: 0,
+      };
+      const reference = await listOpportunityPageIds(options);
+      expect(reference.slice(0, 2)).toEqual(['reject-100', 'recommend-96']);
+      expect(reference).not.toContain('score-96-tie');
+      await expect(
+        listOpportunityPageIds({
+          ...options,
+          scoreSource: 'assessment',
+        }),
+      ).resolves.toEqual(reference);
+    });
+
     it('uses refreshed preference-scoped projection scores before pagination', async () => {
       const { listOpportunityPageIds } = await import(
         './admin-opportunity-query'
