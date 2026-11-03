@@ -1,5 +1,11 @@
 # Public catalog search acceptance (#197)
 
+PostgreSQL release preparation installs a concurrent expression index on
+`companies ((CAST(id AS TEXT)))` for the public catalog join. This keeps legacy
+text company IDs readable. The integration suite checks the managed index and
+runs a public role search over 6,400 synthetic listings with a 500 ms statement
+timeout.
+
 The public reader uses PostgreSQL native tsvector/GIN and SQLite FTS5. It never filters a full catalog in JavaScript. Anonymous matching alone reads at most 500 sanitized analyses. The PostgreSQL role can select only the catalog/search views and execute only `consume_public_search_quota(integer)` and `search_public_catalog(tsquery)`. Source visibility and current analysis identity are rechecked in the live view for every read. A security-definer search function places the full-text predicate next to the GIN-indexed sanitized document while rechecking live catalog membership; the outer security-barrier view still controls projection. The bounded server response cache lives for 60 seconds and facets for five minutes; both are keyed by live visibility generation and current visible row count, including expiry. The cache validator hashes the current response; `max-age=0, must-revalidate` prevents serving an opted-out source from an unvalidated HTTP cache. Match responses are always `no-store`.
 
 | Invariant | Trigger / positive / negative | Actor/context | Executor/transaction | Runtime/dialect | External edge | Level / command |
