@@ -218,6 +218,7 @@ async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
         'id',
         'title',
         'status',
+        'locations',
         'companyId',
         'sourceContentFingerprint',
         'sourceContentVersion',
@@ -256,6 +257,7 @@ async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
       overviewOpportunity({
         ...posting,
         companyName: names.get(String(posting.companyId)),
+        location: posting.locations,
         assessmentProjection: projections.get(String(posting.id)),
       }),
     ]),

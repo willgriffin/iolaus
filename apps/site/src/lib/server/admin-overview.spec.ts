@@ -347,7 +347,7 @@ describe('subject-scoped admin overview', () => {
         ? ['missing', ...scored]
         : [scored[0], ...pending],
     );
-    mocks.listAdminRecords.mockImplementation(async (resource) =>
+    mocks.listAdminRecords.mockImplementation(async (resource, options) =>
       resource.slug === 'companies'
         ? [{ id: 'company', name: 'Synthetic Company' }]
         : [...scored, ...pending].reverse().map((id) => ({
@@ -355,6 +355,9 @@ describe('subject-scoped admin overview', () => {
             title: id,
             status: 'found',
             companyId: 'company',
+            ...(options.select.includes('locations')
+              ? { locations: 'Remote' }
+              : {}),
           })),
     );
     mocks.project.mockResolvedValue(
@@ -369,6 +372,7 @@ describe('subject-scoped admin overview', () => {
       pending.slice(0, 3),
     );
     expect(result.opportunities[0].company).toBe('Synthetic Company');
+    expect(result.opportunities[0].location).toBe('Remote');
     expect(mocks.project).toHaveBeenCalledOnce();
     expect(mocks.project.mock.calls[0][0]).toHaveLength(12);
     expect(
