@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { prepareSourceCrawlOpportunityReference } from './source-crawl-opportunity-integrity.js';
+import { backfillSourceProvenance } from './source-provenance.js';
 
 const databaseUrl = process.env.SOURCE_PROVENANCE_TEST_DATABASE_URL?.trim();
 const enabled = Boolean(databaseUrl);
@@ -44,6 +46,43 @@ describe.runIf(enabled)('source provenance database guards', () => {
       [childId, `child-${childId}`, rootId],
     );
   }
+
+  it('leaves settled rows untouched when migrate repairs run again (#286)', async () => {
+    const unknownId = randomUUID();
+    const itemId = randomUUID();
+    const ctids = async (
+      transaction: Awaited<ReturnType<typeof resolveDatabase>>,
+    ) =>
+      (
+        await transaction.query(
+          `SELECT (SELECT ctid::text FROM sources WHERE id = ?) AS source,
+                  (SELECT ctid::text FROM source_crawl_items WHERE id = ?) AS item`,
+          [unknownId, itemId],
+        )
+      ).rows[0];
+    await expect(
+      db.transaction?.(async (transaction) => {
+        await transaction.query(
+          `INSERT INTO sources (id, slug, context, source_role, parent_source_id, is_active)
+           VALUES (?, ?, 'source-provenance-test', 'unknown', NULL, FALSE)`,
+          [unknownId, `unknown-${unknownId}`],
+        );
+        await transaction.query(
+          `INSERT INTO source_crawl_items (id, slug, context, source_crawl_id, attempt_key, outcome, status, opportunity_id)
+           VALUES (?, ?, 'source-provenance-test', ?, 'noop', 'skipped', 'skipped_not_relevant', NULL)`,
+          [itemId, `item-${itemId}`, randomUUID()],
+        );
+        await backfillSourceProvenance(transaction);
+        await prepareSourceCrawlOpportunityReference(transaction);
+        const settled = await ctids(transaction);
+        // Every migrate reruns both; a settled row must not get a new version.
+        await backfillSourceProvenance(transaction);
+        await prepareSourceCrawlOpportunityReference(transaction);
+        expect(await ctids(transaction)).toEqual(settled);
+        throw new Error('rollback');
+      }),
+    ).rejects.toThrow('rollback');
+  });
 
   it('rejects a posting-derived source whose parent does not exist', async () => {
     const childId = randomUUID();

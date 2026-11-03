@@ -372,6 +372,74 @@ describe('syncSourceSchedule', () => {
     );
     expect(source.nextCheckAt).toBeNull();
   });
+
+  it('does not rewrite a source whose next check is unchanged (#286)', async () => {
+    const source = {
+      id: 'source-1',
+      isActive: true,
+      nextCheckAt: null as Date | null,
+      parentSourceId: null,
+      refreshCadence: 'daily',
+      save: vi.fn(async () => {}),
+      sourceRole: 'root',
+    };
+    const now = new Date('2026-06-04T00:00:00.000Z');
+
+    await syncSourceSchedule(source, { db: databaseMock as never, now });
+    expect(source.save).toHaveBeenCalledOnce();
+
+    // The same source synced again, e.g. by every migrate: nothing to write.
+    source.nextCheckAt = new Date(source.nextCheckAt?.toISOString() ?? '');
+    await syncSourceSchedule(source, { db: databaseMock as never, now });
+    expect(source.save).toHaveBeenCalledOnce();
+
+    const inactive = {
+      id: 'source-2',
+      isActive: false,
+      nextCheckAt: null,
+      refreshCadence: 'daily',
+      save: vi.fn(async () => {}),
+    };
+    await syncSourceSchedule(inactive, { db: databaseMock as never, now });
+    expect(inactive.save).not.toHaveBeenCalled();
+  });
+
+  it('keeps the crawl-due next check for a shared cadence its schedule cannot run (#286)', async () => {
+    sourceAuthMock.shared = true;
+    const dueAt = new Date('2026-06-05T05:00:00.000Z');
+    const source = {
+      id: 'source-1',
+      isActive: true,
+      nextCheckAt: dueAt as Date | null,
+      parentSourceId: null,
+      refreshCadence: 'weekly',
+      save: vi.fn(async () => {}),
+      sourceRole: 'root',
+    };
+
+    await syncSourceSchedule(source, {
+      db: databaseMock as never,
+      now: new Date('2026-06-04T00:00:00.000Z'),
+    });
+
+    expect(schedulesMock.getOrUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false, status: 'disabled' }),
+    );
+    expect(source.nextCheckAt).toBe(dueAt);
+    expect(source.save).not.toHaveBeenCalled();
+
+    // A shortened cadence pulls a later crawl-due check in to its own next run.
+    source.refreshCadence = 'daily';
+    source.nextCheckAt = new Date('2026-07-01T00:00:00.000Z');
+    await syncSourceSchedule(source, {
+      db: databaseMock as never,
+      now: new Date('2026-06-04T00:00:00.000Z'),
+    });
+    expect(source.nextCheckAt?.getTime()).toBeLessThan(
+      new Date('2026-06-05T00:00:00.000Z').getTime(),
+    );
+    expect(source.save).toHaveBeenCalledOnce();
+  });
 });
 
 describe('syncAllSourceSchedules', () => {
