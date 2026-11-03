@@ -16,6 +16,7 @@ export default defineConfig({
     include: [
       'src/lib/components/sources/*.browser.spec.ts',
       'src/lib/components/SearchTriageRace.browser.spec.ts',
+      'src/lib/components/admin/AdminOverview.browser.spec.ts',
       'src/lib/components/admin/CareerResume.browser.spec.ts',
       'src/lib/components/admin/ApplicationOpportunityOverview.browser.spec.ts',
       'src/lib/components/admin/AdminResourcePageHeader.browser.spec.ts',

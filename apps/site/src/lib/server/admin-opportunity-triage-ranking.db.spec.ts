@@ -11,6 +11,7 @@ import {
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import type { WorkspaceOpportunityQuery } from './admin-opportunity-query.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
+import { refreshOpportunityMatches } from './opportunity-matching.js';
 
 const mocks = vi.hoisted(() => ({
   config: { type: 'sqlite' },
@@ -548,6 +549,26 @@ function runSuite(
         'unscored',
         'recommend-96',
       ]);
+    });
+
+    it('reads assessment score order without refreshing recommendation ranks', async () => {
+      const { listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const refresh = vi.mocked(refreshOpportunityMatches);
+      refresh.mockClear();
+      expect(
+        await listOpportunityPageIds({
+          ...query(),
+          scoreSource: 'assessment',
+          // An enabled recommendation scope must not replace the displayed
+          // assessment score or cause the matching catalog to be refreshed.
+          questionRecommendationScope: { questionScreeningEnabled: true },
+          limit: 3,
+          offset: 0,
+        }),
+      ).toEqual(['reject-100', 'recommend-96', 'score-96-tie']);
+      expect(refresh).not.toHaveBeenCalled();
     });
 
     it('uses refreshed preference-scoped projection scores before pagination', async () => {

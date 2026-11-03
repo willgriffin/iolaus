@@ -37,3 +37,14 @@ case. This is a read-only query change; no schema or data migration is needed.
 | Empty current support remains sortable | Cited support ascending or descending after candidate/profile changes | Stable updated-time/id order and page offsets | Missing or stale receipt returns no invented support | Owned workspace; current partial replay retained | Native query; PostgreSQL pinned session and connection-local temporary fixtures; no production writes | PostgreSQL and SQLite | Bare `ORDER BY NULL` production failure (42601) | Native SQL regression and authenticated reload | `admin-opportunity-query.spec.ts`; live production loader readback |
 | A rejected read is terminal and retryable | Curated list endpoint rejects HTTP 500 | Error and Retry appear; successful retry restores payload | Pending upstream preload must not keep the initial spinner forever | Same tenant/user/query cache scope | N/A: browser read only; server authority unchanged | Svelte browser; no SQL | SMRT live collection error/preload lifecycle | Mounted browser regression | `AdminHydratedResourcePage.browser.spec.ts` |
 | Cached payload and disposal stay safe | Revalidation fails or component unmounts before reply | Existing rows remain visible with the load error | Late rejected/successful response does not alter a disposed view | Scoped authenticated browser cache | N/A: no mutations or external write | Svelte browser; no SQL | Native collection invalidation initiates retry | Mounted browser regression | Same focused browser spec |
+
+The admin Home route streams its overview after the verified workspace is
+established. The workspace links and section headers are usable while task and
+opportunity placeholders are visible, and stay usable if the overview fails.
+Home orders its scored cards by their current assessment fit. It does not
+refresh recommendation ranks or scan the catalog to publish matches during
+navigation. The opportunity list retains its existing recommendation behavior.
+When the hook uses PostgreSQL row-level security, the streamed reads reopen
+the verified session and check the same tenant, user, and owned profile before
+reading. The stream uses its own scoped transaction because the hook's
+transaction ends when it returns the response.
