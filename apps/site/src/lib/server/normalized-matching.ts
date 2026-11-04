@@ -7,7 +7,7 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v7';
+export const MATCHING_POLICY_VERSION = 'normalized-v8';
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -1018,6 +1018,7 @@ function supportedExtractionGroup(
     !hard &&
     (employmentCondition.test(clause.text) ||
       essentialCondition.test(clause.text) ||
+      mixedCandidateCondition(clause.text) ||
       independentHardCue.test(clause.text) ||
       requiredHeader.test(header))
   )
@@ -1244,28 +1245,50 @@ function sourceGeography(
   return parseGeography(location, mode, citation);
 }
 
-function nonRequirementLine(
-  raw: MatchingPostingInput,
-  lines: ReturnType<typeof descriptionLines>,
-  span: MatchingSourceSpan,
-) {
-  const line = extractedDescriptionLine(raw, lines, span);
-  return line &&
-    // Hiring and work-location statements may carry candidate constraints.
-    !roleStatement.test(line.text) &&
-    !/\b(?:remote(?:ly)?|hybrid|on[- ]?site|in[- ]office|based in|located in)\b/iu.test(
-      line.text,
-    ) &&
-    !employmentCondition.test(line.text) &&
-    !essentialCondition.test(line.text) &&
-    !independentHardCue.test(line.text) &&
-    !requiredInAdministrativeText.test(line.text) &&
-    !supplementalLimit.test(line.text) &&
-    /^(?:we (?:are|offer|provide|build|believe|support|give|value)|our (?:company|team|mission|benefits|values|hiring process)|you will (?:build|design|develop|support|maintain|collaborate|help|partner|lead|contribute|work on)|build|design|develop|support|maintain|collaborate|partner|lead|contribute|about|benefits|compensation|salary)\b/iu.test(
-      line.text,
-    )
-    ? line.citation
-    : undefined;
+// Candidate expectations can be embedded in benefits, duties, or metadata.
+// Classify the clause itself before applying any section or preference label.
+const capabilityExpectation =
+  /\b(?:knowledge|proficien(?:t|cy)|experience|qualifications?|skills?|fluency|background in)\b/iu;
+const standaloneQualification =
+  /^(?:(?:working |strong |practical |demonstrable |hands-on )?(?:knowledge|proficiency|experience|fluency) (?:in|with|using|of)\b|[\p{L}\p{N}+#. -]{1,60} (?:knowledge|proficiency|fluency|experience)[.!]?$)/iu;
+
+function mixedCandidateCondition(text: string) {
+  const role = roleStatement.test(text);
+  const metadata =
+    role ||
+    geographicLine.test(text) ||
+    administrativeProse.test(text) ||
+    /\b(?:we (?:offer|provide|are)|our (?:benefits|company)|benefits|compensation|remote|hybrid|onsite)\b/iu.test(
+      text,
+    );
+  return (
+    /\b(?:expect(?:s|ed|ation)?|prerequisites?|core skills?|core capabilit(?:y|ies)|non[- ]negotiable|candidate (?:criteria|background)|demonstrated (?:ability|proficiency|experience))\b/iu.test(
+      text,
+    ) ||
+    (capabilityExpectation.test(text) &&
+      (metadata
+        ? /[,;]|\b(?:and|but|while|provided that|subject to)\b/iu.test(text)
+        : /\b(?:and|but|while) (?:you|candidates?|applicants?)\b/iu.test(
+            text,
+          ))) ||
+    (role &&
+      /\b(?:with|who (?:has|have|brings|bring|knows|know))\b/iu.test(text))
+  );
+}
+
+function sectionHasCandidateQualification(text: string) {
+  return text
+    .split(/[,;:]|\b(?:and|but|while)\b/iu)
+    .some((clause) => standaloneQualification.test(clause.trim()));
+}
+
+function independentApplicantCondition(text: string) {
+  return (
+    employmentCondition.test(text) ||
+    essentialCondition.test(text) ||
+    requiredInAdministrativeText.test(text) ||
+    mixedCandidateCondition(text)
+  );
 }
 
 function postingHeading(text: string) {
@@ -1303,11 +1326,11 @@ function hasCompleteDescriptionCoverage(
       inNonRequirementSection =
         administrative || explicitDutiesHeader.test(head);
       if (!tail) return true;
-    } else if (administrativeProse.test(text)) {
-      inNonRequirementSection = true;
     }
     return (
-      inNonRequirementSection ||
+      (inNonRequirementSection &&
+        !independentApplicantCondition(text) &&
+        !sectionHasCandidateQualification(text)) ||
       supportedLines.some((proof) => sameSourceLine(proof, citation)) ||
       coversRequirementLine(citation, verifiedGroups)
     );
@@ -1402,10 +1425,6 @@ function mergeSourceExtraction(
     !raw.location.trim() ||
     workMode(raw.location) === 'remote' ||
     declaredGeography?.citation.field === 'location';
-  const employerLines = (extraction.nonRequirements ?? []).flatMap((span) => {
-    const citation = nonRequirementLine(raw, lines, span);
-    return citation ? [citation] : [];
-  });
   const geography = geographyConflict
     ? undefined
     : (posting.geography ??
@@ -1429,7 +1448,6 @@ function mergeSourceExtraction(
         lines,
         [...recovered, ...verifiedPreferred],
         [
-          ...employerLines,
           ...posting.preferred.map(({ citation }) => citation),
           ...(emptyAttested ? [noHard] : []),
         ].filter((citation): citation is Citation => !!citation),
@@ -1439,14 +1457,7 @@ function mergeSourceExtraction(
     if (code === 'posting-geography-unknown' && geography) return false;
     if (code === 'posting-requirements-incomplete') return !mayClearIncomplete;
     if (code !== 'posting-requirement-unknown' || !complete) return true;
-    return (
-      !citations.length ||
-      !citations.every(
-        (citation) =>
-          coveredLine(citation) ||
-          employerLines.some((line) => sameSourceLine(line, citation)),
-      )
-    );
+    return !citations.length || !citations.every(coveredLine);
   });
   if (roleConflict && declaredRole && posting.role)
     uncertainties.push(
@@ -1547,17 +1558,9 @@ export function normalizeMatchingPosting(
     } else if (dutiesHeader.test(head) || administrativeHeader.test(head)) {
       section = administrativeHeader.test(head) ? 'administrative' : 'duties';
       if (!tail) continue;
-    } else if (administrativeProse.test(text)) {
-      section = 'administrative';
-      if (
-        !employmentCondition.test(text) &&
-        !essentialCondition.test(text) &&
-        !requiredInAdministrativeText.test(text)
-      )
-        continue;
     }
     const geo = text.match(geographicLine);
-    if (geo) {
+    if (geo && !mixedCandidateCondition(text)) {
       const assertion =
         geo[1] ??
         (geo[2]
@@ -1573,7 +1576,24 @@ export function normalizeMatchingPosting(
         geo[1] &&
         currentMode === 'remote' &&
         !/^\s*(?:fully\s+)?remote\b|\(remote\)\s*$/iu.test(assertion);
-      if (officeMetadata) continue;
+      if (
+        officeMetadata &&
+        !independentApplicantCondition(text) &&
+        !hardLanguage.test(text)
+      )
+        continue;
+      if (officeMetadata) {
+        uncertainties.push(
+          reason(
+            'posting-requirement-unknown',
+            'unknown',
+            'A required condition could not be verified from the posting.',
+            citation,
+          ),
+        );
+        seenHardMaterial = true;
+        continue;
+      }
       const stated = parseGeography(
         assertion.replace(/\.$/u, ''),
         currentMode,
@@ -1606,9 +1626,9 @@ export function normalizeMatchingPosting(
     }
     const requiredWording = content.replace(/\bnot required\b/giu, '');
     const strong =
-      employmentCondition.test(requiredWording) ||
-      essentialCondition.test(requiredWording) ||
-      requiredInAdministrativeText.test(requiredWording);
+      independentApplicantCondition(requiredWording) ||
+      ((section === 'administrative' || section === 'duties') &&
+        sectionHasCandidateQualification(requiredWording));
     const explicitHard =
       strong ||
       /\b(?:must|required|mandatory|minimum)\b/iu.test(requiredWording);

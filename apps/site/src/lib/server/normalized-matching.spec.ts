@@ -279,7 +279,7 @@ describe('normalized matching from raw text', () => {
     );
     expect(mixed.status).toBe('insufficient-evidence');
     expect(mixed.reasons).toContainEqual(
-      expect.objectContaining({ code: 'posting-requirements-incomplete' }),
+      expect.objectContaining({ code: 'posting-requirement-unknown' }),
     );
     const mixedSource = {
       ...posting,
@@ -306,7 +306,7 @@ describe('normalized matching from raw text', () => {
       ).status,
     ).toBe('insufficient-evidence');
     expect(decision(description).status).toBe('qualified');
-    const uncued = decision(`${description}\nKafka fluency.`);
+    const uncued = decision(`${description}\nFluent spoken Finnish.`);
     expect(uncued.status).toBe('insufficient-evidence');
     expect(uncued.reasons).toContainEqual(
       expect.objectContaining({ code: 'posting-requirements-incomplete' }),
@@ -328,7 +328,80 @@ describe('normalized matching from raw text', () => {
     ).toBe('qualified');
     expect(
       decision(
-        `${description}\nResponsibilities\nBuild product services.\nAbout the role\nKafka fluency.`,
+        `${description}\nResponsibilities\nBuild product services.\nAbout the role\nFluent spoken Finnish.`,
+      ).status,
+    ).toBe('insufficient-evidence');
+  });
+
+  it.each([
+    ['About the role', 'We offer flexible hours and expect Kafka knowledge.'],
+    [
+      'About the company',
+      'Our company makes scheduling flexible but expects Kafka knowledge.',
+    ],
+    [
+      'Benefits',
+      'We provide flexible hours and Kafka knowledge is a core skill.',
+    ],
+    ['Benefits', 'Kafka fluency.'],
+    ['Benefits', 'Flexible hours; Kafka fluency.'],
+    ['Responsibilities', 'Build services and demonstrate Kafka proficiency.'],
+    [
+      'Preferred skills',
+      'Node.js preferred, but applicants should bring Kafka knowledge.',
+    ],
+    [
+      'About the role',
+      'We are hiring a Backend Engineer with Kafka knowledge.',
+    ],
+    ['About the role', 'Location: Toronto, and expect Kafka knowledge.'],
+    ['About the role', 'Location: Toronto, Kafka proficiency.'],
+  ])('does not exempt mixed candidate conditions under %s', (heading, mixed) => {
+    const required = 'The role calls for a working knowledge of Node.js.';
+    const raw = {
+      ...posting,
+      description: `About the role\n${required}\n${heading}\n${mixed}`,
+    };
+    const span = (quote: string): MatchingSourceSpan => ({
+      field: 'description',
+      quote,
+      start: raw.description.indexOf(quote),
+      end: raw.description.indexOf(quote) + quote.length,
+    });
+    const extraction: MatchingSourceExtraction = {
+      coverage: 'complete',
+      role: null,
+      geography: null,
+      noRequirements: null,
+      required: [
+        {
+          clause: span(required),
+          alternatives: [
+            { capability: span('Node.js'), years: null, context: null },
+          ],
+        },
+      ],
+      preferred: [],
+      unresolved: [],
+      nonRequirements: [span(mixed)],
+    };
+    const profile = normalizeMatchingCandidate(candidate, vocabulary);
+    expect(
+      evaluateNormalizedMatch(
+        normalizeMatchingPosting(raw, vocabulary, extraction),
+        profile,
+      ).status,
+    ).toBe('insufficient-evidence');
+    // The same mixed line must remain a gate even if deterministic parsing
+    // found complete requirements elsewhere and does not need recovery.
+    const deterministic = {
+      ...raw,
+      description: `Required: Node.js\n${heading}\n${mixed}`,
+    };
+    expect(
+      evaluateNormalizedMatch(
+        normalizeMatchingPosting(deterministic, vocabulary),
+        profile,
       ).status,
     ).toBe('insufficient-evidence');
   });
@@ -345,6 +418,7 @@ describe('normalized matching from raw text', () => {
       geography,
       'Minimum Qualifications',
       clause,
+      'Benefits',
       employer,
     ].join('\n');
     const raw = { title, description, location: 'Remote' };
@@ -412,7 +486,7 @@ describe('normalized matching from raw text', () => {
         }),
         profile,
       ).status,
-    ).toBe('insufficient-evidence');
+    ).toBe('qualified');
     expect(
       evaluateNormalizedMatch(
         normalizeMatchingPosting(raw, vocabulary, {
