@@ -249,6 +249,7 @@ function sampleRow(row: Record<string, unknown>): OpportunitySweepSampleRow {
  */
 export async function sweepInactiveSourceOpportunities(
   options: {
+    allowSharedOperatorPreview?: boolean;
     dryRun?: boolean;
     notSeenDays?: unknown;
     now?: Date;
@@ -256,12 +257,23 @@ export async function sweepInactiveSourceOpportunities(
   } = {},
 ): Promise<OpportunitySweepResult> {
   const { isSharedHosted } = await import('./app-config.js');
-  if (isSharedHosted()) {
-    throw new Error(
-      'Shared workspace opportunity sweeps require an explicit operator dispatch.',
-    );
-  }
   const dryRun = options.dryRun !== false;
+  const shared = isSharedHosted();
+  if (shared) {
+    if (!dryRun || !options.allowSharedOperatorPreview)
+      error(
+        403,
+        'Shared workspace opportunity sweeps require an explicit operator dispatch.',
+      );
+    const { isCurrentWorkspaceOperator } = await import(
+      './workspace-subject.js'
+    );
+    if (!isCurrentWorkspaceOperator())
+      error(
+        403,
+        'Inactive-source sweep previews require an installation operator.',
+      );
+  }
   const notSeenDays = sweepNotSeenDays(options.notSeenDays);
   const cutoff = sweepCutoff(notSeenDays, options.now ?? new Date());
   const filter = sweepFilter(notSeenDays, cutoff);
@@ -318,7 +330,7 @@ export async function sweepInactiveSourceOpportunities(
       message:
         count === 0
           ? `No opportunities under an inactive source have gone unseen for ${notSeenDays} days.`
-          : `${count} opportunities under an inactive source have gone unseen for ${notSeenDays} days. Nothing was changed; confirm to archive them.`,
+          : `${count} opportunities under an inactive source have gone unseen for ${notSeenDays} days. ${shared ? 'Nothing was changed.' : 'Nothing was changed; confirm to archive them.'}`,
       lockedCount: 0,
       reviewTasksClosed: 0,
       sample,

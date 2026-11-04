@@ -9,8 +9,13 @@ vi.mock('$lib/server/ai-usage-guard', () => ({
   getAiUsageSummary: vi.fn(async () => null),
 }));
 vi.mock('$lib/server/app-config', () => ({
+  configuredAdminEmails: () => ['operator@example.invalid'],
   isSharedHosted: () => true,
-  getAppConfig: () => ({ appMark: 'I', appName: 'Iolaus' }),
+  getAppConfig: () => ({
+    appMark: 'I',
+    appName: 'Iolaus',
+    runtimeProfile: 'self-hosted',
+  }),
   getPublicLinks: () => ({
     landing: null,
     privacy: { href: 'https://example.invalid/privacy', label: 'Privacy' },
@@ -39,6 +44,18 @@ describe('admin legal links', () => {
     expect(data.legalLinks).toMatchObject({
       privacy: { href: 'https://example.invalid/privacy' },
     });
+  });
+});
+
+describe('shared sweep availability', () => {
+  it.each([
+    ['operator@example.invalid', 'preview'],
+    ['member@example.invalid', 'disabled'],
+  ])('publishes the authorized toolbar mode for %s', async (email, mode) => {
+    expect(
+      (await read({ user: { id: 'user-one', email } }))
+        .inactiveOpportunitySweep,
+    ).toBe(mode);
   });
 });
 

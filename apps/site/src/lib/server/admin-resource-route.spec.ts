@@ -499,6 +499,7 @@ describe('admin-resource-route', () => {
         ownerLocals(permissions),
       );
       expect(mocks.sweepInactiveSourceOpportunities).toHaveBeenCalledWith({
+        allowSharedOperatorPreview: dryRun,
         dryRun,
         notSeenDays: '30',
         user: { id: 'user-1' },

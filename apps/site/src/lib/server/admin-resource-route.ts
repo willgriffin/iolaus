@@ -1719,6 +1719,7 @@ async function runInactiveOpportunitySweep(
     opportunitySweepOperations,
     (user) =>
       sweepInactiveSourceOpportunities({
+        allowSharedOperatorPreview: dryRun,
         dryRun,
         notSeenDays: notSeenDaysValue || undefined,
         user,
