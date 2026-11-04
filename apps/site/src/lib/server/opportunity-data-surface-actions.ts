@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
 import {
   createDataSurfaceActionAdapter,
@@ -10,6 +11,7 @@ import {
   type ResolvedDataSurfaceActions,
   type ResolvedDataSurfaceSelection,
 } from '@happyvertical/smrt-agents/server';
+import { isOpportunityDiscovery } from '$lib/opportunity-filters';
 
 /**
  * The adapter passes an invocation to every action callback but does not
@@ -102,7 +104,12 @@ function toQuery(
   workspaceSubject: OpportunityDataSurfaceOptions['workspaceSubject'],
 ): WorkspaceOpportunityQuery {
   return {
-    candidateSkills: target.candidateSkills,
+    candidateSkills: isOpportunityDiscovery(target.reviewFilter)
+      ? []
+      : target.candidateSkills,
+    ...(isOpportunityDiscovery(target.reviewFilter)
+      ? { currentQualified: true }
+      : {}),
     filters: target.filters,
     reviewFilter: target.reviewFilter,
     search: target.search,
@@ -159,6 +166,7 @@ async function loadRow(
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
+  if (!revisionByRequest.get(request)?.get(key)) return null;
   const collection = await getCollection('Opportunity');
   const row = (await collection.get(key)) as Record<string, unknown> | null;
   const overlays = row
@@ -514,7 +522,24 @@ export function createOpportunityDataSurfaceAdapter(
 
     return {
       revision: 0,
-      queryFingerprint,
+      queryFingerprint: query.currentQualified
+        ? createHash('sha256')
+            .update(queryFingerprint)
+            .update(
+              JSON.stringify(
+                rows
+                  .map((row) => [
+                    row.id,
+                    row.updatedAt,
+                    row.matchingRevision ?? null,
+                  ])
+                  .sort(([left], [right]) =>
+                    String(left).localeCompare(String(right)),
+                  ),
+              ),
+            )
+            .digest('hex')
+        : queryFingerprint,
       rowIds: rowIdList(rows),
     };
   }
@@ -541,15 +566,19 @@ export function createOpportunityDataSurfaceAdapter(
       // than the cap.
       const known = new Map(
         (
-          await listOpportunityRevisionsByIds(ids, options.workspaceSubject)
-        ).map((row) => [row.id, row.updatedAt]),
+          await listOpportunityRevisionsByIds(
+            ids,
+            options.workspaceSubject,
+            query.reviewFilter,
+          )
+        ).map((row) => [row.id, row]),
       );
       // Keep an id the lookup did not find. Dropping it here would shrink the
       // batch silently, because the adapter only reports outcomes for rows the
       // selection resolved; carried through, `eligible()` fails to load it and
       // reports `not_found`, which is the documented per-row outcome. It
       // carries no revision, so it can never be written unguarded.
-      return ids.map((id) => ({ id, updatedAt: known.get(id) ?? '' }));
+      return ids.map((id) => known.get(id) ?? { id, updatedAt: '' });
     }
 
     if (selection.scope === 'current-page') {
@@ -564,6 +593,7 @@ export function createOpportunityDataSurfaceAdapter(
       return await listOpportunityRevisionsByIds(
         pageIds,
         options.workspaceSubject,
+        query.reviewFilter,
       );
     }
 

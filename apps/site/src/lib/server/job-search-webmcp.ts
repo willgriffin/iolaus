@@ -5,12 +5,12 @@ import { getRequestScopedDatabase, type User } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import {
   DEFAULT_OPPORTUNITY_FILTERS,
-  matchesOpportunity,
-  type OpportunityFilterState,
-  sortOpportunities,
+  isOpportunityDiscovery,
 } from '$lib/opportunity-filters';
 import {
   countOpportunityRecords,
+  discoveryMatchForRecord,
+  listCurrentDiscoveryMatches,
   listOpportunityPageIds,
 } from './admin-opportunity-query.js';
 import {
@@ -108,7 +108,6 @@ const TEXT_LIST_MAX_ENTRIES = 40;
 const TEXT_LIST_MAX_ENTRY_LENGTH = 240;
 const TEXT_LIST_MAX_TOTAL_LENGTH = 4_000;
 const TEXT_LIST_MAX_SOURCE_LENGTH = 12_000;
-const LOCAL_BROWSE_RECORD_LIMIT = 1_001;
 const LOCAL_RELATED_HISTORY_PER_OPPORTUNITY = 25;
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -308,6 +307,7 @@ function applicationAdminUrl(id: string): string {
 async function relatedContext(
   opportunities: MutableRecord[],
   subject?: WorkspaceSubject,
+  discovery = false,
 ) {
   const verifiedSubject = subject ? requireWorkspaceSubject(subject) : null;
   const ids = Array.from(
@@ -341,14 +341,14 @@ async function relatedContext(
             where: { 'opportunityId in': ids },
           })
         : Promise.resolve([]),
-      verifiedSubject
+      verifiedSubject && !discovery
         ? listPrivateRecords('EvaluationScore', verifiedSubject, {
             limit: historyLimit,
             orderBy: 'updated_at DESC',
             where: { 'opportunityId in': ids },
           })
         : Promise.resolve([]),
-      verifiedSubject
+      verifiedSubject && !discovery
         ? loadCurrentOpportunityAssessmentProjections({
             opportunities: opportunities.map((record) => ({
               id: record.id,
@@ -412,98 +412,6 @@ async function relatedContext(
   };
 }
 
-function localReviewMatches(
-  record: MutableRecord,
-  reviewFilter: string,
-): boolean {
-  const review = stringValue(record.humanReviewStatus).toLowerCase();
-  if (!reviewFilter || reviewFilter === 'all') return true;
-  if (reviewFilter === 'unsorted') {
-    return !DECISIONS.includes(review as (typeof DECISIONS)[number]);
-  }
-  return review === reviewFilter;
-}
-
-function localSearchMatches(
-  record: MutableRecord,
-  companyName: string,
-  search: string | undefined,
-): boolean {
-  const needle = stringValue(search).toLowerCase();
-  if (!needle) return true;
-  return [
-    record.title,
-    record.descriptionSummary,
-    record.requiredSkills,
-    record.preferredSkills,
-    record.locations,
-    record.postingUrl,
-    companyName,
-  ].some((value) => stringValue(value).toLowerCase().includes(needle));
-}
-
-async function browseLocalJobOpportunities({
-  decision,
-  filters,
-  limit,
-  offset,
-  search,
-  subject,
-}: {
-  decision: string;
-  filters: OpportunityFilterState;
-  limit: number;
-  offset: number;
-  search: string | undefined;
-  subject: WorkspaceSubject;
-}) {
-  const opportunityCollection = await collection('Opportunity');
-  const rawRecords = await opportunityCollection.list({
-    limit: LOCAL_BROWSE_RECORD_LIMIT,
-    orderBy: 'updated_at DESC',
-  });
-  if (rawRecords.length >= LOCAL_BROWSE_RECORD_LIMIT) {
-    throw new Error(
-      `Local opportunity browsing is bounded to ${LOCAL_BROWSE_RECORD_LIMIT - 1} records; archive or deploy this data set before continuing.`,
-    );
-  }
-  const context = await relatedContext(rawRecords, subject);
-  const enriched = rawRecords.map((record) => {
-    const id = stringValue(record.id);
-    const score = context.scores.get(id);
-    return {
-      ...jsonRecord(record),
-      latestScore: score?.score ?? null,
-      save: record.save,
-    } as MutableRecord;
-  });
-  const matches = enriched.filter((record) => {
-    const company = context.companies.get(stringValue(record.companyId));
-    if (filters.status === 'all' && stringValue(record.status) === 'archived') {
-      return false;
-    }
-    return (
-      localReviewMatches(record, decision) &&
-      localSearchMatches(record, stringValue(company?.name), search) &&
-      matchesOpportunity(record, filters, { hasSkill: () => false })
-    );
-  });
-  const ordered = sortOpportunities(
-    matches,
-    filters.sort,
-    filters.sortDirection,
-  );
-  const page = ordered.slice(offset, offset + limit) as MutableRecord[];
-  return {
-    items: page.map((record) => opportunitySummary(record, context)),
-    limit,
-    offset,
-    total: ordered.length,
-    nextOffset:
-      offset + page.length < ordered.length ? offset + page.length : null,
-  };
-}
-
 function opportunitySummary(
   record: MutableRecord,
   context: Awaited<ReturnType<typeof relatedContext>>,
@@ -532,7 +440,7 @@ function opportunitySummary(
       minimum: record.salaryMin ?? null,
       maximum: record.salaryMax ?? null,
     },
-    score: score?.score ?? null,
+    score: record.discoveryMatchScore ?? score?.score ?? null,
     recommendation: stringValue(score?.recommendation),
     assessment,
     humanRating: record.humanRating ?? null,
@@ -599,21 +507,14 @@ export async function browseJobOpportunities(
   };
 
   const search = query || undefined;
-  if (getDbConfig().type === 'sqlite') {
-    return browseLocalJobOpportunities({
-      decision,
-      filters,
-      limit,
-      offset,
-      search,
-      subject: verifiedSubject,
-    });
-  }
-  const assessmentQueryContext =
-    await loadOpportunityAssessmentQueryContext(verifiedSubject);
+  const currentQualified = isOpportunityDiscovery(decision);
+  const assessmentQueryContext = currentQualified
+    ? null
+    : await loadOpportunityAssessmentQueryContext(verifiedSubject);
   const [total, ids] = await Promise.all([
     countOpportunityRecords({
       ...assessmentQueryContext,
+      ...(currentQualified ? { currentQualified } : {}),
       candidateSkills: [],
       filters,
       reviewFilter: decision,
@@ -622,6 +523,7 @@ export async function browseJobOpportunities(
     }),
     listOpportunityPageIds({
       ...assessmentQueryContext,
+      ...(currentQualified ? { currentQualified } : {}),
       candidateSkills: [],
       filters,
       limit,
@@ -642,10 +544,29 @@ export async function browseJobOpportunities(
   const ordered = ids
     .map((id) => byId.get(id))
     .filter((record): record is MutableRecord => Boolean(record));
-  const context = await relatedContext(ordered, verifiedSubject);
+  const context = await relatedContext(
+    ordered,
+    verifiedSubject,
+    currentQualified,
+  );
+  const matches = currentQualified
+    ? await listCurrentDiscoveryMatches(ids, verifiedSubject)
+    : null;
+  const items = ordered.flatMap((record) => {
+    if (!matches) return [opportunitySummary(record, context)];
+    const match = discoveryMatchForRecord(matches, record);
+    if (!match) return [];
+    return [
+      {
+        ...opportunitySummary(record, context),
+        score: match.score,
+        matchReasons: match.reasons,
+      },
+    ];
+  });
 
   return {
-    items: ordered.map((record) => opportunitySummary(record, context)),
+    items,
     limit,
     offset,
     total,
@@ -713,9 +634,14 @@ export async function nextJobTriageCandidate(
     filters,
     offset,
     search: query || undefined,
+    workspaceSubject: verifiedSubject,
   });
   const record = result.candidate as MutableRecord | null;
-  const context = await relatedContext(record ? [record] : [], verifiedSubject);
+  const context = await relatedContext(
+    record ? [record] : [],
+    verifiedSubject,
+    true,
+  );
 
   return {
     candidate: record ? opportunitySummary(record, context) : null,

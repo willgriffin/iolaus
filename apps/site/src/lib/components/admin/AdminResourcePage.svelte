@@ -40,6 +40,7 @@ import {
 } from '$lib/admin/header-actions';
 import { adminParentForPath } from '$lib/admin/navigation';
 import type { AdminListPagination } from '$lib/admin/pagination';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import type {
   AdminResource,
   ReferenceOption,
@@ -64,7 +65,6 @@ import {
 } from '$lib/opportunity-bulk-workflows';
 import {
   filterStateFromSearchParams,
-  OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
 import SourceControlList from '../sources/SourceControlList.svelte';
@@ -78,9 +78,8 @@ const TASK_VIEW_STORAGE_KEY = 'iolaus.admin.tasks.view';
 const TASK_COLLAPSED_LANES_STORAGE_KEY =
   'iolaus.admin.tasks.collapsedKanbanLanes';
 const opportunityReviewFilters = [
-  { label: 'All', value: 'all' },
-  { label: 'Unsorted', value: 'unsorted' },
-  { label: 'Screened out', value: OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER },
+  { label: 'All matches', value: 'all' },
+  { label: 'Undecided matches', value: 'unsorted' },
   { label: 'Applied', value: 'apply' },
   { label: 'Maybe', value: 'maybe' },
   { label: 'Rejected', value: 'reject' },
@@ -106,6 +105,7 @@ type TaskSubjectLink = {
 let { data, form, onRetry } = $props<{
   data: {
     activeReviewFilter: string;
+    matchingProgress?: MatchingDiscoveryProgress;
     activeTaskOwnerFilter: string;
     activeTaskStatusFilter: string;
     candidateSkills: string[];
@@ -1655,6 +1655,7 @@ function taskMeta(record: AdminRecord): string {
       {/if}
       <OpportunityCardList
         records={data.records}
+        matchingProgress={data.matchingProgress}
         candidateSkills={data.candidateSkills}
         selectedIds={selectedOpportunityIds}
         onSelectedIdsChange={setOpportunitySelection}

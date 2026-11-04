@@ -9,6 +9,7 @@ import { browser } from '$app/environment';
 import { page } from '$app/state';
 import type { AdminRecord } from '$lib/admin/dock';
 import type { AdminListPagination } from '$lib/admin/pagination';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import type {
   AdminResource,
   ReferenceOptionsByField,
@@ -38,6 +39,7 @@ type ResourcePageData = {
   error?: string | null;
   loading?: boolean;
   opportunityFilterOptions: OpportunityFilterOptions;
+  matchingProgress?: MatchingDiscoveryProgress;
   /** Carried through to the bulk actions; see `AdminResourceListPayload`. */
   opportunityQueryFingerprint?: string;
   referenceOptions: ReferenceOptionsByField;
@@ -70,9 +72,10 @@ const queryScope = adminResourceQueryScope(
   initialData.tenantId,
   initialData.user?.id,
 );
-const cachedPayload = browser
-  ? getCachedAdminResourceListPayload(queryScope)
-  : null;
+const cachedPayload =
+  browser && resourceSlug !== 'opportunities'
+    ? getCachedAdminResourceListPayload(queryScope)
+    : null;
 let acceptsPayload = true;
 let listFetchError = $state<string | null>(null);
 let listFetchPending = false;
@@ -100,7 +103,8 @@ function resourceDataFromPayload(
 function receiveListPayload(payload: AdminResourceListPayload): void {
   if (!acceptsPayload) return;
   listFetchError = null;
-  rememberAdminResourceListPayload(queryScope, payload);
+  if (resourceSlug !== 'opportunities')
+    rememberAdminResourceListPayload(queryScope, payload);
   currentData = resourceDataFromPayload(payload);
 }
 
@@ -140,15 +144,11 @@ const resourceCollection = createSmrtCollection(resourceDefinition, {
 // shell during SSR; the browser binding owns the subsequent authenticated read.
 const resourceView = browser ? liveCollection(resourceCollection) : null;
 const hydratedRecords = $derived.by(() => {
-  if (!resourceView?.isReady) return currentData.records;
-  const rows = resourceView.rows.map((record) => ({ ...record }));
-  if (resourceSlug !== 'opportunities') return rows;
-  // A live collection is keyed by id, not by the server's page ordering.
-  // Keep the authoritative filtered page order while accepting live row data.
-  const byId = new Map(rows.map((record) => [record.id, record]));
-  return currentData.records.map((record) =>
-    record.id ? (byId.get(record.id) ?? record) : record,
-  );
+  // Opportunity list rows and their match score arrive from the same server
+  // response. Raw catalog events cannot establish profile-specific eligibility.
+  if (resourceSlug === 'opportunities' || !resourceView?.isReady)
+    return currentData.records;
+  return resourceView.rows.map((record) => ({ ...record }));
 });
 const requestError = $derived(
   listFetchError ??
@@ -168,7 +168,8 @@ const hydratedData = $derived({
   ...currentData,
   error: requestError,
   loading: isInitialLoad,
-  records: hydratedRecords,
+  records:
+    resourceSlug === 'opportunities' && requestError ? [] : hydratedRecords,
   refreshing: isCachedRevalidation,
   stale:
     isCachedRevalidation || Boolean(requestError && currentData.records.length),
@@ -214,8 +215,33 @@ onMount(() => {
   // the server-filtered page and its authoritative total.
   const refresh = () => invalidateAdminResourceLists();
   window.addEventListener(ADMIN_RESOURCE_REFRESH_EVENT, refresh);
-  return () =>
+  const refreshMatching = () => {
+    if (
+      resourceSlug === 'opportunities' &&
+      ['pending', 'failed'].includes(
+        currentData.matchingProgress?.status ?? '',
+      ) &&
+      document.visibilityState === 'visible'
+    )
+      retryListLoad();
+  };
+  const timer =
+    resourceSlug === 'opportunities'
+      ? window.setInterval(refreshMatching, 5000)
+      : undefined;
+  const onVisible = () => {
+    if (
+      resourceSlug === 'opportunities' &&
+      document.visibilityState === 'visible'
+    )
+      retryListLoad();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
     window.removeEventListener(ADMIN_RESOURCE_REFRESH_EVENT, refresh);
+    document.removeEventListener('visibilitychange', onVisible);
+    window.clearInterval(timer);
+  };
 });
 
 onDestroy(() => {

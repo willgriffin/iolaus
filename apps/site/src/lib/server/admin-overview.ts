@@ -1,6 +1,5 @@
 import {
   type AdminOverview,
-  overviewOpportunity,
   prioritizeOverviewTasks,
 } from '$lib/admin/overview';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
@@ -12,10 +11,10 @@ import {
   serializeRecord,
 } from './admin-data';
 import {
+  discoveryMatchForRecord,
+  listCurrentDiscoveryMatches,
   listOpportunityPageIds,
-  loadCurrentSourceOpportunityEligibility,
 } from './admin-opportunity-query';
-import { loadOpportunityAssessmentReader } from './opportunity-assessment-store';
 import { listPrivateRecords } from './private-workspace';
 import {
   type CandidateWorkspaceSubject,
@@ -181,98 +180,65 @@ async function loadOverviewTasks(subject: CandidateWorkspaceSubject) {
 }
 
 async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
-  const [reader, sourceEligibility] = await Promise.all([
-    loadOpportunityAssessmentReader(subject),
-    loadCurrentSourceOpportunityEligibility(subject),
-  ]);
-  const list = (pending: boolean) =>
-    listOpportunityPageIds({
-      ...reader.query,
-      candidateSkills: [],
-      workspaceSubject: subject,
-      reviewFilter: 'unsorted',
-      scoreSource: 'assessment',
-      sourceEligibilitySnapshot: sourceEligibility,
-      filters: {
-        ...DEFAULT_OPPORTUNITY_FILTERS,
-        excludeExpired: true,
-        excludeStale: true,
-        eligibilityBuckets: pending
-          ? ['eligible', 'sponsorship_possible', 'unknown']
-          : ['eligible', 'sponsorship_possible'],
-        sort: pending ? 'newest' : 'score',
-      },
-      // Preserve the same ordered window as the former three pages of 30.
-      limit: 90,
-      offset: 0,
-    });
-  const [scoredIds, pendingIds] = await Promise.all([list(false), list(true)]);
-  const ids = [...new Set([...scoredIds, ...pendingIds])];
+  const ids = await listOpportunityPageIds({
+    candidateSkills: [],
+    currentQualified: true,
+    excludeApplications: true,
+    workspaceSubject: subject,
+    reviewFilter: 'unsorted',
+    filters: {
+      ...DEFAULT_OPPORTUNITY_FILTERS,
+      excludeExpired: true,
+      excludeStale: true,
+      sort: 'best',
+    },
+    limit: 6,
+    offset: 0,
+  });
   if (!ids.length) return { opportunities: [], pendingOpportunities: [] };
-
-  const [postings, applications] = await Promise.all([
-    listAdminRecords(requireAdminResource('opportunities'), {
+  const postings = await listAdminRecords(
+    requireAdminResource('opportunities'),
+    {
       where: { 'id in': ids },
       limit: ids.length,
       select: [
         'id',
         'title',
-        'status',
         'locations',
         'companyId',
         'sourceContentFingerprint',
         'sourceContentVersion',
       ],
-    }),
-    listPrivateRecords('Application', subject, {
-      where: { 'opportunityId in': ids },
-      select: [
-        'id',
-        'opportunityId',
-        'tenantId',
-        'ownerUserId',
-        'candidateProfileId',
-      ],
-    }),
+    },
+  );
+  const [names, matches] = await Promise.all([
+    companyNames(postings),
+    listCurrentDiscoveryMatches(ids, subject),
   ]);
-  const applicationsByOpportunity = new Set(
-    applications.map((row) => row.opportunityId),
-  );
-  const unclaimed = postings.filter(
-    (posting) => !applicationsByOpportunity.has(posting.id),
-  );
-  const [names, projections] = await Promise.all([
-    companyNames(unclaimed),
-    reader.project(
-      unclaimed.map((posting) => ({
-        id: posting.id,
-        sourceContentFingerprint: posting.sourceContentFingerprint,
-        sourceContentVersion: posting.sourceContentVersion,
-      })),
-    ),
-  ]);
-  const byId = new Map(
-    unclaimed.map((posting) => [
-      posting.id,
-      overviewOpportunity({
-        ...posting,
-        companyName: names.get(String(posting.companyId)),
-        location: posting.locations,
-        assessmentProjection: projections.get(String(posting.id)),
-      }),
-    ]),
-  );
-  const cards = (orderedIds: string[], pending: boolean, limit: number) =>
-    [...new Set(orderedIds)]
-      .flatMap((id) => {
-        const card = byId.get(id);
-        return card && (card.fitScore === null) === pending ? [card] : [];
-      })
-      .slice(0, limit);
-
+  const byId = new Map(postings.map((posting) => [posting.id, posting]));
   return {
-    opportunities: cards(scoredIds, false, 6),
-    pendingOpportunities: cards(pendingIds, true, 3),
+    opportunities: ids.flatMap((id) => {
+      const posting = byId.get(id);
+      const match = posting && discoveryMatchForRecord(matches, posting);
+      if (!posting || !match) return [];
+      return [
+        {
+          id,
+          title:
+            typeof posting.title === 'string'
+              ? posting.title
+              : 'Untitled opportunity',
+          company: names.get(String(posting.companyId)) ?? '',
+          location:
+            typeof posting.locations === 'string' ? posting.locations : '',
+          fitScore: match.score,
+          eligibility: 'Qualified',
+          readiness: 'Matches your preferences and requirements',
+          href: `/admin/opportunities/${encodeURIComponent(id)}`,
+        },
+      ];
+    }),
+    pendingOpportunities: [],
   };
 }
 

@@ -30,6 +30,10 @@ const mocks = vi.hoisted(() => {
     }),
     getAdminRecord: vi.fn(),
     listAdminRecords: vi.fn(),
+    listCurrentDiscoveryMatches: vi.fn(
+      async (ids: string[]) =>
+        new Map(ids.map((id) => [id, { score: 85, reasons: [] }])),
+    ),
     listComboOptions: vi.fn(),
     listOpportunityFilterOptions: vi.fn(),
     listOpportunityPageIds: vi.fn(),
@@ -211,7 +215,18 @@ vi.mock('./opportunity-triage', async (importOriginal) => ({
   loadTriageQueue: mocks.loadTriageQueue,
 }));
 
+vi.mock('./matching-projection-read.js', () => ({
+  getMatchingDiscoveryProgress: vi.fn(async () => ({
+    status: 'ready',
+    qualified: 0,
+  })),
+}));
 vi.mock('./admin-opportunity-query', () => ({
+  discoveryMatchForRecord: (
+    matches: Map<string, unknown>,
+    record: { id: string },
+  ) => matches.get(record.id),
+  listCurrentDiscoveryMatches: mocks.listCurrentDiscoveryMatches,
   countOpportunityRecords: mocks.countOpportunityRecords,
   createOpportunityQueryFingerprint: mocks.createOpportunityQueryFingerprint,
   listOpportunityFilterOptions: mocks.listOpportunityFilterOptions,
@@ -1237,6 +1252,11 @@ describe('admin-resource-route', () => {
       {
         limit: 100,
         where: { 'id in': pageIds },
+        select: expect.arrayContaining([
+          'title',
+          'sourceContentFingerprint',
+          'sourceContentVersion',
+        ]),
       },
     );
     expect(data.records).toHaveLength(100);
@@ -1259,6 +1279,48 @@ describe('admin-resource-route', () => {
     expect(mocks.listOpportunityFilterOptions).not.toHaveBeenCalled();
     expect(mocks.listComboOptions).not.toHaveBeenCalled();
     expect(mocks.listReferenceOptions).not.toHaveBeenCalled();
+  });
+
+  it('loads one selected match with its captured description and rechecks eligibility', async () => {
+    const { getAdminResource } = await import('$lib/admin/resources');
+    const { triageOpportunityAction } = await import('./admin-resource-route');
+    mocks.requireAdminResource.mockReturnValue(
+      getAdminResource('opportunities'),
+    );
+    mocks.listAdminRecords.mockResolvedValue([
+      {
+        id: 'posting',
+        descriptionRaw: 'Legacy summary',
+        sourceContentJson: JSON.stringify({
+          descriptionRaw: 'Full captured requirements',
+        }),
+      },
+    ]);
+    const request = () =>
+      postForm('/admin/opportunities', { opportunityId: 'posting' });
+
+    await expect(
+      triageOpportunityAction(request(), workspaceSubject),
+    ).resolves.toMatchObject({
+      record: {
+        id: 'posting',
+        descriptionRaw: 'Full captured requirements',
+        discoveryMatchScore: 85,
+      },
+    });
+    expect(mocks.listAdminRecords).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ slug: 'opportunities' }),
+      { limit: 1, where: { id: 'posting' } },
+    );
+    expect(mocks.listCurrentDiscoveryMatches).toHaveBeenCalledWith(
+      ['posting'],
+      workspaceSubject,
+    );
+
+    mocks.listCurrentDiscoveryMatches.mockResolvedValueOnce(new Map());
+    await expect(
+      triageOpportunityAction(request(), workspaceSubject),
+    ).resolves.toEqual({ record: null });
   });
 
   it('retains normalized q in the same count, page and fingerprint query, and narrows rows', async () => {
@@ -1703,6 +1765,11 @@ describe('admin-resource-route', () => {
       {
         limit: 2,
         where: { 'id in': pageIds },
+        select: expect.arrayContaining([
+          'title',
+          'sourceContentFingerprint',
+          'sourceContentVersion',
+        ]),
       },
     );
     expect(data.records.map((record) => record.id)).toEqual(pageIds);
@@ -1718,6 +1785,7 @@ describe('admin-resource-route', () => {
     expect(mocks.listOpportunityFilterOptions).toHaveBeenCalledWith(
       'unsorted',
       workspaceSubject,
+      true,
     );
     expect(data.pagination).toMatchObject({
       page: 2,
@@ -1829,7 +1897,7 @@ describe('admin-resource-route', () => {
     );
   });
 
-  it('supports explicitly viewing all opportunity review statuses', async () => {
+  it('supports explicitly viewing matches across review statuses', async () => {
     const records = [
       { humanReviewStatus: '', id: 'opp-empty', title: 'Empty' },
       { humanReviewStatus: 'apply', id: 'opp-apply', title: 'Apply' },
@@ -1865,6 +1933,13 @@ describe('admin-resource-route', () => {
     );
 
     expect(data.activeReviewFilter).toBe('all');
+    expect(mocks.countOpportunityRecords).toHaveBeenCalledWith(
+      expect.objectContaining({ currentQualified: true }),
+    );
+    expect(
+      mocks.loadOpportunityScreeningProjectionPages,
+    ).not.toHaveBeenCalled();
+    expect(data.records[0]?.discoveryMatchScore).toBe(85);
     expect(data.records.map((record) => record.id)).toEqual([
       'opp-empty',
       'opp-apply',
@@ -1950,7 +2025,7 @@ describe('admin-resource-route', () => {
     );
   });
 
-  it('loads latest evaluation scores in one batch for each opportunity page', async () => {
+  it('loads latest evaluation scores in one batch for deliberate review history', async () => {
     const records = [
       {
         id: 'opp-1',
@@ -2061,7 +2136,7 @@ describe('admin-resource-route', () => {
     );
     const data = await loadAdminResourcePageData(
       'opportunities',
-      new URL('http://localhost/admin/opportunities'),
+      new URL('http://localhost/admin/opportunities?review=apply'),
       workspaceSubject,
     );
 

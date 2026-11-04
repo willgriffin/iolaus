@@ -231,14 +231,43 @@ describe('opportunity data-surface actions', () => {
     const result = await adapter.preview(request(), { principal });
 
     expect(result.ok).toBe(true);
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
-      profileId: 'profile-1',
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(
+      ['opp-1'],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
+      'unsorted',
+    );
     // An explicit selection must not be bounded by how many rows the current
     // filter happens to match.
     expect(mocks.matchingIds).not.toHaveBeenCalled();
+  });
+
+  it('invalidates a preview when a match was replaced for the same posting', async () => {
+    const prior = {
+      id: 'opp-1',
+      updatedAt: '2026-09-02T08:00:00.000Z',
+      matchingRevision: 'prior',
+    };
+    mocks.revisionsByIds.mockResolvedValue([prior]);
+    const adapter = await createAdapter();
+    const preview = await adapter.preview(request(), { principal });
+    expect(preview.ok).toBe(true);
+    mocks.revisionsByIds.mockResolvedValue([
+      { ...prior, matchingRevision: 'new' },
+    ]);
+    const applied = await adapter.apply(
+      request({
+        phase: 'apply',
+        confirmationToken: preview.confirmationToken,
+        idempotencyKey: 'matching-replaced',
+      }),
+      { principal },
+    );
+    expect(applied).toMatchObject({ ok: false, reason: 'stale_preview' });
+    expect(mocks.updateReview).not.toHaveBeenCalled();
   });
 
   it('reports an explicit id that no longer exists as not_found', async () => {
@@ -266,11 +295,15 @@ describe('opportunity data-surface actions', () => {
     expect(mocks.pageIds).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 100, offset: 0 }),
     );
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
-      profileId: 'profile-1',
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(
+      ['opp-1'],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
+      'unsorted',
+    );
   });
 
   it('rejects a review payload with an unknown disposition', async () => {

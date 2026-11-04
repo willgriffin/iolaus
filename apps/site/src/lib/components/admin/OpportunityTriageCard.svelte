@@ -124,11 +124,13 @@ const hasCurrentPartialAssessment = $derived(
     ),
 );
 const score = $derived(
-  !unavailableCompleteReview &&
-    !completeReview &&
-    assessment.matchReadiness === 'assessable'
-    ? assessment.fitScore
-    : null,
+  typeof record.discoveryMatchScore === 'number'
+    ? record.discoveryMatchScore
+    : !unavailableCompleteReview &&
+        !completeReview &&
+        assessment.matchReadiness === 'assessable'
+      ? assessment.fitScore
+      : null,
 );
 const summary = $derived(str('descriptionSummary'));
 function skillEvidence(
@@ -246,10 +248,21 @@ const facts = $derived(
 
   <aside class="card-aside" aria-label={readOnly ? 'Posting facts' : 'Decision'}>
     {#if !readOnly}
+    {#if typeof record.discoveryMatchScore === 'number'}
+      <section class="panel" aria-label="Why this opportunity matches">
+        <h3>Why it matches</h3>
+        {#each (Array.isArray(record.discoveryMatchReasons) ? record.discoveryMatchReasons.slice(0, 5) : []) as reason}
+          <p>{reason}</p>
+        {:else}
+          <p>Matches your preferences and the posting’s requirements.</p>
+        {/each}
+        {#if opportunityId}<p><a href={`/admin/opportunities/${encodeURIComponent(opportunityId)}`}>Open full review</a></p>{/if}
+      </section>
+    {:else}
     <OpportunityScreeningSummary {record} />
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
-      <p>Eligibility: {assessmentEligibilityLabels[getOpportunityEligibilityProjection(record.sourceEligibilityProjection, record.assessmentProjection).buckets[0]]}</p>
+      <p>Eligibility: {typeof record.discoveryMatchScore === 'number' ? 'Qualified' : assessmentEligibilityLabels[getOpportunityEligibilityProjection(record.sourceEligibilityProjection, record.assessmentProjection).buckets[0]]}</p>
       {#if questionRank.enabled}<p>{questionReview ? questionScreeningLabel(questionReview) : 'Recommendation unknown'}</p>
       {:else if completeReview?.evidenceFit}
         <p>{completeReviewLabel(completeReview)}</p>
@@ -270,6 +283,7 @@ const facts = $derived(
       <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
+    {/if}
     {/if}
     <section class="panel" aria-label="Facts">
       <h3>Facts</h3>

@@ -12,6 +12,7 @@ import {
 import { browser } from '$app/environment';
 import type { AdminRecord } from '$lib/admin/dock';
 import type { AdminListPagination } from '$lib/admin/pagination';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import type {
   AdminResource,
   ReferenceOptionsByField,
@@ -47,6 +48,7 @@ export interface AdminResourceListPayload {
   candidateSkills: string[];
   comboOptions: Record<string, Array<{ label: string; value: string }>>;
   opportunityFilterOptions: OpportunityFilterOptions;
+  matchingProgress?: MatchingDiscoveryProgress;
   /**
    * Digest of the filter state this listing was resolved under (opportunities
    * only). A bulk action over "all matching rows" hands this back instead of a
@@ -174,6 +176,7 @@ export async function readAdminResourceListPayload(
     comboOptions: value.comboOptions ?? {},
     opportunityFilterOptions:
       value.opportunityFilterOptions ?? EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+    matchingProgress: value.matchingProgress,
     ...(typeof value.opportunityQueryFingerprint === 'string'
       ? { opportunityQueryFingerprint: value.opportunityQueryFingerprint }
       : {}),

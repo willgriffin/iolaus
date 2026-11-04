@@ -18,7 +18,7 @@ const ADMIN_PARENT_PATHS = [
     label: 'Resume',
   },
   {
-    match: /^\/admin\/preferences\/screening-questions(?:\/|$)/,
+    match: /^\/admin\/preferences\/(?:screening-questions|matching)(?:\/|$)/,
     href: '/admin/opportunities',
     label: 'Opportunities',
   },

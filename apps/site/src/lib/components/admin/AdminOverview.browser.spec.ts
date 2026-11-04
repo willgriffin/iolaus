@@ -33,7 +33,7 @@ it('keeps workspace links available while overview data streams', async () => {
   resolve({ tasks: [], opportunities: [], pendingOpportunities: [] });
   await vi.waitFor(() => {
     expect(target.textContent).toContain('No active tasks');
-    expect(target.textContent).toContain('No new assessed matches');
+    expect(target.textContent).toContain('No new matches');
     expect(target.textContent).not.toContain('Loading opportunities');
   });
 });

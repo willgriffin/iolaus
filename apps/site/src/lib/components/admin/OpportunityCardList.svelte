@@ -18,6 +18,7 @@ import {
 } from '$lib/admin/header-actions';
 import { OPPORTUNITY_LIST_REFRESH_STORAGE_KEY } from '$lib/admin/opportunity-list-refresh';
 import type { AdminListPagination } from '$lib/admin/pagination';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import {
   isTriageDeepLink,
   TRIAGE_SORT_URL_PARAM,
@@ -36,6 +37,7 @@ import {
   countActiveFilters,
   DEFAULT_OPPORTUNITY_FILTERS,
   filterStateFromSearchParams,
+  isOpportunityDiscovery,
   normalizeFilterState,
   getNumber as num,
   type OpportunityFilterOptions,
@@ -70,6 +72,7 @@ type SignalFilterKey =
 
 let {
   records,
+  matchingProgress,
   candidateSkills,
   activeReviewFilter,
   pagination,
@@ -91,6 +94,7 @@ let {
   onRetry,
 } = $props<{
   records: AdminRecord[];
+  matchingProgress?: MatchingDiscoveryProgress;
   candidateSkills: string[];
   activeReviewFilter: string;
   pagination: AdminListPagination;
@@ -644,7 +648,11 @@ function questionScreeningTooltip(record: AdminRecord): string {
   ].join(' ');
 }
 
+const discovery = $derived(isOpportunityDiscovery(activeReviewFilter));
+
 function scoreLabel(record: AdminRecord): string {
+  if (typeof record.discoveryMatchScore === 'number')
+    return `${record.discoveryMatchScore}/100 match`;
   const questionRank = currentQuestionScreeningRank(record);
   if (questionRank.enabled) {
     const questions = getCurrentQuestionScreeningProjection(
@@ -677,7 +685,39 @@ function scoreLabel(record: AdminRecord): string {
       : assessmentMatchReadinessLabel(assessment);
 }
 
+function scoreExplanation(record: AdminRecord): string {
+  if (typeof record.discoveryMatchScore === 'number') {
+    const reasons = record.discoveryMatchReasons;
+    return Array.isArray(reasons) && reasons.length
+      ? reasons.slice(0, 4).join(' ')
+      : 'Matches your preferences and the posting’s requirements.';
+  }
+  if (currentQuestionScreeningRank(record).enabled)
+    return questionScreeningTooltip(record);
+  if (hasUnavailableCompleteOpportunityReview(record))
+    return 'Saved complete review could not be validated for current material.';
+  if (
+    getCurrentCompleteOpportunityReview(
+      record.resumeFitReviewProjection,
+      record.completeReviewStatus,
+    )?.evidenceFit
+  )
+    return 'Current complete material review. Candidate support and source uncertainty are shown separately.';
+  const assessment = getOpportunityAssessmentProjection(
+    record.assessmentProjection,
+  );
+  if (
+    assessment.sourceStatus !== 'current' &&
+    getCurrentPartialOpportunityAssessmentProjection(
+      record.partialAssessmentProjection,
+    )
+  )
+    return 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.';
+  return assessmentCoverageMessages(assessment).join(' ');
+}
+
 function eligibilityLabel(record: AdminRecord): string {
+  if (typeof record.discoveryMatchScore === 'number') return 'Qualified';
   const bucket = getOpportunityEligibilityProjection(
     record.sourceEligibilityProjection,
     record.assessmentProjection,
@@ -864,6 +904,19 @@ function clearBulkSelection(): void {
         Select this page
       </label>
       {#if visibleRecords.length > 0 || !error}
+        {#if matchingProgress?.status === 'pending'}
+          <p role="status">Checking postings against your profile. Matches will appear as they’re ready.</p>
+        {:else if matchingProgress?.status === 'missing-preferences'}
+          <p role="status">Add the roles and locations you’re looking for in <a href="/admin/preferences/matching">Matching preferences</a> to see matches.</p>
+        {:else if matchingProgress?.status === 'needs-evidence'}
+          <p role="status">Add or update your résumé evidence and check your <a href="/admin/preferences/screening-questions">required screening questions</a> so we can confirm more matches.</p>
+        {:else if matchingProgress?.status === 'failed'}
+          <p role="status">Some postings could not be checked. Matching will retry in the background.
+            {#if onRetry}<button type="button" onclick={onRetry}>Refresh matches</button>{/if}
+          </p>
+        {:else if matchingProgress?.status === 'ready' && !visibleRecords.length}
+          <p role="status">No confirmed matches with these filters. Some postings may be missing information needed to check their requirements. You can change your <a href="/admin/preferences/matching">matching preferences</a>.</p>
+        {/if}
         <CollectionList
           items={visibleRecords} itemKey="id" title="title"
           layout="list"
@@ -883,7 +936,7 @@ function clearBulkSelection(): void {
         <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
         <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
         <span class="eligibility-label">{eligibilityLabel(record)}</span>
-        <span title={currentQuestionScreeningRank(record).enabled ? questionScreeningTooltip(record) : hasUnavailableCompleteOpportunityReview(record) ? 'Saved complete review could not be validated for current material.' : getCurrentCompleteOpportunityReview(record.resumeFitReviewProjection, record.completeReviewStatus)?.evidenceFit ? 'Current complete material review. Candidate support and source uncertainty are shown separately.' : getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        <span title={scoreExplanation(record)}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
@@ -934,11 +987,13 @@ function clearBulkSelection(): void {
             <span>Sort</span>
             <select value={filters.sort} aria-label="Sort opportunities" onchange={setSort}>
               <option value="best">Best fit</option>
-              <option value="eligibility">Eligibility for your work location</option>
-              <option value="cited_support">Cited support</option>
-              <option value="recommendation">Recommendation</option>
+              {#if !discovery}
+                <option value="eligibility">Eligibility for your work location</option>
+                <option value="cited_support">Cited support</option>
+                <option value="recommendation">Recommendation</option>
+              {/if}
               <option value="newest">Newest</option>
-              <option value="score">AI score</option>
+              <option value="score">{discovery ? 'Match score' : 'AI score'}</option>
               <option value="salary">Salary</option>
               <option value="rating">My rating</option>
             </select>
@@ -1061,6 +1116,7 @@ function clearBulkSelection(): void {
             </button>
           </div>
 
+          {#if !discovery}
           <span class="field-label">Eligibility for your work location</span>
           <div class="toggle-row" role="group" aria-label="Eligibility for your work location">
             <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('eligible')} onclick={() => toggleEligibilityBucket('eligible')}>Eligible for your work location</button>
@@ -1076,6 +1132,7 @@ function clearBulkSelection(): void {
             <button type="button" class:active={filters.fit === 'have'} onclick={() => setFilters({ ...filters, fit: 'have' })}>Reviewed criteria supported</button>
             <button type="button" class:active={filters.fit === 'gaps'} onclick={() => setFilters({ ...filters, fit: 'gaps' })}>Needs evidence</button>
           </div>
+          {/if}
           {#if filterOptions.skills.length}
             <div
               class="skill-search"
