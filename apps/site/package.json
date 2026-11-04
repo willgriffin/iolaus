@@ -43,6 +43,8 @@
     "account:delete": "tsx scripts/account.ts delete",
     "account:deletions": "tsx scripts/account.ts deletions",
     "jobs:worker": "tsx scripts/jobs-worker.ts",
+    "matching:source-enrich": "tsx --tsconfig tsconfig.runtime.json scripts/matching-source-enrich.ts",
+    "matching:worker": "tsx --tsconfig tsconfig.runtime.json scripts/matching-worker.ts",
     "deployment:monitor": "tsx scripts/deployment-monitor.ts",
     "opportunities:crawl": "tsx scripts/crawl-opportunity-sources.ts",
     "sources:crawl-due": "tsx scripts/crawl-due-sources.ts",

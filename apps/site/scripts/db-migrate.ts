@@ -42,6 +42,7 @@ import {
   validateTagIntegrityGuards,
 } from '../src/lib/server/tag-integrity.js';
 import { ensureOpportunityListQueryIndexes } from '../src/lib/server/admin-opportunity-query.js';
+import { ensureMatchingProjectionSchema } from '../src/lib/server/matching-projection-schema.js';
 import { ensureOpportunityAnalysisSchema } from '../src/lib/server/opportunity-analysis-schema.js';
 import { ensurePublicSearchSchema } from '../src/lib/server/public-search/schema.js';
 import { ensureOpportunityAnalysisMaintenanceSchema } from '../src/lib/server/opportunity-analysis-maintenance.js';
@@ -170,6 +171,7 @@ const {
   await ensureNativeAuthUniqueIndexes(migration.db);
   const initialized = await initializeSmrtCollections(database);
   await ensureOpportunityAnalysisSchema(migration.db);
+  await ensureMatchingProjectionSchema(migration.db);
   await ensureSeedSkillVocabulary();
   await ensureOpportunityAnalysisMaintenanceSchema(migration.db);
   await ensurePublicSearchSchema(migration.db, 'postgres');

@@ -7,7 +7,7 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v2';
+export const MATCHING_POLICY_VERSION = 'normalized-v4';
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -825,8 +825,8 @@ function sameGroup(
   left: readonly Qualification[],
   right: readonly Qualification[],
 ) {
-  const key = ({ slug, years, context }: Qualification) =>
-    JSON.stringify([slug, years, context]);
+  const key = ({ slug, label, years, context }: Qualification) =>
+    JSON.stringify([slug || phrase(label ?? ''), years, context]);
   return (
     JSON.stringify(left.map(key).sort()) ===
     JSON.stringify(right.map(key).sort())
@@ -960,20 +960,33 @@ function supportedExtractionGroup(
   const proofs = input.alternatives
     .flatMap(({ capability, years, context }) => {
       const citation = sourceSpan(raw, capability);
-      const slug = citation && vocabulary.aliases.get(phrase(citation.text));
-      return slug &&
-        citation?.field === 'description' &&
-        citation.start >= clause.start &&
-        citation.end <= clause.end
-        ? [
-            {
-              citation,
-              slug,
-              years: years ?? undefined,
-              context: context ?? undefined,
-            },
-          ]
-        : [];
+      if (
+        citation?.field !== 'description' ||
+        citation.start < clause.start ||
+        citation.end > clause.end
+      )
+        return [];
+      const slug = vocabulary.aliases.get(phrase(citation.text));
+      // A quoted but ungoverned atomic term can still occupy a verified
+      // alternative. It cannot prove any capability, and compound or
+      // otherwise ambiguous unknown text cannot hide a conjunct.
+      if (
+        !slug &&
+        (!/^[\p{L}\p{N}][\p{L}\p{N} .+#()-]{0,69}$/u.test(citation.text) ||
+          omittedLogic.test(citation.text) ||
+          supplementalLimit.test(citation.text) ||
+          independentHardCue.test(citation.text))
+      )
+        return [];
+      return [
+        {
+          citation,
+          slug: slug ?? '',
+          label: slug ? vocabulary.labels.get(slug) : citation.text,
+          years: years ?? undefined,
+          context: context ?? undefined,
+        },
+      ];
     })
     .sort((left, right) => left.citation.start - right.citation.start);
   if (
@@ -985,8 +998,9 @@ function supportedExtractionGroup(
     )
   )
     return undefined;
-  const mapped = proofs.map(({ slug, years, context }) => ({
+  const mapped = proofs.map(({ slug, label, years, context }) => ({
     slug,
+    label,
     years,
     context,
   }));
@@ -1587,7 +1601,7 @@ export function normalizeMatchingPosting(
       citation,
       alternatives: alternatives.map((atom) => ({
         ...atom,
-        label: vocabulary.labels.get(atom.slug),
+        label: vocabulary.labels.get(atom.slug) ?? atom.label,
       })),
     }));
   return {
@@ -1978,6 +1992,7 @@ function evidenceFit(
   requirement: Qualification,
   candidate: NormalizedMatchingCandidate,
 ) {
+  if (!requirement.slug) return { outcome: 'unknown', citations: [] } as const;
   const positives: Citation[] = [];
   const negatives: Citation[] = [];
   const partials: Citation[] = [];

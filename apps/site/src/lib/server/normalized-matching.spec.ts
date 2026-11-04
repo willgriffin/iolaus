@@ -673,6 +673,86 @@ describe('normalized matching from raw text', () => {
     ).toBe('qualified');
   });
 
+  it('keeps ungoverned atomic alternatives unknown without vetoing proven OR choices', () => {
+    const graph = compileMatchingVocabulary([
+      { slug: 'go', label: 'Go' },
+      { slug: 'rust', label: 'Rust' },
+    ]);
+    const or = 'Experience with production-level Go, Rust, or Scala';
+    const and = 'Knowledge of an unmapped runtime';
+    const description = `Basic qualifications:\n${or}\n${and}`;
+    const raw = { ...posting, description };
+    const span = (quote: string) => ({
+      field: 'description' as const,
+      start: description.indexOf(quote),
+      quote,
+    });
+    const extraction = (includeConjunct: boolean) =>
+      parseMatchingSourceExtraction(
+        {
+          coverage: 'complete',
+          role: null,
+          geography: null,
+          noRequirements: null,
+          required: [
+            {
+              clause: span(or),
+              alternatives: ['Go', 'Rust', 'Scala'].map((name) => ({
+                capability: span(name),
+                years: null,
+                context: 'production',
+              })),
+            },
+            ...(includeConjunct
+              ? [
+                  {
+                    clause: span(and),
+                    alternatives: [
+                      {
+                        capability: span('an unmapped runtime'),
+                        years: null,
+                        context: null,
+                      },
+                    ],
+                  },
+                ]
+              : []),
+          ],
+          preferred: [],
+          unresolved: [],
+        },
+        raw,
+      );
+    const proof = (text: string) =>
+      normalizeMatchingCandidate(
+        { ...candidate, evidence: [fact(text)] },
+        graph,
+      );
+    const choiceOnly = normalizeMatchingPosting(
+      { ...raw, description: `Basic qualifications:\n${or}` },
+      graph,
+      extraction(false),
+    );
+    expect(choiceOnly.required[0]?.alternatives).toContainEqual(
+      expect.objectContaining({ slug: '', label: 'Scala' }),
+    );
+    expect(
+      evaluateNormalizedMatch(
+        choiceOnly,
+        proof('Production experience with Go'),
+      ).status,
+    ).toBe('qualified');
+    expect(
+      evaluateNormalizedMatch(choiceOnly, proof('Experience with Go')).status,
+    ).toBe('insufficient-evidence');
+    expect(
+      evaluateNormalizedMatch(
+        normalizeMatchingPosting(raw, graph, extraction(true)),
+        proof('Production experience with Go'),
+      ).status,
+    ).toBe('insufficient-evidence');
+  });
+
   it('requires duration and usage context to come from applicable, attributable evidence', () => {
     const source = {
       description:

@@ -31,6 +31,7 @@ const TECHNOLOGY_SKILLS = [
   'Go',
   'Golang',
   'Rust',
+  'Scala',
   'C++',
   'C#',
   '.NET',
