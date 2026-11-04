@@ -193,9 +193,14 @@ async function decode(
 async function storedRows(
   db: Database,
   subject: WorkspaceSubject,
+  enabledOnly = false,
 ): Promise<Record<string, unknown>[]> {
+  const activeFilter = enabledOnly ? ' AND active IS NOT FALSE' : '';
+  const rowLimit = enabledOnly
+    ? ` LIMIT ${SCREENING_QUESTION_MAX_ACTIVE + 1}`
+    : '';
   const found = await db.query(
-    `SELECT id, tenant_id, owner_user_id, candidate_profile_id, category, name, description, active, rule_json FROM preference_rules WHERE ${where} ORDER BY id ASC`,
+    `SELECT id, tenant_id, owner_user_id, candidate_profile_id, category, name, description, active, rule_json FROM preference_rules WHERE ${where}${activeFilter} ORDER BY id ASC${rowLimit}`,
     [...ownership(subject), SCREENING_QUESTION_RULE_CATEGORY],
   );
   if (
@@ -214,10 +219,11 @@ async function storedRows(
 async function snapshot(
   db: Database,
   subject: WorkspaceSubject,
+  enabledOnly = false,
 ): Promise<ScreeningQuestionSnapshot> {
   const questions: ScreeningQuestion[] = [];
   const invalidQuestions: ScreeningQuestionSnapshot['invalidQuestions'] = [];
-  for (const row of await storedRows(db, subject)) {
+  for (const row of await storedRows(db, subject, enabledOnly)) {
     try {
       questions.push(await decode(row, subject));
     } catch {
@@ -233,6 +239,11 @@ async function snapshot(
     }
   }
   const errors: string[] = [];
+  if (
+    enabledOnly &&
+    questions.length + invalidQuestions.length > SCREENING_QUESTION_MAX_ACTIVE
+  )
+    errors.push('Too many enabled screening question records.');
   if (
     questions.length + invalidQuestions.length >
     SCREENING_QUESTION_MAX_STORED
@@ -256,6 +267,17 @@ async function snapshot(
     invalidQuestions,
     errors,
   };
+}
+
+/**
+ * The matching worker has already verified the selected workspace and owns the
+ * executor's snapshot. Keep the same persisted-question validation as review.
+ */
+export async function loadMatchingScreeningQuestions(
+  db: Database,
+  subject: WorkspaceSubject,
+): Promise<ScreeningQuestionSnapshot> {
+  return await snapshot(db, requireWorkspaceSubject(subject), true);
 }
 /** Defaults are suggestions, never persisted by this read. */
 export async function listScreeningQuestions(
