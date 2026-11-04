@@ -9,6 +9,7 @@
     "preview": "node build",
     "check": "pnpm mcp:build-app-resource && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc --project tsconfig.release.json",
     "test": "pnpm mcp:build-app-resource && vitest run --exclude 'src/lib/components/sources/*.browser.spec.ts' && pnpm test:resume-import-extraction && pnpm test:mcp-apps && pnpm test:browser",
+    "test:hosted-smoke": "tsx --tsconfig tsconfig.runtime.json e2e/hosted-smoke.ts",
     "test:browser": "vitest --config vitest.browser.config.ts run",
     "test:resume-import-extraction": "node --test scripts/resume-import-extraction.spec.mjs",
     "test:source-crawl-quarantine:db": "SOURCE_CRAWL_ITEM_QUARANTINE_DB=1 vitest run src/lib/server/source-crawl-item-quarantine.integration.spec.ts",

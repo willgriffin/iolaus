@@ -77,3 +77,30 @@ The supported logical portability command currently carries filesystem assets
 only. Do not use `pnpm app:export` for an S3-backed source. A one-time S3 to
 S3 handover needs a separately reviewed read-only database dump, object mirror,
 and hash/count verification receipt before the canonical target is started.
+
+## Shared-hosted regression smoke test
+
+Run this check on a fresh, disposable loopback PostgreSQL 17 database before
+testing a shared-hosted change in production. Use a database named
+`iolaus_hosted_smoke` or a name starting with `iolaus_hosted_smoke_`. The
+fixture migrates the schema and seeds two synthetic workspaces, a restricted
+public-search reader and more than 10,000 fictional postings.
+
+```sh
+pnpm --filter @willgriffin/iolaus-site build
+pnpm --filter @willgriffin/iolaus-site exec playwright install chromium
+HOSTED_SMOKE_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/iolaus_hosted_smoke \
+  pnpm --filter @willgriffin/iolaus-site test:hosted-smoke
+```
+
+CI runs the same check alongside the private SQLite browser suite. The smoke
+test starts the built server in shared mode and uses native synthetic sessions.
+It covers the guest authentication boundary, public search, admin Home
+streaming, Opportunities list hydration, Best-fit triage, and the operator and
+member sweep paths. A successful operator preview must leave archive and audit
+state intact. A separate identity-provider integration test covers
+authentication provisioning.
+
+The fixture catches failed responses and missing data. Use the native query
+benchmarks and the local production-shaped copy for performance measurements.
+Keep the synthetic CI fixture separate from that copy.

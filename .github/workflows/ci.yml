@@ -78,6 +78,17 @@ jobs:
   mobile-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres-hosted-smoke:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: iolaus_hosted_smoke
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U postgres -d iolaus_hosted_smoke"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,6 +101,11 @@ jobs:
           --with-deps chromium
       - run: pnpm test:e2e
       - run: pnpm test:e2e:check
+      - name: Verify shared-hosted browser routes on PostgreSQL
+        env:
+          HOSTED_SMOKE_DATABASE_URL: >-
+            postgresql://postgres@127.0.0.1:5432/iolaus_hosted_smoke
+        run: pnpm --filter @willgriffin/iolaus-site test:hosted-smoke
       - name: Verify OAuth consent and account settings in Chromium
         env:
           IOLAUS_OAUTH_BROWSER_TEST: '1'
