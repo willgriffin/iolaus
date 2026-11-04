@@ -352,7 +352,11 @@ async function profileWork(
       'UPDATE matching_worker_cursor SET profile_cursor = ? WHERE id = 1',
       [scan.length === PROFILE_SCAN_BATCH ? text(scan.at(-1)?.profile_id) : ''],
     );
-    return { evaluated: 0, profileBacklog: scan.length === PROFILE_SCAN_BATCH };
+    return {
+      evaluated: 0,
+      profileBacklog:
+        scan.length === PROFILE_SCAN_BATCH || Boolean(cursor.profile_cursor),
+    };
   }
   const scope = {
     profileId: text(profile.profile_id),
