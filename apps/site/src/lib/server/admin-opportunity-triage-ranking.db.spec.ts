@@ -551,6 +551,33 @@ function runSuite(
       ]);
     });
 
+    it('loads the unsorted count and queue window when matching refresh is unavailable', async () => {
+      const { countOpportunityRecords, listOpportunityPageIds } = await import(
+        './admin-opportunity-query'
+      );
+      const opportunityTable =
+        config.type === 'postgres' ? 'pg_temp.opportunities' : 'opportunities';
+      await database.query(`WITH RECURSIVE catalog(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM catalog WHERE n < 11000
+      )
+      INSERT INTO ${opportunityTable} (id, status, freshness)
+      SELECT 'catalog-' || CAST(n AS TEXT), 'found', 'fresh' FROM catalog`);
+      const refresh = vi.mocked(refreshOpportunityMatches);
+      refresh.mockRejectedValue(new Error('Matching catalog is unavailable.'));
+      try {
+        const unsorted = { ...query(), filters: DEFAULT_OPPORTUNITY_FILTERS };
+        await expect(
+          countOpportunityRecords(unsorted),
+        ).resolves.toBeGreaterThanOrEqual(11000);
+        await expect(
+          listOpportunityPageIds({ ...unsorted, limit: 3, offset: 0 }),
+        ).resolves.toEqual(['reject-100', 'recommend-96', 'score-96-tie']);
+        expect(refresh).not.toHaveBeenCalled();
+      } finally {
+        refresh.mockReset();
+      }
+    });
+
     it('reads assessment score order without refreshing recommendation ranks', async () => {
       const { listOpportunityPageIds } = await import(
         './admin-opportunity-query'
