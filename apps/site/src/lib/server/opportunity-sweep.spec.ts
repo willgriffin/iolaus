@@ -122,6 +122,8 @@ describe('opportunity-sweep', () => {
       archivedCount: 0,
       count: 3,
     });
+    expect(result.message).toContain('Nothing was changed.');
+    expect(result.message).not.toContain('confirm to archive');
     expect(mocks.query).toHaveBeenCalledTimes(2);
     expect(mocks.transaction).not.toHaveBeenCalled();
     expect(mocks.recordAgentAudit).not.toHaveBeenCalled();

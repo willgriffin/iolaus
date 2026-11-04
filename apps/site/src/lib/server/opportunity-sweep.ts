@@ -258,7 +258,8 @@ export async function sweepInactiveSourceOpportunities(
 ): Promise<OpportunitySweepResult> {
   const { isSharedHosted } = await import('./app-config.js');
   const dryRun = options.dryRun !== false;
-  if (isSharedHosted()) {
+  const shared = isSharedHosted();
+  if (shared) {
     if (!dryRun || !options.allowSharedOperatorPreview)
       error(
         403,
@@ -329,7 +330,7 @@ export async function sweepInactiveSourceOpportunities(
       message:
         count === 0
           ? `No opportunities under an inactive source have gone unseen for ${notSeenDays} days.`
-          : `${count} opportunities under an inactive source have gone unseen for ${notSeenDays} days. Nothing was changed; confirm to archive them.`,
+          : `${count} opportunities under an inactive source have gone unseen for ${notSeenDays} days. ${shared ? 'Nothing was changed.' : 'Nothing was changed; confirm to archive them.'}`,
       lockedCount: 0,
       reviewTasksClosed: 0,
       sample,
