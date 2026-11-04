@@ -7,7 +7,7 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v4';
+export const MATCHING_POLICY_VERSION = 'normalized-v5';
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -745,13 +745,17 @@ const preferredHeader =
   /^(?:preferred(?: skills| qualifications| experience| skills and experience)?|nice[- ]to[- ]haves?|bonus(?: skills| points)?|bonus points (?:if|for)|desired qualifications|optional qualifications|it.d be great if you (?:have|also have))\s*[:：]?\s*$/iu;
 const dutiesHeader =
   /^(?:responsibilities|(?:key|job|role) responsibilities|duties|what (?:you.ll|you will) (?:do|be doing)|your (?:impact|mission)|how you.ll make an impact|about (?:us|the (?:role|team|job|company|position))|the (?:role|opportunity|team)|who we are|what is the role)\s*[:：]?\s*$/iu;
+const explicitDutiesHeader =
+  /^(?:responsibilities|(?:key|job|role) responsibilities|duties|what (?:you.ll|you will) (?:do|be doing))\s*[:：]?\s*$/iu;
 const administrativeHeader =
   /^(?:(?:our )?benefits(?: and (?:compensation|perks)| built for you)?|perks(?: and benefits)?|compensation(?: and benefits| range)?|total rewards|(?:(?:base|annual|local|[a-z]{2}) )?(?:pay|salary) range|base (?:salary|pay)|salary|equity (?:grant|compensation)|what we offer|what.s in it for you|why (?:join|work with|work for) us|how to apply|application (?:process|deadline)|(?:recruiting|interview) process|(?:our |about our )?hiring process|hiring and how we work|equal (?:employment )?opportunit(?:y|ies)(?: statement| employer)?|diversity (?:and|&) inclusion|our commitment to (?:diversity|inclusion)|accommodations|reasonable accommodation|privacy(?: notice| statement)|candidate privacy(?: notice)?)\s*[:：]?\s*$/iu;
 // These predicates identify actual employment conditions even in footer prose.
 const employmentCondition =
   /\b(?:(?:candidates?|applicants?|you|employees?) (?:will |also )?(?:must|are required to|is required to|need to)|must (?:also |currently )?(?:be|have|hold|possess|work|live|reside|travel|speak|demonstrate|pass|provide|maintain|complete|meet|commit)|(?:employment|hire|offer) is (?:conditional|contingent)|(?:existing|valid|unrestricted) (?:work authori[sz]ation|security clearance)|(?:work|visa) sponsorship (?:is not|not|(?:is )?unavailable)|(?:we|the company) (?:cannot|can not|do not|don.t|will not|won.t) sponsor|right to work|authori[sz]ed to work|willingness to travel|(?:required|expected) to travel|only (?:candidates|applicants) (?:in|based|located)|(?:will|must) require (?:travel|relocation)|required (?:work|office) hours)\b/iu;
+const essentialCondition =
+  /\b(?:you(?:['’]ll| will) need(?: to)?|you need to|(?:is|are) essential|essential (?:qualifications|requirements|skills|experience))\b/iu;
 const hardLanguage =
-  /\b(?:must|required|mandatory|minimum|at least|work authori[sz]ation|citizenship|background check|clearance|licen[cs]e|certification|degree|on[- ]call|weekends?|relocation|time ?zones?|working hours|business hours|office attendance|shift)\b/iu;
+  /\b(?:must|required|mandatory|essential|minimum|at least|work authori[sz]ation|citizenship|background check|clearance|licen[cs]e|certification|degree|on[- ]call|weekends?|relocation|time ?zones?|working hours|business hours|office attendance|shift)\b/iu;
 const administrativeProse =
   /^(?:we are (?:an? )?equal (?:employment )?opportunity employer|all qualified applicants will receive consideration|qualified applicants will be considered without regard|if you (?:require|need) (?:a reasonable )?accommodation|in accordance with (?:applicable|local|state) law|the (?:base )?(?:salary|pay|compensation)(?: range)? (?:for|is|listed))\b/iu;
 const optionalLanguage =
@@ -857,7 +861,7 @@ const supplementalLimit =
 const omittedLogic =
   /\b(?:and|or|plus|as well as|together with|along with|no|not|never|without|unless|except|excluding|instead of|equivalent to)\b|[,;&|/]/iu;
 const independentHardCue =
-  /\b(?:must|required|mandatory|minimum|at least|only candidates|condition of employment)\b/iu;
+  /\b(?:must|required|mandatory|essential|minimum|at least|only candidates|condition of employment)\b/iu;
 
 function hasGovernedCapabilityOutsideProof(
   value: string,
@@ -1013,6 +1017,7 @@ function supportedExtractionGroup(
   if (
     !hard &&
     (employmentCondition.test(clause.text) ||
+      essentialCondition.test(clause.text) ||
       independentHardCue.test(clause.text) ||
       requiredHeader.test(header))
   )
@@ -1063,6 +1068,7 @@ function coversRequirementLine(
   if (
     prefix &&
     !requiredHeader.test(prefixHeader) &&
+    !preferredHeader.test(prefixHeader) &&
     !/^[(*_#]+$/u.test(prefix)
   )
     return false;
@@ -1246,6 +1252,7 @@ function nonRequirementLine(
   const line = extractedDescriptionLine(raw, lines, span);
   return line &&
     !employmentCondition.test(line.text) &&
+    !essentialCondition.test(line.text) &&
     !independentHardCue.test(line.text) &&
     !requiredInAdministrativeText.test(line.text) &&
     !supplementalLimit.test(line.text) &&
@@ -1254,6 +1261,52 @@ function nonRequirementLine(
     )
     ? line.citation
     : undefined;
+}
+
+function postingHeading(text: string) {
+  const header = text.match(
+    /^(?:#{1,6}\s*)?(?:\*\*)?([^:：]+?)(?:\*\*)?(?:\s*[:：]\s*(.*))?$/u,
+  );
+  return {
+    head: header?.[1]?.trim() ?? '',
+    tail: header?.[2]?.replace(/^\*\*\s*/u, '').trim(),
+  };
+}
+
+function sameSourceLine(left: Citation, right: Citation) {
+  return (
+    left.field === right.field &&
+    left.start === right.start &&
+    left.end === right.end
+  );
+}
+
+function hasCompleteDescriptionCoverage(
+  lines: ReturnType<typeof descriptionLines>,
+  verifiedGroups: readonly VerifiedExtractionGroup[],
+  supportedLines: readonly Citation[],
+) {
+  let inNonRequirementSection = false;
+  return lines.every(({ text, citation }) => {
+    const { head, tail } = postingHeading(text);
+    const administrative = administrativeHeader.test(head);
+    const duties = dutiesHeader.test(head);
+    const requirement = requiredHeader.test(head) || preferredHeader.test(head);
+    if (administrative || duties || requirement) {
+      // A general section such as "About the role" can contain requirements.
+      // Only an explicit duties/administrative section accounts for its prose.
+      inNonRequirementSection =
+        administrative || explicitDutiesHeader.test(head);
+      if (!tail) return true;
+    } else if (administrativeProse.test(text)) {
+      inNonRequirementSection = true;
+    }
+    return (
+      inNonRequirementSection ||
+      supportedLines.some((proof) => sameSourceLine(proof, citation)) ||
+      coversRequirementLine(citation, verifiedGroups)
+    );
+  });
 }
 
 function mergeSourceExtraction(
@@ -1277,21 +1330,24 @@ function mergeSourceExtraction(
         sameGroup(alternatives, group.alternatives),
       ),
   );
-  const newPreferred = extraction.preferred.flatMap((group) => {
+  const verifiedPreferred = extraction.preferred.flatMap((group) => {
     const supported = supportedExtractionGroup(
       raw,
       lines,
       group,
       vocabulary,
       false,
-    )?.selected;
-    return supported &&
-      !posting.preferred.some(({ alternatives }) =>
-        sameGroup(alternatives, supported.alternatives),
-      )
-      ? [supported]
-      : [];
+    );
+    return supported ? [supported] : [];
   });
+  const newPreferred = verifiedPreferred
+    .map(({ selected }) => selected)
+    .filter(
+      (group) =>
+        !posting.preferred.some(({ alternatives }) =>
+          sameGroup(alternatives, group.alternatives),
+        ),
+    );
   const noHard =
     extraction.noRequirements && sourceSpan(raw, extraction.noRequirements);
   const emptyAttested =
@@ -1354,22 +1410,41 @@ function mergeSourceExtraction(
       )
         ? declaredGeography
         : undefined));
+  // Only a provider-assisted recovery of missing deterministic requirements
+  // coverage needs whole-description accounting. Known hard lines still have
+  // their independent proof gate whether or not recovery is needed.
+  const incomplete = posting.uncertainties.some(
+    ({ code }) => code === 'posting-requirements-incomplete',
+  );
+  const mayClearIncomplete =
+    complete &&
+    (!incomplete ||
+      hasCompleteDescriptionCoverage(
+        lines,
+        [...recovered, ...verifiedPreferred],
+        [
+          ...employerLines,
+          ...posting.preferred.map(({ citation }) => citation),
+          ...(roleConflict
+            ? []
+            : [posting.role?.citation, declaredRole?.citation]),
+          ...(geographyConflict
+            ? []
+            : [posting.geography?.citation, declaredGeography?.citation]),
+          ...(emptyAttested ? [noHard] : []),
+        ].filter((citation): citation is Citation => !!citation),
+      ));
   const uncertainties = posting.uncertainties.filter(({ code, citations }) => {
     if (code === 'posting-role-unknown' && role) return false;
     if (code === 'posting-geography-unknown' && geography) return false;
-    if (code === 'posting-requirements-incomplete') return !complete;
+    if (code === 'posting-requirements-incomplete') return !mayClearIncomplete;
     if (code !== 'posting-requirement-unknown' || !complete) return true;
     return (
       !citations.length ||
       !citations.every(
         (citation) =>
           coveredLine(citation) ||
-          employerLines.some(
-            (line) =>
-              line.field === citation.field &&
-              line.start === citation.start &&
-              line.end === citation.end,
-          ),
+          employerLines.some((line) => sameSourceLine(line, citation)),
       )
     );
   });
@@ -1463,11 +1538,7 @@ export function normalizeMatchingPosting(
     | 'administrative'
     | undefined;
   for (const { text, citation } of lines) {
-    const header = text.match(
-      /^(?:#{1,6}\s*)?(?:\*\*)?([^:：]+?)(?:\*\*)?(?:\s*[:：]\s*(.*))?$/u,
-    );
-    const head = header?.[1]?.trim() ?? '';
-    const tail = header?.[2]?.replace(/^\*\*\s*/u, '').trim();
+    const { head, tail } = postingHeading(text);
     const requiredSection = requiredHeader.test(head);
     const preferredSection = preferredHeader.test(head);
     if (requiredSection || preferredSection) {
@@ -1480,6 +1551,7 @@ export function normalizeMatchingPosting(
       section = 'administrative';
       if (
         !employmentCondition.test(text) &&
+        !essentialCondition.test(text) &&
         !requiredInAdministrativeText.test(text)
       )
         continue;
@@ -1535,6 +1607,7 @@ export function normalizeMatchingPosting(
     const requiredWording = content.replace(/\bnot required\b/giu, '');
     const strong =
       employmentCondition.test(requiredWording) ||
+      essentialCondition.test(requiredWording) ||
       requiredInAdministrativeText.test(requiredWording);
     const explicitHard =
       strong ||

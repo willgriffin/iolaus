@@ -1,10 +1,31 @@
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
+import type { DatabaseInterface } from '@happyvertical/sql';
 import { getDbConfig } from './db.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 import type { CandidateWorkspaceSubject } from './workspace-subject.js';
 
 export type MatchingDialect = 'postgres' | 'sqlite';
+
+/** Exact server-selected match generations; used again at each bulk write. */
+export const MATCHING_REVISION_SQL = [
+  'profile_id',
+  'tenant_id',
+  'user_id',
+  'profile_revision',
+  'source_revision',
+  'source_listing_revision',
+  'vocabulary_revision',
+  'policy_version',
+]
+  .map((column) => `CAST(current_match.${column} AS TEXT)`)
+  .join(" || ':' || ");
+
+export type MatchingWriteRevision = {
+  opportunityId: string;
+  updatedAt: string;
+  matchingRevision: string;
+};
 
 export type MatchingDiscoveryProgress = {
   status:
@@ -80,6 +101,69 @@ export function liveMatchingOwnerSql(profileAlias: string): string {
       AND CAST(mm.user_id AS TEXT) = ${profileAlias}.owner_user_id
       AND mm.status = 'active' AND mm.role_id IS NOT NULL
   )`;
+}
+
+/** Called only on the transaction that will perform the corresponding write. */
+export async function lockMatchingWriteRevision(
+  tx: DatabaseInterface,
+  dialect: MatchingDialect,
+  subject: CandidateWorkspaceSubject,
+  expected: MatchingWriteRevision,
+): Promise<boolean> {
+  if (dialect === 'sqlite') {
+    // Acquire the database write lock before reading currentness, so no
+    // concurrent raw mutation can commit between this check and the write.
+    await tx.query(
+      'UPDATE matching_source_versions SET revision=revision WHERE opportunity_id=?',
+      [expected.opportunityId],
+    );
+  }
+  const params: unknown[] = [];
+  const gate = currentQualifiedMatchJoin(
+    subject,
+    (value) => {
+      params.push(value);
+      return '?';
+    },
+    'o',
+    dialect,
+  );
+  const lock =
+    dialect === 'postgres'
+      ? 'FOR SHARE OF o, matching_input_version, matching_listing_version, matching_profile_version, matching_vocabulary'
+      : '';
+  const {
+    rows: [row],
+  } = await tx.query(
+    `
+    SELECT o.updated_at FROM opportunities o ${gate}
+    WHERE o.id=? AND (${MATCHING_REVISION_SQL})=? ${lock}
+  `,
+    [...params, expected.opportunityId, expected.matchingRevision],
+  );
+  const updatedAt =
+    row?.updated_at instanceof Date
+      ? row.updated_at.toISOString()
+      : String(row?.updated_at ?? '');
+  return Boolean(row && updatedAt === expected.updatedAt);
+}
+
+/** Keep all matching revision locks on the executor used by the durable mutation. */
+export async function withMatchingWriteRevision<T>(
+  subject: CandidateWorkspaceSubject,
+  expected: MatchingWriteRevision,
+  write: (tx: DatabaseInterface) => Promise<T>,
+): Promise<{ current: true; result: T } | { current: false }> {
+  const config = getDbConfig();
+  const db = getRequestScopedDatabase() ?? (await resolveDatabase(config));
+  if (!db.transaction)
+    throw new Error('Matching writes require a native transaction.');
+  const dialect = config.type === 'sqlite' ? 'sqlite' : 'postgres';
+  return db.transaction(async (tx) => {
+    if (!(await lockMatchingWriteRevision(tx, dialect, subject, expected)))
+      return { current: false };
+    return { current: true, result: await write(tx) };
+  });
 }
 
 export async function getMatchingDiscoveryProgress(

@@ -220,6 +220,71 @@ describe('normalized matching from raw text', () => {
     ).toBe('insufficient-evidence');
   });
 
+  it('keeps incomplete source requirements unresolved when interpretation omits a whole uncued line', () => {
+    const line =
+      'The role calls for a working knowledge of Node.js or TypeScript.';
+    const description = `About the role\n${line}`;
+    const span = (quote: string): MatchingSourceSpan => ({
+      field: 'description',
+      start: description.indexOf(quote),
+      end: description.indexOf(quote) + quote.length,
+      quote,
+    });
+    const extraction: MatchingSourceExtraction = {
+      coverage: 'complete',
+      role: null,
+      geography: null,
+      noRequirements: null,
+      required: [
+        {
+          clause: span(line),
+          alternatives: [
+            { capability: span('Node.js'), years: null, context: null },
+            { capability: span('TypeScript'), years: null, context: null },
+          ],
+        },
+      ],
+      preferred: [],
+      unresolved: [],
+    };
+    const profile = normalizeMatchingCandidate(candidate, vocabulary);
+    const decision = (raw: string) =>
+      evaluateNormalizedMatch(
+        normalizeMatchingPosting(
+          { ...posting, description: raw },
+          vocabulary,
+          extraction,
+        ),
+        profile,
+      );
+    expect(decision(description).status).toBe('qualified');
+    const uncued = decision(`${description}\nKafka fluency.`);
+    expect(uncued.status).toBe('insufficient-evidence');
+    expect(uncued.reasons).toContainEqual(
+      expect.objectContaining({ code: 'posting-requirements-incomplete' }),
+    );
+    for (const requirement of [
+      'Kafka experience is essential.',
+      'You’ll need Kafka.',
+    ]) {
+      const omitted = decision(`${description}\n${requirement}`);
+      expect(omitted.status).toBe('insufficient-evidence');
+      expect(omitted.reasons).toContainEqual(
+        expect.objectContaining({ code: 'posting-requirement-unknown' }),
+      );
+    }
+    expect(
+      decision(
+        `${description}\nResponsibilities\nBuild product services.\nBenefits\nFlexible holidays.`,
+      ).status,
+    ).toBe('qualified');
+    expect(
+      decision(
+        `${description}\nResponsibilities\nBuild product services.\nAbout the role\nKafka fluency.`,
+      ).status,
+    ).toBe('insufficient-evidence');
+  });
+
   it('uses source interpretations of ordinary ATS prose beyond the fallback grammar', () => {
     const title = 'Senior Software Engineer — Merchandising Automation';
     const geography =

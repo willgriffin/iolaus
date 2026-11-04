@@ -1,8 +1,10 @@
-import type { DatabaseInterface } from '@happyvertical/sql';
+import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import { describe, expect, it } from 'vitest';
 import { createMatchingProjectionFixture } from './fixtures/matching-projection.js';
 import {
   currentQualifiedMatchJoin,
+  lockMatchingWriteRevision,
+  MATCHING_REVISION_SQL,
   type MatchingDialect,
 } from './matching-projection-read.js';
 import { ensureMatchingProjectionSchema } from './matching-projection-schema.js';
@@ -121,6 +123,131 @@ async function discover(
 
 for (const dialect of dialects) {
   describe(`matching pipeline on ${dialect}`, () => {
+    it('pins a confirmed match through a durable write and rejects a generation changed before the write fence', async () => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        const updatedAt = '2026-11-04T17:00:00.000Z';
+        await db.query('UPDATE opportunities SET updated_at=? WHERE id=?', [
+          updatedAt,
+          jobs[0],
+        ]);
+        await ensureMatchingProjectionSchema(db, dialect);
+        await db.query('CREATE TABLE write_receipts (id TEXT PRIMARY KEY)');
+        const converge = async () => {
+          for (let i = 0; i < 5; i += 1) await runMatchingTick(db, dialect);
+        };
+        const snapshot = async () => {
+          const params: unknown[] = [];
+          const gate = currentQualifiedMatchJoin(
+            owner,
+            (value) => {
+              params.push(value);
+              return '?';
+            },
+            'o',
+            dialect,
+          );
+          const {
+            rows: [row],
+          } = await db.query(
+            `SELECT ${MATCHING_REVISION_SQL} AS revision
+            FROM opportunities o ${gate} WHERE o.id=?`,
+            [...params, jobs[0]],
+          );
+          expect(row?.revision).toBeTruthy();
+          return {
+            opportunityId: jobs[0]!,
+            updatedAt,
+            matchingRevision: String(row?.revision),
+          };
+        };
+        const write = async (
+          receipt: string,
+          selected: Awaited<ReturnType<typeof snapshot>>,
+        ) =>
+          db.transaction!(async (tx) => {
+            if (
+              !(await lockMatchingWriteRevision(tx, dialect, owner, selected))
+            )
+              return false;
+            await tx.query('INSERT INTO write_receipts VALUES (?)', [receipt]);
+            return true;
+          });
+        await converge();
+        const beforeEdit = await snapshot();
+        // Preview/apply has resolved its selection, but the durable writer
+        // has not yet acquired its revision locks.
+        await db.query(
+          "UPDATE sources SET public_listing=FALSE WHERE id='source'",
+        );
+        await expect(write('obsolete', beforeEdit)).resolves.toBe(false);
+        await db.query(
+          "UPDATE sources SET public_listing=TRUE WHERE id='source'",
+        );
+        await converge();
+        await expect(write('replaced-generation', beforeEdit)).resolves.toBe(
+          false,
+        );
+        const current = await snapshot();
+        await expect(write('current', current)).resolves.toBe(true);
+        expect(
+          (await db.query('SELECT id FROM write_receipts')).rows.map(
+            ({ id }) => id,
+          ),
+        ).toEqual(['current']);
+
+        if (dialect === 'postgres') {
+          const competing = await getDatabase({
+            type: 'postgres',
+            url: db.url,
+            cache: false,
+          });
+          try {
+            const acquired = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            const protectedWrite = db.transaction!(async (tx) => {
+              await expect(
+                lockMatchingWriteRevision(tx, dialect, owner, current),
+              ).resolves.toBe(true);
+              acquired.resolve();
+              await release.promise;
+              await tx.query("INSERT INTO write_receipts VALUES ('locked')");
+            });
+            try {
+              await acquired.promise;
+              // A truly separate executor cannot commit its trigger and
+              // revoke eligibility while the selected write is in flight.
+              await expect(
+                competing.transaction!(async (tx) => {
+                  await tx.query("SET LOCAL lock_timeout='100ms'");
+                  await tx.query(
+                    "UPDATE sources SET public_listing=FALSE WHERE id='source'",
+                  );
+                }),
+              ).rejects.toThrow(/lock timeout/i);
+            } finally {
+              release.resolve();
+              await protectedWrite;
+            }
+            await competing.query(
+              "UPDATE sources SET public_listing=FALSE WHERE id='source'",
+            );
+            await expect(write('after-revocation', current)).resolves.toBe(
+              false,
+            );
+          } finally {
+            await competing.close?.();
+          }
+        }
+      } finally {
+        await close();
+      }
+    }, 15_000);
+
     it('publishes raw evidence only for the live owned profile and rejects a delayed publisher', async () => {
       const { database: db, close } = await createMatchingProjectionFixture(
         dialect,

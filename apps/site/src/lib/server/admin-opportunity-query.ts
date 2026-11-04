@@ -12,7 +12,10 @@ import {
 import { OPPORTUNITY_RECOMMENDATION_RANK_VERSION } from '../objects/OpportunityRecommendationRank.js';
 import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
 import { getDbConfig } from './db.js';
-import { currentQualifiedMatchJoin } from './matching-projection-read.js';
+import {
+  currentQualifiedMatchJoin,
+  MATCHING_REVISION_SQL,
+} from './matching-projection-read.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
 import type { OpportunityPartialAssessmentProjection } from './opportunity-assessment-partial-projection.js';
 import {
@@ -1772,19 +1775,6 @@ export function createOpportunityQueryFingerprint(
  * that was resolved here; a row edited in between fails its own guard instead
  * of silently overwriting the newer value.
  */
-const matchingRevisionSql = [
-  'profile_id',
-  'tenant_id',
-  'user_id',
-  'profile_revision',
-  'source_revision',
-  'source_listing_revision',
-  'vocabulary_revision',
-  'policy_version',
-]
-  .map((column) => `CAST(current_match.${column} AS TEXT)`)
-  .join(" || ':' || ");
-
 export async function listOpportunityMatchingIds(
   query: WorkspaceOpportunityQuery,
   { limit }: { limit: number },
@@ -1810,7 +1800,7 @@ export async function listOpportunityMatchingIds(
     screeningExclusions,
   );
   const limitPlaceholder = pushParam(built.values, limit);
-  const sql = `SELECT o.id, o.updated_at AS "updatedAt"${query.currentQualified ? `, ${matchingRevisionSql} AS "matchingRevision"` : ''}
+  const sql = `SELECT o.id, o.updated_at AS "updatedAt"${query.currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision"` : ''}
     FROM opportunities o
     ${built.joins.join('\n')}
     ${built.whereSql}
@@ -1890,7 +1880,7 @@ export async function listOpportunityRevisionsByIds(
   const result = await queryOpportunitySql(
     db,
     dialect,
-    `SELECT o.id, o.updated_at AS "updatedAt"${currentQualified ? `, ${matchingRevisionSql} AS "matchingRevision"` : ''}
+    `SELECT o.id, o.updated_at AS "updatedAt"${currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision"` : ''}
     FROM opportunities o
     ${joins.join('\n')}
     WHERE ${predicates.join(' AND ')}`,
