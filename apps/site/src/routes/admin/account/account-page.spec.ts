@@ -238,6 +238,7 @@ describe('account page deletion action', () => {
 describe('account deletion disclosure', () => {
   const data = {
     accountConnectionsEnabled: false,
+    inactiveOpportunitySweep: 'disabled',
     activityScopeKey: null,
     aiBudget: null,
     appMark: 'I',

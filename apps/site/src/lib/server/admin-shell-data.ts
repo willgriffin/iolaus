@@ -1,5 +1,6 @@
 import { adminResources } from '$lib/admin/resources';
 import { isAdminAssistantEnabled } from '$lib/server/admin-assistant-config';
+import { isConfiguredOidcAdminEmail } from '$lib/server/administrative-auth';
 import { getAiUsageSummary } from '$lib/server/ai-usage-guard';
 import {
   getAppConfig,
@@ -34,9 +35,16 @@ async function aiBudgetIndicator(locals: App.Locals) {
 }
 
 export async function loadAdminShellData(locals: App.Locals) {
+  const shared = isSharedHosted();
+  const inactiveOpportunitySweep = shared
+    ? isConfiguredOidcAdminEmail(locals.user?.email)
+      ? 'preview'
+      : 'disabled'
+    : 'full';
   return {
+    inactiveOpportunitySweep,
     publicOpportunityBrowserEnabled:
-      isSharedHosted() && process.env.IOLAUS_PUBLIC_SEARCH_ENABLED === 'true',
+      shared && process.env.IOLAUS_PUBLIC_SEARCH_ENABLED === 'true',
     aiBudget: await aiBudgetIndicator(locals),
     assistantEnabled: isAdminAssistantEnabled(),
     accountConnectionsEnabled:

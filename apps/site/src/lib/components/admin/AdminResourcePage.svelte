@@ -269,6 +269,7 @@ const resourceActionFeedbackTone = $derived(
 // Stage 0 inactive-source sweep. The preview submission returns the matching
 // count and writes nothing; the archive button only appears once that count is
 // on screen, so an apply is always a second, explicit confirmation.
+const sweepMode = $derived(page.data?.inactiveOpportunitySweep);
 const sweepPreview = $derived.by(() => {
   if (!isOpportunityResource || !feedbackValue(form, 'sweep')) return null;
   if (feedbackValue(form, 'applied') === true) return null;
@@ -1322,7 +1323,7 @@ function taskMeta(record: AdminRecord): string {
 
 
 {#snippet opportunityBulkToolbar()}
-  {#if isOpportunityResource}
+  {#if isOpportunityResource && (sweepMode === 'full' || sweepMode === 'preview')}
     <form use:enhance={enhanceInactiveOpportunitySweep}
       method="POST"
       action="?/previewInactiveOpportunitySweep"
@@ -1334,7 +1335,9 @@ function taskMeta(record: AdminRecord): string {
         name="notSeenDays"
         value={sweepPreview?.notSeenDays ?? OPPORTUNITY_SWEEP_NOT_SEEN_DAYS}
       />
-      {#if sweepPreview}
+      {#if sweepMode === 'preview' && sweepPreview}
+        <span>Shared catalog archival requires operator dispatch.</span>
+      {:else if sweepPreview}
         <button
           type="submit"
           class="sweep-apply"

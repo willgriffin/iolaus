@@ -6,9 +6,56 @@ import { getAdminResource } from '$lib/admin/resources';
 import { EMPTY_OPPORTUNITY_FILTER_OPTIONS } from '$lib/opportunity-filters';
 import AdminResourcePage from './AdminResourcePage.svelte';
 
-vi.mock('$app/state', () => ({
-  page: { url: new URL('http://localhost/admin/tasks') },
+const pageData = vi.hoisted(() => ({
+  inactiveOpportunitySweep: 'disabled',
 }));
+
+vi.mock('$app/state', () => ({
+  page: { data: pageData, url: new URL('http://localhost/admin/tasks') },
+}));
+
+describe('Inactive-source sweep toolbar', () => {
+  it.each([
+    ['disabled', false, false, false],
+    ['preview', false, true, false],
+    ['preview', true, false, false],
+    ['full', true, false, true],
+  ])('renders the %s mode with a previous preview=%s', (mode, previewed, showPreview, showApply) => {
+    const resource = getAdminResource('opportunities');
+    if (!resource) throw new Error('Expected Opportunities resource');
+    pageData.inactiveOpportunitySweep = mode;
+    try {
+      const { body } = render(AdminResourcePage, {
+        props: {
+          data: {
+            activeTaskOwnerFilter: 'all',
+            activeTaskStatusFilter: 'all',
+            activeReviewFilter: 'unsorted',
+            candidateSkills: [],
+            comboOptions: {},
+            opportunityFilterOptions: EMPTY_OPPORTUNITY_FILTER_OPTIONS,
+            pagination: createAdminListPagination(0, 1, 100),
+            records: [],
+            referenceOptions: {},
+            resource,
+          },
+          form: previewed ? { sweep: true, count: 3, notSeenDays: 30 } : null,
+        },
+        context: new Map([
+          [ADMIN_DOCK_CONTEXT, { setResourceContext: () => undefined }],
+        ]),
+      });
+      expect(body.includes('Sweep inactive</span>')).toBe(showPreview);
+      expect(body.includes('?/applyInactiveOpportunitySweep')).toBe(showApply);
+      if (mode === 'preview' && previewed)
+        expect(body).toContain(
+          'Shared catalog archival requires operator dispatch.',
+        );
+    } finally {
+      pageData.inactiveOpportunitySweep = 'disabled';
+    }
+  });
+});
 
 describe('AdminResourcePage task loading', () => {
   it('makes Screening Questions discoverable from the actual Preferences list', () => {

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     recordAgentAudit: vi.fn(),
     requestDatabase: vi.fn(),
     shared: false,
+    operator: false,
     transaction,
   };
 });
@@ -38,6 +39,9 @@ vi.mock('@happyvertical/smrt-users', () => ({
 
 vi.mock('./db.js', () => ({ getDbConfig: mocks.dbConfig }));
 vi.mock('./app-config.js', () => ({ isSharedHosted: () => mocks.shared }));
+vi.mock('./workspace-subject.js', () => ({
+  isCurrentWorkspaceOperator: () => mocks.operator,
+}));
 
 vi.mock('./change-feed.js', () => ({
   bumpOpportunityChangeFeed: mocks.bumpChangeFeed,
@@ -88,6 +92,7 @@ async function sweep() {
 describe('opportunity-sweep', () => {
   beforeEach(() => {
     mocks.shared = false;
+    mocks.operator = false;
     mocks.query.mockReset();
     mocks.transaction.mockClear();
     mocks.requestDatabase.mockReset();
@@ -103,14 +108,42 @@ describe('opportunity-sweep', () => {
     respondWith(3);
   });
 
-  it('rejects the shared global sweep before any database query', async () => {
+  it('previews a shared sweep for an authorized operator without writing', async () => {
     mocks.shared = true;
+    mocks.operator = true;
+    const { sweepInactiveSourceOpportunities } = await sweep();
+
+    const result = await sweepInactiveSourceOpportunities({
+      allowSharedOperatorPreview: true,
+      now: NOW,
+    });
+    expect(result).toMatchObject({
+      applied: false,
+      archivedCount: 0,
+      count: 3,
+    });
+    expect(mocks.query).toHaveBeenCalledTimes(2);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.recordAgentAudit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { operator: false, dryRun: true, allowSharedOperatorPreview: true },
+    { operator: true, dryRun: false, allowSharedOperatorPreview: true },
+    { operator: true, dryRun: true, allowSharedOperatorPreview: false },
+  ])('returns 403 before reading the shared catalog for %j', async ({
+    operator,
+    ...options
+  }) => {
+    mocks.shared = true;
+    mocks.operator = operator;
     const { sweepInactiveSourceOpportunities } = await sweep();
 
     await expect(
-      sweepInactiveSourceOpportunities({ dryRun: true, now: NOW }),
-    ).rejects.toThrow('explicit operator dispatch');
+      sweepInactiveSourceOpportunities({ ...options, now: NOW }),
+    ).rejects.toMatchObject({ status: 403 });
     expect(mocks.query).not.toHaveBeenCalled();
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
   it('matches only undecided opportunities under an inactive source', async () => {

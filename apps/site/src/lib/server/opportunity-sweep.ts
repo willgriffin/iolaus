@@ -249,6 +249,7 @@ function sampleRow(row: Record<string, unknown>): OpportunitySweepSampleRow {
  */
 export async function sweepInactiveSourceOpportunities(
   options: {
+    allowSharedOperatorPreview?: boolean;
     dryRun?: boolean;
     notSeenDays?: unknown;
     now?: Date;
@@ -256,12 +257,22 @@ export async function sweepInactiveSourceOpportunities(
   } = {},
 ): Promise<OpportunitySweepResult> {
   const { isSharedHosted } = await import('./app-config.js');
-  if (isSharedHosted()) {
-    throw new Error(
-      'Shared workspace opportunity sweeps require an explicit operator dispatch.',
-    );
-  }
   const dryRun = options.dryRun !== false;
+  if (isSharedHosted()) {
+    if (!dryRun || !options.allowSharedOperatorPreview)
+      error(
+        403,
+        'Shared workspace opportunity sweeps require an explicit operator dispatch.',
+      );
+    const { isCurrentWorkspaceOperator } = await import(
+      './workspace-subject.js'
+    );
+    if (!isCurrentWorkspaceOperator())
+      error(
+        403,
+        'Inactive-source sweep previews require an installation operator.',
+      );
+  }
   const notSeenDays = sweepNotSeenDays(options.notSeenDays);
   const cutoff = sweepCutoff(notSeenDays, options.now ?? new Date());
   const filter = sweepFilter(notSeenDays, cutoff);
