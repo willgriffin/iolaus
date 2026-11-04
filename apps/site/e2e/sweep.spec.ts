@@ -60,14 +60,14 @@ function paginationTotal(payload: unknown): number {
 
 async function resultTotal(page: Page): Promise<number> {
   return page
-    .evaluate(async () => {
+    .evaluate(async (search) => {
       const response = await fetch(
-        '/api/admin-resources/opportunities?review=unsorted&sort=best',
+        `/api/admin-resources/opportunities${search}`,
       );
       if (!response.ok)
         throw new Error(`Opportunity list read failed (${response.status})`);
       return (await response.json()) as unknown;
-    })
+    }, new URL(page.url()).search)
     .then(paginationTotal);
 }
 
@@ -78,22 +78,20 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
   const notSeenDays = sweepNotSeenDaysByProject[testInfo.project.name];
   if (!notSeenDays)
     throw new Error(`Missing sweep cohort for ${testInfo.project.name}`);
-  const response = await page.goto(
-    '/admin/opportunities?review=unsorted&sort=best',
-  );
+  const discovery = `/admin/opportunities?${new URLSearchParams({
+    review: 'unsorted',
+    sort: 'best',
+    q: `Fictional sweep ${testInfo.project.name}`,
+  })}`;
+  const response = await page.goto(discovery);
   expect(response?.status()).toBe(200);
 
-  for (const title of [
-    titles.eligible,
-    titles.active,
-    titles.recent,
-    titles.application,
-  ]) {
-    await expect(page.getByText(title, { exact: true })).toBeVisible();
-  }
+  const protectedMatch = page.getByText(titles.active, { exact: true });
+  await expect(protectedMatch).toBeVisible();
+  for (const title of [titles.eligible, titles.recent, titles.application])
+    await expect(page.getByText(title, { exact: true })).toHaveCount(0);
   const before = await resultTotal(page);
-  // A preview is intentionally read-only: the eligible fixture remains in the
-  // rendered list until the explicit Archive confirmation is submitted.
+  // Inactive sources are already outside discovery before the explicit sweep.
   await page
     .locator(
       'form[aria-label="Inactive-source sweep"] input[name="notSeenDays"]',
@@ -111,7 +109,7 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
   );
   expect(archivedCount).toBeGreaterThanOrEqual(1);
   await expect(page.getByText(/Nothing was changed/i)).toBeVisible();
-  await expect(page.getByText(titles.eligible, { exact: true })).toBeVisible();
+  await expect(protectedMatch).toBeVisible();
 
   // This wait observes the authorized list read triggered by the client cache
   // invalidation, rather than a browser reload or a mocked response.
@@ -129,10 +127,8 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
     page.getByText(new RegExp(`Archived ${archivedCount} opportunit`, 'i')),
   ).toBeVisible();
   await expect(page.getByText(titles.eligible, { exact: true })).toHaveCount(0);
-  for (const title of [titles.active, titles.recent, titles.application]) {
-    await expect(page.getByText(title, { exact: true })).toBeVisible();
-  }
-  await expect.poll(() => resultTotal(page)).toBe(before - archivedCount);
+  await expect(protectedMatch).toBeVisible();
+  await expect.poll(() => resultTotal(page)).toBe(before);
   // Owner-decided rows are intentionally outside the Unsorted list. Confirm
   // the separate decision filter still returns the inactive-source fixture.
   await page.goto('/admin/opportunities?review=reject&sort=best');
@@ -140,7 +136,7 @@ test('inactive-source sweep previews, protects rows, and refreshes the list afte
 
   // Retrying the same mutation sees the post-archive state and does not offer
   // a second destructive confirmation.
-  await page.goto('/admin/opportunities?review=unsorted&sort=best');
+  await page.goto(discovery);
   await page
     .locator(
       'form[aria-label="Inactive-source sweep"] input[name="notSeenDays"]',

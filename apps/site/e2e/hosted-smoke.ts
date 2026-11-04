@@ -104,6 +104,9 @@ try {
   );
   const { getSmrtOptions } = await import('../src/lib/server/db.js');
   const { addInvite } = await import('../src/lib/server/hosted-invite.js');
+  const { runMatchingTick } = await import(
+    '../src/lib/server/matching-projection-worker.js'
+  );
   const { verifyWorkspaceSubject } = await import(
     '../src/lib/server/workspace-subject.js'
   );
@@ -138,6 +141,11 @@ try {
             name: 'Synthetic hosted smoke user',
             title: 'Fictional platform engineer',
             summary: 'Isolated browser fixture.',
+            preferences: {
+              targetRoles: ['Backend Engineer'],
+              locations: ['Canada'],
+              workModes: ['remote'],
+            },
           },
           subject,
         );
@@ -154,15 +162,26 @@ try {
   }
   const operator = await seedActor(operatorEmail);
   const member = await seedActor(memberEmail);
+  for (const actor of [operator, member])
+    await db.query(
+      `INSERT INTO resume_skills (id, slug, tenant_id, owner_user_id, candidate_profile_id, skill_id, label)
+       VALUES (gen_random_uuid(), 'smoke-typescript', $1, $2, $3, 'fictional-typescript', 'TypeScript')`,
+      actor.tenantId,
+      actor.userId,
+      actor.profileId,
+    );
 
   await db.query(`INSERT INTO sources (id, slug, source_role, is_active)
     VALUES ('smoke-active', 'smoke-active', 'root', TRUE),
            ('smoke-inactive', 'smoke-inactive', 'root', FALSE)`);
   // Large enough to catch reintroduction of the 10,000-posting request-time
   // catalog rebuild. All posting and identity data in this suite is fictional.
-  await db.query(`INSERT INTO opportunities (id, slug, title, source_id, status, first_seen_at, last_seen_at)
-    SELECT gen_random_uuid(), 'smoke-' || n, 'Fictional catalog posting ' || n,
-      'smoke-active', 'found', NOW(), NOW()
+  await db.query(`INSERT INTO opportunities
+    (id, slug, title, source_id, status, first_seen_at, last_seen_at, description_raw, location_notes, work_mode)
+    SELECT gen_random_uuid(), 'smoke-' || n, 'Backend Engineer',
+      'smoke-active', 'found', NOW(), NOW(), 'Required skills: TypeScript',
+      CASE WHEN n BETWEEN 2 AND 101 THEN 'Remote (Canada)' ELSE 'Remote (United States)' END,
+      'remote'
     FROM generate_series(1, 10001) AS n`);
   const eligible = 'e0000000-0000-4000-8000-000000000001';
   const applied = 'e0000000-0000-4000-8000-000000000002';
@@ -208,6 +227,20 @@ try {
     `UPDATE opportunities SET current_analysis_id = md5('hosted-smoke-analysis')::uuid WHERE slug = 'smoke-1'`,
   );
   await db.query('ANALYZE');
+  let idleTicks = 0;
+  for (let tick = 0; tick < 1_000; tick += 1) {
+    const result = await runMatchingTick(db, 'postgres');
+    if (
+      result.sourceBacklog ||
+      result.profileBacklog ||
+      result.normalized ||
+      result.evaluated
+    )
+      idleTicks = 0;
+    else if (++idleTicks === 3) break;
+    if (tick === 999)
+      throw new Error('Hosted smoke matching backlog did not settle.');
+  }
 
   const server = spawn(process.execPath, ['build/index.js'], {
     env: environment,
@@ -372,7 +405,16 @@ try {
       );
       const list = await listRead;
       assert.equal(list.status(), 200);
-      assert.equal((await list.json()).records.length, 100);
+      const { records, pagination } = await list.json();
+      assert.equal(records.length, 100);
+      assert.equal(pagination.totalRecords, 100);
+      assert(
+        records.every(
+          (record: { locationNotes?: string }) =>
+            record.locationNotes === 'Remote (Canada)',
+        ),
+        'Known location conflicts must stay outside hosted discovery.',
+      );
       await operatorPage
         .getByRole('button', { name: 'Triage opportunities' })
         .click();
