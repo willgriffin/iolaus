@@ -7,7 +7,7 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v5';
+export const MATCHING_POLICY_VERSION = 'normalized-v7';
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -1251,6 +1251,11 @@ function nonRequirementLine(
 ) {
   const line = extractedDescriptionLine(raw, lines, span);
   return line &&
+    // Hiring and work-location statements may carry candidate constraints.
+    !roleStatement.test(line.text) &&
+    !/\b(?:remote(?:ly)?|hybrid|on[- ]?site|in[- ]office|based in|located in)\b/iu.test(
+      line.text,
+    ) &&
     !employmentCondition.test(line.text) &&
     !essentialCondition.test(line.text) &&
     !independentHardCue.test(line.text) &&
@@ -1412,7 +1417,8 @@ function mergeSourceExtraction(
         : undefined));
   // Only a provider-assisted recovery of missing deterministic requirements
   // coverage needs whole-description accounting. Known hard lines still have
-  // their independent proof gate whether or not recovery is needed.
+  // their independent proof gate whether or not recovery is needed. A role
+  // or geography citation does not attest to other conditions on its line.
   const incomplete = posting.uncertainties.some(
     ({ code }) => code === 'posting-requirements-incomplete',
   );
@@ -1425,12 +1431,6 @@ function mergeSourceExtraction(
         [
           ...employerLines,
           ...posting.preferred.map(({ citation }) => citation),
-          ...(roleConflict
-            ? []
-            : [posting.role?.citation, declaredRole?.citation]),
-          ...(geographyConflict
-            ? []
-            : [posting.geography?.citation, declaredGeography?.citation]),
           ...(emptyAttested ? [noHard] : []),
         ].filter((citation): citation is Citation => !!citation),
       ));

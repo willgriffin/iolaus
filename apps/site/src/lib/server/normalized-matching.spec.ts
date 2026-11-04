@@ -257,6 +257,54 @@ describe('normalized matching from raw text', () => {
         ),
         profile,
       );
+    const roleLine =
+      'We are hiring a Backend Engineer, and Kafka is a core skill.';
+    const roleStart = description.length + 1;
+    const mixed = evaluateNormalizedMatch(
+      normalizeMatchingPosting(
+        { ...posting, description: `${description}\n${roleLine}` },
+        vocabulary,
+        {
+          ...extraction,
+          role: {
+            field: 'description',
+            start: roleStart,
+            end: roleStart + roleLine.length,
+            quote: roleLine,
+          },
+          roleTitle: 'Backend Engineer',
+        },
+      ),
+      profile,
+    );
+    expect(mixed.status).toBe('insufficient-evidence');
+    expect(mixed.reasons).toContainEqual(
+      expect.objectContaining({ code: 'posting-requirements-incomplete' }),
+    );
+    const mixedSource = {
+      ...posting,
+      description: `${description}\n${roleLine}`,
+    };
+    const asEmployer = parseMatchingSourceExtraction(
+      {
+        ...extraction,
+        nonRequirements: [
+          {
+            field: 'description',
+            start: roleStart,
+            end: roleStart + roleLine.length,
+            quote: roleLine,
+          },
+        ],
+      },
+      mixedSource,
+    );
+    expect(
+      evaluateNormalizedMatch(
+        normalizeMatchingPosting(mixedSource, vocabulary, asEmployer),
+        profile,
+      ).status,
+    ).toBe('insufficient-evidence');
     expect(decision(description).status).toBe('qualified');
     const uncued = decision(`${description}\nKafka fluency.`);
     expect(uncued.status).toBe('insufficient-evidence');
