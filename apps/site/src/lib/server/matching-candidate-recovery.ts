@@ -1,10 +1,7 @@
 import type { DatabaseInterface } from '@happyvertical/sql';
 import { MATCHING_CANDIDATE_AI_FEATURE } from './ai-config.js';
 import { runAsRevalidatedJobWorkspaceSubject } from './job-workspace-subject.js';
-import {
-  CANDIDATE_INTERPRETATION_PROMPT_VERSION,
-  parseCandidateInterpretation,
-} from './matching-candidate-contract.js';
+import { parseCandidateInterpretation } from './matching-candidate-contract.js';
 import {
   chunkMatchingCandidateEvidence,
   estimateMatchingCandidateInterpretation,
@@ -44,7 +41,7 @@ function isLocalRecoveryDatabase(url: string, dialect: MatchingDialect) {
   }
 }
 
-/** Internal one-off operator recovery for a previously observed v8 incomplete
+/** Internal operator recovery for a previously observed incomplete
  * draft. A settled receipt proves spend, not completion. Preserve the verified
  * prefix and let the normal worker draft and verify both replacement chunks. */
 export async function queueMatchingCandidateDraftRecovery(
@@ -58,8 +55,6 @@ export async function queueMatchingCandidateDraftRecovery(
 > {
   if (
     !isLocalRecoveryDatabase(database.url, dialect) ||
-    CANDIDATE_INTERPRETATION_PROMPT_VERSION !==
-      'matching-candidate-prompt/v8' ||
     !/^[a-f0-9]{64}$/u.test(options.observedRequestId)
   )
     return ineligible;

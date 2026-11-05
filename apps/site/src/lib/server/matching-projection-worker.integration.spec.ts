@@ -62,7 +62,7 @@ async function seed(db: DatabaseInterface) {
   await db.query("INSERT INTO sources VALUES ('source',TRUE,TRUE)");
   for (const subject of [owner, sibling, other]) {
     await db.query(
-      'INSERT INTO candidate_profiles VALUES (?, TRUE, ?, ?, ?, ?, ?)',
+      'INSERT INTO candidate_profiles (id, active, tenant_id, owner_user_id, preferences_json, facts_json, target_work_country_json) VALUES (?, TRUE, ?, ?, ?, ?, ?)',
       [
         subject.profileId,
         subject.tenantId,

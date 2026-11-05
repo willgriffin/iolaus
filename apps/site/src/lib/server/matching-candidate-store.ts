@@ -60,28 +60,48 @@ export async function candidateInterpretationForMatching(
   );
   if (cached?.state === 'complete') {
     try {
+      const interpretation = candidateInterpretationSchema.parse(
+        JSON.parse(String(cached.payload_json)),
+      );
+      if (!interpretation.sourceCoverage) return { state: 'failed' };
+      // The queue is complete when no paid work remains. Coverage determines
+      // whether the resulting interpretation itself is complete.
       return {
-        state: 'complete',
-        interpretation: JSON.parse(String(cached.payload_json)),
+        state: interpretation.unresolvedSourceIds.length
+          ? 'partial'
+          : 'complete',
+        interpretation,
       };
     } catch {
       return { state: 'failed' };
     }
   }
   if (cached?.state === 'failed') {
-    if (!cached.payload_json) return { state: 'failed' };
     try {
       // A terminal later phase must not turn already verified assertions
       // into missing evidence. Explicitly mark every unprocessed source.
-      const interpretation = candidateInterpretationSchema.parse(
-        JSON.parse(String(cached.payload_json)),
-      );
+      const interpretation = cached.payload_json
+        ? candidateInterpretationSchema.parse(
+            JSON.parse(String(cached.payload_json)),
+          )
+        : {
+            assertions: [],
+            reviewedSourceIds: [],
+            unresolvedSourceIds: [],
+            sourceCoverage: [],
+          };
       const accounted = new Set([
         ...interpretation.reviewedSourceIds,
         ...interpretation.unresolvedSourceIds,
       ]);
-      for (const { id } of input.evidence)
-        if (!accounted.has(id)) interpretation.unresolvedSourceIds.push(id);
+      for (const { id } of input.evidence) {
+        if (accounted.has(id)) continue;
+        interpretation.unresolvedSourceIds.push(id);
+        interpretation.sourceCoverage?.push({
+          sourceId: id,
+          issues: [{ kind: 'unread', conceptId: null, quote: null }],
+        });
+      }
       return { state: 'failed', interpretation };
     } catch {
       return { state: 'failed' };

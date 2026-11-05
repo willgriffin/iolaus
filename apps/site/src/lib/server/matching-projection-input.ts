@@ -9,6 +9,7 @@ import {
   fingerprintOpportunitySourceContent,
   parseOpportunitySourceContent,
 } from './opportunity-source-content.js';
+import { isCanonicalOtherRoleEntry } from './resume-canonical-membership.js';
 import { loadMatchingScreeningQuestions } from './screening-question-store.js';
 import { SKILL_VOCABULARY_SEED_TERMS } from './skill-vocabulary.js';
 import type { CandidateWorkspaceSubject } from './workspace-subject.js';
@@ -128,6 +129,8 @@ const ownedProfileWhere =
   'id = ? AND tenant_id = ? AND owner_user_id = ? AND active = TRUE';
 const ownedEvidenceWhere =
   'candidate_profile_id = ? AND tenant_id = ? AND owner_user_id = ?';
+const selectedForResume = ' AND use_on_resume = TRUE';
+const selectedForResumeByDefault = ' AND COALESCE(use_on_resume, TRUE) = TRUE';
 
 export async function loadMatchingCandidateInput(
   db: Executor,
@@ -137,7 +140,8 @@ export async function loadMatchingCandidateInput(
   const {
     rows: [profile],
   } = await db.query(
-    `SELECT preferences_json, facts_json, target_work_country_json
+    `SELECT preferences_json, facts_json, target_work_country_json,
+            CASE WHEN COALESCE(use_on_resume, TRUE) = TRUE THEN summary END AS selected_summary
      FROM candidate_profiles WHERE ${ownedProfileWhere}`,
     args,
   );
@@ -193,16 +197,20 @@ export async function loadMatchingCandidateInput(
       | 'resume_skills'
       | 'resume_positions'
       | 'resume_achievements'
+      | 'resume_other_roles'
       | 'experiences'
       | 'projects'
       | 'achievements'
       | 'duties',
     columns: string,
-    resumeSelection = false,
+    selection:
+      | ''
+      | typeof selectedForResume
+      | typeof selectedForResumeByDefault = '',
   ) =>
     db.query(
       `SELECT id, ${columns} FROM ${table}
-       WHERE ${ownedEvidenceWhere}${resumeSelection ? ' AND use_on_resume = TRUE' : ''}
+       WHERE ${ownedEvidenceWhere}${selection}
        ORDER BY id LIMIT ${limit}`,
       args,
     );
@@ -276,21 +284,25 @@ export async function loadMatchingCandidateInput(
     }
   }
 
-  const { rows: experiences } = await read('experiences', 'summary', true);
+  const { rows: experiences } = await read(
+    'experiences',
+    'summary',
+    selectedForResume,
+  );
   const { rows: projects } = await read(
     'projects',
     'experience_id, name, summary',
-    true,
+    selectedForResume,
   );
   const { rows: projectAchievements } = await read(
     'achievements',
     'experience_id, project_id, title, body, metric',
-    true,
+    selectedForResume,
   );
   const { rows: duties } = await read(
     'duties',
     'experience_id, project_id, title, body',
-    true,
+    selectedForResume,
   );
   const experienceIds = new Set(
     experiences
@@ -332,6 +344,48 @@ export async function loadMatchingCandidateInput(
             : undefined,
       });
     }
+  }
+
+  // Append newly covered narrative after the existing evidence so previously
+  // captured source order and grouping remain stable.
+  if (
+    profile.selected_summary != null &&
+    typeof profile.selected_summary !== 'string'
+  )
+    incomplete = true;
+  const summary = text(profile.selected_summary);
+  if (summary.trim())
+    evidence.push({
+      id: `profile:${subject.profileId}:summary`,
+      text: summary,
+      kind: 'experience',
+    });
+
+  const { rows: otherRoles } = await read(
+    'resume_other_roles',
+    'role, company, period, body',
+    selectedForResumeByDefault,
+  );
+  if (otherRoles.length === limit) incomplete = true;
+  for (const row of otherRoles.slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)) {
+    // Canonical membership uses the renderer's trimmed metadata. Only the
+    // original body is evidence, with no trusted employment or date linkage.
+    if (
+      !isCanonicalOtherRoleEntry({
+        role: text(row.role).trim(),
+        company: text(row.company).trim(),
+        period: text(row.period).trim(),
+      })
+    )
+      continue;
+    const id = text(row.id);
+    if (!id.trim() || (row.body != null && typeof row.body !== 'string')) {
+      incomplete = true;
+      continue;
+    }
+    const body = text(row.body);
+    if (body.trim())
+      evidence.push({ id: `other-role:${id}`, text: body, kind: 'experience' });
   }
 
   const targetCountry = normalizeCountryReference(

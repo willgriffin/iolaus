@@ -286,6 +286,23 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             end: 4 + privateQuote.length,
             evidenceDigest: 'versioned-quote',
           };
+          const omittedQuote = 'Set up monitoring for the fictional Lime API';
+          const omittedLocator = {
+            ...locator,
+            id: 'fictional-project-2',
+            end: locator.start + omittedQuote.length,
+          };
+          const additionalProofs = Array.from({ length: 15 }, (_, index) => {
+            const text = `Private fictional evidence ${index}`;
+            return {
+              citation: {
+                ...locator,
+                id: `fictional-extra-${index}`,
+                end: locator.start + text.length,
+                text,
+              },
+            };
+          });
           await db.query(
             `INSERT INTO matching_profile_facts (
               profile_id, tenant_id, user_id, profile_revision, vocabulary_revision,
@@ -298,7 +315,16 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               owner.userId,
               MATCHING_POLICY_VERSION,
               JSON.stringify({
-                evidence: [{ citation: { ...locator, text: privateQuote } }],
+                evidence: [
+                  { citation: { ...locator, text: privateQuote } },
+                  ...additionalProofs,
+                ],
+                coverageIssues: [
+                  {
+                    kind: 'omitted-positive',
+                    citation: { ...omittedLocator, text: omittedQuote },
+                  },
+                ],
               }),
               owner.profileId,
             ],
@@ -307,11 +333,22 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             'UPDATE matching_results SET screened_with_gaps = TRUE, score = 55, reasons_json = ? WHERE opportunity_id = ?',
             [
               JSON.stringify([
+                ...Array.from({ length: 5 }, (_, index) => ({
+                  code: 'required-capability',
+                  outcome: 'supported',
+                  message: `Additional requirement ${index}`,
+                  citations: additionalProofs
+                    .slice(index * 3, index * 3 + 3)
+                    .map(({ citation: { text: _text, ...cite } }) => cite),
+                })),
                 {
                   code: 'required-capability',
                   outcome: 'unknown',
                   message: 'Evidence gap',
-                  citations: [{ ...locator, evidenceDigest: 'wrong-digest' }],
+                  citations: [
+                    omittedLocator,
+                    { ...locator, evidenceDigest: 'wrong-digest' },
+                  ],
                 },
                 {
                   code: 'candidate-interpretation-partial',
@@ -369,7 +406,9 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             score: 55,
             reasons: ['Evidence gap'],
             evidence: {
-              supported: [{ message: 'Evidence confirmed' }],
+              supported: expect.arrayContaining([
+                { message: 'Evidence confirmed' },
+              ]),
               gaps: [{ message: 'Evidence gap' }],
               interpretation:
                 'Matching could interpret only part of your evidence.',
@@ -377,6 +416,11 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           });
           expect(JSON.stringify(listMatch)).not.toContain(privateQuote);
           expect(JSON.stringify(listMatch)).not.toContain(locator.id);
+          expect(JSON.stringify(listMatch)).not.toContain(omittedQuote);
+          expect(JSON.stringify(listMatch)).not.toContain(omittedLocator.id);
+          expect(JSON.stringify(listMatch)).not.toContain(
+            'Private fictional evidence',
+          );
           const detailOptions = { includePrivateEvidence: true } as const;
           const detailMatch = (
             await listCurrentDiscoveryMatches(
@@ -385,14 +429,25 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               detailOptions,
             )
           ).get(unresolved);
-          expect(detailMatch?.evidence).toEqual({
-            supported: [
+          expect(detailMatch?.evidence).toMatchObject({
+            supported: expect.arrayContaining([
               { message: 'Evidence confirmed', excerpts: [privateQuote] },
-            ],
-            gaps: [{ message: 'Evidence gap' }],
+            ]),
+            gaps: [{ message: 'Evidence gap', excerpts: [omittedQuote] }],
             interpretation:
               'Matching could interpret only part of your evidence.',
           });
+          const evidenceItems = [
+            ...(detailMatch?.evidence.supported ?? []),
+            ...(detailMatch?.evidence.gaps ?? []),
+          ];
+          expect(evidenceItems).toHaveLength(7);
+          expect(evidenceItems.every(({ excerpts }) => excerpts?.length)).toBe(
+            true,
+          );
+          expect(
+            evidenceItems.flatMap(({ excerpts }) => excerpts ?? []),
+          ).toHaveLength(12);
           expect(
             await listCurrentDiscoveryMatches(
               [unresolved],

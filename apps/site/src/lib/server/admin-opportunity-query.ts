@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
-import type { DiscoveryEvidenceExplanation } from '$lib/discovery-match';
+import type {
+  DiscoveryEvidenceExplanation,
+  DiscoveryEvidenceItem,
+} from '$lib/discovery-match';
 import {
   DECISION_REVIEW_STATUSES,
   isOpportunityDiscovery,
@@ -1965,10 +1968,13 @@ function matchingEvidenceLocator(value: unknown): string | undefined {
 }
 
 function matchingEvidenceExcerpts(facts: unknown): Map<string, string> {
-  const evidence = matchingObject(readMatchingJson(facts))?.evidence;
+  const candidate = matchingObject(readMatchingJson(facts));
   const excerpts = new Map<string, string>();
-  if (!Array.isArray(evidence)) return excerpts;
-  for (const proof of evidence) {
+  const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : [];
+  const issues = Array.isArray(candidate?.coverageIssues)
+    ? candidate.coverageIssues
+    : [];
+  for (const proof of [...evidence, ...issues]) {
     const citation = matchingObject(matchingObject(proof)?.citation);
     const key = matchingEvidenceLocator(citation);
     const text = citation?.text;
@@ -2015,7 +2021,7 @@ function explainDiscoveryMatch(
   if (!Array.isArray(parsed)) return { reasons, evidence };
 
   const privateExcerpts = matchingEvidenceExcerpts(facts);
-  let excerptBudget = 12;
+  const excerpted: { item: DiscoveryEvidenceItem; excerpts: string[] }[] = [];
   for (const value of parsed) {
     const reason = matchingObject(value);
     if (!reason || typeof reason.message !== 'string') continue;
@@ -2032,7 +2038,7 @@ function explainDiscoveryMatch(
     if (!gap && !support) continue;
 
     const excerpts = new Set<string>();
-    if (excerptBudget && privateExcerpts.size && Array.isArray(citations)) {
+    if (privateExcerpts.size && Array.isArray(citations)) {
       for (const citation of citations) {
         const key = matchingEvidenceLocator(citation);
         const excerpt = key && privateExcerpts.get(key);
@@ -2040,15 +2046,25 @@ function explainDiscoveryMatch(
         excerpts.add(
           excerpt.length > 240 ? `${excerpt.slice(0, 240)}…` : excerpt,
         );
-        if (excerpts.size >= Math.min(3, excerptBudget)) break;
+        if (excerpts.size === 3) break;
       }
     }
-    excerptBudget -= excerpts.size;
-    const item = {
-      message,
-      ...(excerpts.size ? { excerpts: [...excerpts] } : {}),
-    };
+    const item: DiscoveryEvidenceItem = { message };
+    if (excerpts.size) excerpted.push({ item, excerpts: [...excerpts] });
     (support ? evidence.supported : evidence.gaps).push(item);
+  }
+  // Give each evidence-bearing requirement a first excerpt before spending
+  // the shared allowance on additional citations for any one item.
+  let excerptBudget = 12;
+  for (let index = 0; index < 3 && excerptBudget; index++) {
+    for (const { item, excerpts } of excerpted) {
+      const excerpt = excerpts[index];
+      if (!excerpt) continue;
+      item.excerpts ??= [];
+      item.excerpts.push(excerpt);
+      excerptBudget -= 1;
+      if (!excerptBudget) break;
+    }
   }
   if (!reasons.length && evidence.interpretation)
     reasons.push(evidence.interpretation);

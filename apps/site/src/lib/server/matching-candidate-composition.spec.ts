@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type CandidateInterpretation,
+  type CandidateInterpretationState,
   candidateEvidenceDigest,
   parseCandidateInterpretation,
 } from './matching-candidate-contract.js';
@@ -59,7 +60,12 @@ function proposal(sources: Record[], claims: Claim[]): CandidateInterpretation {
   };
 }
 
-function candidate(sources: Record[], claims?: Claim[], date = asOf) {
+function candidate(
+  sources: Record[],
+  claims?: Claim[],
+  date = asOf,
+  state?: CandidateInterpretationState,
+) {
   return normalizeMatchingCandidate(
     {
       targetRoles: ['Software Engineer'],
@@ -68,9 +74,10 @@ function candidate(sources: Record[], claims?: Claim[], date = asOf) {
       evidence: sources,
     },
     vocabulary,
-    claims
-      ? { state: 'complete', interpretation: proposal(sources, claims) }
-      : undefined,
+    state ??
+      (claims
+        ? { state: 'complete', interpretation: proposal(sources, claims) }
+        : undefined),
     date,
   );
 }
@@ -80,6 +87,7 @@ function decide(
   sources: Record[],
   claims?: Claim[],
   date = asOf,
+  state?: CandidateInterpretationState,
 ) {
   const posting = normalizeMatchingPosting(
     {
@@ -93,7 +101,7 @@ function decide(
   // established the posting's role, location and requirement coverage.
   return evaluateNormalizedMatch(
     { ...posting, uncertainties: [] },
-    candidate(sources, claims, date),
+    candidate(sources, claims, date, state),
   );
 }
 
@@ -536,6 +544,68 @@ describe('deterministic evidence composition', () => {
     expect(decide(required, [ownership]).status).toBe('insufficient-evidence');
   });
 
+  it('supports developer empathy from work that addressed developers’ needs', () => {
+    const workflow = evidence(
+      'workflow',
+      'Interviewed developers about broken handoffs and redesigned the release workflow around their feedback.',
+    );
+    const required = 'Demonstrate empathy for developer experience';
+    expect(
+      decide(
+        required,
+        [workflow],
+        [claim(workflow, 'developer-experience-empathy')],
+      ).status,
+    ).toBe('qualified');
+    expect(
+      decide(
+        required,
+        [workflow],
+        [claim(workflow, 'developer-workflow-automation')],
+      ).status,
+    ).toBe('insufficient-evidence');
+  });
+
+  it('preserves explicitly declared professional and production qualifiers independently', () => {
+    const both = evidence(
+      'both',
+      'I have 6 years of professional experience with Node.js in production.',
+    );
+    const unqualified = evidence(
+      'unqualified',
+      'I have 6 years of experience with Node.js in production.',
+      {
+        activityId: 'employer',
+        activityPosition: {
+          role: 'Backend Engineer',
+          start: '2010',
+          end: '2024',
+        },
+      },
+    );
+    const declaration = (row: Record) =>
+      claim(row, 'nodejs', {
+        context: 'production',
+        support: 'stated',
+        duration: {
+          minimumYears: 6,
+          maximumYears: null,
+          entirePosition: false,
+        },
+      });
+    const professional = '6 years of professional experience with Node.js';
+    const production = '6 years of production experience with Node.js';
+    expect(decide(professional, [both], [declaration(both)]).status).toBe(
+      'qualified',
+    );
+    expect(decide(production, [both], [declaration(both)]).status).toBe(
+      'qualified',
+    );
+    expect(
+      decide(professional, [unqualified], [declaration(unqualified)]).status,
+    ).toBe('insufficient-evidence');
+  });
+
   it('preserves explicit alternatives when another option is disputed', () => {
     const react = evidence('react', 'Built accessible controls with React.');
     const positive = evidence(
@@ -614,6 +684,88 @@ describe('deterministic evidence composition', () => {
         [claim(hobby, 'nodejs', { context: 'production' })],
       ).status,
     ).toBe('insufficient-evidence');
+  });
+
+  it('does not derive professional tenure from a linked personal production action', () => {
+    const position = {
+      role: 'Backend Engineer',
+      start: '2015-01-01',
+      end: '2024-01-01',
+    };
+    const employment = evidence('role', position.role, { position });
+    const actions = [
+      'From 2016-01-01 to 2023-01-01 I ran a production Node.js service for my hobby group.',
+      'From 2016-01-01 to 2023-01-01 I operated a production Node.js service for a community I supported independently of my employer.',
+      'I operated my employer’s production Node.js service from 2016-01-01 to 2023-01-01 as an unpaid volunteer.',
+    ];
+    const period = { start: '2016-01-01', end: '2023-01-01' };
+    for (const text of actions) {
+      const personal = evidence('personal', text, {
+        activityId: employment.id,
+      });
+      const production = claim(personal, 'nodejs', {
+        context: 'production',
+        period,
+      });
+      const sources = [employment, personal];
+      expect(
+        decide('5 years of production experience with Node.js', sources, [
+          production,
+        ]).status,
+      ).toBe('qualified');
+      for (const context of ['production', null] as const)
+        expect(
+          decide('5 years of professional experience with Node.js', sources, [
+            { ...production, context },
+          ]).status,
+        ).toBe('insufficient-evidence');
+    }
+
+    const employerWork = evidence(
+      'employer-work',
+      'I operated my employer’s production Node.js service from 2016-01-01 to 2023-01-01.',
+    );
+    const production = claim(employerWork, 'nodejs', {
+      context: 'production',
+      period,
+    });
+    for (const context of ['professional', 'production'])
+      expect(
+        decide(
+          `5 years of ${context} experience with Node.js`,
+          [employerWork],
+          [production],
+        ).status,
+      ).toBe('qualified');
+    expect(
+      decide(
+        '8 years of professional experience with Node.js',
+        [employment, { ...employerWork, activityId: employment.id }],
+        [production],
+      ).status,
+    ).toBe('insufficient-evidence');
+
+    const wholeRole = evidence(
+      'owned-work',
+      'Throughout this position I operated the production Node.js service.',
+      { activityId: employment.id },
+    );
+    expect(
+      decide(
+        '5 years of professional experience with Node.js',
+        [employment, wholeRole],
+        [
+          claim(wholeRole, 'nodejs', {
+            context: 'production',
+            duration: {
+              entirePosition: true,
+              minimumYears: null,
+              maximumYears: null,
+            },
+          }),
+        ],
+      ).status,
+    ).toBe('qualified');
   });
 });
 
@@ -724,6 +876,52 @@ describe('observed time bounds', () => {
     );
   });
 
+  it.each([
+    ['at most', null],
+    ['up to', null],
+    ['only', 1],
+    ['exactly', 1],
+  ] as const)('applies a candidate-wide %s declaration without erasing hobby familiarity', (modifier, minimumYears) => {
+    const total = evidence(
+      'total',
+      `My total Node.js experience is ${modifier} one year.`,
+    );
+    const hobby = evidence(
+      'hobby',
+      'I used Node.js on a personal learning project.',
+    );
+    const maximum = claim(total, 'nodejs', {
+      support: 'stated',
+      duration: { minimumYears, maximumYears: 1, entirePosition: false },
+    });
+    expect(candidate([total], [maximum]).interpretationIssue).toBeUndefined();
+    const required = '5 years of production experience with Node.js';
+    expect(decide(required, [total]).status).toBe('conflict');
+    expect(
+      decide(required, [total, hobby], [claim(hobby, 'nodejs')]).status,
+    ).toBe('conflict');
+    expect(
+      decide('Node.js', [total, hobby], [claim(hobby, 'nodejs')]).status,
+    ).toBe('qualified');
+    expect(decide('1 year of experience with Node.js', [total]).status).toBe(
+      minimumYears === 1 ? 'qualified' : 'insufficient-evidence',
+    );
+  });
+
+  it.each([
+    'My total Node.js experience is at most one year if I count only the prototype.',
+    'My total Node.js experience is at most one to two years.',
+    'My total Node.js experience is not at most one year.',
+    'My total Node.js experience would be at most one year.',
+    'My team’s total Node.js experience is at most one year.',
+    'I used Node.js for at most one year on the prototype.',
+  ])('does not use a conditional, ambiguous or out-of-scope cap as a candidate-wide limit', (text) => {
+    const source = evidence('non-total', text);
+    expect(
+      decide('5 years of production experience with Node.js', [source]).status,
+    ).toBe('insufficient-evidence');
+  });
+
   it('uses verified position dates only for expressly whole-tenure actions', () => {
     const position = { role: 'Backend Engineer', start: '2015', end: '2024' };
     const job = evidence('job', 'Backend Engineer\n2015\n2024', {
@@ -785,7 +983,7 @@ describe('observed time bounds', () => {
         { conceptId: 'nodejs', missing: 'context', context: 'production' },
       ],
       message: expect.stringContaining(
-        'does not establish production experience',
+        'Matching still needs confirmation of production experience',
       ),
     });
     expect(findGap(decide(production, [], []))?.evidenceGaps).toBeUndefined();
@@ -877,5 +1075,176 @@ describe('observed time bounds', () => {
     expect(
       candidate([first], periods.slice(0, 2)).hasOngoingExperience,
     ).toBeUndefined();
+  });
+});
+
+describe('owner explanations for related verified work', () => {
+  it.each([
+    {
+      requirement: 'Software performance tuning',
+      related: 'software-performance-engineering',
+      text: 'I designed the rendering architecture for a scalable application.',
+      missing: 'measured software performance improvement',
+    },
+    {
+      requirement: 'Empathy for developer experience',
+      related: 'developer-tooling',
+      text: 'I built a command-line toolkit for application developers.',
+      missing: 'identified and responded to developer needs',
+    },
+  ])('shows $related as related evidence without qualifying or screening it', ({
+    requirement,
+    related,
+    text,
+    missing,
+  }) => {
+    const source = evidence('owned-related', text);
+    const proof = claim(source, related);
+    const result = decide(requirement, [source], [proof]);
+    expect(result).toMatchObject({ status: 'insufficient-evidence', score: 0 });
+    expect(result.screenedWithGaps).toBeUndefined();
+    const requirementReason = (value: typeof result) =>
+      value.reasons.find(({ code }) => code === 'required-capability');
+    expect(requirementReason(result)).toMatchObject({
+      outcome: 'unknown',
+      evidenceGaps: [{ missing: 'related', relatedCapabilities: [related] }],
+      citations: expect.arrayContaining([
+        expect.objectContaining({
+          field: 'evidence',
+          id: source.id,
+          evidenceDigest: candidateEvidenceDigest(source),
+        }),
+      ]),
+    });
+    expect(requirementReason(result)?.message).toMatch(/^Your evidence shows/u);
+    expect(requirementReason(result)?.message).toContain(missing);
+    for (const nonProof of [
+      claim(source, 'software-development'),
+      { ...proof, support: 'stated' as const },
+      { ...proof, support: 'inferred' as const },
+    ]) {
+      const weak = decide(requirement, [source], [nonProof]);
+      expect(requirementReason(weak)?.evidenceGaps).toBeUndefined();
+      expect(weak.score).toBe(0);
+    }
+  });
+});
+
+describe('source coverage and requirement explanations', () => {
+  const node = evidence('node', 'Built a Node.js request router for a lab.');
+  const react = evidence('react', 'Added keyboard navigation in React.');
+  const omitted = evidence(
+    'omitted',
+    'Operated the live Node.js service. The frontend runs separately.',
+  );
+  const relevantQuote = 'Operated the live Node.js service.';
+  const assertions = [claim(node, 'nodejs'), claim(react, 'react')];
+  const sources = [node, react, omitted];
+  type Coverage = NonNullable<CandidateInterpretation['sourceCoverage']>;
+  function partial(issue: Coverage[number]['issues'][number]) {
+    return {
+      state: 'partial',
+      interpretation: {
+        assertions,
+        reviewedSourceIds: [node.id, react.id],
+        unresolvedSourceIds: [omitted.id],
+        sourceCoverage: [
+          { sourceId: node.id, issues: [] },
+          { sourceId: react.id, issues: [] },
+          { sourceId: omitted.id, issues: [issue] },
+        ],
+      },
+    } satisfies CandidateInterpretationState;
+  }
+  const omittedPositive = partial({
+    kind: 'omitted-positive',
+    conceptId: 'nodejs',
+    quote: relevantQuote,
+  });
+  const match = (required: string, state: CandidateInterpretationState) =>
+    decide(required, sources, undefined, asOf, state);
+  const requirement = (result: ReturnType<typeof decide>) =>
+    result.reasons.find(({ code }) => code === 'required-capability');
+
+  it('cites the exact relevant omitted positive and preserves unrelated specificity gaps', () => {
+    const result = match('production experience with Node.js', omittedPositive);
+    expect(result.status).toBe('insufficient-evidence');
+    expect(requirement(result)).toMatchObject({
+      outcome: 'unknown',
+      message: expect.stringContaining('relevant evidence'),
+      citations: expect.arrayContaining([
+        {
+          field: 'evidence',
+          id: omitted.id,
+          start: 0,
+          end: relevantQuote.length,
+          text: relevantQuote,
+          evidenceDigest: candidateEvidenceDigest(omitted),
+        },
+      ]),
+    });
+    expect(requirement(result)?.evidenceGaps).toBeUndefined();
+    const unrelated = requirement(
+      match('production experience with React', omittedPositive),
+    );
+    expect(unrelated?.message).toContain(
+      'Matching still needs confirmation of production',
+    );
+    expect(unrelated?.citations.some(({ id }) => id === omitted.id)).toBe(
+      false,
+    );
+  });
+
+  it('qualifies already proven requirements only when exact coverage leaves positive omissions alone', () => {
+    expect(match('React', omittedPositive).status).toBe('qualified');
+    const { sourceCoverage: _coverage, ...legacy } =
+      omittedPositive.interpretation;
+    expect(
+      match('React', { state: 'partial', interpretation: legacy }).status,
+    ).toBe('insufficient-evidence');
+    expect(
+      match('React', {
+        state: 'failed',
+        interpretation: omittedPositive.interpretation,
+      }).status,
+    ).toBe('insufficient-evidence');
+    expect(
+      match('React', {
+        ...omittedPositive,
+        interpretation: {
+          ...omittedPositive.interpretation,
+          sourceCoverage:
+            omittedPositive.interpretation.sourceCoverage.slice(1),
+        },
+      }).status,
+    ).toBe('insufficient-evidence');
+  });
+
+  it('distinguishes a possible restriction from unread evidence and blocks qualification for both', () => {
+    const restriction = partial({
+      kind: 'unassessed-restriction',
+      conceptId: 'react',
+      quote: null,
+    });
+    const unread = partial({
+      kind: 'unread',
+      conceptId: null,
+      quote: null,
+    });
+    const restricted = match('React', restriction);
+    expect(restricted.status).toBe('insufficient-evidence');
+    expect(requirement(restricted)?.message).toContain('possible restriction');
+    const unreadResult = match('React', unread);
+    expect(unreadResult.status).toBe('insufficient-evidence');
+    expect(requirement(unreadResult)?.message).toContain(
+      'has not been reviewed',
+    );
+    const missing = requirement(
+      match('production experience with React', unread),
+    );
+    expect(missing?.evidenceGaps).toBeUndefined();
+    expect(missing?.message).not.toContain(
+      'Matching still needs confirmation of production',
+    );
   });
 });

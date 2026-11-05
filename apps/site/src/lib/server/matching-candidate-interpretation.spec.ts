@@ -1,13 +1,19 @@
 import type { AIResponse } from '@happyvertical/ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiUsageRefusedError } from './ai-usage-guard.js';
-import { candidateInterpretationConcepts } from './matching-candidate-contract.js';
+import {
+  type CandidateInterpretation,
+  candidateInterpretationConcepts,
+} from './matching-candidate-contract.js';
 import {
   chunkMatchingCandidateEvidence,
   estimateMatchingCandidateInterpretation,
   interpretMatchingCandidateChunk,
   matchingCandidateDraftRequestId,
+  matchingCandidateRepairRequestId,
   matchingCandidateVerificationRequestId,
+  reconcileCandidateRepair,
+  repairMatchingCandidateChunk,
   verifyMatchingCandidateChunk,
 } from './matching-candidate-interpretation.js';
 import { compileMatchingVocabulary } from './normalized-matching.js';
@@ -169,7 +175,7 @@ describe('private candidate interpretation provider', () => {
     const result = await interpretMatchingCandidateChunk(narrativeOptions);
     const [messages, config] = mocks.chat.mock.calls[0];
     expect(messages[0].content).toContain(
-      'use the stronger production context',
+      'Preserve production when the passage establishes both',
     );
     expect(config.model).toBe('openai/gpt-6.1-sol');
     expect(config.user).toBe(predictedRequestId);
@@ -183,7 +189,8 @@ describe('private candidate interpretation provider', () => {
       id: `position:${index}`,
     }));
     const chunks = chunkMatchingCandidateEvidence({ evidence }, vocabulary);
-    expect(chunks).toHaveLength(3);
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    expect(chunks.every(({ evidence }) => evidence.length <= 24)).toBe(true);
     expect(chunks.flatMap((chunk) => chunk.evidence)).toEqual(evidence);
     expect(chunkMatchingCandidateEvidence({ evidence }, vocabulary)).toEqual(
       chunks,
@@ -191,11 +198,13 @@ describe('private candidate interpretation provider', () => {
     expect(
       estimateMatchingCandidateInterpretation({ evidence }, vocabulary),
     ).toEqual({
-      chunks: 3,
-      requests: 6,
+      chunks: chunks.length,
+      requests: chunks.length * 4,
       sources: 50,
       estimatedInputTokens: expect.any(Number),
       reservedSpendMicros: expect.any(Number),
+      draftAndVerificationReservedSpendMicros: expect.any(Number),
+      largestStageReservationMicros: expect.any(Number),
     });
     expect(mocks.profile).not.toHaveBeenCalled();
     expect(mocks.reserve).not.toHaveBeenCalled();
@@ -258,7 +267,7 @@ describe('private candidate interpretation provider', () => {
       expect(serialized).not.toContain(privateIdentifier);
     expect(chatOptions).toMatchObject({
       model: 'openai/gpt-6-luna',
-      maxTokens: 4_096,
+      maxTokens: 6_144,
       continueOnLength: false,
       reasoning: { maxTokens: 1_024 },
       timeout: 60_000,
@@ -309,6 +318,7 @@ describe('private candidate interpretation provider', () => {
       ...wire,
       assertions: [{ ...wire.assertions[0], sourceId: source.id }],
       reviewedSourceIds: [source.id],
+      sourceCoverage: [{ sourceId: source.id, issues: [] }],
     });
   });
 
@@ -326,11 +336,12 @@ describe('private candidate interpretation provider', () => {
     });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
+        priorChallenges: [],
         decisions: [
-          { index: 1, supported: false },
-          { index: 0, supported: true },
+          { index: 1, reason: 'concept', omitted: [] },
+          { index: 0, reason: 'accepted', omitted: [] },
         ],
-        unresolvedSourceIds: [],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
       }),
       usage,
     });
@@ -346,23 +357,25 @@ describe('private candidate interpretation provider', () => {
     );
     expect(verified.interpretation).toEqual({
       assertions: [{ ...wire.assertions[0], sourceId: source.id }],
-      reviewedSourceIds: [],
-      unresolvedSourceIds: [source.id],
+      reviewedSourceIds: [source.id],
+      unresolvedSourceIds: [],
+      sourceCoverage: [{ sourceId: source.id, issues: [] }],
     });
     const [messages, chatOptions] = mocks.chat.mock.calls[1];
     expect(messages[0].content).toContain('Independently verify');
     expect(messages[1].content).toContain(text);
     expect(JSON.parse(messages[1].content).implications).toContainEqual([
-      'backend-development',
-      expect.arrayContaining(['software-development']),
+      draftConceptId('backend-development'),
+      expect.arrayContaining([draftConceptId('software-development')]),
     ]);
-    expect(messages[1].content).toContain('nodejs');
+    expect(messages[1].content).toContain('Node.js');
     expect(messages[2].content).not.toContain('nodejs');
-    expect(messages[2].content).toContain('system-scalability');
+    expect(messages[2].content).toContain(draftConceptId('system-scalability'));
     expect(JSON.stringify(messages)).not.toContain(source.id);
     expect(chatOptions).toMatchObject({
       model: 'openai/gpt-6.1-sol',
-      maxTokens: 2_048,
+      maxTokens: 4_096,
+      reasoning: { effort: 'low', maxTokens: 1_024 },
       responseFormat: {
         type: 'json_schema',
         json_schema: {
@@ -374,7 +387,9 @@ describe('private candidate interpretation provider', () => {
                 maxItems: 2,
                 items: { properties: { index: { minimum: 0, maximum: 1 } } },
               },
-              unresolvedSourceIds: { items: { enum: ['source-1'] } },
+              sourceCoverage: {
+                items: { properties: { sourceId: { enum: ['source-1'] } } },
+              },
             },
           },
         },
@@ -395,6 +410,61 @@ describe('private candidate interpretation provider', () => {
     );
   });
 
+  it('shares the attributed work rubric and rejects mere supervision and unperformed assignments', async () => {
+    const quotes = [
+      'In my role I was directly accountable for running scheduled rollouts for the live service.',
+      'I supervised the team. My colleague performed the production deployments.',
+      'I was assigned the production rollout, but I never carried it out.',
+    ];
+    const records = quotes.map((quote, index) => ({
+      ...source,
+      id: `operation-${index}`,
+      text: quote,
+      kind: 'experience' as const,
+    }));
+    const aliases = ['source-1', 'source-2', 'source-3'];
+    mocks.chat
+      .mockResolvedValueOnce({
+        content: serializeDraft({
+          ...wire,
+          reviewedSourceIds: aliases,
+          assertions: quotes.map((quote, index) => ({
+            ...wire.assertions[0],
+            sourceId: aliases[index],
+            conceptId: 'service-deployment',
+            quote,
+          })),
+        }),
+        usage,
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          decisions: [
+            { index: 0, reason: 'accepted', omitted: [] },
+            { index: 1, reason: 'actor', omitted: [] },
+            { index: 2, reason: 'polarity', omitted: [] },
+          ],
+          priorChallenges: [],
+          sourceCoverage: aliases.map((sourceId) => ({ sourceId, issues: [] })),
+        }),
+        usage,
+      });
+    const request = { ...options, input: { evidence: records } };
+    const { interpretation: draft } =
+      await interpretMatchingCandidateChunk(request);
+    const { interpretation } = await verifyMatchingCandidateChunk({
+      ...request,
+      draft,
+    });
+    expect(interpretation.assertions).toEqual([
+      expect.objectContaining({ quote: quotes[0], support: 'action' }),
+    ]);
+    for (const [messages] of mocks.chat.mock.calls)
+      expect(messages[0].content).toContain(
+        'Explicit first-person responsibility for specific operations',
+      );
+  });
+
   it('verifies empty drafts and can flag omitted candidate evidence', async () => {
     const draft = {
       assertions: [],
@@ -403,18 +473,413 @@ describe('private candidate interpretation provider', () => {
     };
     mocks.chat.mockResolvedValue({
       content: JSON.stringify({
+        priorChallenges: [],
         decisions: [],
-        unresolvedSourceIds: ['source-1'],
+        sourceCoverage: [
+          {
+            sourceId: 'source-1',
+            issues: [
+              {
+                kind: 'omitted-positive',
+                conceptId: draftConceptId('postgresql'),
+                quote: text,
+              },
+            ],
+          },
+        ],
       }),
       usage,
     });
     const result = await verifyMatchingCandidateChunk({ ...options, draft });
-    expect(mocks.chat.mock.calls[0][0][1].content).toContain('postgresql');
+    expect(mocks.chat.mock.calls[0][0][1].content).toContain('PostgreSQL');
     expect(result.interpretation).toEqual({
       assertions: [],
       reviewedSourceIds: [],
       unresolvedSourceIds: [source.id],
+      sourceCoverage: [
+        {
+          sourceId: source.id,
+          issues: [
+            { kind: 'omitted-positive', conceptId: 'postgresql', quote: text },
+          ],
+        },
+      ],
     });
+  });
+
+  it.each([
+    { kind: 'omitted-positive', conceptId: null, quote: text },
+    { kind: 'omitted-positive', conceptId: 'c9999', quote: text },
+    {
+      kind: 'omitted-positive',
+      conceptId: draftConceptId('postgresql'),
+      quote: 'Invented quote',
+    },
+    { kind: 'unread', conceptId: draftConceptId('postgresql'), quote: text },
+  ])('rejects malformed diagnostics after settling provider usage', async (issue) => {
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify({
+        priorChallenges: [],
+        decisions: [],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [issue] }],
+      }),
+      usage,
+    });
+    const draft = {
+      assertions: [],
+      reviewedSourceIds: [source.id],
+      unresolvedSourceIds: [],
+    };
+    await expect(
+      verifyMatchingCandidateChunk({ ...options, draft }),
+    ).rejects.toMatchObject({
+      code: 'candidate_interpretation_output',
+    });
+    expect(mocks.settle).toHaveBeenCalledWith(5_000, 'actual');
+  });
+
+  it.each([
+    'accepted',
+    'context',
+  ] as const)('audits a repair and its previously verified fallback independently (%s)', async (revisionReason) => {
+    const denial = 'I have never used Node.js in production.';
+    const unknownRestriction = 'I have limits I cannot describe.';
+    const capture = {
+      ...source,
+      text: [text, denial, unknownRestriction].join(' '),
+    };
+    const request = { ...options, input: { evidence: [capture] } };
+    const initialClaim = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      context: null,
+    };
+    const scopedDenial = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      quote: denial,
+      conceptId: 'nodejs',
+      support: 'stated' as const,
+      polarity: 'negative' as const,
+    };
+    const omitted = {
+      kind: 'omitted-positive',
+      conceptId: 'postgresql',
+      quote: text,
+    } as const;
+    const restriction = {
+      kind: 'unassessed-restriction',
+      conceptId: null,
+      quote: unknownRestriction,
+    } as const;
+    const verified: CandidateInterpretation = {
+      assertions: [initialClaim, scopedDenial],
+      reviewedSourceIds: [],
+      unresolvedSourceIds: [source.id],
+      sourceCoverage: [{ sourceId: source.id, issues: [omitted, restriction] }],
+    };
+    const revised = { ...initialClaim, context: 'production' as const };
+    const { activities } = JSON.parse(
+      serializeDraft({
+        ...wire,
+        assertions: [{ ...revised, sourceId: 'source-1' }],
+      }),
+    );
+    mocks.chat
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ activities }),
+        usage,
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          priorChallenges: [],
+          decisions: [{ index: 0, reason: revisionReason, omitted: [] }],
+          sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+        }),
+        usage,
+      });
+    const repairRequest = { ...request, verified };
+    const repair = await repairMatchingCandidateChunk(repairRequest);
+    expect(repair.requestId).toBe(
+      matchingCandidateRepairRequestId(repairRequest),
+    );
+    expect(repair.requestId).not.toBe(matchingCandidateDraftRequestId(request));
+    expect(repair.interpretation.assertions).toEqual([revised, scopedDenial]);
+    const [repairMessages] = mocks.chat.mock.calls[0];
+    expect(repairMessages[1].content).toContain(denial);
+    expect(repairMessages[3].content).toContain('omitted-positive');
+    expect(JSON.stringify(repairMessages)).not.toContain(source.id);
+    const audited = await verifyMatchingCandidateChunk({
+      ...request,
+      requestId: 'opaque-repair-audit-0001',
+      draft: repair.interpretation,
+      prior: verified,
+    });
+    const strong = revisionReason === 'accepted';
+    expect(reconcileCandidateRepair(verified, audited.interpretation)).toEqual({
+      assertions: [strong ? revised : initialClaim, scopedDenial],
+      reviewedSourceIds: [],
+      unresolvedSourceIds: [source.id],
+      sourceCoverage: [
+        {
+          sourceId: source.id,
+          issues: strong ? [restriction] : [omitted, restriction],
+        },
+      ],
+    });
+    expect(mocks.fence).toHaveBeenCalledTimes(2);
+  });
+
+  it('tracks restrictions independently even when the verifier rejects a known proposed denial', async () => {
+    const quote = 'I have never used PostgreSQL in production.';
+    const request = {
+      ...options,
+      input: { evidence: [{ ...source, text: quote }] },
+    };
+    const assertion = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      quote,
+      support: 'stated' as const,
+      polarity: 'negative' as const,
+    };
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify({
+        priorChallenges: [],
+        decisions: [{ index: 0, reason: 'projection', omitted: ['context'] }],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+      }),
+      usage,
+    });
+    const { interpretation } = await verifyMatchingCandidateChunk({
+      ...request,
+      draft: {
+        assertions: [assertion],
+        reviewedSourceIds: [source.id],
+        unresolvedSourceIds: [],
+      },
+    });
+    expect(interpretation).toEqual({
+      assertions: [],
+      reviewedSourceIds: [],
+      unresolvedSourceIds: [source.id],
+      sourceCoverage: [
+        {
+          sourceId: source.id,
+          issues: [
+            { kind: 'unassessed-restriction', conceptId: 'postgresql', quote },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('retains a verified standalone action after an atomic projection but cannot salvage an unsupported tool binding', async () => {
+    const quote =
+      'From 2020-01-01 through 2024-12-31 I instrumented traces for a customer-facing service.';
+    const activityQuote = `${quote} For a separate prototype, I reviewed PostgreSQL query plans.`;
+    const input = { evidence: [{ ...source, text: activityQuote }] };
+    const claim = {
+      ...wire.assertions[0],
+      conceptId: 'observability',
+      sourceId: source.id,
+      quote,
+      activityQuote,
+      period: { start: '2020-01-01', end: '2024-12-31' },
+    };
+    const unsupported = {
+      ...claim,
+      conceptId: 'database-performance-tuning',
+      quote: activityQuote,
+    };
+    const draft = {
+      assertions: [claim, unsupported],
+      reviewedSourceIds: [source.id],
+      unresolvedSourceIds: [],
+      sourceCoverage: [{ sourceId: source.id, issues: [] }],
+    };
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify({
+        priorChallenges: [
+          {
+            index: 0,
+            reason: 'projection',
+            omitted: ['context', 'time', 'activity'],
+            quote: activityQuote,
+          },
+        ],
+        decisions: [{ index: 0, reason: 'binding', omitted: [] }],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+      }),
+      usage,
+    });
+    const { interpretation } = await verifyMatchingCandidateChunk({
+      ...options,
+      input,
+      draft,
+      prior: { ...draft, assertions: [claim] },
+    });
+    expect(interpretation.assertions).toEqual([
+      { ...claim, context: null, period: null, activityQuote: null },
+    ]);
+  });
+
+  it.each([
+    'unrelated',
+    'actor',
+    'invalid-attribution',
+  ] as const)('checks %s repair changes against a prior independently verified ledger', async (scenario) => {
+    const production =
+      'I maintained the customer-facing backend using Node.js.';
+    const actor = 'My colleague actually maintained that backend.';
+    const denial = 'I have never used PostgreSQL in production.';
+    const deltaQuote = 'I built a React dashboard.';
+    const capture = {
+      ...source,
+      text: [production, actor, denial, deltaQuote].join(' '),
+    };
+    const work = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      conceptId: 'nodejs',
+      quote: production,
+    };
+    const limit = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      support: 'stated' as const,
+      polarity: 'negative' as const,
+      quote: denial,
+    };
+    const delta = {
+      ...work,
+      conceptId: 'react',
+      context: null,
+      quote: deltaQuote,
+    };
+    const prior = {
+      assertions: [work, limit],
+      reviewedSourceIds: [source.id],
+      unresolvedSourceIds: [],
+      sourceCoverage: [{ sourceId: source.id, issues: [] }],
+    };
+    const challenges =
+      scenario === 'unrelated'
+        ? []
+        : [
+            {
+              index: 0,
+              reason: 'actor',
+              omitted: [],
+              quote:
+                scenario === 'actor' ? actor : 'An invented actor passage.',
+            },
+            { index: 1, reason: 'scope', omitted: [], quote: denial },
+          ];
+    mocks.chat.mockResolvedValue({
+      content: JSON.stringify({
+        decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+        priorChallenges: challenges,
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+      }),
+      usage,
+    });
+    const result = verifyMatchingCandidateChunk({
+      ...options,
+      input: { evidence: [capture] },
+      prior,
+      draft: { ...prior, assertions: [...prior.assertions, delta] },
+    });
+    if (scenario === 'invalid-attribution') {
+      await expect(result).rejects.toMatchObject({
+        detail: 'verifier_attribution',
+      });
+      return;
+    }
+    const { interpretation } = await result;
+    const [messages] = mocks.chat.mock.calls[0];
+    const payload = JSON.parse(messages[2].content);
+    expect(payload.assertions).toHaveLength(1);
+    expect(payload.previouslyVerified).toHaveLength(2);
+    expect(interpretation.assertions).toEqual(
+      scenario === 'unrelated' ? [work, limit, delta] : [delta],
+    );
+    if (scenario === 'actor')
+      expect(interpretation.sourceCoverage?.[0].issues).toEqual([
+        {
+          kind: 'unassessed-restriction',
+          conceptId: 'postgresql',
+          quote: denial,
+        },
+      ]);
+  });
+
+  it('accepts an independently checked correction to challenged dates without clearing a restriction', async () => {
+    const quote =
+      'The customer-facing service ran from 2018-01-01 to 2024-12-31. I maintained its Node.js backend from 2020-01-01 to 2024-12-31.';
+    const capture = { ...source, text: quote };
+    const request = { ...options, input: { evidence: [capture] } };
+    const old = {
+      ...wire.assertions[0],
+      sourceId: source.id,
+      conceptId: 'nodejs',
+      quote,
+      period: { start: '2018-01-01', end: '2024-12-31' },
+    };
+    const revised = {
+      ...old,
+      period: { start: '2020-01-01', end: '2024-12-31' },
+    };
+    const restriction = {
+      kind: 'unassessed-restriction',
+      conceptId: null,
+      quote: null,
+    } as const;
+    const prior: CandidateInterpretation = {
+      assertions: [old],
+      reviewedSourceIds: [],
+      unresolvedSourceIds: [source.id],
+      sourceCoverage: [
+        {
+          sourceId: source.id,
+          issues: [
+            { kind: 'omitted-positive', conceptId: 'nodejs', quote },
+            restriction,
+          ],
+        },
+      ],
+    };
+    const { activities } = JSON.parse(
+      serializeDraft({
+        ...wire,
+        assertions: [{ ...revised, sourceId: 'source-1' }],
+      }),
+    );
+    mocks.chat
+      .mockResolvedValueOnce({ content: JSON.stringify({ activities }), usage })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+          priorChallenges: [
+            { index: 0, reason: 'projection', omitted: ['time'], quote },
+          ],
+          sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+        }),
+        usage,
+      });
+    const { interpretation: draft } = await repairMatchingCandidateChunk({
+      ...request,
+      verified: prior,
+    });
+    const { interpretation } = await verifyMatchingCandidateChunk({
+      ...request,
+      draft,
+      prior,
+      requestId: 'opaque-repair-audit-0002',
+    });
+    const result = reconcileCandidateRepair(prior, interpretation);
+    expect(result.assertions).toEqual([revised]);
+    expect(result.sourceCoverage?.[0].issues).toContainEqual(restriction);
   });
 
   it('keeps a short exact positive action with unproven context scoped as unresolved', async () => {
@@ -445,8 +910,9 @@ describe('private candidate interpretation provider', () => {
     });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
-        decisions: [{ index: 0, supported: true }],
-        unresolvedSourceIds: [],
+        priorChallenges: [],
+        decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
       }),
       usage,
     });
@@ -463,7 +929,13 @@ describe('private candidate interpretation provider', () => {
       ...request,
       draft,
     });
-    expect(interpretation).toEqual(draft);
+    expect(interpretation).toEqual({
+      ...draft,
+      sourceCoverage: draft.sourceCoverage?.map(({ sourceId, issues }) => ({
+        sourceId,
+        issues: issues.filter(({ kind }) => kind !== 'unread'),
+      })),
+    });
   });
 
   it('sends a shared exact activity anchor once and verifies each claim separately', async () => {
@@ -489,11 +961,12 @@ describe('private candidate interpretation provider', () => {
     });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
+        priorChallenges: [],
         decisions: [
-          { index: 0, supported: true },
-          { index: 1, supported: false },
+          { index: 0, reason: 'accepted', omitted: [] },
+          { index: 1, reason: 'concept', omitted: [] },
         ],
-        unresolvedSourceIds: [],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
       }),
       usage,
     });
@@ -503,8 +976,9 @@ describe('private candidate interpretation provider', () => {
     const verified = await verifyMatchingCandidateChunk({ ...request, draft });
     expect(verified.interpretation).toEqual({
       assertions: [{ ...deployed, sourceId: capture.id }],
-      reviewedSourceIds: [],
-      unresolvedSourceIds: [capture.id],
+      reviewedSourceIds: [capture.id],
+      unresolvedSourceIds: [],
+      sourceCoverage: [{ sourceId: capture.id, issues: [] }],
     });
     const [messages] = mocks.chat.mock.calls[1];
     const material = JSON.parse(messages[2].content);
@@ -545,10 +1019,23 @@ describe('private candidate interpretation provider', () => {
       ...options,
       input: { evidence: [capture] },
     });
-    expect(interpretation).toEqual({
+    expect(interpretation).toMatchObject({
       assertions: [],
       reviewedSourceIds: [],
       unresolvedSourceIds: [capture.id],
+      sourceCoverage: [
+        {
+          sourceId: capture.id,
+          issues: [
+            { kind: 'unread', conceptId: null, quote: null },
+            {
+              kind: 'unassessed-restriction',
+              conceptId: 'postgresql',
+              quote: 'I have never used PostgreSQL',
+            },
+          ],
+        },
+      ],
     });
   });
 
@@ -580,8 +1067,13 @@ describe('private candidate interpretation provider', () => {
     mocks.chat.mockResolvedValueOnce({ content: proposed, usage });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
-        decisions: assertions.map((_, index) => ({ index, supported: true })),
-        unresolvedSourceIds: [],
+        priorChallenges: [],
+        decisions: assertions.map((_, index) => ({
+          index,
+          reason: 'accepted',
+          omitted: [],
+        })),
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
       }),
       usage,
     });
@@ -617,15 +1109,28 @@ describe('private candidate interpretation provider', () => {
   });
 
   it.each([
-    { decisions: [], unresolvedSourceIds: [] },
-    { decisions: [{ index: 1, supported: true }], unresolvedSourceIds: [] },
     {
-      decisions: [{ index: 0, supported: true }],
-      unresolvedSourceIds: ['source-2'],
+      priorChallenges: [],
+      decisions: [],
+      sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
     },
     {
-      decisions: [{ index: 0, supported: true }],
-      unresolvedSourceIds: ['source-1', 'source-1'],
+      priorChallenges: [],
+      decisions: [{ index: 1, reason: 'accepted', omitted: [] }],
+      sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
+    },
+    {
+      priorChallenges: [],
+      decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+      sourceCoverage: [{ sourceId: 'source-2', issues: [] }],
+    },
+    {
+      priorChallenges: [],
+      decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+      sourceCoverage: [
+        { sourceId: 'source-1', issues: [] },
+        { sourceId: 'source-1', issues: [] },
+      ],
     },
   ])('rejects malformed verifier coverage after accounting for usage', async (output) => {
     const draft = {
@@ -720,7 +1225,7 @@ describe('private candidate interpretation provider', () => {
       reviewedSourceIds: ['source-2'],
       unresolvedSourceIds: ['source-1', 'source-1'],
     },
-  ])('keeps claims from ambiguously accounted sources unresolved through verification', async (coverage) => {
+  ])('lets the independent full-source audit resolve incomplete draft accounting', async (coverage) => {
     const second = { ...source, id: 'position:second-private' };
     const chunk = { ...options, input: { evidence: [source, second] } };
     mocks.chat.mockResolvedValueOnce({
@@ -729,22 +1234,34 @@ describe('private candidate interpretation provider', () => {
     });
     const { interpretation: draft } =
       await interpretMatchingCandidateChunk(chunk);
-    expect(draft).toEqual({
+    expect(draft).toMatchObject({
       assertions: [{ ...wire.assertions[0], sourceId: source.id }],
       reviewedSourceIds: [second.id],
       unresolvedSourceIds: [source.id],
     });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
-        decisions: [{ index: 0, supported: true }],
-        unresolvedSourceIds: [],
+        priorChallenges: [],
+        decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+        sourceCoverage: [
+          { sourceId: 'source-1', issues: [] },
+          { sourceId: 'source-2', issues: [] },
+        ],
       }),
       usage,
     });
     await expect(
       verifyMatchingCandidateChunk({ ...chunk, draft }),
     ).resolves.toMatchObject({
-      interpretation: draft,
+      interpretation: {
+        assertions: draft.assertions,
+        reviewedSourceIds: [source.id, second.id],
+        unresolvedSourceIds: [],
+        sourceCoverage: [
+          { sourceId: source.id, issues: [] },
+          { sourceId: second.id, issues: [] },
+        ],
+      },
     });
   });
 
@@ -827,8 +1344,9 @@ describe('private candidate interpretation provider', () => {
     });
     mocks.chat.mockResolvedValueOnce({
       content: JSON.stringify({
-        decisions: [{ index: 0, supported: true }],
-        unresolvedSourceIds: [],
+        priorChallenges: [],
+        decisions: [{ index: 0, reason: 'accepted', omitted: [] }],
+        sourceCoverage: [{ sourceId: 'source-1', issues: [] }],
       }),
       usage,
     });
@@ -836,7 +1354,7 @@ describe('private candidate interpretation provider', () => {
       ...options,
       input,
     });
-    expect(draft).toEqual({
+    expect(draft).toMatchObject({
       assertions: [{ ...assertion, sourceId: source.id }],
       reviewedSourceIds: [],
       unresolvedSourceIds: [source.id],
@@ -844,7 +1362,11 @@ describe('private candidate interpretation provider', () => {
     await expect(
       verifyMatchingCandidateChunk({ ...options, input, draft }),
     ).resolves.toMatchObject({
-      interpretation: draft,
+      interpretation: {
+        assertions: draft.assertions,
+        reviewedSourceIds: [source.id],
+        unresolvedSourceIds: [],
+      },
     });
     const [messages] = mocks.chat.mock.calls[1];
     expect(JSON.parse(messages[2].content).assertions[0].at(-1)).toEqual(
@@ -965,8 +1487,8 @@ describe('private candidate interpretation provider', () => {
         finishReason: 'length',
         usage: {
           promptTokens: 2_000,
-          completionTokens: 6_000,
-          totalTokens: 8_000,
+          completionTokens: 8_000,
+          totalTokens: 10_000,
         },
       },
       detail: 'usage_limit',

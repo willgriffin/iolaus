@@ -144,7 +144,9 @@ consumes the saved interpretation and never initiates outbound calls.
 
 Private candidate interpretation is a separate opt-in worker. It reads the
 verified owner's current resume skills, positions, achievements, explicit
-experience note, and career records selected for use on the resume.
+experience note, and authored career records selected for use on the resume.
+The selected profile summary and canonical other-career narratives are
+included as prose. They do not confer trusted role or tenure metadata.
 Exact evidence citations stay in the owned profile snapshot. Verified project
 links allow related records to establish conditions together. Requirements
 that ask for independent capabilities can use separate activities. Named
@@ -160,9 +162,26 @@ the current principal, profile permission, and lease before sending each bounded
 A chunk containing narrative career evidence uses a stronger draft model.
 The model choice depends on the evidence type and does not depend on a posting.
 A separate verifier checks that the original evidence supports the drafted
-claim, including who performed the work, its context, and any duration.
+claim, including who performed the work, its strongest supported context,
+and any duration. Professional attribution and production use are separate
+facts. Independently supported dated intervals are combined by their union.
+An attributed responsibility for carrying out a specific operation can
+establish operational experience. General duties and supervision do not
+establish who performed a technical action.
 The worker saves each validated draft before verification, so a safe retry
-can reuse paid work. Publication advances the matching generation atomically.
+can reuse paid work. The verifier accounts for each source and distinguishes
+an omitted positive from an unresolved restriction or an unread source.
+When an audit identifies a grounded omission, the worker can request one
+bounded repair using the original evidence and the audit findings. A second
+independent audit verifies the proposed changes and checks the full sources
+for restrictions and contradictions. It can reject or narrow a previously
+verified claim when it cites the passage that establishes the defect.
+An audit can explicitly verify a narrower positive assertion with
+unsupported context, time, or activity grouping removed. Every remaining
+field must hold on its own evidence. This rule preserves the scope of
+denials and upper bounds. The worker checkpoints each paid phase and retains
+the first verified result if repair fails. Publication advances the matching
+generation atomically.
 When settled usage accompanies a confirmed output-length limit, the worker
 can split one draft chunk into two smaller requests. The saved plan retains
 earlier verified chunks and gives each half a distinct request ID. Ambiguous
@@ -175,12 +194,22 @@ passes.
 
 Previously verified chunks remain usable if a later chunk fails. A posting
 can show recognized evidence with an interpretation caution while remaining
-outside Qualified. An unresolved source flag does not identify whether
-the source contains a missing positive claim or an unclear restriction.
+outside Qualified. Unread sources and unassessed restrictions keep the
+qualification gate closed. The detail view can distinguish an unrepresented
+positive from missing scope or duration, with citations available to the
+current owner.
+Verified related work can explain a gap, such as performance engineering
+without measured tuning or developer tooling without demonstrated developer
+needs research. Related citations do not add screening or ranking credit.
+Preserving posting thresholds such as familiarity is tracked separately in
+[issue #315](https://github.com/willgriffin/iolaus/issues/315).
 Evidence that states a duration contributes only to the
 named activity. Undated durations are never added together, and trusted role
 dates count for a technology only when verified evidence connects the
 activity to the entire role.
+An explicit candidate-wide maximum can rule out a longer required duration
+even if the candidate demonstrates familiarity. A limit on one activity
+applies only to that activity.
 
 Ongoing duration lower bounds refresh through the bounded comparison worker
 as UTC dates advance. Existing current results stay visible during this

@@ -52,7 +52,7 @@ async function seed(db: DatabaseInterface) {
     "INSERT INTO memberships VALUES ('tenant','owner','active','member')",
   );
   await db.query(
-    `INSERT INTO candidate_profiles VALUES (?, TRUE, 'tenant', 'owner', ?, ?, '{}')`,
+    `INSERT INTO candidate_profiles (id, active, tenant_id, owner_user_id, preferences_json, facts_json, target_work_country_json) VALUES (?, TRUE, 'tenant', 'owner', ?, ?, '{}')`,
     [
       profileId,
       JSON.stringify({

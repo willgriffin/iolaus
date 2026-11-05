@@ -36,7 +36,7 @@ async function seed(db: DatabaseInterface, dialect: MatchingDialect) {
     [other, 'tenant-b', 'other'],
   ]) {
     await db.query(
-      `INSERT INTO candidate_profiles VALUES (?, TRUE, ?, ?, ?, '{"facts":{},"version":1}', '{}')`,
+      `INSERT INTO candidate_profiles (id, active, tenant_id, owner_user_id, preferences_json, facts_json, target_work_country_json) VALUES (?, TRUE, ?, ?, ?, '{"facts":{},"version":1}', '{}')`,
       [
         profileId,
         tenant,
@@ -58,6 +58,7 @@ type WorkerOptions = NonNullable<
 >;
 type Provider = NonNullable<WorkerOptions['interpret']>;
 type Verifier = NonNullable<WorkerOptions['verify']>;
+type Repairer = NonNullable<WorkerOptions['repair']>;
 const allowed: NonNullable<WorkerOptions['asOwner']> = async (scope, work) => {
   expect(scope).toMatchObject({
     tenantId: 'tenant-a',
@@ -88,6 +89,7 @@ function proof(input: Parameters<Provider>[0]['input']) {
     ],
     reviewedSourceIds: [source.id],
     unresolvedSourceIds: [],
+    sourceCoverage: [{ sourceId: source.id, issues: [] }],
   };
 }
 
@@ -504,6 +506,140 @@ describe.each(
         state: 'complete',
         draft_json: '',
       });
+    } finally {
+      await close();
+    }
+  });
+
+  it.each([
+    'repair',
+    'repair-verify',
+    'provider-failure',
+    'ownership-transfer',
+  ] as const)('checkpoints verified evidence across %s', async (interruptedPhase) => {
+    const { database: db, close } = await createMatchingProjectionFixture(
+      dialect,
+      postgresUrl,
+    );
+    try {
+      await seed(db, dialect);
+      let now = Date.now();
+      let refused = false;
+      const paid: string[] = [];
+      const interpret: Provider = async ({ input, requestId, revalidate }) => {
+        await revalidate();
+        paid.push(requestId);
+        return { interpretation: proof(input), requestId };
+      };
+      const verify: Verifier = async ({ draft, requestId, revalidate }) => {
+        const repaired = requestId.endsWith('-repair-verify');
+        if (repaired && interruptedPhase === 'repair-verify' && !refused) {
+          refused = true;
+          throw new AiUsageRefusedError('user_budget_exhausted', 'budget');
+        }
+        await revalidate();
+        paid.push(requestId);
+        const [claim] = draft.assertions;
+        const { sourceId, quote, conceptId } = claim;
+        return {
+          requestId,
+          interpretation: {
+            assertions: [claim],
+            reviewedSourceIds: repaired ? [sourceId] : [],
+            unresolvedSourceIds: repaired ? [] : [sourceId],
+            sourceCoverage: [
+              {
+                sourceId,
+                issues: repaired
+                  ? []
+                  : [{ kind: 'omitted-positive', conceptId, quote }],
+              },
+            ],
+          },
+        };
+      };
+      const repair: Repairer = async ({ verified, requestId, revalidate }) => {
+        if (interruptedPhase === 'repair' && !refused) {
+          refused = true;
+          throw new AiUsageRefusedError('user_budget_exhausted', 'budget');
+        }
+        await revalidate();
+        paid.push(requestId);
+        if (interruptedPhase === 'provider-failure')
+          throw new MatchingCandidateInterpretationError(
+            'candidate_interpretation_provider_incomplete',
+            'response_length',
+          );
+        if (interruptedPhase === 'ownership-transfer')
+          await db.query(
+            "UPDATE candidate_profiles SET owner_user_id = 'other', tenant_id = 'tenant-b' WHERE id = ?",
+            [owner],
+          );
+        return {
+          requestId,
+          interpretation: {
+            ...verified,
+            assertions: verified.assertions.map((claim) => ({
+              ...claim,
+              activityQuote: claim.quote,
+            })),
+          },
+        };
+      };
+      const options = {
+        profileId: owner,
+        asOwner: allowed,
+        chunk: oneChunk,
+        interpret,
+        verify,
+        repair,
+        now: () => now,
+      };
+      const failure = interruptedPhase === 'provider-failure';
+      if (interruptedPhase === 'ownership-transfer') {
+        expect(
+          await runMatchingCandidateInterpretation(db, dialect, options),
+        ).toBe('stale');
+        expect(await cache(db)).toBeUndefined();
+        expect(paid).toHaveLength(3);
+        return;
+      }
+      expect(
+        await runMatchingCandidateInterpretation(db, dialect, options),
+      ).toBe(failure ? 'failed' : 'retry');
+      const pinned = await cache(db);
+      expect(JSON.parse(String(pinned.payload_json))).toMatchObject({
+        assertions: [expect.objectContaining({ conceptId: 'observability' })],
+        sourceCoverage: [
+          expect.objectContaining({
+            issues: [expect.objectContaining({ kind: 'omitted-positive' })],
+          }),
+        ],
+      });
+      if (!failure) {
+        now += 60 * 60_000;
+        expect(
+          await runMatchingCandidateInterpretation(db, dialect, options),
+        ).toBe('complete');
+        expect(
+          JSON.parse(String((await cache(db)).payload_json)),
+        ).toMatchObject({
+          assertions: [expect.objectContaining({ activityQuote: sourceText })],
+          sourceCoverage: [expect.objectContaining({ issues: [] })],
+        });
+      }
+      expect(
+        await runMatchingCandidateInterpretation(db, dialect, options),
+      ).toBe('idle');
+      expect(
+        paid.map((id) => id.slice(String(pinned.request_id).length + 1)),
+      ).toEqual([
+        '0-draft',
+        '0-verify',
+        '0-repair',
+        ...(failure ? [] : ['0-repair-verify']),
+      ]);
+      expect((await cache(db)).draft_json).toBe('');
     } finally {
       await close();
     }

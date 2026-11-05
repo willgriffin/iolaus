@@ -14,7 +14,7 @@ const registries = [
   ['sources', 'matching_source_listing_versions', 'source_id'],
 ] as const;
 
-const schemaRevision = 6;
+const schemaRevision = 7;
 const schemaVersionColumn = 'schema_revision INTEGER NOT NULL DEFAULT 0';
 const candidateDraftColumn = "draft_json TEXT NOT NULL DEFAULT ''";
 const candidateSplitColumn =
@@ -93,6 +93,7 @@ const ownerProfile = (row: Image) =>
 function careerEvidenceTrigger(
   table: string,
   columns: readonly string[],
+  relevant: (row: Image) => string = (row) => `${row}.use_on_resume = TRUE`,
 ): Trigger {
   return {
     table,
@@ -105,7 +106,7 @@ function careerEvidenceTrigger(
       ...columns,
     ],
     affects: ownerProfile,
-    relevant: (row) => `${row}.use_on_resume = TRUE`,
+    relevant,
   };
 }
 
@@ -141,6 +142,8 @@ const triggers: readonly Trigger[] = [
       'preferences_json',
       'facts_json',
       'target_work_country_json',
+      'summary',
+      'use_on_resume',
     ],
   },
   {
@@ -199,6 +202,11 @@ const triggers: readonly Trigger[] = [
     'title',
     'body',
   ]),
+  careerEvidenceTrigger(
+    'resume_other_roles',
+    ['role', 'company', 'period', 'body'],
+    (row) => `COALESCE(${row}.use_on_resume, TRUE)`,
+  ),
   {
     table: 'preference_rules',
     columns: [
@@ -288,11 +296,20 @@ export async function advanceMatchingProfileRevision(
   );
 }
 
+function distinct(dialect: Dialect) {
+  return dialect === 'postgres' ? 'IS DISTINCT FROM' : 'IS NOT';
+}
+
 function changed(dialect: Dialect, columns: readonly string[]) {
-  const operator = dialect === 'postgres' ? 'IS DISTINCT FROM' : 'IS NOT';
   return columns
-    .map((column) => `NEW."${column}" ${operator} OLD."${column}"`)
+    .map((column) => `NEW."${column}" ${distinct(dialect)} OLD."${column}"`)
     .join(' OR ');
+}
+
+function selectedSummaryChanged(dialect: Dialect) {
+  const summary = (row: Image) =>
+    `(CASE WHEN COALESCE(${row}.use_on_resume, TRUE) THEN ${row}.summary END)`;
+  return `${summary('NEW')} ${distinct(dialect)} ${summary('OLD')}`;
 }
 
 function cleanup(table: string, condition: string): string[] {
@@ -393,7 +410,7 @@ function triggerBody(trigger: Trigger, event: Event, dialect: Dialect): string {
       if (event === 'UPDATE' && table === 'candidate_profiles') {
         // Active/context changes can revoke access to derived private evidence.
         const revoked = `NOT COALESCE(NEW.active, FALSE) OR ${changed(dialect, ['tenant_id', 'owner_user_id'])}`;
-        const evidenceChanged = changed(dialect, ['facts_json']);
+        const evidenceChanged = `${changed(dialect, ['facts_json'])} OR ${selectedSummaryChanged(dialect)}`;
         statements.push(
           `DELETE FROM matching_candidate_interpretations WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked} OR ${evidenceChanged});`,
           `DELETE FROM matching_profile_facts WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked} OR ${evidenceChanged});`,
@@ -407,7 +424,18 @@ function triggerBody(trigger: Trigger, event: Event, dialect: Dialect): string {
 
 function triggerCondition(trigger: Trigger, event: Event, dialect: Dialect) {
   const criteria: string[] = [];
-  if (event === 'UPDATE') criteria.push(changed(dialect, trigger.columns));
+  if (event === 'UPDATE') {
+    if (trigger.table === 'candidate_profiles') {
+      const metadata = trigger.columns.filter(
+        (column) => column !== 'summary' && column !== 'use_on_resume',
+      );
+      criteria.push(
+        `${changed(dialect, metadata)} OR ${selectedSummaryChanged(dialect)}`,
+      );
+    } else {
+      criteria.push(changed(dialect, trigger.columns));
+    }
+  }
   if (trigger.relevant) {
     const images: Image[] =
       event === 'UPDATE'

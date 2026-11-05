@@ -6,9 +6,9 @@ import type {
   MatchingVocabulary,
 } from './normalized-matching.js';
 
-export const CANDIDATE_INTERPRETATION_VERSION = 'candidate-interpretation/v3';
+export const CANDIDATE_INTERPRETATION_VERSION = 'candidate-interpretation/v4';
 export const CANDIDATE_INTERPRETATION_PROMPT_VERSION =
-  'matching-candidate-prompt/v8';
+  'matching-candidate-prompt/v14';
 // Candidate interpretation and deterministic matching have separate change
 // lifecycles. A ranking or posting fix can reuse existing paid candidate work.
 export const CANDIDATE_INTERPRETATION_POLICY_VERSION = `normalized-v18:${CANDIDATE_INTERPRETATION_VERSION}:${CANDIDATE_INTERPRETATION_PROMPT_VERSION}`;
@@ -34,10 +34,32 @@ const assertionSchema = z.strictObject({
     .nullable(),
 });
 
+const conceptId = z.string().min(1).max(120);
+
+export const candidateCoverageIssueSchema = z.strictObject({
+  kind: z.enum(['omitted-positive', 'unassessed-restriction', 'unread']),
+  conceptId: conceptId.nullable(),
+  quote: z.string().min(1).max(800).nullable(),
+});
+
+export const MAX_CANDIDATE_SOURCE_ISSUES = 16;
+
+const candidateSourceCoverageSchema = z.strictObject({
+  sourceId,
+  issues: z
+    .array(candidateCoverageIssueSchema)
+    .max(MAX_CANDIDATE_SOURCE_ISSUES),
+});
+
+export type CandidateCoverageIssue = z.infer<
+  typeof candidateCoverageIssueSchema
+>;
+
 export const candidateInterpretationSchema = z.strictObject({
   assertions: z.array(assertionSchema).max(2048),
   reviewedSourceIds: z.array(sourceId).max(512),
   unresolvedSourceIds: z.array(sourceId).max(512),
+  sourceCoverage: z.array(candidateSourceCoverageSchema).max(512).optional(),
 });
 
 export type CandidateInterpretation = z.infer<
@@ -46,6 +68,7 @@ export type CandidateInterpretation = z.infer<
 
 export type CandidateInterpretationState =
   | { state: 'complete'; interpretation: CandidateInterpretation }
+  | { state: 'partial'; interpretation: CandidateInterpretation }
   | { state: 'pending' }
   | { state: 'failed'; interpretation?: CandidateInterpretation };
 
@@ -329,8 +352,10 @@ const yearRangePrefix = new RegExp(
   'iu',
 );
 
-const explicitTotalDuration =
-  /^\s*my total (?<capability>[^!?;\r\n]{1,100}?) experience (?:is|was) limited to\b/iu;
+const explicitTotalDuration = new RegExp(
+  `^\\s*my total (?<capability>[^!?;\\r\\n]{1,100}?) experience (?:is|was) (?:limited to\\b|(?:at most|up to|only|exactly)\\s+(?:${yearNumber})\\s+years?\\.?\\s*$)`,
+  'iu',
+);
 
 function declaredDurationBounds(quote: string) {
   const [match, additional] = [...quote.matchAll(yearCount)];
@@ -398,8 +423,13 @@ export function candidateTotalDurationLimit(
   const capability = match?.groups?.capability;
   if (!capability) return;
   const slug = vocabulary.aliases.get(normalized(capability));
-  const maximumYears = declaredDurationBounds(quote)?.maximumYears;
-  if (slug && maximumYears != null) return { slug, maximumYears };
+  const bounds = declaredDurationBounds(quote);
+  if (slug && bounds?.maximumYears != null)
+    return {
+      slug,
+      maximumYears: bounds.maximumYears,
+      ...(bounds.minimumYears != null && { years: bounds.minimumYears }),
+    };
 }
 
 type Position = NonNullable<EvidenceRecord['position']>;
@@ -479,7 +509,8 @@ export function parseCandidateInterpretation(
 ): CandidateInterpretation {
   const parsed = candidateInterpretationSchema.safeParse(raw);
   if (!parsed.success) fail();
-  const { assertions, reviewedSourceIds, unresolvedSourceIds } = parsed.data;
+  const { assertions, reviewedSourceIds, unresolvedSourceIds, sourceCoverage } =
+    parsed.data;
   const sources = new Map(input.evidence.map((item) => [item.id, item]));
   const covered = [...reviewedSourceIds, ...unresolvedSourceIds];
   if (
@@ -489,6 +520,44 @@ export function parseCandidateInterpretation(
     covered.some((id) => !sources.has(id))
   )
     fail();
+  if (sourceCoverage) {
+    const unresolved = new Set(unresolvedSourceIds);
+    if (
+      sourceCoverage.length !== sources.size ||
+      new Set(sourceCoverage.map(({ sourceId }) => sourceId)).size !==
+        sources.size
+    )
+      fail();
+    for (const { sourceId, issues } of sourceCoverage) {
+      const source = sources.get(sourceId);
+      const hasIssues = issues.length > 0;
+      if (
+        !source ||
+        unresolved.has(sourceId) !== hasIssues ||
+        new Set(issues.map((issue) => JSON.stringify(issue))).size !==
+          issues.length
+      )
+        fail();
+      for (const { kind, conceptId, quote } of issues) {
+        if (
+          (kind === 'unread' && (conceptId !== null || quote !== null)) ||
+          (kind === 'omitted-positive' &&
+            (conceptId === null || quote === null)) ||
+          (conceptId !== null && !isCandidateConcept(conceptId, vocabulary))
+        )
+          fail();
+        if (quote !== null) {
+          const index = source.text.indexOf(quote);
+          if (
+            quote.trim() !== quote ||
+            index < 0 ||
+            index !== source.text.lastIndexOf(quote)
+          )
+            fail();
+        }
+      }
+    }
+  }
   const positions = candidateEvidencePositions(input.evidence);
   const seen = new Set<string>();
   for (const assertion of assertions) {

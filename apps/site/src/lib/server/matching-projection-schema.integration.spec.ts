@@ -82,6 +82,118 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).toEqual(revisions);
       });
 
+      it('fences selected résumé summary and other-career writes, rollback, and revocation', async () => {
+        const selected = randomUUID();
+        await database.query(
+          `INSERT INTO candidate_profiles
+           (id, active, tenant_id, owner_user_id, summary, use_on_resume)
+           VALUES (?, TRUE, 'tenant-a', 'owner', 'Fictional work summary', TRUE)`,
+          [selected],
+        );
+        const stagePrivateEvidence = async () => {
+          await database.query(
+            `INSERT INTO matching_candidate_interpretations
+             (profile_id, tenant_id, user_id, vocabulary_revision, policy_version, contract_version, input_digest, request_id, state)
+             VALUES (?, 'tenant-a', 'owner', 1, 'test', 'test', 'test', 'test', 'pending')
+             ON CONFLICT (profile_id) DO NOTHING`,
+            [selected],
+          );
+          await database.query(
+            `INSERT INTO matching_profile_facts
+             (profile_id, tenant_id, user_id, profile_revision, vocabulary_revision, policy_version, facts_json, status)
+             VALUES (?, 'tenant-a', 'owner', 1, 1, 'test', '{}', 'ready')
+             ON CONFLICT (profile_id) DO NOTHING`,
+            [selected],
+          );
+        };
+        const privateEvidenceCount = async (db = database) => {
+          const {
+            rows: [row],
+          } = await db.query(
+            `SELECT
+               (SELECT COUNT(*) FROM matching_candidate_interpretations WHERE profile_id = ?) +
+               (SELECT COUNT(*) FROM matching_profile_facts WHERE profile_id = ?) AS count`,
+            [selected, selected],
+          );
+          return Number(row.count);
+        };
+        await stagePrivateEvidence();
+        const initial = await profileRevision(selected);
+        if (!database.transaction)
+          throw new Error('Test requires transactions.');
+        await expect(
+          database.transaction(async (tx) => {
+            await tx.query(
+              'UPDATE candidate_profiles SET summary=? WHERE id=?',
+              ['Rolled back fictional edit', selected],
+            );
+            expect(await privateEvidenceCount(tx)).toBe(0);
+            throw new Error('rollback');
+          }),
+        ).rejects.toThrow('rollback');
+        expect(await privateEvidenceCount()).toBe(2);
+        expect(await profileRevision(selected)).toBe(initial);
+        await database.query(
+          'UPDATE candidate_profiles SET summary=? WHERE id=?',
+          ['Committed fictional edit', selected],
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+        expect(await profileRevision(selected)).not.toBe(initial);
+        await database.query(
+          'UPDATE candidate_profiles SET use_on_resume=FALSE WHERE id=?',
+          [selected],
+        );
+        await stagePrivateEvidence();
+        const hidden = await profileRevision(selected);
+        await database.query(
+          'UPDATE candidate_profiles SET summary=? WHERE id=?',
+          ['Hidden fictional edit', selected],
+        );
+        expect(await profileRevision(selected)).toBe(hidden);
+        expect(await privateEvidenceCount()).toBe(2);
+        await database.query(
+          'UPDATE candidate_profiles SET use_on_resume=TRUE WHERE id=?',
+          [selected],
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+
+        await stagePrivateEvidence();
+        const insertRole = (
+          id: string,
+          tenantId: string,
+          useOnResume: boolean,
+        ) =>
+          database.query(
+            `INSERT INTO resume_other_roles
+             (id, tenant_id, owner_user_id, candidate_profile_id, role, company, period, body, use_on_resume)
+             VALUES (?, ?, 'owner', ?, 'Fictional role', 'Fictional company', '2010', 'Fictional narrative', ?)`,
+            [id, tenantId, selected, useOnResume],
+          );
+        await insertRole('foreign-role', 'tenant-b', true);
+        await insertRole('selected-role', 'tenant-a', false);
+        expect(await privateEvidenceCount()).toBe(2);
+        await database.query(
+          "UPDATE resume_other_roles SET use_on_resume=TRUE WHERE id='selected-role'",
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+        await stagePrivateEvidence();
+        await database.query(
+          "UPDATE resume_other_roles SET body='Revised narrative' WHERE id='selected-role'",
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+        await stagePrivateEvidence();
+        await database.query(
+          "DELETE FROM resume_other_roles WHERE id='selected-role'",
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+        await stagePrivateEvidence();
+        await database.query(
+          'UPDATE candidate_profiles SET active=FALSE WHERE id=?',
+          [selected],
+        );
+        expect(await privateEvidenceCount()).toBe(0);
+      });
+
       it('adds the screened flag to existing rows and constrains its rank and status', async () => {
         const fixture = await createMatchingProjectionFixture(
           dialect,

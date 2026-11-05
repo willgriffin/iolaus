@@ -8,10 +8,13 @@ import {
   parseCandidateInterpretation,
 } from './matching-candidate-contract.js';
 import {
+  candidateChunkNeedsRepair,
   chunkMatchingCandidateEvidence,
   interpretMatchingCandidateChunk,
   MAX_MATCHING_CANDIDATE_CHUNKS,
   MatchingCandidateInterpretationError,
+  reconcileCandidateRepair,
+  repairMatchingCandidateChunk,
   verifyMatchingCandidateChunk,
 } from './matching-candidate-interpretation.js';
 import {
@@ -79,12 +82,61 @@ type Dependencies = {
   signal?: AbortSignal;
   interpret?: typeof interpretMatchingCandidateChunk;
   verify?: typeof verifyMatchingCandidateChunk;
+  repair?: typeof repairMatchingCandidateChunk;
   chunk?: typeof chunkMatchingCandidateEvidence;
   asOwner?: <T>(
     scope: MatchingProfileScope,
     work: () => Promise<T>,
   ) => Promise<T>;
 };
+
+type ChunkCheckpoint =
+  | { phase: 'verify' | 'repair-verify'; draft: CandidateInterpretation }
+  | { phase: 'repair' };
+
+function selectInterpretationSources(
+  interpretation: CandidateInterpretation,
+  select: (sourceId: string) => boolean,
+): CandidateInterpretation {
+  return {
+    assertions: interpretation.assertions.filter(({ sourceId }) =>
+      select(sourceId),
+    ),
+    reviewedSourceIds: interpretation.reviewedSourceIds.filter(select),
+    unresolvedSourceIds: interpretation.unresolvedSourceIds.filter(select),
+    ...(interpretation.sourceCoverage && {
+      sourceCoverage: interpretation.sourceCoverage.filter(({ sourceId }) =>
+        select(sourceId),
+      ),
+    }),
+  };
+}
+
+function combineInterpretations(
+  prefix: CandidateInterpretation,
+  chunk: CandidateInterpretation,
+): CandidateInterpretation {
+  return {
+    assertions: [...prefix.assertions, ...chunk.assertions],
+    reviewedSourceIds: [
+      ...prefix.reviewedSourceIds,
+      ...chunk.reviewedSourceIds,
+    ],
+    unresolvedSourceIds: [
+      ...prefix.unresolvedSourceIds,
+      ...chunk.unresolvedSourceIds,
+    ],
+    ...(chunk.sourceCoverage &&
+      (prefix.sourceCoverage ||
+        (!prefix.reviewedSourceIds.length &&
+          !prefix.unresolvedSourceIds.length)) && {
+        sourceCoverage: [
+          ...(prefix.sourceCoverage ?? []),
+          ...chunk.sourceCoverage,
+        ],
+      }),
+  };
+}
 
 function asCurrentOwner<T>(
   scope: MatchingProfileScope,
@@ -191,7 +243,7 @@ export async function runMatchingCandidateInterpretation(
   database: DatabaseInterface,
   dialect: MatchingDialect,
   options: { profileId?: string } & Dependencies = {},
-): Promise<'idle' | 'complete' | 'failed' | 'stale' | 'retry'> {
+): Promise<'idle' | 'complete' | 'partial' | 'failed' | 'stale' | 'retry'> {
   if (options.signal?.aborted) return 'idle';
   if (!database.transaction)
     throw new Error('Candidate interpretation requires native transactions.');
@@ -232,7 +284,7 @@ export async function runMatchingCandidateInterpretation(
     index: number,
     update: string,
     values: unknown[],
-    phase: 'draft' | 'verify',
+    checkpoint: string,
     started: boolean,
   ) {
     return await transaction(async (db) => {
@@ -241,21 +293,21 @@ export async function runMatchingCandidateInterpretation(
       const { rows } = await db.query(
         `UPDATE matching_candidate_interpretations SET ${update}
          WHERE ${currentClaim} AND next_chunk = ?
-         AND draft_json ${phase === 'draft' ? '=' : '<>'} ''
+         AND draft_json = ?
          AND ${started ? 'chunk_started' : 'NOT chunk_started'} RETURNING profile_id`,
-        [...values, ...claimPins(claim, now()), index],
+        [...values, ...claimPins(claim, now()), index, checkpoint],
       );
       return rows.length === 1;
     });
   }
 
-  async function markStarted(index: number, phase: 'draft' | 'verify') {
+  async function markStarted(index: number, checkpoint: string) {
     await asOwner(scope, async () => {
       const marked = await updateChunk(
         index,
         'chunk_started = TRUE, next_run_at = CAST(? AS BIGINT)',
         [now() + LEASE_MS],
-        phase,
+        checkpoint,
         false,
       );
       if (!marked)
@@ -292,7 +344,7 @@ export async function runMatchingCandidateInterpretation(
         input,
         vocabulary,
       ).map((chunk, index) => ({ input: chunk, key: String(index) }));
-      const aggregate: CandidateInterpretation = progress.payload_json
+      let aggregate: CandidateInterpretation = progress.payload_json
         ? JSON.parse(String(progress.payload_json))
         : { assertions: [], reviewedSourceIds: [], unresolvedSourceIds: [] };
 
@@ -309,27 +361,58 @@ export async function runMatchingCandidateInterpretation(
       for (let index = firstChunk; index < chunks.length; index += 1) {
         options.signal?.throwIfAborted();
         const { input: chunk, key } = chunks[index];
+        let stored = index === firstChunk ? String(progress.draft_json) : '';
+        let checkpoint = stored
+          ? (JSON.parse(stored) as ChunkCheckpoint)
+          : undefined;
+        if (
+          stored &&
+          checkpoint?.phase !== 'verify' &&
+          checkpoint?.phase !== 'repair' &&
+          checkpoint?.phase !== 'repair-verify'
+        )
+          throw new Error('Candidate interpretation checkpoint is invalid.');
+        const sourceIds = new Set(chunk.evidence.map(({ id }) => id));
+        const prefix = selectInterpretationSources(
+          aggregate,
+          (id) => !sourceIds.has(id),
+        );
         const request = {
           subject: scope,
           input: chunk,
           vocabulary,
           signal: options.signal,
+          revalidate: () => markStarted(index, stored),
         };
-        let draft: CandidateInterpretation;
-        if (index === firstChunk && progress.draft_json) {
-          draft = parseCandidateInterpretation(
-            JSON.parse(String(progress.draft_json)),
-            chunk,
-            vocabulary,
+        async function saveCheckpoint(
+          next: ChunkCheckpoint,
+          verifiedPrefix?: CandidateInterpretation,
+        ) {
+          const json = JSON.stringify(next);
+          const saved = await updateChunk(
+            index,
+            `draft_json = ?, payload_json = COALESCE(?, payload_json), chunk_started = FALSE,
+              preflight_attempts = 0, next_run_at = CAST(? AS BIGINT)`,
+            [
+              json,
+              verifiedPrefix ? JSON.stringify(verifiedPrefix) : null,
+              now() + LEASE_MS,
+            ],
+            stored,
+            true,
           );
-        } else {
+          if (saved) stored = json;
+          return saved;
+        }
+
+        if (!checkpoint) {
+          let draft: CandidateInterpretation;
           try {
             const result = await (
               options.interpret ?? interpretMatchingCandidateChunk
             )({
               ...request,
               requestId: `${claim.requestId}-${key}-draft`,
-              revalidate: () => markStarted(index, 'draft'),
             });
             draft = result.interpretation;
           } catch (error) {
@@ -345,7 +428,7 @@ export async function runMatchingCandidateInterpretation(
               index,
               'split_chunk = ?, chunk_started = FALSE, next_run_at = CAST(? AS BIGINT)',
               [index, now() + LEASE_MS],
-              'draft',
+              stored,
               true,
             );
             if (!saved) return 'stale';
@@ -353,33 +436,66 @@ export async function runMatchingCandidateInterpretation(
             index -= 1;
             continue;
           }
-          const saved = await updateChunk(
-            index,
-            'draft_json = ?, chunk_started = FALSE, preflight_attempts = 0, next_run_at = CAST(? AS BIGINT)',
-            [JSON.stringify(draft), now() + LEASE_MS],
-            'draft',
-            true,
-          );
-          if (!saved) return 'stale';
+          checkpoint = { phase: 'verify', draft };
+          if (!(await saveCheckpoint(checkpoint))) return 'stale';
         }
-        const { interpretation } = await (
-          options.verify ?? verifyMatchingCandidateChunk
-        )({
-          ...request,
-          requestId: `${claim.requestId}-${key}-verify`,
-          revalidate: () => markStarted(index, 'verify'),
-          draft,
-        });
-        aggregate.assertions.push(...interpretation.assertions);
-        aggregate.reviewedSourceIds.push(...interpretation.reviewedSourceIds);
-        aggregate.unresolvedSourceIds.push(
-          ...interpretation.unresolvedSourceIds,
-        );
+
+        let verified: CandidateInterpretation;
+        if (checkpoint.phase === 'verify') {
+          ({ interpretation: verified } = await (
+            options.verify ?? verifyMatchingCandidateChunk
+          )({
+            ...request,
+            requestId: `${claim.requestId}-${key}-verify`,
+            draft: checkpoint.draft,
+          }));
+          if (candidateChunkNeedsRepair(verified)) {
+            // Persist independently verified evidence before any further paid
+            // call. A crash or refusal cannot discard this verified prefix.
+            checkpoint = { phase: 'repair' };
+            if (
+              !(await saveCheckpoint(
+                checkpoint,
+                combineInterpretations(prefix, verified),
+              ))
+            )
+              return 'stale';
+          }
+        } else {
+          verified = parseCandidateInterpretation(
+            selectInterpretationSources(aggregate, (id) => sourceIds.has(id)),
+            chunk,
+            vocabulary,
+          );
+        }
+        if (checkpoint.phase === 'repair') {
+          const { interpretation: draft } = await (
+            options.repair ?? repairMatchingCandidateChunk
+          )({
+            ...request,
+            requestId: `${claim.requestId}-${key}-repair`,
+            verified,
+          });
+          checkpoint = { phase: 'repair-verify', draft };
+          if (!(await saveCheckpoint(checkpoint))) return 'stale';
+        }
+        if (checkpoint.phase === 'repair-verify') {
+          const { interpretation: repaired } = await (
+            options.verify ?? verifyMatchingCandidateChunk
+          )({
+            ...request,
+            requestId: `${claim.requestId}-${key}-repair-verify`,
+            draft: checkpoint.draft,
+            prior: verified,
+          });
+          verified = reconcileCandidateRepair(verified, repaired);
+        }
+        aggregate = combineInterpretations(prefix, verified);
         const saved = await updateChunk(
           index,
           "payload_json = ?, draft_json = '', next_chunk = ?, chunk_started = FALSE, preflight_attempts = 0, next_run_at = CAST(? AS BIGINT)",
           [JSON.stringify(aggregate), index + 1, now() + LEASE_MS],
-          'verify',
+          stored,
           true,
         );
         if (!saved) return 'stale';
@@ -393,7 +509,8 @@ export async function runMatchingCandidateInterpretation(
       const published = await asOwner(scope, () =>
         finish('complete', interpretation),
       );
-      return published ? 'complete' : 'stale';
+      if (!published) return 'stale';
+      return interpretation.unresolvedSourceIds.length ? 'partial' : 'complete';
     });
   } catch (error) {
     const interrupted = options.signal?.aborted === true;
@@ -449,12 +566,12 @@ export function startMatchingCandidateInterpretationWorker(
     current = (async () => {
       let delay = 15_000;
       try {
-        if (
-          (await runMatchingCandidateInterpretation(database, dialect, {
-            signal: controller.signal,
-          })) === 'complete'
-        )
-          delay = 1000;
+        const result = await runMatchingCandidateInterpretation(
+          database,
+          dialect,
+          { signal: controller.signal },
+        );
+        if (result === 'complete' || result === 'partial') delay = 1000;
       } catch {
         console.error(
           'Candidate interpretation worker could not process its queue.',
