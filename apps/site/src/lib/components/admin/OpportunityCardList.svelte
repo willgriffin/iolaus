@@ -1265,7 +1265,8 @@ function clearBulkSelection(): void {
   .page-selection { display: flex; align-items: center; gap: var(--smrt-spacing-2); min-height: 44px; }
   .page-selection input { width: 1.125rem; height: 1.125rem; }
   .collection-opportunity { display: grid; gap: var(--smrt-spacing-2); min-width: 0; }
-  .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--text-body); line-height: 1.5; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .collection-review :global(strong) { font-size: var(--text-title); line-height: 1.35; }
   .collection-review:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
 
   .card-list-wrap {
@@ -1328,7 +1329,7 @@ function clearBulkSelection(): void {
     padding: 4px 10px;
     background: var(--smrt-color-surface);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-primary);
     cursor: pointer;
@@ -1369,14 +1370,16 @@ function clearBulkSelection(): void {
     display: grid;
     gap: 4px;
     color: var(--smrt-color-on-surface);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
   .drawer-group label > span,
   .field-label {
     color: var(--smrt-color-on-surface-variant);
-    font: 800 11px/1.2 var(--smrt-font-family-mono, monospace);
+    font-size: var(--text-secondary);
+    font-weight: 700;
+    line-height: 1.35;
     text-transform: uppercase;
   }
 
@@ -1386,13 +1389,19 @@ function clearBulkSelection(): void {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
-    min-height: 34px;
-    padding: 0 10px;
+    min-height: 40px;
+    padding: 4px 10px;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 6px;
     background: var(--smrt-color-surface);
     font: inherit;
+    font-size: var(--text-body);
     color: var(--smrt-color-on-surface);
+  }
+
+  .drawer :is(button, input, select):focus-visible {
+    outline: 2px solid var(--smrt-color-on-surface);
+    outline-offset: -2px;
   }
 
   .field-row {
@@ -1411,7 +1420,6 @@ function clearBulkSelection(): void {
 
   .check span {
     font: inherit !important;
-    font-size: 13px !important;
     text-transform: none !important;
     color: var(--smrt-color-on-surface) !important;
   }
@@ -1434,12 +1442,12 @@ function clearBulkSelection(): void {
     overflow-wrap: anywhere;
     flex: 1;
     min-height: 32px;
-    padding: 0 10px;
+    padding: 4px 8px;
     border: 0;
     border-right: 1px solid var(--smrt-color-outline-variant);
     background: var(--smrt-color-surface);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-on-surface-variant);
     cursor: pointer;
@@ -1467,12 +1475,14 @@ function clearBulkSelection(): void {
     justify-content: center;
     gap: 5px;
     min-height: 30px;
-    padding: 0 12px;
+    max-width: 100%;
+    padding: 4px 12px;
+    overflow-wrap: anywhere;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 6px;
     background: inherit;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-on-surface);
     cursor: pointer;
@@ -1515,7 +1525,7 @@ function clearBulkSelection(): void {
 
   .hint {
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-style: italic;
   }
 
@@ -1527,7 +1537,7 @@ function clearBulkSelection(): void {
     padding: 12px 16px;
     border-top: 1px solid var(--smrt-color-outline-variant);
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
@@ -1546,17 +1556,20 @@ function clearBulkSelection(): void {
   .eligibility-label {
     flex: 0 1 auto;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 12px;
+    font-size: var(--text-secondary);
     overflow-wrap: anywhere;
   }
 
   .table-meta {
+    min-width: 0;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
+
+  .table-meta :global(svg) { flex-shrink: 0; }
 
   .collection-opportunity.dock-selected {
     background: var(--smrt-color-warning-container);
@@ -1587,7 +1600,7 @@ function clearBulkSelection(): void {
     border-radius: 6px;
     background: var(--smrt-color-primary-container);
     color: var(--smrt-color-on-primary-container);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   .selection-summary strong {

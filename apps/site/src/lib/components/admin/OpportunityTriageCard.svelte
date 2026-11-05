@@ -379,6 +379,7 @@ const facts = $derived(
     grid-template-columns: minmax(0, 1fr) minmax(0, 24rem);
     align-items: start;
     gap: 16px;
+    overflow-wrap: anywhere;
   }
 
   .main {
@@ -432,7 +433,7 @@ const facts = $derived(
   h4 {
     margin: 6px 0 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -443,7 +444,7 @@ const facts = $derived(
     gap: 10px;
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   .meta span {
@@ -469,7 +470,7 @@ const facts = $derived(
     align-items: center;
     gap: 5px;
     color: var(--smrt-color-primary);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-decoration: none;
   }
@@ -489,7 +490,7 @@ const facts = $derived(
   ul {
     margin: 0;
     color: var(--smrt-color-on-surface);
-    font-size: 13px;
+    font-size: var(--text-body);
     line-height: 1.5;
   }
 
@@ -500,7 +501,7 @@ const facts = $derived(
   .muted {
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   /* The description is the body of the card: no cap, the dialog scrolls. */
@@ -510,7 +511,7 @@ const facts = $derived(
     overflow-wrap: anywhere;
     color: var(--smrt-color-on-surface);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     line-height: 1.55;
   }
 
@@ -524,7 +525,7 @@ const facts = $derived(
     padding: 1px 8px;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 999px;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
@@ -549,7 +550,7 @@ const facts = $derived(
     display: flex;
     gap: 8px;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: var(--text-secondary);
   }
 
   dt {
@@ -568,7 +569,7 @@ const facts = $derived(
     display: grid;
     gap: 4px;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -581,7 +582,7 @@ const facts = $derived(
     background: var(--smrt-color-surface);
     color: var(--smrt-color-on-surface);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     text-transform: none;
   }
 
@@ -618,7 +619,7 @@ const facts = $derived(
   .undo-note {
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     line-height: 1.45;
   }
 
