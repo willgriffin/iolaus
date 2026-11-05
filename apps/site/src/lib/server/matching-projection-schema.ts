@@ -1,5 +1,6 @@
 import { detectEngine } from '@happyvertical/smrt-core';
 import type { DatabaseInterface } from '@happyvertical/sql';
+import { liveMatchingOwnerSql } from './matching-projection-read.js';
 
 type Dialect = 'sqlite' | 'postgres';
 type Event = 'INSERT' | 'UPDATE' | 'DELETE';
@@ -13,7 +14,7 @@ const registries = [
   ['sources', 'matching_source_listing_versions', 'source_id'],
 ] as const;
 
-const schemaRevision = 5;
+const schemaRevision = 6;
 const schemaVersionColumn = 'schema_revision INTEGER NOT NULL DEFAULT 0';
 const candidateDraftColumn = "draft_json TEXT NOT NULL DEFAULT ''";
 const candidateSplitColumn =
@@ -358,12 +359,20 @@ function triggerBody(trigger: Trigger, event: Event, dialect: Dialect): string {
     if (table !== 'preference_rules') {
       // Remove private citations at the same fence as evidence edits or
       // revocation. Pair rows only contain locators and are already stale.
+      const authorityChanged = ['memberships', 'users', 'tenants'].includes(
+        table,
+      );
+      const expiredProfiles = authorityChanged
+        ? profiles.map(
+            (profile) => `${profile} AND NOT (${liveMatchingOwnerSql('p')})`,
+          )
+        : profiles;
       for (const projection of [
         'matching_candidate_interpretations',
         'matching_profile_facts',
       ])
         statements.push(
-          `DELETE FROM ${projection} WHERE profile_id IN (${profiles.join(' UNION ')});`,
+          `DELETE FROM ${projection} WHERE profile_id IN (${expiredProfiles.join(' UNION ')});`,
         );
     }
   } else {

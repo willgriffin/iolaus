@@ -182,6 +182,12 @@ named activity. Undated durations are never added together, and trusted role
 dates count for a technology only when verified evidence connects the
 activity to the entire role.
 
+Ongoing duration lower bounds refresh through the bounded comparison worker
+as UTC dates advance. Existing current results stay visible during this
+refresh. Edits to matching inputs still invalidate affected results immediately.
+A membership role change that preserves live ownership keeps the paid cache;
+revocation removes it, and current permissions still gate private access.
+
 Enable candidate interpretation with
 `IOLAUS_MATCHING_CANDIDATE_INTERPRETATION_ENABLED=true` only on a gateway
 route approved for private résumé evidence, with request and response

@@ -5,7 +5,10 @@ import { createMatchingProjectionFixture } from './fixtures/matching-projection.
 import { MatchingCandidateInterpretationError } from './matching-candidate-interpretation.js';
 import { runMatchingCandidateInterpretation } from './matching-candidate-worker.js';
 import { loadMatchingCandidateInput } from './matching-projection-input.js';
-import type { MatchingDialect } from './matching-projection-read.js';
+import {
+  currentDiscoveryMatchJoin,
+  type MatchingDialect,
+} from './matching-projection-read.js';
 import { ensureMatchingProjectionSchema } from './matching-projection-schema.js';
 import { runMatchingTick } from './matching-projection-worker.js';
 
@@ -229,7 +232,7 @@ describe.each(
     }
   });
 
-  it('refreshes ongoing comparisons on the next UTC day while retaining the evidence request', async () => {
+  it('keeps discovery visible throughout a bounded UTC refresh without replacing the evidence request', async () => {
     const { database: db, close } = await createMatchingProjectionFixture(
       dialect,
       postgresUrl,
@@ -240,8 +243,42 @@ describe.each(
         "INSERT INTO resume_positions (id, tenant_id, owner_user_id, candidate_profile_id, role, start, end_label) VALUES ('ongoing', 'tenant-a', 'owner', ?, 'Backend Engineer', '2016', 'Present')",
         [owner],
       );
+      await db.query(
+        "INSERT INTO resume_skills VALUES ('observability', 'tenant-a', 'owner', ?, 'Observability')",
+        [owner],
+      );
+      await db.query("INSERT INTO sources VALUES ('listed',TRUE,TRUE)");
+      const jobCount = 129;
+      await db.query(
+        `INSERT INTO opportunities (id,title,description_raw,locations,work_mode,source_id,status)
+        VALUES ${Array.from({ length: jobCount }, () => "(?, 'Backend Engineer', 'Required skills: Observability', 'Remote (Canada)', 'remote', 'listed', 'found')").join(', ')}`,
+        Array.from(
+          { length: jobCount },
+          (_, index) =>
+            `44444444-0000-4000-8000-${String(index).padStart(12, '0')}`,
+        ),
+      );
+      const visible = async () => {
+        const params: unknown[] = [];
+        const join = currentDiscoveryMatchJoin(
+          { profileId: owner, tenantId: 'tenant-a', userId: 'owner' },
+          (value) => {
+            params.push(value);
+            return '?';
+          },
+          'o',
+          dialect,
+        );
+        const {
+          rows: [row],
+        } = await db.query(
+          `SELECT COUNT(*) AS total FROM opportunities o ${join}`,
+          params,
+        );
+        return Number(row.total);
+      };
       const day = Date.UTC(2026, 10, 5);
-      for (let tick = 0; tick < 5; tick += 1)
+      for (let tick = 0; tick < 12; tick += 1)
         await runMatchingTick(db, dialect, day);
       const read = async () => {
         const {
@@ -257,14 +294,31 @@ describe.each(
       };
       const before = await read();
       const pinned = await cache(db);
+      expect(pinned).toMatchObject({ state: 'pending' });
       expect(before.candidate.ongoingExperienceAsOf).toBe(day);
+      expect(await visible()).toBe(jobCount);
       const next = day + 86_400_000;
-      for (let tick = 0; tick < 6; tick += 1)
-        await runMatchingTick(db, dialect, next);
+      let refreshed = false;
+      for (let tick = 0; tick < 6; tick += 1) {
+        const result = await runMatchingTick(db, dialect, next);
+        expect(await visible()).toBe(jobCount);
+        if (result.evaluated === jobCount - 1 && result.profileBacklog)
+          refreshed = true;
+      }
       const after = await read();
       expect(after.candidate.ongoingExperienceAsOf).toBe(next);
-      expect(after.revision).not.toEqual(before.revision);
+      expect(after.revision).toEqual(before.revision);
+      expect(refreshed).toBe(true);
       expect(await cache(db)).toEqual(pinned);
+      const following = next + 86_400_000;
+      for (let tick = 0; tick < 6; tick += 1) {
+        const result = await runMatchingTick(db, dialect, following);
+        if (result.evaluated === jobCount - 1 && result.profileBacklog) break;
+      }
+      expect((await read()).candidate.ongoingExperienceAsOf).toBe(following);
+      await db.query("DELETE FROM resume_skills WHERE id = 'observability'");
+      expect(await visible()).toBe(0);
+      expect(await cache(db)).toBeUndefined();
     } finally {
       await close();
     }
@@ -314,7 +368,7 @@ describe.each(
     }
   });
 
-  it('publishes one scoped interpretation, reuses it after preference and posting edits, and purges it on deletion', async () => {
+  it('reuses one paid interpretation through preference, posting and live role changes, and purges it on revocation', async () => {
     const { database: db, close } = await createMatchingProjectionFixture(
       dialect,
       postgresUrl,
@@ -353,6 +407,9 @@ describe.each(
           owner,
         ],
       );
+      await db.query(
+        "UPDATE memberships SET role_id = 'admin' WHERE tenant_id = 'tenant-a' AND user_id = 'owner'",
+      );
       await db.query("INSERT INTO sources VALUES ('listed',TRUE,TRUE)");
       await db.query(
         "INSERT INTO opportunities (id,title,description_raw,locations,work_mode,source_id,status) VALUES ('33333333-0000-4000-8000-000000000001','Backend Engineer','Required skills: Observability','Remote (Canada)','remote','listed','found')",
@@ -369,9 +426,13 @@ describe.each(
         request_id: original.request_id,
       });
       await db.query(
-        "DELETE FROM resume_achievements WHERE id = 'achievement'",
+        "UPDATE memberships SET status = 'suspended' WHERE tenant_id = 'tenant-a' AND user_id = 'owner'",
       );
       expect(await cache(db)).toBeUndefined();
+      expect(
+        await runMatchingCandidateInterpretation(db, dialect, options),
+      ).toBe('idle');
+      expect(interpret).toHaveBeenCalledTimes(1);
       expect(
         (
           await db.query(
@@ -505,6 +566,11 @@ describe.each(
     );
     try {
       await seed(db, dialect);
+      const pinned = await cache(db);
+      await db.query(
+        "UPDATE memberships SET role_id = 'restricted' WHERE tenant_id = 'tenant-a' AND user_id = 'owner'",
+      );
+      expect(await cache(db)).toEqual(pinned);
       const denied = vi.fn<Provider>();
       const base = { profileId: owner, chunk: oneChunk };
       expect(

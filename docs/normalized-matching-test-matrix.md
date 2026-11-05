@@ -21,6 +21,7 @@ are not trusted to grant matching eligibility.
 | Attributed and dated composition | Current snapshots paired | Conditions from the same verified project or cited activity, attributed duration union, qualitative action evidence | Disconnected projects, unrelated technology, unknown dates, bare title and explicit upper bound | Candidate owner and background matcher | Pure deterministic Node evaluator and native projection refresh | N/A because pairing consumes stored assertions | `matching-candidate-composition.spec.ts`, `matching-candidate-experience.spec.ts` |
 | Role preference lifecycle | Save a raw role discipline, then run worker and open discovery | Governing family matches; unchanged preference bytes | Wrong specialty or seniority, unrelated role, unsupported alternatives, stale result | Verified candidate owner | Native transaction/current gate; Node, SQLite and PostgreSQL | Actual onboarding suggestions, exact unknown literals | `normalized-matching.spec.ts`, `matching-projection-worker.integration.spec.ts` |
 | Conservative career duration | Current raw dated positions | Overlapping supported titles establish only a lower bound with all citations | Future/malformed dates, unrelated titles, standalone tools and production context stay unproven | Verified candidate owner | Pure normalization of scoped input; Node | English month dates, partial dates, ongoing positions | `matching-candidate-experience.spec.ts` |
+| Candidate refresh continuity | UTC rollover or live membership role change | Keep current discovery visible through a bounded ongoing-duration refresh and reuse the existing paid evidence | A raw evidence edit during refresh still hides old matches; revoked authority purges private evidence and cannot claim work | Live and suspended owners | SQLite and PostgreSQL | A catalogue larger than one projection batch, same paid request identity after role change | `matching-candidate-worker.integration.spec.ts` |
 | Coverage explanations | Current discovery query returns no rows | Count missing, unsupported, unresolved and conflict categories | No stale, inactive, other-workspace, or duplicate reason count | Verified candidate owner | Native scoped read; SQLite and PostgreSQL | Current result codes only, no candidate text in response | `admin-opportunity-discovery.integration.spec.ts` |
 | App typography | Opportunities list and filters at default browser zoom | Legible title/body/meta, controls usable, visible keyboard focus | No clipping or horizontal overflow at narrow widths | Signed-in member | Browser styles, no database mutation required | Desktop and narrow browser layout | Local Chromium at 1440, 360, and 320 px |
 | Eligibility and rank | Compare current snapshots | Alias, directional support, AND/OR, optional unknown | Related-only, role/geography conflict, unknown hard duration | Background worker | Pure Node classifier | No paid provider; deterministic reasons and order | `normalized-matching.spec.ts`, worker integration |
@@ -39,6 +40,10 @@ Run the focused suites with:
 pnpm --filter @willgriffin/iolaus-site exec vitest run \
   src/lib/server/normalized-matching.spec.ts \
   src/lib/server/matching-candidate-experience.spec.ts \
+  src/lib/server/matching-candidate-composition.spec.ts \
+  src/lib/server/matching-candidate-interpretation.spec.ts \
+  src/lib/server/matching-candidate-worker.integration.spec.ts \
+  src/lib/server/matching-candidate-recovery.integration.spec.ts \
   src/lib/server/matching-screened.spec.ts \
   src/lib/server/matching-source-normalization.spec.ts \
   src/lib/server/matching-source-semantics.spec.ts \

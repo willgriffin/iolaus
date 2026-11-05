@@ -401,14 +401,18 @@ async function profileWork(
   const interpretationEnabled = matchingCandidateInterpretationEnabled();
   if (
     candidate &&
-    ((candidate.hasOngoingExperience &&
-      candidate.ongoingExperienceAsOf !== asOf) ||
-      Boolean(candidate.interpretationEnabled) !== interpretationEnabled)
+    Boolean(candidate.interpretationEnabled) !== interpretationEnabled
   ) {
     await advanceMatchingProfileRevision(db, dialect, scope.profileId);
     return { evaluated: 0, profileBacklog: true };
   }
-  if (!candidate) {
+  if (
+    !candidate ||
+    (candidate.hasOngoingExperience &&
+      asOf > (candidate.ongoingExperienceAsOf ?? -Infinity))
+  ) {
+    // More elapsed time can only strengthen an ongoing duration lower bound.
+    // Refresh comparisons in place so existing matches survive the bounded scan.
     const input = await loadMatchingCandidateInput(db, scope);
     if (!input) return { evaluated: 0, profileBacklog: false };
     const interpretation = await candidateInterpretationForMatching(
