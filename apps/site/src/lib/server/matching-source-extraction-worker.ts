@@ -187,6 +187,7 @@ export async function runMatchingSourceExtraction(
   budgetMicros: number,
   options: {
     opportunityId?: string;
+    windowId?: string;
     provider?: Provider;
     onFailure?: (kind: string) => void;
     onDiagnostic?: (kind: string) => void;
@@ -206,7 +207,10 @@ export async function runMatchingSourceExtraction(
     claimed;
   const provider = options.provider ?? extractMatchingSource;
   try {
-    const output = await provider(input, { budgetMicros });
+    const output = await provider(input, {
+      budgetMicros,
+      ...(options.windowId === undefined ? {} : { windowId: options.windowId }),
+    });
     for (const diagnostic of output.diagnostics ?? [])
       options.onDiagnostic?.(diagnostic);
     for (const { field, issue } of output.schemaDiagnostics ?? [])

@@ -1,12 +1,19 @@
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import type { DatabaseInterface } from '@happyvertical/sql';
-import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
+import type {
+  MatchingDiscoveryCoverage,
+  MatchingDiscoveryProgress,
+} from '$lib/admin/resource-shell';
 import { getDbConfig } from './db.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 import type { CandidateWorkspaceSubject } from './workspace-subject.js';
 
 export type MatchingDialect = 'postgres' | 'sqlite';
+
+export type { DiscoveryMatchStatus } from '$lib/discovery-match';
+
+export const DISCOVERY_MATCH_STATUS_SQL = `CASE WHEN current_match.status = 'qualified' THEN 'qualified' ELSE 'screened-with-gaps' END`;
 
 /** Exact server-selected match generations; used again at each bulk write. */
 export const MATCHING_REVISION_SQL = [
@@ -20,6 +27,7 @@ export const MATCHING_REVISION_SQL = [
   'policy_version',
 ]
   .map((column) => `CAST(current_match.${column} AS TEXT)`)
+  .concat(`(${DISCOVERY_MATCH_STATUS_SQL})`)
   .join(" || ':' || ");
 
 export type MatchingWriteRevision = {
@@ -35,6 +43,25 @@ export function currentQualifiedMatchJoin(
   opportunityAlias = 'o',
   dialect: MatchingDialect = 'postgres',
 ): string {
+  return currentMatchJoin(subject, bind, opportunityAlias, dialect, false);
+}
+
+export function currentDiscoveryMatchJoin(
+  subject: CandidateWorkspaceSubject,
+  bind: (value: unknown) => string,
+  opportunityAlias = 'o',
+  dialect: MatchingDialect = 'postgres',
+): string {
+  return currentMatchJoin(subject, bind, opportunityAlias, dialect, true);
+}
+
+function currentMatchJoin(
+  subject: CandidateWorkspaceSubject,
+  bind: (value: unknown) => string,
+  opportunityAlias: string,
+  dialect: MatchingDialect,
+  includeScreened: boolean,
+): string {
   if (!/^[a-z][a-z0-9_]*$/.test(opportunityAlias))
     throw new Error('Invalid matching query alias.');
   const o = opportunityAlias;
@@ -45,7 +72,7 @@ export function currentQualifiedMatchJoin(
       AND current_match.tenant_id = ${bind(subject.tenantId)}
       AND current_match.user_id = ${bind(subject.userId)}
       AND current_match.policy_version = ${bind(MATCHING_POLICY_VERSION)}
-      AND current_match.status = 'qualified'
+      AND (current_match.status = 'qualified'${includeScreened ? " OR (current_match.status = 'insufficient-evidence' AND current_match.screened_with_gaps = TRUE)" : ''})
     JOIN matching_source_versions matching_input_version
       ON matching_input_version.opportunity_id = current_match.opportunity_id
       AND matching_input_version.revision = current_match.source_revision
@@ -101,6 +128,7 @@ export async function lockMatchingWriteRevision(
   dialect: MatchingDialect,
   subject: CandidateWorkspaceSubject,
   expected: MatchingWriteRevision,
+  options: { allowScreened?: boolean } = {},
 ): Promise<boolean> {
   if (dialect === 'sqlite') {
     // Acquire the database write lock before reading currentness, so no
@@ -111,7 +139,10 @@ export async function lockMatchingWriteRevision(
     );
   }
   const params: unknown[] = [];
-  const gate = currentQualifiedMatchJoin(
+  const join = options.allowScreened
+    ? currentDiscoveryMatchJoin
+    : currentQualifiedMatchJoin;
+  const gate = join(
     subject,
     (value) => {
       params.push(value);
@@ -122,7 +153,7 @@ export async function lockMatchingWriteRevision(
   );
   const lock =
     dialect === 'postgres'
-      ? 'FOR SHARE OF o, matching_input_version, matching_listing_version, matching_profile_version, matching_vocabulary'
+      ? 'FOR SHARE OF o, matching_profile_version, matching_vocabulary, matching_input_version, matching_listing_version, current_match'
       : '';
   const {
     rows: [row],
@@ -145,6 +176,7 @@ export async function withMatchingWriteRevision<T>(
   subject: CandidateWorkspaceSubject,
   expected: MatchingWriteRevision,
   write: (tx: DatabaseInterface) => Promise<T>,
+  options: { allowScreened?: boolean } = {},
 ): Promise<{ current: true; result: T } | { current: false }> {
   const config = getDbConfig();
   const db = getRequestScopedDatabase() ?? (await resolveDatabase(config));
@@ -152,7 +184,15 @@ export async function withMatchingWriteRevision<T>(
     throw new Error('Matching writes require a native transaction.');
   const dialect = config.type === 'sqlite' ? 'sqlite' : 'postgres';
   return db.transaction(async (tx) => {
-    if (!(await lockMatchingWriteRevision(tx, dialect, subject, expected)))
+    if (
+      !(await lockMatchingWriteRevision(
+        tx,
+        dialect,
+        subject,
+        expected,
+        options,
+      ))
+    )
       return { current: false };
     return { current: true, result: await write(tx) };
   });
@@ -160,6 +200,7 @@ export async function withMatchingWriteRevision<T>(
 
 export async function getMatchingDiscoveryProgress(
   subject: CandidateWorkspaceSubject,
+  options: { coverage?: boolean } = {},
 ): Promise<MatchingDiscoveryProgress> {
   const { requireCurrentCandidateWorkspaceSubject, WorkspaceSubjectError } =
     await import('./workspace-subject.js');
@@ -175,11 +216,21 @@ export async function getMatchingDiscoveryProgress(
     );
   const config = getDbConfig();
   const db = getRequestScopedDatabase() ?? (await resolveDatabase(config));
-  return readMatchingDiscoveryProgress(
-    db,
-    config.type === 'sqlite' ? 'sqlite' : 'postgres',
-    active,
-  );
+  const dialect = config.type === 'sqlite' ? 'sqlite' : 'postgres';
+  const progress = await readMatchingDiscoveryProgress(db, dialect, active);
+  if (
+    options.coverage &&
+    ['ready', 'needs-evidence'].includes(progress.status)
+  ) {
+    const { readMatchingDiscoveryCoverage } = await import(
+      './matching-discovery-coverage.js'
+    );
+    return {
+      ...progress,
+      coverage: await readMatchingDiscoveryCoverage(db, dialect, active),
+    };
+  }
+  return progress;
 }
 
 /** Use only with the active workspace subject verified by the caller. */

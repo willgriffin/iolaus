@@ -354,10 +354,21 @@ function opportunityDescriptor(): DataSurfaceDescriptor {
 export function createOpportunityDataSurfaceAdapter(
   options: OpportunityDataSurfaceOptions,
 ): DataSurfaceActionAdapter {
+  function screenedSelection(
+    invocation: DataSurfaceActionInvocation,
+    rowId: DataSurfaceRowId,
+  ) {
+    return (
+      revisionByRequest.get(invocation.request)?.get(String(rowId))
+        ?.matchingStatus === 'screened-with-gaps'
+    );
+  }
+
   async function writeAtResolvedRevision<T>(
     invocation: DataSurfaceActionInvocation,
     rowId: DataSurfaceRowId,
     write: (database?: DatabaseInterface) => Promise<T>,
+    allowScreened = false,
   ): Promise<T> {
     const row = revisionByRequest.get(invocation.request)?.get(String(rowId));
     if (!row?.updatedAt)
@@ -377,6 +388,9 @@ export function createOpportunityDataSurfaceAdapter(
           matchingRevision,
         },
         write,
+        ...(allowScreened && screenedSelection(invocation, rowId)
+          ? [{ allowScreened: true }]
+          : []),
       );
       if (!guarded.current)
         throw new OpportunitySelectionError('row_revision_drifted');
@@ -437,6 +451,7 @@ export function createOpportunityDataSurfaceAdapter(
             subject: options.workspaceSubject,
             user: { id: invocation.run.context.userId ?? undefined },
           }),
+        payload.humanReviewStatus !== 'apply',
       );
       return {
         humanReviewStatus: stringOf(
@@ -462,6 +477,8 @@ export function createOpportunityDataSurfaceAdapter(
     },
     authorize: () => true,
     eligible: async (invocation, rowId) => {
+      if (screenedSelection(invocation, rowId))
+        return { eligible: false, reason: 'qualification_required' };
       const row = await loadRow(
         invocation.request,
         rowId,
@@ -544,6 +561,11 @@ export function createOpportunityDataSurfaceAdapter(
     invocation: DataSurfaceActionInvocation,
     rowId: DataSurfaceRowId,
   ): Promise<DataSurfaceActionEligibility> {
+    if (
+      screenedSelection(invocation, rowId) &&
+      reviewPayload(invocation.request.payload)?.humanReviewStatus === 'apply'
+    )
+      return { eligible: false, reason: 'qualification_required' };
     const row = await loadRow(
       invocation.request,
       rowId,

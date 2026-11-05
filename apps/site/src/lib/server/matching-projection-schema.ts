@@ -13,8 +13,10 @@ const registries = [
   ['sources', 'matching_source_listing_versions', 'source_id'],
 ] as const;
 
-const schemaRevision = 2;
+const schemaRevision = 3;
 const schemaVersionColumn = 'schema_revision INTEGER NOT NULL DEFAULT 0';
+const screenedColumn = `screened_with_gaps BOOLEAN NOT NULL DEFAULT FALSE
+  CHECK (NOT screened_with_gaps OR (status = 'insufficient-evidence' AND score BETWEEN 1 AND 69))`;
 const workerCursorDdl = `CREATE TABLE IF NOT EXISTS matching_worker_cursor (
   id INTEGER PRIMARY KEY CHECK (id = 1), source_cursor TEXT NOT NULL, profile_cursor TEXT NOT NULL,
   work_revision BIGINT NOT NULL DEFAULT 0, source_event_revision BIGINT NOT NULL DEFAULT 0,
@@ -50,7 +52,7 @@ const schema = [
      profile_revision BIGINT NOT NULL, source_revision BIGINT NOT NULL, source_listing_revision BIGINT NOT NULL,
      vocabulary_revision BIGINT NOT NULL, policy_version TEXT NOT NULL,
      status TEXT NOT NULL CHECK (status IN ('pending', 'qualified', 'conflict', 'insufficient-evidence', 'failed')),
-     score INTEGER NOT NULL, reasons_json TEXT NOT NULL, PRIMARY KEY (profile_id, opportunity_id))`,
+     score INTEGER NOT NULL, reasons_json TEXT NOT NULL, ${screenedColumn}, PRIMARY KEY (profile_id, opportunity_id))`,
   'CREATE INDEX IF NOT EXISTS matching_results_discovery ON matching_results (profile_id, profile_revision, vocabulary_revision, policy_version, status, score DESC, opportunity_id)',
   'CREATE INDEX IF NOT EXISTS matching_results_opportunity ON matching_results (opportunity_id)',
   'CREATE INDEX IF NOT EXISTS matching_profile_facts_schedule ON matching_profile_facts (next_run_at, profile_id)',
@@ -363,21 +365,44 @@ async function ensureInputTriggers(db: Executor, dialect: Dialect) {
   }
 }
 
-async function hasSchemaRevisionColumn(db: Executor, dialect: Dialect) {
+async function hasColumn(
+  db: Executor,
+  dialect: Dialect,
+  table: 'matching_worker_cursor' | 'matching_results',
+  column: 'schema_revision' | 'screened_with_gaps',
+) {
   const probe =
     dialect === 'postgres'
-      ? `SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('matching_worker_cursor')
-        AND attname = 'schema_revision' AND NOT attisdropped`
-      : `SELECT 1 FROM pragma_table_info('matching_worker_cursor') WHERE name = 'schema_revision'`;
-  return (await db.query(probe)).rows.length > 0;
+      ? 'SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(?) AND attname = ? AND NOT attisdropped'
+      : 'SELECT 1 FROM pragma_table_info(?) WHERE name = ?';
+  return (await db.query(probe, [table, column])).rows.length > 0;
 }
 
 async function installedSchemaRevision(db: Executor, dialect: Dialect) {
-  if (!(await hasSchemaRevisionColumn(db, dialect))) return 0;
+  if (
+    !(await hasColumn(db, dialect, 'matching_worker_cursor', 'schema_revision'))
+  )
+    return 0;
   const marker = await db.query(
     'SELECT schema_revision FROM matching_worker_cursor WHERE id = 1',
   );
   return Number(marker.rows[0]?.schema_revision ?? 0);
+}
+
+const currentDiscoveryIndex = 'matching_results_current_discovery';
+const currentDiscoveryIndexDdl = `CREATE INDEX IF NOT EXISTS ${currentDiscoveryIndex}
+  ON matching_results (profile_id, profile_revision, vocabulary_revision, policy_version, status, score DESC, opportunity_id)
+  WHERE status = 'qualified' OR (status = 'insufficient-evidence' AND screened_with_gaps = TRUE)`;
+
+async function hasCurrentDiscoveryIndex(db: Executor, dialect: Dialect) {
+  const probe =
+    dialect === 'postgres'
+      ? 'SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND tablename = ? AND indexname = ?'
+      : "SELECT 1 FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name = ?";
+  return (
+    (await db.query(probe, ['matching_results', currentDiscoveryIndex])).rows
+      .length === 1
+  );
 }
 
 async function hasMatchingInputTriggers(db: Executor, dialect: Dialect) {
@@ -402,6 +427,8 @@ export async function matchingProjectionSchemaReady(
 ): Promise<boolean> {
   return (
     (await installedSchemaRevision(db, dialect)) === schemaRevision &&
+    (await hasColumn(db, dialect, 'matching_results', 'screened_with_gaps')) &&
+    (await hasCurrentDiscoveryIndex(db, dialect)) &&
     (await hasMatchingInputTriggers(db, dialect))
   );
 }
@@ -418,6 +445,8 @@ export async function ensureMatchingProjectionSchema(
   const previousRevision = await installedSchemaRevision(db, dialect);
   if (
     previousRevision === schemaRevision &&
+    (await hasColumn(db, dialect, 'matching_results', 'screened_with_gaps')) &&
+    (await hasCurrentDiscoveryIndex(db, dialect)) &&
     (await hasMatchingInputTriggers(db, dialect))
   )
     return;
@@ -425,7 +454,14 @@ export async function ensureMatchingProjectionSchema(
     throw new Error('Matching schema requires transactional DDL.');
   await db.transaction(async (transaction) => {
     await transaction.query(workerCursorDdl);
-    if (!(await hasSchemaRevisionColumn(transaction, dialect))) {
+    if (
+      !(await hasColumn(
+        transaction,
+        dialect,
+        'matching_worker_cursor',
+        'schema_revision',
+      ))
+    ) {
       await transaction.query(
         `ALTER TABLE matching_worker_cursor ADD COLUMN ${schemaVersionColumn}`,
       );
@@ -441,6 +477,19 @@ export async function ensureMatchingProjectionSchema(
       );
     }
     for (const statement of schema) await transaction.query(statement);
+    if (
+      !(await hasColumn(
+        transaction,
+        dialect,
+        'matching_results',
+        'screened_with_gaps',
+      ))
+    ) {
+      await transaction.query(
+        `ALTER TABLE matching_results ADD COLUMN ${screenedColumn}`,
+      );
+    }
+    await transaction.query(currentDiscoveryIndexDdl);
     await transaction.query(
       'INSERT INTO matching_vocabulary_version (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING',
     );

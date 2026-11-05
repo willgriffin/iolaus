@@ -1148,6 +1148,9 @@ describe('normalized matching from raw text', () => {
     );
     expect(input.uncertainties).toEqual([
       expect.objectContaining({ code: 'posting-requirement-unknown' }),
+      expect.objectContaining({
+        code: 'posting-source-interpretation-missing',
+      }),
     ]);
   });
 });

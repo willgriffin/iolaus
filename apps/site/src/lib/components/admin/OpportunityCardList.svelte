@@ -25,6 +25,7 @@ import {
   TRIAGE_URL_PARAM,
   triageCloseHref,
 } from '$lib/admin/triage-session';
+import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
 import {
   type AssessmentEligibilityBucket,
   assessmentCoverageMessages,
@@ -58,6 +59,7 @@ import {
 } from '$lib/question-screening-projection';
 import AddUrlIntake from './AddUrlIntake.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
+import OpportunityEvidenceGaps from './OpportunityEvidenceGaps.svelte';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import { getCurrentPartialOpportunityAssessmentProjection } from './PartialOpportunityEvidence.svelte';
@@ -651,6 +653,8 @@ function questionScreeningTooltip(record: AdminRecord): string {
 const discovery = $derived(isOpportunityDiscovery(activeReviewFilter));
 
 function scoreLabel(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return 'Some requirements need evidence';
   if (typeof record.discoveryMatchScore === 'number')
     return `${record.discoveryMatchScore}/100 match`;
   const questionRank = currentQuestionScreeningRank(record);
@@ -686,6 +690,8 @@ function scoreLabel(record: AdminRecord): string {
 }
 
 function scoreExplanation(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return 'Role and work location match. Review the requirements still missing evidence.';
   if (typeof record.discoveryMatchScore === 'number') {
     const reasons = record.discoveryMatchReasons;
     return Array.isArray(reasons) && reasons.length
@@ -717,6 +723,8 @@ function scoreExplanation(record: AdminRecord): string {
 }
 
 function eligibilityLabel(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return DISCOVERY_EVIDENCE_GAPS_LABEL;
   if (typeof record.discoveryMatchScore === 'number') return 'Qualified';
   const bucket = getOpportunityEligibilityProjection(
     record.sourceEligibilityProjection,
@@ -917,7 +925,24 @@ function clearBulkSelection(): void {
             {#if onRetry}<button type="button" onclick={onRetry}>Refresh matches</button>{/if}
           </p>
         {:else if matchingProgress?.status === 'ready' && !visibleRecords.length}
-          <p role="status">No confirmed matches with these filters. Some postings may be missing information needed to check their requirements. You can change your <a href="/admin/preferences/matching">matching preferences</a>.</p>
+          <p role="status">No confirmed matches with these filters. You can change your <a href="/admin/preferences/matching">matching preferences</a>.</p>
+        {/if}
+        {#if matchingProgress?.coverage && !visibleRecords.length}
+          {@const { coverage } = matchingProgress}
+          {#if Object.values(coverage).some(Boolean)}
+            <details>
+              <summary>Why some postings don’t appear</summary>
+              <p>Across available postings, before applying the list filters:</p>
+              <ul>
+                {#if coverage.missingSource}<li>{coverage.missingSource.toLocaleString()} still need a source interpretation.</li>{/if}
+                {#if coverage.unsupported}<li>{coverage.unsupported.toLocaleString()} use requirements matching can’t interpret or recognize.</li>{/if}
+                {#if coverage.unresolvedSource}<li>{coverage.unresolvedSource.toLocaleString()} have unresolved role, location, or requirement details in the posting.</li>{/if}
+                {#if coverage.unresolvedEvidence}<li>{coverage.unresolvedEvidence.toLocaleString()} have a known requirement your evidence hasn’t confirmed.</li>{/if}
+                {#if coverage.conflicts}<li>{coverage.conflicts.toLocaleString()} conflict with a target or a verified requirement.</li>{/if}
+              </ul>
+              <p>A posting can have more than one unresolved detail.</p>
+            </details>
+          {/if}
         {/if}
         {#if matchingProgress?.hasUnsupportedRoleChoices}
           <p>Some target roles couldn’t be recognized. Edit those choices in <a href="/admin/preferences/matching">Matching preferences</a>. Matches for recognized roles still appear.</p>
@@ -945,6 +970,9 @@ function clearBulkSelection(): void {
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
+      {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+        <OpportunityEvidenceGaps compact reasons={record.discoveryMatchReasons} />
+      {/if}
       {#if postingUrlFor(record)}
         <a href={postingUrlFor(record)} target="_blank" rel="noreferrer" aria-label="View posting">View posting</a>
       {/if}

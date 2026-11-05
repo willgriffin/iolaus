@@ -229,6 +229,56 @@ describe('opportunity data-surface actions', () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
+  it('permits guarded manual rejection of a screened match but excludes Apply and LLM processing', async () => {
+    mocks.revisionsByIds.mockResolvedValue([
+      {
+        id: 'opp-1',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+        matchingStatus: 'screened-with-gaps',
+      },
+    ]);
+    const adapter = await createAdapter();
+    const blockedReview = await adapter.preview(request(), { principal });
+    expect(JSON.stringify(blockedReview.details)).toContain(
+      'qualification_required',
+    );
+    const blockedLlm = await adapter.preview(
+      request({
+        actionId: OPPORTUNITY_BULK_WORKFLOW_IDS.processWithLlm,
+        payload: undefined,
+      }),
+      { principal },
+    );
+    expect(JSON.stringify(blockedLlm.details)).toContain(
+      'qualification_required',
+    );
+    expect(mocks.withMatchingWriteRevision).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    const payload = { humanReviewStatus: 'reject' };
+    const preview = await adapter.preview(request({ payload }), { principal });
+    expect(preview.confirmationToken).toBeTruthy();
+    const applied = await adapter.apply(
+      request({
+        phase: 'apply',
+        payload,
+        confirmationToken: preview.confirmationToken,
+        idempotencyKey: 'screened-reject',
+      }),
+      { principal },
+    );
+    expect(applied.details).toMatchObject({ accepted: 1, failed: 0 });
+    expect(mocks.withMatchingWriteRevision).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ matchingRevision: 'generation-1' }),
+      expect.any(Function),
+      { allowScreened: true },
+    );
+    expect(mocks.updateReview).toHaveBeenCalledWith(
+      expect.objectContaining({ humanReviewStatus: 'reject' }),
+    );
+  });
+
   it('refuses an all-matching selection whose filters have drifted', async () => {
     const { OpportunitySelectionError } = await import(
       './opportunity-data-surface-actions.js'

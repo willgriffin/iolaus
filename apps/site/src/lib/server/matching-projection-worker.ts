@@ -47,6 +47,7 @@ export type PendingMatchingDecision = {
   listingRevision: string;
   status: ReturnType<typeof evaluateNormalizedMatch>['status'] | 'failed';
   score: number;
+  screenedWithGaps?: true;
   reasonsJson: string;
 };
 
@@ -137,13 +138,16 @@ export async function publishMatchingBatch(
     decision.listingRevision,
     decision.status,
     decision.score,
+    dialect === 'postgres'
+      ? decision.screenedWithGaps === true
+      : Number(decision.screenedWithGaps === true),
     decision.reasonsJson,
   ]);
   const published = await rows(
     db,
     `
-    WITH incoming(opportunity_id, source_revision, listing_revision, status, score, reasons_json) AS (
-      VALUES ${valuesSql(decisions.length, ['TEXT', 'BIGINT', 'BIGINT', 'TEXT', 'INTEGER', 'TEXT'])}
+    WITH incoming(opportunity_id, source_revision, listing_revision, status, score, screened_with_gaps, reasons_json) AS (
+      VALUES ${valuesSql(decisions.length, ['TEXT', 'BIGINT', 'BIGINT', 'TEXT', 'INTEGER', 'BOOLEAN', 'TEXT'])}
     ), checked AS (
       SELECT i.* FROM incoming i
       JOIN matching_source_versions sv ON sv.opportunity_id = i.opportunity_id AND sv.revision = i.source_revision
@@ -155,17 +159,17 @@ export async function publishMatchingBatch(
     )
     INSERT INTO matching_results (
       profile_id, tenant_id, user_id, opportunity_id, profile_revision, source_revision,
-      source_listing_revision, vocabulary_revision, policy_version, status, score, reasons_json
+      source_listing_revision, vocabulary_revision, policy_version, status, score, screened_with_gaps, reasons_json
     )
     SELECT ?, ?, ?, opportunity_id, CAST(? AS BIGINT), source_revision,
-      listing_revision, CAST(? AS BIGINT), ?, status, score, reasons_json
+      listing_revision, CAST(? AS BIGINT), ?, status, score, screened_with_gaps, reasons_json
     FROM checked WHERE TRUE
     ON CONFLICT (profile_id, opportunity_id) DO UPDATE SET
       tenant_id = excluded.tenant_id, user_id = excluded.user_id,
       profile_revision = excluded.profile_revision, source_revision = excluded.source_revision,
       source_listing_revision = excluded.source_listing_revision,
       vocabulary_revision = excluded.vocabulary_revision, policy_version = excluded.policy_version,
-      status = excluded.status, score = excluded.score, reasons_json = excluded.reasons_json
+      status = excluded.status, score = excluded.score, screened_with_gaps = excluded.screened_with_gaps, reasons_json = excluded.reasons_json
     RETURNING opportunity_id
   `,
     [
@@ -411,6 +415,7 @@ async function profileWork(
         listingRevision: text(row.source_listing_revision),
         status: match?.status ?? 'failed',
         score: match?.score ?? 0,
+        screenedWithGaps: match?.screenedWithGaps,
         // Snapshots retain the quoted text. Pair rows retain locators only,
         // avoiding a copy of private candidate text for every posting.
         reasonsJson: JSON.stringify(

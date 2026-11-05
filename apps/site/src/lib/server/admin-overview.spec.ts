@@ -86,7 +86,9 @@ beforeEach(() => {
   );
   mocks.listCurrentDiscoveryMatches.mockImplementation(
     async (ids: string[]) =>
-      new Map(ids.map((id) => [id, { score: 82, reasons: [] }])),
+      new Map(
+        ids.map((id) => [id, { status: 'qualified', score: 82, reasons: [] }]),
+      ),
   );
   mocks.listAdminRecords.mockImplementation(async (resource, options) => {
     if (resource.slug !== 'opportunities') return [];
@@ -98,6 +100,28 @@ beforeEach(() => {
 });
 
 describe('subject-scoped admin overview', () => {
+  it('labels screened discovery results and omits the qualified score on Home', async () => {
+    mocks.listCurrentDiscoveryMatches.mockResolvedValue(
+      new Map([
+        [
+          'new',
+          {
+            status: 'screened-with-gaps',
+            score: 42,
+            reasons: ['Evidence still needed'],
+          },
+        ],
+      ]),
+    );
+    const overview = await loadAdminOverview(subjectA);
+    expect(overview.opportunities[0]).toMatchObject({
+      id: 'new',
+      discoveryStatus: 'screened-with-gaps',
+      eligibility: 'Screened · evidence gaps',
+      fitScore: null,
+    });
+  });
+
   it('labels an application packet task with its owned opportunity without modifying stored task text', async () => {
     const task = {
       id: 'packet-task',

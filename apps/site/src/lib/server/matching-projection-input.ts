@@ -228,6 +228,15 @@ export async function loadMatchingCandidateInput(
           id: `${kind}:${String(row.id)}`,
           text: raw,
           kind: kind === 'skill' ? 'skill' : 'experience',
+          ...(kind === 'position'
+            ? {
+                position: {
+                  role: text(row.role),
+                  start: text(row.start),
+                  end: text(row.end_label),
+                },
+              }
+            : {}),
         });
     }
   }

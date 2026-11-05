@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import {
+  type MatchingSourceSemanticProof,
+  parseMatchingSourceSemanticProof,
+} from './matching-source-semantics.js';
 import { hasAnalysisPII } from './opportunity-analysis-source.js';
 
 export const MATCHING_SOURCE_EXTRACTION_VERSION =
-  'matching-source-extraction/v4';
+  'matching-source-extraction/v6';
 
 const failureMessages = [
   [
@@ -29,6 +33,30 @@ const failureMessages = [
   [
     'matching_extraction_coverage',
     'Matching extraction does not establish requirement coverage.',
+  ],
+  [
+    'matching_extraction_semantic_unit_set',
+    'Matching extraction rejected a missing or duplicate source unit.',
+  ],
+  [
+    'matching_extraction_semantic_predicate',
+    'Matching extraction rejected a predicate without an eligible source unit.',
+  ],
+  [
+    'matching_extraction_semantic_concept',
+    'Matching extraction rejected a noncanonical concept or oversized predicate set.',
+  ],
+  [
+    'matching_extraction_semantic_role',
+    'Matching extraction rejected a noncanonical role claim.',
+  ],
+  [
+    'matching_extraction_semantic_geography',
+    'Matching extraction rejected a unsupported geography claim.',
+  ],
+  [
+    'matching_extraction_semantic_digest',
+    'Matching extraction rejected a mismatched proof identity.',
   ],
   [
     'matching_extraction_provider_failed',
@@ -315,6 +343,7 @@ export type MatchingSourceExtraction = {
   preferred: MatchingSourceGroup[];
   unresolved: MatchingSourceSpan[];
   nonRequirements?: MatchingSourceSpan[];
+  semantic?: MatchingSourceSemanticProof;
 };
 
 const duration = /\b(\d{1,2})\+?\s*years?\b/giu;
@@ -524,6 +553,38 @@ export function parseMatchingSourceExtraction(
   options: ValidationOptions = {},
 ): MatchingSourceExtraction {
   const repair = options.repairProviderOutput === true;
+  if (!repair && value && typeof value === 'object' && 'semantic' in value) {
+    const { semantic, ...legacy } = value;
+    try {
+      const parsed = validatePersistedResult(legacy);
+      if (
+        parsed.coverage !== 'partial' ||
+        parsed.role ||
+        parsed.geography ||
+        parsed.noRequirements ||
+        parsed.roleTitle ||
+        parsed.workplaceType ||
+        parsed.workLocation ||
+        parsed.required.length ||
+        parsed.preferred.length ||
+        parsed.unresolved.length ||
+        parsed.nonRequirements?.length
+      )
+        throw new MatchingSourceExtractionError('matching_extraction_schema');
+      return {
+        coverage: 'partial',
+        role: null,
+        geography: null,
+        noRequirements: null,
+        required: [],
+        preferred: [],
+        unresolved: [],
+        semantic: parseMatchingSourceSemanticProof(semantic, source),
+      };
+    } catch {
+      throw new MatchingSourceExtractionError('matching_extraction_coverage');
+    }
+  }
   const parsed = repair
     ? sanitizeProviderResult(value, options)
     : validatePersistedResult(value);

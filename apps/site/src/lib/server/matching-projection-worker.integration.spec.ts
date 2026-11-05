@@ -191,6 +191,73 @@ for (const dialect of dialects) {
       }
     });
 
+    it('publishes screened rows only for the owner with direct evidence and clears the flag on promotion', async () => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        await db.query(
+          'UPDATE opportunities SET description_raw=? WHERE id=?',
+          ['Required skills: Node.js and TypeScript', jobs[1]],
+        );
+        await ensureMatchingProjectionSchema(db, dialect);
+        const converge = async () => {
+          for (let i = 0; i < 6; i += 1) await runMatchingTick(db, dialect);
+        };
+        const resultFor = async (profileId: string) => {
+          const row = (
+            await db.query(
+              'SELECT status, score, screened_with_gaps, reasons_json FROM matching_results WHERE profile_id=? AND opportunity_id=?',
+              [profileId, jobs[1]],
+            )
+          ).rows[0];
+          return {
+            status: row?.status,
+            score: Number(row?.score),
+            reasons_json: String(row?.reasons_json ?? '[]'),
+            screened_with_gaps: Boolean(row?.screened_with_gaps),
+          };
+        };
+        await converge();
+        const screened = await resultFor(owner.profileId);
+        expect(screened).toMatchObject({
+          status: 'insufficient-evidence',
+          screened_with_gaps: true,
+        });
+        expect(Number(screened.score)).toBeGreaterThan(0);
+        expect(Number(screened.score)).toBeLessThan(70);
+        expect(JSON.parse(String(screened.reasons_json))).toContainEqual(
+          expect.objectContaining({
+            code: 'required-capability',
+            outcome: 'unknown',
+            citations: [
+              expect.not.objectContaining({ text: expect.any(String) }),
+            ],
+          }),
+        );
+        expect(await resultFor(sibling.profileId)).toMatchObject({
+          screened_with_gaps: false,
+          score: 0,
+        });
+        await db.query('INSERT INTO resume_skills VALUES (?,?,?,?,?)', [
+          'skill-c',
+          owner.tenantId,
+          owner.userId,
+          owner.profileId,
+          'TypeScript',
+        ]);
+        await converge();
+        expect(await resultFor(owner.profileId)).toMatchObject({
+          status: 'qualified',
+          screened_with_gaps: false,
+        });
+      } finally {
+        await close();
+      }
+    });
+
     it('pins a confirmed match through a durable write and rejects a generation changed before the write fence', async () => {
       const { database: db, close } = await createMatchingProjectionFixture(
         dialect,

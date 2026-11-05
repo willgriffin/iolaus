@@ -81,7 +81,11 @@ function dueDate(value: string): string {
             {#each data.opportunities as opportunity (opportunity.id)}
               <li><a class="record-link opportunity-link" href={opportunity.href}>
                 <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span></div>
-                <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
+                {#if opportunity.discoveryStatus === 'screened-with-gaps'}
+                  <span class="record-meta">{opportunity.readiness}</span>
+                {:else if opportunity.fitScore !== null}
+                  <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
+                {/if}
               </a></li>
             {/each}
           </ol>

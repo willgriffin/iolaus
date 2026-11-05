@@ -560,6 +560,7 @@ export async function browseJobOpportunities(
       {
         ...opportunitySummary(record, context),
         score: match.score,
+        matchStatus: match.status,
         matchReasons: match.reasons,
       },
     ];

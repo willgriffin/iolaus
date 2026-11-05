@@ -193,6 +193,7 @@ export async function loadTriageQueue({
       ? [
           {
             ...record,
+            discoveryMatchStatus: match.status,
             discoveryMatchScore: match.score,
             discoveryMatchReasons: match.reasons,
           },

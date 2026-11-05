@@ -11,6 +11,8 @@ import {
   listOpportunityRevisionsByIds,
 } from './admin-opportunity-query.js';
 import { createMatchingProjectionFixture } from './fixtures/matching-projection.js';
+import { readMatchingDiscoveryCoverage } from './matching-discovery-coverage.js';
+import { lockMatchingWriteRevision } from './matching-projection-read.js';
 import { ensureMatchingProjectionSchema } from './matching-projection-schema.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 
@@ -82,6 +84,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           const newest = randomUUID();
           const stale = randomUUID();
           const unprocessed = randomUUID();
+          const unresolved = randomUUID();
           const conflict = randomUUID();
           const revisionTime = '2026-02-01T00:00:00.000Z';
           for (const [id, skill, day] of [
@@ -89,6 +92,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             [newest, 'JavaScript', '02'],
             [stale, 'Stale skill', '04'],
             [unprocessed, 'Unprocessed skill', '05'],
+            [unresolved, 'Unknown required skill', '07'],
             [conflict, 'Conflict skill', '06'],
           ]) {
             await db.query(
@@ -128,6 +132,34 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               [MATCHING_POLICY_VERSION, status, score, owner.profileId, id],
             );
           }
+          const unresolvedReasons = JSON.stringify([
+            {
+              code: 'posting-source-interpretation-missing',
+              outcome: 'unknown',
+            },
+            { code: 'posting-requirement-unsupported', outcome: 'unknown' },
+            { code: 'posting-requirement-unknown', outcome: 'unknown' },
+            { code: 'posting-requirement-unknown', outcome: 'unknown' },
+            { code: 'required-capability', outcome: 'unknown' },
+          ]);
+          await db.query(
+            `
+            INSERT INTO matching_results (
+              profile_id, tenant_id, user_id, opportunity_id, profile_revision, source_revision,
+              source_listing_revision, vocabulary_revision, policy_version, status, score, reasons_json)
+            SELECT p.profile_id, 'tenant', 'owner', s.opportunity_id, p.revision, s.revision,
+              l.revision, v.revision, ?, 'insufficient-evidence', 0, ?
+            FROM matching_profile_versions p, matching_source_versions s,
+              matching_source_listing_versions l, matching_vocabulary_version v
+            WHERE p.profile_id = ? AND s.opportunity_id = ? AND l.source_id = 'board'
+          `,
+            [
+              MATCHING_POLICY_VERSION,
+              unresolvedReasons,
+              owner.profileId,
+              unresolved,
+            ],
+          );
           for (const [index, id, slug] of [
             [1, best, 'typescript'],
             [2, newest, 'javascript'],
@@ -243,9 +275,142 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               workspaceSubject: { ...owner, tenantId: 'foreign' },
             }),
           ).toBe(0);
+          // The same current projection reaches reads and selections, while
+          // the write fence distinguishes manual dispositions from Apply.
+          await db.query(
+            'UPDATE matching_results SET screened_with_gaps = TRUE, score = 55, reasons_json = ? WHERE opportunity_id = ?',
+            [
+              JSON.stringify([
+                {
+                  code: 'required-capability',
+                  outcome: 'unknown',
+                  message: 'Evidence gap',
+                },
+                {
+                  code: 'required-capability',
+                  outcome: 'supported',
+                  message: 'Evidence confirmed',
+                },
+                {
+                  code: 'work-location',
+                  outcome: 'supported',
+                  message: 'Compatible location',
+                },
+              ]),
+              unresolved,
+            ],
+          );
+          expect(await countOpportunityRecords(query)).toBe(3);
+          expect(
+            await listOpportunityPageIds({ ...query, limit: 3, offset: 0 }),
+          ).toEqual([best, newest, unresolved]);
+          expect(
+            await listOpportunityPageIds({
+              ...query,
+              filters: { ...query.filters, sort: 'newest' },
+              limit: 3,
+              offset: 0,
+            }),
+          ).toEqual([unresolved, newest, best]);
+          expect(
+            await countOpportunityRecords({
+              ...query,
+              filters: { ...query.filters, fit: 'have' },
+            }),
+          ).toBe(2);
+          expect(
+            await countOpportunityRecords({
+              ...query,
+              filters: {
+                ...query.filters,
+                fit: 'gaps',
+                eligibilityBuckets: ['eligible'],
+              },
+            }),
+          ).toBe(1);
+          expect(
+            (await listCurrentDiscoveryMatches([unresolved], owner)).get(
+              unresolved,
+            ),
+          ).toMatchObject({
+            status: 'screened-with-gaps',
+            score: 55,
+            reasons: ['Evidence gap'],
+          });
+          const [screened] = await listOpportunityRevisionsByIds(
+            [unresolved],
+            owner,
+            'unsorted',
+          );
+          expect(screened?.matchingStatus).toBe('screened-with-gaps');
+          const expected = {
+            opportunityId: unresolved,
+            updatedAt: screened?.updatedAt ?? '',
+            matchingRevision: screened?.matchingRevision ?? '',
+          };
+          await db.transaction?.(async (tx) => {
+            expect(
+              await lockMatchingWriteRevision(tx, dialect, owner, expected),
+            ).toBe(false);
+            expect(
+              await lockMatchingWriteRevision(tx, dialect, owner, expected, {
+                allowScreened: true,
+              }),
+            ).toBe(true);
+          });
+          await db.query(
+            'UPDATE matching_results SET screened_with_gaps = FALSE, score = 0, reasons_json = ? WHERE opportunity_id = ?',
+            [
+              JSON.stringify([
+                {
+                  code: 'posting-source-interpretation-missing',
+                  outcome: 'unknown',
+                },
+                { code: 'posting-requirement-unsupported', outcome: 'unknown' },
+                { code: 'posting-requirement-unknown', outcome: 'unknown' },
+                { code: 'required-capability', outcome: 'unknown' },
+              ]),
+              unresolved,
+            ],
+          );
+          const emptyCoverage = {
+            conflicts: 0,
+            missingSource: 0,
+            unsupported: 0,
+            unresolvedSource: 0,
+            unresolvedEvidence: 0,
+          };
+          expect(
+            await readMatchingDiscoveryCoverage(db, dialect, owner),
+          ).toEqual({
+            conflicts: 1,
+            missingSource: 1,
+            unsupported: 1,
+            unresolvedSource: 1,
+            unresolvedEvidence: 1,
+          });
+          expect(
+            await readMatchingDiscoveryCoverage(db, dialect, sibling),
+          ).toEqual(emptyCoverage);
+          expect(
+            await readMatchingDiscoveryCoverage(db, dialect, {
+              ...owner,
+              tenantId: 'foreign',
+            }),
+          ).toEqual(emptyCoverage);
+          await db.query(
+            "UPDATE opportunities SET description_raw = 'Source changed' WHERE id = ?",
+            [unresolved],
+          );
+          expect(
+            await readMatchingDiscoveryCoverage(db, dialect, owner),
+          ).toEqual({ ...emptyCoverage, conflicts: 1 });
           await db.query(
             "UPDATE memberships SET status = 'suspended' WHERE user_id = 'owner'",
           );
+          expect(
+            await readMatchingDiscoveryCoverage(db, dialect, owner),
+          ).toEqual(emptyCoverage);
           expect(await countOpportunityRecords(query)).toBe(0);
         } finally {
           scoped.db = undefined;

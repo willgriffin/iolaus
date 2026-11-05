@@ -6,6 +6,7 @@ import { ensureMatchingProjectionSchema } from './matching-projection-schema.js'
 import { runMatchingTick } from './matching-projection-worker.js';
 import { parseMatchingSourceExtraction } from './matching-source-extraction-contract.js';
 import { runMatchingSourceExtraction } from './matching-source-extraction-worker.js';
+import { OpportunityIntelligenceGovernanceError } from './opportunity-intelligence-governance.js';
 import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 
 const postingId = '11111111-0000-4000-8000-000000000001';
@@ -95,6 +96,47 @@ for (const dialect of dialects) {
           ).rows[0]?.status;
         await drain();
         expect(await status()).toBe('insufficient-evidence');
+
+        const failed: string[] = [];
+        await expect(
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            windowId: 'fixture-window',
+            provider: async (_input, options) => {
+              expect(options).toEqual({
+                budgetMicros: 1000,
+                windowId: 'fixture-window',
+              });
+              throw new OpportunityIntelligenceGovernanceError(
+                'budget_exhausted',
+                'Fixture: hourly ceiling reached',
+              );
+            },
+            onFailure: (kind) => failed.push(kind),
+          }),
+        ).resolves.toBe('retry');
+        expect(failed).toEqual(['Governance:budget_exhausted']);
+        const {
+          rows: [deferred],
+        } = await db.query(
+          'SELECT state, attempts, next_run_at FROM matching_source_interpretations WHERE opportunity_id=?',
+          [postingId],
+        );
+        expect(deferred?.state).toBe('retry');
+        expect(Number(deferred?.attempts)).toBe(0);
+        expect(Number(deferred?.next_run_at)).toBeGreaterThan(Date.now());
+        await expect(
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            opportunityId: postingId,
+            provider: async () => {
+              throw new Error('Deferred work was invoked');
+            },
+          }),
+        ).resolves.toBe('idle');
+        // Advance the fixture clock for the persisted retry without sleeping.
+        await db.query(
+          'UPDATE matching_source_interpretations SET next_run_at=0 WHERE opportunity_id=?',
+          [postingId],
+        );
 
         const entered = Promise.withResolvers<void>();
         const release = Promise.withResolvers<void>();

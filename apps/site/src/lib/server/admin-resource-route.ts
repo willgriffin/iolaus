@@ -389,6 +389,7 @@ export async function attachOpportunityDiscoveryContext(
     return [
       {
         ...record,
+        discoveryMatchStatus: match.status,
         discoveryMatchScore: match.score,
         discoveryMatchReasons: match.reasons,
         companyName: names.get(String(record.companyId)) ?? '',
@@ -1166,26 +1167,28 @@ export async function loadAdminResourcePageData(
     };
     const opportunityQueryFingerprint =
       createOpportunityQueryFingerprint(opportunityQuery);
-    const [totalRecords, opportunityFilterOptions, matchingProgress] =
-      await Promise.all([
-        subject
-          ? countOpportunityRecords(
-              opportunityQuery as Parameters<typeof countOpportunityRecords>[0],
+    const [totalRecords, opportunityFilterOptions] = await Promise.all([
+      subject
+        ? countOpportunityRecords(
+            opportunityQuery as Parameters<typeof countOpportunityRecords>[0],
+          )
+        : Promise.resolve(0),
+      shouldLoadFacetOptions
+        ? subject
+          ? listOpportunityFilterOptions(
+              reviewFilter,
+              subject,
+              currentQualified,
             )
-          : Promise.resolve(0),
-        shouldLoadFacetOptions
-          ? subject
-            ? listOpportunityFilterOptions(
-                reviewFilter,
-                subject,
-                currentQualified,
-              )
-            : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS)
-          : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS),
-        subject && currentQualified
-          ? getMatchingDiscoveryProgress(subject)
-          : undefined,
-      ]);
+          : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS)
+        : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS),
+    ]);
+    const matchingProgress =
+      subject && currentQualified
+        ? await getMatchingDiscoveryProgress(subject, {
+            coverage: totalRecords === 0,
+          })
+        : undefined;
     const pagination = createAdminListPagination(
       totalRecords,
       requestedPage,
@@ -1366,7 +1369,7 @@ export async function loadAdminRecordPageData(
   if (resource.slug === 'opportunities') {
     const companyId =
       typeof records[0]?.companyId === 'string' ? records[0].companyId : '';
-    const [foundCompany, relations] = await Promise.all([
+    const [foundCompany, relations, currentMatches] = await Promise.all([
       companyId
         ? (async () => {
             try {
@@ -1382,9 +1385,28 @@ export async function loadAdminRecordPageData(
       options.includeOpportunityRelations
         ? listOpportunityRelationEditors(recordId)
         : Promise.resolve([]),
+      options.workspaceSubject?.profileId
+        ? listCurrentDiscoveryMatches(
+            [recordId],
+            requireCandidateWorkspaceSubject(options.workspaceSubject),
+          )
+        : undefined,
     ]);
     company = foundCompany;
     opportunityRelations = relations;
+    const hydrated = records[0];
+    const match =
+      hydrated &&
+      currentMatches &&
+      discoveryMatchForRecord(currentMatches, hydrated);
+    if (match) {
+      records[0] = {
+        ...hydrated,
+        discoveryMatchStatus: match.status,
+        discoveryMatchScore: match.score,
+        discoveryMatchReasons: match.reasons,
+      };
+    }
   }
 
   let relatedProjectEditor: RelatedProjectEditorData | null = null;

@@ -13,7 +13,9 @@ import { OPPORTUNITY_RECOMMENDATION_RANK_VERSION } from '../objects/OpportunityR
 import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
 import { getDbConfig } from './db.js';
 import {
-  currentQualifiedMatchJoin,
+  currentDiscoveryMatchJoin,
+  DISCOVERY_MATCH_STATUS_SQL,
+  type DiscoveryMatchStatus,
   MATCHING_REVISION_SQL,
 } from './matching-projection-read.js';
 import { OPPORTUNITY_ASSESSMENT_VERSION } from './opportunity-assessment.js';
@@ -745,7 +747,10 @@ function filterWhereSql({
     )`);
   }
 
-  if (currentQualified && filters.fit === 'gaps') where.push('FALSE');
+  if (currentQualified && filters.fit === 'gaps')
+    where.push("current_match.status = 'insufficient-evidence'");
+  if (currentQualified && filters.fit === 'have')
+    where.push("current_match.status = 'qualified'");
   if (!currentQualified && filters.fit !== 'all') {
     const candidates = normalizeQueryTerms(candidateSkills);
     const candidateTermsSql =
@@ -1565,7 +1570,7 @@ export function createOpportunityWhereSql(
   if (query.currentQualified) {
     if (hasCandidateWorkspaceSubject(query.workspaceSubject)) {
       joins.push(
-        currentQualifiedMatchJoin(
+        currentDiscoveryMatchJoin(
           query.workspaceSubject,
           (value) => pushParam(values, value),
           'o',
@@ -1675,6 +1680,7 @@ export type OpportunityMatchingRow = {
   id: string;
   updatedAt: string;
   matchingRevision?: string;
+  matchingStatus?: DiscoveryMatchStatus;
 };
 
 /**
@@ -1800,7 +1806,7 @@ export async function listOpportunityMatchingIds(
     screeningExclusions,
   );
   const limitPlaceholder = pushParam(built.values, limit);
-  const sql = `SELECT o.id, o.updated_at AS "updatedAt"${query.currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision"` : ''}
+  const sql = `SELECT o.id, o.updated_at AS "updatedAt"${query.currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision", ${DISCOVERY_MATCH_STATUS_SQL} AS "matchingStatus"` : ''}
     FROM opportunities o
     ${built.joins.join('\n')}
     ${built.whereSql}
@@ -1816,6 +1822,10 @@ export async function listOpportunityMatchingIds(
         id,
         ...(typeof row.matchingRevision === 'string'
           ? { matchingRevision: row.matchingRevision }
+          : {}),
+        ...(row.matchingStatus === 'qualified' ||
+        row.matchingStatus === 'screened-with-gaps'
+          ? { matchingStatus: row.matchingStatus }
           : {}),
         updatedAt:
           updatedAt instanceof Date
@@ -1856,7 +1866,7 @@ export async function listOpportunityRevisionsByIds(
   if (reviewFilter !== undefined) {
     if (currentQualified) {
       joins.push(
-        currentQualifiedMatchJoin(
+        currentDiscoveryMatchJoin(
           workspaceSubject,
           (value) => pushParam(values, value),
           'o',
@@ -1880,7 +1890,7 @@ export async function listOpportunityRevisionsByIds(
   const result = await queryOpportunitySql(
     db,
     dialect,
-    `SELECT o.id, o.updated_at AS "updatedAt"${currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision"` : ''}
+    `SELECT o.id, o.updated_at AS "updatedAt"${currentQualified ? `, ${MATCHING_REVISION_SQL} AS "matchingRevision", ${DISCOVERY_MATCH_STATUS_SQL} AS "matchingStatus"` : ''}
     FROM opportunities o
     ${joins.join('\n')}
     WHERE ${predicates.join(' AND ')}`,
@@ -1896,6 +1906,10 @@ export async function listOpportunityRevisionsByIds(
         ...(typeof row.matchingRevision === 'string'
           ? { matchingRevision: row.matchingRevision }
           : {}),
+        ...(row.matchingStatus === 'qualified' ||
+        row.matchingStatus === 'screened-with-gaps'
+          ? { matchingStatus: row.matchingStatus }
+          : {}),
         updatedAt:
           updatedAt instanceof Date
             ? updatedAt.toISOString()
@@ -1906,6 +1920,7 @@ export async function listOpportunityRevisionsByIds(
 }
 
 export type DiscoveryMatch = {
+  status: DiscoveryMatchStatus;
   score: number;
   reasons: string[];
   sourceFingerprint: string;
@@ -1921,7 +1936,7 @@ export async function listCurrentDiscoveryMatches(
   const db = await queryDatabase();
   const dialect = opportunityQueryDialect();
   const values: unknown[] = [];
-  const join = currentQualifiedMatchJoin(
+  const join = currentDiscoveryMatchJoin(
     subject,
     (value) => pushParam(values, value),
     'o',
@@ -1936,7 +1951,7 @@ export async function listCurrentDiscoveryMatches(
     dialect,
     `SELECT o.id, o.source_content_fingerprint AS "sourceFingerprint",
     o.source_content_version AS "sourceVersion",
-    current_match.score, current_match.reasons_json AS reasons
+    current_match.score, ${DISCOVERY_MATCH_STATUS_SQL} AS "matchingStatus", current_match.reasons_json AS reasons
     FROM opportunities o ${join}
     WHERE ${idsSql}`,
     values,
@@ -1945,6 +1960,8 @@ export async function listCurrentDiscoveryMatches(
     if (typeof row.id !== 'string' || row.score == null) continue;
     const score = Number(row.score);
     if (!Number.isFinite(score)) continue;
+    const status = row.matchingStatus;
+    if (status !== 'qualified' && status !== 'screened-with-gaps') continue;
     let reasons: unknown = row.reasons;
     if (typeof reasons === 'string') {
       try {
@@ -1954,10 +1971,16 @@ export async function listCurrentDiscoveryMatches(
       }
     }
     matches.set(row.id, {
+      status,
       score,
       reasons: Array.isArray(reasons)
         ? reasons.flatMap((reason) =>
-            typeof reason?.message === 'string' ? [reason.message] : [],
+            typeof reason?.message === 'string' &&
+            (status === 'qualified' ||
+              (reason.code === 'required-capability' &&
+                reason.outcome === 'unknown'))
+              ? [reason.message]
+              : [],
           )
         : [],
       sourceFingerprint: String(row.sourceFingerprint ?? ''),
@@ -2068,7 +2091,9 @@ export async function listOpportunityPageIds({
     const direction = filters.sortDirection === 'asc' ? 'ASC' : 'DESC';
     const order = ['newest', 'salary', 'rating'].includes(filters.sort)
       ? orderBySql(filters.sort, filters.sortDirection, { dialect })
-      : `current_match.score ${filters.sort === 'best' ? 'DESC' : direction}, o.updated_at DESC, o.id ASC`;
+      : filters.sort === 'best'
+        ? "CASE WHEN current_match.status = 'qualified' THEN 0 ELSE 1 END, current_match.score DESC, o.updated_at DESC, o.id ASC"
+        : `current_match.score ${direction}, o.updated_at DESC, o.id ASC`;
     const result = await queryOpportunitySql(
       db,
       dialect,
@@ -2409,7 +2434,7 @@ export async function listOpportunityFilterOptions(
   const joins: string[] = [];
   if (currentQualified)
     joins.push(
-      currentQualifiedMatchJoin(
+      currentDiscoveryMatchJoin(
         workspaceSubject,
         (value) => pushParam(values, value),
         'o',

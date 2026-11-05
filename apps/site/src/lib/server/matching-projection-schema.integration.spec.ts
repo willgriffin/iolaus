@@ -82,6 +82,59 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         ).toEqual(revisions);
       });
 
+      it('adds the screened flag to existing rows and constrains its rank and status', async () => {
+        const fixture = await createMatchingProjectionFixture(
+          dialect,
+          postgresUrl,
+        );
+        try {
+          const legacy = fixture.database;
+          await ensureMatchingProjectionSchema(legacy, dialect);
+          await legacy.query('DROP INDEX matching_results_current_discovery');
+          await legacy.query(
+            'ALTER TABLE matching_results DROP COLUMN screened_with_gaps',
+          );
+          await legacy.query(
+            'UPDATE matching_worker_cursor SET schema_revision=2 WHERE id=1',
+          );
+          await legacy.query(`
+            INSERT INTO matching_results
+              (profile_id, tenant_id, user_id, opportunity_id, profile_revision,
+               source_revision, source_listing_revision, vocabulary_revision,
+               policy_version, status, score, reasons_json)
+            VALUES ('profile', 'tenant', 'user', 'posting', 1, 1, 1, 1, 'legacy', 'qualified', 70, '[]')
+          `);
+          expect(await matchingProjectionSchemaReady(legacy, dialect)).toBe(
+            false,
+          );
+          await ensureMatchingProjectionSchema(legacy, dialect);
+          expect(await matchingProjectionSchemaReady(legacy, dialect)).toBe(
+            true,
+          );
+          const migrated = await legacy.query(
+            'SELECT status, score, screened_with_gaps FROM matching_results',
+          );
+          expect(migrated.rows[0]).toMatchObject({
+            status: 'qualified',
+            score: 70,
+          });
+          expect(Boolean(migrated.rows[0]?.screened_with_gaps)).toBe(false);
+          await expect(
+            legacy.query('UPDATE matching_results SET screened_with_gaps=TRUE'),
+          ).rejects.toThrow();
+          await expect(
+            legacy.query(
+              "UPDATE matching_results SET screened_with_gaps=TRUE, status='insufficient-evidence'",
+            ),
+          ).rejects.toThrow();
+          await legacy.query(
+            "UPDATE matching_results SET screened_with_gaps=TRUE, status='insufficient-evidence', score=35",
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
       it('invalidates raw source edits transactionally and ignores crawl timestamps', async () => {
         const before = await sourceRevision();
         const unrelated = await profileRevision(profile);

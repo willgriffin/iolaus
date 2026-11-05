@@ -11,6 +11,7 @@ import {
   type TriageShortcutAction,
 } from '$lib/admin/triage-shortcuts';
 import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
+import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
 import {
   assessmentCoverageMessages,
   assessmentEligibilityLabels,
@@ -29,6 +30,7 @@ import {
   getCurrentQuestionScreeningProjection,
   questionScreeningLabel,
 } from '$lib/question-screening-projection';
+import OpportunityEvidenceGaps from './OpportunityEvidenceGaps.svelte';
 import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
@@ -221,7 +223,9 @@ const facts = $derived(
         <span><Building2 size={14} strokeWidth={2.2} /> {company || 'Unknown company'}</span>
         <span><MapPin size={14} strokeWidth={2.2} /> {locations || 'Location not stated'}</span>
         {#if !readOnly}
-        {#if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
+        {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+          <span class="badge muted">{DISCOVERY_EVIDENCE_GAPS_LABEL}</span>
+        {:else if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
         {:else if score !== null}
           <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
@@ -248,7 +252,10 @@ const facts = $derived(
 
   <aside class="card-aside" aria-label={readOnly ? 'Posting facts' : 'Decision'}>
     {#if !readOnly}
-    {#if typeof record.discoveryMatchScore === 'number'}
+    {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} />
+      {#if opportunityId}<p><a href={`/admin/opportunities/${encodeURIComponent(opportunityId)}`}>Open full review</a></p>{/if}
+    {:else if typeof record.discoveryMatchScore === 'number'}
       <section class="panel" aria-label="Why this opportunity matches">
         <h3>Why it matches</h3>
         {#each (Array.isArray(record.discoveryMatchReasons) ? record.discoveryMatchReasons.slice(0, 5) : []) as reason}

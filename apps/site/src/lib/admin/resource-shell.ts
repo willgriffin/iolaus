@@ -25,6 +25,14 @@ export const DEFAULT_ADMIN_RECORD_PAGE_SIZE = 250;
 export const OPPORTUNITY_TABLE_PAGE_SIZE = 100;
 export const OPPORTUNITY_DEFAULT_REVIEW_FILTER = 'unsorted';
 
+export interface MatchingDiscoveryCoverage {
+  conflicts: number;
+  missingSource: number;
+  unsupported: number;
+  unresolvedSource: number;
+  unresolvedEvidence: number;
+}
+
 export type MatchingDiscoveryProgress = {
   status:
     | 'pending'
@@ -34,6 +42,7 @@ export type MatchingDiscoveryProgress = {
     | 'needs-evidence'
     | 'failed';
   hasUnsupportedRoleChoices?: boolean;
+  coverage?: MatchingDiscoveryCoverage;
 };
 
 export interface AdminResourcePageData {

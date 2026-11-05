@@ -1,17 +1,39 @@
 # Normalized opportunity matching
 
-Opportunities, Home discovery, and triage show postings that meet the current
-candidate profile's target roles, work locations, required posting criteria,
-and enabled must-have screening questions. Best orders that set by match
-score; Newest orders the same set by date. Saved reviews and applications are
-available through their respective history views. An explicit deep review
-can use additional analysis, but it cannot admit a posting into discovery.
+Opportunities, Home discovery, and triage show current **Qualified** matches
+and **Screened · evidence gaps**. Qualified means every required condition is
+established. A screened posting has a verified role and compatible location
+and work arrangement, all its mandatory source requirements are understood,
+and candidate evidence directly supports at least one required capability.
+Exact evidence for a named tool or required capability can count as partial
+support when the remaining experience, scope, or context is unproven. This
+never establishes the whole requirement. An explicit upper bound below the requirement, a contrary
+context, a related capability, or an employer’s technology list cannot
+provide that support. A documented duration below the minimum is still
+relevant evidence when it is a lower bound. It has no known conflict or unresolved must-have screening question. The app
+names the remaining candidate evidence gaps, which can include an explicit,
+cited qualitative requirement that the current evidence cannot establish.
+Those requirements retain their mandatory status; a qualifier, technical
+prerequisite, or unknown source condition cannot be discarded as qualitative.
+A missing source interpretation, unsupported hard source condition, or lack of relevant proof stays out of
+discovery.
+
+Best ranks qualified matches first; Newest orders the same set by date.
+Saved reviews and applications stay in their history views. Explicit manual
+bulk dispositions can record screened rows for follow-up or rejection. Bulk
+Apply and bulk paid processing still require a qualified row in discovery.
+An explicit deep review can use additional analysis, but it cannot admit a
+posting into discovery.
 
 Set roles, locations, and work arrangements under **System → Preferences →
 Matching preferences**. The fields are shared with onboarding. A current or
-past job title is evidence about a career, not a search target. Add current
-résumé skills, positions, achievements, or a verified skill experience note
-to supply evidence; inferred or cached AI skill suggestions are excluded.
+past job title is evidence about a career, not a search target. Role titles
+and supported disciplines can be saved as separate choices. Explicit
+specialty and seniority narrow that choice; an unrecognized choice is shown
+separately from missing résumé evidence. The original preferences stay intact.
+
+Current résumé skills, positions, achievements, and a verified skill experience
+note can supply evidence; inferred or cached AI skill suggestions are excluded.
 Candidate facts, preferences, and matching projections are private to the
 verified tenant, user, and selected profile.
 
@@ -27,7 +49,15 @@ recognizes:
 - Governed skill aliases, explicit narrower capabilities, and related
   capabilities. A narrower capability can prove its parent, but the
   relationship cannot be reversed. Related skills may affect optional rank;
-  they do not prove a required skill. In a verified OR group, one proven
+  they do not prove a required skill. Recognized dated résumé positions can
+  establish conservative professional experience in the role's own capability.
+  Overlaps count once; incomplete dates use the latest possible start and
+  earliest possible end. An ongoing position is counted only through the time
+  its matching snapshot was computed. Crossing a duration threshold does not
+  refresh that snapshot by itself; it is recalculated with the next profile or
+  policy revision. Dates do not transfer to standalone skills or establish
+  production use. An explicit maximum duration can establish a conflict;
+  a recorded lower bound below the posting's minimum remains missing proof. In a verified OR group, one proven
   alternative can satisfy the group even if a different alternative remains
   unknown. An unknown required conjunct still blocks.
 - Explicit English requirement and preference sections, including AND
@@ -48,10 +78,22 @@ localities without recognized geography, and unsupported requirement grammar
 can suppress real matches. Offline ranking evaluation in
 [matching-evaluation.md](matching-evaluation.md) does not
 measure this raw extraction path. The matching loop makes no provider calls.
-The optional source interpretation pass can handle more prose once per
-verified posting revision, within an operator-set shared budget. It sends
-only the posting title, description, and location to the configured model.
-Candidate evidence and per-profile comparisons stay in the application.
+The optional source interpretation pass handles more prose once per verified
+posting revision, within an operator-set shared budget. The application
+assigns IDs and source offsets to the captured title, location, and description
+units. A first request proposes canonical roles, geography, and capability
+predicates for those units, with source section hints and defined capability
+scopes. A separately governed verification request reads the raw units
+without the section hints and binds its result to both digests. Disagreement
+about the details of an independently established preference stays optional;
+disagreement about whether a condition is optional remains unresolved. A missing unit, unverified interpretation, known contradiction, or
+unsupported condition cannot grant a match. Where they establish a hard
+condition independently, deterministic source facts still apply. The second
+request is an additional quality check; it cannot guarantee perfect extraction.
+
+Both requests receive only the public posting and fixed matching vocabulary,
+never candidate preferences or evidence. Candidate evidence and per-profile
+comparisons stay in the application.
 Production rollout and changes in extraction policy require separate
 verification.
 
@@ -74,8 +116,11 @@ batch can be retried without losing work. Posting edits get a revision fast
 path; periodic reconciliation also covers listing toggles, vocabulary
 corrections, and changes that commit out of revision order. Reactivation may
 take a sweep before matches return. Role/location conflicts, unresolved
-evidence, and failed or pending computations are excluded. Discovery reads do
-not run the matcher.
+source facts, and failed or pending computations are excluded. The empty discovery
+view distinguishes missing source interpretation, unsupported wording or
+capabilities, unresolved source details, unconfirmed candidate evidence, and
+known conflicts. These counts describe all current available postings before
+filters and can overlap. Discovery reads do not run the matcher.
 
 Schema installation is part of the regular database migration and release
 schema preparation. The ordinary jobs worker runs reconciliation after
@@ -99,9 +144,21 @@ consumes the saved interpretation and never initiates outbound calls.
 
 For a bounded live source-only check on an isolated PostgreSQL database,
 use `matching:source-enrich` with the isolated `--database-name` and at
-most ten explicit `--opportunity=<UUID>` selectors. The command enforces
+most ten explicit `--opportunity=<UUID>` selectors, or use
+`--backlog=<scan steps>` for a bounded pass over the durable shared cursor.
+The command reports source attempts, outcomes, and the reason it stopped.
+Repeat a backlog pass to continue; the normal hourly ledger, leases, and
+retry schedule still apply. The command enforces
 local-only connection details and native call, token, and spend ceilings
-(maximum one dollar). Leave the ordinary worker and all crawlers off in
+(at most eight paid calls, 100,000 input tokens, and one dollar per hour).
+An interpreted source can use two calls; a retry can reuse a previously
+accepted draft without paying to extract it again. At that limit a run of
+four uncached sources can take the entire hour. At that rate, a catalog of
+11,221 live listings would take at least 2,806 hourly windows (about 117 days)
+if every source needed both requests. Use bounded diagnostics rather than a
+blind paid sweep. A successful sample does not establish catalog readiness.
+Leave the ordinary worker and
+all crawlers off in
 that clone; use the existing intelligence control for the scope of the
 test and restore it afterwards. Do not include candidate information in
 source probes.

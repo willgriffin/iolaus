@@ -1,3 +1,4 @@
+import type { DiscoveryMatchStatus } from '$lib/discovery-match';
 import {
   taskAssigneeRoleDefinitions,
   workflowLabel,
@@ -24,6 +25,7 @@ export type OverviewOpportunity = {
   company: string;
   location: string;
   fitScore: number | null;
+  discoveryStatus?: DiscoveryMatchStatus;
   eligibility: string;
   readiness: string;
   href: string;

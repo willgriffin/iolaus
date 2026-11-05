@@ -3,6 +3,7 @@ import {
   prioritizeOverviewTasks,
 } from '$lib/admin/overview';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
+import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import {
   type AdminRecord,
@@ -231,9 +232,16 @@ async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
           company: names.get(String(posting.companyId)) ?? '',
           location:
             typeof posting.locations === 'string' ? posting.locations : '',
-          fitScore: match.score,
-          eligibility: 'Qualified',
-          readiness: 'Matches your preferences and requirements',
+          discoveryStatus: match.status,
+          fitScore: match.status === 'screened-with-gaps' ? null : match.score,
+          eligibility:
+            match.status === 'screened-with-gaps'
+              ? DISCOVERY_EVIDENCE_GAPS_LABEL
+              : 'Qualified',
+          readiness:
+            match.status === 'screened-with-gaps'
+              ? 'Some requirements still need evidence'
+              : 'Matches your preferences and requirements',
           href: `/admin/opportunities/${encodeURIComponent(id)}`,
         },
       ];

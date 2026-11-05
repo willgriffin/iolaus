@@ -43,6 +43,27 @@ function renderList(
 }
 
 describe('OpportunityCardList assessment readiness', () => {
+  it('shows current screened evidence gaps without presenting a qualified score', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'screened-fixture',
+          title: 'Backend engineer',
+          discoveryMatchStatus: 'screened-with-gaps',
+          discoveryMatchScore: 32,
+          discoveryMatchReasons: [
+            'Your evidence does not establish production experience with PostgreSQL.',
+          ],
+        },
+      ],
+    });
+    expect(body).toContain('Screened · evidence gaps');
+    expect(body).toContain('Review evidence gaps');
+    expect(body).toContain('production experience with PostgreSQL');
+    expect(body).not.toContain('Qualified');
+    expect(body).not.toContain('32/100');
+  });
+
   it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
     const { body } = renderList({
       records: [
