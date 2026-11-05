@@ -137,6 +137,95 @@ describe('AI config profiles', () => {
     ).rejects.toThrow('is not the pinned openai/gpt-6.1-sol');
   });
 
+  it('uses the approved owned résumé route for the pinned candidate model and private purpose', async () => {
+    vi.stubEnv('BIFROST_API_KEY', 'generic-key');
+    vi.stubEnv('BIFROST_BASE_URL', 'https://generic.invalid');
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_BASE_URL',
+      'https://owned.invalid/openai',
+    );
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_RESUME_FIT_REVIEW_MODEL',
+      'openai/gpt-6.1-sol',
+    );
+    const { resolveMatchingCandidateAiProfileClient } = await import(
+      './ai-config'
+    );
+
+    await expect(
+      resolveMatchingCandidateAiProfileClient(4096),
+    ).resolves.toBeNull();
+    expect(getAI).not.toHaveBeenCalled();
+
+    vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'owned-resume-key');
+    await expect(
+      resolveMatchingCandidateAiProfileClient(4096),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-scoring',
+    });
+    expect(getAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'owned-resume-key',
+        baseUrl: 'https://owned.invalid/openai',
+        defaultModel: 'openai/gpt-6-luna',
+        headers: { 'x-bf-disable-content-logging': 'true' },
+        maxRetries: 0,
+        rateLimit: { maxAttempts: 1 },
+        usageTags: expect.objectContaining({
+          feature: 'matching-candidate-interpretation',
+        }),
+      }),
+    );
+  });
+
+  it('sends the private content logging header through the native Bifrost SDK', async () => {
+    vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'owned-resume-key');
+    vi.stubEnv(
+      'BIFROST_OPPORTUNITY_INTELLIGENCE_SCORING_BASE_URL',
+      'https://owned.invalid/openai',
+    );
+    const sdk =
+      await vi.importActual<typeof import('@happyvertical/ai')>(
+        '@happyvertical/ai',
+      );
+    getAI.mockImplementation(sdk.getAI);
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      expect(request.url).toBe('https://owned.invalid/openai/chat/completions');
+      expect(request.headers.get('x-bf-disable-content-logging')).toBe('true');
+      return new Response(
+        JSON.stringify({
+          model: 'openai/gpt-6-luna',
+          choices: [
+            {
+              message: { role: 'assistant', content: '{}' },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const { resolveMatchingCandidateAiProfileClient } = await import(
+        './ai-config'
+      );
+      const client = await resolveMatchingCandidateAiProfileClient(4096);
+      expect(client).not.toBeNull();
+      await expect(
+        client?.aiClient.chat([{ role: 'user', content: 'Synthetic source' }]),
+      ).resolves.toMatchObject({
+        usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('selects exact registered Luna or Sol only for owned resume reviews without unpinning legacy scoring', async () => {
     vi.stubEnv(
       'BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY',

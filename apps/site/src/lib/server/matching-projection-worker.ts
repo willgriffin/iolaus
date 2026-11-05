@@ -1,5 +1,9 @@
 import type { DatabaseInterface } from '@happyvertical/sql';
 import {
+  candidateInterpretationForMatching,
+  matchingCandidateInterpretationEnabled,
+} from './matching-candidate-store.js';
+import {
   loadMatchingCandidateInput,
   loadMatchingVocabulary,
   matchingPostingInput,
@@ -9,6 +13,7 @@ import {
   liveMatchingOwnerSql,
   type MatchingDialect,
 } from './matching-projection-read.js';
+import { advanceMatchingProfileRevision } from './matching-projection-schema.js';
 import {
   MATCHING_SOURCE_EXTRACTION_VERSION,
   parseMatchingSourceExtraction,
@@ -34,11 +39,15 @@ const vocabularies = new WeakMap<
   }
 >();
 type Row = Record<string, unknown>;
-type Scope = CandidateWorkspaceSubject & {
+export type MatchingProfileScope = CandidateWorkspaceSubject & {
   profileRevision: string;
   vocabularyRevision: string;
 };
-type Candidate = ReturnType<typeof normalizeMatchingCandidate>;
+type Scope = MatchingProfileScope;
+type Candidate = ReturnType<typeof normalizeMatchingCandidate> & {
+  ongoingExperienceAsOf?: number;
+  interpretationEnabled?: true;
+};
 type Posting = ReturnType<typeof normalizeMatchingPosting>;
 
 export type PendingMatchingDecision = {
@@ -94,25 +103,32 @@ function parseSnapshot<T>(value: unknown): T | null {
  * already holds its transaction's write lock. Identity joins guard transferred,
  * deactivated or removed owners independently of the revision checks.
  */
-async function lockCurrentMatchingScope(
+export async function lockCurrentMatchingScope(
   db: DatabaseInterface,
   dialect: MatchingDialect,
   scope: Scope,
+  options: { exclusive?: boolean; reuseAcrossProfileEdits?: boolean } = {},
 ): Promise<boolean> {
+  const { exclusive = false, reuseAcrossProfileEdits = false } = options;
+  if (exclusive && dialect === 'sqlite')
+    await db.query(
+      'UPDATE matching_profile_versions SET revision = revision WHERE profile_id = ?',
+      [scope.profileId],
+    );
   const [current] = await rows(
     db,
     `
     SELECT pv.profile_id FROM matching_profile_versions pv
     JOIN candidate_profiles p ON CAST(p.id AS TEXT) = pv.profile_id
     JOIN matching_vocabulary_version vv ON vv.id = 1
-    WHERE pv.profile_id = ? AND pv.revision = CAST(? AS BIGINT)
+    WHERE pv.profile_id = ? ${reuseAcrossProfileEdits ? '' : 'AND pv.revision = CAST(? AS BIGINT)'}
       AND CAST(p.tenant_id AS TEXT) = ? AND p.owner_user_id = ? AND p.active = TRUE
       AND vv.revision = CAST(? AS BIGINT) AND ${liveMatchingOwnerSql('p')}
-    ${share(dialect, 'pv, vv')}
+    ${exclusive && dialect === 'postgres' ? 'FOR UPDATE OF pv FOR SHARE OF vv' : share(dialect, 'pv, vv')}
   `,
     [
       scope.profileId,
-      scope.profileRevision,
+      ...(reuseAcrossProfileEdits ? [] : [scope.profileRevision]),
       scope.tenantId,
       scope.userId,
       scope.vocabularyRevision,
@@ -373,15 +389,41 @@ async function profileWork(
     'UPDATE matching_worker_cursor SET profile_cursor = ? WHERE id = 1',
     [scope.profileId],
   );
-  if (!(await lockCurrentMatchingScope(db, dialect, scope)))
+  if (
+    !(await lockCurrentMatchingScope(db, dialect, scope, { exclusive: true }))
+  )
     return { evaluated: 0, profileBacklog: true };
   let candidate = parseSnapshot<Candidate>(profile.facts_json);
   let status = text(profile.status) || 'pending';
   let position = text(profile.cursor ?? '0');
+  const dayMs = 86_400_000;
+  const asOf = Math.floor(now / dayMs) * dayMs;
+  const interpretationEnabled = matchingCandidateInterpretationEnabled();
+  if (
+    candidate &&
+    ((candidate.hasOngoingExperience &&
+      candidate.ongoingExperienceAsOf !== asOf) ||
+      Boolean(candidate.interpretationEnabled) !== interpretationEnabled)
+  ) {
+    await advanceMatchingProfileRevision(db, dialect, scope.profileId);
+    return { evaluated: 0, profileBacklog: true };
+  }
   if (!candidate) {
     const input = await loadMatchingCandidateInput(db, scope);
     if (!input) return { evaluated: 0, profileBacklog: false };
-    candidate = normalizeMatchingCandidate(input, vocabulary);
+    const interpretation = await candidateInterpretationForMatching(
+      db,
+      scope,
+      input,
+    );
+    candidate = normalizeMatchingCandidate(
+      input,
+      vocabulary,
+      interpretation,
+      asOf,
+    );
+    if (interpretationEnabled) candidate.interpretationEnabled = true;
+    if (candidate.hasOngoingExperience) candidate.ongoingExperienceAsOf = asOf;
     position = '0';
     status =
       !candidate.roles.length ||
@@ -421,12 +463,15 @@ async function profileWork(
         reasonsJson: JSON.stringify(
           match?.reasons.map(({ citations, ...reason }) => ({
             ...reason,
-            citations: citations.map(({ field, id, start, end }) => ({
-              field,
-              id,
-              start,
-              end,
-            })),
+            citations: citations.map(
+              ({ field, id, start, end, evidenceDigest }) => ({
+                field,
+                id,
+                start,
+                end,
+                evidenceDigest,
+              }),
+            ),
           })) ?? [],
         ),
       };
@@ -466,6 +511,7 @@ async function profileWork(
         ).length > 0;
       const privateGap =
         candidate.evidence.length === 0 ||
+        Boolean(candidate.interpretationIssue) ||
         candidate.uncertainties.some(
           ({ code }) => code !== 'candidate-role-choice-unknown',
         ) ||

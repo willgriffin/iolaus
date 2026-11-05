@@ -13,8 +13,11 @@ const registries = [
   ['sources', 'matching_source_listing_versions', 'source_id'],
 ] as const;
 
-const schemaRevision = 3;
+const schemaRevision = 5;
 const schemaVersionColumn = 'schema_revision INTEGER NOT NULL DEFAULT 0';
+const candidateDraftColumn = "draft_json TEXT NOT NULL DEFAULT ''";
+const candidateSplitColumn =
+  'split_chunk INTEGER NOT NULL DEFAULT -1 CHECK (split_chunk >= -1)';
 const screenedColumn = `screened_with_gaps BOOLEAN NOT NULL DEFAULT FALSE
   CHECK (NOT screened_with_gaps OR (status = 'insufficient-evidence' AND score BETWEEN 1 AND 69))`;
 const workerCursorDdl = `CREATE TABLE IF NOT EXISTS matching_worker_cursor (
@@ -47,6 +50,15 @@ const schema = [
      policy_version TEXT NOT NULL, facts_json TEXT NOT NULL,
      status TEXT NOT NULL CHECK (status IN ('pending', 'ready', 'missing-preferences', 'needs-evidence', 'failed')),
      cursor BIGINT NOT NULL DEFAULT 0, next_run_at BIGINT NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS matching_candidate_interpretations (
+     profile_id TEXT PRIMARY KEY NOT NULL, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL,
+     vocabulary_revision BIGINT NOT NULL, policy_version TEXT NOT NULL, contract_version TEXT NOT NULL,
+     input_digest TEXT NOT NULL, request_id TEXT NOT NULL,
+     state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'complete', 'failed')),
+     lease TEXT NOT NULL DEFAULT '', next_run_at BIGINT NOT NULL DEFAULT 0,
+     payload_json TEXT NOT NULL DEFAULT '', ${candidateDraftColumn}, ${candidateSplitColumn}, next_chunk INTEGER NOT NULL DEFAULT 0,
+     chunk_started BOOLEAN NOT NULL DEFAULT FALSE, preflight_attempts INTEGER NOT NULL DEFAULT 0)`,
+  "CREATE INDEX IF NOT EXISTS matching_candidate_interpretations_due ON matching_candidate_interpretations (next_run_at, profile_id) WHERE state IN ('pending', 'running')",
   `CREATE TABLE IF NOT EXISTS matching_results (
      profile_id TEXT NOT NULL, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
      profile_revision BIGINT NOT NULL, source_revision BIGINT NOT NULL, source_listing_revision BIGINT NOT NULL,
@@ -76,6 +88,25 @@ const ownerProfile = (row: Image) =>
   `CAST(p.id AS TEXT) = CAST(${row}.candidate_profile_id AS TEXT)
    AND CAST(p.owner_user_id AS TEXT) = CAST(${row}.owner_user_id AS TEXT)
    AND CAST(p.tenant_id AS TEXT) = CAST(${row}.tenant_id AS TEXT)`;
+
+function careerEvidenceTrigger(
+  table: string,
+  columns: readonly string[],
+): Trigger {
+  return {
+    table,
+    columns: [
+      'id',
+      'tenant_id',
+      'owner_user_id',
+      'candidate_profile_id',
+      'use_on_resume',
+      ...columns,
+    ],
+    affects: ownerProfile,
+    relevant: (row) => `${row}.use_on_resume = TRUE`,
+  };
+}
 
 const triggers: readonly Trigger[] = [
   {
@@ -130,6 +161,8 @@ const triggers: readonly Trigger[] = [
       'owner_user_id',
       'candidate_profile_id',
       'role',
+      'position_id',
+      'company',
       'blurb',
       'start',
       'end_label',
@@ -143,11 +176,28 @@ const triggers: readonly Trigger[] = [
       'tenant_id',
       'owner_user_id',
       'candidate_profile_id',
+      'position_id',
       'title',
       'body',
+      'metric',
     ],
     affects: ownerProfile,
   },
+  careerEvidenceTrigger('experiences', ['summary']),
+  careerEvidenceTrigger('projects', ['experience_id', 'name', 'summary']),
+  careerEvidenceTrigger('achievements', [
+    'experience_id',
+    'project_id',
+    'title',
+    'body',
+    'metric',
+  ]),
+  careerEvidenceTrigger('duties', [
+    'experience_id',
+    'project_id',
+    'title',
+    'body',
+  ]),
   {
     table: 'preference_rules',
     columns: [
@@ -221,6 +271,22 @@ export async function advanceMatchingSourceRevision(
   );
 }
 
+/** Invalidate deterministic pairs after an owned interpretation changes state. */
+export async function advanceMatchingProfileRevision(
+  db: Executor,
+  dialect: Dialect,
+  profileId: string,
+) {
+  if (dialect === 'sqlite')
+    await db.query(
+      'UPDATE matching_revision_clock SET revision = revision + 1 WHERE id = 1',
+    );
+  await db.query(
+    `UPDATE matching_profile_versions SET revision = ${revision(dialect)} WHERE profile_id = ?`,
+    [profileId],
+  );
+}
+
 function changed(dialect: Dialect, columns: readonly string[]) {
   const operator = dialect === 'postgres' ? 'IS DISTINCT FROM' : 'IS NOT';
   return columns
@@ -236,6 +302,7 @@ function cleanup(table: string, condition: string): string[] {
   const statements = [`DELETE FROM ${versions} WHERE ${byOldId};`];
   if (table === 'candidate_profiles') {
     statements.push(
+      `DELETE FROM matching_candidate_interpretations WHERE ${byOldId};`,
       `DELETE FROM matching_profile_facts WHERE ${byOldId};`,
       `DELETE FROM matching_results WHERE ${byOldId};`,
     );
@@ -288,6 +355,17 @@ function triggerBody(trigger: Trigger, event: Event, dialect: Dialect): string {
         profiles.join(' UNION '),
       ),
     );
+    if (table !== 'preference_rules') {
+      // Remove private citations at the same fence as evidence edits or
+      // revocation. Pair rows only contain locators and are already stale.
+      for (const projection of [
+        'matching_candidate_interpretations',
+        'matching_profile_facts',
+      ])
+        statements.push(
+          `DELETE FROM ${projection} WHERE profile_id IN (${profiles.join(' UNION ')});`,
+        );
+    }
   } else {
     const registry = registries.find(([raw]) => raw === table);
     if (!registry) throw new Error(`No matching input registry for ${table}`);
@@ -306,8 +384,10 @@ function triggerBody(trigger: Trigger, event: Event, dialect: Dialect): string {
       if (event === 'UPDATE' && table === 'candidate_profiles') {
         // Active/context changes can revoke access to derived private evidence.
         const revoked = `NOT COALESCE(NEW.active, FALSE) OR ${changed(dialect, ['tenant_id', 'owner_user_id'])}`;
+        const evidenceChanged = changed(dialect, ['facts_json']);
         statements.push(
-          `DELETE FROM matching_profile_facts WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked});`,
+          `DELETE FROM matching_candidate_interpretations WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked} OR ${evidenceChanged});`,
+          `DELETE FROM matching_profile_facts WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked} OR ${evidenceChanged});`,
           `DELETE FROM matching_results WHERE profile_id = CAST(OLD.id AS TEXT) AND (${revoked});`,
         );
       }
@@ -368,8 +448,15 @@ async function ensureInputTriggers(db: Executor, dialect: Dialect) {
 async function hasColumn(
   db: Executor,
   dialect: Dialect,
-  table: 'matching_worker_cursor' | 'matching_results',
-  column: 'schema_revision' | 'screened_with_gaps',
+  table:
+    | 'matching_worker_cursor'
+    | 'matching_results'
+    | 'matching_candidate_interpretations',
+  column:
+    | 'schema_revision'
+    | 'screened_with_gaps'
+    | 'draft_json'
+    | 'split_chunk',
 ) {
   const probe =
     dialect === 'postgres'
@@ -421,15 +508,33 @@ async function hasMatchingInputTriggers(db: Executor, dialect: Dialect) {
   return (await db.query(probe)).rows.length === triggerNames.length;
 }
 
+async function projectionInputsReady(db: Executor, dialect: Dialect) {
+  return (
+    (await hasColumn(
+      db,
+      dialect,
+      'matching_candidate_interpretations',
+      'draft_json',
+    )) &&
+    (await hasColumn(db, dialect, 'matching_results', 'screened_with_gaps')) &&
+    (await hasCurrentDiscoveryIndex(db, dialect)) &&
+    (await hasMatchingInputTriggers(db, dialect))
+  );
+}
+
 export async function matchingProjectionSchemaReady(
   db: Pick<DatabaseInterface, 'query' | 'url'>,
   dialect: Dialect = detectEngine(db.url) === 'sqlite' ? 'sqlite' : 'postgres',
 ): Promise<boolean> {
   return (
     (await installedSchemaRevision(db, dialect)) === schemaRevision &&
-    (await hasColumn(db, dialect, 'matching_results', 'screened_with_gaps')) &&
-    (await hasCurrentDiscoveryIndex(db, dialect)) &&
-    (await hasMatchingInputTriggers(db, dialect))
+    (await hasColumn(
+      db,
+      dialect,
+      'matching_candidate_interpretations',
+      'split_chunk',
+    )) &&
+    (await projectionInputsReady(db, dialect))
   );
 }
 
@@ -443,11 +548,17 @@ export async function ensureMatchingProjectionSchema(
   // Regular init containers also use db:migrate. Avoid repeating DDL locks
   // and scanning the existing catalog once the atomic install has committed.
   const previousRevision = await installedSchemaRevision(db, dialect);
+  const inputsReady =
+    previousRevision >= 4 && (await projectionInputsReady(db, dialect));
   if (
     previousRevision === schemaRevision &&
-    (await hasColumn(db, dialect, 'matching_results', 'screened_with_gaps')) &&
-    (await hasCurrentDiscoveryIndex(db, dialect)) &&
-    (await hasMatchingInputTriggers(db, dialect))
+    inputsReady &&
+    (await hasColumn(
+      db,
+      dialect,
+      'matching_candidate_interpretations',
+      'split_chunk',
+    ))
   )
     return;
   if (!db.transaction)
@@ -481,6 +592,28 @@ export async function ensureMatchingProjectionSchema(
       !(await hasColumn(
         transaction,
         dialect,
+        'matching_candidate_interpretations',
+        'draft_json',
+      ))
+    )
+      await transaction.query(
+        `ALTER TABLE matching_candidate_interpretations ADD COLUMN ${candidateDraftColumn}`,
+      );
+    if (
+      !(await hasColumn(
+        transaction,
+        dialect,
+        'matching_candidate_interpretations',
+        'split_chunk',
+      ))
+    )
+      await transaction.query(
+        `ALTER TABLE matching_candidate_interpretations ADD COLUMN ${candidateSplitColumn}`,
+      );
+    if (
+      !(await hasColumn(
+        transaction,
+        dialect,
         'matching_results',
         'screened_with_gaps',
       ))
@@ -500,7 +633,7 @@ export async function ensureMatchingProjectionSchema(
       'INSERT INTO matching_source_extraction_cursor (id, work_cursor) VALUES (1, 0) ON CONFLICT (id) DO NOTHING',
     );
     await ensureInputTriggers(transaction, dialect);
-    if (previousRevision > 0) {
+    if (previousRevision > 0 && !inputsReady) {
       // A raw write may have passed through the missing trigger while the
       // schema was incomplete. Fail closed on every old result after repair.
       if (dialect === 'sqlite') {

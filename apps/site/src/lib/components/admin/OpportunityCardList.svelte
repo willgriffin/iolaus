@@ -654,7 +654,7 @@ const discovery = $derived(isOpportunityDiscovery(activeReviewFilter));
 
 function scoreLabel(record: AdminRecord): string {
   if (record.discoveryMatchStatus === 'screened-with-gaps')
-    return 'Some requirements need evidence';
+    return 'Some requirements need confirmation';
   if (typeof record.discoveryMatchScore === 'number')
     return `${record.discoveryMatchScore}/100 match`;
   const questionRank = currentQuestionScreeningRank(record);
@@ -691,7 +691,7 @@ function scoreLabel(record: AdminRecord): string {
 
 function scoreExplanation(record: AdminRecord): string {
   if (record.discoveryMatchStatus === 'screened-with-gaps')
-    return 'Role and work location match. Review the requirements still missing evidence.';
+    return 'Role and work location match. Review the requirements that still need confirmation.';
   if (typeof record.discoveryMatchScore === 'number') {
     const reasons = record.discoveryMatchReasons;
     return Array.isArray(reasons) && reasons.length
@@ -937,7 +937,10 @@ function clearBulkSelection(): void {
                 {#if coverage.missingSource}<li>{coverage.missingSource.toLocaleString()} still need a source interpretation.</li>{/if}
                 {#if coverage.unsupported}<li>{coverage.unsupported.toLocaleString()} use requirements matching can’t interpret or recognize.</li>{/if}
                 {#if coverage.unresolvedSource}<li>{coverage.unresolvedSource.toLocaleString()} have unresolved role, location, or requirement details in the posting.</li>{/if}
-                {#if coverage.unresolvedEvidence}<li>{coverage.unresolvedEvidence.toLocaleString()} have a known requirement your evidence hasn’t confirmed.</li>{/if}
+                {#if coverage.pendingInterpretation}<li>{coverage.pendingInterpretation.toLocaleString()} are waiting for candidate evidence interpretation.</li>{/if}
+                {#if coverage.failedInterpretation}<li>{coverage.failedInterpretation.toLocaleString()} could not be fully checked because candidate evidence interpretation failed.</li>{/if}
+                {#if coverage.partialInterpretation}<li>{coverage.partialInterpretation.toLocaleString()} could only be checked against part of your evidence.</li>{/if}
+                {#if coverage.unresolvedEvidence}<li>{coverage.unresolvedEvidence.toLocaleString()} have a known requirement or screening question that still needs confirmation.</li>{/if}
                 {#if coverage.conflicts}<li>{coverage.conflicts.toLocaleString()} conflict with a target or a verified requirement.</li>{/if}
               </ul>
               <p>A posting can have more than one unresolved detail.</p>
@@ -971,7 +974,7 @@ function clearBulkSelection(): void {
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
       {#if record.discoveryMatchStatus === 'screened-with-gaps'}
-        <OpportunityEvidenceGaps compact reasons={record.discoveryMatchReasons} />
+        <OpportunityEvidenceGaps compact reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} />
       {/if}
       {#if postingUrlFor(record)}
         <a href={postingUrlFor(record)} target="_blank" rel="noreferrer" aria-label="View posting">View posting</a>

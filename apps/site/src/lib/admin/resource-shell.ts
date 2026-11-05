@@ -31,6 +31,9 @@ export interface MatchingDiscoveryCoverage {
   unsupported: number;
   unresolvedSource: number;
   unresolvedEvidence: number;
+  pendingInterpretation: number;
+  failedInterpretation: number;
+  partialInterpretation: number;
 }
 
 export type MatchingDiscoveryProgress = {

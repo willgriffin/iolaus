@@ -189,23 +189,39 @@ export async function loadMatchingCandidateInput(
   // proposals can contain copied citations from since-deleted resume rows.
   const limit = MAX_PROFILE_EVIDENCE_PER_KIND + 1;
   const read = (
-    table: 'resume_skills' | 'resume_positions' | 'resume_achievements',
+    table:
+      | 'resume_skills'
+      | 'resume_positions'
+      | 'resume_achievements'
+      | 'experiences'
+      | 'projects'
+      | 'achievements'
+      | 'duties',
     columns: string,
+    resumeSelection = false,
   ) =>
     db.query(
       `SELECT id, ${columns} FROM ${table}
-       WHERE ${ownedEvidenceWhere} ORDER BY id LIMIT ${limit}`,
+       WHERE ${ownedEvidenceWhere}${resumeSelection ? ' AND use_on_resume = TRUE' : ''}
+       ORDER BY id LIMIT ${limit}`,
       args,
     );
   const { rows: skills } = await read('resume_skills', 'label');
   const { rows: positions } = await read(
     'resume_positions',
-    'role, blurb, start, end_label',
+    'position_id, role, company, blurb, start, end_label',
   );
   const { rows: achievements } = await read(
     'resume_achievements',
-    'title, body',
+    'position_id, title, body, metric',
   );
+  // The resume's position key is only usable when it resolves uniquely
+  // within the same owned profile. A title or employer is not an activity ID.
+  const activities = new Map<string, (typeof positions)[number] | null>();
+  for (const row of positions.slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)) {
+    const key = text(row.position_id).trim();
+    if (key) activities.set(key, activities.has(key) ? null : row);
+  }
   for (const [kind, rows] of [
     ['skill', skills],
     ['position', positions],
@@ -213,12 +229,16 @@ export async function loadMatchingCandidateInput(
   ] as const) {
     if (rows.length === limit) incomplete = true;
     for (const row of rows.slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)) {
+      const linkedPosition =
+        kind === 'achievement'
+          ? activities.get(text(row.position_id).trim())
+          : undefined;
       const fields =
         kind === 'skill'
           ? [row.label]
           : kind === 'position'
-            ? [row.role, row.start, row.end_label, row.blurb]
-            : [row.title, row.body];
+            ? [row.role, row.start, row.end_label, row.company, row.blurb]
+            : [row.title, row.body, row.metric];
       const raw = fields
         .map(text)
         .filter((value) => value.trim())
@@ -228,6 +248,21 @@ export async function loadMatchingCandidateInput(
           id: `${kind}:${String(row.id)}`,
           text: raw,
           kind: kind === 'skill' ? 'skill' : 'experience',
+          activityId:
+            kind === 'position'
+              ? `position:${String(row.id)}`
+              : linkedPosition
+                ? `position:${String(linkedPosition.id)}`
+                : undefined,
+          ...(linkedPosition
+            ? {
+                activityPosition: {
+                  role: text(linkedPosition.role),
+                  start: text(linkedPosition.start),
+                  end: text(linkedPosition.end_label),
+                },
+              }
+            : {}),
           ...(kind === 'position'
             ? {
                 position: {
@@ -238,6 +273,64 @@ export async function loadMatchingCandidateInput(
               }
             : {}),
         });
+    }
+  }
+
+  const { rows: experiences } = await read('experiences', 'summary', true);
+  const { rows: projects } = await read(
+    'projects',
+    'experience_id, name, summary',
+    true,
+  );
+  const { rows: projectAchievements } = await read(
+    'achievements',
+    'experience_id, project_id, title, body, metric',
+    true,
+  );
+  const { rows: duties } = await read(
+    'duties',
+    'experience_id, project_id, title, body',
+    true,
+  );
+  const experienceIds = new Set(
+    experiences
+      .slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)
+      .map((row) => String(row.id)),
+  );
+  const projectParents = new Map(
+    projects
+      .slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)
+      .map((row) => [String(row.id), text(row.experience_id)]),
+  );
+  for (const [kind, rows] of [
+    ['career-experience', experiences],
+    ['career-project', projects],
+    ['career-achievement', projectAchievements],
+    ['career-duty', duties],
+  ] as const) {
+    if (rows.length === limit) incomplete = true;
+    for (const row of rows.slice(0, MAX_PROFILE_EVIDENCE_PER_KIND)) {
+      const id = String(row.id);
+      const experienceId =
+        kind === 'career-experience' ? id : text(row.experience_id);
+      const projectId = kind === 'career-project' ? id : text(row.project_id);
+      const raw = [row.name, row.summary, row.title, row.body, row.metric]
+        .map(text)
+        .filter((value) => value.trim())
+        .join('\n');
+      if (!raw) continue;
+      evidence.push({
+        id: `${kind}:${id}`,
+        text: raw,
+        kind: 'experience',
+        activityId: experienceIds.has(experienceId)
+          ? `career-experience:${experienceId}`
+          : undefined,
+        projectActivityId:
+          projectId && projectParents.get(projectId) === experienceId
+            ? `career-project:${projectId}`
+            : undefined,
+      });
     }
   }
 

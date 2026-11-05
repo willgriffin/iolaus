@@ -1635,7 +1635,13 @@ describe('admin-resource-route', () => {
     );
     const data = await loadAdminRecordPageData('opportunities', 'opp-1', {
       workspaceSubject,
+      includePrivateMatchingEvidence: true,
     });
+    expect(mocks.listCurrentDiscoveryMatches).toHaveBeenCalledWith(
+      ['opp-1'],
+      workspaceSubject,
+      { includePrivateEvidence: true },
+    );
     expect(
       mocks.loadCurrentOpportunityAssessmentProjections,
     ).toHaveBeenCalledWith({
@@ -1707,7 +1713,11 @@ describe('admin-resource-route', () => {
     });
     mocks.listComboOptions.mockResolvedValue({});
     mocks.listReferenceOptions.mockResolvedValue({});
-    const data = await loadAdminRecordPageData('opportunities', 'opp-1');
+    mocks.listCurrentDiscoveryMatches.mockClear();
+    const data = await loadAdminRecordPageData('opportunities', 'opp-1', {
+      includePrivateMatchingEvidence: true,
+    });
+    expect(mocks.listCurrentDiscoveryMatches).not.toHaveBeenCalled();
     expect(
       mocks.loadCurrentOpportunityAssessmentProjections,
     ).not.toHaveBeenCalled();

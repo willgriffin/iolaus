@@ -1,5 +1,16 @@
 export type DiscoveryMatchStatus = 'qualified' | 'screened-with-gaps';
 
+export type DiscoveryEvidenceItem = {
+  message: string;
+  excerpts?: string[];
+};
+
+export type DiscoveryEvidenceExplanation = {
+  supported: DiscoveryEvidenceItem[];
+  gaps: DiscoveryEvidenceItem[];
+  interpretation?: string;
+};
+
 export const DISCOVERY_EVIDENCE_GAPS_LABEL = 'Screened · evidence gaps';
 
 export function discoveryEvidenceGaps(value: unknown): string[] {

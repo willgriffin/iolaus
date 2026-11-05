@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
+import type { DiscoveryEvidenceExplanation } from '$lib/discovery-match';
 import {
   DECISION_REVIEW_STATUSES,
   isOpportunityDiscovery,
@@ -1923,13 +1924,141 @@ export type DiscoveryMatch = {
   status: DiscoveryMatchStatus;
   score: number;
   reasons: string[];
+  evidence: DiscoveryEvidenceExplanation;
   sourceFingerprint: string;
   sourceVersion: number;
 };
 
+function readMatchingJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function matchingObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function matchingEvidenceLocator(value: unknown): string | undefined {
+  const citation = matchingObject(value);
+  if (!citation) return;
+  const { field, id, start, end, evidenceDigest } = citation;
+  if (
+    field === 'evidence' &&
+    typeof id === 'string' &&
+    id &&
+    typeof start === 'number' &&
+    typeof end === 'number' &&
+    Number.isSafeInteger(start) &&
+    Number.isSafeInteger(end) &&
+    start >= 0 &&
+    end > start &&
+    (evidenceDigest === undefined || typeof evidenceDigest === 'string')
+  ) {
+    return JSON.stringify([id, start, end, evidenceDigest]);
+  }
+}
+
+function matchingEvidenceExcerpts(facts: unknown): Map<string, string> {
+  const evidence = matchingObject(readMatchingJson(facts))?.evidence;
+  const excerpts = new Map<string, string>();
+  if (!Array.isArray(evidence)) return excerpts;
+  for (const proof of evidence) {
+    const citation = matchingObject(matchingObject(proof)?.citation);
+    const key = matchingEvidenceLocator(citation);
+    const text = citation?.text;
+    if (
+      key &&
+      typeof text === 'string' &&
+      text.trim() &&
+      typeof citation?.start === 'number' &&
+      typeof citation?.end === 'number' &&
+      text.length === citation.end - citation.start
+    ) {
+      // A locator with conflicting texts cannot be resolved reliably.
+      if (excerpts.has(key) && excerpts.get(key) !== text)
+        excerpts.set(key, '');
+      else excerpts.set(key, text);
+    }
+  }
+  return excerpts;
+}
+
+const INTERPRETATION_NOTES = new Map([
+  [
+    'candidate-interpretation-pending',
+    'Matching is still interpreting some of your evidence.',
+  ],
+  [
+    'candidate-interpretation-failed',
+    'Matching could not interpret some of your evidence.',
+  ],
+  [
+    'candidate-interpretation-partial',
+    'Matching could interpret only part of your evidence.',
+  ],
+]);
+
+function explainDiscoveryMatch(
+  rawReasons: unknown,
+  status: DiscoveryMatchStatus,
+  facts: unknown,
+): Pick<DiscoveryMatch, 'reasons' | 'evidence'> {
+  const reasons: string[] = [];
+  const evidence: DiscoveryEvidenceExplanation = { supported: [], gaps: [] };
+  const parsed = readMatchingJson(rawReasons);
+  if (!Array.isArray(parsed)) return { reasons, evidence };
+
+  const privateExcerpts = matchingEvidenceExcerpts(facts);
+  let excerptBudget = 12;
+  for (const value of parsed) {
+    const reason = matchingObject(value);
+    if (!reason || typeof reason.message !== 'string') continue;
+    const { code, outcome, message, citations } = reason;
+    const gap = code === 'required-capability' && outcome === 'unknown';
+    if (status === 'qualified' || gap) reasons.push(message);
+    if (outcome === 'unknown' && typeof code === 'string') {
+      const note = INTERPRETATION_NOTES.get(code);
+      if (note) evidence.interpretation = note;
+    }
+    const support =
+      (code === 'required-capability' || code === 'preferred-capability') &&
+      outcome === 'supported';
+    if (!gap && !support) continue;
+
+    const excerpts = new Set<string>();
+    if (excerptBudget && privateExcerpts.size && Array.isArray(citations)) {
+      for (const citation of citations) {
+        const key = matchingEvidenceLocator(citation);
+        const excerpt = key && privateExcerpts.get(key);
+        if (!excerpt) continue;
+        excerpts.add(
+          excerpt.length > 240 ? `${excerpt.slice(0, 240)}…` : excerpt,
+        );
+        if (excerpts.size >= Math.min(3, excerptBudget)) break;
+      }
+    }
+    excerptBudget -= excerpts.size;
+    const item = {
+      message,
+      ...(excerpts.size ? { excerpts: [...excerpts] } : {}),
+    };
+    (support ? evidence.supported : evidence.gaps).push(item);
+  }
+  if (!reasons.length && evidence.interpretation)
+    reasons.push(evidence.interpretation);
+  return { reasons, evidence };
+}
+
 export async function listCurrentDiscoveryMatches(
   ids: readonly string[],
   subject: WorkspaceOpportunityQuery['workspaceSubject'],
+  options?: { includePrivateEvidence: true },
 ): Promise<Map<string, DiscoveryMatch>> {
   const matches = new Map<string, DiscoveryMatch>();
   if (!ids.length || !hasCandidateWorkspaceSubject(subject)) return matches;
@@ -1946,13 +2075,27 @@ export async function listCurrentDiscoveryMatches(
     dialect === 'sqlite'
       ? `o.id IN (${ids.map((id) => pushParam(values, id)).join(', ')})`
       : `o.id = ANY(${pushParam(values, ids)})`;
+  // Only the owner detail route requests proof text, for one opportunity.
+  // Match the current pair and profile snapshot in the same SQL statement.
+  const includePrivateEvidence =
+    options?.includePrivateEvidence && ids.length === 1;
+  const evidenceJoin = includePrivateEvidence
+    ? `LEFT JOIN matching_profile_facts candidate_facts
+        ON candidate_facts.profile_id = current_match.profile_id
+        AND candidate_facts.tenant_id = current_match.tenant_id
+        AND candidate_facts.user_id = current_match.user_id
+        AND candidate_facts.profile_revision = current_match.profile_revision
+        AND candidate_facts.vocabulary_revision = current_match.vocabulary_revision
+        AND candidate_facts.policy_version = current_match.policy_version`
+    : '';
   const result = await queryOpportunitySql(
     db,
     dialect,
     `SELECT o.id, o.source_content_fingerprint AS "sourceFingerprint",
     o.source_content_version AS "sourceVersion",
     current_match.score, ${DISCOVERY_MATCH_STATUS_SQL} AS "matchingStatus", current_match.reasons_json AS reasons
-    FROM opportunities o ${join}
+    ${includePrivateEvidence ? ', candidate_facts.facts_json AS "candidateFacts"' : ''}
+    FROM opportunities o ${join} ${evidenceJoin}
     WHERE ${idsSql}`,
     values,
   );
@@ -1962,27 +2105,14 @@ export async function listCurrentDiscoveryMatches(
     if (!Number.isFinite(score)) continue;
     const status = row.matchingStatus;
     if (status !== 'qualified' && status !== 'screened-with-gaps') continue;
-    let reasons: unknown = row.reasons;
-    if (typeof reasons === 'string') {
-      try {
-        reasons = JSON.parse(reasons);
-      } catch {
-        reasons = [];
-      }
-    }
     matches.set(row.id, {
       status,
       score,
-      reasons: Array.isArray(reasons)
-        ? reasons.flatMap((reason) =>
-            typeof reason?.message === 'string' &&
-            (status === 'qualified' ||
-              (reason.code === 'required-capability' &&
-                reason.outcome === 'unknown'))
-              ? [reason.message]
-              : [],
-          )
-        : [],
+      ...explainDiscoveryMatch(
+        row.reasons,
+        status,
+        includePrivateEvidence ? row.candidateFacts : undefined,
+      ),
       sourceFingerprint: String(row.sourceFingerprint ?? ''),
       sourceVersion: Number(row.sourceVersion ?? 0),
     });

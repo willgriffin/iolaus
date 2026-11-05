@@ -277,6 +277,32 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           ).toBe(0);
           // The same current projection reaches reads and selections, while
           // the write fence distinguishes manual dispositions from Apply.
+          const privateQuote =
+            'Operated the fictional Citrus API in production';
+          const locator = {
+            field: 'evidence',
+            id: 'fictional-project-1',
+            start: 4,
+            end: 4 + privateQuote.length,
+            evidenceDigest: 'versioned-quote',
+          };
+          await db.query(
+            `INSERT INTO matching_profile_facts (
+              profile_id, tenant_id, user_id, profile_revision, vocabulary_revision,
+              policy_version, facts_json, status
+            ) SELECT p.profile_id, ?, ?, p.revision, v.revision, ?, ?, 'pending'
+              FROM matching_profile_versions p, matching_vocabulary_version v
+              WHERE p.profile_id = ?`,
+            [
+              owner.tenantId,
+              owner.userId,
+              MATCHING_POLICY_VERSION,
+              JSON.stringify({
+                evidence: [{ citation: { ...locator, text: privateQuote } }],
+              }),
+              owner.profileId,
+            ],
+          );
           await db.query(
             'UPDATE matching_results SET screened_with_gaps = TRUE, score = 55, reasons_json = ? WHERE opportunity_id = ?',
             [
@@ -285,11 +311,18 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
                   code: 'required-capability',
                   outcome: 'unknown',
                   message: 'Evidence gap',
+                  citations: [{ ...locator, evidenceDigest: 'wrong-digest' }],
+                },
+                {
+                  code: 'candidate-interpretation-partial',
+                  outcome: 'unknown',
+                  message: 'Partial interpretation',
                 },
                 {
                   code: 'required-capability',
                   outcome: 'supported',
                   message: 'Evidence confirmed',
+                  citations: [locator, { ...locator, field: 'question' }],
                 },
                 {
                   code: 'work-location',
@@ -328,15 +361,64 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               },
             }),
           ).toBe(1);
-          expect(
-            (await listCurrentDiscoveryMatches([unresolved], owner)).get(
-              unresolved,
-            ),
-          ).toMatchObject({
+          const listMatch = (
+            await listCurrentDiscoveryMatches([unresolved], owner)
+          ).get(unresolved);
+          expect(listMatch).toMatchObject({
             status: 'screened-with-gaps',
             score: 55,
             reasons: ['Evidence gap'],
+            evidence: {
+              supported: [{ message: 'Evidence confirmed' }],
+              gaps: [{ message: 'Evidence gap' }],
+              interpretation:
+                'Matching could interpret only part of your evidence.',
+            },
           });
+          expect(JSON.stringify(listMatch)).not.toContain(privateQuote);
+          expect(JSON.stringify(listMatch)).not.toContain(locator.id);
+          const detailOptions = { includePrivateEvidence: true } as const;
+          const detailMatch = (
+            await listCurrentDiscoveryMatches(
+              [unresolved],
+              owner,
+              detailOptions,
+            )
+          ).get(unresolved);
+          expect(detailMatch?.evidence).toEqual({
+            supported: [
+              { message: 'Evidence confirmed', excerpts: [privateQuote] },
+            ],
+            gaps: [{ message: 'Evidence gap' }],
+            interpretation:
+              'Matching could interpret only part of your evidence.',
+          });
+          expect(
+            await listCurrentDiscoveryMatches(
+              [unresolved],
+              sibling,
+              detailOptions,
+            ),
+          ).toEqual(new Map());
+          expect(
+            await listCurrentDiscoveryMatches(
+              [unresolved],
+              { ...owner, tenantId: 'foreign' },
+              detailOptions,
+            ),
+          ).toEqual(new Map());
+          await db.query(
+            'UPDATE matching_profile_facts SET profile_revision = profile_revision + 1 WHERE profile_id = ?',
+            [owner.profileId],
+          );
+          const staleDetail = (
+            await listCurrentDiscoveryMatches(
+              [unresolved],
+              owner,
+              detailOptions,
+            )
+          ).get(unresolved);
+          expect(staleDetail?.evidence).toEqual(listMatch?.evidence);
           const [screened] = await listOpportunityRevisionsByIds(
             [unresolved],
             owner,
@@ -379,10 +461,14 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             unsupported: 0,
             unresolvedSource: 0,
             unresolvedEvidence: 0,
+            pendingInterpretation: 0,
+            failedInterpretation: 0,
+            partialInterpretation: 0,
           };
           expect(
             await readMatchingDiscoveryCoverage(db, dialect, owner),
           ).toEqual({
+            ...emptyCoverage,
             conflicts: 1,
             missingSource: 1,
             unsupported: 1,
@@ -398,6 +484,32 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
               tenantId: 'foreign',
             }),
           ).toEqual(emptyCoverage);
+          for (const [state, key] of [
+            ['pending', 'pendingInterpretation'],
+            ['failed', 'failedInterpretation'],
+            ['partial', 'partialInterpretation'],
+          ] as const) {
+            await db.query(
+              'UPDATE matching_results SET reasons_json = ? WHERE opportunity_id = ?',
+              [
+                JSON.stringify([
+                  { code: 'required-capability', outcome: 'unknown' },
+                  {
+                    code: `candidate-interpretation-${state}`,
+                    outcome: 'unknown',
+                  },
+                ]),
+                unresolved,
+              ],
+            );
+            expect(
+              await readMatchingDiscoveryCoverage(db, dialect, owner),
+            ).toEqual({
+              ...emptyCoverage,
+              conflicts: 1,
+              [key]: 1,
+            });
+          }
           await db.query(
             "UPDATE opportunities SET description_raw = 'Source changed' WHERE id = ?",
             [unresolved],

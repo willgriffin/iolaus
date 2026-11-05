@@ -392,6 +392,7 @@ export async function attachOpportunityDiscoveryContext(
         discoveryMatchStatus: match.status,
         discoveryMatchScore: match.score,
         discoveryMatchReasons: match.reasons,
+        discoveryMatchEvidence: match.evidence,
         companyName: names.get(String(record.companyId)) ?? '',
         reviewOverlay: reviewOverlays.get(record.id) ?? null,
         ...(application
@@ -1337,6 +1338,7 @@ export async function loadAdminRecordPageData(
   recordId: string,
   options: {
     includeOpportunityRelations?: boolean;
+    includePrivateMatchingEvidence?: boolean;
     includeRelatedProjects?: boolean;
     returnTo?: string;
     workspaceSubject?: WorkspaceSubject;
@@ -1389,6 +1391,9 @@ export async function loadAdminRecordPageData(
         ? listCurrentDiscoveryMatches(
             [recordId],
             requireCandidateWorkspaceSubject(options.workspaceSubject),
+            options.includePrivateMatchingEvidence
+              ? { includePrivateEvidence: true }
+              : undefined,
           )
         : undefined,
     ]);
@@ -1405,6 +1410,7 @@ export async function loadAdminRecordPageData(
         discoveryMatchStatus: match.status,
         discoveryMatchScore: match.score,
         discoveryMatchReasons: match.reasons,
+        discoveryMatchEvidence: match.evidence,
       };
     }
   }

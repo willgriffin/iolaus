@@ -286,6 +286,21 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         );
         expect(await profileRevision(profile)).not.toBe(transferred);
       });
+      it('adds the split checkpoint without invalidating the current vocabulary', async () => {
+        const before = await vocabularyRevision();
+        await database.query(
+          'ALTER TABLE matching_candidate_interpretations DROP COLUMN split_chunk',
+        );
+        await database.query(
+          'UPDATE matching_worker_cursor SET schema_revision=4 WHERE id=1',
+        );
+        await ensureMatchingProjectionSchema(database, dialect);
+        expect(await vocabularyRevision()).toBe(before);
+        await database.query(
+          'SELECT split_chunk FROM matching_candidate_interpretations',
+        );
+      });
+
       it('repairs a missing trigger and invalidates results that may have missed a raw edit', async () => {
         const trigger = 'matching_touch_opportunities_update';
         const before = await vocabularyRevision();

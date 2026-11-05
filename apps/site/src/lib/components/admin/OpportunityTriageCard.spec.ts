@@ -16,6 +16,33 @@ function renderCard(record: AdminRecord, props: Record<string, unknown> = {}) {
 }
 
 describe('OpportunityTriageCard', () => {
+  it('shows discovery explanations only in owner triage and excludes private excerpts', () => {
+    const record = {
+      id: 'opp-1',
+      title: 'API engineer',
+      discoveryMatchStatus: 'screened-with-gaps',
+      discoveryMatchEvidence: {
+        supported: [
+          {
+            message: 'API design is supported.',
+            excerpts: ['Fictional private API detail'],
+          },
+        ],
+        gaps: [{ message: 'Production monitoring still needs confirmation.' }],
+      },
+    };
+    const owner = renderCard(record).body;
+    expect(owner).toContain('API design is supported.');
+    expect(owner).toContain('Production monitoring still needs confirmation.');
+    expect(owner).not.toContain('Fictional private API detail');
+    const shared = renderCard(record, { readOnly: true }).body;
+    expect(shared).not.toContain('API design is supported.');
+    expect(shared).not.toContain(
+      'Production monitoring still needs confirmation.',
+    );
+    expect(shared).not.toContain('Fictional private API detail');
+  });
+
   it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
     const { body } = renderCard({
       id: 'question-result',

@@ -161,9 +161,28 @@ describe('screened listings with candidate evidence gaps', () => {
       screenedWithGaps: true,
     });
     expect(observed.score).toBeGreaterThanOrEqual(partial.score);
+    expect(
+      match(source, {
+        evidence: [
+          {
+            id: 'professional',
+            text: '5 years of professional experience with Node.js',
+          },
+        ],
+      }),
+    ).toMatchObject({
+      status: 'insufficient-evidence',
+      screenedWithGaps: true,
+      reasons: expect.arrayContaining([
+        expect.objectContaining({
+          evidenceGaps: [
+            { conceptId: 'nodejs', missing: 'context', context: 'production' },
+          ],
+        }),
+      ]),
+    });
     for (const text of [
       'Only 2 years of production experience with Node.js',
-      '5 years of professional experience with Node.js',
       'No experience with Node.js.',
     ]) {
       const result = match(source, {

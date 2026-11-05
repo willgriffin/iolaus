@@ -3,6 +3,19 @@ import {
   onboardingCountryCodes,
 } from './country-reference.js';
 import {
+  CANDIDATE_INTERPRETATION_PROMPT_VERSION,
+  CANDIDATE_INTERPRETATION_VERSION,
+  type CandidateInterpretationState,
+  candidateActionTechnologies,
+  candidateConditionGroups,
+  candidateEvidenceDigest,
+  candidateEvidencePositions,
+  candidatePeriodIsOngoing,
+  candidateQuoteShowsProfessionalWork,
+  candidateTotalDurationLimit,
+  parseCandidateInterpretation,
+} from './matching-candidate-contract.js';
+import {
   conservativeExperiencePeriod,
   type ExperiencePeriod,
   minimumExperienceYears,
@@ -17,7 +30,7 @@ import {
   matchingSourceSemanticUnits,
 } from './matching-source-units.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v17';
+export const MATCHING_POLICY_VERSION = `normalized-v21:${CANDIDATE_INTERPRETATION_VERSION}:${CANDIDATE_INTERPRETATION_PROMPT_VERSION}`;
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -30,7 +43,7 @@ export interface MatchingVocabularyTerm {
   narrowerThan?: readonly string[];
 }
 
-interface MatchingVocabulary {
+export interface MatchingVocabulary {
   aliases: ReadonlyMap<string, string | null>;
   labels: ReadonlyMap<string, string>;
   definitions: ReadonlyMap<string, string>;
@@ -569,6 +582,7 @@ interface Citation {
   start: number;
   end: number;
   text: string;
+  evidenceDigest?: string;
 }
 
 function cite(
@@ -1167,7 +1181,14 @@ interface Group {
   citation: Citation;
 }
 interface Evidence extends Qualification {
-  otherCitations?: readonly Citation[];
+  projectActivityId?: string;
+  activityAnchor?: { start: number; end: number };
+  ongoing?: true;
+  professional?: true;
+  positionCitation?: Citation;
+  actionTechnologies?: readonly string[];
+  support?: 'action' | 'stated' | 'inferred';
+  period?: ExperiencePeriod;
   polarity: 'positive' | 'negative' | 'upper-bound';
   maximumYears?: number;
   citation: Citation;
@@ -1189,6 +1210,12 @@ export interface MatchingCandidateInput {
     id: string;
     text: string;
     kind?: 'skill' | 'fact' | 'experience';
+    /** Native employment link from the owner-scoped evidence reader. */
+    activityId?: string;
+    /** Verified linked employment dates. Only own position rows grant role evidence. */
+    activityPosition?: { role: string; start: string; end: string };
+    /** A native, owner-verified project parent distinct from position membership. */
+    projectActivityId?: string;
     position?: { role: string; start: string; end: string };
   }[];
   questions?: readonly {
@@ -1227,6 +1254,8 @@ export interface NormalizedMatchingCandidate {
   explicitRemoteCountries: boolean;
   unknownRemoteCountries: readonly Citation[];
   modes: readonly Mode[];
+  interpretationIssue?: MatchingReason;
+  hasOngoingExperience?: true;
   evidence: readonly (Evidence & {
     satisfies: readonly string[];
     rulesOut: readonly string[];
@@ -1241,7 +1270,21 @@ export interface MatchingReason {
   outcome: 'supported' | 'conflict' | 'unknown';
   message: string;
   citations: readonly Citation[];
+  evidenceGaps?: readonly CandidateEvidenceGap[];
 }
+
+export type CandidateEvidenceGap = { conceptId: string } & (
+  | { missing: 'context'; context: NonNullable<Qualification['context']> }
+  | { missing: 'duration'; requiredYears: number; observedYears?: number }
+  | {
+      missing: 'conditions';
+      conditions: readonly {
+        conceptId: string;
+        context?: Qualification['context'];
+        independent?: true;
+      }[];
+    }
+);
 
 export interface NormalizedMatchDecision {
   status: 'qualified' | 'conflict' | 'insufficient-evidence';
@@ -3394,22 +3437,15 @@ export function normalizeMatchingPosting(
 function datedRoleEvidence(
   items: MatchingCandidateInput['evidence'],
   vocabulary: MatchingVocabulary,
+  asOf: number,
 ): Evidence[] {
-  const asOf = Date.now();
-  const byCapability = new Map<
-    string,
-    {
-      periods: ExperiencePeriod[];
-      citations: Citation[];
-    }
-  >();
-  for (const item of items) {
-    if (item.kind !== 'experience' || !item.position) continue;
+  return items.flatMap((item): Evidence[] => {
+    if (item.kind !== 'experience' || !item.position) return [];
     const { role, start, end } = item.position;
     const period = conservativeExperiencePeriod(start, end, asOf);
     const citation = cite('evidence', item.text, 0, item.text.length, item.id);
     const parsed = exactRole(role, citation);
-    if (!period || !parsed) continue;
+    if (!period || !parsed) return [];
     const capabilities =
       parsed.family === 'software-engineering'
         ? [
@@ -3427,22 +3463,17 @@ function datedRoleEvidence(
           : parsed.family === 'engineering-management'
             ? ['engineering-management']
             : [];
-    for (const slug of capabilities) {
-      if (!vocabulary.labels.has(slug)) continue;
-      const proof = byCapability.get(slug) ?? { periods: [], citations: [] };
-      proof.periods.push(period);
-      proof.citations.push(citation);
-      byCapability.set(slug, proof);
-    }
-  }
-  return Array.from(byCapability, ([slug, { periods, citations }]) => ({
-    slug,
-    years: minimumExperienceYears(periods),
-    context: 'professional',
-    polarity: 'positive',
-    citation: citations[0] as Citation,
-    otherCitations: citations.slice(1),
-  }));
+    return capabilities
+      .filter((slug) => vocabulary.labels.has(slug))
+      .map((slug) => ({
+        slug,
+        period,
+        context: 'professional',
+        polarity: 'positive',
+        citation,
+        ongoing: candidatePeriodIsOngoing(end) ? true : undefined,
+      }));
+  });
 }
 
 function durationUpperBound(
@@ -3450,6 +3481,8 @@ function durationUpperBound(
   citation: Citation,
   vocabulary: MatchingVocabulary,
 ): Evidence | undefined {
+  const total = candidateTotalDurationLimit(statement, vocabulary);
+  if (total) return { ...total, polarity: 'upper-bound', citation };
   const explicit = phrase(statement).match(
     /^(?:(?:i )?have )?(only|at most) (\d{1,2} years?\b.*)$/u,
   );
@@ -3502,9 +3535,11 @@ function normalizeEvidence(
     const text = phrase(statement);
     const denial =
       text.match(
-        /^(?:i have )?no (?:hands-on )?(?:experience|knowledge) (?:with|in|of|using) (.+)$/u,
+        /^(?:i have )?no (?:(?<context>professional|production) )?(?:hands-on )?(?:experience|knowledge) (?:with|in|of|using) (?<skill>.+)$/u,
       ) ??
-      text.match(/^(?:i )?(?:have never|never) (?:used|worked with) (.+)$/u);
+      text.match(
+        /^(?:i )?(?:have never|never) (?:used|worked with) (?<skill>.+)$/u,
+      );
     const action =
       text.match(
         /^(?:i )?(?:have )?(?:used|worked with|implemented|maintained|administered|configured) (.+)$/u,
@@ -3525,8 +3560,18 @@ function normalizeEvidence(
     if (bounded) {
       evidence.push(bounded);
     } else if (denial) {
-      const slug = vocabulary.aliases.get(denial[1] ?? '');
-      if (slug) evidence.push({ slug, polarity: 'negative', citation });
+      const slug = vocabulary.aliases.get(denial.groups?.skill ?? '');
+      const context = denial.groups?.context;
+      if (slug)
+        evidence.push({
+          slug,
+          context:
+            context === 'production' || context === 'professional'
+              ? context
+              : undefined,
+          polarity: 'negative',
+          citation,
+        });
     } else if (action?.[1]) {
       const groups = parseGroups(action[1], citation, vocabulary);
       if (groups?.every((group) => group.alternatives.length === 1))
@@ -3543,6 +3588,128 @@ function normalizeEvidence(
     }
   }
   return evidence;
+}
+
+function interpretedEvidence(
+  input: MatchingCandidateInput,
+  vocabulary: MatchingVocabulary,
+  state: CandidateInterpretationState | undefined,
+  asOf: number,
+): { proofs: Evidence[]; issue?: MatchingReason } {
+  const incomplete = (status: 'pending' | 'failed' | 'partial') => ({
+    proofs: [],
+    issue: reason(
+      `candidate-interpretation-${status}`,
+      'unknown',
+      {
+        pending: 'Some candidate evidence is still waiting to be interpreted.',
+        failed: 'Matching could not interpret some candidate evidence.',
+        partial:
+          'Matching could only interpret part of the candidate evidence.',
+      }[status],
+    ),
+  });
+  if (!state) return { proofs: [] };
+  if (state.state === 'pending' || !state.interpretation)
+    return incomplete(state.state === 'pending' ? 'pending' : 'failed');
+  try {
+    const interpretation = parseCandidateInterpretation(
+      state.interpretation,
+      input,
+      vocabulary,
+      asOf,
+    );
+    const records = new Map(
+      input.evidence.map((item) => [
+        item.id,
+        { item, digest: candidateEvidenceDigest(item) },
+      ]),
+    );
+    const positions = candidateEvidencePositions(input.evidence);
+    return {
+      issue:
+        state.state === 'failed'
+          ? incomplete('failed').issue
+          : interpretation.unresolvedSourceIds.length
+            ? incomplete('partial').issue
+            : undefined,
+      proofs: interpretation.assertions.flatMap((claim) => {
+        const record = records.get(claim.sourceId);
+        if (!record) return [];
+        const { item, digest } = record;
+        const positionRecord = positions.get(item.activityId ?? item.id);
+        const position =
+          positionRecord?.position ??
+          (item.activityId ? item.activityPosition : undefined);
+        const tenure = claim.duration?.entirePosition
+          ? positionRecord
+          : undefined;
+        const interval =
+          claim.period ??
+          (claim.duration?.entirePosition ? position : undefined);
+        const start = item.text.indexOf(claim.quote);
+        const activityStart = claim.activityQuote
+          ? item.text.indexOf(claim.activityQuote)
+          : undefined;
+        const citation = {
+          ...cite(
+            'evidence',
+            item.text,
+            start,
+            start + claim.quote.length,
+            item.id,
+          ),
+          evidenceDigest: digest,
+        };
+        return [
+          {
+            slug: claim.conceptId,
+            citation,
+            polarity:
+              claim.duration?.maximumYears != null &&
+              !claim.duration.minimumYears
+                ? 'upper-bound'
+                : claim.polarity,
+            years: claim.duration?.minimumYears ?? undefined,
+            maximumYears: claim.duration?.maximumYears ?? undefined,
+            positionCitation: tenure
+              ? cite('evidence', tenure.text, 0, tenure.text.length, tenure.id)
+              : undefined,
+            actionTechnologies:
+              claim.support === 'action'
+                ? candidateActionTechnologies(claim.quote, vocabulary)
+                : undefined,
+            context: claim.context ?? undefined,
+            support: claim.support,
+            projectActivityId: item.projectActivityId,
+            activityAnchor:
+              activityStart !== undefined && claim.activityQuote
+                ? {
+                    start: activityStart,
+                    end: activityStart + claim.activityQuote.length,
+                  }
+                : undefined,
+            professional:
+              claim.support === 'action' &&
+              (position || candidateQuoteShowsProfessionalWork(claim.quote))
+                ? true
+                : undefined,
+            ongoing:
+              claim.polarity === 'positive' &&
+              interval &&
+              candidatePeriodIsOngoing(interval.end)
+                ? true
+                : undefined,
+            period: interval
+              ? conservativeExperiencePeriod(interval.start, interval.end, asOf)
+              : undefined,
+          },
+        ];
+      }),
+    };
+  } catch {
+    return incomplete('failed');
+  }
 }
 
 function normalizeQuestion(
@@ -3577,6 +3744,8 @@ function normalizeQuestion(
 export function normalizeMatchingCandidate(
   raw: MatchingCandidateInput,
   vocabulary: MatchingVocabulary,
+  interpretation?: CandidateInterpretationState,
+  asOf = Date.now(),
 ): NormalizedMatchingCandidate {
   const uncertainties: MatchingReason[] = [];
   if (raw.incomplete)
@@ -3645,9 +3814,16 @@ export function normalizeMatchingCandidate(
         ...(raw.workModes ?? []).map((text) => cite('target-mode', text)),
       ),
     );
+  const interpreted = interpretedEvidence(
+    raw,
+    vocabulary,
+    interpretation,
+    asOf,
+  );
   const evidence = [
+    ...interpreted.proofs,
     ...raw.evidence.flatMap((item) => normalizeEvidence(item, vocabulary)),
-    ...datedRoleEvidence(raw.evidence, vocabulary),
+    ...datedRoleEvidence(raw.evidence, vocabulary, asOf),
   ].map((proof) => ({
     ...proof,
     satisfies:
@@ -3671,6 +3847,10 @@ export function normalizeMatchingCandidate(
     unknownRemoteCountries,
     modes,
     evidence,
+    interpretationIssue: interpreted.issue,
+    hasOngoingExperience: evidence.some(({ ongoing }) => ongoing)
+      ? true
+      : undefined,
     questions: (raw.questions ?? [])
       .filter((question) => question.required)
       .map(normalizeQuestion),
@@ -3851,17 +4031,55 @@ function candidateGeography(
   return reasons;
 }
 
-function evidenceFit(
+type EvidenceFit = {
+  outcome: MatchingReason['outcome'];
+  citations: Citation[];
+  disputed?: boolean;
+  directPartial?: boolean;
+  recognizedCapability?: boolean;
+  gap?: CandidateEvidenceGap;
+};
+
+function distinctCitations(citations: Citation[]) {
+  const unique = new Map<string, Citation>();
+  for (const citation of citations) {
+    const key = JSON.stringify([
+      citation.field,
+      citation.id,
+      citation.start,
+      citation.end,
+    ]);
+    if (!unique.has(key)) unique.set(key, citation);
+  }
+  return [...unique.values()];
+}
+
+function matchesEvidenceContext(
+  proof: Evidence,
+  context: Qualification['context'],
+) {
+  return (
+    !context ||
+    proof.context === context ||
+    (context === 'professional' && Boolean(proof.professional))
+  );
+}
+
+function atomicEvidenceFit(
   requirement: Qualification,
   candidate: NormalizedMatchingCandidate,
-) {
-  if (!requirement.slug) return { outcome: 'unknown', citations: [] } as const;
+): EvidenceFit {
+  if (!requirement.slug) return { outcome: 'unknown', citations: [] };
   const positives: Citation[] = [];
+  const observed: { period: ExperiencePeriod; citations: Citation[] }[] = [];
   const negatives: Citation[] = [];
   const partials: Citation[] = [];
   const durationLimits: Citation[] = [];
-  const direct = new Set<string>();
-  const disqualified = new Set<string>();
+  let direct = false;
+  let recognizedCapability = false;
+  let hasRequiredContext = false;
+  let eligibleForDuration = false;
+  let declaredYears: number | undefined;
   for (const proof of candidate.evidence) {
     const exact = proof.slug === requirement.slug;
     const scopedCapability = requirement.partialCapabilities?.includes(
@@ -3869,22 +4087,40 @@ function evidenceFit(
     );
     const example =
       requirement.examples?.includes(proof.slug) || scopedCapability;
-    const wrongContext = Boolean(
-      requirement.context &&
-        proof.context &&
-        proof.context !== requirement.context,
-    );
+    const limitsScope = !proof.context || proof.context === requirement.context;
     const boundedBelowMinimum =
       proof.maximumYears !== undefined &&
       requirement.years !== undefined &&
       proof.maximumYears < requirement.years &&
-      (!proof.context || proof.context === requirement.context);
-    const citations = [proof.citation, ...(proof.otherCitations ?? [])];
+      limitsScope;
+    const citations = proof.positionCitation
+      ? [proof.citation, proof.positionCitation]
+      : [proof.citation];
     if (proof.satisfies.includes(requirement.slug)) {
+      if (proof.support !== 'inferred') {
+        recognizedCapability = true;
+        hasRequiredContext ||= matchesEvidenceContext(
+          proof,
+          requirement.context,
+        );
+      }
+      const qualifiesExceptContext =
+        proof.support !== 'inferred' &&
+        (!requirement.qualitative || proof.support === 'action') &&
+        (!requirement.examples?.length ||
+          (requirement.slug === 'observability' && proof.support === 'action'));
+      const eligible =
+        qualifiesExceptContext &&
+        matchesEvidenceContext(proof, requirement.context);
+      if (eligible) {
+        eligibleForDuration = true;
+        if (proof.years !== undefined)
+          declaredYears = Math.max(declaredYears ?? 0, proof.years);
+      }
+      if (eligible && proof.period)
+        observed.push({ period: proof.period, citations });
       if (
-        !requirement.qualitative &&
-        !requirement.examples?.length &&
-        (!requirement.context || proof.context === requirement.context) &&
+        eligible &&
         (!requirement.years ||
           (proof.years !== undefined && proof.years >= requirement.years))
       )
@@ -3892,44 +4128,354 @@ function evidenceFit(
       else partials.push(...citations);
     } else if (example && proof.polarity === 'positive') {
       partials.push(...citations);
+      if (proof.support !== 'inferred') recognizedCapability = true;
     }
     if (
-      proof.rulesOut.includes(requirement.slug) ||
-      requirement.partialCapabilities?.some((slug) =>
-        proof.rulesOut.includes(slug),
-      )
+      limitsScope &&
+      (proof.rulesOut.includes(requirement.slug) ||
+        requirement.partialCapabilities?.some((slug) =>
+          proof.rulesOut.includes(slug),
+        ))
     )
       negatives.push(...citations);
     if ((exact || scopedCapability) && boundedBelowMinimum)
       durationLimits.push(proof.citation);
-    if (exact || example) {
-      if (
-        proof.polarity === 'negative' ||
-        boundedBelowMinimum ||
-        (proof.polarity === 'positive' && wrongContext)
-      )
-        disqualified.add(proof.slug);
-      else if (proof.polarity === 'positive') direct.add(proof.slug);
-    }
+    if (
+      (exact || example) &&
+      proof.polarity === 'positive' &&
+      proof.support !== 'inferred'
+    )
+      direct = true;
   }
+  const observedYears = observed.length
+    ? minimumExperienceYears(observed.map(({ period }) => period))
+    : undefined;
+  if (requirement.years && (observedYears ?? 0) >= requirement.years)
+    positives.push(...observed.flatMap(({ citations }) => citations));
   if (positives.length && !negatives.length && !durationLimits.length)
-    return { outcome: 'supported', citations: positives } as const;
+    return {
+      outcome: 'supported',
+      citations: distinctCitations(positives),
+      recognizedCapability,
+    };
   if (
     !positives.length &&
     (durationLimits.length || (negatives.length && !partials.length))
   )
     return {
       outcome: 'conflict',
-      citations: [...negatives, ...durationLimits],
-    } as const;
+      citations: distinctCitations([...negatives, ...durationLimits]),
+    };
   const disputed = Boolean(negatives.length || durationLimits.length);
+  let gap: CandidateEvidenceGap | undefined;
+  if (!disputed && recognizedCapability) {
+    if (requirement.years && eligibleForDuration) {
+      gap = {
+        conceptId: requirement.slug,
+        missing: 'duration',
+        requiredYears: requirement.years,
+        observedYears:
+          observedYears === undefined && declaredYears === undefined
+            ? undefined
+            : Math.max(observedYears ?? 0, declaredYears ?? 0),
+      };
+    } else if (requirement.context && !hasRequiredContext) {
+      gap = {
+        conceptId: requirement.slug,
+        missing: 'context',
+        context: requirement.context,
+      };
+    }
+  }
   return {
     outcome: 'unknown',
-    citations: [...positives, ...negatives, ...partials, ...durationLimits],
+    citations: distinctCitations([
+      ...positives,
+      ...negatives,
+      ...partials,
+      ...durationLimits,
+    ]),
     disputed,
+    recognizedCapability,
+    gap,
+    directPartial: !disputed && direct,
+  };
+}
+
+/** The observations counted for a compound are the time shared by every
+ * condition. Union the resulting windows across activities afterward. */
+function sharedExperience(
+  left: readonly ExperiencePeriod[],
+  right: readonly ExperiencePeriod[],
+): ExperiencePeriod[] {
+  // Intersect two already-unioned timelines without a cross product.
+  const timeline = (periods: readonly ExperiencePeriod[]) => {
+    const union: [number, number][] = [];
+    for (const [start, end] of [...periods].sort(([a], [b]) => a - b)) {
+      const previous = union.at(-1);
+      if (previous && previous[1] >= start)
+        previous[1] = Math.max(previous[1], end);
+      else union.push([start, end]);
+    }
+    return union;
+  };
+  const a = timeline(left);
+  const b = timeline(right);
+  const shared: ExperiencePeriod[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const [startA, endA] = a[i] as ExperiencePeriod;
+    const [startB, endB] = b[j] as ExperiencePeriod;
+    const start = Math.max(startA, startB);
+    const end = Math.min(endA, endB);
+    if (start < end) shared.push([start, end]);
+    if (endA <= endB) i += 1;
+    else j += 1;
+  }
+  return shared;
+}
+
+function sameEvidencePassage(left: Citation, right: Citation) {
+  return (
+    left.id === right.id && left.start < right.end && right.start < left.end
+  );
+}
+
+function sameCandidateActivity(left: Citation, right: Citation) {
+  return (
+    left.id === right.id &&
+    left.start === right.start &&
+    left.end === right.end &&
+    !/[;\r\n]|[.!?]\s+\S/u.test(left.text)
+  );
+}
+
+function evidenceFit(
+  requirement: Qualification,
+  candidate: NormalizedMatchingCandidate,
+): EvidenceFit {
+  const conditions = candidateConditionGroups.get(requirement.slug);
+  if (!conditions) return atomicEvidenceFit(requirement, candidate);
+  const atoms = conditions.map((condition) => ({
+    ...condition,
+    context:
+      condition.context ??
+      (requirement.slug === 'postgresql-operational-tuning' ||
+      requirement.slug === 'production-node-backend-engineering'
+        ? undefined
+        : requirement.context),
+  }));
+  const evaluatedAtoms = atoms.map((atom) => ({
+    atom,
+    fit: atomicEvidenceFit(
+      {
+        ...atom,
+        years: requirement.years,
+        qualitative: atom.independent,
+      },
+      candidate,
+    ),
+  }));
+  const independent = evaluatedAtoms.filter(({ atom }) => atom.independent);
+  const independentMissing = independent
+    .filter(({ fit }) => fit.outcome !== 'supported')
+    .map(({ atom }) => atom);
+  const activityAtoms = atoms.filter(({ independent }) => !independent);
+  const individual = [
+    atomicEvidenceFit(requirement, candidate),
+    ...evaluatedAtoms.map(({ fit }) => fit),
+  ];
+  const conflicts = individual.filter(({ outcome }) => outcome === 'conflict');
+  const disputed = individual.some((fit) => fit.disputed);
+  const namedTechnology = atoms.find(
+    ({ namedTechnology }) => namedTechnology,
+  )?.slug;
+  const activities = new Map<
+    string,
+    NormalizedMatchingCandidate['evidence'][number][]
+  >();
+  for (const proof of candidate.evidence) {
+    const id = proof.projectActivityId
+      ? `project:${proof.projectActivityId}`
+      : proof.citation.id && `source:${proof.citation.id}`;
+    if (
+      id &&
+      proof.support === 'action' &&
+      (!namedTechnology ||
+        proof.actionTechnologies?.includes(namedTechnology)) &&
+      activityAtoms.some(
+        ({ slug, context }) =>
+          proof.satisfies.includes(slug) &&
+          matchesEvidenceContext(proof, context),
+      )
+    ) {
+      const members = activities.get(id) ?? [];
+      members.push(proof);
+      activities.set(id, members);
+    }
+  }
+  let closest = activityAtoms;
+  let supported = false;
+  let declaredYears: number | undefined;
+  const dated: ExperiencePeriod[] = [];
+  const positiveCitations = independent.flatMap(({ fit }) =>
+    fit.outcome === 'supported' ? fit.citations : [],
+  );
+  for (const members of activities.values()) {
+    const matches = activityAtoms.map(({ slug, context }) =>
+      members.filter(
+        (proof) =>
+          proof.satisfies.includes(slug) &&
+          matchesEvidenceContext(proof, context),
+      ),
+    );
+    // Distinct passages need a verified shared activity or project. A named
+    // technology also needs overlapping passages tying the actions to that tool.
+    const bundles =
+      members[0]?.projectActivityId && !namedTechnology
+        ? [matches]
+        : (matches[0] ?? []).map((anchor) =>
+            matches.map((proofs) =>
+              proofs.filter((proof) =>
+                namedTechnology
+                  ? sameEvidencePassage(proof.citation, anchor.citation)
+                  : sameCandidateActivity(proof.citation, anchor.citation),
+              ),
+            ),
+          );
+    if (!namedTechnology && !members[0]?.projectActivityId) {
+      // A single verifier-approved scope must cover every exact action
+      // citation. Never union overlapping anchors into a larger activity.
+      const scopes = new Set<string>();
+      for (const { activityAnchor, citation } of members) {
+        if (!activityAnchor) continue;
+        const { start, end } = activityAnchor;
+        const scopeKey = JSON.stringify([citation.id, start, end]);
+        if (scopes.has(scopeKey)) continue;
+        scopes.add(scopeKey);
+        bundles.push(
+          matches.map((proofs) =>
+            proofs.filter(
+              ({ citation: proof }) =>
+                proof.id === citation.id &&
+                proof.start >= start &&
+                proof.end <= end,
+            ),
+          ),
+        );
+      }
+    }
+    for (const bundle of bundles) {
+      const missing = activityAtoms.filter(
+        (_, index) => !bundle[index]?.length,
+      );
+      if (missing.length < closest.length) closest = missing;
+      if (missing.length) continue;
+      if (requirement.years) {
+        const windows = bundle.map((proofs) =>
+          proofs.flatMap(({ period }) => (period ? [period] : [])),
+        );
+        const intersection = windows.reduce(sharedExperience);
+        dated.push(...intersection);
+        // Without dates, a single cited duration must expressly cover every
+        // condition. Separate declarations may overlap and are never summed.
+        const declarations = (bundle[0] ?? []).filter(
+          (anchor) =>
+            anchor.years !== undefined &&
+            bundle.every((proofs) =>
+              proofs.some(
+                (proof) =>
+                  proof.years === anchor.years &&
+                  proof.citation.id === anchor.citation.id &&
+                  proof.citation.start === anchor.citation.start &&
+                  proof.citation.end === anchor.citation.end,
+              ),
+            ),
+        );
+        for (const { years } of declarations)
+          declaredYears = Math.max(declaredYears ?? 0, years ?? 0);
+        if (!intersection.length && !declarations.length) continue;
+      }
+      supported = true;
+      positiveCitations.push(
+        ...bundle
+          .flat()
+          .flatMap(({ citation, positionCitation }) =>
+            positionCitation ? [citation, positionCitation] : [citation],
+          ),
+      );
+    }
+    if (!bundles.length) {
+      const missing = activityAtoms.filter(
+        (_, index) => !matches[index]?.length,
+      );
+      if (missing.length < closest.length) closest = missing;
+    }
+  }
+  const observedYears =
+    dated.length || declaredYears !== undefined
+      ? Math.max(
+          dated.length ? minimumExperienceYears(dated) : 0,
+          declaredYears ?? 0,
+        )
+      : undefined;
+  const qualified =
+    independentMissing.length === 0 &&
+    (activityAtoms.length === 0 ||
+      (supported &&
+        (!requirement.years || (observedYears ?? 0) >= requirement.years)));
+  const missing = [...independentMissing, ...closest];
+  if (qualified && !conflicts.length && !disputed)
+    return {
+      outcome: 'supported',
+      citations: distinctCitations(positiveCitations),
+    };
+  if (!qualified && conflicts.length && !disputed)
+    return {
+      outcome: 'conflict',
+      citations: distinctCitations(
+        conflicts.flatMap(({ citations }) => citations),
+      ),
+    };
+  return {
+    outcome: 'unknown',
+    citations: distinctCitations([
+      ...positiveCitations,
+      ...individual.flatMap(({ citations }) => citations),
+    ]),
+    disputed: disputed || Boolean(conflicts.length),
     directPartial:
-      !disputed && [...direct].some((slug) => !disqualified.has(slug)),
-  } as const;
+      !disputed &&
+      !conflicts.length &&
+      individual.some(
+        ({ outcome, directPartial }) =>
+          outcome === 'supported' || directPartial,
+      ),
+    gap:
+      disputed ||
+      conflicts.length ||
+      !individual.some(({ recognizedCapability }) => recognizedCapability)
+        ? undefined
+        : missing.length
+          ? {
+              conceptId: requirement.slug,
+              missing: 'conditions',
+              conditions: missing.map(({ slug, context, independent }) => ({
+                conceptId: slug,
+                context,
+                independent,
+              })),
+            }
+          : requirement.years
+            ? {
+                conceptId: requirement.slug,
+                missing: 'duration',
+                requiredYears: requirement.years,
+                observedYears,
+              }
+            : undefined,
+  };
 }
 
 function groupFit(
@@ -3962,6 +4508,7 @@ function groupFit(
       ...evaluated[supportedIndex].citations,
     );
   const conflict = evaluated.every(({ outcome }) => outcome === 'conflict');
+  const evidenceGaps = evaluated.flatMap(({ gap }) => (gap ? [gap] : []));
   const options = group.alternatives.map(name).join(' or ');
   if (group.alternatives.some(({ slug }) => !slug))
     return reason(
@@ -3979,16 +4526,60 @@ function groupFit(
       group.citation,
       ...evaluated.flatMap(({ citations }) => citations),
     );
+  const explanations = evaluated.flatMap(({ gap }, index) => {
+    const atom = group.alternatives[index];
+    if (!gap || !atom) return [];
+    const capability = atom.label || atom.slug.replace(/-/gu, ' ');
+    switch (gap.missing) {
+      case 'context':
+        return [
+          `Your evidence shows ${capability}, but does not establish ${gap.context} experience.`,
+        ];
+      case 'conditions':
+        return [true, false].flatMap((independent) => {
+          const conditions = gap.conditions
+            .filter(
+              (condition) => Boolean(condition.independent) === independent,
+            )
+            .map(
+              ({ conceptId, context }) =>
+                `${context ? `${context} ` : ''}${conceptId.replace(/-/gu, ' ')}`,
+            );
+          if (!conditions.length) return [];
+          return [
+            independent
+              ? `Matching still needs evidence of ${conditions.join(', ')}.`
+              : `Matching still needs evidence of ${conditions.join(', ')} from the same activity.`,
+          ];
+        });
+      case 'duration':
+        return [
+          gap.observedYears === undefined
+            ? `Your evidence shows ${capability}, but dates do not establish the required ${gap.requiredYears}+ years.`
+            : gap.observedYears === 0
+              ? `Your dated evidence for ${capability} establishes less than one full year toward the required ${gap.requiredYears}+ years.`
+              : `Your evidence establishes a lower bound of ${gap.observedYears} year${gap.observedYears === 1 ? '' : 's'} for ${capability}. The requirement is ${gap.requiredYears}+ years.`,
+        ];
+      default:
+        return [];
+    }
+  });
   return {
     ...reason(
       `${kind}-capability`,
       conflict ? 'conflict' : 'unknown',
       conflict
         ? `Your evidence rules out ${options}.`
-        : `Your evidence does not establish ${options}.`,
+        : [
+            candidate.interpretationIssue
+              ? `Matching has not yet verified ${options} from your evidence.`
+              : `Your evidence does not establish ${options}.`,
+            ...explanations,
+          ].join(' '),
       group.citation,
       ...evaluated.flatMap(({ citations }) => citations),
     ),
+    ...(evidenceGaps.length ? { evidenceGaps } : {}),
     directPartial: evaluated.some(
       (fit) => 'directPartial' in fit && fit.directPartial,
     ),
@@ -4057,6 +4648,10 @@ export function evaluateNormalizedMatch(
   if (posting.role) hard.push(candidateRole(posting.role, candidate));
   if (posting.geography)
     hard.push(...candidateGeography(posting.geography, candidate));
+  const interpretationGap = posting.required.length
+    ? candidate.interpretationIssue
+    : undefined;
+  if (interpretationGap) hard.push(interpretationGap);
   let supportedRequirements = 0;
   let partialRequirements = 0;
   for (const group of posting.required) {
@@ -4079,6 +4674,16 @@ export function evaluateNormalizedMatch(
     ...posting.preferredUncertainties,
   ];
   const reasons = [...hard, ...soft];
+  if (
+    !interpretationGap &&
+    candidate.interpretationIssue &&
+    reasons.some(
+      ({ code, outcome }) =>
+        outcome === 'unknown' &&
+        (code === 'required-capability' || code === 'preferred-capability'),
+    )
+  )
+    reasons.push(candidate.interpretationIssue);
   if (hard.some(({ outcome }) => outcome === 'conflict'))
     return { status: 'conflict', score: 0, reasons };
   const gaps = hard.filter(({ outcome }) => outcome === 'unknown');
@@ -4098,7 +4703,10 @@ export function evaluateNormalizedMatch(
         alternatives.every(({ slug }) => Boolean(slug)),
       ) &&
       supportedRequirements + partialRequirements > 0 &&
-      gaps.every(({ code }) => code === 'required-capability');
+      gaps.every(
+        (gap) =>
+          gap.code === 'required-capability' || gap === interpretationGap,
+      );
     return screened
       ? {
           status: 'insufficient-evidence',

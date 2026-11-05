@@ -93,11 +93,21 @@ describe('matching inputs', () => {
         'CREATE TABLE resume_skills (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, label TEXT)',
       );
       await db.query(
-        'CREATE TABLE resume_positions (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, role TEXT, blurb TEXT, start TEXT, end_label TEXT)',
+        'CREATE TABLE resume_positions (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, position_id TEXT, role TEXT, company TEXT, blurb TEXT, start TEXT, end_label TEXT)',
       );
       await db.query(
-        'CREATE TABLE resume_achievements (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, title TEXT, body TEXT)',
+        'CREATE TABLE resume_achievements (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, position_id TEXT, title TEXT, body TEXT, metric TEXT)',
       );
+      const ownedCareer =
+        'id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, use_on_resume BOOLEAN';
+      for (const [name, fields] of Object.entries({
+        experiences: 'summary TEXT',
+        projects: 'experience_id TEXT, name TEXT, summary TEXT',
+        achievements:
+          'experience_id TEXT, project_id TEXT, title TEXT, body TEXT, metric TEXT',
+        duties: 'experience_id TEXT, project_id TEXT, title TEXT, body TEXT',
+      }))
+        await db.query(`CREATE TABLE ${name} (${ownedCareer}, ${fields})`);
       await db.query(
         'CREATE TABLE preference_rules (id TEXT, tenant_id TEXT, owner_user_id TEXT, candidate_profile_id TEXT, category TEXT, name TEXT, description TEXT, active BOOLEAN, rule_json TEXT)',
       );

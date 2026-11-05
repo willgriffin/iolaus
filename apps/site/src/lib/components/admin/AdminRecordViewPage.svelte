@@ -989,10 +989,15 @@ $effect(() => adminHeader?.register(recordHeaderActions));
     </aside>
   {/if}
 
-  {#if isOpportunityRecord && record.discoveryMatchStatus === 'screened-with-gaps'}
+  {#if isOpportunityRecord && record.discoveryMatchEvidence && record.discoveryMatchStatus === 'qualified'}
+    <section class="panel" aria-label="Qualified opportunity evidence">
+      <h2 class="panel-title">Why it matches</h2>
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} qualified showPrivateExcerpts />
+    </section>
+  {:else if isOpportunityRecord && record.discoveryMatchStatus === 'screened-with-gaps'}
     <section class="panel" aria-label="Screened opportunity">
       <h2 class="panel-title">{DISCOVERY_EVIDENCE_GAPS_LABEL}</h2>
-      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} />
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} showPrivateExcerpts />
     </section>
   {/if}
 

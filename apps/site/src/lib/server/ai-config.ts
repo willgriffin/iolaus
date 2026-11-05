@@ -51,6 +51,11 @@ export const OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES = {
   },
 } as const;
 
+export const MATCHING_CANDIDATE_AI_FEATURE =
+  'matching-candidate-interpretation';
+export const MATCHING_CANDIDATE_AI_MODEL = 'openai/gpt-6-luna';
+export const MATCHING_CANDIDATE_VERIFICATION_AI_MODEL = 'openai/gpt-6.1-sol';
+
 export interface AiProfileClient {
   aiClient: Pick<AIInterface, 'chat'> &
     Partial<Pick<AIInterface, 'countTokens'>>;
@@ -71,6 +76,7 @@ export interface AiProfileClientOptions {
   timeout?: number;
   usageTags?: Record<string, string>;
   requireProfileApiKey?: boolean;
+  suppressContentLogging?: boolean;
 }
 
 function boundedMaxOutputTokens(value: number | undefined) {
@@ -391,6 +397,8 @@ export async function resolveAiProfileClient(
       rateLimit: { maxAttempts: 1 },
       type: 'bifrost',
     };
+    if (options.suppressContentLogging)
+      aiOptions.headers = { 'x-bf-disable-content-logging': 'true' };
     if (model) aiOptions.defaultModel = model;
     if (timeout) aiOptions.timeout = timeout;
 
@@ -543,6 +551,21 @@ export async function resolveOpportunityIntelligenceScoringAiProfileClient(
     OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring,
     options,
   );
+}
+
+/** Reuse the owned résumé route with a separate private usage purpose. */
+export async function resolveMatchingCandidateAiProfileClient(
+  maxOutputTokens: number,
+  model:
+    | typeof MATCHING_CANDIDATE_AI_MODEL
+    | typeof MATCHING_CANDIDATE_VERIFICATION_AI_MODEL = MATCHING_CANDIDATE_AI_MODEL,
+): Promise<AiProfileClient | null> {
+  return await resolveOpportunityResumeFitReviewAiProfileClient({
+    model,
+    maxOutputTokens,
+    suppressContentLogging: true,
+    usageTags: { feature: MATCHING_CANDIDATE_AI_FEATURE },
+  });
 }
 
 export const OPPORTUNITY_RESUME_FIT_REVIEW_MODELS = [

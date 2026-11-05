@@ -253,7 +253,7 @@ const facts = $derived(
   <aside class="card-aside" aria-label={readOnly ? 'Posting facts' : 'Decision'}>
     {#if !readOnly}
     {#if record.discoveryMatchStatus === 'screened-with-gaps'}
-      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} />
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} />
       {#if opportunityId}<p><a href={`/admin/opportunities/${encodeURIComponent(opportunityId)}`}>Open full review</a></p>{/if}
     {:else if typeof record.discoveryMatchScore === 'number'}
       <section class="panel" aria-label="Why this opportunity matches">

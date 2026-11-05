@@ -51,15 +51,33 @@ describe('OpportunityCardList assessment readiness', () => {
           title: 'Backend engineer',
           discoveryMatchStatus: 'screened-with-gaps',
           discoveryMatchScore: 32,
-          discoveryMatchReasons: [
-            'Your evidence does not establish production experience with PostgreSQL.',
-          ],
+          discoveryMatchEvidence: {
+            supported: [
+              {
+                message: 'Your evidence supports designing REST APIs.',
+                excerpts: ['Fictional confidential passage'],
+              },
+            ],
+            gaps: [
+              {
+                message:
+                  'Your evidence does not establish production experience with PostgreSQL.',
+              },
+            ],
+            interpretation:
+              'Matching is still interpreting some of your evidence.',
+          },
         },
       ],
     });
     expect(body).toContain('Screened · evidence gaps');
     expect(body).toContain('Review evidence gaps');
     expect(body).toContain('production experience with PostgreSQL');
+    expect(body).toContain('Your evidence supports designing REST APIs.');
+    expect(body).toContain(
+      'Matching is still interpreting some of your evidence.',
+    );
+    expect(body).not.toContain('Fictional confidential passage');
     expect(body).not.toContain('Qualified');
     expect(body).not.toContain('32/100');
   });

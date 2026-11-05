@@ -3,6 +3,7 @@ import { releaseDeploymentProtocolEnabled } from '../../../scripts/smrt-deployme
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { ScheduleRunner, TaskRunner, type SmrtJob } from '@happyvertical/smrt-jobs';
 import { getDbConfig } from '../src/lib/server/db.js';
+import { startMatchingCandidateInterpretationWorker } from '../src/lib/server/matching-candidate-worker.js';
 import { startMatchingSourceExtractionWorker } from '../src/lib/server/matching-source-extraction-worker.js';
 import { startMatchingWorker } from '../src/lib/server/matching-projection-worker.js';
 import { assertDeployedSchemaReady } from '../src/lib/server/deployment/schema.js';
@@ -106,6 +107,7 @@ const stopHeartbeat = await startWorkerHeartbeat({ kind: 'task' });
 const matchingDialect = getDbConfig().type === 'sqlite' ? 'sqlite' : 'postgres';
 const stopMatching = startMatchingWorker(db, matchingDialect);
 const stopMatchingExtraction = startMatchingSourceExtractionWorker(db, matchingDialect);
+const stopCandidateInterpretation = startMatchingCandidateInterpretationWorker(db, matchingDialect);
 
 const sourceCrawlWatchdog = setInterval(() => {
   void reapStaleSourceCrawls(db).catch((error) => {
@@ -133,6 +135,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   await Promise.all([
     stopMatching(),
     stopMatchingExtraction(),
+    stopCandidateInterpretation(),
     drainJobWorkerRunners({ scheduleRunner, stopHeartbeat, taskRunner }),
   ]);
   process.exit(0);

@@ -48,7 +48,11 @@ export async function readMatchingDiscoveryCoverage(
         ${unknown('posting-source-interpretation-missing')} AS missing_source,
         ${unknown('posting-requirement-unsupported', 'required-capability-unsupported')} AS unsupported,
         ${unknown('posting-requirement-unknown', 'posting-requirements-incomplete', 'posting-role-unknown', 'posting-role-ambiguous', 'posting-geography-unknown', 'posting-geography-ambiguous')} AS unresolved_source,
-        ${unknown('required-capability', 'screening-question')} AS unresolved_evidence
+        ${unknown('required-capability')} AS unresolved_capability,
+        ${unknown('screening-question')} AS unresolved_screening,
+        ${unknown('candidate-interpretation-pending')} AS pending_interpretation,
+        ${unknown('candidate-interpretation-failed')} AS failed_interpretation,
+        ${unknown('candidate-interpretation-partial')} AS partial_interpretation
       FROM current_rows r
       LEFT JOIN ${reasons} j ON TRUE
       GROUP BY r.opportunity_id, r.status
@@ -58,7 +62,13 @@ export async function readMatchingDiscoveryCoverage(
       SUM(missing_source) AS missing_source,
       SUM(unsupported) AS unsupported,
       SUM(unresolved_source) AS unresolved_source,
-      SUM(unresolved_evidence) AS unresolved_evidence
+      SUM(CASE WHEN unresolved_screening = 1 OR (
+        unresolved_capability = 1 AND pending_interpretation = 0
+        AND failed_interpretation = 0 AND partial_interpretation = 0
+      ) THEN 1 ELSE 0 END) AS unresolved_evidence,
+      SUM(pending_interpretation) AS pending_interpretation,
+      SUM(failed_interpretation) AS failed_interpretation,
+      SUM(partial_interpretation) AS partial_interpretation
     FROM categorized
     `,
     [
@@ -75,5 +85,8 @@ export async function readMatchingDiscoveryCoverage(
     unsupported: Number(row?.unsupported ?? 0),
     unresolvedSource: Number(row?.unresolved_source ?? 0),
     unresolvedEvidence: Number(row?.unresolved_evidence ?? 0),
+    pendingInterpretation: Number(row?.pending_interpretation ?? 0),
+    failedInterpretation: Number(row?.failed_interpretation ?? 0),
+    partialInterpretation: Number(row?.partial_interpretation ?? 0),
   };
 }

@@ -196,6 +196,7 @@ export async function loadTriageQueue({
             discoveryMatchStatus: match.status,
             discoveryMatchScore: match.score,
             discoveryMatchReasons: match.reasons,
+            discoveryMatchEvidence: match.evidence,
           },
         ]
       : [];

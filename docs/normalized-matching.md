@@ -142,6 +142,56 @@ the database transaction. Publication rechecks the exact raw capture and
 invalidates that posting's source revision. The matching-only runner
 consumes the saved interpretation and never initiates outbound calls.
 
+Private candidate interpretation is a separate opt-in worker. It reads the
+verified owner's current resume skills, positions, achievements, explicit
+experience note, and career records selected for use on the resume.
+Exact evidence citations stay in the owned profile snapshot. Verified project
+links allow related records to establish conditions together. Requirements
+that ask for independent capabilities can use separate activities. Named
+technology and same-system conditions need attributable related evidence. A position's
+date range alone cannot establish how long a particular technology was used.
+The candidate prompt has no posting input. The public source interpreter
+receives no candidate data.
+
+The private queue pins the owner, evidence digest, vocabulary revision,
+candidate interpretation policy, and interpretation contract. Deterministic
+ranking changes can reuse that queue's verified result. The paid worker checks
+the current principal, profile permission, and lease before sending each bounded chunk.
+A chunk containing narrative career evidence uses a stronger draft model.
+The model choice depends on the evidence type and does not depend on a posting.
+A separate verifier checks that the original evidence supports the drafted
+claim, including who performed the work, its context, and any duration.
+The worker saves each validated draft before verification, so a safe retry
+can reuse paid work. Publication advances the matching generation atomically.
+When settled usage accompanies a confirmed output-length limit, the worker
+can split one draft chunk into two smaller requests. The saved plan retains
+earlier verified chunks and gives each half a distinct request ID. Ambiguous
+attempts and other provider refusals stay failed. Budget and provider
+preflight refusals can retry with backoff. Raw evidence edits or ownership
+revocation clear the private snapshot and interpretation in the same
+transaction. Search preference and posting edits reuse the interpretation.
+Ongoing attributable intervals refresh deterministic comparisons as time
+passes.
+
+Previously verified chunks remain usable if a later chunk fails. A posting
+can show recognized evidence with an interpretation caution while remaining
+outside Qualified. An unresolved source flag does not identify whether
+the source contains a missing positive claim or an unclear restriction.
+Evidence that states a duration contributes only to the
+named activity. Undated durations are never added together, and trusted role
+dates count for a technology only when verified evidence connects the
+activity to the entire role.
+
+Enable candidate interpretation with
+`IOLAUS_MATCHING_CANDIDATE_INTERPRETATION_ENABLED=true` only on a gateway
+route approved for private résumé evidence, with request and response
+content logging and raw retention disabled. The provider requests content
+logging suppression through the existing owned résumé route. Each request
+uses native user usage accounting and requires an effective lifetime or
+monthly cap.
+The standalone matching-only runner continues to use the same stored results
+without calling a provider.
+
 For a bounded live source-only check on an isolated PostgreSQL database,
 use `matching:source-enrich` with the isolated `--database-name` and at
 most ten explicit `--opportunity=<UUID>` selectors, or use
