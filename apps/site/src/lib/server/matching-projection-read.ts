@@ -1,6 +1,7 @@
 import { resolveDatabase } from '@happyvertical/smrt-core';
 import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import type { DatabaseInterface } from '@happyvertical/sql';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import { getDbConfig } from './db.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 import type { CandidateWorkspaceSubject } from './workspace-subject.js';
@@ -25,15 +26,6 @@ export type MatchingWriteRevision = {
   opportunityId: string;
   updatedAt: string;
   matchingRevision: string;
-};
-
-export type MatchingDiscoveryProgress = {
-  status:
-    | 'pending'
-    | 'ready'
-    | 'missing-preferences'
-    | 'needs-evidence'
-    | 'failed';
 };
 
 /** Values come from a server-verified subject, never a browser profile selector. */
@@ -183,12 +175,31 @@ export async function getMatchingDiscoveryProgress(
     );
   const config = getDbConfig();
   const db = getRequestScopedDatabase() ?? (await resolveDatabase(config));
+  return readMatchingDiscoveryProgress(
+    db,
+    config.type === 'sqlite' ? 'sqlite' : 'postgres',
+    active,
+  );
+}
+
+/** Use only with the active workspace subject verified by the caller. */
+export async function readMatchingDiscoveryProgress(
+  db: DatabaseInterface,
+  dialect: MatchingDialect,
+  subject: CandidateWorkspaceSubject,
+): Promise<MatchingDiscoveryProgress> {
+  // Expose only an enum from the current, owned snapshot, never its private text.
+  const rolePreferenceStatus =
+    dialect === 'sqlite'
+      ? "CASE WHEN json_valid(f.facts_json) THEN json_extract(f.facts_json, '$.rolePreferenceStatus') END"
+      : "CASE WHEN f.facts_json IS JSON OBJECT THEN f.facts_json::jsonb->>'rolePreferenceStatus' END";
   const result = await db.query(
     `
     SELECT CASE WHEN f.status <> 'missing-preferences'
       AND (f.cursor < clock.work_revision OR EXISTS (
         SELECT 1 FROM matching_source_versions sv WHERE sv.revision > clock.source_event_revision
-      )) THEN 'pending' ELSE f.status END AS status
+      )) THEN 'pending' ELSE f.status END AS status,
+      ${rolePreferenceStatus} AS role_preference_status
     FROM matching_profile_facts f
     JOIN matching_profile_versions pv ON pv.profile_id = f.profile_id AND pv.revision = f.profile_revision
     JOIN matching_vocabulary_version vv ON vv.id = 1 AND vv.revision = f.vocabulary_revision
@@ -203,13 +214,17 @@ export async function getMatchingDiscoveryProgress(
     ],
   );
   const row = (Array.isArray(result) ? result : result.rows)[0];
+  if (row?.role_preference_status === 'unsupported')
+    return { status: 'unsupported-target-roles' };
   switch (row?.status) {
     case 'ready':
     case 'needs-evidence':
     case 'missing-preferences':
     case 'failed':
     case 'pending':
-      return { status: row.status };
+      return row.role_preference_status === 'partial'
+        ? { status: row.status, hasUnsupportedRoleChoices: true }
+        : { status: row.status };
     default:
       return { status: 'pending' };
   }

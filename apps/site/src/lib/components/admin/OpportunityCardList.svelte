@@ -908,6 +908,8 @@ function clearBulkSelection(): void {
           <p role="status">Checking postings against your profile. Matches will appear as they’re ready.</p>
         {:else if matchingProgress?.status === 'missing-preferences'}
           <p role="status">Add the roles and locations you’re looking for in <a href="/admin/preferences/matching">Matching preferences</a> to see matches.</p>
+        {:else if matchingProgress?.status === 'unsupported-target-roles'}
+          <p role="status">We couldn’t recognize your target roles. In <a href="/admin/preferences/matching">Matching preferences</a>, enter each role or discipline on its own line, such as Software Engineer or Software engineering.</p>
         {:else if matchingProgress?.status === 'needs-evidence'}
           <p role="status">Add or update your résumé evidence and check your <a href="/admin/preferences/screening-questions">required screening questions</a> so we can confirm more matches.</p>
         {:else if matchingProgress?.status === 'failed'}
@@ -916,6 +918,9 @@ function clearBulkSelection(): void {
           </p>
         {:else if matchingProgress?.status === 'ready' && !visibleRecords.length}
           <p role="status">No confirmed matches with these filters. Some postings may be missing information needed to check their requirements. You can change your <a href="/admin/preferences/matching">matching preferences</a>.</p>
+        {/if}
+        {#if matchingProgress?.hasUnsupportedRoleChoices}
+          <p>Some target roles couldn’t be recognized. Edit those choices in <a href="/admin/preferences/matching">Matching preferences</a>. Matches for recognized roles still appear.</p>
         {/if}
         <CollectionList
           items={visibleRecords} itemKey="id" title="title"

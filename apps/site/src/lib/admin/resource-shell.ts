@@ -30,8 +30,10 @@ export type MatchingDiscoveryProgress = {
     | 'pending'
     | 'ready'
     | 'missing-preferences'
+    | 'unsupported-target-roles'
     | 'needs-evidence'
     | 'failed';
+  hasUnsupportedRoleChoices?: boolean;
 };
 
 export interface AdminResourcePageData {

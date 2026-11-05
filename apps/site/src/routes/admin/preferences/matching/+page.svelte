@@ -21,7 +21,9 @@ const workModeLabels = {
   {#if form?.error}<p role="alert">{form.error}</p>{/if}
   <form method="POST" use:enhance={keepFormValues}>
     <label for="targetRoles">Target roles</label>
-    <textarea id="targetRoles" name="targetRoles" rows="3" placeholder="Senior Backend Engineer" value={data.preferences?.targetRoles.join('\n') ?? ''}></textarea>
+    <textarea id="targetRoles" name="targetRoles" rows="3" aria-describedby="target-role-help" placeholder="Senior Backend Engineer" value={data.preferences?.targetRoles.join('\n') ?? ''}></textarea>
+
+    <p id="target-role-help">Use a role or discipline, such as Senior Backend Engineer or Software engineering. Add alternatives on separate lines.</p>
 
     <label for="locations">Target locations</label>
     <textarea id="locations" name="locations" rows="3" placeholder="Canada" value={data.preferences?.locations.join('\n') ?? ''}></textarea>

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MATCHING_ROLE_SUGGESTIONS } from '../matching-role-suggestions.js';
 import {
   type MatchingSourceExtraction,
   type MatchingSourceSpan,
@@ -88,6 +89,42 @@ describe('normalized matching from raw text', () => {
     ).toBe('qualified');
     expect(match({}, { evidence: [skill('Postgres')] }).status).toBe(
       'insufficient-evidence',
+    );
+  });
+
+  it('supports conventional discipline shorthand without broadening architecture or ML specialty', () => {
+    const profile = {
+      targetRoles: [
+        'Software engineering',
+        'AI & ML development',
+        'Technical architecture',
+      ],
+    };
+    expect(match({ title: 'Backend Engineer' }, profile).status).toBe(
+      'qualified',
+    );
+    expect(match({ title: 'AI/ML Engineer' }, profile).status).toBe(
+      'qualified',
+    );
+    expect(match({ title: 'Technical Architect' }, profile).status).toBe(
+      'qualified',
+    );
+    expect(match({ title: 'Solutions Architect' }, profile).status).toBe(
+      'conflict',
+    );
+    expect(match({ title: 'Sales Engineer' }, profile).status).toBe('conflict');
+    const specialized = { targetRoles: ['Fullstack', 'AI/LLM engineering'] };
+    expect(match({ title: 'Full Stack Engineer' }, specialized).status).toBe(
+      'qualified',
+    );
+    expect(match({ title: 'LLM Engineer' }, specialized).status).toBe(
+      'qualified',
+    );
+    expect(
+      match({ title: 'Machine Learning Engineer' }, specialized).status,
+    ).toBe('insufficient-evidence');
+    expect(match({ title: 'Backend Engineer' }, specialized).status).toBe(
+      'conflict',
     );
   });
 
@@ -673,6 +710,83 @@ describe('normalized matching from raw text', () => {
         geography: span('Canada'),
       }),
     ).toBe('insufficient-evidence');
+  });
+
+  it('interprets disciplines as role targets while retaining explicit restrictions', () => {
+    expect(match({}, { targetRoles: ['Software engineering'] }).status).toBe(
+      'qualified',
+    );
+    expect(
+      match({}, { targetRoles: ['Senior backend engineering'] }).status,
+    ).toBe('qualified');
+    expect(
+      match({}, { targetRoles: ['Staff backend engineering'] }).status,
+    ).toBe('conflict');
+    expect(
+      match({}, { targetRoles: ['Frontend software development'] }).status,
+    ).toBe('conflict');
+    expect(
+      match(
+        { title: 'Sales Manager' },
+        { targetRoles: ['Software engineering'] },
+      ).status,
+    ).toBe('conflict');
+    expect(
+      match(
+        { title: 'Sales Manager' },
+        { targetRoles: ['Software engineering', 'Other idea'] },
+      ).status,
+    ).toBe('insufficient-evidence');
+    expect(
+      match({}, { targetRoles: ['Software engineering', 'Other idea'] }).status,
+    ).toBe('qualified');
+    expect(
+      match(
+        { title: 'Software engineering' },
+        { targetRoles: ['Software engineering'] },
+      ).status,
+    ).toBe('insufficient-evidence');
+    expect(
+      match({}, { targetRoles: ['Software engineering or Sales'] }).reasons,
+    ).toContainEqual(
+      expect.objectContaining({ code: 'candidate-role-choice-unknown' }),
+    );
+  });
+
+  it.each(
+    MATCHING_ROLE_SUGGESTIONS,
+  )('recognizes onboarding target %s', (targetRole) => {
+    const normalized = normalizeMatchingCandidate(
+      { ...candidate, targetRoles: [targetRole] },
+      vocabulary,
+    );
+    expect(normalized.roles).toHaveLength(1);
+    expect(normalized.rolePreferenceStatus).toBeUndefined();
+    expect(normalized.roles[0]?.citation.text).toBe(targetRole);
+    expect(
+      match({ title: targetRole }, { targetRoles: [targetRole] }).status,
+    ).toBe('qualified');
+  });
+
+  it('does not broaden explicit or ambiguous qualifications', () => {
+    expect(
+      match({}, { targetRoles: ['Software Engineer, Backend'] }).status,
+    ).toBe('qualified');
+    expect(
+      match({}, { targetRoles: ['Software Engineer, Frontend'] }).status,
+    ).toBe('conflict');
+    expect(
+      match({}, { targetRoles: ['Software Engineer, Platform'] }).status,
+    ).toBe('insufficient-evidence');
+    expect(match({}, { targetRoles: ['Software Engineer IV'] }).status).toBe(
+      'insufficient-evidence',
+    );
+    expect(match({}, { targetRoles: ['Technical Lead'] }).status).toBe(
+      'conflict',
+    );
+    expect(match({}, { targetRoles: ['Software Architect'] }).status).toBe(
+      'conflict',
+    );
   });
 
   it('keeps title specialty and seniority distinct from broader role intent', () => {

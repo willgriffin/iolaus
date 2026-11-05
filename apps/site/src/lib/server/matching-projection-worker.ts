@@ -380,7 +380,7 @@ async function profileWork(
     candidate = normalizeMatchingCandidate(input, vocabulary);
     position = '0';
     status =
-      !input.targetRoles.length ||
+      !candidate.roles.length ||
       (!input.locations.length && !input.remoteCountries?.length)
         ? 'missing-preferences'
         : 'pending';
@@ -461,7 +461,9 @@ async function profileWork(
         ).length > 0;
       const privateGap =
         candidate.evidence.length === 0 ||
-        candidate.uncertainties.length > 0 ||
+        candidate.uncertainties.some(
+          ({ code }) => code !== 'candidate-role-choice-unknown',
+        ) ||
         candidate.questions.some((question) => !question.query);
       status = (await hasStatus('qualified'))
         ? 'ready'

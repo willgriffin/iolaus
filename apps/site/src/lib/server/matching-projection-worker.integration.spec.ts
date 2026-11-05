@@ -6,6 +6,7 @@ import {
   lockMatchingWriteRevision,
   MATCHING_REVISION_SQL,
   type MatchingDialect,
+  readMatchingDiscoveryProgress,
 } from './matching-projection-read.js';
 import { ensureMatchingProjectionSchema } from './matching-projection-schema.js';
 import {
@@ -123,6 +124,73 @@ async function discover(
 
 for (const dialect of dialects) {
   describe(`matching pipeline on ${dialect}`, () => {
+    it('uses original discipline preferences through the worker and discovery', async () => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        await db.query('UPDATE opportunities SET title=? WHERE id=?', [
+          'Sales Manager',
+          jobs[3],
+        ]);
+        await ensureMatchingProjectionSchema(db, dialect);
+        const saved =
+          '{ "targetRoles": ["Software engineering", "Other idea"], "locations": ["Canada"], "workModes": ["remote"] }';
+        await db.query(
+          'UPDATE candidate_profiles SET preferences_json=? WHERE id=?',
+          [saved, owner.profileId],
+        );
+        const converge = async () => {
+          for (let i = 0; i < 6; i += 1) await runMatchingTick(db, dialect);
+        };
+        await converge();
+        expect(await discover(db, dialect, owner)).toEqual([jobs[0]]);
+        expect(await discover(db, dialect, sibling)).toEqual([]);
+        expect(await readMatchingDiscoveryProgress(db, dialect, owner)).toEqual(
+          {
+            status: 'ready',
+            hasUnsupportedRoleChoices: true,
+          },
+        );
+        expect(
+          await readMatchingDiscoveryProgress(db, dialect, {
+            ...owner,
+            tenantId: other.tenantId,
+          }),
+        ).toEqual({ status: 'pending' });
+        expect(
+          (
+            await db.query(
+              'SELECT preferences_json FROM candidate_profiles WHERE id=?',
+              [owner.profileId],
+            )
+          ).rows[0]?.preferences_json,
+        ).toBe(saved);
+
+        await db.query(
+          'UPDATE candidate_profiles SET preferences_json=? WHERE id=?',
+          [
+            saved.replace('Software engineering', 'Ambiguous role'),
+            owner.profileId,
+          ],
+        );
+        // The current read gate hides old matches even before reprocessing.
+        expect(await discover(db, dialect, owner)).toEqual([]);
+        expect(await readMatchingDiscoveryProgress(db, dialect, owner)).toEqual(
+          { status: 'pending' },
+        );
+        await converge();
+        expect(await discover(db, dialect, owner)).toEqual([]);
+        expect(await readMatchingDiscoveryProgress(db, dialect, owner)).toEqual(
+          { status: 'unsupported-target-roles' },
+        );
+      } finally {
+        await close();
+      }
+    });
+
     it('pins a confirmed match through a durable write and rejects a generation changed before the write fence', async () => {
       const { database: db, close } = await createMatchingProjectionFixture(
         dialect,

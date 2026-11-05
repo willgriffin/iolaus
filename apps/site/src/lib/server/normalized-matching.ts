@@ -7,7 +7,7 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 
-export const MATCHING_POLICY_VERSION = 'normalized-v8';
+export const MATCHING_POLICY_VERSION = 'normalized-v9';
 
 export interface MatchingVocabularyTerm {
   slug: string;
@@ -138,7 +138,8 @@ type Role = {
   citation: Citation;
 };
 
-const roleAliases = new Map<string, Omit<Role, 'citation' | 'level'>>();
+type RoleIdentity = Omit<Role, 'citation'>;
+const roleAliases = new Map<string, RoleIdentity>();
 const roleFamilies: readonly [string, string | undefined, string][] = [
   [
     'software-engineering',
@@ -164,6 +165,16 @@ const roleFamilies: readonly [string, string | undefined, string][] = [
     'software-engineering',
     'mobile',
     'mobile engineer|mobile developer|mobile software engineer|software engineer mobile|ios engineer|ios developer|android engineer|android developer',
+  ],
+  [
+    'software-architecture',
+    undefined,
+    'software architect|software application architect',
+  ],
+  [
+    'technical-architecture',
+    undefined,
+    'technical architect|technology architect',
   ],
   [
     'engineering-management',
@@ -194,7 +205,12 @@ const roleFamilies: readonly [string, string | undefined, string][] = [
   [
     'machine-learning-engineering',
     undefined,
-    'machine learning engineer|ml engineer|ai engineer|applied ai engineer|ai ml engineer',
+    'machine learning engineer|ml engineer|ai engineer|applied ai engineer|ai ml engineer|ai/ml engineer|ai & ml engineer|ai and ml engineer',
+  ],
+  [
+    'machine-learning-engineering',
+    'llm',
+    'llm engineer|ai/llm engineer|ai / llm engineer|large language model engineer|generative ai engineer',
   ],
   [
     'data-analysis',
@@ -286,6 +302,80 @@ for (const [family, specialty, aliases] of roleFamilies)
   for (const alias of aliases.split('|'))
     roleAliases.set(alias, { family, specialty });
 
+roleAliases.set('technical lead', {
+  family: 'software-engineering',
+  level: 'lead',
+});
+
+// A saved target can name a discipline. These aliases never identify a
+// posting title and never discard a specialty or an unrecognized qualifier.
+const targetRoleAliases = new Map(roleAliases);
+for (const [family, specialty] of roleFamilies)
+  if (!specialty)
+    targetRoleAliases.set(family.replaceAll('-', ' '), { family });
+
+const disciplineAliases: typeof roleFamilies = [
+  [
+    'software-engineering',
+    undefined,
+    'software development|software programming',
+  ],
+  ['software-engineering', 'backend', 'api engineering|api development'],
+  ['software-engineering', 'frontend', 'ui engineering'],
+  [
+    'software-engineering',
+    'full-stack',
+    'full stack|fullstack|fullstack engineering|fullstack development',
+  ],
+  [
+    'engineering-management',
+    undefined,
+    'software engineering management|software development management',
+  ],
+  [
+    'platform-engineering',
+    undefined,
+    'site reliability engineering|devops|cloud engineering|infrastructure engineering',
+  ],
+  [
+    'machine-learning-engineering',
+    undefined,
+    'ai engineering|ml engineering|applied ai engineering|ai/ml engineering|ai / ml engineering|ai & ml engineering|ai and ml engineering|ai/ml development|ai / ml development|ai & ml development|ai and ml development|ml/ai engineering|artificial intelligence and machine learning engineering',
+  ],
+  [
+    'machine-learning-engineering',
+    'llm',
+    'llm engineering|ai/llm engineering|ai / llm engineering|large language model engineering|generative ai engineering',
+  ],
+  ['technical-architecture', undefined, 'technology architecture'],
+  ['quality-engineering', undefined, 'quality assurance|test engineering'],
+  [
+    'solutions-engineering',
+    undefined,
+    'solution engineering|solutions architecture|solution architecture',
+  ],
+  ['product-design', undefined, 'ux design|user experience design'],
+  ['customer-support', undefined, 'customer service|technical support'],
+];
+for (const [family, specialty, aliases] of disciplineAliases)
+  for (const alias of aliases.split('|'))
+    targetRoleAliases.set(alias, { family, specialty });
+
+const softwareSpecialties = [
+  ['backend', ['backend', 'back end']],
+  ['frontend', ['frontend', 'front end']],
+  ['full-stack', ['full stack']],
+  ['mobile', ['mobile']],
+] as const;
+for (const [specialty, names] of softwareSpecialties)
+  for (const name of names)
+    for (const discipline of ['engineering', 'development']) {
+      const role = { family: 'software-engineering', specialty };
+      targetRoleAliases.set(`${name} ${discipline}`, role);
+      targetRoleAliases.set(`${name} software ${discipline}`, role);
+      targetRoleAliases.set(`software ${discipline} ${name}`, role);
+    }
+
 const levels: Record<string, Level> = {
   junior: 'entry',
   jr: 'entry',
@@ -313,16 +403,31 @@ function normalizedTitle(value: string): string {
   return phrase(value.replace(/[.,()\-–—]/gu, ' '));
 }
 
-function exactRole(value: string, citation: Citation): Role | undefined {
+function exactRole(
+  value: string,
+  citation: Citation,
+  aliases = roleAliases,
+  allowOrdinalSuffix = true,
+): Role | undefined {
   const normalized = normalizedTitle(value);
   const level = normalized.match(levelPrefix);
   const name = level?.[2] ?? normalized;
   const role =
-    roleAliases.get(name) ??
-    roleAliases.get(name.replace(/ (?:i|ii|iii|iv|v)$/u, ''));
-  return role
-    ? { ...role, level: levels[level?.[1] ?? ''], citation }
-    : undefined;
+    aliases.get(name) ??
+    (allowOrdinalSuffix
+      ? aliases.get(name.replace(/ (?:i|ii|iii|iv|v)$/u, ''))
+      : undefined);
+  const explicitLevel = levels[level?.[1] ?? ''];
+  if (!role || (role.level && explicitLevel && role.level !== explicitLevel))
+    return undefined;
+  return { ...role, level: role.level ?? explicitLevel, citation };
+}
+
+function normalizeTargetRole(
+  raw: string,
+  citation: Citation,
+): Role | undefined {
+  return exactRole(raw, citation, targetRoleAliases, false);
 }
 
 function normalizeRole(raw: string, citation: Citation): Role | undefined {
@@ -559,6 +664,7 @@ export interface NormalizedMatchingPosting {
 
 export interface NormalizedMatchingCandidate {
   roles: readonly Role[];
+  rolePreferenceStatus?: 'unsupported' | 'partial';
   locations: readonly (Region & { citation: Citation })[];
   remoteCountries: readonly (Region & { citation: Citation })[];
   anywhere: boolean;
@@ -1818,32 +1924,33 @@ export function normalizeMatchingCandidate(
         'Some of your matching preferences or evidence could not be read.',
       ),
     );
+  const unknownRoles: Citation[] = [];
   const roles = raw.targetRoles.flatMap((text) => {
     const citation = cite('target-role', text);
-    const role = normalizeRole(text, citation);
+    const role = normalizeTargetRole(text, citation);
+    if (!role) unknownRoles.push(citation);
     return role ? [role] : [];
   });
-  if (!roles.length)
+  const rolePreferenceStatus = unknownRoles.length
+    ? roles.length
+      ? 'partial'
+      : 'unsupported'
+    : undefined;
+  if (!raw.targetRoles.length)
     uncertainties.push(
       reason(
         'candidate-role-missing',
         'unknown',
-        'Add a recognized role you want to find.',
-        ...raw.targetRoles.map((text) => cite('target-role', text)),
+        'Add a target role in Matching preferences.',
       ),
     );
-  // An additional unrecognized choice is an alternative, not a hard blocker
-  // when a known choice supports this match. It prevents known-conflict below.
-  const unknownRoles = raw.targetRoles.filter(
-    (text) => !normalizeRole(text, cite('target-role', text)),
-  );
-  if (roles.length && unknownRoles.length)
+  if (unknownRoles.length)
     uncertainties.push(
       reason(
         'candidate-role-choice-unknown',
         'unknown',
-        'Some of your target roles are unclear.',
-        ...unknownRoles.map((text) => cite('target-role', text)),
+        'Edit unsupported target roles in Matching preferences. Enter each role or discipline on its own line.',
+        ...unknownRoles,
       ),
     );
   const anywhere = raw.locations.some((text) => phrase(text) === 'anywhere');
@@ -1891,6 +1998,7 @@ export function normalizeMatchingCandidate(
   );
   return {
     roles,
+    rolePreferenceStatus,
     locations,
     remoteCountries,
     anywhere,
@@ -1936,9 +2044,7 @@ function candidateRole(
   if (
     !fits.length ||
     fits.some(({ outcome }) => outcome === 'unknown') ||
-    candidate.uncertainties.some(
-      ({ code }) => code === 'candidate-role-choice-unknown',
-    )
+    candidate.rolePreferenceStatus === 'partial'
   )
     return reason(
       'target-role',
@@ -2208,7 +2314,9 @@ export function evaluateNormalizedMatch(
   const hard = [
     ...posting.uncertainties,
     ...candidate.uncertainties.filter(
-      ({ code }) => code !== 'candidate-role-choice-unknown',
+      ({ code }) =>
+        code !== 'candidate-role-choice-unknown' ||
+        candidate.rolePreferenceStatus === 'unsupported',
     ),
   ];
   if (posting.role) hard.push(candidateRole(posting.role, candidate));
