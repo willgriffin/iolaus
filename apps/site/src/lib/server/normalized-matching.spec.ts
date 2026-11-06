@@ -59,6 +59,42 @@ function match(
 }
 
 describe('normalized matching from raw text', () => {
+  it('recognizes a governed team suffix without weakening an unknown title', () => {
+    expect(
+      normalizeMatchingPosting(
+        { ...posting, title: 'Engineering Manager - Spark' },
+        vocabulary,
+      ).role,
+    ).toMatchObject({ family: 'engineering-management' });
+    expect(
+      normalizeMatchingPosting(
+        { ...posting, title: 'Engineering Manager - Account Executive' },
+        vocabulary,
+      ).role,
+    ).toBeUndefined();
+  });
+
+  it('accepts an explicit worldwide scope with remote mode without widening a bare office', () => {
+    expect(
+      normalizeMatchingPosting(
+        { ...posting, location: 'Worldwide', workplaceType: 'remote' },
+        vocabulary,
+      ).geography,
+    ).toMatchObject({ mode: 'remote', worldwide: true });
+    expect(
+      normalizeMatchingPosting(
+        { ...posting, location: 'Canada', workplaceType: 'remote' },
+        vocabulary,
+      ).geography,
+    ).toBeUndefined();
+    expect(
+      normalizeMatchingPosting(
+        { ...posting, location: 'Worldwide', workplaceType: 'hybrid' },
+        vocabulary,
+      ).geography,
+    ).toBeUndefined();
+  });
+
   it('qualifies exact aliases, one alternative per group, and multi-choice role and location preferences', () => {
     const result = match();
     expect(result.status).toBe('qualified');

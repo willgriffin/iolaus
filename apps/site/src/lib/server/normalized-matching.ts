@@ -887,7 +887,7 @@ const levelPrefix =
 const contextualTitleSuffix =
   /^(?:(?:fully )?remote|hybrid|on site|onsite|full time|part time|contract|temporary|asean|[a-z]{2}-[a-z]{2}|(?:m|f|w|d|x)(?:[ /-](?:m|f|w|d|x)){1,4})$/u;
 const productDomain =
-  /^(?:payments|billing|identity|fraud|search|growth|developer experience|developer tools|commerce|ecommerce|observability|core product|core services|infrastructure|data infrastructure|security platform|platform security|ai infrastructure|ai platform|machine learning platform|cloud platform|platform|integrations|distributed systems|api platform|web platform|database platform|storage|networking(?: features)?|managed gateways|mobile app|supply chain)$/u;
+  /^(?:payments|billing|identity|fraud|search|growth|developer experience|developer tools|commerce|ecommerce|observability|core product|core services|infrastructure|data infrastructure|security platform|platform security|ai infrastructure|ai platform|machine learning platform|cloud platform|platform|integrations|distributed systems|api platform|web platform|database platform|storage|networking(?: features)?|managed gateways|mobile app|supply chain|spark)$/u;
 
 function normalizedTitle(value: string): string {
   return phrase(value.replace(/[.,()\-–—]/gu, ' '));
@@ -1083,6 +1083,8 @@ function region(value: string, source = false): Region | undefined {
     : { locality: normalized };
 }
 
+const worldwideScope = /^(?:worldwide|global|anywhere|work from anywhere)$/iu;
+
 function parseGeography(
   raw: string,
   mode: Mode | undefined,
@@ -1145,9 +1147,7 @@ function parseGeography(
     .replace(/^\((.*)\)$/u, '$1')
     .replace(/\s+only$/iu, '')
     .trim();
-  const worldwide = /^(?:worldwide|global|anywhere|work from anywhere)$/iu.test(
-    text,
-  );
+  const worldwide = worldwideScope.test(text);
   if (worldwide)
     return mode === 'remote'
       ? { mode, regions: [], worldwide, citation }
@@ -3225,7 +3225,9 @@ export function normalizeMatchingPosting(
     );
   const mode = declaredMode ?? (explicitRemoteLocation ? 'remote' : undefined);
   let geography =
-    mode !== 'remote' || explicitRemoteLocation
+    mode !== 'remote' ||
+    explicitRemoteLocation ||
+    (declaredMode === 'remote' && worldwideScope.test(raw.location.trim()))
       ? parseGeography(raw.location, mode, location)
       : undefined;
   let conflictingGeography = false;
