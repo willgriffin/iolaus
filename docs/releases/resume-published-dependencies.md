@@ -1,8 +1,36 @@
 # Resume dependency release closure
 
-## Current adoption baseline (#236, 2026-10-26)
+## Current adoption baseline (#320)
 
-The active published closure uses SMRT **0.57.32** and standard SDK **0.108.0**.
+The active published closure uses SMRT **0.60.10** and standard SDK
+**0.111.5**, including the SQL adapter required by the SMRT release. The
+workspace resolves those versions from published dependency declarations and
+exact direct pins, then freezes the graph in the lockfile. The reviewed
+inventory retains the same REST, MCP, WebMCP and data-surface entries.
+PDF, OCR, spider, animation and Sharp keep their previous pins.
+
+Published PDF and OCR request SDK utils in the 0.80 line, and OCR also
+requests SDK AI in that line. Published spider requests cache and utils in
+the 0.74 line. The registry-integrity record covers all 61 first-party lock
+identities, including AI and utils 0.80.6 and cache and utils 0.74.11.
+The verifier restricts those four releases to their reviewed transitive
+consumers in the PDF, OCR and spider dependency paths.
+
+A fresh local SQLite database is migrated and checked with the native SMRT
+CLI (`pnpm --filter @willgriffin/iolaus-site exec smrt db:migrate` and
+`pnpm --filter @willgriffin/iolaus-site exec smrt db:status`) using an isolated
+local runtime directory. The site package's hosted migration and status
+scripts use PostgreSQL-specific operations.
+
+Before promoting the upgraded image to the hosted beta, apply an
+owner-reviewed role identity migration on a restored copy and verify
+existing authorization and ownership. SMRT 0.60.10 reserves IDs for the
+global built-in roles and rejects seeding when an existing built-in has a
+different ID. The deployment gate is tracked in [#310](https://github.com/willgriffin/iolaus/issues/310).
+
+## Previous adoption baseline (#236, 2026-10-26)
+
+The published closure used SMRT **0.57.32** and standard SDK **0.108.0**.
 OCR moves to **0.62.1**, the minimum required by ingestion's `^0.62.1` range.
 PDF **0.66.0**, spider **1.1.11**, animation **0.5.0** and Sharp **0.35.5** remain
 unchanged. All 57 first-party active lock identities, including independently

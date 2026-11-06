@@ -13,7 +13,6 @@ function fixture(run) {
   };
   const pkg = { name: '@happyvertical/auth', version: '0.103.5', integrity: 'sha512-YWJjZA==' };
   write('vendor/release/published-closure.json', { provenance: 'published-registry-metadata', packages: [pkg] });
-  write('pnpm-workspace.yaml', 'overrides:\n  "@happyvertical/auth": "0.103.5"\n');
   write('pnpm-lock.yaml', "packages:\n\n  '@happyvertical/auth@0.103.5':\n    resolution: {integrity: sha512-YWJjZA==}\n\nsnapshots:\n");
   write('node_modules/.pnpm/@happyvertical+auth@0.103.5/node_modules/@happyvertical/auth/package.json', pkg);
   for (const path of ['package.json', 'apps/site/package.json', 'packages/cli/package.json', 'packages/resume/package.json']) write(path, { dependencies: {} });
@@ -51,4 +50,69 @@ test('rejects stale direct installed links even when the expected store copy exi
 test('rejects an unrecorded transitive first-party dependency', () => fixture(({ root, write }) => {
   write('pnpm-lock.yaml', `${readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')}\n  '@happyvertical/spider@1.1.11':\n    resolution: {}\n`);
   assert.throws(() => verifyPublishedClosure(root), /unrecorded first-party lock identity/u);
+}));
+
+function addSpecialtyDependency(root, write, consumer = '@happyvertical/pdf@0.66.0') {
+  const closure = JSON.parse(readFileSync(join(root, 'vendor/release/published-closure.json'), 'utf8'));
+  const [current] = closure.packages;
+  const older = { ...current, version: '0.80.6', consumers: ['@happyvertical/pdf@0.66.0'] };
+  const [consumerName, consumerVersion] = consumer.split('@').slice(1);
+  const parent = { ...current, name: `@${consumerName}`, version: consumerVersion };
+  closure.packages.push(older, parent);
+  write('vendor/release/published-closure.json', closure);
+  const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+  write('pnpm-lock.yaml', lock.replace('snapshots:', `
+  '@happyvertical/auth@0.80.6':
+    resolution: {integrity: ${older.integrity}}
+
+  '${consumer}':
+    resolution: {integrity: ${parent.integrity}}
+
+snapshots:
+
+  '${consumer}':
+    dependencies:
+      '@happyvertical/auth': 0.80.6
+`));
+  write('node_modules/.pnpm/@happyvertical+auth@0.80.6/node_modules/@happyvertical/auth/package.json', older);
+  write(`node_modules/.pnpm/${parent.name.replace('/', '+')}@${parent.version}/node_modules/${parent.name}/package.json`, parent);
+  return older;
+}
+
+test('verifies a reviewed transitive-only release alongside the current release', () => fixture(({ root, write }) => {
+  addSpecialtyDependency(root, write);
+  assert.equal(verifyPublishedClosure(root), 3);
+}));
+
+test('rejects a reviewed older release under an unapproved consumer', () => fixture(({ root, write }) => {
+  addSpecialtyDependency(root, write, '@happyvertical/smrt-core@0.60.10');
+  assert.throws(() => verifyPublishedClosure(root), /unexpected transitive consumers/u);
+}));
+
+test('rejects a transitive-only release as an app dependency', () => fixture(({ root, write }) => {
+  const older = addSpecialtyDependency(root, write);
+  write('apps/site/package.json', { dependencies: { [older.name]: older.version } });
+  write('apps/site/node_modules/@happyvertical/auth/package.json', older);
+  assert.throws(() => verifyPublishedClosure(root), /direct dependency differs from closure/u);
+}));
+
+test('rejects an alias of a transitive-only release under an unapproved consumer', () => fixture(({ root, write }) => {
+  addSpecialtyDependency(root, write);
+  const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+  write('pnpm-lock.yaml', `${lock}
+  other-consumer@1.0.0:
+    dependencies:
+      auth-alias: '@happyvertical/auth@0.80.6'
+`);
+  assert.throws(() => verifyPublishedClosure(root), /restricted transitive alias/u);
+}));
+
+test('rejects an extra alias beside the real edge under an approved consumer', () => fixture(({ root, write }) => {
+  addSpecialtyDependency(root, write);
+  const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+  write('pnpm-lock.yaml', lock.replace(
+    "      '@happyvertical/auth': 0.80.6",
+    "      '@happyvertical/auth': 0.80.6\n      auth-alias: '@happyvertical/auth@0.80.6'",
+  ));
+  assert.throws(() => verifyPublishedClosure(root), /restricted transitive alias/u);
 }));
