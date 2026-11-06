@@ -17,11 +17,14 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
     url,
     workspaceSubjectFromLocals(locals),
   );
-  return json({
-    ...data,
-    count: data.pagination.totalRecords,
-    data: data.records,
-    items: data.records,
-    pagination: data.pagination,
-  });
+  return json(
+    {
+      ...data,
+      count: data.pagination.totalRecords,
+      data: data.records,
+      items: data.records,
+      pagination: data.pagination,
+    },
+    { headers: { 'Cache-Control': 'private, no-store' } },
+  );
 };

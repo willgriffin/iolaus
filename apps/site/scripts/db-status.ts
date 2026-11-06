@@ -1,4 +1,5 @@
 import { getDatabaseUrl } from '../src/lib/server/db.js';
+import { matchingProjectionSchemaReady } from '../src/lib/server/matching-projection-schema.js';
 import {
   getResumeImportSchemaStatus,
   resumeImportSchemaIsReady,
@@ -40,10 +41,14 @@ const sourceCrawlJobDedupe = await getSourceCrawlJobDedupeStatus(pending.db);
 const sourceProvenance = await getSourceProvenanceSchemaStatus(pending.db);
 const sourceProviders = await getSourceProviderSchemaStatus(pending.db);
 const resumeImportSchema = await getResumeImportSchemaStatus(pending.db);
+const matchingSchemaReady = await matchingProjectionSchemaReady(pending.db);
 
 console.log('Database:', redactDatabaseUrl(getDatabaseUrl()));
 console.log(`SMRT schemas registered: ${pending.schemaCount}`);
 console.log(`Pending schema statements: ${pending.statements.length}`);
+console.log(
+  `Matching projection schema: ${matchingSchemaReady ? 'ready' : 'needs migration'}.`,
+);
 console.log(
   `Resume import ingestion: ${resumeImportSchema.present}/${resumeImportSchema.total} private intake tables present.`,
 );
@@ -101,3 +106,5 @@ if (
 ) {
   process.exitCode = 1;
 }
+
+if (!matchingSchemaReady) process.exitCode = 1;

@@ -18,12 +18,17 @@ import {
 } from '$lib/admin/header-actions';
 import { OPPORTUNITY_LIST_REFRESH_STORAGE_KEY } from '$lib/admin/opportunity-list-refresh';
 import type { AdminListPagination } from '$lib/admin/pagination';
+import type { MatchingDiscoveryProgress } from '$lib/admin/resource-shell';
 import {
   isTriageDeepLink,
   TRIAGE_SORT_URL_PARAM,
   TRIAGE_URL_PARAM,
   triageCloseHref,
 } from '$lib/admin/triage-session';
+import {
+  DISCOVERY_EVIDENCE_GAPS_LABEL,
+  discoveryMatchHighlight,
+} from '$lib/discovery-match';
 import {
   type AssessmentEligibilityBucket,
   assessmentCoverageMessages,
@@ -36,6 +41,7 @@ import {
   countActiveFilters,
   DEFAULT_OPPORTUNITY_FILTERS,
   filterStateFromSearchParams,
+  isOpportunityDiscovery,
   normalizeFilterState,
   getNumber as num,
   type OpportunityFilterOptions,
@@ -56,6 +62,7 @@ import {
 } from '$lib/question-screening-projection';
 import AddUrlIntake from './AddUrlIntake.svelte';
 import { ADMIN_RESOURCE_REFRESH_EVENT } from './admin-resource-hydration';
+import OpportunityEvidenceGaps from './OpportunityEvidenceGaps.svelte';
 import OpportunityTriageModal from './OpportunityTriageModal.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
 import { getCurrentPartialOpportunityAssessmentProjection } from './PartialOpportunityEvidence.svelte';
@@ -70,6 +77,7 @@ type SignalFilterKey =
 
 let {
   records,
+  matchingProgress,
   candidateSkills,
   activeReviewFilter,
   pagination,
@@ -91,6 +99,7 @@ let {
   onRetry,
 } = $props<{
   records: AdminRecord[];
+  matchingProgress?: MatchingDiscoveryProgress;
   candidateSkills: string[];
   activeReviewFilter: string;
   pagination: AdminListPagination;
@@ -644,7 +653,13 @@ function questionScreeningTooltip(record: AdminRecord): string {
   ].join(' ');
 }
 
+const discovery = $derived(isOpportunityDiscovery(activeReviewFilter));
+
 function scoreLabel(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return 'Some requirements need confirmation';
+  if (typeof record.discoveryMatchScore === 'number')
+    return `${record.discoveryMatchScore}/100 match`;
   const questionRank = currentQuestionScreeningRank(record);
   if (questionRank.enabled) {
     const questions = getCurrentQuestionScreeningProjection(
@@ -677,7 +692,43 @@ function scoreLabel(record: AdminRecord): string {
       : assessmentMatchReadinessLabel(assessment);
 }
 
+function scoreExplanation(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return 'Role and work location match. Review the requirements that still need confirmation.';
+  if (typeof record.discoveryMatchScore === 'number') {
+    const reasons = record.discoveryMatchReasons;
+    return Array.isArray(reasons) && reasons.length
+      ? reasons.slice(0, 4).join(' ')
+      : 'Matches your preferences and the posting’s requirements.';
+  }
+  if (currentQuestionScreeningRank(record).enabled)
+    return questionScreeningTooltip(record);
+  if (hasUnavailableCompleteOpportunityReview(record))
+    return 'Saved complete review could not be validated for current material.';
+  if (
+    getCurrentCompleteOpportunityReview(
+      record.resumeFitReviewProjection,
+      record.completeReviewStatus,
+    )?.evidenceFit
+  )
+    return 'Current complete material review. Candidate support and source uncertainty are shown separately.';
+  const assessment = getOpportunityAssessmentProjection(
+    record.assessmentProjection,
+  );
+  if (
+    assessment.sourceStatus !== 'current' &&
+    getCurrentPartialOpportunityAssessmentProjection(
+      record.partialAssessmentProjection,
+    )
+  )
+    return 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.';
+  return assessmentCoverageMessages(assessment).join(' ');
+}
+
 function eligibilityLabel(record: AdminRecord): string {
+  if (record.discoveryMatchStatus === 'screened-with-gaps')
+    return DISCOVERY_EVIDENCE_GAPS_LABEL;
+  if (typeof record.discoveryMatchScore === 'number') return 'Qualified';
   const bucket = getOpportunityEligibilityProjection(
     record.sourceEligibilityProjection,
     record.assessmentProjection,
@@ -864,6 +915,44 @@ function clearBulkSelection(): void {
         Select this page
       </label>
       {#if visibleRecords.length > 0 || !error}
+        {#if matchingProgress?.status === 'pending'}
+          <p role="status">Checking postings against your profile. Matches will appear as they’re ready.</p>
+        {:else if matchingProgress?.status === 'missing-preferences'}
+          <p role="status">Add the roles and locations you’re looking for in <a href="/admin/preferences/matching">Matching preferences</a> to see matches.</p>
+        {:else if matchingProgress?.status === 'unsupported-target-roles'}
+          <p role="status">We couldn’t recognize your target roles. In <a href="/admin/preferences/matching">Matching preferences</a>, enter each role or discipline on its own line, such as Software Engineer or Software engineering.</p>
+        {:else if matchingProgress?.status === 'needs-evidence'}
+          <p role="status">Add or update your résumé evidence and check your <a href="/admin/preferences/screening-questions">required screening questions</a> so we can confirm more matches.</p>
+        {:else if matchingProgress?.status === 'failed'}
+          <p role="status">Some postings could not be checked. Matching will retry in the background.
+            {#if onRetry}<button type="button" onclick={onRetry}>Refresh matches</button>{/if}
+          </p>
+        {:else if matchingProgress?.status === 'ready' && !visibleRecords.length}
+          <p role="status">No confirmed matches with these filters. You can change your <a href="/admin/preferences/matching">matching preferences</a>.</p>
+        {/if}
+        {#if matchingProgress?.coverage && !visibleRecords.length}
+          {@const { coverage } = matchingProgress}
+          {#if Object.values(coverage).some(Boolean)}
+            <details>
+              <summary>Why some postings don’t appear</summary>
+              <p>Across available postings, before applying the list filters:</p>
+              <ul>
+                {#if coverage.missingSource}<li>{coverage.missingSource.toLocaleString()} still need a source interpretation.</li>{/if}
+                {#if coverage.unsupported}<li>{coverage.unsupported.toLocaleString()} use requirements matching can’t interpret or recognize.</li>{/if}
+                {#if coverage.unresolvedSource}<li>{coverage.unresolvedSource.toLocaleString()} have unresolved role, location, or requirement details in the posting.</li>{/if}
+                {#if coverage.pendingInterpretation}<li>{coverage.pendingInterpretation.toLocaleString()} are waiting for candidate evidence interpretation.</li>{/if}
+                {#if coverage.failedInterpretation}<li>{coverage.failedInterpretation.toLocaleString()} could not be fully checked because candidate evidence interpretation failed.</li>{/if}
+                {#if coverage.partialInterpretation}<li>{coverage.partialInterpretation.toLocaleString()} could only be checked against part of your evidence.</li>{/if}
+                {#if coverage.unresolvedEvidence}<li>{coverage.unresolvedEvidence.toLocaleString()} have a known requirement or screening question that still needs confirmation.</li>{/if}
+                {#if coverage.conflicts}<li>{coverage.conflicts.toLocaleString()} conflict with a target or a verified requirement.</li>{/if}
+              </ul>
+              <p>A posting can have more than one unresolved detail.</p>
+            </details>
+          {/if}
+        {/if}
+        {#if matchingProgress?.hasUnsupportedRoleChoices}
+          <p>Some target roles couldn’t be recognized. Edit those choices in <a href="/admin/preferences/matching">Matching preferences</a>. Matches for recognized roles still appear.</p>
+        {/if}
         <CollectionList
           items={visibleRecords} itemKey="id" title="title"
           layout="list"
@@ -876,6 +965,7 @@ function clearBulkSelection(): void {
   </section>
 
   {#snippet collectionOpportunity({ item: record }: { item: AdminRecord; index: number; selected: boolean })}
+    {@const highlight = discoveryMatchHighlight(record.discoveryMatchEvidence)}
     <article class="collection-opportunity" class:dock-selected={record.id === dockSelectedId} class:dock-selected--muted={record.id === dockSelectedId && bulkSelectionCount > 0}>
       <button type="button" class="collection-review" onclick={() => handleRowClick(record)}
         aria-label={`Review ${str(record, 'title') || 'Untitled opportunity'}`}>
@@ -883,10 +973,14 @@ function clearBulkSelection(): void {
         <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
         <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
         <span class="eligibility-label">{eligibilityLabel(record)}</span>
-        <span title={currentQuestionScreeningRank(record).enabled ? questionScreeningTooltip(record) : hasUnavailableCompleteOpportunityReview(record) ? 'Saved complete review could not be validated for current material.' : getCurrentCompleteOpportunityReview(record.resumeFitReviewProjection, record.completeReviewStatus)?.evidenceFit ? 'Current complete material review. Candidate support and source uncertainty are shown separately.' : getOpportunityAssessmentProjection(record.assessmentProjection).sourceStatus !== 'current' && getCurrentPartialOpportunityAssessmentProjection(record.partialAssessmentProjection) ? 'Overall fit not yet established. Review the evidenced criteria and unresolved source clauses.' : assessmentCoverageMessages(getOpportunityAssessmentProjection(record.assessmentProjection)).join(' ')}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        {#if highlight}<span class="match-highlight">{highlight}</span>{/if}
+        <span title={scoreExplanation(record)}>{#if !highlight || record.discoveryMatchStatus !== 'screened-with-gaps'}{scoreLabel(record)} · {/if}{humanize(str(record, 'status'), 'unknown')}</span>
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
+      {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+        <OpportunityEvidenceGaps compact reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} />
+      {/if}
       {#if postingUrlFor(record)}
         <a href={postingUrlFor(record)} target="_blank" rel="noreferrer" aria-label="View posting">View posting</a>
       {/if}
@@ -934,11 +1028,13 @@ function clearBulkSelection(): void {
             <span>Sort</span>
             <select value={filters.sort} aria-label="Sort opportunities" onchange={setSort}>
               <option value="best">Best fit</option>
-              <option value="eligibility">Eligibility for your work location</option>
-              <option value="cited_support">Cited support</option>
-              <option value="recommendation">Recommendation</option>
+              {#if !discovery}
+                <option value="eligibility">Eligibility for your work location</option>
+                <option value="cited_support">Cited support</option>
+                <option value="recommendation">Recommendation</option>
+              {/if}
               <option value="newest">Newest</option>
-              <option value="score">AI score</option>
+              <option value="score">{discovery ? 'Match score' : 'AI score'}</option>
               <option value="salary">Salary</option>
               <option value="rating">My rating</option>
             </select>
@@ -1061,6 +1157,7 @@ function clearBulkSelection(): void {
             </button>
           </div>
 
+          {#if !discovery}
           <span class="field-label">Eligibility for your work location</span>
           <div class="toggle-row" role="group" aria-label="Eligibility for your work location">
             <button type="button" class="filter-pill" class:active={filters.eligibilityBuckets.includes('eligible')} onclick={() => toggleEligibilityBucket('eligible')}>Eligible for your work location</button>
@@ -1076,6 +1173,7 @@ function clearBulkSelection(): void {
             <button type="button" class:active={filters.fit === 'have'} onclick={() => setFilters({ ...filters, fit: 'have' })}>Reviewed criteria supported</button>
             <button type="button" class:active={filters.fit === 'gaps'} onclick={() => setFilters({ ...filters, fit: 'gaps' })}>Needs evidence</button>
           </div>
+          {/if}
           {#if filterOptions.skills.length}
             <div
               class="skill-search"
@@ -1208,7 +1306,9 @@ function clearBulkSelection(): void {
   .page-selection { display: flex; align-items: center; gap: var(--smrt-spacing-2); min-height: 44px; }
   .page-selection input { width: 1.125rem; height: 1.125rem; }
   .collection-opportunity { display: grid; gap: var(--smrt-spacing-2); min-width: 0; }
-  .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--text-body); line-height: 1.5; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .match-highlight { font-weight: 600; }
+  .collection-review :global(strong) { font-size: var(--text-title); line-height: 1.35; }
   .collection-review:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
 
   .card-list-wrap {
@@ -1271,7 +1371,7 @@ function clearBulkSelection(): void {
     padding: 4px 10px;
     background: var(--smrt-color-surface);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-primary);
     cursor: pointer;
@@ -1312,14 +1412,16 @@ function clearBulkSelection(): void {
     display: grid;
     gap: 4px;
     color: var(--smrt-color-on-surface);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
   .drawer-group label > span,
   .field-label {
     color: var(--smrt-color-on-surface-variant);
-    font: 800 11px/1.2 var(--smrt-font-family-mono, monospace);
+    font-size: var(--text-secondary);
+    font-weight: 700;
+    line-height: 1.35;
     text-transform: uppercase;
   }
 
@@ -1329,13 +1431,19 @@ function clearBulkSelection(): void {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
-    min-height: 34px;
-    padding: 0 10px;
+    min-height: 40px;
+    padding: 4px 10px;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 6px;
     background: var(--smrt-color-surface);
     font: inherit;
+    font-size: var(--text-body);
     color: var(--smrt-color-on-surface);
+  }
+
+  .drawer :is(button, input, select):focus-visible {
+    outline: 2px solid var(--smrt-color-on-surface);
+    outline-offset: -2px;
   }
 
   .field-row {
@@ -1354,7 +1462,6 @@ function clearBulkSelection(): void {
 
   .check span {
     font: inherit !important;
-    font-size: 13px !important;
     text-transform: none !important;
     color: var(--smrt-color-on-surface) !important;
   }
@@ -1377,12 +1484,12 @@ function clearBulkSelection(): void {
     overflow-wrap: anywhere;
     flex: 1;
     min-height: 32px;
-    padding: 0 10px;
+    padding: 4px 8px;
     border: 0;
     border-right: 1px solid var(--smrt-color-outline-variant);
     background: var(--smrt-color-surface);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-on-surface-variant);
     cursor: pointer;
@@ -1410,12 +1517,14 @@ function clearBulkSelection(): void {
     justify-content: center;
     gap: 5px;
     min-height: 30px;
-    padding: 0 12px;
+    max-width: 100%;
+    padding: 4px 12px;
+    overflow-wrap: anywhere;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 6px;
     background: inherit;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     color: var(--smrt-color-on-surface);
     cursor: pointer;
@@ -1458,7 +1567,7 @@ function clearBulkSelection(): void {
 
   .hint {
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-style: italic;
   }
 
@@ -1470,7 +1579,7 @@ function clearBulkSelection(): void {
     padding: 12px 16px;
     border-top: 1px solid var(--smrt-color-outline-variant);
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
@@ -1489,17 +1598,20 @@ function clearBulkSelection(): void {
   .eligibility-label {
     flex: 0 1 auto;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 12px;
+    font-size: var(--text-secondary);
     overflow-wrap: anywhere;
   }
 
   .table-meta {
+    min-width: 0;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
+
+  .table-meta :global(svg) { flex-shrink: 0; }
 
   .collection-opportunity.dock-selected {
     background: var(--smrt-color-warning-container);
@@ -1530,7 +1642,7 @@ function clearBulkSelection(): void {
     border-radius: 6px;
     background: var(--smrt-color-primary-container);
     color: var(--smrt-color-on-primary-container);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   .selection-summary strong {

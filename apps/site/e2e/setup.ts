@@ -264,16 +264,12 @@ export default async function setup() {
     process.env.IOLAUS_E2E_FOREIGN_AUTH = environment.IOLAUS_E2E_FOREIGN_AUTH;
     process.env.IOLAUS_E2E_AUTH = join(root, 'auth.json');
     process.env.IOLAUS_E2E_FIXTURE = environment.IOLAUS_E2E_FIXTURE;
+    const environmentPath = join(root, 'isolated-runtime-environment.json');
+    writeFileSync(environmentPath, JSON.stringify(environment), {
+      mode: 0o600,
+    });
+    process.env.IOLAUS_E2E_RUNTIME_ENVIRONMENT = environmentPath;
     if (coverageProvider) {
-      const environmentPath = join(
-        root,
-        'source-coverage-runtime-environment.json',
-      );
-      writeFileSync(environmentPath, JSON.stringify(environment), {
-        mode: 0o600,
-      });
-      chmodSync(environmentPath, 0o600);
-      process.env.IOLAUS_E2E_RUNTIME_ENVIRONMENT = environmentPath;
       process.env.IOLAUS_E2E_PROVIDER_EVENTS = coverageProvider.eventsPath;
     }
     return () => cleanup(true);

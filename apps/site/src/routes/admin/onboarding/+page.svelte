@@ -9,6 +9,7 @@ import {
 } from '$lib/admin/header-actions';
 import { adminBackLink } from '$lib/admin/navigation';
 import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
+import { MATCHING_ROLE_SUGGESTIONS } from '$lib/matching-role-suggestions';
 
 let { data, form } = $props();
 const backLink = adminBackLink('Overview', '/admin');
@@ -91,20 +92,10 @@ let selectedRoles = $state(
 );
 let roleDraft = $state('');
 
-const roleSuggestions = [
-  'Software Engineer',
-  'Senior Software Engineer',
-  'Staff Software Engineer',
-  'Principal Software Engineer',
-  'Engineering Manager',
-  'Technical Lead',
-  'AI Engineer',
-  'Machine Learning Engineer',
-  'Data Engineer',
-  'Solutions Architect',
-  'Software Architect',
-  'Platform Engineer',
-].map((label) => ({ value: label, label }));
+const roleSuggestions = MATCHING_ROLE_SUGGESTIONS.map((label) => ({
+  value: label,
+  label,
+}));
 
 const countryOptions = $derived(data.countryOptions ?? []);
 const citizenshipOptions = $derived(

@@ -16,6 +16,7 @@ import {
   processRecommendationTaskAction,
   reviewOpportunityAction,
   syncRecommendationTasksAction,
+  triageOpportunityAction,
   triageQueueAction,
   updateAdminResourceAction,
   verifyOpportunityPostingAction,
@@ -70,6 +71,12 @@ export const actions: Actions = {
   },
   applyInactiveOpportunitySweep: async ({ locals, request }) => {
     return await applyInactiveOpportunitySweepAction(request, locals);
+  },
+  triageOpportunity: async ({ locals, request }) => {
+    return await triageOpportunityAction(
+      request,
+      workspaceSubjectFromLocals(locals),
+    );
   },
   loadOpportunityDetails: async ({ request }) => {
     return await loadOpportunityDetailsAction(request);

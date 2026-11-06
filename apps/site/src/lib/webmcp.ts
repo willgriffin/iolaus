@@ -140,7 +140,7 @@ export const jobSearchWebMcpToolDefinitions = [
     action: 'next-triage-candidate',
     name: 'job_search_next_triage_candidate',
     description:
-      'Return the next undecided local opportunity for one-at-a-time triage, prioritizing non-rejected recommendations before explicit machine rejects and then score. Includes its queue position and how many remain. Archived, expired, and no-longer-seen postings are excluded. Read-only: record the verdict with job_search_record_decision, or raise offset to pass on a candidate.',
+      'Return the next undecided current match for the selected candidate profile, ordered by the requested sort. Includes its queue position and how many remain. Unresolved, conflicting, stale, and closed postings are excluded. Read-only: record the verdict with job_search_record_decision, or raise offset to pass on a candidate.',
     effect: 'read',
     idempotent: true,
     openWorld: false,

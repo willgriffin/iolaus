@@ -94,6 +94,13 @@ function resourceItem(
       ? {
           children: [
             {
+              href: '/admin/preferences/matching',
+              icon: 'sliders',
+              label: 'Matching Preferences',
+              description:
+                'Choose target roles, locations, and work arrangements.',
+            },
+            {
               href: '/admin/preferences/screening-questions',
               icon: 'sliders',
               label: 'Screening Questions',

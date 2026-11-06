@@ -156,6 +156,19 @@ vi.mock('./smrt.js', () => ({
 }));
 
 vi.mock('./admin-opportunity-query.js', () => ({
+  discoveryMatchForRecord: (
+    matches: Map<string, unknown>,
+    record: { id: string },
+  ) => matches.get(record.id),
+  listCurrentDiscoveryMatches: vi.fn(
+    async (ids: readonly string[]) =>
+      new Map(
+        ids.map((id) => [
+          id,
+          { score: 88, reasons: ['Supported requirements'] },
+        ]),
+      ),
+  ),
   countOpportunityRecords: mocks.count,
   listLatestOpportunityRelatedContext: mocks.relatedContext,
   listOpportunityPageIds: mocks.ids,
@@ -514,6 +527,7 @@ describe('job-search WebMCP service', () => {
       expect.objectContaining({
         limit: 5,
         reviewFilter: 'unsorted',
+        currentQualified: true,
         search: 'platform',
       }),
     );
@@ -537,96 +551,42 @@ describe('job-search WebMCP service', () => {
       subject,
       expect.objectContaining({ where: { 'opportunityId in': ['opp-1'] } }),
     );
-    expect(mocks.privateRecords).toHaveBeenCalledWith(
+    expect(mocks.privateRecords).not.toHaveBeenCalledWith(
       'EvaluationScore',
       subject,
       expect.objectContaining({ where: { 'opportunityId in': ['opp-1'] } }),
     );
   });
 
-  it('browses a bounded local SQLite data set without PostgreSQL query helpers', async () => {
+  it('uses the same bounded query in SQLite and omits an unqualified catalog record', async () => {
     mocks.dbType = 'sqlite';
     mocks.collections.set(
       'Opportunity',
       collection([
         record({
-          companyId: 'company-1',
-          descriptionSummary: 'Build a fictional developer platform.',
-          humanReviewStatus: '',
-          id: 'opp-1',
-          scoringMaterialFingerprint: 'material-opp-1',
-          sourceContentFingerprint: 'fixture-v1',
+          id: 'qualified',
+          title: 'Fictional Engineer',
           status: 'found',
+        }),
+        record({
+          id: 'catalog-only',
           title: 'Fictional Principal Engineer',
-        }),
-        record({
-          id: 'opp-archived',
-          status: 'archived',
-          title: 'Archived Principal Engineer',
+          status: 'found',
         }),
       ]),
     );
-    mocks.collections.set(
-      'Application',
-      collection([
-        record({
-          id: 'app-1',
-          opportunityId: 'opp-1',
-          status: 'awaiting_user',
-        }),
-      ]),
-    );
-    mocks.collections.set(
-      'EvaluationScore',
-      collection([
-        record({
-          id: 'score-1',
-          opportunityId: 'opp-1',
-          score: 91,
-          scoringMaterialFingerprint: 'material-opp-1',
-          sourceContentFingerprint: 'fixture-v1',
-        }),
-        record({
-          createdByProfileId: 'profile-human',
-          id: 'score-human',
-          opportunityId: 'opp-1',
-          score: 91,
-          sourceContentFingerprint: 'fixture-v1',
-        }),
-        record({
-          createdByProfileId: 'profile-human',
-          id: 'score-human-older',
-          opportunityId: 'opp-1',
-          score: 10,
-          sourceContentFingerprint: 'fixture-v1',
-        }),
-      ]),
-    );
-    mocks.collections.set(
-      'Company',
-      collection([record({ id: 'company-1', name: 'Fictional Systems' })]),
-    );
+    mocks.count.mockResolvedValue(1);
+    mocks.ids.mockResolvedValue(['qualified']);
     const { browseJobOpportunities } = await import('./job-search-webmcp');
-
-    const result = await browseJobOpportunities(
-      { limit: 5, query: 'fictional principal' },
-      subject,
+    const result = await browseJobOpportunities({ limit: 5 }, subject);
+    expect(result.items.map((item) => item.id)).toEqual(['qualified']);
+    expect(mocks.ids).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentQualified: true,
+        limit: 5,
+        workspaceSubject: subject,
+      }),
     );
-
-    expect(result).toMatchObject({
-      items: [
-        {
-          application: { id: 'app-1', status: 'awaiting_user' },
-          company: 'Fictional Systems',
-          id: 'opp-1',
-          score: 91,
-        },
-      ],
-      total: 1,
-    });
-    expect(mocks.count).not.toHaveBeenCalled();
-    expect(mocks.ids).not.toHaveBeenCalled();
-    expect(mocks.relatedContext).not.toHaveBeenCalled();
   });
 
   it('returns only the verified workspace application and current score', async () => {
@@ -716,8 +676,8 @@ describe('job-search WebMCP service', () => {
 
     expect(browsed.items[0]).toMatchObject({
       application: { id: 'app-owned', status: 'draft' },
-      assessment: { personalEligibility: 'eligible_without_sponsorship' },
-      score: 87,
+      assessment: null,
+      score: 88,
     });
     expect(inspected.evaluation).toEqual({
       id: 'score-owned',

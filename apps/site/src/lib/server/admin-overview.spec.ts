@@ -6,9 +6,7 @@ const mocks = vi.hoisted(() => ({
   applicationList: vi.fn(),
   listAdminRecords: vi.fn(),
   listOpportunityPageIds: vi.fn(),
-  loadCurrentSourceOpportunityEligibility: vi.fn(),
-  loadOpportunityAssessmentReader: vi.fn(),
-  project: vi.fn(),
+  listCurrentDiscoveryMatches: vi.fn(),
 }));
 vi.mock('./smrt', () => ({ getCollection: mocks.getCollection }));
 vi.mock('./admin-data', () => ({
@@ -26,11 +24,11 @@ vi.mock('./admin-data', () => ({
 }));
 vi.mock('./admin-opportunity-query', () => ({
   listOpportunityPageIds: mocks.listOpportunityPageIds,
-  loadCurrentSourceOpportunityEligibility:
-    mocks.loadCurrentSourceOpportunityEligibility,
-}));
-vi.mock('./opportunity-assessment-store', () => ({
-  loadOpportunityAssessmentReader: mocks.loadOpportunityAssessmentReader,
+  listCurrentDiscoveryMatches: mocks.listCurrentDiscoveryMatches,
+  discoveryMatchForRecord: (
+    matches: Map<string, unknown>,
+    record: { id: string },
+  ) => matches.get(record.id),
 }));
 vi.mock('./workspace-subject', () => ({
   requireCandidateWorkspaceSubject: (subject: Record<string, string>) => {
@@ -62,19 +60,6 @@ const postings = [
   { id: 'draft', status: 'needs_input', title: 'Active draft' },
   { id: 'pending', status: 'found', title: 'Unassessed' },
 ];
-const assessment = {
-  sourceStatus: 'current',
-  eligibilityBucket: 'eligible',
-  matchReadiness: 'assessable',
-  coverage: {
-    candidateTruncated: false,
-    postingTruncated: false,
-    requirementsTruncated: false,
-    requirementCount: 4,
-  },
-  ranking: { eligibilityPriority: 0, fitScore: 82, excluded: false },
-};
-
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.getCollection.mockImplementation(async (className) => ({
@@ -95,24 +80,15 @@ beforeEach(() => {
       candidateProfileId: subject.profileId,
     })),
   );
-  mocks.loadCurrentSourceOpportunityEligibility.mockResolvedValue(new Map());
-  mocks.loadOpportunityAssessmentReader.mockResolvedValue({
-    query: {
-      assessmentCandidateMaterialFingerprint: 'evidence',
-      assessmentPreferencesFingerprint: 'preferences',
-    },
-    project: mocks.project,
-  });
-  mocks.project.mockImplementation(
-    async (records: Array<{ id: string }>) =>
-      new Map(
-        records.flatMap(({ id }) =>
-          id === 'pending' ? [] : [[id, assessment]],
-        ),
-      ),
+  mocks.listOpportunityPageIds.mockImplementation(
+    async ({ workspaceSubject }) =>
+      workspaceSubject.userId === subjectA.userId ? ['new'] : ['new', 'draft'],
   );
-  mocks.listOpportunityPageIds.mockResolvedValue(
-    postings.map((posting) => posting.id),
+  mocks.listCurrentDiscoveryMatches.mockImplementation(
+    async (ids: string[]) =>
+      new Map(
+        ids.map((id) => [id, { status: 'qualified', score: 82, reasons: [] }]),
+      ),
   );
   mocks.listAdminRecords.mockImplementation(async (resource, options) => {
     if (resource.slug !== 'opportunities') return [];
@@ -124,6 +100,30 @@ beforeEach(() => {
 });
 
 describe('subject-scoped admin overview', () => {
+  it('labels screened discovery results and omits the qualified score on Home', async () => {
+    mocks.listCurrentDiscoveryMatches.mockResolvedValue(
+      new Map([
+        [
+          'new',
+          {
+            status: 'screened-with-gaps',
+            score: 42,
+            reasons: ['Evidence still needed'],
+            evidence: { highlight: 'Partial support for REST API design.' },
+          },
+        ],
+      ]),
+    );
+    const overview = await loadAdminOverview(subjectA);
+    expect(overview.opportunities[0]).toMatchObject({
+      id: 'new',
+      discoveryStatus: 'screened-with-gaps',
+      eligibility: 'Screened · evidence gaps',
+      fitScore: null,
+      matchHighlight: 'Partial support for REST API design.',
+    });
+  });
+
   it('labels an application packet task with its owned opportunity without modifying stored task text', async () => {
     const task = {
       id: 'packet-task',
@@ -284,102 +284,36 @@ describe('subject-scoped admin overview', () => {
     );
   });
 
-  it('reads the current assessment score and private projections for the verified workspace', async () => {
-    await loadAdminOverview(subjectA);
-    expect(mocks.loadOpportunityAssessmentReader).toHaveBeenCalledWith(
-      subjectA,
-    );
-    expect(mocks.listOpportunityPageIds).toHaveBeenCalledWith(
+  it('reads one bounded ranked window for the verified workspace, excluding application rows', async () => {
+    const overview = await loadAdminOverview(subjectA);
+    expect(mocks.listOpportunityPageIds).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         workspaceSubject: subjectA,
-        assessmentCandidateMaterialFingerprint: 'evidence',
-        assessmentPreferencesFingerprint: 'preferences',
+        currentQualified: true,
+        excludeApplications: true,
         reviewFilter: 'unsorted',
-        scoreSource: 'assessment',
+        limit: 6,
+        offset: 0,
         filters: expect.objectContaining({
+          sort: 'best',
           excludeExpired: true,
           excludeStale: true,
-          sort: 'score',
-          eligibilityBuckets: ['eligible', 'sponsorship_possible'],
         }),
       }),
     );
+    expect(mocks.listCurrentDiscoveryMatches).toHaveBeenCalledExactlyOnceWith(
+      ['new'],
+      subjectA,
+    );
     expect(
-      mocks.loadCurrentSourceOpportunityEligibility,
-    ).toHaveBeenCalledExactlyOnceWith(subjectA);
-    expect(mocks.listOpportunityPageIds).toHaveBeenCalledTimes(2);
-    expect(
-      mocks.listOpportunityPageIds.mock.calls.map(([query]) => [
-        query.limit,
-        query.offset,
-      ]),
-    ).toEqual([
-      [90, 0],
-      [90, 0],
-    ]);
-    expect(mocks.project).toHaveBeenCalledExactlyOnceWith([
-      expect.objectContaining({ id: 'new' }),
-      expect.objectContaining({ id: 'pending' }),
-    ]);
+      overview.opportunities.map((card) => [card.id, card.fitScore]),
+    ).toEqual([['new', 82]]);
+    expect(overview.pendingOpportunities).toEqual([]);
   });
 
-  it('excludes this user draft even with needs_input review and separates unknown scores', async () => {
-    const a = await loadAdminOverview(subjectA);
-    const b = await loadAdminOverview(subjectB);
-    expect(a.opportunities.map((opportunity) => opportunity.id)).toEqual([
-      'new',
-    ]);
-    expect(a.pendingOpportunities.map((opportunity) => opportunity.id)).toEqual(
-      ['pending'],
-    );
-    expect(a.pendingOpportunities[0].fitScore).toBeNull();
-    expect(b.opportunities.map((opportunity) => opportunity.id)).toEqual([
-      'new',
-      'draft',
-    ]);
-  });
-
-  it('keeps both bucket orders while hydrating the shared candidate window once', async () => {
-    const scored = Array.from({ length: 8 }, (_, index) => `scored-${index}`);
-    const pending = Array.from({ length: 4 }, (_, index) => `pending-${index}`);
-    mocks.listOpportunityPageIds.mockImplementation(async ({ filters }) =>
-      filters.sort === 'score'
-        ? ['missing', ...scored]
-        : [scored[0], ...pending],
-    );
-    mocks.listAdminRecords.mockImplementation(async (resource, options) =>
-      resource.slug === 'companies'
-        ? [{ id: 'company', name: 'Synthetic Company' }]
-        : [...scored, ...pending].reverse().map((id) => ({
-            id,
-            title: id,
-            status: 'found',
-            companyId: 'company',
-            ...(options.select.includes('locations')
-              ? { locations: 'Remote' }
-              : {}),
-          })),
-    );
-    mocks.project.mockResolvedValue(
-      new Map(scored.map((id) => [id, assessment])),
-    );
-
-    const result = await loadAdminOverview(subjectA);
-    expect(result.opportunities.map((card) => card.id)).toEqual(
-      scored.slice(0, 6),
-    );
-    expect(result.pendingOpportunities.map((card) => card.id)).toEqual(
-      pending.slice(0, 3),
-    );
-    expect(result.opportunities[0].company).toBe('Synthetic Company');
-    expect(result.opportunities[0].location).toBe('Remote');
-    expect(mocks.project).toHaveBeenCalledOnce();
-    expect(mocks.project.mock.calls[0][0]).toHaveLength(12);
-    expect(
-      mocks.listAdminRecords.mock.calls.filter(
-        ([resource]) => resource.slug === 'opportunities',
-      ),
-    ).toHaveLength(1);
+  it('drops a selected row which becomes stale during hydration', async () => {
+    mocks.listCurrentDiscoveryMatches.mockResolvedValue(new Map());
+    expect((await loadAdminOverview(subjectA)).opportunities).toEqual([]);
   });
 
   it('rejects missing selected profile before storage reads', async () => {
@@ -398,6 +332,6 @@ describe('subject-scoped admin overview', () => {
       opportunities: [],
       pendingOpportunities: [],
     });
-    expect(mocks.project).not.toHaveBeenCalled();
+    expect(mocks.listCurrentDiscoveryMatches).not.toHaveBeenCalled();
   });
 });

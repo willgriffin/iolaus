@@ -679,6 +679,14 @@ export async function persistCandidateOnboarding(
     title: stringValue(input.title),
     workAuthorization: stringValue(input.workAuthorization),
   };
+  let remoteCountries: unknown;
+  try {
+    remoteCountries = JSON.parse(
+      String(profile?.preferencesJson ?? '{}'),
+    )?.remoteCountries;
+  } catch {
+    /* Malformed legacy preferences remain unresolved. */
+  }
 
   if (basic) {
     profileValues.authorizedWorkCountriesJson =
@@ -713,6 +721,12 @@ export async function persistCandidateOnboarding(
         ? stringValue(input.workAuthorization)
         : (basic.workAuthorization ?? String(profile?.workAuthorization ?? ''));
   }
+  // Remote work countries are edited on the matching preferences page.
+  const onboardingPreferences = JSON.parse(profileValues.preferencesJson);
+  delete onboardingPreferences.remoteCountries;
+  if (remoteCountries !== undefined)
+    onboardingPreferences.remoteCountries = remoteCountries;
+  profileValues.preferencesJson = JSON.stringify(onboardingPreferences);
   if (!collections.claimResumeAsset) {
     await validateResumeAssetSelection({
       assetId: selectedResumeAssetId,

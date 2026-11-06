@@ -18,6 +18,7 @@ import {
   repairExistingCandidateAnswerNaturalKeyIndex,
 } from '../src/lib/server/candidate-answer-schema.js';
 import { ensureNativeAuthUniqueIndexes } from '../src/lib/server/auth-unique-indexes.js';
+import { ensureMatchingProjectionSchema } from '../src/lib/server/matching-projection-schema.js';
 import { ensureOpportunityAnalysisSchema } from '../src/lib/server/opportunity-analysis-schema.js';
 import { ensureOpportunityAnalysisMaintenanceSchema } from '../src/lib/server/opportunity-analysis-maintenance.js';
 import { ensurePublicSearchSchema } from '../src/lib/server/public-search/schema.js';
@@ -77,6 +78,7 @@ export async function prepareReleaseSchema(
     ensureCandidateAnswerNaturalKeyIndex,
     ensureNativeAuthUniqueIndexes,
     ensureOpportunityAnalysisSchema,
+    ensureMatchingProjectionSchema,
     ensureOpportunityAnalysisMaintenanceSchema,
     (db: DatabaseInterface) => ensurePublicSearchSchema(db, 'postgres'),
     ensureOpportunityListQueryIndexes,

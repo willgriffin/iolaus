@@ -26,9 +26,12 @@ function recordHref(resource: string, id: string): string {
   return `/admin/${resource}/${encodeURIComponent(id)}`;
 }
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, setHeaders }) => {
+  const opportunityDetail = params.resource === 'opportunities';
+  if (opportunityDetail) setHeaders({ 'cache-control': 'private, no-store' });
   return await loadAdminRecordPageData(params.resource, params.id, {
-    includeOpportunityRelations: params.resource === 'opportunities',
+    includeOpportunityRelations: opportunityDetail,
+    includePrivateMatchingEvidence: opportunityDetail,
     workspaceSubject: workspaceSubjectFromLocals(locals),
   });
 };

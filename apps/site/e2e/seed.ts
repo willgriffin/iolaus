@@ -31,6 +31,7 @@ import {
   withSyntheticDemoOwnerContext,
 } from '../src/lib/server/synthetic-demo-fixture.js';
 import { resolveWorkspaceSubjectForProfile } from '../src/lib/server/workspace-subject.js';
+import { refreshMatchingFixture } from './matching-runtime.js';
 
 assertSyntheticDemoFixtureEnabled();
 if (process.env.IOLAUS_E2E_SOURCE_COVERAGE === '1') {
@@ -60,6 +61,11 @@ await withSyntheticDemoOwnerContext(async (identity) => {
       name: 'Jordan Example',
       email: 'jordan.example@demo.invalid',
       title: 'Fictional Staff Software Engineer',
+      preferences: {
+        targetRoles: ['Backend Engineer'],
+        locations: ['Canada'],
+        workModes: ['remote'],
+      },
       summary: 'Fictional browser test candidate. Never submit externally.',
     },
     identity,
@@ -91,6 +97,24 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     status: 'published',
   });
   await publishedFixture.save();
+  const rawMatchingPosting = (
+    description: string,
+    locationNotes = 'Remote (Canada)',
+  ) => {
+    const capture = {
+      title: 'Backend Engineer',
+      descriptionRaw: `${description}\n\nRequired skills: TypeScript`,
+      workMode: 'remote',
+      locationNotes,
+    };
+    return {
+      descriptionRaw: capture.descriptionRaw,
+      locationNotes,
+      sourceContentJson: JSON.stringify(capture),
+      sourceContentFingerprint: fingerprintOpportunitySourceContent(capture),
+      sourceContentVersion: 1,
+    };
+  };
   const applyingOpportunities: Record<string, string> = {};
   const sourceCoverageOpportunities: Record<
     string,
@@ -111,17 +135,13 @@ await withSyntheticDemoOwnerContext(async (identity) => {
       applyMethod: 'other',
       companyId: '',
       currency: 'CAD',
-      descriptionRaw,
+      ...rawMatchingPosting(descriptionRaw),
       descriptionSummary:
         'Fictional application preparation for accessible TypeScript software.',
       requiredSkills: 'TypeScript\nAccessible interfaces',
       salaryMin: 155000,
       salaryMax: 175000,
-      sourceContentJson: JSON.stringify({ descriptionRaw }),
-      sourceContentFingerprint: fingerprintOpportunitySourceContent({
-        descriptionRaw,
-      }),
-      sourceContentVersion: 1,
+      sourceId: fixture.sourceId,
       status: 'found',
       title: `Applying readiness ${project} fictional engineer`,
       workMode: 'remote',
@@ -196,23 +216,39 @@ await withSyntheticDemoOwnerContext(async (identity) => {
   const sources = await getCollection('Source');
   // Long, synthetic descriptions exercise the triage body's real touch scrolling.
   const opportunities = await getCollection('Opportunity');
+  const resumeSkills = await privateCollection('ResumeSkill');
+  await (
+    await resumeSkills.create({
+      skillId: 'fictional-typescript',
+      label: 'TypeScript',
+    })
+  ).save();
   const applications = await privateCollection('Application');
   for (const id of [
     fixture.triageOpportunityId,
     fixture.triageFollowupOpportunityId,
   ]) {
     const opportunity = (await opportunities.get(id)) as unknown as {
-      descriptionRaw: string;
       save: () => Promise<unknown>;
     } | null;
     if (!opportunity) throw new Error('Synthetic triage fixture is missing.');
-    opportunity.descriptionRaw = Array.from(
+    const description = Array.from(
       { length: 24 },
       (_, index) =>
-        `Fictional responsibility ${index + 1}: Build accessible software and dependable integrations. This synthetic posting is for mobile layout testing only; no employer or external action exists.`,
+        `Fictional responsibility ${index + 1}: Build accessible software and dependable integrations. This synthetic posting exercises the mobile layout without any employer or external action.`,
     ).join('\n\n');
+    Object.assign(opportunity, rawMatchingPosting(description));
     await opportunity.save();
   }
+  const linkedPosting = await opportunities.get(fixture.opportunityId);
+  if (!linkedPosting)
+    throw new Error('Synthetic application posting is missing.');
+  Object.assign(
+    linkedPosting,
+    rawMatchingPosting('Fictional posting with an existing application.'),
+  );
+  await linkedPosting.save();
+
   // These rows drive the inactive-source sweep through the real SvelteKit action
   // and local database. Keep every label visibly fictional so the browser suite
   // cannot be mistaken for a live employment workflow.
@@ -237,13 +273,12 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     const { humanReviewStatus, ...publicOverrides } = overrides;
     const record = await opportunities.create({
       currency: 'CAD',
-      descriptionRaw:
-        'Fictional local browser test opportunity. No employer or external action exists.',
       lastSeenAt: new Date('2020-01-01T00:00:00.000Z'),
       sourceId,
       status: 'found',
       title,
       workMode: 'remote',
+      ...rawMatchingPosting('Fictional sweep workflow for browser testing.'),
       ...publicOverrides,
     });
     await record.save();
@@ -337,8 +372,7 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         salaryMin: salaryBase + index * 10_000,
         status: 'found',
         workMode: 'remote',
-        // The list deliberately includes expired rows unless excluded by its filters.
-        expiresAt: index === 0 ? new Date('2020-01-01') : null,
+        expiresAt: null,
       })),
       {
         name: 'Compensation excluded',
@@ -368,8 +402,11 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         const record = await opportunities.create({
           ...publicVariant,
           title: `${family} ${project} ${variant.name}`,
-          descriptionRaw:
+          ...rawMatchingPosting(
             'Synthetic queue inheritance test. No employer or external action.',
+            variant.workMode === 'onsite' ? 'United States' : undefined,
+          ),
+          sourceId: fixture.sourceId,
           currency: 'CAD',
           requiredSkills: 'TypeScript',
           postedAt: new Date('2026-01-01'),
@@ -379,6 +416,28 @@ await withSyntheticDemoOwnerContext(async (identity) => {
         if (humanReviewStatus) await recordReview(record.id, humanReviewStatus);
       }
   }
+
+  const homeMatch = await opportunities.create({
+    ...rawMatchingPosting('Fictional qualification for the Home browser test.'),
+    title: 'Fictional Home backend match',
+    sourceId: fixture.sourceId,
+    firstSeenAt: new Date(),
+    status: 'found',
+    workMode: 'remote',
+  });
+  await homeMatch.save();
+  const excludedMatch = await opportunities.create({
+    ...rawMatchingPosting(
+      'Fictional conflict for the Home browser test.',
+      'Remote (United States)',
+    ),
+    title: 'Fictional Home location conflict',
+    sourceId: fixture.sourceId,
+    firstSeenAt: new Date(),
+    status: 'found',
+    workMode: 'remote',
+  });
+  await excludedMatch.save();
 
   // Current-source eligibility fixture rows exercise the list's shared query
   // path. Their names and evidence are fictional and isolated by viewport.
@@ -507,6 +566,8 @@ await withSyntheticDemoOwnerContext(async (identity) => {
       approvedApplicationId: approvedApplication.id,
       draftingApplicationId: draftingApplication.id,
       orphanApplicationId: orphanApplication.id,
+      homeMatchId: homeMatch.id,
+      excludedMatchId: excludedMatch.id,
     }),
     {
       mode: 0o600,
@@ -595,3 +656,6 @@ await withSyntheticDemoOwnerContext(async (identity) => {
     { mode: 0o600 },
   );
 });
+
+// Exercise the actual durable pipeline in the disposable local SQLite state.
+await refreshMatchingFixture();

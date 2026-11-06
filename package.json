@@ -61,7 +61,9 @@
     "typecheck": "pnpm check",
     "clean": "turbo run clean",
     "test:e2e": "pnpm --filter @willgriffin/iolaus-site exec playwright test",
-    "test:e2e:check": "pnpm --filter @willgriffin/iolaus-site exec tsc --noEmit -p tsconfig.e2e.json"
+    "test:e2e:check": "pnpm --filter @willgriffin/iolaus-site exec tsc --noEmit -p tsconfig.e2e.json",
+    "matching:evaluate": "node scripts/matching-evaluation/run.mjs",
+    "matching:evaluate:test": "node --test scripts/matching-evaluation.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",

@@ -21,6 +21,7 @@ import { displayFieldLabel, type ResourceField } from '$lib/admin/resources';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
 import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
+import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
 import { recommendationDecisionDefinitions } from '$lib/objects/workflow';
 import {
   assessmentCoverageMessages,
@@ -42,6 +43,7 @@ import {
 } from '$lib/question-screening-projection';
 import type { OpportunityRelationEditorData } from '$lib/server/admin-resource-route';
 import AdminRecordValue from './AdminRecordValue.svelte';
+import OpportunityEvidenceGaps from './OpportunityEvidenceGaps.svelte';
 import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
@@ -985,6 +987,18 @@ $effect(() => adminHeader?.register(recordHeaderActions));
         </form>
       {/if}
     </aside>
+  {/if}
+
+  {#if isOpportunityRecord && record.discoveryMatchEvidence && record.discoveryMatchStatus === 'qualified'}
+    <section class="panel" aria-label="Qualified opportunity evidence">
+      <h2 class="panel-title">Why it matches</h2>
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} qualified showPrivateExcerpts />
+    </section>
+  {:else if isOpportunityRecord && record.discoveryMatchStatus === 'screened-with-gaps'}
+    <section class="panel" aria-label="Screened opportunity">
+      <h2 class="panel-title">{DISCOVERY_EVIDENCE_GAPS_LABEL}</h2>
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} showPrivateExcerpts />
+    </section>
   {/if}
 
   {#if isOpportunityRecord}

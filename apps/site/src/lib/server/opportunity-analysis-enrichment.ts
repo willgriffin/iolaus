@@ -26,6 +26,9 @@ import { canonicalSkillSlug } from './skill-vocabulary.js';
 export const ANALYSIS_MODEL = 'openai/gpt-6-luna';
 export const ANALYSIS_PROMPT_VERSION = 'opportunity-analysis-prompt/v1';
 export const ANALYSIS_OUTPUT_VERSION = 'opportunity-analysis-output/v1';
+// Platform-only accounting has no user workspace, but native AgentRun
+// requires a UUID tenant_id. Reserve the nil UUID solely for this ledger.
+const PLATFORM_ANALYSIS_TENANT_ID = '00000000-0000-0000-0000-000000000000';
 const MAX_OUTPUT_TOKENS = 4_000;
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const boundedText = z
@@ -190,11 +193,12 @@ export async function ensureAnalysisBudgetWindow(
      intelligence_reserved_calls, intelligence_reserved_input_tokens, intelligence_reserved_spend_micros,
      intelligence_actual_calls, intelligence_actual_input_tokens, intelligence_actual_output_tokens,
      intelligence_actual_spend_micros, input_json, started_at, created_at, updated_at)
-    VALUES (?, ?, '', '', '', '', 'opportunity_analysis', 'running', ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    VALUES (?, ?, '', ?, '', '', 'opportunity_analysis', 'running', ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT (id) DO NOTHING`,
     [
       id,
       id,
+      PLATFORM_ANALYSIS_TENANT_ID,
       config.run.calls,
       config.run.inputTokens,
       Math.min(budgetMicros, config.run.spendMicros),

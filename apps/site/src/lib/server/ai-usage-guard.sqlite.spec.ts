@@ -151,6 +151,37 @@ describe.each([
     expect((await reserve(400)).kind).toBe('reserved');
   });
 
+  it('requires an effective owner limit atomically when a feature opts in', async () => {
+    const candidateCall = {
+      environment: { IOLAUS_AI_USER_LIFETIME_CAP_MICROS: '500' },
+      feature: 'matching-candidate-interpretation',
+      micros: 300,
+      requireBudgetLimit: true,
+      store,
+      subject: alice,
+    };
+    await expect(
+      reserveAiUserSpend({ ...candidateCall, subject: null }),
+    ).rejects.toMatchObject({ code: 'user_budget_unavailable' });
+    await store.setBudget(alice, { lifetimeCapMicros: 0 });
+    await expect(reserveAiUserSpend(candidateCall)).rejects.toMatchObject({
+      code: 'user_budget_unavailable',
+      message:
+        'An effective AI spend limit is required. No AI request was made.',
+    });
+    expect(
+      (await db.query('SELECT id FROM ai_user_spend_entries')).rows,
+    ).toHaveLength(0);
+    await store.setBudget(alice, { monthlyCapMicros: 500 });
+    const uncappedEnvironmentCall = { ...candidateCall, environment: {} };
+    await expect(
+      reserveAiUserSpend(uncappedEnvironmentCall),
+    ).resolves.not.toBeNull();
+    await expect(reserveAiUserSpend(candidateCall)).rejects.toMatchObject({
+      code: 'user_budget_exhausted',
+    });
+  });
+
   it('enforces the monthly cap per UTC month and lets the next month through', async () => {
     const monthly = { lifetimeCapMicros: 0, monthlyCapMicros: 1_000 };
     expect((await reserve(900, monthly)).kind).toBe('reserved');

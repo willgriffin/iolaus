@@ -72,7 +72,7 @@ function dueDate(value: string): string {
     </section>
 
     <section aria-labelledby="overview-opportunities">
-      <header class="section-heading"><div><h2 id="overview-opportunities">Best new opportunities</h2><p>Current match scores for your work location, excluding existing applications.</p></div><a href="/admin/opportunities?review=unsorted&amp;sort=score&amp;excludeExpired=1&amp;excludeStale=1">All new opportunities</a></header>
+      <header class="section-heading"><div><h2 id="overview-opportunities">Best new opportunities</h2><p>Matches for your target roles and work locations, excluding existing applications.</p></div><a href="/admin/opportunities?review=unsorted&amp;sort=score&amp;excludeExpired=1&amp;excludeStale=1">All new opportunities</a></header>
       {#await overview}
         {@render loading('Loading opportunities…')}
       {:then data}
@@ -80,23 +80,21 @@ function dueDate(value: string): string {
           <ol class="opportunity-list">
             {#each data.opportunities as opportunity (opportunity.id)}
               <li><a class="record-link opportunity-link" href={opportunity.href}>
-                <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span></div>
-                <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
+                <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span>
+                  {#if opportunity.matchHighlight}<span class="record-meta match-highlight">{opportunity.matchHighlight}</span>{/if}
+                </div>
+                {#if opportunity.discoveryStatus === 'screened-with-gaps'}
+                  {#if !opportunity.matchHighlight}<span class="record-meta">{opportunity.readiness}</span>{/if}
+                {:else if opportunity.fitScore !== null}
+                  <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
+                {/if}
               </a></li>
             {/each}
           </ol>
         {:else}
-          <p class="empty-state">No new assessed matches to show yet. Opportunities awaiting assessment appear below.</p>
+          <p class="empty-state">No new matches to show yet. Open Opportunities to check matching progress.</p>
         {/if}
 
-        {#if data.pendingOpportunities.length}
-          <h3>Awaiting assessment or eligibility</h3>
-          <ul class="pending-list">
-            {#each data.pendingOpportunities as opportunity (opportunity.id)}
-              <li><a class="record-link" href={opportunity.href}><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}<span>{opportunity.readiness}</span></span><span class="eligibility">{opportunity.eligibility} · Score unavailable</span></a></li>
-            {/each}
-          </ul>
-        {/if}
       {:catch}
         <p role="status">Could not load recommendations. You can still open All new opportunities.</p>
       {/await}
@@ -116,21 +114,21 @@ function dueDate(value: string): string {
   .admin-header-action:focus-visible { outline:2px solid var(--smrt-color-on-surface); outline-offset:2px; }
   .overview { display: grid; gap: var(--smrt-spacing-6); min-width: 0; }
   .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--smrt-spacing-4); flex-wrap: wrap; }
-  h2, h3, p { margin: 0; }
+  h2, p { margin: 0; }
   h2 { font-size: 1.2rem; }
-  h3 { font-size: 1rem; margin-top: var(--smrt-spacing-6); }
   p { color: var(--smrt-color-on-surface-variant); line-height: 1.5; margin-top: var(--smrt-spacing-2); }
   a { color: var(--smrt-color-primary); }
   .overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--smrt-spacing-6); }
   section { min-width: 0; padding: var(--smrt-spacing-5); border: 1px solid var(--smrt-color-outline-variant); border-radius: var(--smrt-radius-large); background: var(--smrt-color-surface-container-low); }
   .section-heading a { min-height: 44px; display: inline-flex; align-items: center; font-size: .9rem; }
-  ol, ul { list-style: none; padding: 0; margin: var(--smrt-spacing-4) 0 0; display: grid; gap: var(--smrt-spacing-2); }
+  ol { list-style: none; padding: 0; margin: var(--smrt-spacing-4) 0 0; display: grid; gap: var(--smrt-spacing-2); }
   .record-link { display: grid; gap: var(--smrt-spacing-2); padding: var(--smrt-spacing-3); border-radius: var(--smrt-radius-medium); color: var(--smrt-color-on-surface); text-decoration: none; min-height: 44px; }
   .record-link:hover, .record-link:focus-visible { background: var(--smrt-color-surface-container-high); }
   .record-link:focus-visible, a:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
   .record-title { display: block; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
   .record-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--smrt-spacing-2); margin-top: var(--smrt-spacing-1); font-size: .85rem; color: var(--smrt-color-on-surface-variant); }
   .priority { color: var(--smrt-color-primary); font-weight: 600; }
+  .match-highlight { color: var(--smrt-color-on-surface); font-weight: 600; overflow-wrap: anywhere; }
   .opportunity-link { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--smrt-spacing-4); }
   .eligibility { display: block; font-size: .8rem; color: var(--smrt-color-on-surface-variant); margin-top: var(--smrt-spacing-2); }
   .match { display: grid; justify-items: end; gap: var(--smrt-spacing-1); }

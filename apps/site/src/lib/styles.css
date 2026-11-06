@@ -21,6 +21,9 @@
   --font-serif: "Source Serif 4", "Source Serif Pro", "Iowan Old Style", "Charter", Georgia, serif;
   --font-sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  --text-body: 1rem;
+  --text-secondary: 0.875rem;
+  --text-title: 1.125rem;
   --sidebar-w: 280px;
   --content-max: 760px;
 }
@@ -55,7 +58,7 @@ html, body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--text-body);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;

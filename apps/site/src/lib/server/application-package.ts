@@ -700,6 +700,8 @@ export function normalizeOpportunityRating(value: unknown): number | null {
 }
 
 export async function updateOpportunityReview(options: {
+  /** Pin the private Decision to a caller-owned transaction when supplied. */
+  database?: unknown;
   /**
    * Retained for route compatibility. Reviews are immutable Decision revisions,
    * so a shared Opportunity revision cannot be used as a write fence.
@@ -725,6 +727,7 @@ export async function updateOpportunityReview(options: {
   const humanRating = normalizeOpportunityRating(options.humanRating);
   const humanReviewNotes = stringValue(options.humanReviewNotes);
   const decision = (await recordPrivateOpportunityReview({
+    ...(options.database ? { database: options.database } : {}),
     humanRating,
     humanReviewNotes,
     humanReviewStatus: humanReviewStatus as
