@@ -229,11 +229,22 @@ export const actions: Actions = {
   generate: async ({ locals, request }) => {
     const form = await request.formData();
     const tailoringId = String(form.get('tailoringId') ?? '');
-    return await runResumeMutation(
-      locals,
-      async (subject, assertWriteAllowed) =>
-        await generateResumeAsset({ tailoringId, subject, assertWriteAllowed }),
-    );
+    try {
+      return await runResumeMutation(
+        locals,
+        async (subject, assertWriteAllowed) =>
+          await generateResumeAsset({
+            tailoringId,
+            subject,
+            assertWriteAllowed,
+          }),
+      );
+    } catch (cause) {
+      if (isHttpError(cause, 503)) {
+        return fail(cause.status, { error: cause.body.message, ok: false });
+      }
+      throw cause;
+    }
   },
   regenerate: async ({ locals, request }) => {
     const form = await request.formData();

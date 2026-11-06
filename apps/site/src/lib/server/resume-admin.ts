@@ -5,7 +5,7 @@ import { getRequestScopedDatabase } from '@happyvertical/smrt-users';
 import { error } from '@sveltejs/kit';
 import type { ResumeSource, TailoringConfig } from '@willgriffin/iolaus-resume';
 import { createCandidateSkillMatcher } from '$lib/skill-matching';
-import { isSharedHosted } from './app-config.js';
+import { getAppConfig, isSharedHosted } from './app-config.js';
 import { getDbConfig } from './db.js';
 import {
   getPrivateRecord,
@@ -429,8 +429,15 @@ export async function generateResumeAsset(
     const { generateResumeArtifacts, getDefaultPuppeteerExecutablePath } =
       await import('@willgriffin/iolaus-resume');
     await options.assertWriteAllowed?.();
+    const executablePath = await getDefaultPuppeteerExecutablePath();
+    if (!executablePath && getAppConfig().runtimeProfile === 'local') {
+      error(
+        503,
+        'Install Chrome or Chromium to generate resume PDFs, then retry. If it is already installed in a custom location, set PUPPETEER_EXECUTABLE_PATH and restart Iolaus.',
+      );
+    }
     const artifact = await generateResumeArtifacts({
-      executablePath: await getDefaultPuppeteerExecutablePath(),
+      executablePath,
       filesystem,
       outputDir: `generated-resumes/${assetId}`,
       pdfPathBasename: 'resume.pdf',

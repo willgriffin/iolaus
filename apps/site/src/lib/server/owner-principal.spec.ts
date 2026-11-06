@@ -93,7 +93,7 @@ vi.mock('./resume-tailoring-configs.js', () => ({
 }));
 vi.mock('@willgriffin/iolaus-resume', () => ({
   generateResumeArtifacts: fixture.renderer,
-  getDefaultPuppeteerExecutablePath: async () => undefined,
+  getDefaultPuppeteerExecutablePath: async () => '/fixture/chromium',
 }));
 
 const owner = {
