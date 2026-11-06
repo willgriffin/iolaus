@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObjectRegistry } from '@happyvertical/smrt-core';
@@ -29,9 +29,14 @@ const materialOld = randomUUID();
 const materialNew = randomUUID();
 const reviewerId = randomUUID();
 const postgresUrl = process.env.APPLICATION_CAS_TEST_POSTGRES_URL?.trim();
-for (const dialect of ['sqlite', 'postgres'] as const) {
+const adapters = [
+  { dialect: 'sqlite', driver: 'libsql' },
+  { dialect: 'sqlite', driver: 'node:sqlite' },
+  { dialect: 'postgres', driver: 'PostgreSQL' },
+] as const;
+for (const { dialect, driver } of adapters) {
   describe.skipIf(dialect === 'postgres' && !postgresUrl)(
-    `application material/approval CAS on native ${dialect}`,
+    `application material/approval CAS on ${driver}`,
     () => {
       let database: DatabaseInterface;
       let control: DatabaseInterface | undefined;
@@ -56,11 +61,23 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
           url.searchParams.set('options', `-c search_path=${schema},public`);
           fixture.config = { type: dialect, url: url.toString(), dbid: schema };
         } else {
-          directory = await mkdtemp(join(tmpdir(), 'application-cas-'));
+          directory = await mkdtemp(
+            join(await realpath(tmpdir()), 'application-cas-'),
+          );
+          vi.stubEnv('SMRT_DATA_DIR', directory);
           fixture.config = {
             type: dialect,
             url: join(directory, 'cas.sqlite'),
             dbid: randomUUID(),
+            ...(driver === 'node:sqlite'
+              ? {
+                  secureFile: {
+                    custody: 'trusted-parent',
+                    driver,
+                    root: directory,
+                  },
+                }
+              : {}),
           };
         }
         database = await getDatabase(fixture.config as never);
@@ -76,11 +93,15 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
       }, 20_000);
 
       afterAll(async () => {
-        await database?.close?.();
-        if (control && schema)
-          await control.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-        await control?.close?.();
-        if (directory) await rm(directory, { recursive: true, force: true });
+        try {
+          await database?.close?.();
+          if (control && schema)
+            await control.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+          await control?.close?.();
+        } finally {
+          vi.unstubAllEnvs();
+          if (directory) await rm(directory, { recursive: true, force: true });
+        }
       });
 
       async function seed() {
@@ -263,7 +284,7 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
         const persisted = {
           id: variant.id,
           resumeAssetId: variant.resumeAssetId,
-          updated_at: revision,
+          updated_at: variant.updated_at,
         };
         await expect(
           inMaterialTransaction(id, async (transaction) => {
