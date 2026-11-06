@@ -213,6 +213,71 @@ describe('admin-opportunity-query', () => {
     ).toHaveLength(12);
   });
 
+  it('ranks verified highlights and ignores missing or unbounded partial evidence', async () => {
+    const { listCurrentDiscoveryMatches } = await import(
+      './admin-opportunity-query.js'
+    );
+    const preferred = {
+      code: 'preferred-capability',
+      outcome: 'supported',
+      message: 'Your evidence supports Node.js.',
+    };
+    const partial = {
+      code: 'required-capability',
+      outcome: 'unknown',
+      message: 'Production REST API work needs confirmation.',
+      partialSupport: 'REST API design',
+      citations: [
+        {
+          field: 'evidence',
+          id: 'owned',
+          start: 0,
+          end: 10,
+          text: 'Never show this excerpt.',
+        },
+      ],
+    };
+    const required = {
+      code: 'required-capability',
+      outcome: 'supported',
+      message: 'Your evidence supports PostgreSQL.',
+    };
+    const invalid = [
+      { ...partial, citations: [] },
+      { ...partial, partialSupport: ['REST APIs'] },
+      { ...partial, partialSupport: 'x'.repeat(210) },
+      { ...partial, outcome: 'conflict' },
+      { ...partial, code: 'posting-capability-gap' },
+    ];
+    mocks.query.mockResolvedValue({
+      rows: [
+        ['full', [preferred, partial, required]],
+        ['partial', [preferred, partial]],
+        ['gaps', invalid],
+      ].map(([id, reasons]) => ({
+        id,
+        score: 55,
+        matchingStatus: 'screened-with-gaps',
+        reasons: JSON.stringify(reasons),
+      })),
+    });
+    const matches = await listCurrentDiscoveryMatches(
+      ['full', 'partial', 'gaps'],
+      WORKSPACE_SUBJECT,
+    );
+    expect(matches.get('full')?.evidence.highlight).toBe(required.message);
+    expect(matches.get('partial')?.evidence.highlight).toBe(
+      'Partial support for REST API design.',
+    );
+    expect(matches.get('partial')?.evidence.gaps).toEqual([
+      { message: partial.message },
+    ]);
+    expect(matches.get('gaps')?.evidence.highlight).toBeUndefined();
+    expect(JSON.stringify([...matches])).not.toContain(
+      'Never show this excerpt.',
+    );
+  });
+
   it.each([
     'qualified',
     'screened-with-gaps',

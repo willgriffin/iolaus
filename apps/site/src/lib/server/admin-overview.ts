@@ -3,7 +3,10 @@ import {
   prioritizeOverviewTasks,
 } from '$lib/admin/overview';
 import { taskWorkTargetForRecord } from '$lib/admin/task-work-target';
-import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
+import {
+  DISCOVERY_EVIDENCE_GAPS_LABEL,
+  discoveryMatchHighlight,
+} from '$lib/discovery-match';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
 import {
   type AdminRecord,
@@ -233,6 +236,7 @@ async function loadOverviewOpportunities(subject: CandidateWorkspaceSubject) {
           location:
             typeof posting.locations === 'string' ? posting.locations : '',
           discoveryStatus: match.status,
+          matchHighlight: discoveryMatchHighlight(match.evidence),
           fitScore: match.status === 'screened-with-gaps' ? null : match.score,
           eligibility:
             match.status === 'screened-with-gaps'

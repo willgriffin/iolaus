@@ -25,7 +25,10 @@ import {
   TRIAGE_URL_PARAM,
   triageCloseHref,
 } from '$lib/admin/triage-session';
-import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
+import {
+  DISCOVERY_EVIDENCE_GAPS_LABEL,
+  discoveryMatchHighlight,
+} from '$lib/discovery-match';
 import {
   type AssessmentEligibilityBucket,
   assessmentCoverageMessages,
@@ -962,6 +965,7 @@ function clearBulkSelection(): void {
   </section>
 
   {#snippet collectionOpportunity({ item: record }: { item: AdminRecord; index: number; selected: boolean })}
+    {@const highlight = discoveryMatchHighlight(record.discoveryMatchEvidence)}
     <article class="collection-opportunity" class:dock-selected={record.id === dockSelectedId} class:dock-selected--muted={record.id === dockSelectedId && bulkSelectionCount > 0}>
       <button type="button" class="collection-review" onclick={() => handleRowClick(record)}
         aria-label={`Review ${str(record, 'title') || 'Untitled opportunity'}`}>
@@ -969,7 +973,8 @@ function clearBulkSelection(): void {
         <span class="table-meta"><Building2 size={13} /> {companyLabel(record)}</span>
         <span class="table-meta"><MapPin size={13} /> {locationLabel(record)}</span>
         <span class="eligibility-label">{eligibilityLabel(record)}</span>
-        <span title={scoreExplanation(record)}>{scoreLabel(record)} · {humanize(str(record, 'status'), 'unknown')}</span>
+        {#if highlight}<span class="match-highlight">{highlight}</span>{/if}
+        <span title={scoreExplanation(record)}>{#if !highlight || record.discoveryMatchStatus !== 'screened-with-gaps'}{scoreLabel(record)} · {/if}{humanize(str(record, 'status'), 'unknown')}</span>
         {#if salaryLabel(record)}<span>{salaryLabel(record)}</span>{/if}
         <OpportunityVideoRequirements requirements={record.videoRequirements} compact />
       </button>
@@ -1302,6 +1307,7 @@ function clearBulkSelection(): void {
   .page-selection input { width: 1.125rem; height: 1.125rem; }
   .collection-opportunity { display: grid; gap: var(--smrt-spacing-2); min-width: 0; }
   .collection-review { display: grid; gap: var(--smrt-spacing-1); width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--text-body); line-height: 1.5; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+  .match-highlight { font-weight: 600; }
   .collection-review :global(strong) { font-size: var(--text-title); line-height: 1.35; }
   .collection-review:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
 

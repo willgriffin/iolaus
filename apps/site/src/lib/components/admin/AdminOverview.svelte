@@ -80,9 +80,11 @@ function dueDate(value: string): string {
           <ol class="opportunity-list">
             {#each data.opportunities as opportunity (opportunity.id)}
               <li><a class="record-link opportunity-link" href={opportunity.href}>
-                <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span></div>
+                <div><span class="record-title">{opportunity.title}</span><span class="record-meta">{opportunity.company}{#if opportunity.location}<span>{opportunity.location}</span>{/if}</span><span class="eligibility">{opportunity.eligibility}</span>
+                  {#if opportunity.matchHighlight}<span class="record-meta match-highlight">{opportunity.matchHighlight}</span>{/if}
+                </div>
                 {#if opportunity.discoveryStatus === 'screened-with-gaps'}
-                  <span class="record-meta">{opportunity.readiness}</span>
+                  {#if !opportunity.matchHighlight}<span class="record-meta">{opportunity.readiness}</span>{/if}
                 {:else if opportunity.fitScore !== null}
                   <span class="match"><strong>{opportunity.fitScore}</strong><span>Match / 100</span></span>
                 {/if}
@@ -126,6 +128,7 @@ function dueDate(value: string): string {
   .record-title { display: block; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
   .record-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--smrt-spacing-2); margin-top: var(--smrt-spacing-1); font-size: .85rem; color: var(--smrt-color-on-surface-variant); }
   .priority { color: var(--smrt-color-primary); font-weight: 600; }
+  .match-highlight { color: var(--smrt-color-on-surface); font-weight: 600; overflow-wrap: anywhere; }
   .opportunity-link { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--smrt-spacing-4); }
   .eligibility { display: block; font-size: .8rem; color: var(--smrt-color-on-surface-variant); margin-top: var(--smrt-spacing-2); }
   .match { display: grid; justify-items: end; gap: var(--smrt-spacing-1); }

@@ -109,6 +109,7 @@ describe('subject-scoped admin overview', () => {
             status: 'screened-with-gaps',
             score: 42,
             reasons: ['Evidence still needed'],
+            evidence: { highlight: 'Partial support for REST API design.' },
           },
         ],
       ]),
@@ -119,6 +120,7 @@ describe('subject-scoped admin overview', () => {
       discoveryStatus: 'screened-with-gaps',
       eligibility: 'Screened · evidence gaps',
       fitScore: null,
+      matchHighlight: 'Partial support for REST API design.',
     });
   });
 

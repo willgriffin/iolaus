@@ -273,3 +273,15 @@ Five independently authored fictional postings exercised the source
 boundaries with a scripted adapter. Their exact citations and actual
 eligibility conditions remained intact. This is contract evidence. The
 single live pinned posting does not measure general extraction accuracy.
+
+
+## Opportunity card evidence
+
+The Home and Opportunities cards show one current match highlight when
+available. Fully supported requirements take precedence over explicitly
+partial required evidence, followed by fully supported preferences. A
+partial highlight names only capabilities with direct evidence and does
+not confirm the whole requirement. Older stored results without partial
+highlight metadata can still show full support or the neutral summary.
+Normal provider-free projection writes the additive metadata. The
+screening badge, detailed gaps and detail-only excerpts remain available.

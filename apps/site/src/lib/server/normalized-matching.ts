@@ -1352,6 +1352,7 @@ export interface MatchingReason {
   message: string;
   citations: readonly Citation[];
   evidenceGaps?: readonly CandidateEvidenceGap[];
+  partialSupport?: string;
 }
 
 export type CandidateEvidenceGap = { conceptId: string } & (
@@ -4872,6 +4873,7 @@ type EvidenceFit = {
   citations: Citation[];
   disputed?: boolean;
   directPartial?: boolean;
+  directAtoms?: readonly string[];
   recognizedCapability?: boolean;
   recognizedAtoms?: readonly string[];
   gap?: CandidateEvidenceGap;
@@ -4935,7 +4937,7 @@ function atomicEvidenceFit(
   const durationLimits: Citation[] = [];
   const related: { slug: string; citation: Citation }[] = [];
   const relatedRule = relatedCandidateEvidence.get(requirement.slug);
-  let direct = false;
+  const directAtoms = new Set<string>();
   let recognizedCapability = false;
   let hasRequiredContext = false;
   let eligibleForDuration = false;
@@ -5012,7 +5014,7 @@ function atomicEvidenceFit(
       proof.polarity === 'positive' &&
       proof.support !== 'inferred'
     )
-      direct = true;
+      directAtoms.add(proof.slug);
   }
   const observedYears = observed.length
     ? minimumExperienceYears(observed.map(({ period }) => period))
@@ -5024,6 +5026,7 @@ function atomicEvidenceFit(
       outcome: 'supported',
       citations: distinctCitations(positives),
       recognizedCapability,
+      directAtoms: [...directAtoms],
     };
   if (
     !positives.length &&
@@ -5073,7 +5076,8 @@ function atomicEvidenceFit(
     disputed,
     recognizedCapability,
     gap,
-    directPartial: !disputed && direct,
+    directPartial: !disputed && directAtoms.size > 0,
+    directAtoms: disputed ? [] : [...directAtoms],
   };
 }
 
@@ -5327,6 +5331,10 @@ function evidenceFit(
           : fit.recognizedCapability,
       )
       .map(({ atom }) => atom.slug),
+    directAtoms:
+      disputed || conflicts.length
+        ? []
+        : individual.flatMap(({ directAtoms }) => directAtoms ?? []),
     directPartial:
       !disputed &&
       !conflicts.length &&
@@ -5416,6 +5424,7 @@ function groupFit(
           outcome: 'unknown',
           directPartial: true,
           recognizedAtoms: [verifiedConcept],
+          directAtoms: [verifiedConcept],
           citations: [gap.citation, ...base.citations],
         };
     }
@@ -5559,6 +5568,16 @@ function groupFit(
               ? `Matching has not yet verified ${options} from your evidence.`
               : `Your evidence does not establish ${options}.`,
           ];
+  const directAtoms = [
+    ...new Set(
+      evaluated.flatMap((fit) =>
+        fit.directPartial ? (fit.directAtoms ?? []) : [],
+      ),
+    ),
+  ];
+  const partialLabels = directAtoms
+    .slice(0, 2)
+    .map((slug) => capabilityLabels.get(slug) ?? slug.replace(/-/gu, ' '));
   return {
     ...reason(
       `${kind}-capability`,
@@ -5583,6 +5602,10 @@ function groupFit(
       ]),
     ),
     ...(evidenceGaps.length ? { evidenceGaps } : {}),
+    ...(!conflict &&
+      partialLabels.length && {
+        partialSupport: capabilityList.format(partialLabels),
+      }),
     directPartial: evaluated.some(
       (fit) => 'directPartial' in fit && fit.directPartial,
     ),

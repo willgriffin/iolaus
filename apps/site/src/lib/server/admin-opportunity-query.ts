@@ -2064,6 +2064,38 @@ const INTERPRETATION_NOTES = new Map([
   ],
 ]);
 
+function discoveryHighlight(reasons: readonly unknown[]): string | undefined {
+  let best: { message: string; priority: number } | undefined;
+  for (const value of reasons) {
+    const reason = matchingObject(value);
+    if (!reason) continue;
+    const { code, outcome, message, partialSupport } = reason;
+    const required = code === 'required-capability';
+    const preferred = code === 'preferred-capability';
+    const partial =
+      required &&
+      outcome === 'unknown' &&
+      typeof partialSupport === 'string' &&
+      partialSupport.trim() &&
+      Array.isArray(reason.citations) &&
+      reason.citations.some(matchingEvidenceLocator);
+    const supported = (required || preferred) && outcome === 'supported';
+    const text = partial
+      ? `Partial support for ${partialSupport.trim()}.`
+      : message;
+    if (
+      (!partial && !supported) ||
+      typeof text !== 'string' ||
+      !text.trim() ||
+      text.length > 200
+    )
+      continue;
+    const priority = partial ? 2 : required ? 3 : 1;
+    if (!best || priority > best.priority) best = { message: text, priority };
+  }
+  return best?.message;
+}
+
 function explainDiscoveryMatch(
   rawReasons: unknown,
   status: DiscoveryMatchStatus,
@@ -2074,6 +2106,8 @@ function explainDiscoveryMatch(
   const evidence: DiscoveryEvidenceExplanation = { supported: [], gaps: [] };
   const parsed = readMatchingJson(rawReasons);
   if (!Array.isArray(parsed)) return { reasons, evidence };
+  const highlight = discoveryHighlight(parsed);
+  if (highlight) evidence.highlight = highlight;
 
   const privateExcerpts = matchingEvidenceExcerpts(facts);
   const source = matchingObject(readMatchingJson(sourceFacts));

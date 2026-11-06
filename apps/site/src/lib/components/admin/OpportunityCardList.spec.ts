@@ -52,6 +52,7 @@ describe('OpportunityCardList assessment readiness', () => {
           discoveryMatchStatus: 'screened-with-gaps',
           discoveryMatchScore: 32,
           discoveryMatchEvidence: {
+            highlight: 'Your evidence supports designing REST APIs.',
             supported: [
               {
                 message: 'Your evidence supports designing REST APIs.',
@@ -72,7 +73,9 @@ describe('OpportunityCardList assessment readiness', () => {
     });
     expect(body).toContain('Screened · evidence gaps');
     expect(body).toContain('Review evidence gaps');
+    expect(body).not.toContain('Some requirements need confirmation');
     expect(body).toContain('production experience with PostgreSQL');
+    expect(body).toContain('<span class="match-highlight');
     expect(body).toContain('Your evidence supports designing REST APIs.');
     expect(body).toContain(
       'Matching is still interpreting some of your evidence.',
@@ -80,6 +83,24 @@ describe('OpportunityCardList assessment readiness', () => {
     expect(body).not.toContain('Fictional confidential passage');
     expect(body).not.toContain('Qualified');
     expect(body).not.toContain('32/100');
+  });
+
+  it('keeps a neutral card summary when only evidence gaps exist', () => {
+    const { body } = renderList({
+      records: [
+        {
+          id: 'gaps-fixture',
+          discoveryMatchStatus: 'screened-with-gaps',
+          discoveryMatchEvidence: {
+            supported: [],
+            gaps: [{ message: 'A fictional qualification needs evidence.' }],
+          },
+        },
+      ],
+    });
+    expect(body).toContain('Some requirements need confirmation');
+    expect(body).toContain('A fictional qualification needs evidence.');
+    expect(body).not.toContain('class="match-highlight');
   });
 
   it('uses current user-question recommendation as primary without a legacy numeric score', async () => {

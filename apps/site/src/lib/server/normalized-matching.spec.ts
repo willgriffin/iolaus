@@ -944,6 +944,88 @@ describe('normalized matching from raw text', () => {
     );
   });
 
+  it('records only the directly evidenced subset of a partially supported requirement', () => {
+    const partial = match(
+      {
+        description: 'Required: 5+ years of production experience with Node.js',
+      },
+      { evidence: [skill('Node.js')] },
+    );
+    expect(partial.status).toBe('insufficient-evidence');
+    expect(partial.reasons).toContainEqual(
+      expect.objectContaining({
+        code: 'required-capability',
+        outcome: 'unknown',
+        partialSupport: 'Node.js',
+      }),
+    );
+    const related = match(
+      { description: 'Required: People management' },
+      { evidence: [skill('Mentoring')] },
+    );
+    expect(
+      related.reasons.some(
+        ({ partialSupport }) => partialSupport !== undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('does not highlight unproven conjuncts or disputed alternatives', () => {
+    const source = normalizeMatchingPosting(posting, vocabulary);
+    const citation = source.required[0]?.citation;
+    if (!citation) throw new Error('Expected a required source group');
+    const compound = {
+      ...source,
+      required: [
+        {
+          citation,
+          alternatives: [{ slug: 'production-node-backend-engineering' }],
+        },
+      ],
+    };
+    const profile = normalizeMatchingCandidate(
+      { ...candidate, evidence: [skill('Node.js')] },
+      vocabulary,
+    );
+    expect(evaluateNormalizedMatch(compound, profile).reasons).toContainEqual(
+      expect.objectContaining({
+        code: 'required-capability',
+        outcome: 'unknown',
+        partialSupport: 'Node.js',
+      }),
+    );
+    const choice = {
+      ...source,
+      required: [
+        {
+          citation,
+          alternatives: [
+            { slug: 'nodejs', years: 3 },
+            { slug: 'postgresql', years: 3 },
+          ],
+        },
+      ],
+    };
+    const disputed = normalizeMatchingCandidate(
+      {
+        ...candidate,
+        evidence: [
+          skill('Node.js'),
+          fact('Never used Node.js.'),
+          skill('PostgreSQL'),
+        ],
+      },
+      vocabulary,
+    );
+    expect(
+      evaluateNormalizedMatch(choice, disputed).reasons,
+    ).not.toContainEqual(
+      expect.objectContaining({
+        partialSupport: expect.stringContaining('Node.js'),
+      }),
+    );
+  });
+
   it('treats related terms and punctuation-distinct skills as separate capabilities', () => {
     expect(match({ description: 'Required: TypeScript' }).status).toBe(
       'insufficient-evidence',

@@ -28,6 +28,7 @@ export type OverviewOpportunity = {
   discoveryStatus?: DiscoveryMatchStatus;
   eligibility: string;
   readiness: string;
+  matchHighlight?: string;
   href: string;
 };
 
