@@ -1,5 +1,5 @@
 import { AgentScheduleCollection } from '@happyvertical/smrt-agents';
-import { resolveDatabase } from '@happyvertical/smrt-core';
+import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
 import { bumpOpportunityChangeFeed } from './change-feed.js';
 import { getDbConfig } from './db.js';
 import { scoringMaterialForOpportunity } from './opportunity-intelligence.js';
@@ -45,9 +45,13 @@ function numberValue(value: unknown): number {
 }
 
 function dateValue(value: unknown): Date | null {
-  if (value instanceof Date && Number.isFinite(value.getTime())) return value;
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const parsed = new Date(value);
+  if (
+    !(value instanceof Date) &&
+    typeof value !== 'number' &&
+    (typeof value !== 'string' || !value.trim())
+  )
+    return null;
+  const parsed = value instanceof Date ? value : new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
@@ -150,6 +154,17 @@ async function reserveEnqueueAttempt(
   sourceContentFingerprint: string,
   now: Date,
 ): Promise<boolean> {
+  const sqlite = Boolean(db.url && detectEngine(db.url) === 'sqlite');
+  const nextAttemptAt = new Date(
+    now.getTime() + OPPORTUNITY_SCORE_REFRESH_RETRY_MS,
+  );
+  // Bind milliseconds for raw SQLite queries. Older rows may also have ISO
+  // timestamps written by a collection save, so compare both as milliseconds.
+  const retryDeadline = sqlite
+    ? `CASE WHEN typeof(scoring_refresh_next_attempt_at) = 'text'
+        THEN ROUND(unixepoch(scoring_refresh_next_attempt_at, 'subsec') * 1000)
+        ELSE scoring_refresh_next_attempt_at END`
+    : 'scoring_refresh_next_attempt_at';
   const result = await db.query(
     `UPDATE opportunities
         SET scoring_refresh_attempts = scoring_refresh_attempts + 1,
@@ -161,16 +176,16 @@ async function reserveEnqueueAttempt(
         AND scoring_refresh_attempts < ?
         AND (
           scoring_refresh_next_attempt_at IS NULL
-          OR scoring_refresh_next_attempt_at <= ?
+          OR ${retryDeadline} <= ?
         )`,
     [
-      new Date(now.getTime() + OPPORTUNITY_SCORE_REFRESH_RETRY_MS),
+      sqlite ? nextAttemptAt.getTime() : nextAttemptAt,
       opportunityId,
       fingerprint,
       fingerprint,
       sourceContentFingerprint,
       OPPORTUNITY_SCORE_REFRESH_MAX_ATTEMPTS,
-      now,
+      sqlite ? now.getTime() : now,
     ],
   );
   return (result.rowCount ?? result.rows.length) > 0;
