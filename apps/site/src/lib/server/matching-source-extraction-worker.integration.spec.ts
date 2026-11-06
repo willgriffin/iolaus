@@ -91,6 +91,157 @@ async function seed(db: DatabaseInterface) {
 
 for (const dialect of dialects) {
   describe(`governed shared interpretation publication on ${dialect}`, () => {
+    it('replaces a falsely verified capability inside a current bound exercise', async () => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        const description =
+          'Take-home assignment:\nPlease complete the exercise.\nNode.js\nBuild a dashboard.\nInterview Process:\nDiscuss your approach.';
+        const source = { title, description, location };
+        await writeCapture(db, description, 1);
+        await ensureMatchingProjectionSchema(db, dialect);
+        await runMatchingTick(db, dialect);
+        const profile: MatchingSourceDecisionProfile = {
+          provider: 'typesafe',
+          transport: 'direct',
+          model: 'jev-1.14.0',
+          revision: 'exercise',
+          maxInputBytes: 8192,
+          preparationVersion: 'matching-source-jev/v23',
+        };
+        const latest = {
+          ...profile,
+          preparationVersion: 'matching-source-jev/v24',
+        };
+        const material = matchingSourceSemanticMaterial(source);
+        const run = (corrected: boolean) =>
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            opportunityId: postingId,
+            decisionProfile: corrected ? latest : profile,
+            provider: async () => {
+              const proposal = parseMatchingSourceSemanticProposal(
+                {
+                  role: null,
+                  geography: null,
+                  ledger: material.units.map(({ id }) =>
+                    !corrected && id === 'd3'
+                      ? {
+                          id,
+                          kind: 'requirement',
+                          groups: [
+                            {
+                              alternatives: [
+                                {
+                                  conceptId: 'nodejs',
+                                  years: null,
+                                  context: null,
+                                  unsupportedQualifier: false,
+                                },
+                              ],
+                            },
+                          ],
+                        }
+                      : {
+                          id,
+                          kind:
+                            corrected && id === 'd4' ? 'unresolved' : 'context',
+                          groups: [],
+                        },
+                  ),
+                },
+                source,
+              );
+              const proof = verifyMatchingSourceSemanticProposal(
+                {
+                  sourceDigest: material.sourceDigest,
+                  proposalDigest:
+                    matchingSourceSemanticProposalDigest(proposal),
+                  roleCorrect: false,
+                  geographyCorrect: false,
+                  units: material.units.map(({ id }) => {
+                    const pass = !corrected || id !== 'd4';
+                    return {
+                      id,
+                      classificationCorrect: pass,
+                      allConditionsRepresented: pass,
+                      logicAndQualifiersPreserved: pass,
+                    };
+                  }),
+                },
+                source,
+                proposal,
+              );
+              return {
+                requestId: '',
+                extraction: {
+                  coverage: 'partial',
+                  role: null,
+                  geography: null,
+                  noRequirements: null,
+                  required: [],
+                  preferred: [],
+                  unresolved: [],
+                  semantic: {
+                    ...proof,
+                    decision: {
+                      ...(corrected ? latest : profile),
+                      observedModels: [profile.model],
+                      ...(corrected && {
+                        hiringExercises: [
+                          {
+                            version: 1 as const,
+                            anchorId: 'd1',
+                            closingId: 'd5',
+                            unitIds: ['d1', 'd2', 'd3', 'd4'],
+                            assessedUnitIds: ['d1', 'd2', 'd3'],
+                            participation: 'required' as const,
+                            participationUnitId: 'd2',
+                          },
+                        ],
+                      }),
+                    },
+                  },
+                },
+              };
+            },
+          });
+        await expect(run(false)).resolves.toBe('published');
+        await runMatchingTick(db, dialect);
+        await expect(run(true)).resolves.toBe('published');
+        await runMatchingTick(db, dialect);
+        await expect(run(true)).resolves.toBe('idle');
+        const {
+          rows: [row],
+        } = await db.query(
+          'SELECT facts_json FROM matching_source_facts WHERE opportunity_id=?',
+          [postingId],
+        );
+        const facts = JSON.parse(String(row.facts_json));
+        expect(facts.applicationSteps).toMatchObject([
+          {
+            kind: 'assessment-required',
+            citation: { text: 'Please complete the exercise.' },
+          },
+        ]);
+        expect(facts.required).toEqual([]);
+        expect(facts.uncertainties).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: 'posting-requirement-unknown',
+              citations: expect.arrayContaining([
+                expect.objectContaining({ text: 'Build a dashboard.' }),
+              ]),
+            }),
+          ]),
+        );
+      } finally {
+        await close();
+      }
+    });
+
     it.each([
       'publish',
       'provider-failure',

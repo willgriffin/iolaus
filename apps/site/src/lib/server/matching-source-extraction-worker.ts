@@ -318,24 +318,45 @@ export async function runMatchingSourceExtraction(
       )
         throw new MatchingSourceExtractionError('matching_extraction_coverage');
       if (previous && !unsafePrior) {
-        const countVerified = (extraction: typeof previous) =>
-          extraction.semantic?.verification.units.filter(
-            ({
-              classificationCorrect,
-              allConditionsRepresented,
-              logicAndQualifiersPreserved,
-            }) =>
-              classificationCorrect &&
-              allConditionsRepresented &&
-              logicAndQualifiersPreserved,
-          ).length ?? 0;
+        const priorKinds = new Map(
+          previous.semantic?.proposal.ledger.map(({ id, kind }) => [id, kind]),
+        );
+        const verifiedIds = (extraction: typeof previous) =>
+          (extraction.semantic?.verification.units ?? [])
+            .filter(
+              ({
+                classificationCorrect,
+                allConditionsRepresented,
+                logicAndQualifiersPreserved,
+              }) =>
+                classificationCorrect &&
+                allConditionsRepresented &&
+                logicAndQualifiersPreserved,
+            )
+            .map(({ id }) => id);
+        const previousVerified = new Set(verifiedIds(previous));
+        const correctedExercise = [
+          ...(provenance.hiringExercises ?? []).flatMap(
+            ({ assessedUnitIds }) => assessedUnitIds,
+          ),
+          ...(provenance.submissionDisclosures ?? []),
+          ...(provenance.applicationSubmissions ?? []),
+          ...(provenance.mixedUnits ?? []).map(({ unitId }) => unitId),
+        ].some((id) => {
+          const kind = priorKinds.get(id);
+          return (
+            previousVerified.has(id) &&
+            (kind === 'requirement' || kind === 'preferred')
+          );
+        });
         if (
-          previous.coverage === 'complete' ||
-          countVerified(previous) > countVerified(incoming) ||
-          (previous.semantic?.verification.roleCorrect &&
-            !incoming.semantic?.verification.roleCorrect) ||
-          (previous.semantic?.verification.geographyCorrect &&
-            !incoming.semantic?.verification.geographyCorrect)
+          !correctedExercise &&
+          (previous.coverage === 'complete' ||
+            previousVerified.size > verifiedIds(incoming).length ||
+            (previous.semantic?.verification.roleCorrect &&
+              !incoming.semantic?.verification.roleCorrect) ||
+            (previous.semantic?.verification.geographyCorrect &&
+              !incoming.semantic?.verification.geographyCorrect))
         ) {
           options.onFailure?.('PriorEvidenceRetained');
           return (await retainPrior()) ? 'idle' : 'obsolete';

@@ -3,16 +3,32 @@ import { z } from 'zod';
 import { onboardingCountryCodes } from './country-reference.js';
 import type { MatchingSourceText } from './matching-source-extraction-contract.js';
 import { matchingSourceJevBlocks } from './matching-source-jev-blocks.js';
+import { matchingSourceJevClauseSpans } from './matching-source-jev-clauses.js';
+import {
+  matchingSourceJevApplicationSubmission,
+  matchingSourceJevExactExerciseParticipation,
+  matchingSourceJevExerciseCondition,
+  matchingSourceJevExerciseScopes,
+  matchingSourceJevExerciseSections,
+} from './matching-source-jev-exercise.js';
 import { matchingSourceStructureMatches } from './matching-source-jev-structure.js';
 import {
+  hasAnalysisPII,
+  MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION,
   MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT,
+  matchingSourceDecoration,
   matchingSourceSemanticUnits,
+  matchingSourceSubmissionDisclosureCandidate,
   matchingSourceTypedClaimNeedsReview,
+  matchingSourceUsesClausePreparation,
+  matchingSourceUsesClosedExercisePreparation,
+  matchingSourceUsesExercisePreparation,
   matchingSourceUsesPreparationAtLeast,
 } from './matching-source-units.js';
 import {
   compileMatchingVocabulary,
   matchingSourceCapabilityGapAllowed,
+  matchingSourceContextLines,
   matchingSourceRoleInventory,
   matchingSourceSectionHints,
 } from './normalized-matching.js';
@@ -37,7 +53,11 @@ export function matchingSourceProofHasUnsafeTypedCoverage(
       )
       .map(({ id }) => id),
   );
+  const mixedUnits = new Set(
+    proof.decision.mixedUnits?.map(({ unitId }) => unitId),
+  );
   return matchingSourceSemanticUnits(source).some(({ id, field, quote }) => {
+    if (mixedUnits.has(id)) return false;
     const claim = claims.get(id);
     return (
       field === 'description' &&
@@ -146,6 +166,103 @@ const sourceBlock = z.strictObject({
   operator: z.enum(['all', 'any']),
 });
 export type MatchingSourceDecisionBlock = z.infer<typeof sourceBlock>;
+const exerciseScope = z.strictObject({
+  version: z.literal(1),
+  anchorId: unitId,
+  closingId: unitId,
+  unitIds: z.array(unitId).min(2).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+  assessedUnitIds: z
+    .array(unitId)
+    .min(2)
+    .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+  participationUnitId: unitId,
+  participation: z.enum(['required', 'optional']),
+  boundaryProof: z.literal('closed-source').optional(),
+});
+export type MatchingSourceDecisionExercise = z.infer<typeof exerciseScope>;
+const exerciseSection = z.strictObject({
+  version: z.literal(1),
+  exerciseAnchorId: unitId,
+  anchorId: unitId,
+  startId: unitId,
+  followingId: unitId,
+  unitIds: z.array(unitId).min(1).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+  phase: z.enum(['tools', 'sample', 'submission', 'rubric']),
+  assessedUnitIds: z
+    .array(unitId)
+    .min(1)
+    .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+});
+export type MatchingSourceDecisionExerciseSection = z.infer<
+  typeof exerciseSection
+>;
+const mixedClause = z.strictObject({
+  start: z.number().int().min(0).max(900),
+  end: z.number().int().min(1).max(900),
+  kind: z.enum(['requirement', 'preferred', 'context', 'application', 'trait']),
+});
+const mixedUnit = z.strictObject({
+  version: z.literal(1),
+  unitId,
+  clauses: z.array(mixedClause).min(2).max(4),
+});
+export type MatchingSourceDecisionMixedUnit = z.infer<typeof mixedUnit>;
+
+export function matchingSourceJevClausePhaseAllowed(
+  quote: string,
+  kind: MatchingSourceDecisionMixedUnit['clauses'][number]['kind'],
+): boolean {
+  if (hasAnalysisPII(quote)) return false;
+  const optional =
+    /^(?:optional|preferred|nice[- ]to[- ]have)\b|\b(?:is a plus|optional|preferred|nice[- ]to[- ]have|not required)[.!]?$/iu.test(
+      quote,
+    );
+  const mandatory = /\b(?:must|mandatory|is required|required for)\b/iu.test(
+    quote.replace(/\bnot required\b/giu, ''),
+  );
+  if ((optional && kind !== 'preferred') || (mandatory && kind === 'preferred'))
+    return false;
+  if (kind === 'requirement' || kind === 'preferred')
+    return matchingSourceCapabilityGapAllowed(quote, 'unmapped');
+  if (kind === 'application')
+    return Boolean(
+      matchingSourceJevApplicationSubmission(quote, 'How to apply'),
+    );
+  const literalRolePurpose =
+    /^we(?:['’]re| are) looking for ([^.!?]{1,140}?)\bto (?:help )?(?:build|design|develop|maintain|support|lead|implement|scale)\b/iu.exec(
+      quote,
+    );
+  const safeRolePurpose =
+    literalRolePurpose &&
+    !/\b(?:or|and)\b|[/|]/iu.test(literalRolePurpose[1] ?? '') &&
+    !/\b(?:prior|experience|expert\w*|proficien\w*|skills?|knowledge|qualifications?|mandatory|required|must|years?|licen[cs]e|visas?|certif\w*|clearance|eligib\w*|relocat\w*|on[- ]site|time[- ]zone|availability|authori[sz]ation|based in|located in|remote|reside|live in|only)\b/iu.test(
+      quote,
+    );
+  const safeSource =
+    !matchingSourceJevExerciseCondition(quote) &&
+    !matchingSourceTypedClaimNeedsReview(quote, 'context');
+  if (kind === 'trait')
+    return (
+      safeSource &&
+      Boolean(
+        safeRolePurpose &&
+          /^(?:a|an|the)\s+[\p{L}-]+,\s+[\p{L}-]+\s+\p{L}/iu.test(
+            literalRolePurpose?.[1] ?? '',
+          ),
+      )
+    );
+  return (
+    safeSource &&
+    (literalRolePurpose
+      ? Boolean(safeRolePurpose)
+      : matchingSourceContextLines(
+          { title: '', location: '', description: quote },
+          true,
+          true,
+          true,
+        ).has(0))
+  );
+}
 const unaskedReason = z.enum([
   'unsafeSource',
   'metadataUnavailable',
@@ -157,6 +274,10 @@ const unaskedReason = z.enum([
   'auditBudget',
   'auditInputLimit',
   'unsupportedAudit',
+  'exerciseBoundaryUnresolved',
+  'exerciseConditionUnresolved',
+  'exerciseStructuralWrapper',
+  'mixedClauseUnresolved',
 ]);
 const declinedDimension = z.enum([
   'classification',
@@ -179,6 +300,11 @@ const decisionProvenance = decisionProfile.extend({
   assessmentVersion: z.literal(1).optional(),
   blocks: z.array(sourceBlock).max(16).optional(),
   capabilityGaps: z.array(capabilityGap).max(MAX_ATOMS).optional(),
+  hiringExercises: z.array(exerciseScope).min(1).max(4).optional(),
+  hiringExerciseSections: z.array(exerciseSection).min(1).max(32).optional(),
+  submissionDisclosures: z.array(unitId).min(1).max(8).optional(),
+  applicationSubmissions: z.array(unitId).min(1).max(8).optional(),
+  mixedUnits: z.array(mixedUnit).min(1).max(8).optional(),
   structures: z
     .record(
       z.string().regex(/^d[1-9]\d{0,2}$/u),
@@ -188,6 +314,11 @@ const decisionProvenance = decisionProfile.extend({
   diagnostics: z
     .strictObject({
       draftCalls: z.number().int().min(0).max(100),
+      unaskedUnits: z
+        .array(z.strictObject({ unitId, reason: unaskedReason }))
+        .min(1)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT)
+        .optional(),
       unaskedReasons: z
         .partialRecord(unaskedReason, sourceUnitCount)
         .optional(),
@@ -197,6 +328,20 @@ const decisionProvenance = decisionProfile.extend({
       draftFailures: z.number().int().min(1).max(100).optional(),
       assessedGaps: z.number().int().min(1).max(MAX_ATOMS).optional(),
       verifiedBlocks: z.number().int().min(1).max(16).optional(),
+      exerciseBoundariesAsked: z.number().int().min(1).max(4).optional(),
+      exerciseBoundariesVerified: z.number().int().min(1).max(4).optional(),
+      exerciseBoundariesHostVerified: z.number().int().min(1).max(4).optional(),
+      exerciseUnitsAsked: sourceUnitCount.optional(),
+      exerciseUnitsVerified: sourceUnitCount.optional(),
+      exerciseBlocksAsked: z.number().int().min(1).max(32).optional(),
+      exerciseBlocksVerified: z.number().int().min(1).max(32).optional(),
+      exerciseAuditDeclines: z
+        .array(unitId)
+        .min(1)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT)
+        .optional(),
+      mixedUnitsAsked: z.number().int().min(1).max(8).optional(),
+      mixedUnitsVerified: z.number().int().min(1).max(8).optional(),
       verificationCalls: z.number().int().min(0).max(100),
       unasked: z.number().int().min(0).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
       declined: z
@@ -582,6 +727,219 @@ export function parseMatchingSourceSemanticProof(
       )
         throw new MatchingSourceSemanticError('predicate');
       for (const id of block.unitIds) claimed.add(id);
+    }
+  }
+  if (parsed.decision?.mixedUnits) {
+    if (
+      !matchingSourceUsesClausePreparation(parsed.decision.preparationVersion)
+    )
+      throw new MatchingSourceSemanticError('predicate');
+    const seen = new Set<string>();
+    for (const mixed of parsed.decision.mixedUnits) {
+      const unit = units.get(mixed.unitId);
+      if (
+        unit?.field !== 'description' ||
+        seen.has(mixed.unitId) ||
+        !reviewed.has(mixed.unitId) ||
+        ledger.get(mixed.unitId)?.kind !== 'context' ||
+        parsed.decision.applicationSubmissions?.includes(mixed.unitId) ||
+        parsed.decision.submissionDisclosures?.includes(mixed.unitId) ||
+        parsed.decision.hiringExercises?.some((scope) =>
+          scope.unitIds.includes(mixed.unitId),
+        )
+      )
+        throw new MatchingSourceSemanticError('predicate');
+      const spans = matchingSourceJevClauseSpans(unit.quote);
+      if (
+        spans.length !== mixed.clauses.length ||
+        mixed.clauses.some(({ start, end, kind }, index) => {
+          const span = spans[index];
+          return (
+            !span ||
+            span.start !== start ||
+            span.end !== end ||
+            (kind === 'trait' &&
+              parsed.decision?.preparationVersion !==
+                MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION) ||
+            !matchingSourceJevClausePhaseAllowed(span.quote, kind)
+          );
+        })
+      )
+        throw new MatchingSourceSemanticError('predicate');
+      seen.add(mixed.unitId);
+    }
+  }
+  if (parsed.decision?.applicationSubmissions) {
+    const ids = parsed.decision.applicationSubmissions;
+    const hints = matchingSourceSectionHints(source.description, true);
+    if (
+      !matchingSourceUsesClausePreparation(
+        parsed.decision.preparationVersion,
+      ) ||
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => {
+        const unit = units.get(id);
+        return (
+          unit?.field !== 'description' ||
+          !reviewed.has(id) ||
+          ledger.get(id)?.kind !== 'context' ||
+          parsed.decision?.submissionDisclosures?.includes(id) ||
+          !matchingSourceJevApplicationSubmission(
+            unit.quote,
+            hints.get(unit.start)?.governingHeading.quote,
+          )
+        );
+      })
+    )
+      throw new MatchingSourceSemanticError('predicate');
+  }
+  if (parsed.decision?.submissionDisclosures) {
+    const ids = parsed.decision.submissionDisclosures;
+    if (
+      !matchingSourceUsesExercisePreparation(
+        parsed.decision.preparationVersion,
+      ) ||
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => {
+        const unit = units.get(id);
+        return (
+          unit?.field !== 'description' ||
+          !reviewed.has(id) ||
+          ledger.get(id)?.kind !== 'context' ||
+          hasAnalysisPII(unit.quote) ||
+          !matchingSourceSubmissionDisclosureCandidate(unit.quote) ||
+          matchingSourceTypedClaimNeedsReview(unit.quote, 'context')
+        );
+      })
+    )
+      throw new MatchingSourceSemanticError('predicate');
+  }
+  if (parsed.decision?.hiringExercises) {
+    if (
+      !matchingSourceUsesExercisePreparation(parsed.decision.preparationVersion)
+    )
+      throw new MatchingSourceSemanticError('predicate');
+    const expected = new Map(
+      matchingSourceJevExerciseScopes(source).map((scope) => [
+        scope.anchorId,
+        scope,
+      ]),
+    );
+    const anchors = new Set<string>();
+    for (const exercise of parsed.decision.hiringExercises) {
+      const candidate = expected.get(exercise.anchorId);
+      const introductionId = candidate?.unitIds.slice(1).find((id) => {
+        const unit = units.get(id);
+        return unit && !matchingSourceDecoration(unit.quote);
+      });
+      const members = new Set(exercise.assessedUnitIds);
+      if (exercise.boundaryProof === 'closed-source') {
+        const fullUnits = [...units.values()];
+        const closingIndex = fullUnits.findIndex(
+          ({ id }) => id === exercise.closingId,
+        );
+        const following = fullUnits
+          .slice(closingIndex + 1)
+          .find(
+            (unit) =>
+              unit.field === 'description' &&
+              !matchingSourceDecoration(unit.quote),
+          );
+        const open = units.get(exercise.anchorId);
+        const intro = units.get(exercise.participationUnitId);
+        const close = units.get(exercise.closingId);
+        if (
+          !matchingSourceUsesClosedExercisePreparation(
+            parsed.decision.preparationVersion,
+          ) ||
+          !open ||
+          !intro ||
+          !close ||
+          !following ||
+          matchingSourceJevExactExerciseParticipation(
+            open.quote,
+            intro.quote,
+            close.quote,
+            following.quote,
+          ) !== exercise.participation
+        )
+          throw new MatchingSourceSemanticError('predicate');
+      }
+      if (
+        !candidate ||
+        anchors.has(exercise.anchorId) ||
+        candidate.closingId !== exercise.closingId ||
+        candidate.unitIds.join(',') !== exercise.unitIds.join(',') ||
+        exercise.unitIds.some(
+          (id) =>
+            parsed.decision?.submissionDisclosures?.includes(id) ||
+            parsed.decision?.applicationSubmissions?.includes(id),
+        ) ||
+        !introductionId ||
+        exercise.participationUnitId !== introductionId ||
+        !members.has(exercise.anchorId) ||
+        !members.has(introductionId) ||
+        exercise.unitIds.filter((id) => members.has(id)).join(',') !==
+          exercise.assessedUnitIds.join(',') ||
+        exercise.assessedUnitIds.some((id) => {
+          const unit = units.get(id);
+          return (
+            unit?.field !== 'description' ||
+            !reviewed.has(id) ||
+            ledger.get(id)?.kind !== 'context' ||
+            hasAnalysisPII(unit.quote) ||
+            matchingSourceJevExerciseCondition(unit.quote) ||
+            matchingSourceTypedClaimNeedsReview(unit.quote, 'context')
+          );
+        })
+      )
+        throw new MatchingSourceSemanticError('predicate');
+      anchors.add(exercise.anchorId);
+    }
+  }
+  if (parsed.decision?.hiringExerciseSections) {
+    if (
+      (!matchingSourceUsesClosedExercisePreparation(
+        parsed.decision.preparationVersion,
+      ) &&
+        parsed.decision.preparationVersion !== 'matching-source-jev/v28') ||
+      !parsed.decision.hiringExercises
+    )
+      throw new MatchingSourceSemanticError('predicate');
+    const byExercise = new Map(
+      parsed.decision.hiringExercises.map((exercise) => [
+        exercise.anchorId,
+        {
+          exercise,
+          sections: new Map(
+            matchingSourceJevExerciseSections(source, exercise).map(
+              (section) => [section.startId, section],
+            ),
+          ),
+        },
+      ]),
+    );
+    const used = new Set<string>();
+    for (const section of parsed.decision.hiringExerciseSections) {
+      const outer = byExercise.get(section.exerciseAnchorId);
+      const expected = outer?.sections.get(section.startId);
+      const assessed = new Set(section.assessedUnitIds);
+      if (
+        !outer ||
+        !expected ||
+        expected.anchorId !== section.anchorId ||
+        expected.followingId !== section.followingId ||
+        expected.phase !== section.phase ||
+        expected.unitIds.join(',') !== section.unitIds.join(',') ||
+        section.unitIds.some((id) => used.has(id)) ||
+        section.unitIds.filter((id) => assessed.has(id)).join(',') !==
+          section.assessedUnitIds.join(',') ||
+        section.assessedUnitIds.some(
+          (id) => !outer.exercise.assessedUnitIds.includes(id),
+        )
+      )
+        throw new MatchingSourceSemanticError('predicate');
+      for (const id of section.unitIds) used.add(id);
     }
   }
   if (parsed.decision?.structures) {

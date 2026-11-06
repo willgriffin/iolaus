@@ -26,6 +26,11 @@ import type {
 } from './matching-source-extraction-contract.js';
 import { matchingSourceJevBlocks } from './matching-source-jev-blocks.js';
 import {
+  matchingSourceJevApplicationSubmission,
+  matchingSourceJevExerciseBoundaries,
+  matchingSourceJevExerciseStructuralWrappers,
+} from './matching-source-jev-exercise.js';
+import {
   matchingSourceStructureMatches,
   matchingSourceStructures,
 } from './matching-source-jev-structure.js';
@@ -35,10 +40,13 @@ import {
   MATCHING_SOURCE_DESCRIPTION_LIMIT,
   matchingDescriptionUnits,
   matchingSourceDecoration,
+  matchingSourceJevMixedPhaseCandidate,
   matchingSourceSemanticUnits,
   matchingSourceTypedClaimNeedsReview,
   matchingSourceTypedContextNeedsReview,
   matchingSourceTypicalTenure,
+  matchingSourceUsesClausePreparation,
+  matchingSourceUsesExercisePreparation,
   matchingSourceUsesPreparationAtLeast,
 } from './matching-source-units.js';
 
@@ -1282,9 +1290,19 @@ type SourceCapabilityGap = {
     | 'production'
     | 'illustrative'
     | 'unmapped'
-    | 'scope';
+    | 'scope'
+    | 'trait';
   verifiedConceptId?: string;
   conceptIds: readonly string[];
+  citation: Citation;
+};
+
+type SourceApplicationStep = {
+  kind:
+    | 'assessment-required'
+    | 'assessment-optional'
+    | 'submission-disclosure'
+    | 'submission-materials';
   citation: Citation;
 };
 
@@ -1296,6 +1314,7 @@ export interface NormalizedMatchingPosting {
   preferredUncertainties: readonly MatchingReason[];
   uncertainties: readonly MatchingReason[];
   sourceCapabilityGaps?: readonly SourceCapabilityGap[];
+  applicationSteps?: readonly SourceApplicationStep[];
   sourceDecisionReaderRevision?: string;
 }
 
@@ -3153,6 +3172,69 @@ export function matchingSourceContextLines(
   return safe;
 }
 
+function exactMixedClauseGroups(
+  citation: Citation,
+  vocabulary: MatchingVocabulary,
+): Group[] | undefined {
+  const value = citation.text.trim().replace(/[.!?]$/u, '');
+  const familiarity = value.match(
+    /^familiarity with ([^()]+?)(?:\s+\(([^()]+)\))?\s+is (?:important|required|essential|a plus|preferred|optional)$/iu,
+  );
+  if (familiarity) {
+    const slug = vocabulary.aliases.get(phrase(familiarity[1] ?? ''));
+    const parenthetical = familiarity[2];
+    const examples = parenthetical
+      ?.replace(/^(?:e\.g\.|for example)\s*[, ]*/iu, '')
+      .replace(/[, ]+etc\.?$/iu, '')
+      .split(',')
+      .map((label) => label.trim());
+    if (
+      slug &&
+      (!parenthetical ||
+        ((/^(?:e\.g\.|for example\b)/iu.test(parenthetical) ||
+          /\betc\.?$/iu.test(parenthetical)) &&
+          examples?.every(
+            (label) =>
+              /^[\p{L}\p{N}+#. /-]+$/u.test(label) &&
+              !/\b(?:must|only|required|production|professional|years?|months?)\b/iu.test(
+                label,
+              ),
+          )))
+    ) {
+      return [
+        {
+          citation,
+          alternatives: [
+            {
+              slug,
+              familiarity: true,
+              examples: examples?.flatMap(
+                (label) => vocabulary.aliases.get(phrase(label)) ?? [],
+              ),
+            },
+          ],
+        },
+      ];
+    }
+    return undefined;
+  }
+  const bare = value.replace(
+    /\s+is (?:a plus|preferred|optional|required|essential)$/iu,
+    '',
+  );
+  if (bare !== value && /\bexperience$/iu.test(bare)) {
+    const names = bare.replace(/\s+experience$/iu, '').split(/\s+and\s+/iu);
+    const concepts = names.map((name) => vocabulary.aliases.get(phrase(name)));
+    if (concepts.every((slug) => slug))
+      return concepts.flatMap((slug) =>
+        slug ? [{ citation, alternatives: [{ slug }] }] : [],
+      );
+  }
+  return parseGroups(bare, citation, vocabulary)?.filter(
+    ({ requiresSourceReview }) => !requiresSourceReview,
+  );
+}
+
 function mergeSemanticExtraction(
   raw: MatchingPostingInput,
   posting: NormalizedMatchingPosting,
@@ -3220,6 +3302,52 @@ function mergeSemanticExtraction(
   const assessedGaps = new Map(
     (proof.decision?.capabilityGaps ?? []).map((gap) => [gap.unitId, gap]),
   );
+  const applicationSteps: SourceApplicationStep[] = [];
+  const submissionDisclosures = new Set(proof.decision?.submissionDisclosures);
+  const applicationSubmissions = new Set(
+    proof.decision?.applicationSubmissions,
+  );
+  const mixedUnits = new Map(
+    proof.decision?.mixedUnits?.map((unit) => [unit.unitId, unit]),
+  );
+  const exerciseBoundaries = matchingSourceUsesExercisePreparation(
+    proof.decision?.preparationVersion,
+  )
+    ? matchingSourceJevExerciseBoundaries(raw)
+    : undefined;
+  const exerciseIds = new Set([
+    ...(exerciseBoundaries?.scopes.flatMap(({ unitIds }) => unitIds) ?? []),
+    ...(exerciseBoundaries?.unresolvedUnitIds ?? []),
+  ]);
+  const assessedExerciseIds = new Set(
+    proof.decision?.hiringExercises?.flatMap((scope) => scope.assessedUnitIds),
+  );
+  const structuralExerciseIds = new Set(
+    proof.decision?.hiringExercises?.flatMap((scope) =>
+      matchingSourceJevExerciseStructuralWrappers(
+        raw,
+        scope,
+        proof.decision?.hiringExerciseSections?.filter(
+          ({ exerciseAnchorId }) => exerciseAnchorId === scope.anchorId,
+        ) ?? [],
+      ),
+    ),
+  );
+  for (const scope of proof.decision?.hiringExercises ?? []) {
+    const citation = citeUnit(scope.participationUnitId);
+    if (
+      citation &&
+      verifiedUnits.has(scope.anchorId) &&
+      verifiedUnits.has(scope.participationUnitId)
+    )
+      applicationSteps.push({
+        kind:
+          scope.participation === 'required'
+            ? 'assessment-required'
+            : 'assessment-optional',
+        citation,
+      });
+  }
   const scopedUnits = new Set<string>();
   const typedDutyHeadings = matchingSourceUsesPreparationAtLeast(
     proof.decision?.preparationVersion,
@@ -3239,7 +3367,7 @@ function mergeSemanticExtraction(
     ? matchingSourceJevBlocks(
         raw,
         typedHints ?? matchingSourceSectionHints(raw.description),
-      )
+      ).filter(({ unitIds }) => !unitIds.some((id) => exerciseIds.has(id)))
     : [];
   const verifiedBlocks = new Set(
     proof.decision?.blocks?.map(({ anchorId }) => anchorId),
@@ -3340,6 +3468,117 @@ function mergeSemanticExtraction(
       matchingSourceDecoration(citation.text)
     ) {
       verifiedDisclosures.push(citation);
+      continue;
+    }
+    if (exerciseIds.has(unit.id)) {
+      removeGroupsAt(citation);
+      if (
+        structuralExerciseIds.has(unit.id) ||
+        (assessedExerciseIds.has(unit.id) && verifiedUnits.has(unit.id))
+      )
+        verifiedDisclosures.push(citation);
+      else
+        unresolved.push(
+          reason(
+            'posting-requirement-unknown',
+            'unknown',
+            'Source review could not distinguish this exercise clause from an actual applicant condition.',
+            citation,
+          ),
+        );
+      continue;
+    }
+    const mixed = mixedUnits.get(unit.id);
+    if (mixed && verifiedUnits.has(unit.id)) {
+      removeGroupsAt(citation);
+      verifiedDisclosures.push(citation);
+      for (const { start, end, kind } of mixed.clauses) {
+        const clause = cite(
+          'description',
+          raw.description,
+          citation.start + start,
+          citation.start + end,
+        );
+        if (kind === 'context') continue;
+        if (kind === 'trait') {
+          sourceCapabilityGaps.push({
+            qualifier: 'trait',
+            conceptIds: [],
+            citation: clause,
+          });
+          continue;
+        }
+        if (kind === 'application') {
+          applicationSteps.push({
+            kind: 'submission-materials',
+            citation: clause,
+          });
+          continue;
+        }
+        const groups = exactMixedClauseGroups(clause, vocabulary);
+        if (kind === 'requirement') {
+          coveredHard.push(citation);
+          if (groups?.length) required.push(...groups);
+          else
+            sourceCapabilityGaps.push({
+              qualifier: 'unmapped',
+              conceptIds: [],
+              citation: clause,
+            });
+        } else if (groups?.length) preferred.push(...groups);
+        else
+          preferredUncertainties.push(
+            reason(
+              'posting-preference-unknown',
+              'unknown',
+              'The posting lists this optional capability, but matching could not establish its full scope.',
+              clause,
+            ),
+          );
+      }
+      continue;
+    }
+    if (
+      matchingSourceUsesClausePreparation(proof.decision?.preparationVersion) &&
+      unit.kind === 'unresolved' &&
+      citation.field === 'description' &&
+      matchingSourceJevMixedPhaseCandidate(citation.text)
+    ) {
+      removeGroupsAt(citation);
+      unresolved.push(
+        reason(
+          'posting-requirement-unknown',
+          'unknown',
+          'Source review could not separate the duties and applicant conditions in this clause.',
+          citation,
+        ),
+      );
+      continue;
+    }
+    if (applicationSubmissions.has(unit.id) && verifiedUnits.has(unit.id)) {
+      const submission = matchingSourceJevApplicationSubmission(
+        citation.text,
+        typedHints?.get(citation.start)?.governingHeading.quote,
+      );
+      if (submission) {
+        removeGroupsAt(citation);
+        verifiedDisclosures.push(citation);
+        applicationSteps.push({
+          kind: 'submission-materials',
+          citation: cite(
+            'description',
+            raw.description,
+            citation.start,
+            citation.start + submission.citationText.length,
+          ),
+        });
+        continue;
+      }
+    }
+    if (submissionDisclosures.has(unit.id) && verifiedUnits.has(unit.id)) {
+      removeGroupsAt(citation);
+      verifiedDisclosures.push(citation);
+      applicationSteps.push({ kind: 'submission-disclosure', citation });
       continue;
     }
     if (
@@ -3697,6 +3936,7 @@ function mergeSemanticExtraction(
       sourceDecisionReaderRevision: MATCHING_SOURCE_DECISION_READER_REVISION,
     }),
     ...(sourceCapabilityGaps.length > 0 && { sourceCapabilityGaps }),
+    ...(applicationSteps.length > 0 && { applicationSteps }),
     preferredUncertainties,
     uncertainties: [...uncertainties, ...unresolved],
   };
@@ -5405,9 +5645,11 @@ export function evaluateNormalizedMatch(
       reason(
         'posting-capability-gap',
         'unknown',
-        qualifier === 'unmapped'
-          ? 'The posting requires a capability that matching could not map.'
-          : 'The posting specifies a capability qualification that matching could not establish.',
+        qualifier === 'trait'
+          ? 'The posting describes desired professional traits that matching could not establish.'
+          : qualifier === 'unmapped'
+            ? 'The posting requires a capability that matching could not map.'
+            : 'The posting specifies a capability qualification that matching could not establish.',
         citation,
       ),
     ),
@@ -5449,7 +5691,24 @@ export function evaluateNormalizedMatch(
     }),
     ...posting.preferredUncertainties,
   ];
-  const reasons = [...hard, ...soft];
+  const reasons = [
+    ...hard,
+    ...soft,
+    ...(posting.applicationSteps ?? []).map(({ kind, citation }) =>
+      reason(
+        'posting-application-step',
+        'unknown',
+        kind === 'assessment-required'
+          ? 'The hiring process requires a take-home assessment.'
+          : kind === 'assessment-optional'
+            ? 'The hiring process offers an optional take-home assessment.'
+            : kind === 'submission-disclosure'
+              ? 'The posting gives a disclosure instruction for submitting an application.'
+              : 'The posting asks applicants to send application materials.',
+        citation,
+      ),
+    ),
+  ];
   if (
     !interpretationGap &&
     candidate.interpretationIssue &&

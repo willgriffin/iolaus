@@ -1,7 +1,47 @@
 import type { MatchingSourceText } from './matching-source-extraction-contract.js';
 
 export const MATCHING_SOURCE_DECISION_READER_REVISION =
-  'typed-source-reader/v3';
+  'typed-source-reader/v6';
+export const MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION =
+  'matching-source-jev/v31';
+
+export function matchingSourceUsesExercisePreparation(
+  version: string | undefined,
+): boolean {
+  return (
+    version === 'matching-source-jev/v24' ||
+    version === 'matching-source-jev/v25' ||
+    version === 'matching-source-jev/v26' ||
+    version === 'matching-source-jev/v27' ||
+    version === 'matching-source-jev/v28' ||
+    version === 'matching-source-jev/v29' ||
+    version === 'matching-source-jev/v30' ||
+    version === MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION
+  );
+}
+
+export function matchingSourceUsesClausePreparation(
+  version: string | undefined,
+): boolean {
+  return (
+    version === 'matching-source-jev/v26' ||
+    version === 'matching-source-jev/v27' ||
+    version === 'matching-source-jev/v28' ||
+    version === 'matching-source-jev/v29' ||
+    version === 'matching-source-jev/v30' ||
+    version === MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION
+  );
+}
+
+export function matchingSourceUsesClosedExercisePreparation(
+  version: string | undefined,
+): boolean {
+  return (
+    version === 'matching-source-jev/v29' ||
+    version === 'matching-source-jev/v30' ||
+    version === MATCHING_SOURCE_EXERCISE_PREPARATION_VERSION
+  );
+}
 
 export function matchingSourceUsesPreparationAtLeast(
   preparationVersion: string | undefined,
@@ -39,6 +79,51 @@ export function matchingSourceTypedClaimNeedsReview(
   return (
     (kind === 'context' && matchingSourceTypedContextNeedsReview(quote)) ||
     (kind !== 'unresolved' && matchingSourceHasMixedStrength(quote))
+  );
+}
+
+export function matchingSourceOperatorDirective(quote: string): boolean {
+  return /\b(?:ignore|disregard|override)\b[^.!?]{0,60}\b(?:prior|previous|system|developer) (?:instructions?|rules?|prompts?)\b|\b(?:mark|classify)\b[^.!?]{0,55}\b(?:candidate|applicant|posting|role)\b[^.!?]{0,30}\bqualified\b/iu.test(
+    quote,
+  );
+}
+
+export function matchingSourceAIUseEligibility(quote: string): boolean {
+  return (
+    /\b(?:AI(?:[- ]assisted| tools?| assistance)?|LLMs?|automated coding tools?)\b/iu.test(
+      quote,
+    ) &&
+    /\b(?:ineligible|not eligible|disqualifi\w*|may not apply|cannot apply|(?:must not|may not) have used|AI use is (?:prohibited|forbidden))\b/iu.test(
+      quote,
+    )
+  );
+}
+
+/** Draft aid only. Independent audit verifies the actual applicant scope. */
+export function matchingSourceSubmissionDisclosureCandidate(
+  quote: string,
+): boolean {
+  return (
+    /\b(?:LLMs?|large language models?|AI(?:[- ]assisted| assistance| tools?| usage)?|automation|automated)\b/iu.test(
+      quote,
+    ) &&
+    /\b(?:disclos\w*|declar\w*|indicate|include)\b/iu.test(quote) &&
+    /\b(?:applications?|when applying|when you apply|subject line|submission)\b/iu.test(
+      quote,
+    ) &&
+    !/\b(?:ineligible|not eligible|disqualifi\w*|work authori[sz]ation|authori[sz]ed to work|visas?|sponsor\w*|citizenship|residency|clearance|licen[cs]e|degree|relocat\w*|time[- ]zone|availability|\d+\+? years?|AI use is (?:prohibited|forbidden))\b/iu.test(
+      quote,
+    ) &&
+    !matchingSourceOperatorDirective(quote)
+  );
+}
+
+export function matchingSourceJevMixedPhaseCandidate(quote: string): boolean {
+  return (
+    /;\s*\S|\.\s+\p{Lu}/u.test(quote) &&
+    /\b(?:preferred|optional|a plus|nice[- ]to[- ]have)\b|^we(?:['’]re| are) looking for\b/iu.test(
+      quote,
+    )
   );
 }
 
