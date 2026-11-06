@@ -1,3 +1,6 @@
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
 import {
   afterAll,
@@ -88,17 +91,36 @@ async function setup(
 
 function suite(
   label: string,
-  config: { type: 'sqlite' | 'postgres'; url: string },
+  config:
+    | { type: 'sqlite' | 'postgres'; url: string }
+    | { type: 'sqlite'; native: true },
 ) {
   describe(label, () => {
     let database: DatabaseInterface;
+    let directory: string | undefined;
 
     beforeAll(async () => {
-      database = await getDatabase(
-        config.type === 'postgres'
-          ? { ...config, cache: false, max: 1 }
-          : { ...config, cache: false },
-      );
+      if ('native' in config) {
+        directory = await mkdtemp(
+          join(await realpath(tmpdir()), 'iolaus-score-refresh-'),
+        );
+        database = await getDatabase({
+          type: 'sqlite',
+          url: join(directory, 'scores.sqlite'),
+          cache: false,
+          secureFile: {
+            custody: 'trusted-parent',
+            driver: 'node:sqlite',
+            root: directory,
+          },
+        });
+      } else {
+        database = await getDatabase(
+          config.type === 'postgres'
+            ? { ...config, cache: false, max: 1 }
+            : { ...config, cache: false },
+        );
+      }
       await setup(database, config.type);
     });
     beforeEach(async () => {
@@ -122,7 +144,11 @@ function suite(
       mocks.opportunities.clear();
     });
     afterAll(async () => {
-      await database.close?.();
+      try {
+        await database?.close?.();
+      } finally {
+        if (directory) await rm(directory, { force: true, recursive: true });
+      }
     });
 
     it('registers the singleton generic schedule idempotently', async () => {
@@ -275,6 +301,54 @@ function suite(
       expect(row.rows[0]?.scoring_refresh_next_attempt_at).toBeTruthy();
     });
 
+    it('respects the persisted retry boundary even when the loaded record is stale', async () => {
+      const retryAt = new Date('2026-02-01T00:15:00.123Z');
+      await database.query(
+        `INSERT INTO opportunities (id,status,source_content_fingerprint,scoring_material_fingerprint,scoring_refresh_fingerprint,scoring_refresh_attempts,scoring_refresh_next_attempt_at)
+          VALUES ('a','found','source-a','material-a','material-a',1,?)`,
+        [config.type === 'postgres' ? retryAt : retryAt.toISOString()],
+      );
+      await database.query(
+        "INSERT INTO evaluation_scores (id,opportunity_id,source_content_fingerprint,scoring_material_fingerprint,created_by_profile_id) VALUES ('score-a','a','source-a','old','')",
+      );
+      mocks.opportunities.set('a', {
+        id: 'a',
+        sourceContentFingerprint: 'source-a',
+        scoringMaterialFingerprint: 'material-a',
+        scoringRefreshFingerprint: 'material-a',
+        scoringRefreshAttempts: 1,
+        testMaterial: 'material-a',
+      });
+      const {
+        OPPORTUNITY_SCORE_REFRESH_RETRY_MS,
+        reconcileSavedOpportunityScores,
+      } = await import('./opportunity-score-refresh');
+      const refreshAt = (now: Date) =>
+        reconcileSavedOpportunityScores(
+          { ...mocks.control, scoreRefreshCursor: '' } as never,
+          { db: database, now },
+        );
+
+      await expect(
+        refreshAt(new Date(retryAt.getTime() - 1)),
+      ).resolves.toMatchObject({ enqueued: 0 });
+      await expect(refreshAt(retryAt)).resolves.toMatchObject({ enqueued: 1 });
+      expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+
+      const next = retryAt.getTime() + OPPORTUNITY_SCORE_REFRESH_RETRY_MS;
+      await expect(refreshAt(new Date(next - 1))).resolves.toMatchObject({
+        enqueued: 0,
+      });
+      await expect(refreshAt(new Date(next))).resolves.toMatchObject({
+        enqueued: 1,
+      });
+      expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+      const row = await database.query(
+        "SELECT scoring_refresh_attempts FROM opportunities WHERE id = 'a'",
+      );
+      expect(row.rows[0]).toMatchObject({ scoring_refresh_attempts: 3 });
+    });
+
     it('does not enqueue after the source changes between targeting and reservation', async () => {
       await database.query(`INSERT INTO opportunities (id,status,source_content_fingerprint,scoring_material_fingerprint,scoring_refresh_fingerprint,scoring_refresh_attempts)
         VALUES ('a','found','source-a','','',0)`);
@@ -289,6 +363,7 @@ function suite(
         testMaterial: 'material-a',
       });
       const mutatingDatabase = {
+        url: database.url,
         query: async (sql: string, args?: unknown[]) => {
           const result = await database.query(sql, args);
           if (sql.includes('SET scoring_material_fingerprint')) {
@@ -362,5 +437,6 @@ function suite(
 }
 
 suite('sqlite', { type: 'sqlite', url: ':memory:' });
+suite('native file-backed SQLite', { type: 'sqlite', native: true });
 if (postgresUrl)
   suite('disposable PostgreSQL', { type: 'postgres', url: postgresUrl });
