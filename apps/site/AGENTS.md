@@ -36,5 +36,5 @@ test:data-surface-store:db` against a migrated local database after changing
 any of its statements.
 
 Run the narrowest relevant package check before broader repository validation.
-For database-sensitive changes, run this package's `db:migrate` and `db:status`
-scripts as required by the repository guide.
+For database-sensitive changes, follow the [repository validation
+guide](../../AGENTS.md#validation) for local SQLite or hosted PostgreSQL.

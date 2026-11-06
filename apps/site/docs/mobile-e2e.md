@@ -65,10 +65,9 @@ The older checkout exposed a task-data HTTP 500 from sorting sensitive
 fields and sorting rendered labels; this test change preserves that solution.
 The suite refuses to start if authenticated task data fails to load.
 
-The legacy package `db:status` script assumes PostgreSQL and fails on SQLite
-(`pg_tables` missing); tracked separately in [#104](https://github.com/willgriffin/iolaus/issues/104).
-The harness uses the supported SMRT CLI migration/status commands for its local
-runtime. No PostgreSQL schema or migration is changed.
+The harness runs SMRT CLI migrations and status checks on its SQLite fixture.
+For manual validation, see [local schema setup and
+status](../../../docs/configuration.md#local-schema-setup-and-status).
 
 ## Recorded baseline
 

@@ -36,6 +36,21 @@ tenant, cookies, terminal authorization code prefix, audit agent class, and
 CLI configuration directory. The `iolaus` default is reserved for the local
 profile; every public deployment must choose a unique non-default identifier.
 
+### Local schema setup and status
+
+From the repository root with the local profile, run setup to apply SQLite
+migrations and use the SMRT CLI to inspect the same database:
+
+```sh
+pnpm app:setup
+pnpm --filter @willgriffin/iolaus-site exec smrt db:status
+```
+
+For validation, set `SMRT_DATA_DIR` to the same disposable absolute path for
+both commands. Use `mktemp -d` to create a private directory. The site package
+scripts `db:migrate` and `db:status` are for hosted PostgreSQL deployments and
+include PostgreSQL-specific migration and integrity checks.
+
 ## Public installation
 
 Set `SMRT_RUNTIME_PROFILE=self-hosted` (or `cloud` for a managed deployment)
