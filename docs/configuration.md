@@ -198,7 +198,9 @@ and the admin sidebar footer. Terms and privacy must be `https:` URLs; support
 may also be an email address (rendered as `mailto:`). Unset or invalid values
 are ignored and the link is hidden. Nothing product-specific is built in. These
 variables have no effect in private or local mode, where the root continues to
-render the published resume.
+render the published resume. When using SQLite, the root reads the current
+resume for each request and uses a digest of the content as its HTTP cache
+validator.
 
 ### Account export and deletion
 

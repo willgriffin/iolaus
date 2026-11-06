@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   executeCollectionReadPlan: vi.fn(),
   getCurrentSessionPermissionContext: vi.fn(),
   getCurrentTenant: vi.fn(),
+  getDbConfig: vi.fn(),
   getRequestScopedSmrtOptions: vi.fn(),
   getRequestScopedDatabase: vi.fn(),
   getPrivateRecord: vi.fn(),
@@ -78,6 +79,11 @@ vi.mock('./resume-stamp', () => ({
 
 vi.mock('./app-config.js', () => ({
   isSharedHosted: mocks.isSharedHosted,
+}));
+
+vi.mock('./db.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./db.js')>()),
+  getDbConfig: mocks.getDbConfig,
 }));
 
 vi.mock('./private-workspace.js', () => ({
@@ -129,6 +135,11 @@ beforeEach(() => {
   mocks.getRequestScopedSmrtOptions.mockReturnValue({ db: 'request-db' });
   mocks.getCurrentSessionPermissionContext.mockReset();
   mocks.getRequestScopedDatabase.mockReset();
+  mocks.getDbConfig.mockReset();
+  mocks.getDbConfig.mockReturnValue({
+    type: 'postgres',
+    url: 'postgresql://example.test/resume',
+  });
   mocks.getCurrentTenant.mockReset();
   mocks.getPrivateRecord.mockReset();
   mocks.isSharedHosted.mockReset();
@@ -1219,6 +1230,37 @@ describe('loadPublishedResumeSource', () => {
     await expect(getCachedPublishedResume()).resolves.toMatchObject({
       stamp: 'stamp-1',
     });
+  });
+
+  it.each([
+    'request-scoped',
+    'configured',
+  ])('reads a %s SQLite resume directly and still returns a content hash', async (scope) => {
+    const db = { type: 'sqlite', url: 'file:resume.db' };
+    if (scope === 'request-scoped') {
+      mocks.getRequestScopedDatabase.mockReturnValue(db);
+    } else {
+      mocks.getDbConfig.mockReturnValue(db);
+    }
+    mocks.getRequestScopedSmrtOptions.mockReturnValue({ db });
+    mocks.executeCollectionReadPlan.mockImplementation(async (plan) =>
+      emptyReadPlanResult(plan),
+    );
+
+    const first = await getCachedPublishedResume();
+    expect(first).toMatchObject({
+      contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      stamp: null,
+    });
+    expect(mocks.executeCollectionReadPlan).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectionOptions: { db } }),
+    );
+    mocks.executeCollectionReadPlan.mockClear();
+
+    await expect(getCachedPublishedResume()).resolves.toEqual(first);
+    expect(mocks.executeCollectionReadPlan).toHaveBeenCalled();
+    expect(mocks.loadPublishedResumeStamp).not.toHaveBeenCalled();
   });
 
   it('reports no stamp when the database identity is unknown', async () => {
