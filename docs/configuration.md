@@ -18,6 +18,11 @@ Local Iolaus does not need an OIDC provider. Browser sign-in is available only
 from `localhost`, `127.0.0.1`, or `::1`; a remote host cannot turn the local
 owner path into a public login endpoint.
 
+Set `SMRT_BACKGROUND_JOBS=true` to start the local source crawl worker when
+Iolaus starts. It resumes crawls already queued in SQLite, including after an
+app restart. The setting defaults to off. You can still request a crawl
+manually and start the same source worker from the app.
+
 Do not place a reverse proxy, tunnel, or public ingress in front of the local
 profile. Local owner sign-in rejects forwarded requests, and a proxy that hides
 its forwarding metadata cannot safely provide public authentication. Use the
