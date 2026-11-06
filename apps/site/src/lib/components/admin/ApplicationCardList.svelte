@@ -93,7 +93,6 @@ const cards = $derived(
       status,
       title: str(record.opportunityTitle) || 'Untitled opportunity',
       company: str(record.companyName),
-      opportunityHref: str(record.opportunityHref),
       terminalLabel: TERMINAL_LABELS[status] ?? '',
       reviewReady: isReviewReady(status),
       activeStage: stageIndex(status),
@@ -134,13 +133,7 @@ const cards = $derived(
       onkeydown={(event) => handleApplicationKeydown(event, card.href)}
     >
       <div class="head">
-        <h2 class="title">
-          {#if card.opportunityHref}
-            <a href={card.opportunityHref} target="_blank" rel="noreferrer noopener">{card.title}</a>
-          {:else}
-            {card.title}
-          {/if}
-        </h2>
+        <h2 class="title">{card.title}</h2>
         {#if card.company}
           <span class="company"><Building2 size={13} strokeWidth={2.2} />{card.company}</span>
         {/if}
@@ -196,6 +189,7 @@ const cards = $derived(
   }
 
   .card {
+    cursor: pointer;
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr) auto;
     align-items: center;
@@ -226,15 +220,6 @@ const cards = $derived(
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .title a {
-    color: var(--smrt-color-on-surface);
-    text-decoration: none;
-  }
-
-  .title a:hover {
-    text-decoration: underline;
   }
 
   .company {
