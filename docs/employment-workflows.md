@@ -199,6 +199,9 @@ These are explicit operations an agent or Will can request:
   tailoring config/overrides as resume generator input, and writes generated
   Markdown, text, HTML, and PDF paths back to the variant. The generated variant
   remains preparation material; it does not approve or submit the application.
+- Local resume PDF generation uses an installed Chrome or Chromium. For a
+  custom browser location, set `PUPPETEER_EXECUTABLE_PATH` to its executable
+  path and restart Iolaus.
 - Submission and blocker actions record the outcome in `Application`, `Task`,
   and `AgentRun` without bypassing final application approval.
 - Posting preflight fetches a known ATS posting without credentials, classifies
