@@ -54,8 +54,11 @@ or raw error details.
 
 ## Verification batch limits
 
-Independent verification runs metadata separately and groups at most three
-source units of the same audit type. In a controlled Jev replay, the
+Independent verification handles a requirement or a scope restatement in
+its own request. Context audits group at most three units. A closed parse
+can establish a title, work location, Boolean structure, or qualifier when
+it consumes the entire relevant span. Typed audits separately assess
+applicant strength, capability membership, and any additional condition. In a controlled Jev replay, the
 original 12-unit batch declined both short employer-benefit controls at
 0.37 and 0.49. Inlining their quotes in the same batch produced 0.49 and
 0.50. The three-unit replay confirmed the two controls at 0.81 and 0.72
@@ -73,21 +76,25 @@ unit unresolved.
 
 ## Local quality status
 
-A 31-posting comparison plus two later captures produced zero new visible
-Jev matches for the unchanged local QA profile. The existing visible control
-still loaded with cited support and gaps. An authenticated browser run
-measured a warm full-list p95 of 254 ms over 11 loads and observed the shell
-before the matching payload.
+The fixed 33-posting cohort left 33 current local projections. The matching
+list showed two screened results, including one new result prepared by Jev
+and one prior control. Three postings had conflicts, 28 remained unflagged,
+and none qualified. Across the stored mixed-version proofs, 1,267 of 1,865
+source units had complete verification. Repeated preparation and targeted
+diagnostics cost $0.072797 using the configured input-token rate and per-call
+rounding. They made 1,719 calls with 1,712,710 input and 312,548 output
+tokens, with no SDK retries or unknown usage.
 
-On a representative 39-unit posting, successive diagnostic runs increased
-verified coverage from 22 to 25 to 30 units. A later run assessed every unit
-and verified 31, but the worker retained the preceding proof after the
-geography judgment regressed. One isolated audit per source unit still
-declined several employer-only sentences and the explicit remote geography.
-That result identifies a verification-quality blocker even when all of the
-source text was read. The isolated audit did not publish any proof.
+On the newly visible 39-unit posting, 35 units had complete verification.
+Every unit had an established classification. Exact deterministic
+requirement facts and independent classification preserved the remaining
+conditions, including the original illustrative tool examples. The matcher
+showed recognized support and candidate evidence gaps separately. Its
+three-year requirement retained the original qualification and citation.
 
-The local QA did preserve a verified three-year requirement, reject unrelated
-role and geography cases, and keep unsupported clauses out of qualification.
-The result does not establish that this preparation path can yet produce a
-useful matching list from the sampled real postings.
+The cohort still contains compatible postings held back by source
+interpretation. Examples include a multi-line “one or more of” alternatives
+list and combined scale, production use, and tenure requirements.
+Those clauses stay unresolved when the exact full condition cannot be
+represented and assessed. This run establishes one end-to-end Jev result
+and does not establish broad catalogue coverage.

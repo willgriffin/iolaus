@@ -1182,6 +1182,19 @@ function parseGeography(
   return { mode, regions: known, worldwide: false, citation };
 }
 
+/** A location label is mechanically conclusive only when consumed in full. */
+export function matchingSourceExactLocation(
+  citation: Citation,
+  workplaceType: string | undefined,
+): boolean {
+  return (
+    citation.field === 'location' &&
+    Boolean(
+      parseGeography(citation.text, workMode(workplaceType ?? ''), citation),
+    )
+  );
+}
+
 interface Qualification {
   slug: string;
   qualitative?: true;
@@ -2449,9 +2462,14 @@ export function matchingSourceContextLabel(citation: Citation): boolean {
 export function matchingSourceSectionHints(description: string) {
   type Section = 'required' | 'preferred' | 'duties' | 'administrative';
   let section: Section | undefined;
+  let governingHeading: { quote: string; start: number } | undefined;
   const hints = new Map<
     number,
-    { sectionHint: Section; sectionHeading: boolean }
+    {
+      sectionHint: Section;
+      sectionHeading: boolean;
+      governingHeading: { quote: string; start: number };
+    }
   >();
   for (const { text, start } of matchingDescriptionUnits(description)) {
     const { head, tail } = postingHeading(text);
@@ -2464,11 +2482,18 @@ export function matchingSourceSectionHints(description: string) {
           : administrativeHeader.test(head)
             ? 'administrative'
             : undefined;
-    section = heading ?? (dutiesHeader.test(head) ? undefined : section);
-    if (section)
+    if (heading) {
+      section = heading;
+      governingHeading = { quote: head, start: start + text.indexOf(head) };
+    } else if (dutiesHeader.test(head)) {
+      section = undefined;
+      governingHeading = undefined;
+    }
+    if (section && governingHeading)
       hints.set(start, {
         sectionHint: section,
         sectionHeading: Boolean(heading && !tail),
+        governingHeading,
       });
   }
   return hints;

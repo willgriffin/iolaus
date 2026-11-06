@@ -25,6 +25,7 @@ import {
   compileMatchingVocabulary,
   matchingSourceContextLabel,
   matchingSourceContextLines,
+  matchingSourceExactLocation,
   matchingSourceRoleInventory,
   matchingSourceSectionHints,
   normalizeMatchingPosting,
@@ -39,7 +40,8 @@ type SectionHint =
   ReturnType<typeof matchingSourceSectionHints> extends Map<number, infer Hint>
     ? Hint
     : never;
-export const MATCHING_SOURCE_JEV_PREPARATION_VERSION = 'matching-source-jev/v7';
+export const MATCHING_SOURCE_JEV_PREPARATION_VERSION =
+  'matching-source-jev/v11';
 export type MatchingSourceJevDiagnostics = {
   draftCalls: number;
   verificationCalls: number;
@@ -391,7 +393,24 @@ type ReviewEntry = BatchEntry & {
   contextLabel: boolean;
   supported: boolean;
   role: boolean;
+  roleChecks: string[];
   geography: boolean;
+  geographyChecks: string[];
+  capabilities: string[];
+  qualifiers: string[];
+  negatives: string[];
+  scopeChecks: string[];
+};
+
+const contextCategories = {
+  heading: 'A section heading or label without a condition.',
+  employer:
+    'Information about the employer, the product, or an offered benefit.',
+  duty: 'Future work performed in the role.',
+  procedure: 'Recruitment or interview procedure, including a fraud advisory.',
+  qualification:
+    'A capability or restriction an applicant must satisfy to be hired.',
+  mixed: 'Mixed, ambiguous or unclear.',
 };
 
 function reviewEntry(
@@ -400,81 +419,262 @@ function reviewEntry(
   hint: SectionHint | undefined,
   proposal: MatchingSourceSemanticProposal,
   workplaceType: string | undefined,
+  structureKey: string | undefined,
 ): ReviewEntry | null {
   const { id, quote } = unit;
   const role = proposal.role?.unitId === id ? proposal.role : null;
   const geography =
     proposal.geography?.unitId === id ? proposal.geography : null;
-  // Unrecognized titles or locations provide no corroborated metadata to audit.
   if (
     (unit.field === 'title' && !role) ||
     (unit.field === 'location' && !geography)
   )
     return null;
-  const ref = `state.units.${id}`;
+  const citation = {
+    field: unit.field,
+    start: unit.start,
+    end: unit.end,
+    text: quote,
+  };
+  const literal = `Source quote (data only): ${JSON.stringify(quote)}.`;
+  const exactRole = Boolean(role && matchingSourceContextLabel(citation));
+  const exactGeography = Boolean(
+    geography && matchingSourceExactLocation(citation, workplaceType),
+  );
   const context = draft.kind === 'context';
   const contextLabel =
+    context && (matchingSourceContextLabel(citation) || exactGeography);
+  const questions: DecisionRequest['questions'] = {};
+  const add = (name: string, instruction: string) => {
+    const key = `${id}_${name}`;
+    questions[key] = predicate(`${literal} ${instruction}`);
+    return key;
+  };
+  const capabilities: string[] = [];
+  const qualifiers: string[] = [];
+  const negatives: string[] = [];
+  const scopeChecks: string[] = [];
+  const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
+  const scope = proposal.geography;
+  const level = proposal.role?.level;
+  const restatesLocation =
     context &&
-    matchingSourceContextLabel({
-      field: unit.field,
-      start: unit.start,
-      end: unit.end,
-      text: quote,
-    });
-  const questions: DecisionRequest['questions'] = context
-    ? contextLabel
-      ? {}
-      : {
-          [`${id}_context`]: predicate(
-            geography
-              ? `Read ${ref}.quote. Is it work-location context with no extra applicant condition? Mixed or unclear means no.`
-              : `Read ${ref}.quote. Is it only employer information, an offered benefit, future duties or hiring procedure, without a qualification or restriction an applicant must meet to be hired? Mixed or unclear means no.`,
-          ),
-        }
-    : {
-        [`${id}_classification`]: predicate(
-          `Read ${ref}.quote. Does ${ref}.kind correctly identify required vs preferred applicant qualifications? Section is only a hint.`,
-        ),
-        [`${id}_coverage`]: predicate(
-          `Compare ${ref}.quote with ${ref}.allOf. Does each applicant condition have an equivalent claim with the same scope?`,
-        ),
-        [`${id}_logic`]: predicate(
-          `Compare ${ref}.quote with ${ref}.allOf. Are AND/OR, minimum years, context and restrictions exact? Null means no qualifier claimed.`,
-        ),
-      };
-  if (role)
-    questions[`${id}_role`] = predicate(
-      `Does ${ref}.quote establish ${ref}.role exactly, including specialty and seniority?`,
+    unit.field === 'description' &&
+    scope &&
+    /\b(?:work(?:ing)? (?:from|remotely)|remote (?:first|work)|open to candidates from)\b/iu.test(
+      quote,
     );
-  if (geography)
-    questions[`${id}_geography`] = predicate(
-      `Do ${ref}.quote and stated workplaceType establish ${ref}.geography exactly, including every limit?`,
+  const levelMentions =
+    quote.match(
+      /\b(?:entry|junior|intermediate|mid|senior|staff|principal|lead)\b/giu,
+    ) ?? [];
+  const restatesLevels =
+    context &&
+    unit.field === 'description' &&
+    level &&
+    /\b(?:seniority levels?|looking for|positions available|(?:this|the) (?:role|position|job) is)\b/iu.test(
+      quote,
+    ) &&
+    levelMentions.length > 0;
+  if (
+    restatesLevels &&
+    (new Set(levelMentions.map((word) => word.toLowerCase())).size < 2 ||
+      /\b(?:only|not|excluding|except|must)\b/iu.test(quote))
+  )
+    return null;
+  if (
+    restatesLocation &&
+    scope.mode &&
+    !scope.worldwide &&
+    scope.countries.length
+  ) {
+    scopeChecks.push(
+      add(
+        'scope_mode',
+        `Does the quote say this job permits ${scope.mode} work?`,
+      ),
     );
-  const allOf = draft.groups.map(({ alternatives }) => ({
-    anyOf: alternatives.map(
-      ({ conceptId, years, context, unsupportedQualifier }) => ({
-        concept: conceptId
-          ? (vocabulary.definitions.get(conceptId) ??
-            vocabulary.labels.get(conceptId) ??
-            null)
-          : null,
-        years,
-        context,
-        ...(unsupportedQualifier && { unsupportedQualifier }),
+    for (const country of scope.countries)
+      scopeChecks.push(
+        add(
+          `scope_country_${country}`,
+          `Does the quote allow doing this job from anywhere in ${countryNames.of(country)}, with no province, state, or city restriction?`,
+        ),
+      );
+    const countries = scope.countries
+      .map((country) => countryNames.of(country))
+      .join(', ');
+    negatives.push(
+      add(
+        'scope_extra',
+        `Does the quote add another applicant qualification besides working from ${countries}?`,
+      ),
+      add(
+        'scope_outside',
+        `Does the employer permit work from any country outside ${countries}?`,
+      ),
+    );
+    if (scope.mode === 'remote')
+      negatives.push(
+        add(
+          'scope_attendance',
+          'Does the quote require in-person attendance at an office? An office may exist without mandatory attendance.',
+        ),
+      );
+  } else if (restatesLevels) {
+    scopeChecks.push(
+      add(
+        'scope_level',
+        `Does this text explicitly include ${level} among the advertised levels?`,
+      ),
+    );
+    negatives.push(
+      add(
+        'scope_extra',
+        `Does the quote exclude ${level}, assign this single posting to a different exact seniority or role family than ${proposal.role?.family.replaceAll('-', ' ')}, or impose a separate applicant qualification?`,
+      ),
+    );
+  }
+  if (context && !contextLabel && !scopeChecks.length)
+    questions[`${id}_context`] = {
+      type: 'choice',
+      instructions: `${literal} Which type of posting text is this? If it also contains an applicant qualification or a restriction, use qualification or mixed.`,
+      criteria: contextCategories,
+    };
+  if (!context) {
+    const section = hint?.governingHeading
+      ? `This exact clause appears under the posting heading ${JSON.stringify(hint.governingHeading.quote)}.`
+      : '';
+    add(
+      'classification',
+      draft.kind === 'requirement'
+        ? `${section} Does the quoted clause state a capability or condition the applicant should bring or satisfy, rather than a task assigned after joining or an explicitly optional skill?`
+        : `${section} Does the quoted clause state a desirable but optional applicant qualification?`,
+    );
+    const labels = draft.groups.map(({ alternatives }) =>
+      alternatives.map(({ conceptId, years, context }) => {
+        const label =
+          (conceptId && vocabulary.labels.get(conceptId)) ||
+          'unmapped capability';
+        return [
+          label,
+          ...(years === null ? [] : [`minimum ${years} years`]),
+          ...(context ? [`${context} use`] : []),
+        ].join(', ');
       }),
-    ),
-  }));
+    );
+    negatives.push(
+      add(
+        'coverage',
+        `Does the quote name any other applicant qualification beyond these capabilities and their stated qualifiers: ${JSON.stringify(labels)}? Look for a separate capability, credential, language, eligibility or location restriction.`,
+      ),
+    );
+    const structures = matchingSourceStructures(quote);
+    const exactStructure =
+      structureKey &&
+      structures.length === 1 &&
+      matchingSourceStructureMatches(quote, structureKey, draft.groups)
+        ? structures[0]
+        : undefined;
+    if (
+      !exactStructure &&
+      (draft.groups.length > 1 ||
+        draft.groups.some(({ alternatives }) => alternatives.length > 1))
+    )
+      qualifiers.push(
+        add(
+          'logic',
+          `Does the applicant have to satisfy each group, with any one capability sufficient within a group? Groups: ${JSON.stringify(labels)}.`,
+        ),
+      );
+    for (const [groupIndex, { alternatives }] of draft.groups.entries())
+      for (const [alternativeIndex, atom] of alternatives.entries()) {
+        if (!atom.conceptId || atom.unsupportedQualifier) continue;
+        const suffix = `${groupIndex}_${alternativeIndex}`;
+        const capability =
+          vocabulary.definitions.get(atom.conceptId) ??
+          vocabulary.labels.get(atom.conceptId);
+        const part = exactStructure?.groups[groupIndex]?.[alternativeIndex];
+        capabilities.push(
+          add(
+            `capability_${suffix}`,
+            `Does ${part ? `the clause ${JSON.stringify(part.text)}` : 'the quote'} describe this capability as part of the applicant qualification: ${capability}?`,
+          ),
+        );
+        if (part) continue;
+        qualifiers.push(
+          add(
+            `tenure_${suffix}`,
+            atom.years === null
+              ? 'Does the quote leave minimum years of experience unstated?'
+              : `Does the quote require at least ${atom.years} years for ${labels[groupIndex]?.[alternativeIndex]}?`,
+          ),
+        );
+        if (atom.context)
+          qualifiers.push(
+            add(
+              `use_${suffix}`,
+              `Does the quote require ${atom.context} use of ${labels[groupIndex]?.[alternativeIndex]}?`,
+            ),
+          );
+        else
+          qualifiers.push(
+            add(
+              `use_${suffix}`,
+              'Does the quote leave professional or production use unstated?',
+            ),
+          );
+      }
+  }
+  const roleChecks =
+    role && !exactRole
+      ? [
+          add(
+            'family',
+            `Is the job family ${role.family.replaceAll('-', ' ')}?`,
+          ),
+          add(
+            'level',
+            role.level
+              ? `Does the title say the role is ${role.level} level?`
+              : 'Does the title leave seniority unspecified?',
+          ),
+          add(
+            'specialty',
+            role.specialty
+              ? `Does the title specify ${role.specialty.replaceAll('-', ' ')} as the role specialty?`
+              : 'Does the title leave the role specialty unspecified?',
+          ),
+        ]
+      : [];
+  const geographyChecks =
+    geography && !exactGeography
+      ? [
+          ...(geography.mode
+            ? [
+                add(
+                  'mode',
+                  `Does the quote say this job permits ${geography.mode} work?`,
+                ),
+              ]
+            : []),
+          ...geography.countries.map((country) =>
+            add(
+              `country_${country}`,
+              `Does the quote explicitly allow working from ${countryNames.of(country)}?`,
+            ),
+          ),
+          add(
+            'worldwide',
+            geography.worldwide
+              ? 'Does the quote explicitly allow work from any country in the world?'
+              : 'Does the quote describe a narrower scope than work from any country in the world?',
+          ),
+        ]
+      : [];
   return {
     id,
-    state: {
-      quote,
-      section: hint?.sectionHint ?? null,
-      kind: draft.kind,
-      ...(allOf.length && { allOf }),
-      ...(role && { role }),
-      ...(geography && { geography }),
-      ...(geography && workplaceType && { workplaceType }),
-    },
+    state: { governingHeading: hint?.governingHeading ?? null },
     questions,
     context,
     contextLabel,
@@ -485,7 +685,13 @@ function reviewEntry(
       ),
     ),
     role: Boolean(role),
+    roleChecks,
     geography: Boolean(geography),
+    geographyChecks,
+    capabilities,
+    qualifiers,
+    negatives,
+    scopeChecks,
   };
 }
 
@@ -775,8 +981,25 @@ export async function prepareJevMatchingSource(
     const answers = outcome.status === 'ok' ? outcome.result.answers : {};
     for (const entry of batch) {
       const { id, context, supported } = entry;
+      const allConfirm = (keys: string[]) =>
+        keys.every((key) => confirms(answers[key]));
+      const noExtra = entry.negatives.every((key) => {
+        const answer = answers[key];
+        return (
+          answer?.type === 'predicate' &&
+          validPredicate(answer) &&
+          answer.probability < 0.5
+        );
+      });
       const noCondition =
-        context && (entry.contextLabel || confirms(answers[`${id}_context`]));
+        context &&
+        (entry.contextLabel ||
+          (entry.scopeChecks.length > 0 &&
+            allConfirm(entry.scopeChecks) &&
+            noExtra) ||
+          ['heading', 'employer', 'duty', 'procedure'].includes(
+            choice(answers[`${id}_context`]) ?? '',
+          ));
       const judgment = {
         id,
         classificationCorrect: context
@@ -784,15 +1007,16 @@ export async function prepareJevMatchingSource(
           : confirms(answers[`${id}_classification`]),
         allConditionsRepresented: context
           ? noCondition
-          : supported && confirms(answers[`${id}_coverage`]),
+          : supported && noExtra && allConfirm(entry.capabilities),
         logicAndQualifiersPreserved: context
           ? noCondition
-          : supported && confirms(answers[`${id}_logic`]),
+          : outcome.status === 'ok' &&
+            supported &&
+            allConfirm(entry.qualifiers),
       };
       judgments.set(id, judgment);
-      const roleCorrect = !entry.role || confirms(answers[`${id}_role`]);
-      const geographyCorrect =
-        !entry.geography || confirms(answers[`${id}_geography`]);
+      const roleCorrect = allConfirm(entry.roleChecks);
+      const geographyCorrect = allConfirm(entry.geographyChecks);
       if (entry.role) {
         review.roleCorrect = roleCorrect;
         diagnostics.rolePasses += Number(roleCorrect);
@@ -808,8 +1032,10 @@ export async function prepareJevMatchingSource(
       diagnostics.logicPasses += Number(judgment.logicAndQualifiersPreserved);
       diagnostics.unasked -= 1;
       if (
-        Object.keys(entry.questions).some(
-          (key) => !validPredicate(answers[key]),
+        Object.keys(entry.questions).some((key) =>
+          entry.questions[key]?.type === 'choice'
+            ? !choice(answers[key])
+            : !validPredicate(answers[key]),
         )
       )
         diagnostics.failed += 1;
@@ -835,6 +1061,7 @@ export async function prepareJevMatchingSource(
       unit.field === 'description' ? hints.get(unit.start) : undefined,
       proposal,
       workplaceType,
+      structureKeys[unit.id],
     );
     if (!entry) return [];
     if (entry.contextLabel && !Object.keys(entry.questions).length) {
@@ -844,6 +1071,14 @@ export async function prepareJevMatchingSource(
         allConditionsRepresented: true,
         logicAndQualifiersPreserved: true,
       });
+      if (entry.role) {
+        review.roleCorrect = true;
+        diagnostics.rolePasses += 1;
+      }
+      if (entry.geography) {
+        review.geographyCorrect = true;
+        diagnostics.geographyPasses += 1;
+      }
       diagnostics.unasked -= 1;
       diagnostics.verified += 1;
       diagnostics.classificationPasses += 1;
@@ -864,11 +1099,19 @@ export async function prepareJevMatchingSource(
       entries: entries.filter(
         (entry) => !entry.context && !entry.role && !entry.geography,
       ),
-      limit: 3,
+      limit: 1,
+    },
+    {
+      entries: entries.filter((entry) => entry.scopeChecks.length > 0),
+      limit: 1,
     },
     {
       entries: entries.filter(
-        (entry) => entry.context && !entry.role && !entry.geography,
+        (entry) =>
+          entry.context &&
+          !entry.role &&
+          !entry.geography &&
+          !entry.scopeChecks.length,
       ),
       limit: 3,
     },

@@ -58,8 +58,18 @@ function provider(
         Object.entries(questions).map(([key, question]) => [
           key,
           question.type === 'predicate'
-            ? judge()
-            : choose(key.endsWith('_kind') ? 'requirement' : leadership),
+            ? judge(
+                key.endsWith('_coverage') || key.endsWith('_scope_extra')
+                  ? 0
+                  : 1,
+              )
+            : choose(
+                key.endsWith('_context')
+                  ? 'employer'
+                  : key.endsWith('_kind')
+                    ? 'requirement'
+                    : leadership,
+              ),
         ]),
       ),
     ),
@@ -142,22 +152,34 @@ describe('JEV matching source preparation', () => {
       criteria: { [leadership]: expect.any(String), none: expect.any(String) },
     });
     const audit = adapter.decide.mock.calls.find(
-      ([{ state, questions }]) =>
-        questions.d2_coverage &&
-        JSON.stringify(state).includes('directing a group of engineers'),
+      ([{ questions }]) => questions.d2_coverage,
     )?.[0];
     expect(audit?.questions).toMatchObject({
       d2_classification: { type: 'predicate' },
       d2_coverage: { type: 'predicate' },
-      d2_logic: { type: 'predicate' },
+      d2_capability_0_0: { type: 'predicate' },
     });
-
+    expect(audit?.questions.d2_classification?.instructions).toContain(
+      '"Qualifications"',
+    );
+    expect(audit?.state).toMatchObject({
+      units: {
+        d2: { governingHeading: { quote: 'Qualifications', start: 0 } },
+      },
+    });
     expect(audit?.questions.d2_coverage?.instructions).toContain(
-      'state.units.d2.allOf',
+      'minimum 3 years',
     );
-    expect(audit?.questions.d2_logic?.instructions).toContain(
-      'state.units.d2.quote',
+    expect(audit?.questions.d2_capability_0_0?.instructions).toContain(
+      'directing a group of engineers',
     );
+    expect(
+      adapter.decide.mock.calls.some(([request]) =>
+        Object.keys(request.questions).some(
+          (key) => key.startsWith('title_') || key.startsWith('location_'),
+        ),
+      ),
+    ).toBe(false);
 
     const posting = normalizeMatchingPosting(source, vocabulary, {
       coverage: 'partial',
@@ -229,8 +251,18 @@ describe('JEV matching source preparation', () => {
           Object.entries(questions).map(([key, question]) => [
             key,
             question.type === 'predicate'
-              ? judge()
-              : choose(key === 'd3_kind' ? 'requirement' : 'context'),
+              ? judge(
+                  key.endsWith('_coverage') || key.endsWith('_scope_extra')
+                    ? 0
+                    : 1,
+                )
+              : choose(
+                  key.endsWith('_context')
+                    ? 'employer'
+                    : key === 'd3_kind'
+                      ? 'requirement'
+                      : 'context',
+                ),
           ]),
         ),
       ),
@@ -279,7 +311,11 @@ describe('JEV matching source preparation', () => {
           Object.entries(questions).map(([key, question]) => [
             key,
             question.type === 'predicate'
-              ? judge()
+              ? judge(
+                  key.endsWith('_coverage') || key.endsWith('_scope_extra')
+                    ? 0
+                    : 1,
+                )
               : choose(
                   key.endsWith('_kind')
                     ? 'requirement'
@@ -364,7 +400,10 @@ describe('JEV matching source preparation', () => {
         Object.fromEntries(
           Object.keys(questions)
             .filter((key) => key !== 'd7_context')
-            .map((key) => [key, judge(key === 'd14_context' ? 0 : 1)]),
+            .map((key) => [
+              key,
+              choose(key === 'd14_context' ? 'mixed' : 'employer'),
+            ]),
         ),
       ),
     );
@@ -385,7 +424,7 @@ describe('JEV matching source preparation', () => {
     const proof = await prepareJevMatchingSource(input, adapter, {
       onDiagnostics,
     });
-    expect(adapter.decide.mock.calls.length).toBe(13);
+    expect(adapter.decide.mock.calls.length).toBe(11);
     const wire = adapter.decide.mock.calls.map(([request]) => request);
     expect(
       wire.every(
@@ -463,17 +502,14 @@ describe('JEV matching source preparation', () => {
         Object.fromEntries(
           Object.keys(questions).map((key) => [
             key,
-            judge(key === 'd3_context' ? 0 : 1),
+            choose(key === 'd3_context' ? 'mixed' : 'duty'),
           ]),
         ),
       ),
     );
     const proof = await prepareJevMatchingSource(input, adapter);
     const request = adapter.decide.mock.calls[0]?.[0];
-    expect(request?.state).toMatchObject({ units: { d3: { quote: mixed } } });
-    expect(request?.questions.d3_context?.instructions).toContain(
-      'state.units.d3.quote',
-    );
+    expect(request?.questions.d3_context?.instructions).toContain(mixed);
     expect(Object.keys(request?.questions ?? {})).toEqual([
       'd2_context',
       'd3_context',
@@ -493,6 +529,71 @@ describe('JEV matching source preparation', () => {
       allConditionsRepresented: false,
       logicAndQualifiersPreserved: false,
     });
+  });
+
+  it('audits compatible scope restatements and refuses contradictory conditions', async () => {
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => {
+            const instructions = question.instructions ?? '';
+            if (question.type === 'choice') return [key, choose('mixed')];
+            if (key.endsWith('_scope_country_CA'))
+              return [
+                key,
+                judge(
+                  Number(!/US only|Toronto residents only/u.test(instructions)),
+                ),
+              ];
+            if (key.endsWith('_scope_outside'))
+              return [key, judge(Number(instructions.includes('US only')))];
+            if (key.endsWith('_scope_attendance'))
+              return [key, judge(Number(instructions.includes('must attend')))];
+            return [
+              key,
+              judge(
+                key.endsWith('_scope_extra')
+                  ? Number(instructions.includes('account executives'))
+                  : 1,
+              ),
+            ];
+          }),
+        ),
+      ),
+    );
+    const proof = await prepareJevMatchingSource(
+      {
+        ...source,
+        description: [
+          'Looking for intermediate and senior engineers.',
+          'Seniority levels: only intermediate.',
+          'This role is intermediate.',
+          'Looking for intermediate or staff engineers, excluding senior.',
+          'Remote first, work from anywhere in Canada.',
+          'Remote first, work from the US only.',
+          'Remote first, work from anywhere in Canada but must attend the office weekly.',
+          'Remote first, work from Toronto residents only.',
+          'Looking for intermediate and senior account executives.',
+        ].join('\n'),
+      },
+      adapter,
+    );
+    expect(
+      proof.verification.units
+        .filter(({ id }) => id.startsWith('d'))
+        .map(({ allConditionsRepresented }) => allConditionsRepresented),
+    ).toEqual([true, false, false, false, true, false, false, false, false]);
+    expect(
+      adapter.decide.mock.calls
+        .filter(([{ questions }]) =>
+          Object.keys(questions).some((key) => key.includes('_scope_')),
+        )
+        .every(
+          ([{ questions }]) =>
+            new Set(Object.keys(questions).map((key) => key.split('_')[0]))
+              .size === 1,
+        ),
+    ).toBe(true);
   });
 
   it('splits verifier batches on UTF-8 bytes and does not count oversized units as verified', async () => {
@@ -539,7 +640,7 @@ describe('JEV matching source preparation', () => {
     const proof = await prepareJevMatchingSource(input, adapter, {
       onDiagnostics,
     });
-    expect(adapter.decide.mock.calls.length).toBeLessThan(66);
+    expect(adapter.decide.mock.calls.length).toBeLessThanOrEqual(100);
     expect(proof.proposal.ledger).toHaveLength(83);
     expect(
       proof.verification.units.find(({ id }) => id === 'd55')
@@ -602,8 +703,8 @@ describe('JEV matching source preparation', () => {
           questions.d2_coverage
             ? ok({
                 d2_classification: judge(),
-                d2_coverage: judge(),
-                d2_logic: judge(0.5),
+                d2_coverage: judge(0),
+                d2_capability_0_0: judge(0.5),
               })
             : ok({
                 d2_kind: choose('requirement'),
@@ -611,7 +712,7 @@ describe('JEV matching source preparation', () => {
               }),
         ),
       );
-      expect(proof.verification.units.at(-1)?.logicAndQualifiersPreserved).toBe(
+      expect(proof.verification.units.at(-1)?.allConditionsRepresented).toBe(
         false,
       );
       if (selection !== leadership) {
