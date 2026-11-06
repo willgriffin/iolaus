@@ -900,7 +900,7 @@ const levelPrefix =
 const contextualTitleSuffix =
   /^(?:(?:fully )?remote|hybrid|on site|onsite|full time|part time|contract|temporary|asean|[a-z]{2}-[a-z]{2}|(?:m|f|w|d|x)(?:[ /-](?:m|f|w|d|x)){1,4})$/u;
 const productDomain =
-  /^(?:payments|billing|identity|fraud|search|growth|developer experience|developer tools|commerce|ecommerce|observability|core product|core services|infrastructure|data infrastructure|security platform|platform security|ai infrastructure|ai platform|machine learning platform|cloud platform|platform|integrations|distributed systems|api platform|web platform|database platform|storage|networking(?: features)?|managed gateways|mobile app|supply chain|spark)$/u;
+  /^(?:payments|billing|identity|fraud|search|growth|developer experience|developer tools|commerce|ecommerce|observability|core product|core services|infrastructure|data infrastructure|security platform|platform security|ai infrastructure|ai platform|machine learning platform|cloud platform|platform|integrations|distributed systems|api platform|web platform|database platform|storage|networking(?: features)?|managed gateways|mobile app|supply chain)$/u;
 
 function normalizedTitle(value: string): string {
   return phrase(value.replace(/[.,()\-–—]/gu, ' '));
@@ -3023,9 +3023,12 @@ const employerDisclosure =
   /\b(?:salary range disclosure|equal (?:employment )?opportunity employer|inclusive hiring|use of (?:artificial intelligence|ai) in (?:recruitment|hiring)|recruitment process|compensation (?:bands|philosophy)|the salary range listed)\b/iu;
 const employerSalarySetting =
   /^(?:for (?:base )?(?:salary|pay|compensation),?\s+)?we set (?:standard )?(?:salary |pay |compensation )?ranges for\b/iu;
-function safeEmployerDisclosure(text: string): boolean {
-  if (!employerDisclosure.test(text) && !employerSalarySetting.test(text))
-    return false;
+function safeEmployerDisclosure(
+  text: string,
+  assessedDecision = false,
+): boolean {
+  const salarySetting = assessedDecision && employerSalarySetting.test(text);
+  if (!employerDisclosure.test(text) && !salarySetting) return false;
   const applicant = text
     .replace(
       /\b(?:if|should) you (?:require|need) (?:any |a reasonable )?accommodations?\b/giu,
@@ -3034,8 +3037,7 @@ function safeEmployerDisclosure(text: string): boolean {
     .replace(/\b(?:which )?depends on experience and skills\b/giu, '');
   return !(
     employmentCondition.test(applicant) ||
-    (employerSalarySetting.test(text) &&
-      separateEligibilityRestriction.test(applicant)) ||
+    (salarySetting && separateEligibilityRestriction.test(applicant)) ||
     essentialCondition.test(applicant) ||
     requiredInAdministrativeText.test(applicant) ||
     independentHardCue.test(applicant) ||
@@ -3049,7 +3051,10 @@ function safeEmployerDisclosure(text: string): boolean {
   );
 }
 
-export function matchingSourceContextLines(raw: MatchingPostingInput) {
+export function matchingSourceContextLines(
+  raw: MatchingPostingInput,
+  assessedDecision = false,
+) {
   let inMandatorySection = false;
   const safe = new Set<number>();
   for (const { text, citation } of descriptionLines(raw.description)) {
@@ -3064,12 +3069,16 @@ export function matchingSourceContextLines(raw: MatchingPostingInput) {
         continue;
       }
     }
-    if (employerSalarySetting.test(text) && safeEmployerDisclosure(text)) {
+    if (
+      assessedDecision &&
+      employerSalarySetting.test(text) &&
+      safeEmployerDisclosure(text, true)
+    ) {
       safe.add(citation.start);
       continue;
     }
     if (
-      matchingSourceContextLabel(citation) ||
+      (assessedDecision && matchingSourceContextLabel(citation)) ||
       noRequirements.test(tail ?? text)
     ) {
       safe.add(citation.start);
@@ -3077,7 +3086,7 @@ export function matchingSourceContextLines(raw: MatchingPostingInput) {
     }
     if (
       inMandatorySection ||
-      (!safeEmployerDisclosure(text) &&
+      (!safeEmployerDisclosure(text, assessedDecision) &&
         (independentApplicantCondition(text) ||
           sectionHasCandidateQualification(text) ||
           /\b(?:fluen\w*|language skills|native speaker|proficien\w*|working knowledge|ability to|track record|\d+\+? years? of (?:work |professional )?experience)\b/iu.test(
@@ -3153,7 +3162,8 @@ function mergeSemanticExtraction(
   const coveredHard: Citation[] = [];
   const verifiedDisclosures: Citation[] = [];
   const unresolved: MatchingReason[] = [];
-  const contextLines = matchingSourceContextLines(raw);
+  const assessedDecision = proof.decision?.assessmentVersion === 1;
+  const contextLines = matchingSourceContextLines(raw, assessedDecision);
   const assessedGaps = new Map(
     (proof.decision?.capabilityGaps ?? []).map((gap) => [gap.unitId, gap]),
   );
@@ -3359,7 +3369,7 @@ function mergeSemanticExtraction(
     if (unit.kind === 'context') {
       if (
         citation.field === 'description' &&
-        safeEmployerDisclosure(citation.text)
+        safeEmployerDisclosure(citation.text, assessedDecision)
       )
         verifiedDisclosures.push(citation);
       continue;
@@ -3529,6 +3539,7 @@ export function normalizeMatchingPosting(
   raw: MatchingPostingInput,
   vocabulary: MatchingVocabulary,
   extraction?: MatchingSourceExtraction,
+  options: { typedDecisionPreparation?: true } = {},
 ): NormalizedMatchingPosting {
   const title = cite('title', raw.title);
   const lines = descriptionLines(raw.description);
@@ -3555,7 +3566,9 @@ export function normalizeMatchingPosting(
   let geography =
     mode !== 'remote' ||
     explicitRemoteLocation ||
-    (declaredMode === 'remote' && worldwideScope.test(raw.location.trim()))
+    ((options.typedDecisionPreparation || extraction?.semantic?.decision) &&
+      declaredMode === 'remote' &&
+      worldwideScope.test(raw.location.trim()))
       ? parseGeography(raw.location, mode, location)
       : undefined;
   let conflictingGeography = false;

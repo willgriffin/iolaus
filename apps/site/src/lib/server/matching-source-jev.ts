@@ -47,7 +47,7 @@ type SectionHint =
     ? Hint
     : never;
 export const MATCHING_SOURCE_JEV_PREPARATION_VERSION =
-  'matching-source-jev/v16';
+  'matching-source-jev/v17';
 export type MatchingSourceJevAssessments = {
   assessmentVersion: 1;
   blocks: MatchingSourceDecisionBlock[];
@@ -1003,7 +1003,7 @@ export async function prepareJevMatchingSource(
     !hasAnalysisPII(unit.quote);
   // Only mailbox syntax can be removed here. Numbers and residual PII fail
   // closed, and a redacted unit may only be proposed as context for audit.
-  const permittedContext = matchingSourceContextLines(source);
+  const permittedContext = matchingSourceContextLines(source, true);
   const reviewUnits = units.map((unit) => {
     if (safe(unit)) return unit;
     if (
@@ -1031,6 +1031,8 @@ export async function prepareJevMatchingSource(
       description: safeDescription ? source.description : '',
     },
     vocabulary,
+    undefined,
+    { typedDecisionPreparation: true },
   );
   const hints = matchingSourceSectionHints(source.description);
   const blocks = matchingSourceJevBlocks(source, hints);

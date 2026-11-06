@@ -118,6 +118,18 @@ function decision(
 }
 
 describe('verified public semantic source interpretation', () => {
+  it('keeps the legacy semantic prompt shape stable when typed heading provenance is available', () => {
+    expect(
+      matchingSourceSemanticMaterial(raw).units.find(({ id }) => id === 'd2'),
+    ).toEqual({
+      id: 'd2',
+      field: 'description',
+      quote: 'You have previously written computer programs.',
+      sectionHint: 'required',
+      sectionHeading: false,
+    });
+  });
+
   it('retains an exact scoped trait as an assessed gap and clears only pure salary context', () => {
     const scoped =
       'Comfortable operating in ambiguity and driving clarity where none exists';
@@ -139,6 +151,12 @@ describe('verified public semantic source interpretation', () => {
         { alternatives: [atom('clarifying-ambiguous-work')] },
       ];
       const proof = payload(source, proposed);
+      const legacy = normalizeMatchingPosting(source, vocabulary, proof);
+      expect(
+        legacy.uncertainties.some(({ citations }) =>
+          citations.some(({ text }) => text === salaryLine),
+        ),
+      ).toBe(true);
       const extraction = parseMatchingSourceExtraction(
         {
           ...proof,

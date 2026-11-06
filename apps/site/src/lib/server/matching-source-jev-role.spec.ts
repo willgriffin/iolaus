@@ -76,6 +76,18 @@ describe('Jev source title role drafting', () => {
     expect(decide).toHaveBeenCalledTimes(1);
   });
 
+  it('does not send a compound title with two competing governed role families', async () => {
+    const decide = vi.fn(async () => ({}));
+    await expect(
+      draftJevSourceRole(
+        'Engineering Manager - Account Executive',
+        'title',
+        decide,
+      ),
+    ).resolves.toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
   it('represents unstated seniority without inventing a level', async () => {
     const decide = vi.fn(async () => ({
       role_pair: choice('data-engineering'),

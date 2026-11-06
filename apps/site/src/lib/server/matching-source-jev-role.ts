@@ -92,6 +92,15 @@ export async function draftJevSourceRole(
   decide: (request: DecisionRequest) => Promise<DecisionResult['answers']>,
 ): Promise<MatchingSourceSemanticProposal['role']> {
   if (unitId !== 'title' || !title.trim() || title.length > 300) return null;
+  const roleFamilies = new Set(
+    title.split(/\s+[-–—/]\s+|\s*[,|]\s*/u).flatMap((part) => {
+      const label = words(part).join(' ');
+      return aliasTerms
+        .filter(({ phrase }) => phrase === label)
+        .map(({ family }) => family);
+    }),
+  );
+  if (roleFamilies.size > 1) return null;
   const candidates = shortlist(title);
   if (!candidates.length) return null;
   const pairs = Object.fromEntries(

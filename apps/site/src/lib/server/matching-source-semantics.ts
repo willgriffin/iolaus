@@ -287,12 +287,19 @@ export function matchingSourceSemanticMaterial(source: MatchingSourceText) {
   const sectionHints = matchingSourceSectionHints(source.description);
   return {
     sourceDigest: digest([source.title, source.description, source.location]),
-    units: units.map(({ id, field, quote, start }) => ({
-      id,
-      field,
-      quote,
-      ...(field === 'description' ? sectionHints.get(start) : undefined),
-    })),
+    units: units.map(({ id, field, quote, start }) => {
+      const hint =
+        field === 'description' ? sectionHints.get(start) : undefined;
+      return {
+        id,
+        field,
+        quote,
+        ...(hint && {
+          sectionHint: hint.sectionHint,
+          sectionHeading: hint.sectionHeading,
+        }),
+      };
+    }),
     concepts,
     rolePairs: roles.map(({ family, specialty }) => ({
       family,

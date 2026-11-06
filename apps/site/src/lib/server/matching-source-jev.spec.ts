@@ -91,6 +91,43 @@ function provider(
 }
 
 describe('JEV matching source preparation', () => {
+  it('routes a previously unknown product suffix through typed full-title draft and audit', async () => {
+    const input = {
+      ...source,
+      title: 'Engineering Manager - Spark',
+      description: 'Qualifications:\nNode.js',
+    };
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'predicate'
+              ? judge(key.endsWith('_coverage') ? 0 : 1)
+              : choose(
+                  key === 'role_pair'
+                    ? 'engineering-management'
+                    : key === 'role_level'
+                      ? 'unstated'
+                      : 'heading',
+                ),
+          ]),
+        ),
+      ),
+    );
+    expect(normalizeMatchingPosting(input, vocabulary).role).toBeUndefined();
+    const semantic = await prepareJevMatchingSource(input, adapter);
+    expect(semantic.proposal.role).toMatchObject({
+      family: 'engineering-management',
+    });
+    expect(semantic.verification.roleCorrect).toBe(true);
+    expect(
+      adapter.decide.mock.calls.some(([{ questions }]) =>
+        Boolean(questions.title_family),
+      ),
+    ).toBe(true);
+  });
+
   it('drafts and independently audits grounded role, geography, Boolean groups, strength and a non-alias with tenure', async () => {
     const adapter = provider();
     const proof = await prepareJevMatchingSource(source, adapter);
