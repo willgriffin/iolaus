@@ -1198,7 +1198,7 @@ export async function closeReviewTasksForArchivedOpportunities(options: {
     ...(sqlite
       ? [
           AUTO_ARCHIVE_TASK_COLUMN,
-          options.now ?? new Date(),
+          (options.now ?? new Date()).toISOString(),
           reason,
           ...activeTaskStatuses,
           ...opportunityIds,
