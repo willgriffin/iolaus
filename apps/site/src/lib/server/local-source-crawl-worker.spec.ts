@@ -11,6 +11,7 @@ describe('ensureLocalSourceCrawlWorker', () => {
     const runner = {
       initialize: vi.fn(async () => {}),
       start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
     };
     const database = { type: 'sqlite' };
     const getRuntime = vi.fn(async () => ({ db: database as never }));

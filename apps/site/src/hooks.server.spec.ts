@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   candidateProfileOnboardingRedirect: vi.fn((): string | null => null),
   contextActive: false,
   ensureApplicationRuntimeReady: vi.fn(),
+  ensureLocalSourceCrawlWorker: vi.fn(),
+  getLocalApplicationRuntime: vi.fn(),
+  runtimeProfile: 'self-hosted',
   verifyWorkspaceSubject: vi.fn(),
   withBearerSessionContext: vi.fn(),
 }));
@@ -33,9 +36,24 @@ vi.mock('$lib/server/local-oauth', () => ({
 
 vi.mock('$app/environment', () => ({ building: false }));
 
-vi.mock('$lib/server/application-runtime', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('$lib/server/application-runtime')>()),
-  ensureApplicationRuntimeReady: mocks.ensureApplicationRuntimeReady,
+vi.mock('$lib/server/application-runtime', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('$lib/server/application-runtime')>();
+  return {
+    ...original,
+    applicationRuntime: {
+      ...original.applicationRuntime,
+      get profile() {
+        return mocks.runtimeProfile;
+      },
+    },
+    ensureApplicationRuntimeReady: mocks.ensureApplicationRuntimeReady,
+    getLocalApplicationRuntime: mocks.getLocalApplicationRuntime,
+  };
+});
+
+vi.mock('$lib/server/local-source-crawl-worker', () => ({
+  ensureLocalSourceCrawlWorker: mocks.ensureLocalSourceCrawlWorker,
 }));
 
 vi.mock('@happyvertical/smrt-users/sveltekit', () => ({
@@ -142,7 +160,12 @@ describe('server bearer-session handling', () => {
     });
     vi.clearAllMocks();
     mocks.contextActive = false;
+    mocks.runtimeProfile = 'self-hosted';
     mocks.ensureApplicationRuntimeReady.mockResolvedValue(undefined);
+    mocks.ensureLocalSourceCrawlWorker.mockResolvedValue(undefined);
+    mocks.getLocalApplicationRuntime.mockResolvedValue({
+      backgroundJobsEnabled: false,
+    });
     mocks.verifyWorkspaceSubject.mockResolvedValue(null);
   });
 
@@ -304,6 +327,38 @@ describe('server bearer-session handling', () => {
     await vi.waitFor(() =>
       expect(startPublishedResumePrime).toHaveBeenCalledOnce(),
     );
+    expect(mocks.getLocalApplicationRuntime).not.toHaveBeenCalled();
+    expect(mocks.ensureLocalSourceCrawlWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    false,
+    true,
+  ])('starts the local crawl worker at boot only when background jobs are enabled (%s)', async (backgroundJobsEnabled) => {
+    mocks.runtimeProfile = 'local';
+    mocks.getLocalApplicationRuntime.mockResolvedValue({
+      backgroundJobsEnabled,
+    });
+    const { init } = await import('./hooks.server');
+    const { startPublishedResumePrime } = await import(
+      '$lib/server/resume-prime'
+    );
+
+    await init();
+    await vi.waitFor(() =>
+      expect(startPublishedResumePrime).toHaveBeenCalledOnce(),
+    );
+
+    expect(mocks.ensureLocalSourceCrawlWorker).toHaveBeenCalledTimes(
+      backgroundJobsEnabled ? 1 : 0,
+    );
+    if (backgroundJobsEnabled) {
+      expect(
+        mocks.ensureApplicationRuntimeReady.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mocks.ensureLocalSourceCrawlWorker.mock.invocationCallOrder[0] ?? 0,
+      );
+    }
   });
 
   it('keeps anonymous private-match authentication errors out of shared caches', async () => {

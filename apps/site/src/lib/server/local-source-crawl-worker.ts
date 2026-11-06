@@ -13,22 +13,21 @@ export interface LocalSourceCrawlWorkerDependencies {
     pollInterval: number;
     queues: string[];
     retention: false;
-  }) => Pick<TaskRunner, 'initialize' | 'start'>;
+  }) => Pick<TaskRunner, 'initialize' | 'start' | 'stop'>;
   getRuntime?: () => Promise<LocalRuntime>;
 }
 
 let localSourceCrawlWorker: Promise<void> | undefined;
 
 /**
- * Start one local-only worker for explicitly requested source crawls. The
- * durable queue remains the contract in every profile; hosted deployments
- * retain their separate worker topology and never call this helper.
+ * Start one local-only worker for the durable source crawl queue. Manual
+ * enqueue and enabled local startup share this worker for the process.
  */
 export async function ensureLocalSourceCrawlWorker(
   dependencies: LocalSourceCrawlWorkerDependencies = {},
 ): Promise<void> {
   if (!dependencies.createRunner && !dependencies.getRuntime) {
-    localSourceCrawlWorker ??= startLocalSourceCrawlWorker();
+    localSourceCrawlWorker ??= startManagedLocalSourceCrawlWorker();
     try {
       await localSourceCrawlWorker;
     } catch (cause) {
@@ -41,9 +40,28 @@ export async function ensureLocalSourceCrawlWorker(
   await startLocalSourceCrawlWorker(dependencies);
 }
 
+async function startManagedLocalSourceCrawlWorker(): Promise<void> {
+  const startup = startLocalSourceCrawlWorker();
+  const stop = () => {
+    void startup
+      .then(
+        (runner) => runner.stop(),
+        () => undefined,
+      )
+      .catch(() => console.warn('Local source crawl worker failed to stop.'));
+  };
+  process.once('sveltekit:shutdown', stop);
+  try {
+    await startup;
+  } catch (cause) {
+    process.off('sveltekit:shutdown', stop);
+    throw cause;
+  }
+}
+
 async function startLocalSourceCrawlWorker(
   dependencies: LocalSourceCrawlWorkerDependencies = {},
-): Promise<void> {
+) {
   const runtime = await (
     dependencies.getRuntime ?? getLocalApplicationRuntime
   )();
@@ -55,6 +73,7 @@ async function startLocalSourceCrawlWorker(
   });
   await runner.initialize(runtime.db);
   await runner.start();
+  return runner;
 }
 
 export function resetLocalSourceCrawlWorkerForTests(): void {
