@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { onboardingCountryCodes } from './country-reference.js';
 import type { MatchingSourceText } from './matching-source-extraction-contract.js';
+import { matchingSourceStructureMatches } from './matching-source-jev-structure.js';
 import {
   MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT,
   matchingSourceSemanticUnits,
@@ -94,6 +95,12 @@ const decisionProfile = z.strictObject({
 export type MatchingSourceDecisionProfile = z.infer<typeof decisionProfile>;
 const decisionProvenance = decisionProfile.extend({
   observedModels: z.array(decisionIdentifier).min(1).max(16),
+  structures: z
+    .record(
+      z.string().regex(/^d[1-9]\d{0,2}$/u),
+      z.string().regex(/^[a-z][a-z0-9-]{0,31}$/u),
+    )
+    .optional(),
   diagnostics: z
     .strictObject({
       draftCalls: z.number().int().min(0).max(100),
@@ -391,6 +398,24 @@ export function parseMatchingSourceSemanticProof(
     source,
     parsed.proposal,
   );
+  if (parsed.decision?.structures) {
+    const units = new Map(
+      matchingSourceSemanticUnits(source).map((unit) => [unit.id, unit]),
+    );
+    for (const [id, structure] of Object.entries(parsed.decision.structures)) {
+      const unit = units.get(id);
+      const entry = verified.proposal.ledger.find(
+        (candidate) => candidate.id === id,
+      );
+      if (
+        unit?.field !== 'description' ||
+        !entry ||
+        (entry.kind !== 'requirement' && entry.kind !== 'preferred') ||
+        !matchingSourceStructureMatches(unit.quote, structure, entry.groups)
+      )
+        throw new MatchingSourceSemanticError('predicate');
+    }
+  }
   if (parsed.sourceDigest !== verified.sourceDigest)
     throw new MatchingSourceSemanticError('digest');
   return parsed.decision

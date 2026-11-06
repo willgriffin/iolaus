@@ -214,6 +214,17 @@ for (const dialect of dialects) {
           }),
         ).resolves.toBe('retry');
         expect(calls).toBe(2);
+        expect(
+          (
+            await db.query(
+              'SELECT request_id, state FROM matching_source_interpretations WHERE opportunity_id=?',
+              [postingId],
+            )
+          ).rows[0],
+        ).toMatchObject({
+          state: 'complete',
+          request_id: matchingSourceDecisionRequestId(profile),
+        });
       } finally {
         await close();
       }

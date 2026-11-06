@@ -117,6 +117,80 @@ function decision(
 }
 
 describe('verified public semantic source interpretation', () => {
+  it('covers an implied lexical parent only inside one verified exact capability span', () => {
+    const governed = compileMatchingVocabulary([
+      { slug: 'nodejs', label: 'Node.js', related: ['typescript'] },
+      { slug: 'typescript', label: 'TypeScript' },
+    ]);
+    const use = (
+      description: string,
+      slug = 'scalable-full-stack-web-development',
+    ) => {
+      const source = { ...raw, description: `Qualifications:\n${description}` };
+      const proposed = draft(source, [atom(slug, 3)]);
+      const original = payload(source, proposed);
+      const extraction = parseMatchingSourceExtraction(
+        {
+          ...original,
+          semantic: {
+            ...original.semantic,
+            decision: {
+              provider: 'typesafe',
+              transport: 'direct',
+              model: 'jev-1.14.0',
+              revision: 'test-r1',
+              maxInputBytes: 8192,
+              preparationVersion: 'test/v1',
+              observedModels: ['jev-1.14.0'],
+              structures: { d2: 'whole' },
+            },
+          },
+        },
+        source,
+      );
+      return {
+        baseline: normalizeMatchingPosting(source, governed),
+        prepared: normalizeMatchingPosting(source, governed, extraction),
+      };
+    };
+    const positive = use(
+      '3 years as a full-stack engineer, developing scalable web applications.',
+    );
+    expect(positive.baseline.required).toHaveLength(0);
+    expect(positive.prepared.required[0]?.alternatives).toMatchObject([
+      { slug: 'scalable-full-stack-web-development', years: 3 },
+    ]);
+    expect(() =>
+      use(
+        '3 years developing scalable web applications in a full-stack role and building scalable web applications.',
+      ),
+    ).toThrow();
+    const sibling = use(
+      '3 years developing scalable web applications in a full-stack role, with Node.js.',
+    );
+    expect(
+      sibling.prepared.required.some((g) =>
+        g.alternatives.some(
+          (a) => a.slug === 'scalable-full-stack-web-development',
+        ),
+      ),
+    ).toBe(false);
+    const related = use(
+      '3 years developing with Node.js, using TypeScript.',
+      'nodejs',
+    );
+    expect(
+      related.prepared.required.some((g) =>
+        g.alternatives.some((a) => a.slug === 'nodejs'),
+      ),
+    ).toBe(false);
+    expect(() =>
+      use(
+        '3 years developing scalable web applications in a full-stack role and 2 years building scalable web applications.',
+      ),
+    ).toThrow();
+  });
+
   it('only admits exact illustrative tools after current source classification is corroborated', () => {
     const source = {
       ...raw,

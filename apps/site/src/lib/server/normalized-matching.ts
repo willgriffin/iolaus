@@ -25,6 +25,10 @@ import type {
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
 import {
+  matchingSourceStructureMatches,
+  matchingSourceStructures,
+} from './matching-source-jev-structure.js';
+import {
   MATCHING_SOURCE_DESCRIPTION_LIMIT,
   matchingDescriptionUnits,
   matchingSourceSemanticUnits,
@@ -880,6 +884,13 @@ export const matchingSourceRoleInventory = {
     ).values(),
   ],
   levels: [...new Set(Object.values(levels))],
+  aliases: [...postingRoleAliases.entries()].map(
+    ([label, { family, specialty }]) => ({
+      label,
+      family,
+      specialty,
+    }),
+  ),
 };
 
 const levelPrefix =
@@ -2419,6 +2430,21 @@ function postingHeading(text: string) {
   };
 }
 
+/** Closed labels have no prose in which a separate condition could hide. */
+export function matchingSourceContextLabel(citation: Citation): boolean {
+  if (citation.field === 'title') return plainGovernedRoleTitle(citation);
+  if (citation.field !== 'description') return false;
+  const { head, tail } = postingHeading(citation.text);
+  return (
+    !tail &&
+    (requiredHeader.test(head) ||
+      preferredHeader.test(head) ||
+      dutiesHeader.test(head) ||
+      administrativeHeader.test(head) ||
+      /^(?:description|recruitment fraud alert)$/iu.test(head))
+  );
+}
+
 /** Optional draft aids derived entirely from the captured public text. */
 export function matchingSourceSectionHints(description: string) {
   type Section = 'required' | 'preferred' | 'duties' | 'administrative';
@@ -2665,8 +2691,13 @@ function semanticQualifications(
   unit: SemanticLedgerUnit,
   citation: Citation,
   vocabulary: MatchingVocabulary,
+  structure?: string,
 ) {
   const atoms = unit.groups.flatMap(({ alternatives }) => alternatives);
+  const exactStructure =
+    structure &&
+    matchingSourceStructureMatches(citation.text, structure, unit.groups);
+  if (structure && !exactStructure) return undefined;
   const wording = citation.text
     .replace(/<[^<>]+>/gu, ' ')
     .replace(/\s+/gu, ' ');
@@ -2733,27 +2764,60 @@ function semanticQualifications(
   )
     return undefined;
 
+  // A known narrower capability can cover its broader lexical alias inside
+  // this exact, independently audited atom. An explicit connective or an
+  // additional qualifier can instead establish a separate applicant condition.
+  const single =
+    exactStructure &&
+    structure === 'whole' &&
+    !and &&
+    !or &&
+    years.length <= 1 &&
+    contexts.length <= 1 &&
+    atoms.length === 1
+      ? matchingSourceStructures(citation.text).find(
+          ({ key }) => key === structure,
+        )?.groups[0]?.[0]
+      : undefined;
+  const child = single && atoms[0]?.conceptId;
+  const omittedCapability =
+    single && child
+      ? hasGovernedCapabilityOutsideProof(
+          single.text,
+          vocabulary,
+          new Set([child, ...(vocabulary.broader.get(child) ?? [])]),
+        ) ||
+        hasGovernedCapabilityOutsideProof(
+          `${citation.text.slice(0, single.start)} ${citation.text.slice(single.end)}`,
+          vocabulary,
+          proposed,
+        )
+      : hasGovernedCapabilityOutsideProof(wording, vocabulary, proposed);
+
   // Typed review can identify a canonical concept in prose. It cannot waive
   // independently visible credential/eligibility limits or certify ambiguous
   // qualifier scope. Exact deterministic groups are handled before this step.
   if (
     supplementalLimit.test(wording) ||
     atoms.some(({ conceptId }) => conceptId?.startsWith('role-tool-')) ||
-    hasGovernedCapabilityOutsideProof(wording, vocabulary, proposed) ||
+    omittedCapability ||
     /\b(?:without|unless|except|excluding|instead of|at least (?:two|three|four|[2-9]) of)\b|\band\/or\b/iu.test(
       wording,
     ) ||
-    (and && or) ||
-    (and && unit.groups.length < 2) ||
-    (!or && unit.groups.some(({ alternatives }) => alternatives.length > 1)) ||
-    (or && !unit.groups.some(({ alternatives }) => alternatives.length > 1)) ||
-    years.length > 1 ||
-    contexts.length > 1 ||
-    atoms.some(
-      (atom) =>
-        atom.years !== (years[0] ?? null) ||
-        atom.context !== (contexts[0] ?? null),
-    )
+    (!exactStructure &&
+      ((and && or) ||
+        (and && unit.groups.length < 2) ||
+        (!or &&
+          unit.groups.some(({ alternatives }) => alternatives.length > 1)) ||
+        (or &&
+          !unit.groups.some(({ alternatives }) => alternatives.length > 1)) ||
+        years.length > 1 ||
+        contexts.length > 1 ||
+        atoms.some(
+          (atom) =>
+            atom.years !== (years[0] ?? null) ||
+            atom.context !== (contexts[0] ?? null),
+        )))
   )
     return undefined;
   return unit.groups.map(({ alternatives }) => ({
@@ -2891,7 +2955,7 @@ function safeEmployerDisclosure(text: string): boolean {
   );
 }
 
-function semanticContextLines(raw: MatchingPostingInput) {
+export function matchingSourceContextLines(raw: MatchingPostingInput) {
   let inMandatorySection = false;
   const safe = new Set<number>();
   for (const { text, citation } of descriptionLines(raw.description)) {
@@ -2906,7 +2970,10 @@ function semanticContextLines(raw: MatchingPostingInput) {
         continue;
       }
     }
-    if (noRequirements.test(tail ?? text)) {
+    if (
+      matchingSourceContextLabel(citation) ||
+      noRequirements.test(tail ?? text)
+    ) {
       safe.add(citation.start);
       continue;
     }
@@ -2938,6 +3005,22 @@ function mergeSemanticExtraction(
     const unit = units.get(id);
     return unit && cite(unit.field, raw[unit.field], unit.start, unit.end);
   };
+  if (proof.decision) {
+    const ambiguous = [...units.values()]
+      .filter(
+        ({ field, quote }) =>
+          field === 'description' && matchingSourceStructures(quote).length > 1,
+      )
+      .map(({ id }) => citeUnit(id))
+      .filter((citation): citation is Citation => citation !== undefined);
+    const retain = ({ citation }: Group) =>
+      !ambiguous.some((entry) => sameSourceLine(entry, citation));
+    posting = {
+      ...posting,
+      required: posting.required.filter(retain),
+      preferred: posting.preferred.filter(retain),
+    };
+  }
   const verifiedUnits = new Set(
     proof.verification.units
       .filter(
@@ -2971,7 +3054,7 @@ function mergeSemanticExtraction(
   const coveredHard: Citation[] = [];
   const verifiedDisclosures: Citation[] = [];
   const unresolved: MatchingReason[] = [];
-  const contextLines = semanticContextLines(raw);
+  const contextLines = matchingSourceContextLines(raw);
   for (const unit of proof.proposal.ledger) {
     const citation = citeUnit(unit.id);
     if (!citation) continue;
@@ -3092,7 +3175,12 @@ function mergeSemanticExtraction(
       );
       continue;
     }
-    const groups = semanticQualifications(unit, citation, vocabulary);
+    const groups = semanticQualifications(
+      unit,
+      citation,
+      vocabulary,
+      proof.decision?.structures?.[unit.id],
+    );
     if (!groups) {
       if (isRequired)
         unresolved.push(

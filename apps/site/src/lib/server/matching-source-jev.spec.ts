@@ -222,6 +222,142 @@ describe('JEV matching source preparation', () => {
     });
   });
 
+  it('classifies employer experience and hiring procedure before requiring a representable structure', async () => {
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'predicate'
+              ? judge()
+              : choose(key === 'd3_kind' ? 'requirement' : 'context'),
+          ]),
+        ),
+      ),
+    );
+    const proof = await prepareJevMatchingSource(
+      {
+        ...source,
+        description: [
+          'Our company has experience, but our story begins elsewhere.',
+          'Interview procedure: no experience evaluation takes place on the first call.',
+          'Applicants must have clearance and a licence or a certification.',
+        ].join('\n'),
+      },
+      adapter,
+    );
+    expect(proof.proposal.ledger.slice(-3).map(({ kind }) => kind)).toEqual([
+      'context',
+      'context',
+      'unresolved',
+    ]);
+    const requests = adapter.decide.mock.calls.map(
+      ([request]) => request.questions,
+    );
+    expect(
+      requests.some(
+        (questions) =>
+          questions.d1_kind && questions.d2_kind && questions.d3_kind,
+      ),
+    ).toBe(true);
+    expect(
+      requests.some(
+        (questions) => questions.d1_context && questions.d2_context,
+      ),
+    ).toBe(true);
+    expect(
+      requests.some(
+        (questions) => questions.d3_structure || questions.d3_coverage,
+      ),
+    ).toBe(false);
+  });
+
+  it('accepts only a provided comma structure and exposes exact structure keys separately', async () => {
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'predicate'
+              ? judge()
+              : choose(
+                  key.endsWith('_kind')
+                    ? 'requirement'
+                    : key === 'd2_structure'
+                      ? 'list-all'
+                      : 'none',
+                ),
+          ]),
+        ),
+      ),
+    );
+    const onStructures = vi.fn();
+    const result = await prepareJevMatchingSource(
+      {
+        ...source,
+        description:
+          'Qualifications:\nExperience with Node.js, Python, PostgreSQL.',
+      },
+      adapter,
+      { onStructures },
+    );
+    expect(result.proposal.ledger.at(-1)).toMatchObject({
+      kind: 'requirement',
+      groups: [
+        { alternatives: [{ conceptId: 'nodejs' }] },
+        { alternatives: [{ conceptId: 'python' }] },
+        { alternatives: [{ conceptId: 'postgresql' }] },
+      ],
+    });
+    expect(onStructures).toHaveBeenCalledWith({ d2: 'list-all' });
+    const first = adapter.decide.mock.calls.find(
+      ([request]) => request.questions.d2_structure,
+    )?.[0];
+    expect(first?.questions.d2_structure).toMatchObject({
+      type: 'choice',
+      criteria: {
+        whole: expect.any(String),
+        'list-all': expect.any(String),
+        'list-any': expect.any(String),
+        unresolved: expect.any(String),
+      },
+    });
+    const refused = await prepareJevMatchingSource(
+      {
+        ...source,
+        description:
+          'Qualifications:\nExperience with Node.js, Python, PostgreSQL.',
+      },
+      provider(),
+    );
+    expect(refused.proposal.ledger.at(-1)).toMatchObject({
+      kind: 'unresolved',
+      groups: [],
+    });
+  });
+
+  it('preserves explicit parenthesized alternatives and declines ungrouped mixed scope', async () => {
+    const onStructures = vi.fn();
+    const proof = await prepareJevMatchingSource(
+      {
+        ...source,
+        description:
+          'Qualifications:\nExperience with (Node.js or Python) and TypeScript.\nExperience with Node.js or Python and TypeScript.',
+      },
+      provider(),
+      { onStructures },
+    );
+    expect(
+      proof.proposal.ledger
+        .find(({ id }) => id === 'd2')
+        ?.groups.map(({ alternatives }) =>
+          alternatives.map(({ conceptId }) => conceptId),
+        ),
+    ).toEqual([['nodejs', 'python'], ['typescript']]);
+    expect(proof.proposal.ledger.at(-1)?.kind).toBe('unresolved');
+    expect(onStructures).toHaveBeenCalledWith({ d2: 'explicit' });
+  });
+
   it('audits a real-shaped posting across a few bounded requests with exact unit keys', async () => {
     const adapter = provider(({ questions }) =>
       ok(
@@ -237,8 +373,10 @@ describe('JEV matching source preparation', () => {
       ...source,
       description: [
         'Responsibilities:',
+        'Competitive compensation',
+        'Stock option grant',
         ...Array.from(
-          { length: 32 },
+          { length: 30 },
           (_, index) =>
             `You will build integration ${index} and maintain the associated service for our customers.`,
         ),
@@ -247,7 +385,7 @@ describe('JEV matching source preparation', () => {
     const proof = await prepareJevMatchingSource(input, adapter, {
       onDiagnostics,
     });
-    expect(adapter.decide.mock.calls.length).toBeLessThan(8);
+    expect(adapter.decide.mock.calls.length).toBe(13);
     const wire = adapter.decide.mock.calls.map(([request]) => request);
     expect(
       wire.every(
@@ -257,8 +395,25 @@ describe('JEV matching source preparation', () => {
           Object.keys(request.questions).length <= 64,
       ),
     ).toBe(true);
+    const contextBatches = wire.filter(({ questions }) =>
+      Object.keys(questions).every((key) => /^d\d+_context$/u.test(key)),
+    );
+    expect(contextBatches).toHaveLength(11);
     expect(
-      wire.some(({ questions }) => Object.keys(questions).length > 12),
+      contextBatches.every(
+        ({ questions }) => Object.keys(questions).length <= 3,
+      ),
+    ).toBe(true);
+    expect(
+      wire
+        .filter(({ questions }) =>
+          Object.keys(questions).some((key) => /_(role|geography)$/u.test(key)),
+        )
+        .every(
+          ({ questions }) =>
+            new Set(Object.keys(questions).map((key) => key.split('_')[0]))
+              .size === 1,
+        ),
     ).toBe(true);
     expect(proof.verification.units.map(({ id }) => id)).toEqual(
       matchingSourceSemanticUnits(input).map(({ id }) => id),
@@ -320,7 +475,6 @@ describe('JEV matching source preparation', () => {
       'state.units.d3.quote',
     );
     expect(Object.keys(request?.questions ?? {})).toEqual([
-      'd1_context',
       'd2_context',
       'd3_context',
     ]);
@@ -385,7 +539,7 @@ describe('JEV matching source preparation', () => {
     const proof = await prepareJevMatchingSource(input, adapter, {
       onDiagnostics,
     });
-    expect(adapter.decide.mock.calls.length).toBeLessThan(24);
+    expect(adapter.decide.mock.calls.length).toBeLessThan(66);
     expect(proof.proposal.ledger).toHaveLength(83);
     expect(
       proof.verification.units.find(({ id }) => id === 'd55')
@@ -414,7 +568,10 @@ describe('JEV matching source preparation', () => {
     const adapter = provider(({ questions }) =>
       questions.d2_coverage
         ? { status }
-        : ok({ d2_concept_0_0: choose(leadership) }),
+        : ok({
+            d2_kind: choose('requirement'),
+            d2_concept_0_0: choose(leadership),
+          }),
     );
     const proof = await prepareJevMatchingSource(
       {
@@ -448,7 +605,10 @@ describe('JEV matching source preparation', () => {
                 d2_coverage: judge(),
                 d2_logic: judge(0.5),
               })
-            : ok({ d2_concept_0_0: choose(selection) }),
+            : ok({
+                d2_kind: choose('requirement'),
+                d2_concept_0_0: choose(selection),
+              }),
         ),
       );
       expect(proof.verification.units.at(-1)?.logicAndQualifiersPreserved).toBe(
@@ -468,6 +628,34 @@ describe('JEV matching source preparation', () => {
     }
   });
 
+  it('redacts a mailbox only for the independent context audit while retaining exact source binding', async () => {
+    const adapter = provider();
+    const input = {
+      ...source,
+      description: [
+        'Recruitment Fraud Alert',
+        'Report suspicious messages to fraud@example.org.',
+        'Applicants must have a security clearance; contact hiring@example.org.',
+        'Report fraud by calling 123-456-7890.',
+      ].join('\n'),
+    };
+    const proof = await prepareJevMatchingSource(input, adapter);
+    const wire = JSON.stringify(adapter.decide.mock.calls);
+    expect(wire).toContain('Report suspicious messages to [contact removed].');
+    expect(wire).not.toMatch(/example\.org|123-456-7890|security clearance/u);
+    expect(
+      proof.verification.units.find(({ id }) => id === 'd2')
+        ?.allConditionsRepresented,
+    ).toBe(true);
+    for (const id of ['d3', 'd4']) {
+      expect(
+        proof.verification.units.find((entry) => entry.id === id)
+          ?.allConditionsRepresented,
+      ).toBe(false);
+    }
+    expect(parseMatchingSourceSemanticProof(proof, input)).toEqual(proof);
+  });
+
   it('accounts for unsafe applicant conditions without submitting them or unrelated private inputs', async () => {
     const adapter = provider();
     const input = {
@@ -484,15 +672,27 @@ describe('JEV matching source preparation', () => {
     };
     const proof = await prepareJevMatchingSource(input, adapter);
     expect(proof.proposal.geography).toBeNull();
-    for (const id of ['d2', 'd3', 'd4']) {
-      expect(proof.proposal.ledger.find((entry) => entry.id === id)?.kind).toBe(
-        'unresolved',
-      );
+    for (const id of ['d2', 'd3']) {
+      expect(
+        proof.proposal.ledger.find((entry) => entry.id === id),
+      ).toMatchObject({
+        kind: 'requirement',
+        groups: [
+          { alternatives: [{ conceptId: null, unsupportedQualifier: true }] },
+        ],
+      });
       expect(
         proof.verification.units.find((entry) => entry.id === id)
-          ?.classificationCorrect,
+          ?.allConditionsRepresented,
       ).toBe(false);
     }
+    expect(proof.proposal.ledger.find((entry) => entry.id === 'd4')?.kind).toBe(
+      'unresolved',
+    );
+    expect(
+      proof.verification.units.find((entry) => entry.id === 'd4')
+        ?.classificationCorrect,
+    ).toBe(false);
     const wire = JSON.stringify(adapter.decide.mock.calls);
     expect(wire).not.toContain(input.profile);
     expect(wire).not.toContain('private@example.org');

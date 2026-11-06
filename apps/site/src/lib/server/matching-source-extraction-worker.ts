@@ -77,7 +77,7 @@ async function claimSourceExtraction(
           AND sv.revision = f.source_revision AND sl.revision = f.source_listing_revision
           AND s.is_active = TRUE AND s.public_listing = TRUE AND ${liveMatchingOpportunitySql('o', dialect)}
         THEN 1 ELSE 0 END AS eligible,
-        x.attempts AS previous_attempts, x.state AS previous_state, x.next_run_at, x.input_digest, x.request_id AS previous_request_id
+        x.attempts AS previous_attempts, x.state AS previous_state, x.next_run_at, x.input_digest, x.request_id AS previous_request_id, x.payload_json AS previous_payload
       FROM page f
       JOIN matching_vocabulary_version vv ON vv.id=1
       JOIN matching_source_versions sv ON sv.opportunity_id=f.opportunity_id
@@ -192,6 +192,17 @@ async function claimSourceExtraction(
       capture,
       sourceRevision: text(selected.source_revision),
       listingRevision: text(selected.listing_revision),
+      prior:
+        decisionRequestId &&
+        selected.previous_state === 'complete' &&
+        selected.input_digest === inputDigest &&
+        selected.previous_payload
+          ? {
+              payload: text(selected.previous_payload),
+              requestId: text(selected.previous_request_id),
+              attempts: Number(selected.previous_attempts),
+            }
+          : undefined,
     };
   });
 }
@@ -232,22 +243,74 @@ export async function runMatchingSourceExtraction(
     decisionRequestId,
   );
   if (!claimed) return 'idle';
-  const { input, lease, attempt, capture, sourceRevision, listingRevision } =
-    claimed;
+  const {
+    input,
+    lease,
+    attempt,
+    capture,
+    sourceRevision,
+    listingRevision,
+    prior,
+  } = claimed;
   const provider = options.provider ?? extractMatchingSource;
+  const retainPrior = async () => {
+    if (!prior) return false;
+    const { rows } = await database.query(
+      `UPDATE matching_source_interpretations
+       SET state='complete', lease='', next_run_at=0, attempts=?, payload_json=?, request_id=?
+       WHERE opportunity_id=? AND lease=? AND state='running'
+       RETURNING opportunity_id`,
+      [
+        prior.attempts,
+        prior.payload,
+        prior.requestId,
+        input.opportunityId,
+        lease,
+      ],
+    );
+    return rows.length > 0;
+  };
   try {
     const output = await provider(input, {
       budgetMicros,
       ...(options.windowId === undefined ? {} : { windowId: options.windowId }),
     });
     if (decisionRequestId) {
-      const provenance = parseMatchingSourceExtraction(output.extraction, input)
-        .semantic?.decision;
+      const incoming = parseMatchingSourceExtraction(output.extraction, input);
+      const provenance = incoming.semantic?.decision;
       if (
         !provenance ||
         matchingSourceDecisionRequestId(provenance) !== decisionRequestId
       )
         throw new MatchingSourceExtractionError('matching_extraction_coverage');
+      if (prior) {
+        const previous = parseMatchingSourceExtraction(
+          JSON.parse(prior.payload),
+          input,
+        );
+        const countVerified = (extraction: typeof previous) =>
+          extraction.semantic?.verification.units.filter(
+            ({
+              classificationCorrect,
+              allConditionsRepresented,
+              logicAndQualifiersPreserved,
+            }) =>
+              classificationCorrect &&
+              allConditionsRepresented &&
+              logicAndQualifiersPreserved,
+          ).length ?? 0;
+        if (
+          previous.coverage === 'complete' ||
+          countVerified(previous) > countVerified(incoming) ||
+          (previous.semantic?.verification.roleCorrect &&
+            !incoming.semantic?.verification.roleCorrect) ||
+          (previous.semantic?.verification.geographyCorrect &&
+            !incoming.semantic?.verification.geographyCorrect)
+        ) {
+          options.onFailure?.('PriorEvidenceRetained');
+          return (await retainPrior()) ? 'idle' : 'obsolete';
+        }
+      }
     }
     for (const diagnostic of output.diagnostics ?? [])
       options.onDiagnostic?.(diagnostic);
@@ -330,6 +393,7 @@ export async function runMatchingSourceExtraction(
                 ? 'InputCeiling'
                 : 'ProviderOrConfigurationError';
     options.onFailure?.(classification);
+    if (await retainPrior()) return 'retry';
     // Admission refusals did not invoke the provider. Keep the source
     // retryable when an hourly cap, circuit, or pending duplicate clears.
     const admissionRefused =
