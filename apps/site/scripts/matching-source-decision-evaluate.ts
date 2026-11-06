@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import type { DecisionAnswer } from '@happyvertical/ai';
+import {
+  jevBudget,
+  jevInputTokenCeiling,
+  reserveJevAttempt,
+  settleJevAttempt,
+} from '../src/lib/server/matching-source-decision-budget.js';
 import { prepareMatchingSourceDecision } from '../src/lib/server/matching-source-decision-preparation.js';
 import {
   createMatchingSourceDecisionProvider,
@@ -88,69 +94,6 @@ export function parseArguments(args: string[]) {
   )
     throw new Error('Live evaluation requires a matching opt-in and limits.');
   return { mode, maxCalls, maxCostMicros, fixture };
-}
-
-const jevInputTokenCeiling = 65_536;
-
-function jevBudget(
-  model: string,
-  maxCostMicros: number | undefined,
-  env: NodeJS.ProcessEnv,
-) {
-  if (!/^jev-1\.(?:13|14)\.0$/u.test(model))
-    throw new Error('Jev evaluation requires a supported pinned checkpoint.');
-  const rate = env.IOLAUS_SOURCE_DECISION_JEV_INPUT_COST_MICROS_PER_MILLION;
-  if (
-    !rate ||
-    !/^[1-9]\d{0,8}$/u.test(rate) ||
-    maxCostMicros === undefined ||
-    !Number.isSafeInteger(maxCostMicros) ||
-    maxCostMicros < 1 ||
-    maxCostMicros > 999_999_999
-  )
-    throw new Error('Jev evaluation requires a positive rate and spend cap.');
-  const inputMicrosPerMillion = Number(rate);
-  const maxPerCallMicros = Math.ceil(
-    (jevInputTokenCeiling * inputMicrosPerMillion) / 1_000_000,
-  );
-  return {
-    maxCostMicros,
-    maxPerCallMicros,
-    inputMicrosPerMillion,
-    reportedCostMicros: 0,
-    settledCalls: 0,
-    unsettledReservedMicros: 0,
-    stopReason: null as 'cost-cap' | 'unverified-usage' | null,
-  };
-}
-
-function settleJevAttempt(
-  budget: ReturnType<typeof jevBudget>,
-  attempt: MatchingSourceDecisionAttempt | undefined,
-): boolean {
-  if (attempt?.calls === 0) {
-    budget.unsettledReservedMicros = 0;
-    return true;
-  }
-  const usage = attempt?.usage;
-  if (
-    attempt?.status !== 'ok' ||
-    !usage ||
-    usageFields.some(
-      (field) => !Number.isSafeInteger(usage[field]) || usage[field] < 0,
-    ) ||
-    usage.totalTokens !== usage.promptTokens + usage.completionTokens ||
-    usage.promptTokens > jevInputTokenCeiling
-  ) {
-    budget.stopReason = 'unverified-usage';
-    return false;
-  }
-  budget.reportedCostMicros += Math.ceil(
-    (usage.promptTokens * budget.inputMicrosPerMillion) / 1_000_000,
-  );
-  budget.settledCalls++;
-  budget.unsettledReservedMicros = 0;
-  return true;
 }
 
 function digest(value: unknown) {
@@ -706,18 +649,9 @@ export async function evaluate(
             budgetBlockedRequests++;
             return { status: 'failed' };
           }
-          if (spend) {
-            if (
-              !spend.stopReason &&
-              spend.reportedCostMicros + spend.maxPerCallMicros >
-                spend.maxCostMicros
-            )
-              spend.stopReason = 'cost-cap';
-            if (spend.stopReason) {
-              budgetBlockedRequests++;
-              return { status: 'failed' };
-            }
-            spend.unsettledReservedMicros = spend.maxPerCallMicros;
+          if (spend && !reserveJevAttempt(spend)) {
+            budgetBlockedRequests++;
+            return { status: 'failed' };
           }
           attemptsBudgeted++;
           const before = attempts.length;
