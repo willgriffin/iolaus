@@ -79,3 +79,8 @@ The [offline matching study](docs/matching-evaluation.md) compares structured
 retrieval, a pinned text embedding model, and gated reranking on fictional
 opportunities and candidate evidence. Run `pnpm --silent matching:evaluate`
 with the checked-in vectors, or follow the study's regeneration instructions.
+
+The [posting source decision benchmark](docs/matching-source-decision-evaluation.md)
+compares typed preparation with abstention controls on reviewed posting fixtures.
+Run it offline with
+`pnpm --silent --filter @willgriffin/iolaus-site matching:source-decision-evaluate`.
