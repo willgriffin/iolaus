@@ -60,7 +60,11 @@ pnpm test
 pnpm build
 ```
 
-For database-sensitive changes, also run:
+For database-sensitive changes, validate with the commands for the affected
+database. For local SQLite, follow the [local schema setup and status
+instructions](docs/configuration.md#local-schema-setup-and-status) with a
+disposable data directory. For hosted PostgreSQL, run the site package scripts
+against a disposable PostgreSQL database:
 
 ```bash
 pnpm --filter @willgriffin/iolaus-site db:migrate
