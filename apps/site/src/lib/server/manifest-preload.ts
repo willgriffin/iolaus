@@ -29,6 +29,7 @@ import {
   loadExternalManifestSync,
   loadManifestFromPathSync,
 } from '@happyvertical/smrt-core';
+import { getIolausSourceRoot } from './runtime-paths.js';
 
 const DEPENDENCY_PACKAGES = [
   '@happyvertical/smrt-agents',
@@ -45,9 +46,12 @@ for (const packageName of DEPENDENCY_PACKAGES) {
   loadExternalManifestSync(packageName, { warn: false });
 }
 
+// Use the same artifact as deployment schema validation, including from
+// generated server directories where runtime inference lacks sync metadata.
+const sourceRoot = getIolausSourceRoot();
 const LOCAL_MANIFEST_CANDIDATES = [
-  resolve(process.cwd(), '.smrt/manifest.json'),
-  resolve(process.cwd(), 'apps/site/.smrt/manifest.json'),
+  resolve(sourceRoot, 'apps/site/.smrt/manifest.json'),
+  resolve(sourceRoot, '.smrt/manifest.json'),
 ] as const;
 
 for (const manifestPath of LOCAL_MANIFEST_CANDIDATES) {

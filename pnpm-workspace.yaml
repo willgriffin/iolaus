@@ -2,65 +2,12 @@ packages:
   - apps/*
   - packages/*
 
-# Exact published first-party packages for the supported resume release closure.
+# Existing specialty dependency and advisory pins.
 overrides:
-  "@happyvertical/ai": "0.108.0"
-  "@happyvertical/auth": "0.108.0"
-  "@happyvertical/cache": "0.108.0"
-  "@happyvertical/email": "0.108.0"
-  "@happyvertical/encryption": "0.108.0"
-  "@happyvertical/files": "0.108.0"
-  "@happyvertical/geo": "0.108.0"
-  "@happyvertical/jobs": "0.108.0"
-  "@happyvertical/json": "0.108.0"
-  "@happyvertical/logger": "0.108.0"
-  "@happyvertical/messages": "0.108.0"
-  "@happyvertical/secrets": "0.108.0"
-  "@happyvertical/smrt-agents": "0.57.32"
-  "@happyvertical/smrt-app-cli": "0.57.32"
-  "@happyvertical/smrt-app-mcp": "0.57.32"
-  "@happyvertical/smrt-app-runtime": "0.57.32"
-  "@happyvertical/smrt-assets": "0.57.32"
-  "@happyvertical/smrt-chat": "0.57.32"
-  "@happyvertical/smrt-cli": "0.57.32"
-  "@happyvertical/smrt-config": "0.57.32"
-  "@happyvertical/smrt-core": "0.57.32"
-  "@happyvertical/smrt-dev-mcp": "0.57.32"
-  "@happyvertical/smrt-facts": "0.57.32"
-  "@happyvertical/smrt-features": "0.57.32"
-  "@happyvertical/smrt-jobs": "0.57.32"
-  "@happyvertical/smrt-languages": "0.57.32"
-  "@happyvertical/smrt-ledgers": "0.57.32"
-  "@happyvertical/smrt-mcp-apps": "0.57.32"
-  "@happyvertical/smrt-mcp-openai": "0.57.32"
-  "@happyvertical/smrt-messages": "0.57.32"
-  "@happyvertical/smrt-mobile-contract": "0.57.32"
-  "@happyvertical/smrt-personas": "0.57.32"
-  "@happyvertical/smrt-places": "0.57.32"
-  "@happyvertical/smrt-playbooks": "0.57.32"
-  "@happyvertical/smrt-playground": "0.57.32"
-  "@happyvertical/smrt-profiles": "0.57.32"
-  "@happyvertical/smrt-prompts": "0.57.32"
-  "@happyvertical/smrt-reports": "0.57.32"
-  "@happyvertical/smrt-scanner": "0.57.32"
-  "@happyvertical/smrt-secrets": "0.57.32"
-  "@happyvertical/smrt-svelte": "0.57.32"
-  "@happyvertical/smrt-tags": "0.57.32"
-  "@happyvertical/smrt-tenancy": "0.57.32"
-  "@happyvertical/smrt-types": "0.57.32"
-  "@happyvertical/smrt-ui": "0.57.32"
-  "@happyvertical/smrt-users": "0.57.32"
-  "@happyvertical/smrt-web": "0.57.32"
-  "@happyvertical/speech": "0.108.0"
-  "@happyvertical/sql": "0.108.0"
   "@happyvertical/spider": "1.1.11"
-  "@happyvertical/utils": "0.108.0"
-  "@happyvertical/smrt-ingestion": "0.57.32"
   "@happyvertical/pdf": "0.66.0"
   "@happyvertical/ocr": "0.62.1"
   "@happyvertical/animation": "0.5.0"
-  "@happyvertical/smrt-images": "0.57.32"
-  "@happyvertical/images": "0.108.0"
   sharp: "0.35.5"
 
   # Bounded advisory remediation; preserve each existing major line.
@@ -148,18 +95,23 @@ minimumReleaseAgeExclude:
   - '@happyvertical/sql'
   - '@happyvertical/spider'
   - '@happyvertical/utils'
-  - '@happyvertical/smrt-reports@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-playbooks@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-app-runtime@0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-ledgers@0.51.31 || 0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-app-mcp@0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-mcp-apps@0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-mcp-openai@0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-chat@0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-messages@0.52.0 || 0.57.32'
-  - '@happyvertical/smrt-images@0.57.32'
-  - '@happyvertical/smrt-ingestion@0.57.32'
-  - '@happyvertical/smrt-personas@0.57.32'
+  - '@happyvertical/smrt-reports@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-playbooks@0.44.1 || 0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-app-runtime@0.45.0 || 0.45.3 || 0.47.0 || 0.47.1 || 0.49.0 || 0.49.1 || 0.50.0 || 0.51.16 || 0.51.31 || 0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-ledgers@0.51.31 || 0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-app-mcp@0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-mcp-apps@0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-mcp-openai@0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-chat@0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-messages@0.52.0 || 0.60.10'
+  - '@happyvertical/smrt-images@0.60.10'
+  - '@happyvertical/smrt-ingestion@0.60.10'
+  - '@happyvertical/smrt-personas@0.60.10'
+  - '@happyvertical/email@0.111.5'
+  - '@happyvertical/encryption@0.111.5'
+  - '@happyvertical/images@0.111.5'
+  - '@happyvertical/messages@0.111.5'
+  - '@happyvertical/speech@0.111.5'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4

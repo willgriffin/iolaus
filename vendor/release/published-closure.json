@@ -1,28 +1,39 @@
 {
   "schema": 1,
   "provenance": "published-registry-metadata",
-  "capturedAt": "2026-10-26",
+  "capturedAt": "2026-11-06",
   "qualification": "Registry identities and dist integrity are verified against the frozen lock and installed packages. Source tags are independently observed references; registry metadata supplies no gitHead or build attestation, so this does not attest tarball-to-source reproducibility.",
   "sourceReferences": [
     {
       "repository": "https://github.com/happyvertical/sdk",
-      "tag": "v0.108.0",
-      "commit": "82f860d056251d89376844827fa573639f856273"
+      "tag": "v0.111.5",
+      "commit": "7bb9eed5230abef43ba7ad24641d107d40798ce1"
     },
     {
       "repository": "https://github.com/happyvertical/smrt",
-      "tag": "v0.57.32",
-      "commit": "ce94e5805d8cd159a84c9d615b4cd2a2779ca0ab"
+      "tag": "v0.60.10",
+      "commit": "fd4a6bd4a5ff9df167e268f635f39cee5f1df201"
     }
   ],
   "packages": [
     {
       "name": "@happyvertical/ai",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/ai/-/ai-0.108.0.tgz",
-      "integrity": "sha512-lSkw/HaREjAOTyGyTh6THzA7xgPUGSdLPdZLo6OmuK1jwBBbUjgGmnfI8xeUB96nIZmf8d6OAl9p5UUHpT8Pwg==",
-      "shasum": "72453b3943dabdb83fc383090e12bbcd18e2a71b"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/ai/-/ai-0.111.5.tgz",
+      "integrity": "sha512-bfWCbzcsayFufxH2+4idGJK4n2Ltb4GOBz0B3A3mIdimAYlwmlAJps/P01HJKV+ZvV30XNWl8JOaL54lS6/9+g==",
+      "shasum": "a59f2e269815632ca249b2429053217c515ec676"
+    },
+    {
+      "name": "@happyvertical/ai",
+      "version": "0.80.6",
+      "registry": "https://npm.happyvertical.com/",
+      "tarball": "https://npm.happyvertical.com/@happyvertical/ai/-/ai-0.80.6.tgz",
+      "integrity": "sha512-k5kfr+6sICnQGbJbrDl2vufpB2I41eCZGO0EG3KLlas3tsgKPR+7FewENMprVbXgH4W6KRI2BHhU7hWa3V9OFw==",
+      "shasum": "18752c1b1fa682a6fdf4226f1087a137ba6eef8a",
+      "consumers": [
+        "@happyvertical/ocr@0.62.1"
+      ]
     },
     {
       "name": "@happyvertical/animation",
@@ -34,91 +45,102 @@
     },
     {
       "name": "@happyvertical/auth",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/auth/-/auth-0.108.0.tgz",
-      "integrity": "sha512-VwXJS/K0+dnU8GiKQIjSMha7ZIASZHNy8LnkmvZ0xCrnF8GtHMRJg9NyiGuvgh3cYiQQ4D9e4akNru9BLZE3Xw==",
-      "shasum": "388b026b35b8e71279ba193fd8202c8be1f0943c"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/auth/-/auth-0.111.5.tgz",
+      "integrity": "sha512-QRh2uPvbSba2Z8xdTDPUJxTPyOND5fqgV1qfmVmQLAR2mY49Yw3ZnUdMuKxg/LnxDXPasUDja4tMLItdQMpDVw==",
+      "shasum": "ac1d76ec631d30ad29a796aba21e9d115156c4bc"
     },
     {
       "name": "@happyvertical/cache",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/cache/-/cache-0.108.0.tgz",
-      "integrity": "sha512-FWLIwuvX7T36SQlQ38PKgNdfOcxMQJJq6IgyQXI5M2MZuh3Y1/ZHqQGYaXgQLA1JgIhfBg5WkBAOKDngC09EFg==",
-      "shasum": "99ed224ad792c8ffb08a8e0c801c052e1303fac8"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/cache/-/cache-0.111.5.tgz",
+      "integrity": "sha512-ZGDH4y0S1iqceVfabCyHORxegjp5dxtFJizQIArTZW6s2hcjEXYSdCGeXR51+PfaQ9bDPy5n9gPM7R8XlPd7Ow==",
+      "shasum": "3794d20f27aee05ebee269d1d05d27e6ab761267"
+    },
+    {
+      "name": "@happyvertical/cache",
+      "version": "0.74.11",
+      "registry": "https://npm.happyvertical.com/",
+      "tarball": "https://npm.happyvertical.com/@happyvertical/cache/-/cache-0.74.11.tgz",
+      "integrity": "sha512-+29qTVnz4JP2Rajkzq3BTBUVpLabMRoXr+zvu0s2aHmGLWvpnwORhj89zRKXUIig4isWT/TQP1oTKfkP7ryHFA==",
+      "shasum": "f07bf6bef92d189354f838e1612ad8051bfcc217",
+      "consumers": [
+        "@happyvertical/spider@1.1.11"
+      ]
     },
     {
       "name": "@happyvertical/email",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/email/-/email-0.108.0.tgz",
-      "integrity": "sha512-l/22X6bjlbH0xlPoy3JGwdE0Y2+ELqMV/VOfse7bX7thMevAqagBz9AX8zKmBCMo42gwI4Zh1p4ACEQR+c6prw==",
-      "shasum": "d9cdd28e35f193506de6ec14d03dbf2f0e527a8f"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/email/-/email-0.111.5.tgz",
+      "integrity": "sha512-nyZ6cG4VxNAngRBemirO2GIeYesBeDnN6y+ILKOFtZESTdbcq9JKz0b+U1bNub2TxeodieM6vHwaOmwzaBxBjg==",
+      "shasum": "f510263112502a6a20dc06a9358c322e74548f95"
     },
     {
       "name": "@happyvertical/encryption",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/encryption/-/encryption-0.108.0.tgz",
-      "integrity": "sha512-IpacAWDjWCS5nBndwdbtbYUMV6mL7bRkV9VOAs0ulx5vlhfnOfYTHZkwqlTTMzuw/cH0S9GJiehEI7ikgW+T5w==",
-      "shasum": "b91707754c6c56b93c43a675aee4b516abbf8a6a"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/encryption/-/encryption-0.111.5.tgz",
+      "integrity": "sha512-UkXOz9G/uYE6C4B6ScnNSxG3PV0osMzib+H5FybUUkX7Am8UqMLSNPHPsfnvMPkdCE2iZuwpC04W5VSWyKTRMg==",
+      "shasum": "95e9ab571a01583ac70625f5bd72c7c2731d9b0c"
     },
     {
       "name": "@happyvertical/files",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/files/-/files-0.108.0.tgz",
-      "integrity": "sha512-vGhkH9Lp53D0jGRBTjHMHzzDMKL5wUHR7REWgtV1BDjeztPQC5W7J6TJkhMC6O36fOWko5xAU6UqAmAVOOI2WQ==",
-      "shasum": "9c96949772e5db63dbb808bd480afb739889e200"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/files/-/files-0.111.5.tgz",
+      "integrity": "sha512-PhQJxBOAjF922gleq1wb459ycSpgys1/c9co7kSEL3y0P7yrYEQY7tP355wKLnm+s5at7YfFndOA29YvYfqCGQ==",
+      "shasum": "92c0d3a79c3df46ec26ef457c10bbd9ef8d97b30"
     },
     {
       "name": "@happyvertical/geo",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/geo/-/geo-0.108.0.tgz",
-      "integrity": "sha512-cMbjb1NO71gjPLOarEFE3CJ6hKbBuA+A8BbdFpLWYgAbessxjwpkMcFw623fy5hanERykvt58SqlLbXE0LNdnQ==",
-      "shasum": "0a21d875ca5a0ac34f8e2cf4223d6992eff0ab1a"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/geo/-/geo-0.111.5.tgz",
+      "integrity": "sha512-hFOwrJTuJq1xbqrzQORR3t5KrN+ISfBGkaq4EOJhPrFe+Dip2AhRk+z05Pd0Q5IcCcDy5bTd5zZ8FHVKP0u+/g==",
+      "shasum": "28a3237b96b06c66d1716227b875aa6d6ac73c65"
     },
     {
       "name": "@happyvertical/images",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/images/-/images-0.108.0.tgz",
-      "integrity": "sha512-I8Ygi5rY+vJa3PkgMwjUPrFUbbYEZ/xFYBS5svorJyVkJ0jT0f5qczAM+diSiCx5fVCZTCV9gJRpALCiIZzlMQ==",
-      "shasum": "3918ef793998f57a18500ca527c8ccea595866be"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/images/-/images-0.111.5.tgz",
+      "integrity": "sha512-KH42D++5dzK/GJh3YioND1KxUPL44pal9nb20BIYJ37PwFIdLRn9S4i9VegcKlzzkhCyrjk6dduZsFK4tGvZqw==",
+      "shasum": "fb87c7739af420640b7b0e691fd15a0ddebbb310"
     },
     {
       "name": "@happyvertical/jobs",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/jobs/-/jobs-0.108.0.tgz",
-      "integrity": "sha512-fJoAEb+MvG7MnDoXlyHo/HSIr4iTWRGhbqMrEqL24OY3db6agvmZeZAKc5kGCk7QqgWtL3c7BJqGwGLgB8SyQw==",
-      "shasum": "e752892761a484ba161e50742e7fb55da0d62f10"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/jobs/-/jobs-0.111.5.tgz",
+      "integrity": "sha512-jaY+MS3bpSUPXJeHD2RDDJ0aqCkUDtoJiR+DIJ3VnIs00RKpG6bQAB0mHggwrEfZdTyQq2NtkTRiOGjvovSXig==",
+      "shasum": "eff665429ff417072126e1a3e7c00b04524e3519"
     },
     {
       "name": "@happyvertical/json",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/json/-/json-0.108.0.tgz",
-      "integrity": "sha512-CoxnGAVzm0E/MmEDmAB8qqwHwsvjoc/gNnQoFwKcEPCRP7mPztWbAs6TQADDFDLCiGDPT6O26zO4ovcI0HKyPg==",
-      "shasum": "5b1835dacf223099d74622419bd9e9f20adae3dc"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/json/-/json-0.111.5.tgz",
+      "integrity": "sha512-sunrHC/J8JlSSQSc/KdvzYAZh+wzr8e7ovTlDs351Mm01jxKTLtntyq1VDzULF16z4w0B0558MOp3AgbvYGoWg==",
+      "shasum": "0ab207e6967cfcaa02ea51b605b19767223bae01"
     },
     {
       "name": "@happyvertical/logger",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/logger/-/logger-0.108.0.tgz",
-      "integrity": "sha512-9hOU+LmCceRotFiGl2RmfiQjJvMcVL6KgimYnTkIFJ4zpERTV0tyehc/9YNmFTyOz0VzX9LPmKLYCdTjjz64hA==",
-      "shasum": "5745c6fc81cbe75f2754b94d16154ef4b9b8a627"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/logger/-/logger-0.111.5.tgz",
+      "integrity": "sha512-uZbCGJIx2PZfp1FtNgOVCSibVoDIuIN53HvI3/YEWcDAWVlI3o3r5/LZ9hYJMJHIZ8gxA1UpYXZ2GyaD73SnNA==",
+      "shasum": "a94dccaf8a06fb92b0e8fd78f2b01d4eb57d37a2"
     },
     {
       "name": "@happyvertical/messages",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/messages/-/messages-0.108.0.tgz",
-      "integrity": "sha512-Qqy4Hka4cJeMqjbHlgbv+kE2CO9Mg61Rhx7WSOphMJupV5Kl0llPfx9NkDlDNu05XsHtYKWiOzYpbOHoHrmaEQ==",
-      "shasum": "a0a2938be1453ecc13b29e5fdfdc177515673ff7"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/messages/-/messages-0.111.5.tgz",
+      "integrity": "sha512-7fGcgj7y2WSeEl3YiZG/a898dbnI4cJeNs7uhFM5c3gyho+OZ3kiXFl2IB/gwqQxfbOy+/6b9oQp4Vfb2YiTBA==",
+      "shasum": "e6b6d1d762ec08e47a86eaa0491aabf018f2e111"
     },
     {
       "name": "@happyvertical/ocr",
@@ -138,315 +160,315 @@
     },
     {
       "name": "@happyvertical/secrets",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/secrets/-/secrets-0.108.0.tgz",
-      "integrity": "sha512-vLnG3GAtSYEYZbqIazay8MUi+Nwspc53RerXAQhI9TIYA/2IDFYThsm7t3OiiAXqB6wvPzftzd0NgQTtFx7QLQ==",
-      "shasum": "0e0729010fe120fee2ecf0a718bbc1ad3b19991e"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/secrets/-/secrets-0.111.5.tgz",
+      "integrity": "sha512-2X3gt4cdTJQedRm32tSh4vRKjksycUbmscdN8giJxiF0nU6nQyaFdP33YKXYUssbCkJkh12h0QcSERobrmIUvw==",
+      "shasum": "7c972ccc65caa241ca111550be028f1c195db457"
     },
     {
       "name": "@happyvertical/smrt-agents",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-agents/-/smrt-agents-0.57.32.tgz",
-      "integrity": "sha512-6SIfVLeTtgO7mmQ7ntKrIS7yimsy4MuViJxv0YHb7g8I/TzK6VIOtrXNzpbab8Lm23eAUka05C82aWoc/HAIrg==",
-      "shasum": "9693a33158ee6b855926f78b5709a0523ae04cad"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-agents/-/smrt-agents-0.60.10.tgz",
+      "integrity": "sha512-ADJMX2F2QoiqY4lwlJbpKq0Xg1+cOvWcfBZ/s8nRfZeeyrmRDC4STVT+8LnLO2nIEI8v9BY/q61G6pC+0ZQiDA==",
+      "shasum": "48d54605784cf4117345f304dc6c1ea1b588a58e"
     },
     {
       "name": "@happyvertical/smrt-app-cli",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-cli/-/smrt-app-cli-0.57.32.tgz",
-      "integrity": "sha512-JgJpGtLP5jtbonxQDaKs0CpA0hYiPuC1neDO6OFn6x69Tk3mEhGxTgjnv2neJ/Zw9VRYRIwBZlOXkyYVZ5IvHg==",
-      "shasum": "ebb55bd11aa242269a2ee5e2afc6b8f36336ef52"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-cli/-/smrt-app-cli-0.60.10.tgz",
+      "integrity": "sha512-pQ4quIea3Y48+X7elw/LkUW0E0YNojmEouoxgqZsaLuAvKOUUXkdolEupqQvbeU53DLBtMhIZDh8qvwrMPigBg==",
+      "shasum": "90f1fbeeed8d2c74d11532fba078d86d3310d29a"
     },
     {
       "name": "@happyvertical/smrt-app-mcp",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-mcp/-/smrt-app-mcp-0.57.32.tgz",
-      "integrity": "sha512-SlmtoZ/CRVoPc8/x3WQ+wn6qChn3pGuAuTYZ3sZYMnF6esfgKEBfo0GR3U1f57MF+JkUukHeWMLZVfWIkDOmng==",
-      "shasum": "562a26e8fac6dd4327b585007bce22ea30e1e06b"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-mcp/-/smrt-app-mcp-0.60.10.tgz",
+      "integrity": "sha512-ZH8LHiFUmxTIiJvMmBqAcnTqa8Jz0N3S1RbRsvtMLAOJAyyrpW7ICnmqVdGqshbsEqBhxgXNGg8dQs/8xCR4Qw==",
+      "shasum": "87ed7e48245aec02d0174efc66a1195c0cab54b6"
     },
     {
       "name": "@happyvertical/smrt-app-runtime",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-runtime/-/smrt-app-runtime-0.57.32.tgz",
-      "integrity": "sha512-vAWJJaeWiYMaJoI/F+NKJ7uQkYvZ96CLBmhueN4m+tZ48Sb5RAUeOQwYf//3JU1ozb1xqRFaT+PdutG1keDFRA==",
-      "shasum": "5bb054373e65fcc917e6bf97db9fb9ac72ea566c"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-app-runtime/-/smrt-app-runtime-0.60.10.tgz",
+      "integrity": "sha512-mjAvdxFTeKcn6WvGBmzlvXECCc0E3UKjMKm03qNd3S6HBZxe6T0Z5+dmebmxl6kM3s+A2lQqUNlL18Qjk8UnuQ==",
+      "shasum": "0406f0839c020d0963765815124e26d3444e6687"
     },
     {
       "name": "@happyvertical/smrt-assets",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-assets/-/smrt-assets-0.57.32.tgz",
-      "integrity": "sha512-pHxJWBHuYM4rfjdnpJ8N7/ctGKsCeJbxrOvqOqKCaaEahb7bqU58hZNemljZiv0bPnAlj5xG5FeycBj5KqvIvg==",
-      "shasum": "68d608cb719d5810d5c7fb206835dc7e921d8571"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-assets/-/smrt-assets-0.60.10.tgz",
+      "integrity": "sha512-q0Mj4TugfRFsycyyVPBJBtUXUGseu48CnOZu3WWqSxUzfarVrKsFw4abPgJwmJoljm653DMk7x6PL3b/81Bq/w==",
+      "shasum": "2779a1c9bb6a61cd05d1a1edfbcced8bbfe99470"
     },
     {
       "name": "@happyvertical/smrt-chat",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-chat/-/smrt-chat-0.57.32.tgz",
-      "integrity": "sha512-+f/A92KE3OvcYQ8nobQE02qasuV1zy7MtGdgzVunkibCWFXehnmj9LvQhOqfVNEqZXKsPWKc93bNAKNhXvCkcg==",
-      "shasum": "825c0012d06496482f987653aff87bfcd3a2cb40"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-chat/-/smrt-chat-0.60.10.tgz",
+      "integrity": "sha512-v5rMB7sAOGjvE1GWaVFmrqeUJytyFyl/j/yfnGgEsUTd9rfbQb1Vz4zgA6pFReMniEnCi9CM/YhNnxtiXs7Vig==",
+      "shasum": "83e192273fa73805ad1fd756c27208f46156a50c"
     },
     {
       "name": "@happyvertical/smrt-cli",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-cli/-/smrt-cli-0.57.32.tgz",
-      "integrity": "sha512-0rhn3/Us9+Oqjxr3hsS1bBfjWnTPaUZOl6Y6IPD6NsDqkVzMb/akwQepRig0wiDMCZ6KKDzjnV4tSh5nR2N4wQ==",
-      "shasum": "cf3c2ba4f61197a0c16449e7252a05263b43424e"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-cli/-/smrt-cli-0.60.10.tgz",
+      "integrity": "sha512-HpKRnhVvTMpKNDdjVI+9jV+W4WkM2kBoWJZzkypacnVBcgDP8RhCsG5U5BZqBLoKXrmZQOY/EOlMCT4Sun/CZw==",
+      "shasum": "3af378b73cf2767a4c5664d5f15e4e99c004b80d"
     },
     {
       "name": "@happyvertical/smrt-config",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-config/-/smrt-config-0.57.32.tgz",
-      "integrity": "sha512-yxpV/Nl2t6jUlbPPQV14YnT4+oJDjtSbNbxpFB+rSnbst2o5Lqg2iJJUinQ5FIFCkDlE8Qvrmmo0iZSjw8hW3Q==",
-      "shasum": "64d735dce59b580f7577f6242f3198a8c5baf099"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-config/-/smrt-config-0.60.10.tgz",
+      "integrity": "sha512-/rBJ1DPtcIv1E3PuwCU5HaV4C0/dcIdJfLWv60Xb2AVtEyKdf1krQxKPKZVjInMe/pG54BnGl+UzrTb0V7wayg==",
+      "shasum": "244c43930bc93dd8960724001a2d0d1f6ad6956e"
     },
     {
       "name": "@happyvertical/smrt-core",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-core/-/smrt-core-0.57.32.tgz",
-      "integrity": "sha512-Uus04OmgvnLcq2Ekz4uqu6tVpuw7o7u8N+9jhpIpwq/UDXKS7MpI/svPnKXjQuYGAKmu3VUOkM34dQyNClYzRA==",
-      "shasum": "651eda411181e8113496acefff6c612b0fb7b99a"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-core/-/smrt-core-0.60.10.tgz",
+      "integrity": "sha512-XvMzBlEJ1iEjcUwYJIzesOstPwgiZ9ql2sagekrjffTXog6d9OFAETCc1+pTdrDI02u/6mQlg+gWDBLpGdUZgg==",
+      "shasum": "0c62c84e92c0577c771cc0ae81dcc124be291270"
     },
     {
       "name": "@happyvertical/smrt-dev-mcp",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-dev-mcp/-/smrt-dev-mcp-0.57.32.tgz",
-      "integrity": "sha512-yZKO/z8MPEyhenvGuws+0W0mQrPZWPjTikE2azWrbaN9vpMNmXVvy2DGYlWcQheuj9aDAmDvBNPOKPNl8wghpg==",
-      "shasum": "b6dfeb6882b89bc1a662f75109a96ae7126438be"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-dev-mcp/-/smrt-dev-mcp-0.60.10.tgz",
+      "integrity": "sha512-+StA/D6ws/wLhTomSsl8DImsHm3meyAwbfAQhuirUM3huxWV3daGE1dKDN9+dqUZopPH1lm5XMyiwI3LMrogGg==",
+      "shasum": "0bd4e3f455086ff40029af09eba6794bb4148e42"
     },
     {
       "name": "@happyvertical/smrt-facts",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-facts/-/smrt-facts-0.57.32.tgz",
-      "integrity": "sha512-tBW+mfhibQIpmNtim1oTdoW9pFOHVlu47pUPTPpJKBqrUL3vA8WrGxxFEf9XLMbbIr/pX3P8dhPTku+3mh+CAg==",
-      "shasum": "92ee2b2a1cbb617ccae3cf305bbf1bd24fa36fda"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-facts/-/smrt-facts-0.60.10.tgz",
+      "integrity": "sha512-e+uvPPx7kUwiLomZ+Nl6MBZZgPBWVNBb2Q3XUwHloezQrrWqmG0sfHaPJx2SqtMa8l8uEQY6ciWHHspdsC/eQg==",
+      "shasum": "2df8cca0f1277c2d6424768eaaf52366aa6f6762"
     },
     {
       "name": "@happyvertical/smrt-features",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-features/-/smrt-features-0.57.32.tgz",
-      "integrity": "sha512-FqwNUl8Z8sZ1B3oH7usv2j8xqpGXopfVHONUpuOUQWXrbFT3GJKFtMigWlCi/bEVNBg0ma6ushrNFteTAeAmvQ==",
-      "shasum": "66407d5b706736822b5889860fc71c30dd2590ed"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-features/-/smrt-features-0.60.10.tgz",
+      "integrity": "sha512-32W+xyN3bbk6205xtRhh5YtCdtMAPSgT+PIYwdVhkP0q9LMwwdHyzs3FFS882nF1E/dWxLi4nezJtY4O8y+ymQ==",
+      "shasum": "4a148afce318fd505e5518f652be00f918d409ac"
     },
     {
       "name": "@happyvertical/smrt-images",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-images/-/smrt-images-0.57.32.tgz",
-      "integrity": "sha512-H0TGKGooOKBIy61tCMWUTe56PFwW9hv5muZJMi608rRJh3DDluhkx5YiIDltJMyu+mm3nQA13sKLVsRZhs7EEw==",
-      "shasum": "89ad5f014765a4214f22428bf41049e2be578bc2"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-images/-/smrt-images-0.60.10.tgz",
+      "integrity": "sha512-m+RLWMu6rjnS1TaCWtscTNIkxYP9qn/CRzrbhoa1omKM6gIRhSwUPlLIWKQ7VpQAGRHRPFBrjryrA7v2MS4z1Q==",
+      "shasum": "235eade2b7d103b89e326b275988e81d42d22908"
     },
     {
       "name": "@happyvertical/smrt-ingestion",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ingestion/-/smrt-ingestion-0.57.32.tgz",
-      "integrity": "sha512-ti5viW/qtI2EKVsPgaWqlGEJDPeuprKLX1YYoJ18omdIUb2WprPdsTpZpEJe1Z4365BnaeGShEJKaO0XhKiVcQ==",
-      "shasum": "8693abd7b5da0e5419e0c59e7f7a7831307db1ac"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ingestion/-/smrt-ingestion-0.60.10.tgz",
+      "integrity": "sha512-5Jv3OWHik6kGcyWH6uZ+EedQXhRFReqFfXgql7m5SGNAnan6AuXfQ4aduD8NCTSlXZb3M5YaCkiz+HEHjruN8g==",
+      "shasum": "379a255e3f77ce6f45e99cf2b9494190316ec04f"
     },
     {
       "name": "@happyvertical/smrt-jobs",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-jobs/-/smrt-jobs-0.57.32.tgz",
-      "integrity": "sha512-6UsSwFmiw0o5rJs9gUC43gV6heW0MghrwJnNfhUkGSYpzpxDTicJiHSmGww/n0v3DIrdDUY25JCnihUZhAJJ9Q==",
-      "shasum": "db3f3688969586c14b2b18601bf4a7891ee42869"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-jobs/-/smrt-jobs-0.60.10.tgz",
+      "integrity": "sha512-w1+4mKRRHkuiOdopBSPnPx1cJtXiqhWxe1mrb7zNa1P89pDK1csykzjCQiT7FhhmIuydZneS1iEovVZMsi2E0Q==",
+      "shasum": "17e97516350be08b31be7a98a342bb84f306d32d"
     },
     {
       "name": "@happyvertical/smrt-languages",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-languages/-/smrt-languages-0.57.32.tgz",
-      "integrity": "sha512-Hr8qfZZ2DsQfLuaHRxkQftenh0iTZq++xXhAKJ6jWrTfgQEmXgeuFhb7QjiINoIZGxrXbAMPFK5GwgZ+28e7Pg==",
-      "shasum": "8780aa2e335dccb7c94bd5d12736b762aa503f72"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-languages/-/smrt-languages-0.60.10.tgz",
+      "integrity": "sha512-pEafMRxkIuyAq3mtGjf2yTyd6N6mCOkuHlT50exJvS5vEz2BgtouJzXxNp4yXn/GQ8ybV0BqqmRXA7dnwEVnqQ==",
+      "shasum": "97470d3bec83de595ffa8b014f70f47b9fe26c3e"
     },
     {
       "name": "@happyvertical/smrt-ledgers",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ledgers/-/smrt-ledgers-0.57.32.tgz",
-      "integrity": "sha512-ibSkmxg1eHX2Ll0wiiwKVBKScGHBRyzOhOVbSLI0xK0p91FjZsCF/StxhtD+wWzzTGW/zQC7JbSCfTvwWYShog==",
-      "shasum": "3c4a0ab6033016c221bcf145ffc01354410fa77e"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ledgers/-/smrt-ledgers-0.60.10.tgz",
+      "integrity": "sha512-KMiLcbFug32rQ9rbManVaDZSsQGwgBYCQexdmooMajxjTuK+FwvU2LBxemTVtp5mBdKHZHbyXfOmbSSc81x0CA==",
+      "shasum": "8c0b5d6ba634ceb9e85644204d583f1baf32e691"
     },
     {
       "name": "@happyvertical/smrt-mcp-apps",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mcp-apps/-/smrt-mcp-apps-0.57.32.tgz",
-      "integrity": "sha512-NXEW2LIF/wAkKwoeWeG5fiTJjAyrJdaNHSwyunrqkqgOzO97jLSOFOCrlf+ZYjghkn+aLVBN2/5834n5Yebp0g==",
-      "shasum": "d8b6b4777d3c7796b0caf02c33e86de78fe73e90"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mcp-apps/-/smrt-mcp-apps-0.60.10.tgz",
+      "integrity": "sha512-qY01+szVfoIm/ozIUhqtuFQ/4wXrpOhyDnkSZQysgNmRIdaVC4KPQ9dRClt1CJSqFB+RYjsncvGyxlrgRvxSZA==",
+      "shasum": "9b9241108ca2c70b07def4db1d81a9ac1e11a74e"
     },
     {
       "name": "@happyvertical/smrt-mcp-openai",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mcp-openai/-/smrt-mcp-openai-0.57.32.tgz",
-      "integrity": "sha512-fxkEiqiX9c2tqECFPL0K1HYwhp0vGCUbPIo3IKGZMe3h3C2NToiRfLv/3fGNPVfGXlgHkvtoIWSc8etwuBRGVw==",
-      "shasum": "37e3f31ebc7241dc261323c6a96743ae09f3562f"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mcp-openai/-/smrt-mcp-openai-0.60.10.tgz",
+      "integrity": "sha512-/eu+Jq35MV49pw+/7QVOYea1bVhiwviiAfR/oMs0MJxjtWyGNxQse+dlCMC09W2tEBJFfwuWGX87/P09W5K8Wg==",
+      "shasum": "abff631d09301d3cb558b41ec8be17d604fa752b"
     },
     {
       "name": "@happyvertical/smrt-messages",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-messages/-/smrt-messages-0.57.32.tgz",
-      "integrity": "sha512-E9TRlot7B5W5mHA7BMFGaQ22FRD1kuacBZmuvYiCvd4bjM3hWIyYQi9umJ/LDYCzOV+E0kL0nuFOg6Z6p1yGdQ==",
-      "shasum": "7024608e39d811af5f17c0018e0cedf493b3fdf0"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-messages/-/smrt-messages-0.60.10.tgz",
+      "integrity": "sha512-9yolqq3Lz3eLEw6NLAqbNMio2PZ5A1penZr2igUOupM2LtNC5RronZGccvy2x/UHLqsotqVbh7gvZH+qzYoi+g==",
+      "shasum": "cd846d6b0501b5278e0509764dbf11a305c27134"
     },
     {
       "name": "@happyvertical/smrt-mobile-contract",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mobile-contract/-/smrt-mobile-contract-0.57.32.tgz",
-      "integrity": "sha512-vIUszzulV8v9AGihCQoL3Z1DttnNs2m96DNZTxYM7wvZPqiqvf6j4W/K2gQwAazdVt8UgyjWVOgTqcxbpfBuiQ==",
-      "shasum": "fd5a2b3ea60299c8dc22e93f1227f44b78467b9b"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-mobile-contract/-/smrt-mobile-contract-0.60.10.tgz",
+      "integrity": "sha512-ChjCMPDjtasW5lRDmbvLr7bULb43julyH+Yh4E20kTE8k1uj1gZDzSQXl4lkvCqJHhaEkhx0tMNY0zige5OwkQ==",
+      "shasum": "ed5ed8d096490f1f3d21673daa6c308400ff04d3"
     },
     {
       "name": "@happyvertical/smrt-personas",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-personas/-/smrt-personas-0.57.32.tgz",
-      "integrity": "sha512-nb7eeojACBe5J0dPC4MNW5KdpD5zeYpwF/rmdT4Q1XqyWM9vImAL6CoOq1jA367BA8h3z6T0j0lWNe2UFFFBFA==",
-      "shasum": "619d4ba8219c77200807ee605d13b98ba20a8c95"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-personas/-/smrt-personas-0.60.10.tgz",
+      "integrity": "sha512-XE3LuMiCaOhneHzgzd6OI85PaoZzLI/qlAD8zEz0l8hjNv255Ho6hcru1zxdmWB7BaRAa4hlZA7tGtpVFO0B3Q==",
+      "shasum": "1481d5e18c897b67f25935967a0bcd58f8509b63"
     },
     {
       "name": "@happyvertical/smrt-places",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-places/-/smrt-places-0.57.32.tgz",
-      "integrity": "sha512-BLZz92yyC5vpp4RPpcFvnG8Hpbm3R97tPg23QbgpxXGE3D13KPOAzzSKXFj7aUoJk8tWiUFZ6tF3UI3s+UkzMg==",
-      "shasum": "83335a1c1c7d6d5ec2a3537a60fd94dcf0b5e44d"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-places/-/smrt-places-0.60.10.tgz",
+      "integrity": "sha512-ZKPSgf+KL/QPUVUA1Oh8LNWRoOUZS9NmDyKVxRKvd66cdz3cU+o5QAOGS2R69EVx7pBmEb1vCCrwhmwTnMuBiw==",
+      "shasum": "b6e9a3ef99454d3b6150d63ec6c8d953cb5d86d5"
     },
     {
       "name": "@happyvertical/smrt-playbooks",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-playbooks/-/smrt-playbooks-0.57.32.tgz",
-      "integrity": "sha512-o6ZwTigeT8wiW+f717XW9DZmUAKb55DNJACorWcUKMCoYFDZ9FzZ5bY8JXqvEWtl8CbUdYDLIVyxiRw5y1hDMA==",
-      "shasum": "35f33a5a72ccc2db688c9730861b49f8dc243b18"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-playbooks/-/smrt-playbooks-0.60.10.tgz",
+      "integrity": "sha512-TK5wfqbbFJFI+McavbbH506HIe3uVBIme7rDt69gOndHHJMMz4ePFsYIIgNWBN3nxz7c4ChCAa4C8soFs7TFog==",
+      "shasum": "01ef0946b5a5143b4408488284fb1930763a59d6"
     },
     {
       "name": "@happyvertical/smrt-playground",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-playground/-/smrt-playground-0.57.32.tgz",
-      "integrity": "sha512-+E18/Ha3Bgt63u53oeB9C+pdWHMMPYKwGTCkC3ET/wbH33lv2viQicdQi7Pmlfj/XbIJgwl+m/SYBVwnTgMlPg==",
-      "shasum": "50f62a9a8710cac5979a7596eda831e15d5adacf"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-playground/-/smrt-playground-0.60.10.tgz",
+      "integrity": "sha512-VK0DvzUZdq06kVifzt2q3GoRoPUntgLmvzSxWr0n12yv/W30eZOhxmQl73T29QFI0JbYvMulDQT3g60JNCsoZg==",
+      "shasum": "6baade7d4e5e041f3ae4ea153870098dac136839"
     },
     {
       "name": "@happyvertical/smrt-profiles",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-profiles/-/smrt-profiles-0.57.32.tgz",
-      "integrity": "sha512-36CFMVo04zj0k88CA4ezGOw8QtXUHiHfAlORKZes/o60x6TQDSe1tXZ+9Zp8jTzze2EDwnI/bN4mmzGh2XyHEw==",
-      "shasum": "795a5476823d385cd9528f78afea5396947f0af2"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-profiles/-/smrt-profiles-0.60.10.tgz",
+      "integrity": "sha512-5LmE1hfK0keNwl5qHZKoOQJ3ahngLYOJ9ERcQI++K53wqjbnKkHnO0VSlgcNKso/0E3wXmSknicVvTJrpEcnpg==",
+      "shasum": "f8598b20d6b6e897636ada3cd900f47c864d2c7c"
     },
     {
       "name": "@happyvertical/smrt-prompts",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-prompts/-/smrt-prompts-0.57.32.tgz",
-      "integrity": "sha512-Tva/ErRlLxe7+5bg6g3qBREas1H4mDhO/8rXYGBY2MGbYEm0IF+a4Lo9bek6uP7eZkTaHFhI7tajd2W9AeGASA==",
-      "shasum": "74fbe2f5373ccb921b89bd08cabd4efe3b748275"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-prompts/-/smrt-prompts-0.60.10.tgz",
+      "integrity": "sha512-K+ajbnbmQDoel+Zunzq+lsuEfur1llz7mF4M80Ftl9pm71cWD7GG9MYWYxvrQin/8kkEMcwzFy+6gEe0foBlMA==",
+      "shasum": "5acfacdb8cf9ecca1c6ed95f2df81058192c5a16"
     },
     {
       "name": "@happyvertical/smrt-reports",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-reports/-/smrt-reports-0.57.32.tgz",
-      "integrity": "sha512-UErdD74DSwHMnKlqf3jcPgRaxlh6cWatIoZubr5hEIqvuV+evxCP7uGb8YZVHvjy2dZdIqG2v7dRS25YomQeiw==",
-      "shasum": "2b685aca3b19490231e7a96d3c8a182b0cdb410f"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-reports/-/smrt-reports-0.60.10.tgz",
+      "integrity": "sha512-+9yGzwuiklNDsiymgu5YnIKy22FQEutnHmMsY9mCjMv6fH3kC4O7Dpxmx0n+jfon8hmTw6vo0Mx9p1ousNvAiA==",
+      "shasum": "6d38c8d4f18cf50984d263fa5642e6245549041e"
     },
     {
       "name": "@happyvertical/smrt-scanner",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-scanner/-/smrt-scanner-0.57.32.tgz",
-      "integrity": "sha512-PEMovXeukF19VbobRf14cZ+zHxZxg3YXJKK9IjwQsmZNzP8YCqObarv0q2eAQ6FN8Hp1+DCuS+FS2YpYeDBmrw==",
-      "shasum": "aacf02555bc1fa1415dfc349e955d5db72c56418"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-scanner/-/smrt-scanner-0.60.10.tgz",
+      "integrity": "sha512-DY5WYPV9rf0iV0g+ALVPCMDMPf4lToc6kusVSMwjKWIzzbkBLKtJCugstB/V2c6okqhaTJ2GwKcqmeWTcZsp8g==",
+      "shasum": "6f6d8c0f57cb191cd89f02b79a47e189d248c605"
     },
     {
       "name": "@happyvertical/smrt-secrets",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-secrets/-/smrt-secrets-0.57.32.tgz",
-      "integrity": "sha512-/uR2MGyUMw7+OrVjiWgdP1fyy3nLZ0Tgy3EkylIGg0wO+3ft/VX1dbcm6cIInuQ8an45ydnXE0/zgiwJsrK7AA==",
-      "shasum": "52c9fcdc9bd7954fc38d4cb802c323a8021e1a07"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-secrets/-/smrt-secrets-0.60.10.tgz",
+      "integrity": "sha512-shzJSwXsd27b+0YGEQ4WZmkdiKW9ywZSpzFmEr1S/QGn6HTrsotvN5pUIneKpOQU5IjcX2r6HCufVL5OIIhcBg==",
+      "shasum": "4efd2d8429a19eb0cb9fcb76f936a883a50ea698"
     },
     {
       "name": "@happyvertical/smrt-svelte",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-svelte/-/smrt-svelte-0.57.32.tgz",
-      "integrity": "sha512-HxmTmPOYULm/4tLuE2QRFRW2DIfBr5u6t6YTUyirXeBPZClEggrPcc/VBJ63oI/fploAdiHV41Kg66kPNtUU3Q==",
-      "shasum": "6823eba87490449eb29f87a0c74add5671423bc0"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-svelte/-/smrt-svelte-0.60.10.tgz",
+      "integrity": "sha512-mN+OOIzAnDfncGxSLYwgaOtJ+iJLRwy/ZEow0pY+BBayTOLDqiBtdKFkeC7O/7uQtmV0SAFPWkib2/e/a6y+KA==",
+      "shasum": "591b64b597838a739a76930a34e9720466f8c22c"
     },
     {
       "name": "@happyvertical/smrt-tags",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-tags/-/smrt-tags-0.57.32.tgz",
-      "integrity": "sha512-C/H/K2Fjo7TS3iFwOV03z+uUApMFHhUUuB6gMJquVr3SB5Iv6UnL8ScXrfk95neZ8zumQ10Bu9QziEQ5Er4wfw==",
-      "shasum": "4e03fa6ffb43ad6c2baaf047983adbbf4863bb4c"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-tags/-/smrt-tags-0.60.10.tgz",
+      "integrity": "sha512-B9gJ6Sjoja0arXFYlhOqnQGCbz/SF2duJ7THgbWJrXPaqQzrIKGiFtfGuH5eyZsS/XgGXc4npIGA1vOcdXdu0w==",
+      "shasum": "b6457faaa389dae24db62298f542872d97cb483e"
     },
     {
       "name": "@happyvertical/smrt-tenancy",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-tenancy/-/smrt-tenancy-0.57.32.tgz",
-      "integrity": "sha512-3ePXDzsn9PiGjZLsR/uU1OVc96ihj3ev8RaV/3vCkceQdplqTVuYlfZWjnuhbNlHUiR2Z7cOlJkEk5cjYAIC1w==",
-      "shasum": "c1f60a25fdfc1e22c2c1ff5763f3abb5caf3a58e"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-tenancy/-/smrt-tenancy-0.60.10.tgz",
+      "integrity": "sha512-BEMcOeF1Dtylx9kFxLfnBgLWdtKo061MNzjB0+ht8b1ABWYZd0wQ1wHiV6GOFaCZsY0flaSitnS9K1euMv98HA==",
+      "shasum": "a00473558016cc5716bdef0453f066f90e0a22ac"
     },
     {
       "name": "@happyvertical/smrt-types",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-types/-/smrt-types-0.57.32.tgz",
-      "integrity": "sha512-9NGXe1Sex4gz+BI+HJt9d3LpA4CzbAq8yRqYThbSfzbZWZeDO9EiXe5GomEyYLc8qXGazdRfh2D2S+VZTi9Hcw==",
-      "shasum": "17b6a8eda803980be68a2a97391721c7173a17bb"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-types/-/smrt-types-0.60.10.tgz",
+      "integrity": "sha512-jGgpFWd3udu3rQ9Jpb2rpPsw0IDl3mDPz32kdbKtC/DmH3N8OwOTi8G/SCDapC1qCniZvfdFkSHwoxq0YIeTRw==",
+      "shasum": "371aa3850a0d080dbd39670d197a65303a3ccfd8"
     },
     {
       "name": "@happyvertical/smrt-ui",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ui/-/smrt-ui-0.57.32.tgz",
-      "integrity": "sha512-q4As+nYhNhBuH7t/gpSfN6Xdxr7TjV7BBVcVtJIHx7K1NIOOhTsifmoXlD61CNTmEpFWzMCoDOG9WKWTpRsHGA==",
-      "shasum": "a9c27eadaa47340325b6836a1f09b9d6749a47dd"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-ui/-/smrt-ui-0.60.10.tgz",
+      "integrity": "sha512-G1y2MuXbTjz24ZpXa5OXDVbj2rENymLKXeqfWgNYBgsMRCMF5hW0admQqoQLMM2rWk4eUzKktrZkHllOHv52Lw==",
+      "shasum": "2b7903e5f8e653f188831474ed587ee55d717583"
     },
     {
       "name": "@happyvertical/smrt-users",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-users/-/smrt-users-0.57.32.tgz",
-      "integrity": "sha512-a7MozS2aiTcNoEHdXNmKsvpON5a4qctRxRa450AXL7MExiKNrtJwChw+fMv5SBzQf0Xo3tm9L2bEQKNlJpgXwA==",
-      "shasum": "630f7bf1e9042cef68608222e74c4d2718510bed"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-users/-/smrt-users-0.60.10.tgz",
+      "integrity": "sha512-Xz0X3nfXLKzbLgri7Ty3EivnAv1OXV5Q2XpCGvnEKldWgbpGWGI9uWrtG77RPEvGqvciSh8YUWk3wXaR5F22rQ==",
+      "shasum": "b3db423fcbba6bfff5e909f27a19c833bce42e82"
     },
     {
       "name": "@happyvertical/smrt-web",
-      "version": "0.57.32",
+      "version": "0.60.10",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-web/-/smrt-web-0.57.32.tgz",
-      "integrity": "sha512-l6+KyNj2Yv8I5oRsG3SAND7lUCWe3KmwPuFJ6HNuwPDyMQ8Gya70mZ613Lf31ushCfJEHIl1dDZmYPwm2PJZlA==",
-      "shasum": "2c086b9e23bd6daf66e76bacec9cc4bccf2191e9"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/smrt-web/-/smrt-web-0.60.10.tgz",
+      "integrity": "sha512-e2NOo7PzctTzYgYc6Xpgo4Gg46aFrnPsPi6Xhab9nhm6eLjXze0PHeTwFnSCW/gEuSHgj71DOmbupTNe+Qza5w==",
+      "shasum": "5a1c401ebaa846601313037a60345ed0a3eafc3e"
     },
     {
       "name": "@happyvertical/speech",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/speech/-/speech-0.108.0.tgz",
-      "integrity": "sha512-TfSsmHXqbRKpGemOukxkK4ym71dGVlEdwRRTdTD6NXdr5Ybbc3dica+D822Vszlqq1V44ypnSPTmTWeLK4B/Vw==",
-      "shasum": "b1c45c3a3d30df30a11733f73748ad635cc05764"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/speech/-/speech-0.111.5.tgz",
+      "integrity": "sha512-eH7mzlbzHZ3n8/4qtSLXh6liIhhzVtqxqVs3lPiFmcMt4RQdCsHF8GJl4gv6uSvFENPikUGaJ4qi7EXyXVhP4Q==",
+      "shasum": "c53d1873574899646635c53a029ba1bba66de221"
     },
     {
       "name": "@happyvertical/spider",
@@ -458,19 +480,44 @@
     },
     {
       "name": "@happyvertical/sql",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/sql/-/sql-0.108.0.tgz",
-      "integrity": "sha512-cjLlZxuB7wNjG1dlr/UQQ0Wkpem30kYYpA7ONhfvas4XHSQUr4h0rhBwptl7PaUbvHTiV4IPnuLTTo6VJfNwiw==",
-      "shasum": "2b2faf8ae63ae53eb2d737a8f55a03e4072d3e6d"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/sql/-/sql-0.111.5.tgz",
+      "integrity": "sha512-XSVDmwC3KqHg/wYrsnKZ+59QvudVmez+tHAvYcHDOzO4k4fsB6frIjVb/hAhPGQPSjp8x58eWfmJ/iZPPe5d6w==",
+      "shasum": "6b21604354656095bf5c0abefb59e73f3090ce18"
     },
     {
       "name": "@happyvertical/utils",
-      "version": "0.108.0",
+      "version": "0.111.5",
       "registry": "https://npm.happyvertical.com/",
-      "tarball": "https://npm.happyvertical.com/@happyvertical/utils/-/utils-0.108.0.tgz",
-      "integrity": "sha512-vjBRewbE8YLyzRRLnSbIiP4NykZEZhfGFjBPMziulgXF7Uic+rXJykQjV0B+RaylZLPMmS1PoA88zRz3ygNcgA==",
-      "shasum": "463c34d370e59e9e8d9afb2663e40efba57bceec"
+      "tarball": "https://npm.happyvertical.com/@happyvertical/utils/-/utils-0.111.5.tgz",
+      "integrity": "sha512-M+FS4g1Xmkop8LESg863H25aIpRr9Pw63UhkNN/7KJhZ38QiN/UmRnbYUWw543yhsusbEGfK06p+6aqj5lgWvg==",
+      "shasum": "51ff222816271a0d72c9d50b81c281dbd243d00f"
+    },
+    {
+      "name": "@happyvertical/utils",
+      "version": "0.74.11",
+      "registry": "https://npm.happyvertical.com/",
+      "tarball": "https://npm.happyvertical.com/@happyvertical/utils/-/utils-0.74.11.tgz",
+      "integrity": "sha512-QuAw6kbci5l3idsenY2OcUtEEfOWL26ryyMXtPWCP3q+z3RJei/mZ05BtWD/1xJKmyPG7xM54UXK3OilhGxjaw==",
+      "shasum": "cbdf06f4588a1ec8c48629bdc25e17abe9a67a33",
+      "consumers": [
+        "@happyvertical/cache@0.74.11",
+        "@happyvertical/spider@1.1.11"
+      ]
+    },
+    {
+      "name": "@happyvertical/utils",
+      "version": "0.80.6",
+      "registry": "https://npm.happyvertical.com/",
+      "tarball": "https://npm.happyvertical.com/@happyvertical/utils/-/utils-0.80.6.tgz",
+      "integrity": "sha512-XcfAt/GqoPwam7SKPRoB0beK4l4OTwjOJ4oy2KXUmFjG2hv1UXVb4XF0hVpB/2VWD+Wz3dVbgSjoYq6s7Zzrbw==",
+      "shasum": "7a0c9df8906808db35c128134984816f163de81e",
+      "consumers": [
+        "@happyvertical/ai@0.80.6",
+        "@happyvertical/ocr@0.62.1",
+        "@happyvertical/pdf@0.66.0"
+      ]
     }
   ]
 }
