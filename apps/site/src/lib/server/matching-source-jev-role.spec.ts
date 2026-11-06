@@ -76,14 +76,17 @@ describe('Jev source title role drafting', () => {
     expect(decide).toHaveBeenCalledTimes(1);
   });
 
-  it('does not send a compound title with two competing governed role families', async () => {
+  it.each([
+    'Engineering Manager - Account Executive',
+    'Engineering Manager - Senior Account Executive',
+    'Engineering Manager & Account Executive',
+    'Engineering Manager and Account Executive',
+    'Engineering Manager (Account Executive)',
+    'Backend Software Engineer / Frontend Software Engineer',
+  ])('does not submit competing explicit roles in %s', async (title) => {
     const decide = vi.fn(async () => ({}));
     await expect(
-      draftJevSourceRole(
-        'Engineering Manager - Account Executive',
-        'title',
-        decide,
-      ),
+      draftJevSourceRole(title, 'title', decide),
     ).resolves.toBeNull();
     expect(decide).not.toHaveBeenCalled();
   });

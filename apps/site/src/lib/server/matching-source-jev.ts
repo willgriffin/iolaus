@@ -47,7 +47,7 @@ type SectionHint =
     ? Hint
     : never;
 export const MATCHING_SOURCE_JEV_PREPARATION_VERSION =
-  'matching-source-jev/v17';
+  'matching-source-jev/v18';
 export type MatchingSourceJevAssessments = {
   assessmentVersion: 1;
   blocks: MatchingSourceDecisionBlock[];

@@ -32,6 +32,37 @@ const aliasTerms = aliases.map(({ label, family, specialty }) => {
   };
 });
 
+function competingTitleRoles(title: string): boolean {
+  const text = ` ${words(title).join(' ')} `;
+  const matches = aliasTerms.flatMap(({ family, key, phrase }) =>
+    [...text.matchAll(new RegExp(`(?<= )${phrase}(?= )`, 'gu'))].map(
+      ({ index }) => ({
+        family,
+        key,
+        start: index,
+        end: index + phrase.length,
+      }),
+    ),
+  );
+  const distinct = matches.filter(
+    (match) =>
+      !matches.some(
+        (other) =>
+          other.start <= match.start &&
+          other.end >= match.end &&
+          (other.start < match.start || other.end > match.end),
+      ),
+  );
+  return (
+    new Set(distinct.map(({ family }) => family)).size > 1 ||
+    new Set(
+      distinct
+        .filter(({ family, key }) => family !== key)
+        .map(({ key }) => key),
+    ).size > 1
+  );
+}
+
 function shortlist(title: string) {
   const titleWords = words(title);
   if (!titleWords.length || titleWords.length > maxTitleTokens) return [];
@@ -92,15 +123,7 @@ export async function draftJevSourceRole(
   decide: (request: DecisionRequest) => Promise<DecisionResult['answers']>,
 ): Promise<MatchingSourceSemanticProposal['role']> {
   if (unitId !== 'title' || !title.trim() || title.length > 300) return null;
-  const roleFamilies = new Set(
-    title.split(/\s+[-–—/]\s+|\s*[,|]\s*/u).flatMap((part) => {
-      const label = words(part).join(' ');
-      return aliasTerms
-        .filter(({ phrase }) => phrase === label)
-        .map(({ family }) => family);
-    }),
-  );
-  if (roleFamilies.size > 1) return null;
+  if (competingTitleRoles(title)) return null;
   const candidates = shortlist(title);
   if (!candidates.length) return null;
   const pairs = Object.fromEntries(
