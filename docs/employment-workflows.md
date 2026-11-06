@@ -176,7 +176,8 @@ These are explicit operations an agent or Will can request:
   report created, reused, relisted, duplicate, skipped, and failed-persistence
   counts; pass `--json` for the same complete summary as machine-readable JSON.
 - `pnpm --filter @willgriffin/iolaus-site opportunities:crawl-status` reports queued,
-  active, completed, failed, timed-out, and stale-running crawls. Add
+  active, completed, failed, timed-out, and stale-running crawls on local SQLite
+  and hosted PostgreSQL. Recent error timestamps on SQLite use UTC. Add
   `--reconcile` to terminally mark only overdue `running` crawls as timed out;
   it never deletes crawl evidence or marks a crawl successful.
 - The admin source "Crawl now" action enqueues one manual source crawl job on

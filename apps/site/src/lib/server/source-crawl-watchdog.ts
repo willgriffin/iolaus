@@ -1,4 +1,4 @@
-import { resolveDatabase } from '@happyvertical/smrt-core';
+import { detectEngine, resolveDatabase } from '@happyvertical/smrt-core';
 import { getDbConfig } from './db.js';
 import {
   reconcileSourceCrawlAccountingTransaction,
@@ -810,7 +810,20 @@ export async function getSourceCrawlWatchdogStatus(
   now = new Date(),
 ): Promise<SourceCrawlWatchdogStatus> {
   const db = database ?? (await resolveDatabase(getDbConfig()));
-  const deadline = new Date(now.getTime() - SOURCE_CRAWL_TIMEOUT_MS);
+  const sqlite = db.url ? detectEngine(db.url) === 'sqlite' : usesSqlite();
+  const cutoff = now.getTime() - SOURCE_CRAWL_TIMEOUT_MS;
+  const deadline = sqlite ? cutoff : new Date(cutoff);
+  // SQLite crawl writes use both epoch milliseconds and SQL/ISO timestamps.
+  const timestamp = (column: 'started_at' | 'finished_at' | 'created_at') =>
+    sqlite
+      ? `CASE WHEN typeof(${column}) = 'text'
+          THEN ROUND(unixepoch(${column}, 'subsec') * 1000)
+          ELSE ${column} END`
+      : column;
+  const startedAt = timestamp('started_at');
+  const finishedAt = sqlite
+    ? `strftime('%Y-%m-%dT%H:%M:%fZ', (${timestamp('finished_at')}) / 1000.0, 'unixepoch')`
+    : 'finished_at';
   const result = await db.query(
     `
       SELECT
@@ -818,12 +831,12 @@ export async function getSourceCrawlWatchdogStatus(
         COUNT(*) FILTER (
           WHERE status = 'running'
             AND finished_at IS NULL
-            AND started_at > ?
+            AND ${startedAt} > ?
         ) AS active,
         COUNT(*) FILTER (
           WHERE status = 'running'
             AND finished_at IS NULL
-            AND (started_at IS NULL OR started_at <= ?)
+            AND (${startedAt} IS NULL OR ${startedAt} <= ?)
         ) AS stale_running,
         COUNT(*) FILTER (WHERE status IN ('completed', 'completed_with_errors')) AS completed,
         COUNT(*) FILTER (WHERE status = 'failed') AS failed,
@@ -838,13 +851,13 @@ export async function getSourceCrawlWatchdogStatus(
       SELECT
         CAST(id AS TEXT) AS id,
         status,
-        LEFT(COALESCE(error, ''), 240) AS error,
-        finished_at
+        SUBSTR(COALESCE(error, ''), 1, 240) AS error,
+        ${finishedAt} AS finished_at
       FROM source_crawls
       WHERE status IN ('failed', ?)
         AND error IS NOT NULL
         AND error <> ''
-      ORDER BY finished_at DESC NULLS LAST, created_at DESC
+      ORDER BY finished_at DESC NULLS LAST, ${timestamp('created_at')} DESC
       LIMIT 10
     `,
     [SOURCE_CRAWL_TIMEOUT_STATUS],
