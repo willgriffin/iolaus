@@ -1,9 +1,68 @@
 import type { MatchingSourceText } from './matching-source-extraction-contract.js';
 
+export const MATCHING_SOURCE_DECISION_READER_REVISION =
+  'typed-source-reader/v3';
+
+export function matchingSourceUsesPreparationAtLeast(
+  preparationVersion: string | undefined,
+  minimum: number,
+): boolean {
+  const match = /^matching-source-jev\/v(\d+)$/u.exec(preparationVersion ?? '');
+  return Number(match?.[1] ?? 0) >= minimum;
+}
+
+export function matchingSourceTypedPriorExperience(quote: string): boolean {
+  return /^(?:(?:preferred|optional|nice[- ]to[- ]have)\s*[:：]\s*)?(?:(?:prior|previous|demonstrable|demonstrated|extensive|significant|professional|hands-on|strong|practical)\s+)*experience\s+(?:in\b|with\b|of\b|[a-z-]{3,}ing\b)/iu.test(
+    quote,
+  );
+}
+
+export function matchingSourceTypedContextNeedsReview(quote: string): boolean {
+  return (
+    matchingSourceTypedPriorExperience(quote) ||
+    /^(?:travel as needed|travel as required|travel is required|travel required)\b/iu.test(
+      quote,
+    )
+  );
+}
+
+export function matchingSourceHasMixedStrength(quote: string): boolean {
+  return /\([^()]*\b(?:is a plus|preferred|optional|not required|nice[- ]to[- ]have)\s*\)\s*[,;:]?\s*\b(?:and|but|or|with)\b/iu.test(
+    quote,
+  );
+}
+
+export function matchingSourceTypedClaimNeedsReview(
+  quote: string,
+  kind: string,
+): boolean {
+  return (
+    (kind === 'context' && matchingSourceTypedContextNeedsReview(quote)) ||
+    (kind !== 'unresolved' && matchingSourceHasMixedStrength(quote))
+  );
+}
+
 export const MATCHING_SOURCE_DESCRIPTION_LIMIT = 40_000;
 
 export const hasAnalysisPII = (text: string): boolean =>
   /[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:\+?\d[\s().-]*){9,}/i.test(text);
+
+/** A complete source unit containing only formatting has no applicant scope. */
+export function matchingSourceDecoration(quote: string): boolean {
+  return /^(?:[-–—•]+|\*{3,}|_{3,})$/u.test(quote.trim());
+}
+
+export function matchingSourceTypicalTenure(quote: string): boolean {
+  return (
+    /\b(?:typically|usually|often|approximately|around|about|roughly)\s+\d{1,2}\+?\s+years?\b/iu.test(
+      quote,
+    ) &&
+    [...quote.matchAll(/\b\d{1,2}\+?\s+years?\b/giu)].length === 1 &&
+    !/\b(?:at least|minimum|no fewer than|(?:years? .*?)?mandatory)\b/iu.test(
+      quote,
+    )
+  );
+}
 
 /** Segment captured text without changing offsets into its raw source. */
 export function matchingDescriptionUnits(raw: string) {

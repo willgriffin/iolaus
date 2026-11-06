@@ -130,6 +130,110 @@ describe('verified public semantic source interpretation', () => {
     });
   });
 
+  it.each([
+    ['-', false],
+    ['- Applicants must have a security clearance.', true],
+  ])('accounts only for an exact standalone decorative unit in typed proofs: %s', (footer, blocked) => {
+    const source = {
+      ...raw,
+      description: `Qualifications:\nNode.js\n${footer}`,
+    };
+    const proposed = draft(source, [atom('nodejs')]);
+    const proof = payload(source, proposed, 'd3');
+    const legacy = normalizeMatchingPosting(source, vocabulary, proof);
+    expect(
+      legacy.uncertainties.some(
+        ({ code }) => code === 'posting-requirement-unknown',
+      ),
+    ).toBe(true);
+    const typed = parseMatchingSourceExtraction(
+      {
+        ...proof,
+        semantic: {
+          ...proof.semantic,
+          decision: {
+            provider: 'typesafe',
+            transport: 'direct',
+            model: 'fixture',
+            revision: 'fixture',
+            maxInputBytes: 8192,
+            preparationVersion: 'fixture',
+            observedModels: ['fixture'],
+            assessmentVersion: 1,
+            blocks: [],
+            capabilityGaps: [],
+          },
+        },
+      },
+      source,
+    );
+    expect(
+      normalizeMatchingPosting(source, vocabulary, typed).uncertainties.some(
+        ({ code }) => code === 'posting-requirement-unknown',
+      ),
+    ).toBe(blocked);
+  });
+
+  it.each([
+    ['', false],
+    [' Applicants must already be authorized to work in Canada.', true],
+    [' This position requires professional fluency in French.', true],
+  ])('only clears an independently assessed accommodation notice without applicant restrictions: %s', (extra, blocked) => {
+    const notice =
+      "Accessibility Statement: We're committed to an accessible hiring experience. If you need any accommodations throughout the interview process, please let us know.";
+    const source = {
+      ...raw,
+      description: `Qualifications:\nNode.js\n${notice}${extra}`,
+    };
+    const proof = payload(source, draft(source, [atom('nodejs')]));
+    const typed = parseMatchingSourceExtraction(
+      {
+        ...proof,
+        semantic: {
+          ...proof.semantic,
+          decision: {
+            provider: 'typesafe',
+            transport: 'direct',
+            model: 'fixture',
+            revision: 'fixture',
+            maxInputBytes: 8192,
+            preparationVersion: 'fixture',
+            observedModels: ['fixture'],
+            assessmentVersion: 1,
+            blocks: [],
+            capabilityGaps: [],
+          },
+        },
+      },
+      source,
+    );
+    const hasUnknown = (value: typeof proof | typeof typed) =>
+      normalizeMatchingPosting(source, vocabulary, value).uncertainties.some(
+        ({ code }) => code === 'posting-requirement-unknown',
+      );
+    expect(hasUnknown(proof)).toBe(true);
+    expect(hasUnknown(typed)).toBe(blocked);
+    if (!blocked) {
+      const { semantic } = typed;
+      if (!semantic) throw new Error('Expected typed proof fixture.');
+      const declined = {
+        ...typed,
+        semantic: {
+          ...semantic,
+          verification: {
+            ...semantic.verification,
+            units: semantic.verification.units.map((unit) =>
+              unit.id === 'd3'
+                ? { ...unit, classificationCorrect: false }
+                : unit,
+            ),
+          },
+        },
+      };
+      expect(hasUnknown(declined)).toBe(true);
+    }
+  });
+
   it('retains an exact scoped trait as an assessed gap and clears only pure salary context', () => {
     const scoped =
       'Comfortable operating in ambiguity and driving clarity where none exists';

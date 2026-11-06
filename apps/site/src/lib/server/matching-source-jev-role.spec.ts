@@ -1,6 +1,13 @@
 import type { DecisionAnswer, DecisionRequest } from '@happyvertical/ai';
 import { describe, expect, it, vi } from 'vitest';
-import { draftJevSourceRole } from './matching-source-jev-role.js';
+import {
+  draftJevSourceRole,
+  matchingSourceJevPrimaryRole,
+} from './matching-source-jev-role.js';
+import {
+  compileMatchingVocabulary,
+  normalizeMatchingPosting,
+} from './normalized-matching.js';
 
 function choice(selected: string, probability = 0.9): DecisionAnswer {
   return {
@@ -12,34 +19,61 @@ function choice(selected: string, probability = 0.9): DecisionAnswer {
 }
 
 describe('Jev source title role drafting', () => {
-  it('offers a bounded shortlist with nearby canonical pairs and independently selects a stated level', async () => {
+  it('proposes the exact primary occupation and level without model reproof', async () => {
     const title = 'Senior Backend Developer — Payments';
-    const decide = vi.fn(async (request: DecisionRequest) => {
-      expect(request.state).toEqual({ title });
-      expect(request.questions.role_pair).toMatchObject({
-        type: 'choice',
-        criteria: {
-          'software-engineering:backend': expect.any(String),
-          'software-engineering': expect.any(String),
-          unsupported: expect.any(String),
-        },
-      });
-      expect(
-        Object.keys(request.questions.role_pair.criteria ?? {}),
-      ).toHaveLength(6);
-      expect(request.questions.role_level.criteria).toHaveProperty('unstated');
-      return {
-        role_pair: choice('software-engineering:backend'),
-        role_level: choice('senior'),
-      };
-    });
+    const decide = vi.fn(async () => ({}));
     await expect(draftJevSourceRole(title, 'title', decide)).resolves.toEqual({
       family: 'software-engineering',
       specialty: 'backend',
       level: 'senior',
       unitId: 'title',
     });
-    expect(decide).toHaveBeenCalledTimes(1);
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'Staff Software Engineer, Observability Platform',
+      'Staff Software Engineer',
+      null,
+      ['Observability Platform'],
+    ],
+    [
+      'Staff FullStack Engineer - Application Core Services | Canada | Remote',
+      'Staff FullStack Engineer',
+      'full-stack',
+      ['Application Core Services', 'Canada', 'Remote'],
+    ],
+    [
+      'Staff Fullstack Engineer - Service Quality',
+      'Staff Fullstack Engineer',
+      'full-stack',
+      ['Service Quality'],
+    ],
+  ] as const)('preserves a governed primary occupation with unclassified suffixes in %s', async (title, head, specialty, suffixes) => {
+    const vocabulary = compileMatchingVocabulary([]);
+    expect(
+      normalizeMatchingPosting(
+        { title, description: '', location: '' },
+        vocabulary,
+      ).role,
+    ).toBeUndefined();
+    const role = {
+      family: 'software-engineering',
+      specialty,
+      level: 'staff' as const,
+    };
+    expect(matchingSourceJevPrimaryRole(title)).toEqual({
+      head,
+      suffixes,
+      ...role,
+    });
+    const decide = vi.fn(async () => ({}));
+    await expect(draftJevSourceRole(title, 'title', decide)).resolves.toEqual({
+      ...role,
+      unitId: 'title',
+    });
+    expect(decide).not.toHaveBeenCalled();
   });
 
   it('uses a familiar alias for retrieval while preserving an unrecognized modifier for the decision', async () => {
@@ -83,6 +117,12 @@ describe('Jev source title role drafting', () => {
     'Engineering Manager and Account Executive',
     'Engineering Manager (Account Executive)',
     'Backend Software Engineer / Frontend Software Engineer',
+    'Senior Backend Engineer and Staff Frontend Engineer',
+    'Staff Fullstack Engineer; Backend Engineer',
+    'Staff Software Engineer and Senior Software Engineer',
+    'Staff Software Engineer, Senior Software Engineer',
+    'Staff Software Engineer, Backend',
+    'Staff Software Engineer, Bioprocess Scientist',
   ])('does not submit competing explicit roles in %s', async (title) => {
     const decide = vi.fn(async () => ({}));
     await expect(

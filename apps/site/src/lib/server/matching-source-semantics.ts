@@ -7,6 +7,8 @@ import { matchingSourceStructureMatches } from './matching-source-jev-structure.
 import {
   MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT,
   matchingSourceSemanticUnits,
+  matchingSourceTypedClaimNeedsReview,
+  matchingSourceUsesPreparationAtLeast,
 } from './matching-source-units.js';
 import {
   compileMatchingVocabulary,
@@ -15,6 +17,35 @@ import {
   matchingSourceSectionHints,
 } from './normalized-matching.js';
 import { SKILL_VOCABULARY_SEED_TERMS } from './skill-vocabulary.js';
+
+/** Previously accepted typed claims cannot override the current source safety rules. */
+export function matchingSourceProofHasUnsafeTypedCoverage(
+  source: MatchingSourceText,
+  proof: MatchingSourceSemanticProof | undefined,
+): boolean {
+  if (!proof?.decision) return false;
+  const claims = new Map(
+    proof.proposal.ledger.map(({ id, kind }) => [id, kind]),
+  );
+  const verified = new Set(
+    proof.verification.units
+      .filter(
+        (unit) =>
+          unit.classificationCorrect &&
+          unit.allConditionsRepresented &&
+          unit.logicAndQualifiersPreserved,
+      )
+      .map(({ id }) => id),
+  );
+  return matchingSourceSemanticUnits(source).some(({ id, field, quote }) => {
+    const claim = claims.get(id);
+    return (
+      field === 'description' &&
+      verified.has(id) &&
+      Boolean(claim && matchingSourceTypedClaimNeedsReview(quote, claim))
+    );
+  });
+}
 
 const MAX_ATOMS = 60;
 
@@ -115,6 +146,34 @@ const sourceBlock = z.strictObject({
   operator: z.enum(['all', 'any']),
 });
 export type MatchingSourceDecisionBlock = z.infer<typeof sourceBlock>;
+const unaskedReason = z.enum([
+  'unsafeSource',
+  'metadataUnavailable',
+  'draftBudget',
+  'draftInputLimit',
+  'draftProviderFailure',
+  'unresolvedDraft',
+  'structureLimit',
+  'auditBudget',
+  'auditInputLimit',
+  'unsupportedAudit',
+]);
+const declinedDimension = z.enum([
+  'classification',
+  'coverage',
+  'logic',
+  'role',
+  'geography',
+]);
+export type MatchingSourceJevUnaskedReason = z.infer<typeof unaskedReason>;
+export type MatchingSourceJevDeclinedDimension = z.infer<
+  typeof declinedDimension
+>;
+const sourceUnitCount = z
+  .number()
+  .int()
+  .min(1)
+  .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT);
 const decisionProvenance = decisionProfile.extend({
   observedModels: z.array(decisionIdentifier).min(1).max(16),
   assessmentVersion: z.literal(1).optional(),
@@ -129,6 +188,12 @@ const decisionProvenance = decisionProfile.extend({
   diagnostics: z
     .strictObject({
       draftCalls: z.number().int().min(0).max(100),
+      unaskedReasons: z
+        .partialRecord(unaskedReason, sourceUnitCount)
+        .optional(),
+      declinedDimensions: z
+        .partialRecord(declinedDimension, sourceUnitCount)
+        .optional(),
       draftFailures: z.number().int().min(1).max(100).optional(),
       assessedGaps: z.number().int().min(1).max(MAX_ATOMS).optional(),
       verifiedBlocks: z.number().int().min(1).max(16).optional(),
@@ -483,7 +548,13 @@ export function parseMatchingSourceSemanticProof(
     const expected = new Map(
       matchingSourceJevBlocks(
         source,
-        matchingSourceSectionHints(source.description),
+        matchingSourceSectionHints(
+          source.description,
+          matchingSourceUsesPreparationAtLeast(
+            parsed.decision.preparationVersion,
+            21,
+          ),
+        ),
       ).map((block) => [block.anchorId, block]),
     );
     const claimed = new Set<string>();

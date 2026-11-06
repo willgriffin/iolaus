@@ -10,11 +10,35 @@ const maxChoices = 5;
 const maxTitleTokens = 24;
 const pairQuestion = 'role_pair';
 const levelQuestion = 'role_level';
+const titleLevels: Record<string, NonNullable<Role['level']>> = {
+  junior: 'entry',
+  jr: 'entry',
+  entry: 'entry',
+  'entry level': 'entry',
+  associate: 'entry',
+  mid: 'mid',
+  'mid level': 'mid',
+  intermediate: 'mid',
+  senior: 'senior',
+  sr: 'senior',
+  staff: 'staff',
+  principal: 'principal',
+  lead: 'lead',
+};
+const leadingLevel =
+  /^(entry level|mid level|junior|jr|entry|associate|mid|intermediate|senior|sr|staff|principal|lead) (.+)$/u;
+const occupationEnding =
+  /\b(?:engineers?|developers?|architects?|managers?|directors?|scientists?|consultants?|administrators?|analysts?|technicians?|specialists?|designers?|coordinators?|executives?|officers?|counsel)\s*$/iu;
+const levelWord =
+  /^(?:(?:entry|mid)[ -]level|junior|jr\.?|entry|associate|mid|intermediate|senior|sr\.?|staff|principal|lead)(?:\s|$)/iu;
 const generic =
   /^(?:engineer|engineering|developer|development|manager|management|specialist|senior|staff|principal|lead|junior|associate|entry|mid|director)$/u;
 
 const words = (text: string) =>
-  text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  text
+    .replace(/([\p{Ll}])([\p{Lu}])/gu, '$1 $2')
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
 const pairKey = ({ family, specialty }: RolePair) =>
   specialty ? `${family}:${specialty}` : family;
 
@@ -32,18 +56,102 @@ const aliasTerms = aliases.map(({ label, family, specialty }) => {
   };
 });
 
-function competingTitleRoles(title: string): boolean {
-  const text = ` ${words(title).join(' ')} `;
-  const matches = aliasTerms.flatMap(({ family, key, phrase }) =>
-    [...text.matchAll(new RegExp(`(?<= )${phrase}(?= )`, 'gu'))].map(
-      ({ index }) => ({
-        family,
-        key,
-        start: index,
-        end: index + phrase.length,
-      }),
-    ),
+const byCompactAlias = new Map<string, typeof aliasTerms>();
+for (const alias of aliasTerms) {
+  const compact = alias.phrase.replaceAll(' ', '');
+  const entries = byCompactAlias.get(compact) ?? [];
+  entries.push(alias);
+  byCompactAlias.set(compact, entries);
+}
+const maxAliasWords = Math.max(
+  ...aliasTerms.map(({ phrase }) => phrase.split(' ').length),
+);
+
+function exactOccupation(text: string) {
+  const phrase = words(text).join(' ');
+  const matchedLevel = leadingLevel.exec(phrase);
+  const level = matchedLevel?.[1]
+    ? (titleLevels[matchedLevel[1]] ?? null)
+    : null;
+  const occupation = matchedLevel?.[2] ?? phrase;
+  const literal = aliasTerms.filter((alias) => alias.phrase === occupation);
+  // Closed occupation aliases can also appear with a joined spelling, such
+  // as fullstack. Only a unique whole-head match can anchor the title.
+  const candidates = literal.length
+    ? literal
+    : (byCompactAlias.get(occupation.replaceAll(' ', '')) ?? []);
+  const keys = new Set(candidates.map(({ key }) => key));
+  const key = keys.size === 1 ? candidates[0]?.key : undefined;
+  const role = roles.find(
+    ({ family, specialty }) =>
+      pairKey({ family, specialty: specialty ?? null }) === key,
   );
+  return role
+    ? { family: role.family, specialty: role.specialty ?? null, level }
+    : null;
+}
+
+function titleAnchor(title: string) {
+  const parts = title
+    .trim()
+    .replace(/\s*\(([^()]+)\)\s*$/u, ' | $1')
+    .split(/\s*[:,|;–—]\s*|\s+-\s+/u)
+    .map((part) => part.trim());
+  const [head, ...suffixes] = parts;
+  if (!head || !suffixes.length) return null;
+  const role = exactOccupation(head);
+  return role ? { head, suffixes, ...role } : null;
+}
+
+/** Retrieve an exact occupation prefix for a whole-title audit. The suffix
+ * remains unclassified until a typed decision independently checks its scope. */
+export function matchingSourceJevPrimaryRole(title: string) {
+  const anchored = titleAnchor(title);
+  if (
+    !anchored ||
+    words(title).length > maxTitleTokens ||
+    title.length > 300 ||
+    competingTitleRoles(title)
+  )
+    return null;
+  const { head, suffixes } = anchored;
+  if (
+    suffixes.some((suffix) => {
+      const narrowed = exactOccupation(`${head} ${suffix}`);
+      return (
+        !suffix ||
+        exactOccupation(suffix) ||
+        occupationEnding.test(suffix) ||
+        levelWord.test(suffix) ||
+        Boolean(narrowed && pairKey(narrowed) !== pairKey(anchored))
+      );
+    })
+  )
+    return null;
+  return anchored;
+}
+
+function competingTitleRoles(title: string): boolean {
+  const tokens = words(title);
+  const matches = tokens.flatMap((_, start) => {
+    const prefix = tokens.slice(0, start);
+    const level =
+      titleLevels[prefix.slice(-2).join(' ')] ??
+      titleLevels[prefix.at(-1) ?? ''];
+    return tokens.slice(start, start + maxAliasWords).flatMap((_, offset) => {
+      const end = start + offset + 1;
+      const segment = tokens.slice(start, end);
+      return (byCompactAlias.get(segment.join('')) ?? []).map(
+        ({ family, key }) => ({
+          family,
+          key,
+          start,
+          end,
+          level,
+        }),
+      );
+    });
+  });
   const distinct = matches.filter(
     (match) =>
       !matches.some(
@@ -55,6 +163,7 @@ function competingTitleRoles(title: string): boolean {
   );
   return (
     new Set(distinct.map(({ family }) => family)).size > 1 ||
+    new Set(distinct.flatMap(({ level }) => level ?? [])).size > 1 ||
     new Set(
       distinct
         .filter(({ family, key }) => family !== key)
@@ -123,7 +232,15 @@ export async function draftJevSourceRole(
   decide: (request: DecisionRequest) => Promise<DecisionResult['answers']>,
 ): Promise<MatchingSourceSemanticProposal['role']> {
   if (unitId !== 'title' || !title.trim() || title.length > 300) return null;
-  if (competingTitleRoles(title)) return null;
+  const anchored = matchingSourceJevPrimaryRole(title);
+  if (anchored)
+    return {
+      family: anchored.family,
+      specialty: anchored.specialty,
+      level: anchored.level,
+      unitId,
+    };
+  if (titleAnchor(title) || competingTitleRoles(title)) return null;
   const candidates = shortlist(title);
   if (!candidates.length) return null;
   const pairs = Object.fromEntries(

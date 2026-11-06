@@ -6,6 +6,19 @@ import {
 
 const noQualifier = { years: null, context: null };
 
+it('does not convert typical tenure to a minimum', () => {
+  expect(
+    matchingSourceStructures(
+      'Significant software engineering experience, typically 8+ years',
+    ),
+  ).toEqual([]);
+  expect(
+    matchingSourceStructures(
+      'At least 8 years of professional experience with TypeScript',
+    )[0]?.groups[0]?.[0]?.years,
+  ).toBe(8);
+});
+
 describe('JEV host source structure grammar', () => {
   it('offers whole, ALL, ANY on ordinary commas and keeps every fragment exact', () => {
     const quote =
@@ -48,6 +61,124 @@ describe('JEV host source structure grammar', () => {
         structures[0]?.groups.map((parts) => parts.map(({ text }) => text)),
       ).toEqual(expected);
     }
+  });
+
+  it('keeps one inherited-depth OR and preserves all five exact alternatives', () => {
+    const prefix = 'Deep expertise in one or more of: ';
+    const quote = `${prefix}distributed systems, data pipelines, reference data platforms, platform engineering, or AI-powered classification and validation.`;
+    const options = matchingSourceStructures(quote);
+    expect(options).toHaveLength(1);
+    const variant = options[0];
+    expect(variant).toMatchObject({
+      key: 'inline-depth-any',
+      scope: {
+        kind: 'deep-expertise',
+        start: 0,
+        end: prefix.length,
+        text: prefix,
+      },
+    });
+    const parts = variant?.groups[0] ?? [];
+    expect(parts.map(({ text }) => text)).toEqual([
+      'distributed systems',
+      'data pipelines',
+      'reference data platforms',
+      'platform engineering',
+      'AI-powered classification and validation',
+    ]);
+    expect(
+      parts.every(
+        ({ start, end, text, unsupported }) =>
+          !unsupported && quote.slice(start, end) === text,
+      ),
+    ).toBe(true);
+    const alternatives = parts.map(() => noQualifier);
+    expect(
+      matchingSourceStructureMatches(quote, 'inline-depth-any', [
+        { alternatives },
+      ]),
+    ).toBe(true);
+    expect(
+      matchingSourceStructureMatches(
+        quote,
+        'inline-depth-any',
+        alternatives.map((part) => ({ alternatives: [part] })),
+      ),
+    ).toBe(false);
+    expect(
+      matchingSourceStructureMatches(quote, 'explicit', [{ alternatives }]),
+    ).toBe(false);
+  });
+
+  it('inherits familiarity over two conjuncts and keeps only the first examples illustrative', () => {
+    const prefix = 'Posses familiarity with ';
+    const quote = `${prefix}observability tools (OpenTelemetry, Prometheus, Grafana) and performance tuning.`;
+    const options = matchingSourceStructures(quote);
+    expect(options).toHaveLength(1);
+    const variant = options[0];
+    expect(variant).toMatchObject({
+      key: 'familiarity-all',
+      scope: {
+        kind: 'familiarity',
+        start: 0,
+        end: prefix.length,
+        text: prefix,
+      },
+      groups: [
+        [
+          {
+            text: 'observability tools',
+            examples: ['OpenTelemetry', 'Prometheus', 'Grafana'],
+            unsupported: false,
+          },
+        ],
+        [{ text: 'performance tuning', unsupported: false }],
+      ],
+    });
+    expect(variant?.groups[1]?.[0]?.examples).toBeUndefined();
+    const spans = variant?.groups
+      .flat()
+      .map(({ start, end }) => quote.slice(start, end));
+    expect(spans).toEqual([
+      'observability tools (OpenTelemetry, Prometheus, Grafana)',
+      'performance tuning',
+    ]);
+    expect(
+      matchingSourceStructureMatches(quote, 'familiarity-all', [
+        { alternatives: [noQualifier] },
+        { alternatives: [noQualifier] },
+      ]),
+    ).toBe(true);
+    expect(
+      matchingSourceStructureMatches(quote, 'familiarity-all', [
+        { alternatives: [noQualifier, noQualifier] },
+      ]),
+    ).toBe(false);
+  });
+
+  it('leaves an ordinary parenthetical alias on the existing grammar', () => {
+    const options = matchingSourceStructures(
+      'Familiarity with Amazon Web Services (AWS) and Terraform.',
+    );
+    expect(options[0]?.key).toBe('explicit');
+    expect(options[0]?.scope).toBeUndefined();
+  });
+
+  it.each([
+    'Deep expertise in one or more of: distributed systems, data pipelines, or',
+    'Deep expertise in one or more of distributed systems, data pipelines, or Go',
+    'Deep expertise in one or more of: distributed systems, or data pipelines, and a visa',
+    'Deep expertise in one or more of: distributed systems, Python and Go',
+    'Deep expertise in one or more of: distributed systems and Python, or Go',
+    'Deep expertise in one or more of: distributed systems, data pipelines, or right to work in Canada',
+    'Deep expertise in one or more of: distributed systems, or Python preferred, and Go required',
+    'Posses familiarity with observability tools (OpenTelemetry or Prometheus) and performance tuning',
+    'Posses familiarity with observability tools (OpenTelemetry, Prometheus) and work authorization in Canada',
+    'Posses familiarity with observability tools (OpenTelemetry, Prometheus) and performance tuning or SQL',
+    'Posses familiarity with observability tools (OpenTelemetry, Prometheus) and',
+    'Posses familiarity with observability tools (OpenTelemetry, Prometheus required) and performance tuning preferred',
+  ])('declines incomplete, mixed, nested, or ineligible scoped clauses: %s', (quote) => {
+    expect(matchingSourceStructures(quote)).toEqual([]);
   });
 
   it('binds distinct or explicitly shared tenure without inventing qualifiers', () => {

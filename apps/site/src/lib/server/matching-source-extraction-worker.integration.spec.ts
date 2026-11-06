@@ -1,12 +1,19 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseInterface } from '@happyvertical/sql';
 import { describe, expect, it } from 'vitest';
 import { createMatchingProjectionFixture } from './fixtures/matching-projection.js';
 import type { MatchingDialect } from './matching-projection-read.js';
 import { ensureMatchingProjectionSchema } from './matching-projection-schema.js';
 import { runMatchingTick } from './matching-projection-worker.js';
-import { parseMatchingSourceExtraction } from './matching-source-extraction-contract.js';
+import {
+  MATCHING_SOURCE_EXTRACTION_VERSION,
+  parseMatchingSourceExtraction,
+} from './matching-source-extraction-contract.js';
 import { runMatchingSourceExtraction } from './matching-source-extraction-worker.js';
-import { matchingSourceDecisionRequestId } from './matching-source-identity.js';
+import {
+  matchingSourceCaptureDigest,
+  matchingSourceDecisionRequestId,
+} from './matching-source-identity.js';
 import {
   type MatchingSourceDecisionProfile,
   matchingSourceSemanticMaterial,
@@ -84,6 +91,143 @@ async function seed(db: DatabaseInterface) {
 
 for (const dialect of dialects) {
   describe(`governed shared interpretation publication on ${dialect}`, () => {
+    it.each([
+      'publish',
+      'provider-failure',
+    ])('does not retain an unsafe old typed proof after %s', async (outcome) => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        const description =
+          "What you'll do:\nExperience collaborating with product teams";
+        await writeCapture(db, description, 1);
+        await ensureMatchingProjectionSchema(db, dialect);
+        await runMatchingTick(db, dialect);
+        const source = { title, description, location };
+        const profile: MatchingSourceDecisionProfile = {
+          provider: 'typesafe',
+          transport: 'direct',
+          model: 'jev-1.14.0',
+          revision: 'test-r1',
+          maxInputBytes: 8192,
+          preparationVersion: 'matching-source-jev/v21',
+        };
+        const next = {
+          ...profile,
+          preparationVersion: 'matching-source-jev/v23',
+        };
+        const material = matchingSourceSemanticMaterial(source);
+        const extraction = (strategy: typeof profile, unsafe: boolean) => {
+          const proposal = parseMatchingSourceSemanticProposal(
+            {
+              role: null,
+              geography: null,
+              ledger: material.units.map(({ id }) => ({
+                id,
+                kind: id === 'd2' && !unsafe ? 'unresolved' : 'context',
+                groups: [],
+              })),
+            },
+            source,
+          );
+          const semantic = verifyMatchingSourceSemanticProposal(
+            {
+              sourceDigest: material.sourceDigest,
+              proposalDigest: matchingSourceSemanticProposalDigest(proposal),
+              roleCorrect: false,
+              geographyCorrect: false,
+              units: material.units.map(({ id }) => {
+                const confirmed = unsafe || id !== 'd2';
+                return {
+                  id,
+                  classificationCorrect: confirmed,
+                  allConditionsRepresented: confirmed,
+                  logicAndQualifiersPreserved: confirmed,
+                };
+              }),
+            },
+            source,
+            proposal,
+          );
+          return {
+            coverage: 'partial' as const,
+            role: null,
+            geography: null,
+            noRequirements: null,
+            required: [],
+            preferred: [],
+            unresolved: [],
+            semantic: {
+              ...semantic,
+              decision: { ...strategy, observedModels: [strategy.model] },
+            },
+          };
+        };
+        const {
+          rows: [capture],
+        } = await db.query(
+          'SELECT source_content_json, source_content_fingerprint FROM opportunities WHERE id=?',
+          [postingId],
+        );
+        await db.query(
+          `INSERT INTO matching_source_interpretations
+             (opportunity_id, source_fingerprint, source_content_version, contract_version, input_digest,
+             state, lease, next_run_at, attempts, payload_json, request_id)
+             VALUES (?, ?, 1, ?, ?, 'complete', '', 0, 1, ?, ?)`,
+          [
+            postingId,
+            capture.source_content_fingerprint,
+            MATCHING_SOURCE_EXTRACTION_VERSION,
+            matchingSourceCaptureDigest(capture.source_content_json),
+            JSON.stringify(extraction(profile, true)),
+            matchingSourceDecisionRequestId(profile),
+          ],
+        );
+        const sourceRevision = async () =>
+          String(
+            (
+              await db.query(
+                'SELECT revision FROM matching_source_versions WHERE opportunity_id=?',
+                [postingId],
+              )
+            ).rows[0]?.revision,
+          );
+        const before = await sourceRevision();
+        await expect(
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            opportunityId: postingId,
+            decisionProfile: next,
+            provider: async () => {
+              if (outcome === 'provider-failure')
+                throw new Error('fixture failure');
+              return { requestId: '', extraction: extraction(next, false) };
+            },
+          }),
+        ).resolves.toBe(outcome === 'publish' ? 'published' : 'retry');
+        expect(
+          (
+            await db.query(
+              'SELECT request_id, state, payload_json FROM matching_source_interpretations WHERE opportunity_id=?',
+              [postingId],
+            )
+          ).rows[0],
+        ).toMatchObject({
+          request_id: matchingSourceDecisionRequestId(next),
+          state: outcome === 'publish' ? 'complete' : 'retry',
+          payload_json:
+            outcome === 'publish'
+              ? expect.stringContaining('matching-source-jev/v23')
+              : '',
+        });
+        expect(await sourceRevision()).not.toBe(before);
+      } finally {
+        await close();
+      }
+    });
+
     it('pins decision strategy, refuses a concurrent replacement, and reuses only the same completed strategy', async () => {
       const { database: db, close } = await createMatchingProjectionFixture(
         dialect,
@@ -172,9 +316,38 @@ for (const dialect of dialects) {
             },
           };
         };
+        const {
+          rows: [capture],
+        } = await db.query(
+          'SELECT source_content_json, source_content_fingerprint FROM opportunities WHERE id=?',
+          [postingId],
+        );
+        const expectedCapture = {
+          fingerprint: String(capture.source_content_fingerprint),
+          title,
+          sha256: createHash('sha256')
+            .update(String(capture.source_content_json))
+            .digest('hex'),
+        };
+        for (const wrong of [
+          { title: 'Different captured title' },
+          { fingerprint: '0'.repeat(64) },
+          { sha256: '0'.repeat(64) },
+        ]) {
+          await expect(
+            runMatchingSourceExtraction(db, dialect, 1000, {
+              opportunityId: postingId,
+              decisionProfile: profile,
+              expectedCapture: { ...expectedCapture, ...wrong },
+              provider,
+            }),
+          ).resolves.toBe('idle');
+        }
+        expect(calls).toBe(0);
         const first = runMatchingSourceExtraction(db, dialect, 1000, {
           opportunityId: postingId,
           decisionProfile: profile,
+          expectedCapture,
           provider,
         });
         await entered.promise;

@@ -13,6 +13,9 @@ import { parseMatchingSourceSemanticProof } from './matching-source-semantics.js
 import { matchingSourceSemanticUnits } from './matching-source-units.js';
 import {
   compileMatchingVocabulary,
+  matchingSourceCapabilityGapAllowed,
+  matchingSourceSectionHints,
+  matchingSourceTypedFutureDuty,
   normalizeMatchingPosting,
 } from './normalized-matching.js';
 import { SKILL_VOCABULARY_SEED_TERMS } from './skill-vocabulary.js';
@@ -68,11 +71,13 @@ function provider(
                   : 1,
               )
             : choose(
-                key.endsWith('_context')
-                  ? 'employer'
-                  : key.endsWith('_kind')
-                    ? 'requirement'
-                    : leadership,
+                key.endsWith('_classification')
+                  ? 'capability'
+                  : key.endsWith('_context')
+                    ? 'employer'
+                    : key.endsWith('_kind')
+                      ? 'requirement'
+                      : leadership,
               ),
         ]),
       ),
@@ -91,10 +96,16 @@ function provider(
 }
 
 describe('JEV matching source preparation', () => {
-  it('routes a previously unknown product suffix through typed full-title draft and audit', async () => {
+  it.each([
+    'team',
+    'competing-occupation',
+    'eligibility-restriction',
+    'unclear',
+  ])('audits an exact primary title suffix once and declines competing or unknown scope (%s)', async (finding) => {
+    const accepted = finding === 'team';
     const input = {
       ...source,
-      title: 'Engineering Manager - Spark',
+      title: 'Engineering Manager - Delivery Platform',
       description: 'Qualifications:\nNode.js',
     };
     const adapter = provider(({ questions }) =>
@@ -103,29 +114,55 @@ describe('JEV matching source preparation', () => {
           Object.entries(questions).map(([key, question]) => [
             key,
             question.type === 'predicate'
-              ? judge(key.endsWith('_coverage') ? 0 : 1)
+              ? judge(
+                  key === 'title_suffix_occupation'
+                    ? Number(finding === 'competing-occupation')
+                    : key === 'title_suffix_eligibility'
+                      ? Number(finding === 'eligibility-restriction')
+                      : key.endsWith('_coverage')
+                        ? 0
+                        : 1,
+                )
               : choose(
-                  key === 'role_pair'
-                    ? 'engineering-management'
-                    : key === 'role_level'
-                      ? 'unstated'
-                      : 'heading',
+                  key === 'title_role_suffix'
+                    ? finding === 'unclear'
+                      ? 'unclear'
+                      : 'team'
+                    : 'heading',
                 ),
           ]),
         ),
       ),
     );
+    const onDiagnostics = vi.fn();
     expect(normalizeMatchingPosting(input, vocabulary).role).toBeUndefined();
-    const semantic = await prepareJevMatchingSource(input, adapter);
+    const semantic = await prepareJevMatchingSource(input, adapter, {
+      onDiagnostics,
+    });
     expect(semantic.proposal.role).toMatchObject({
       family: 'engineering-management',
     });
-    expect(semantic.verification.roleCorrect).toBe(true);
+    expect(semantic.verification.roleCorrect).toBe(accepted);
     expect(
-      adapter.decide.mock.calls.some(([{ questions }]) =>
-        Boolean(questions.title_family),
+      semantic.verification.units.find(({ id }) => id === 'title')
+        ?.classificationCorrect,
+    ).toBe(accepted);
+    expect(
+      adapter.decide.mock.calls.filter(
+        ([{ questions }]) => questions.title_role_suffix,
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
+    expect(
+      adapter.decide.mock.calls.some(([{ questions }]) => questions.role_pair),
+    ).toBe(false);
+    expect(onDiagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rolePasses: Number(accepted),
+        ...(accepted
+          ? {}
+          : { declinedDimensions: expect.objectContaining({ role: 1 }) }),
+      }),
+    );
   });
 
   it('drafts and independently audits grounded role, geography, Boolean groups, strength and a non-alias with tenure', async () => {
@@ -518,6 +555,7 @@ describe('JEV matching source preparation', () => {
       verificationCalls: wire.length,
       unasked: 0,
       declined: 1,
+      declinedDimensions: { classification: 1, coverage: 1, logic: 1 },
       failed: 1,
       verified: 33,
       classificationPasses: 33,
@@ -904,6 +942,275 @@ describe('JEV matching source preparation', () => {
         input,
       ),
     ).toThrow();
+  });
+
+  it.each([
+    "What you'll do",
+    'Responsibilities include',
+    'Some things you might be expected to do could include',
+  ])('uses the exact typed duties boundary and resets at later sections: %s', async (heading) => {
+    const duty =
+      'When ready, participating in our follow-the-sun OnCall rotation';
+    const input = {
+      ...source,
+      description: [
+        'Qualifications:',
+        'Node.js',
+        `${heading}:`,
+        duty,
+        'What you must already know:',
+        'TypeScript',
+        'Preferred qualifications:',
+        'Kubernetes',
+      ].join('\n'),
+    };
+    const hints = matchingSourceSectionHints(input.description, true);
+    expect(hints.get(input.description.indexOf(duty))).toMatchObject({
+      sectionHint: 'duties',
+      governingHeading: {
+        quote: heading,
+        start: input.description.indexOf(heading),
+      },
+    });
+    expect(
+      hints.get(input.description.indexOf('TypeScript'))?.sectionHint,
+    ).toBe('required');
+    expect(
+      hints.get(input.description.indexOf('Kubernetes'))?.sectionHint,
+    ).toBe('preferred');
+    expect(matchingSourceTypedFutureDuty(duty)).toBe(true);
+    expect(matchingSourceTypedFutureDuty('Prior on-call experience')).toBe(
+      false,
+    );
+    expect(
+      matchingSourceTypedFutureDuty(
+        'Candidates must be available every weekend for OnCall.',
+      ),
+    ).toBe(false);
+    const adapter = provider();
+    const proof = await prepareJevMatchingSource(input, adapter);
+    expect(proof.proposal.ledger.find(({ id }) => id === 'd4')?.kind).toBe(
+      'context',
+    );
+    expect(
+      adapter.decide.mock.calls.some(
+        ([{ questions }]) =>
+          typeof questions.d4_context?.instructions === 'string' &&
+          questions.d4_context.instructions.includes(heading),
+      ),
+    ).toBe(true);
+  });
+
+  it('distinguishes prior experience under duties from future work, benefits, and local optional strength', async () => {
+    const input = {
+      ...source,
+      description: [
+        "What you'll be doing:",
+        'Experience collaborating with design and product teams',
+        'Experience our culture first-hand',
+        'Develop experience while collaborating with product teams',
+        'Optional: experience collaborating with research teams',
+        'Experience with relational databases (cloud tooling is a plus) and prior incident response',
+        'Experience collaborating with designers and applicants must hold clearance',
+        'Travel as needed for partner meetings',
+        'Travel is required for site visits',
+        'Enjoy occasional travel opportunities through our volunteer program',
+      ].join('\n'),
+    };
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? choose(
+                  key === 'd5_kind'
+                    ? 'preferred'
+                    : key.endsWith('_kind')
+                      ? 'context'
+                      : key.endsWith('_context')
+                        ? 'duty'
+                        : 'capability',
+                )
+              : judge(key.endsWith('_gap_eligibility') ? 0 : 1),
+          ]),
+        ),
+      ),
+    );
+    const proof = await prepareJevMatchingSource(input, adapter);
+    expect(
+      proof.proposal.ledger.slice(3).map(({ id, kind }) => [id, kind]),
+    ).toEqual([
+      ['d2', 'unresolved'],
+      ['d3', 'context'],
+      ['d4', 'context'],
+      ['d5', 'preferred'],
+      ['d6', 'unresolved'],
+      ['d7', 'unresolved'],
+      ['d8', 'unresolved'],
+      ['d9', 'unresolved'],
+      ['d10', 'context'],
+    ]);
+  });
+
+  it.each([
+    [0, 'capability', true],
+    [1, 'capability', false],
+    [Number.NaN, 'capability', false],
+    [0, 'other', false],
+  ] as const)('accepts only an independently assessed whole-clause gap (%s, %s)', async (restriction, category, accepted) => {
+    const quote = 'TypeScript and PostgreSQL';
+    const input = { ...source, description: `Who You Are:\n${quote}` };
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? choose(
+                  key.endsWith('_kind')
+                    ? 'requirement'
+                    : key.endsWith('_classification')
+                      ? category
+                      : key.endsWith('_context')
+                        ? 'heading'
+                        : 'none',
+                )
+              : judge(key === 'd2_gap_eligibility' ? restriction : 1),
+          ]),
+        ),
+      ),
+    );
+    let assessments: MatchingSourceJevAssessments | undefined;
+    const proof = await prepareJevMatchingSource(input, adapter, {
+      onAssessments(value) {
+        assessments = value;
+      },
+    });
+    expect(
+      adapter.decide.mock.calls.filter(
+        ([{ questions }]) => questions.d2_gap_eligibility,
+      ),
+    ).toHaveLength(1);
+    expect(assessments?.capabilityGaps ?? []).toEqual(
+      accepted ? [{ unitId: 'd2', qualifier: 'unmapped', conceptIds: [] }] : [],
+    );
+    expect(
+      proof.verification.units.find(({ id }) => id === 'd2')
+        ?.allConditionsRepresented,
+    ).toBe(accepted);
+    for (const unsafe of [
+      'Incident response and a valid security clearance',
+      'Incident response and not using Kubernetes',
+      'Incident response and at most 2 years of Kubernetes',
+    ])
+      expect(matchingSourceCapabilityGapAllowed(unsafe, 'unmapped')).toBe(
+        false,
+      );
+  });
+
+  it('keeps inline OR depth and shared familiarity on their exact branches', async () => {
+    const input = {
+      ...source,
+      description: [
+        'Qualifications:',
+        'Deep expertise in one or more of: distributed systems, data pipelines, or AI-powered classification and validation',
+        'Posses familiarity with observability tools (OpenTelemetry, Prometheus, Grafana) and performance tuning',
+      ].join('\n'),
+    };
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? choose(key.endsWith('_kind') ? 'requirement' : 'none')
+              : judge(/_(?:coverage|scope_eligibility)$/u.test(key) ? 0 : 1),
+          ]),
+        ),
+      ),
+    );
+    let assessments: MatchingSourceJevAssessments | undefined;
+    let structures: Record<string, string> | undefined;
+    const semantic = await prepareJevMatchingSource(input, adapter, {
+      onAssessments(value) {
+        assessments = value;
+      },
+      onStructures(value) {
+        structures = value;
+      },
+    });
+    expect(structures).toEqual({
+      d2: 'inline-depth-any',
+      d3: 'familiarity-all',
+    });
+    const checked = parseMatchingSourceSemanticProof(
+      {
+        ...semantic,
+        decision: {
+          provider: 'typesafe',
+          transport: 'direct',
+          model: 'fixture',
+          revision: 'fixture',
+          maxInputBytes: 8192,
+          preparationVersion: MATCHING_SOURCE_JEV_PREPARATION_VERSION,
+          observedModels: ['fixture'],
+          ...assessments,
+          structures,
+        },
+      },
+      input,
+    );
+    const posting = normalizeMatchingPosting(input, vocabulary, {
+      coverage: 'partial',
+      role: null,
+      geography: null,
+      noRequirements: null,
+      required: [],
+      preferred: [],
+      unresolved: [],
+      semantic: checked,
+    });
+    const groups = posting.required;
+    const depth = groups.find(({ citation }) =>
+      citation.text.startsWith('Deep expertise'),
+    );
+    expect(depth?.alternatives).toHaveLength(3);
+    expect(depth?.alternatives[0]).toMatchObject({
+      sourceGap: {
+        qualifier: 'depth',
+        verifiedConceptId: 'distributed-systems',
+      },
+    });
+    expect(
+      depth?.alternatives[1]?.sourceGap?.verifiedConceptId,
+    ).toBeUndefined();
+    const familiarity = groups.filter(({ citation }) =>
+      citation.text.startsWith('Posses familiarity'),
+    );
+    expect(familiarity).toMatchObject([
+      {
+        alternatives: [
+          {
+            familiarity: true,
+            slug: 'observability',
+            examples: expect.arrayContaining(['prometheus']),
+          },
+        ],
+      },
+      {
+        alternatives: [
+          { familiarity: true, slug: 'software-performance-tuning' },
+        ],
+      },
+    ]);
+    expect(familiarity[1]?.alternatives[0]?.examples).toBeUndefined();
+    expect(posting.sourceDecisionReaderRevision).toBe('typed-source-reader/v3');
+    expect(
+      posting.uncertainties.some(({ code }) =>
+        code.startsWith('posting-requirement'),
+      ),
+    ).toBe(false);
   });
 
   it('redacts a mailbox only for the independent context audit while retaining exact source binding', async () => {

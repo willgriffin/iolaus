@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseInterface } from '@happyvertical/sql';
 import { matchingPostingInput } from './matching-projection-input.js';
 import {
@@ -16,7 +16,10 @@ import {
   matchingSourceCaptureDigest,
   matchingSourceDecisionRequestId,
 } from './matching-source-identity.js';
-import type { MatchingSourceDecisionProfile } from './matching-source-semantics.js';
+import {
+  type MatchingSourceDecisionProfile,
+  matchingSourceProofHasUnsafeTypedCoverage,
+} from './matching-source-semantics.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 import { OpportunityIntelligenceGovernanceError } from './opportunity-intelligence-governance.js';
 
@@ -24,6 +27,7 @@ const SCAN_BATCH = 24;
 const LEASE_MS = 180_000;
 const MAX_ATTEMPTS = 3;
 type Row = Record<string, unknown>;
+type ExpectedCapture = { fingerprint: string; sha256: string; title: string };
 type Provider = (
   input: Parameters<typeof extractMatchingSource>[0] & {
     workplaceType?: string;
@@ -51,6 +55,7 @@ async function claimSourceExtraction(
   dialect: MatchingDialect,
   opportunityId?: string,
   decisionRequestId?: string,
+  expectedCapture?: ExpectedCapture,
 ) {
   if (!database.transaction)
     throw new Error('Source extraction requires native transactions.');
@@ -151,6 +156,14 @@ async function claimSourceExtraction(
     const attempt =
       (sameCapture(selected) ? Number(selected.previous_attempts ?? 0) : 0) + 1;
     const capture = text(selected.source_content_json);
+    if (
+      expectedCapture &&
+      (expectedCapture.fingerprint !== selected.source_content_fingerprint ||
+        expectedCapture.title !== posting.title ||
+        expectedCapture.sha256 !==
+          createHash('sha256').update(capture).digest('hex'))
+    )
+      return null;
     const inputDigest = matchingSourceCaptureDigest(capture);
     const input: Parameters<Provider>[0] = {
       opportunityId: text(selected.opportunity_id),
@@ -221,6 +234,7 @@ export async function runMatchingSourceExtraction(
     windowId?: string;
     provider?: Provider;
     decisionProfile?: MatchingSourceDecisionProfile;
+    expectedCapture?: ExpectedCapture;
     onFailure?: (kind: string) => void;
     onDiagnostic?: (kind: string) => void;
   } = {},
@@ -229,7 +243,10 @@ export async function runMatchingSourceExtraction(
     throw new Error('Source extraction requires native transactions.');
   if (!Number.isSafeInteger(budgetMicros) || budgetMicros <= 0)
     throw new Error('Source extraction requires a positive integer budget.');
-  if (options.decisionProfile && (!options.provider || !options.opportunityId))
+  if (
+    (options.decisionProfile || options.expectedCapture) &&
+    (!options.provider || !options.opportunityId)
+  )
     throw new Error(
       'Decision publication requires an explicit provider and posting.',
     );
@@ -241,6 +258,7 @@ export async function runMatchingSourceExtraction(
     dialect,
     options.opportunityId,
     decisionRequestId,
+    options.expectedCapture,
   );
   if (!claimed) return 'idle';
   const {
@@ -253,8 +271,23 @@ export async function runMatchingSourceExtraction(
     prior,
   } = claimed;
   const provider = options.provider ?? extractMatchingSource;
+  let previous: ReturnType<typeof parseMatchingSourceExtraction> | undefined;
+  if (prior) {
+    try {
+      previous = parseMatchingSourceExtraction(
+        JSON.parse(prior.payload),
+        input,
+      );
+    } catch {
+      // A malformed prior payload cannot be reused.
+    }
+  }
+  const unsafePrior = matchingSourceProofHasUnsafeTypedCoverage(
+    input,
+    previous?.semantic,
+  );
   const retainPrior = async () => {
-    if (!prior) return false;
+    if (!prior || !previous || unsafePrior) return false;
     const { rows } = await database.query(
       `UPDATE matching_source_interpretations
        SET state='complete', lease='', next_run_at=0, attempts=?, payload_json=?, request_id=?
@@ -280,14 +313,11 @@ export async function runMatchingSourceExtraction(
       const provenance = incoming.semantic?.decision;
       if (
         !provenance ||
-        matchingSourceDecisionRequestId(provenance) !== decisionRequestId
+        matchingSourceDecisionRequestId(provenance) !== decisionRequestId ||
+        matchingSourceProofHasUnsafeTypedCoverage(input, incoming.semantic)
       )
         throw new MatchingSourceExtractionError('matching_extraction_coverage');
-      if (prior) {
-        const previous = parseMatchingSourceExtraction(
-          JSON.parse(prior.payload),
-          input,
-        );
+      if (previous && !unsafePrior) {
         const countVerified = (extraction: typeof previous) =>
           extraction.semantic?.verification.units.filter(
             ({
@@ -407,20 +437,32 @@ export async function runMatchingSourceExtraction(
         'pricing_missing',
       ].includes(cause.code);
     const waitMs = admissionRefused ? 15 * 60_000 : 60_000 * attempt;
-    await database.query(
-      `
+    const markRetry = (db: DatabaseInterface) =>
+      db.query(
+        `
       UPDATE matching_source_interpretations SET state=?, lease='', next_run_at=CAST(? AS BIGINT),
         attempts=?
-      WHERE opportunity_id=? AND lease=? AND state='running'
+      WHERE opportunity_id=? AND lease=? AND state='running' RETURNING opportunity_id
     `,
-      [
-        !admissionRefused && attempt >= MAX_ATTEMPTS ? 'failed' : 'retry',
-        Date.now() + waitMs,
-        admissionRefused ? attempt - 1 : attempt,
-        input.opportunityId,
-        lease,
-      ],
-    );
+        [
+          !admissionRefused && attempt >= MAX_ATTEMPTS ? 'failed' : 'retry',
+          Date.now() + waitMs,
+          admissionRefused ? attempt - 1 : attempt,
+          input.opportunityId,
+          lease,
+        ],
+      );
+    if (unsafePrior) {
+      await database.transaction(async (db) => {
+        await db.query(
+          `SELECT opportunity_id FROM matching_source_versions WHERE opportunity_id=?
+          ${dialect === 'postgres' ? 'FOR UPDATE' : ''}`,
+          [input.opportunityId],
+        );
+        if ((await markRetry(db)).rows.length)
+          await advanceMatchingSourceRevision(db, dialect, input.opportunityId);
+      });
+    } else await markRetry(database);
     return 'retry';
   }
 }

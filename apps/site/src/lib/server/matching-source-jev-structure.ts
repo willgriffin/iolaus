@@ -1,3 +1,5 @@
+import { matchingSourceTypicalTenure } from './matching-source-units.js';
+
 type Span = { start: number; end: number };
 type QualificationContext = 'professional' | 'production' | null;
 type Binding = { years: number | null; context: QualificationContext };
@@ -5,11 +7,23 @@ export type MatchingSourceStructurePart = Span &
   Binding & {
     text: string;
     unsupported: boolean;
+    /** The span still covers the complete conjunct, including examples. */
+    examples?: string[];
   };
-type StructureKey = 'whole' | 'explicit' | 'list-all' | 'list-any';
+type StructureKey =
+  | 'whole'
+  | 'explicit'
+  | 'list-all'
+  | 'list-any'
+  | 'inline-depth-any'
+  | 'familiarity-all';
 export type MatchingSourceStructure = {
   key: StructureKey;
   groups: MatchingSourceStructurePart[][];
+  scope?: Span & {
+    kind: 'deep-expertise' | 'familiarity';
+    text: string;
+  };
 };
 
 const lead =
@@ -26,6 +40,23 @@ const contextPattern =
 const sharedPrefix =
   /^(?:(?:at least |minimum of )?\d{1,2}\+? years? (?:of )?)?(?:professional |production )?(?:hands-on )?experience (?:with|in|using|of) (?:either |one of )?/iu;
 const innerChoicePrefix = /^(?:either |one of )/iu;
+
+const depthPrefix =
+  /^(?:deep|advanced|extensive|substantial) expertise (?:in|with) (?:one or more of|at least one of)\s*[:：]\s*/iu;
+const unclosedDepth =
+  /^(?:deep|advanced|extensive|substantial) expertise (?:in|with) (?:one or more of|at least one of)\b/iu;
+const familiarityPrefix =
+  /^(?:(?:possess?|have|demonstrate)\s+)?(?:working\s+)?familiarity with\s+/iu;
+const illustrativeCategory =
+  /\b(?:tools|frameworks|technologies|libraries|platforms|systems)\s*\(/iu;
+const nonCapability =
+  /\b(?:applicants?|candidates?|you|right to work|eligib\w*|residen\w*|sponsor\w*|based in|located in|on[- ]call|shift work|time ?zone|language proficiency|fluency|background check|credential\w*)\b/iu;
+const nestedQualification =
+  /\b(?:experience|expertise|familiarity|proficiency|qualifications?|minimum of|at least|both|either)\b/iu;
+const nounClause = /^[\p{L}\p{N}][\p{L}\p{N} .+#’'-]*$/u;
+const nominalAnd =
+  /^[\p{L}\p{N}]+-[\p{L}\p{N}-]+\s+[\p{L}]+(?:\s+[\p{L}]+)?\s+and\s+[\p{L}]+$/iu;
+const exampleName = /^[\p{L}\p{N}][\p{L}\p{N} .+#'-]{0,39}$/u;
 
 function trim(quote: string, { start, end }: Span): Span {
   const text = quote.slice(start, end);
@@ -146,11 +177,127 @@ function makeStructure(
   return { key, groups };
 }
 
+function qualifiedNoun(text: string) {
+  const { years, context, unsupported } = binding(text);
+  return (
+    text.length <= 150 &&
+    nounClause.test(text) &&
+    !years &&
+    !context &&
+    !unsupported &&
+    !nonCapability.test(text) &&
+    !nestedQualification.test(text)
+  );
+}
+
+function inlineDepth(quote: string, body: Span, prefix: string) {
+  const tail = { start: body.start + prefix.length, end: body.end };
+  const text = quote.slice(tail.start, tail.end);
+  const commaList = text.includes(',');
+  const separators = [
+    ...text.matchAll(commaList ? /,\s*(?:or\s+)?/giu : /\s+or\s+/giu),
+  ];
+  if (
+    !separators.length ||
+    separators.length > 7 ||
+    separators
+      .slice(0, -1)
+      .some(([token]) => /\bor\b/iu.test(token) && commaList)
+  )
+    return [];
+  const spans: Span[] = [];
+  let cursor = tail.start;
+  for (const token of separators) {
+    const index = tail.start + token.index;
+    spans.push(trim(quote, { start: cursor, end: index }));
+    cursor = index + token[0].length;
+  }
+  spans.push(trim(quote, { start: cursor, end: tail.end }));
+  const valid = spans.every(({ start, end }, index) => {
+    const part = quote.slice(start, end);
+    return (
+      qualifiedNoun(part) &&
+      !/\b(?:or|plus|as well as|along with)\b/iu.test(part) &&
+      (!/\band\b/iu.test(part) ||
+        (index === spans.length - 1 && nominalAnd.test(part)))
+    );
+  });
+  if (!valid) return [];
+  return [
+    {
+      ...makeStructure(quote, 'inline-depth-any', [spans], null),
+      scope: {
+        kind: 'deep-expertise' as const,
+        start: body.start,
+        end: tail.start,
+        text: prefix,
+      },
+    },
+  ];
+}
+
+function familiarityAll(quote: string, body: Span, prefix: string) {
+  const tail = { start: body.start + prefix.length, end: body.end };
+  const parsed = split(quote, tail);
+  if (
+    !parsed ||
+    parsed.parts.length < 2 ||
+    parsed.parts.length > 4 ||
+    parsed.joins.some((join) => join !== 'and')
+  )
+    return [];
+  const [first, ...others] = parsed.parts;
+  if (!first) return [];
+  const exampleList =
+    /^(.+?\b(?:tools|frameworks|technologies|libraries|platforms|systems))\s*\(([^()]+)\)$/iu.exec(
+      quote.slice(first.start, first.end),
+    );
+  const core = exampleList?.[1];
+  const examples =
+    exampleList?.[2]?.split(/,\s*/u).map((name) => name.trim()) ?? [];
+  if (
+    !core ||
+    !qualifiedNoun(core) ||
+    examples.length < 2 ||
+    examples.length > 8 ||
+    examples.some(
+      (name) =>
+        !exampleName.test(name) ||
+        !qualifiedNoun(name) ||
+        /\b(?:and|or)\b/iu.test(name),
+    ) ||
+    others.some(({ start, end }) => !qualifiedNoun(quote.slice(start, end)))
+  )
+    return [];
+  const structure = makeStructure(
+    quote,
+    'familiarity-all',
+    parsed.parts.map((part) => [part]),
+    null,
+  );
+  const firstPart = structure.groups[0]?.[0];
+  if (!firstPart) return [];
+  firstPart.text = core;
+  firstPart.examples = examples;
+  return [
+    {
+      ...structure,
+      scope: {
+        kind: 'familiarity' as const,
+        start: body.start,
+        end: tail.start,
+        text: prefix,
+      },
+    },
+  ];
+}
+
 /** A small grammar for full-source candidate structures. Spans always index
  * the exact supplied quote, and no option can invent connective text. */
 export function matchingSourceStructures(
   quote: string,
 ): MatchingSourceStructure[] {
+  if (matchingSourceTypicalTenure(quote)) return [];
   if (
     quote.length > 1_200 ||
     (/\.(?=\s)|\b(?:and\s*\/\s*or)\b/iu.test(quote) &&
@@ -183,6 +330,13 @@ export function matchingSourceStructures(
     )
   )
     return [];
+
+  const depth = depthPrefix.exec(bodyText)?.[0];
+  if (depth) return inlineDepth(quote, body, depth);
+  if (unclosedDepth.test(bodyText)) return [];
+  const familiarity = familiarityPrefix.exec(bodyText)?.[0];
+  if (familiarity && illustrativeCategory.test(bodyText))
+    return familiarityAll(quote, body, familiarity);
 
   const prefix = sharedPrefix.exec(bodyText)?.[0] ?? '';
   const scoped = prefix ? binding(prefix) : null;

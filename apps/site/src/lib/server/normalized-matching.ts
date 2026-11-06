@@ -31,9 +31,15 @@ import {
 } from './matching-source-jev-structure.js';
 import {
   hasAnalysisPII,
+  MATCHING_SOURCE_DECISION_READER_REVISION,
   MATCHING_SOURCE_DESCRIPTION_LIMIT,
   matchingDescriptionUnits,
+  matchingSourceDecoration,
   matchingSourceSemanticUnits,
+  matchingSourceTypedClaimNeedsReview,
+  matchingSourceTypedContextNeedsReview,
+  matchingSourceTypicalTenure,
+  matchingSourceUsesPreparationAtLeast,
 } from './matching-source-units.js';
 
 export const MATCHING_POLICY_VERSION = `normalized-v25:${CANDIDATE_INTERPRETATION_VERSION}:${CANDIDATE_INTERPRETATION_PROMPT_VERSION}`;
@@ -1200,6 +1206,7 @@ export function matchingSourceExactLocation(
 interface Qualification {
   slug: string;
   sourceGap?: SourceCapabilityGap;
+  familiarity?: true;
   qualitative?: true;
   /** Explicit illustrative tools can support a gap result, never full proof. */
   examples?: readonly string[];
@@ -1289,6 +1296,7 @@ export interface NormalizedMatchingPosting {
   preferredUncertainties: readonly MatchingReason[];
   uncertainties: readonly MatchingReason[];
   sourceCapabilityGaps?: readonly SourceCapabilityGap[];
+  sourceDecisionReaderRevision?: string;
 }
 
 export interface NormalizedMatchingCandidate {
@@ -1821,6 +1829,9 @@ const preferredHeader =
   /^(?:preferred(?: skills| qualifications| experience| skills (?:and|&) experience)?|nice[- ]to[- ]haves?|bonus(?: skills| points)?|bonus points (?:if(?: you have)?|for)|desired qualifications|optional qualifications|helpful (?:skills|experience|qualifications)|it.d be great if you (?:have|also have))\s*[:：]?\s*$/iu;
 const dutiesHeader =
   /^(?:responsibilities|(?:key|job|role) responsibilities|duties|what (?:you.ll|you will|will you) (?:do|be doing)|your (?:impact|mission)|how you.ll make an impact|about (?:us|the (?:role|team|job|company|position))|the (?:role|opportunity|team)|who we are|what is the role)\s*[:：?]?\s*$/iu;
+const typedRequiredHeader = /^what you must (?:already )?know$/iu;
+const typedFutureDutiesHeader =
+  /^(?:(?:your )?responsibilities include|some (?:things|tasks) you (?:might|may) be expected to (?:do|perform)(?: (?:could|may) include)?|examples of (?:work|duties|responsibilities) you (?:may|might|will) (?:do|perform|take on))$/iu;
 const explicitDutiesHeader =
   /^(?:responsibilities|(?:key|job|role) responsibilities|duties|what (?:you.ll|you will|will you) (?:do|be doing))\s*[:：?]?\s*$/iu;
 const administrativeHeader =
@@ -1956,6 +1967,7 @@ function sameGroup(
     examples,
     partialCapabilities,
     sourceGap,
+    familiarity,
   }: Qualification) =>
     JSON.stringify([
       slug || phrase(label ?? ''),
@@ -1963,6 +1975,7 @@ function sameGroup(
       context,
       examples,
       partialCapabilities,
+      familiarity,
       sourceGap && [
         sourceGap.qualifier,
         sourceGap.conceptIds,
@@ -2469,8 +2482,9 @@ export function matchingSourceCapabilityGapAllowed(
   quote: string,
   qualifier: SourceCapabilityGap['qualifier'],
 ): boolean {
-  const scope = boundedLeadershipScope.test(quote);
-  const remaining = scope
+  const leadershipScope = boundedLeadershipScope.test(quote);
+  const scope = leadershipScope || matchingSourceTypicalTenure(quote);
+  const remaining = leadershipScope
     ? quote.replace(
         /\bwithout (?:formal )?(?:people management|line management|direct reports|reporting authority)[.!]?$/iu,
         '',
@@ -2491,9 +2505,24 @@ export function matchingSourceCapabilityGapAllowed(
       /\b(?:preferred|optional|nice[- ]to[- ]have)\b/iu.test(quote)
     ) &&
     !qualificationRefusal.test(remaining) &&
+    !/\b(?:at most|no more than|maximum (?:of )?\d+)\b/iu.test(remaining) &&
     !roleStatement.test(quote) &&
     !geographicLine.test(quote) &&
     !directWorkLocation(quote)
+  );
+}
+
+export function matchingSourceTypedFutureDuty(quote: string): boolean {
+  const withoutDutyName = quote.replace(/\bon[- ]?call\b/giu, '');
+  return (
+    !independentApplicantCondition(quote) &&
+    !matchingSourceTypedContextNeedsReview(quote) &&
+    !sectionHasCandidateQualification(quote) &&
+    !separateEligibilityRestriction.test(withoutDutyName) &&
+    !hardLanguage.test(withoutDutyName) &&
+    !/\b(?:prior|previous|availability|available|overnight|follow a fixed schedule)\b/iu.test(
+      quote,
+    )
   );
 }
 
@@ -2511,6 +2540,7 @@ function postingHeading(text: string) {
 export function matchingSourceContextLabel(citation: Citation): boolean {
   if (citation.field === 'title') return plainGovernedRoleTitle(citation);
   if (citation.field !== 'description') return false;
+  if (matchingSourceDecoration(citation.text)) return true;
   const { head, tail } = postingHeading(citation.text);
   return (
     !tail &&
@@ -2523,7 +2553,10 @@ export function matchingSourceContextLabel(citation: Citation): boolean {
 }
 
 /** Optional draft aids derived entirely from the captured public text. */
-export function matchingSourceSectionHints(description: string) {
+export function matchingSourceSectionHints(
+  description: string,
+  typedDutyHeadings = false,
+) {
   type Section = 'required' | 'preferred' | 'duties' | 'administrative';
   let section: Section | undefined;
   let governingHeading: { quote: string; start: number } | undefined;
@@ -2537,15 +2570,18 @@ export function matchingSourceSectionHints(description: string) {
   >();
   for (const { text, start } of matchingDescriptionUnits(description)) {
     const { head, tail } = postingHeading(text);
-    const heading = requiredHeader.test(head)
-      ? 'required'
-      : preferredHeader.test(head)
-        ? 'preferred'
-        : explicitDutiesHeader.test(head)
-          ? 'duties'
-          : administrativeHeader.test(head)
-            ? 'administrative'
-            : undefined;
+    const heading =
+      requiredHeader.test(head) ||
+      (typedDutyHeadings && typedRequiredHeader.test(head))
+        ? 'required'
+        : preferredHeader.test(head)
+          ? 'preferred'
+          : explicitDutiesHeader.test(head) ||
+              (typedDutyHeadings && typedFutureDutiesHeader.test(head))
+            ? 'duties'
+            : administrativeHeader.test(head)
+              ? 'administrative'
+              : undefined;
     if (heading) {
       section = heading;
       governingHeading = { quote: head, start: start + text.indexOf(head) };
@@ -3023,12 +3059,21 @@ const employerDisclosure =
   /\b(?:salary range disclosure|equal (?:employment )?opportunity employer|inclusive hiring|use of (?:artificial intelligence|ai) in (?:recruitment|hiring)|recruitment process|compensation (?:bands|philosophy)|the salary range listed)\b/iu;
 const employerSalarySetting =
   /^(?:for (?:base )?(?:salary|pay|compensation),?\s+)?we set (?:standard )?(?:salary |pay |compensation )?ranges for\b/iu;
+const employerAccessibilityNotice =
+  /^(?:accessibility|(?:reasonable )?accommodations?) (?:statement|notice)\s*[:：]/iu;
+function typedEmployerDisclosure(text: string): boolean {
+  return (
+    employerSalarySetting.test(text) || employerAccessibilityNotice.test(text)
+  );
+}
+
 function safeEmployerDisclosure(
   text: string,
   assessedDecision = false,
 ): boolean {
-  const salarySetting = assessedDecision && employerSalarySetting.test(text);
-  if (!employerDisclosure.test(text) && !salarySetting) return false;
+  const verifiedDisclosureShape =
+    assessedDecision && typedEmployerDisclosure(text);
+  if (!employerDisclosure.test(text) && !verifiedDisclosureShape) return false;
   const applicant = text
     .replace(
       /\b(?:if|should) you (?:require|need) (?:any |a reasonable )?accommodations?\b/giu,
@@ -3037,7 +3082,8 @@ function safeEmployerDisclosure(
     .replace(/\b(?:which )?depends on experience and skills\b/giu, '');
   return !(
     employmentCondition.test(applicant) ||
-    (salarySetting && separateEligibilityRestriction.test(applicant)) ||
+    (verifiedDisclosureShape &&
+      separateEligibilityRestriction.test(applicant)) ||
     essentialCondition.test(applicant) ||
     requiredInAdministrativeText.test(applicant) ||
     independentHardCue.test(applicant) ||
@@ -3054,16 +3100,23 @@ function safeEmployerDisclosure(
 export function matchingSourceContextLines(
   raw: MatchingPostingInput,
   assessedDecision = false,
+  typedDutyHeadings = false,
+  typedContextVeto = false,
 ) {
   let inMandatorySection = false;
   const safe = new Set<number>();
   for (const { text, citation } of descriptionLines(raw.description)) {
     const { head, tail } = postingHeading(text);
     const administrative = administrativeHeader.test(head);
-    const duties = dutiesHeader.test(head);
-    const requirement = requiredHeader.test(head) || preferredHeader.test(head);
+    const duties =
+      dutiesHeader.test(head) ||
+      (typedDutyHeadings && typedFutureDutiesHeader.test(head));
+    const mandatory =
+      requiredHeader.test(head) ||
+      (typedDutyHeadings && typedRequiredHeader.test(head));
+    const requirement = mandatory || preferredHeader.test(head);
     if (administrative || duties || requirement) {
-      inMandatorySection = requiredHeader.test(head);
+      inMandatorySection = mandatory;
       if (!tail) {
         safe.add(citation.start);
         continue;
@@ -3071,7 +3124,7 @@ export function matchingSourceContextLines(
     }
     if (
       assessedDecision &&
-      employerSalarySetting.test(text) &&
+      typedEmployerDisclosure(text) &&
       safeEmployerDisclosure(text, true)
     ) {
       safe.add(citation.start);
@@ -3086,6 +3139,7 @@ export function matchingSourceContextLines(
     }
     if (
       inMandatorySection ||
+      (typedContextVeto && matchingSourceTypedContextNeedsReview(text)) ||
       (!safeEmployerDisclosure(text, assessedDecision) &&
         (independentApplicantCondition(text) ||
           sectionHasCandidateQualification(text) ||
@@ -3163,13 +3217,29 @@ function mergeSemanticExtraction(
   const verifiedDisclosures: Citation[] = [];
   const unresolved: MatchingReason[] = [];
   const assessedDecision = proof.decision?.assessmentVersion === 1;
-  const contextLines = matchingSourceContextLines(raw, assessedDecision);
   const assessedGaps = new Map(
     (proof.decision?.capabilityGaps ?? []).map((gap) => [gap.unitId, gap]),
   );
   const scopedUnits = new Set<string>();
+  const typedDutyHeadings = matchingSourceUsesPreparationAtLeast(
+    proof.decision?.preparationVersion,
+    21,
+  );
+  const typedContextVeto = Boolean(proof.decision);
+  const contextLines = matchingSourceContextLines(
+    raw,
+    assessedDecision,
+    typedDutyHeadings,
+    typedContextVeto,
+  );
+  const typedHints = typedDutyHeadings
+    ? matchingSourceSectionHints(raw.description, true)
+    : undefined;
   const scopedBlocks = proof.decision?.blocks
-    ? matchingSourceJevBlocks(raw, matchingSourceSectionHints(raw.description))
+    ? matchingSourceJevBlocks(
+        raw,
+        typedHints ?? matchingSourceSectionHints(raw.description),
+      )
     : [];
   const verifiedBlocks = new Set(
     proof.decision?.blocks?.map(({ anchorId }) => anchorId),
@@ -3200,7 +3270,18 @@ function mergeSemanticExtraction(
       const member = citeUnit(id);
       if (member) removeGroupsAt(member);
     }
-    if (!verifiedBlocks.has(block.anchorId)) {
+    if (
+      !verifiedBlocks.has(block.anchorId) ||
+      block.unitIds.some((id) => {
+        const member = citeUnit(id);
+        const entry = ledger.get(id);
+        return (
+          member &&
+          entry &&
+          matchingSourceTypedClaimNeedsReview(member.text, entry.kind)
+        );
+      })
+    ) {
       unresolved.push(
         reason(
           'posting-requirement-unknown',
@@ -3253,6 +3334,30 @@ function mergeSemanticExtraction(
   for (const unit of proof.proposal.ledger) {
     const citation = citeUnit(unit.id);
     if (!citation || scopedUnits.has(unit.id)) continue;
+    if (
+      assessedDecision &&
+      citation.field === 'description' &&
+      matchingSourceDecoration(citation.text)
+    ) {
+      verifiedDisclosures.push(citation);
+      continue;
+    }
+    if (
+      typedContextVeto &&
+      citation.field === 'description' &&
+      matchingSourceTypedClaimNeedsReview(citation.text, unit.kind)
+    ) {
+      removeGroupsAt(citation);
+      unresolved.push(
+        reason(
+          'posting-requirement-unknown',
+          'unknown',
+          'Source review could not verify the applicant conditions in this clause.',
+          citation,
+        ),
+      );
+      continue;
+    }
     const gap = assessedGaps.get(unit.id);
     if (gap && verifiedUnits.has(unit.id)) {
       if (unit.kind === 'requirement') {
@@ -3274,6 +3379,61 @@ function mergeSemanticExtraction(
           ),
         );
       }
+      continue;
+    }
+    const scopedKey = proof.decision?.structures?.[unit.id];
+    const scoped =
+      assessedDecision &&
+      verifiedUnits.has(unit.id) &&
+      (unit.kind === 'requirement' || unit.kind === 'preferred') &&
+      scopedKey &&
+      matchingSourceStructureMatches(citation.text, scopedKey, unit.groups)
+        ? matchingSourceStructures(citation.text).find(
+            (structure) => structure.key === scopedKey && structure.scope,
+          )
+        : undefined;
+    if (scoped?.scope) {
+      removeGroupsAt(citation);
+      const destination = unit.kind === 'requirement' ? required : preferred;
+      const depth = scoped.scope.kind === 'deep-expertise';
+      for (const [groupIndex, parts] of scoped.groups.entries()) {
+        const alternatives = parts.map(
+          (part, alternativeIndex): Qualification => {
+            const atom =
+              unit.groups[groupIndex]?.alternatives[alternativeIndex];
+            const conceptId =
+              atom?.conceptId && vocabulary.labels.has(atom.conceptId)
+                ? atom.conceptId
+                : null;
+            const examples = part.examples?.flatMap((example) => {
+              const mapped = vocabulary.aliases.get(phrase(example));
+              return mapped ? [mapped] : [];
+            });
+            if (depth || !conceptId || atom?.unsupportedQualifier)
+              return {
+                slug: '',
+                ...(!depth && { familiarity: true as const }),
+                sourceGap: {
+                  qualifier: depth ? 'depth' : 'scope',
+                  conceptIds: conceptId ? [conceptId] : [],
+                  citation,
+                  ...(depth &&
+                    conceptId &&
+                    !atom?.unsupportedQualifier && {
+                      verifiedConceptId: conceptId,
+                    }),
+                },
+              };
+            return {
+              slug: conceptId,
+              familiarity: true,
+              ...(examples?.length && { examples }),
+            };
+          },
+        );
+        destination.push({ alternatives, citation });
+      }
+      if (unit.kind === 'requirement') coveredHard.push(citation);
       continue;
     }
     const knownRequired = posting.required.filter((group) =>
@@ -3369,7 +3529,11 @@ function mergeSemanticExtraction(
     if (unit.kind === 'context') {
       if (
         citation.field === 'description' &&
-        safeEmployerDisclosure(citation.text, assessedDecision)
+        (safeEmployerDisclosure(citation.text, assessedDecision) ||
+          (assessedDecision &&
+            typedHints?.get(citation.start)?.sectionHint === 'duties' &&
+            (typedHints.get(citation.start)?.sectionHeading ||
+              matchingSourceTypedFutureDuty(citation.text))))
       )
         verifiedDisclosures.push(citation);
       continue;
@@ -3529,6 +3693,9 @@ function mergeSemanticExtraction(
     geography,
     required,
     preferred,
+    ...(proof.decision && {
+      sourceDecisionReaderRevision: MATCHING_SOURCE_DECISION_READER_REVISION,
+    }),
     ...(sourceCapabilityGaps.length > 0 && { sourceCapabilityGaps }),
     preferredUncertainties,
     uncertainties: [...uncertainties, ...unresolved],
@@ -5020,8 +5187,12 @@ function groupFit(
   );
   const kind = required ? 'required' : 'preferred';
   const name = (atom: Qualification) => {
-    if (atom.sourceGap) return 'an unverified capability qualification';
+    if (atom.sourceGap)
+      return atom.familiarity
+        ? 'familiarity with an unverified capability'
+        : 'an unverified capability qualification';
     const capability = atom.label || atom.slug.replace(/-/gu, ' ');
+    if (atom.familiarity) return `familiarity with ${capability}`;
     if (atom.years)
       return `${atom.years}+ years of ${atom.context ? `${atom.context} ` : ''}experience with ${capability}`;
     return atom.context
