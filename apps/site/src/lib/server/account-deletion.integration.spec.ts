@@ -9,7 +9,7 @@ import {
   withPrincipalPermissionContext,
 } from '@happyvertical/smrt-users';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PublicOpportunity } from '$lib/public-opportunity-contract.js';
 import {
   type AccountDeletionDatabase,
@@ -1050,6 +1050,30 @@ function quoteIdentifier(value: string): string {
 describe.runIf(postgresUrl)('account deletion on PostgreSQL', () => {
   const databases: string[] = [];
   let control: DatabaseInterface | undefined;
+  let template: string | undefined;
+
+  beforeAll(async () => {
+    if (!postgresUrl) throw new Error('Expected a PostgreSQL test URL.');
+    control = await getDatabase({
+      cache: false,
+      type: 'postgres',
+      url: postgresUrl,
+    });
+    template = `iolaus_delete_template_${randomUUID().replaceAll('-', '')}`;
+    await control.query(`CREATE DATABASE ${quoteIdentifier(template)}`);
+    const url = new URL(postgresUrl);
+    url.pathname = `/${template}`;
+    const db = await getDatabase({
+      cache: false,
+      type: 'postgres',
+      url: url.toString(),
+    });
+    try {
+      await getTestDatabase({ db, classes });
+    } finally {
+      await db.close?.();
+    }
+  }, 30_000);
 
   afterEach(async () => {
     for (const name of databases.splice(0)) {
@@ -1057,27 +1081,34 @@ describe.runIf(postgresUrl)('account deletion on PostgreSQL', () => {
         `DROP DATABASE IF EXISTS ${quoteIdentifier(name)} WITH (FORCE)`,
       );
     }
-    await control?.close?.();
-    control = undefined;
+  });
+
+  afterAll(async () => {
+    try {
+      if (template) {
+        await control?.query(
+          `DROP DATABASE IF EXISTS ${quoteIdentifier(template)} WITH (FORCE)`,
+        );
+      }
+    } finally {
+      await control?.close?.();
+    }
   });
 
   deletionContract(async () => {
-    if (!postgresUrl) throw new Error('Expected a PostgreSQL test URL.');
-    control = await getDatabase({
-      cache: false,
-      type: 'postgres',
-      url: postgresUrl,
-    });
+    if (!postgresUrl || !control || !template)
+      throw new Error('Expected the PostgreSQL deletion fixture template.');
     const name = `iolaus_delete_${randomUUID().replaceAll('-', '')}`;
     databases.push(name);
-    await control.query(`CREATE DATABASE ${quoteIdentifier(name)}`);
+    await control.query(
+      `CREATE DATABASE ${quoteIdentifier(name)} TEMPLATE ${quoteIdentifier(template)}`,
+    );
     const url = new URL(postgresUrl);
     url.pathname = `/${name}`;
-    const db = await getDatabase({
+    return await getDatabase({
       cache: false,
       type: 'postgres',
       url: url.toString(),
     });
-    return await getTestDatabase({ db, classes });
   }, 'postgres');
 });
