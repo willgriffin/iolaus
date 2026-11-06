@@ -126,6 +126,8 @@ export async function refreshSeenOpportunities(options: {
   const ids = uniqueIds(options.opportunityIds);
   if (ids.length === 0) return 0;
   const database = await reconciliationDatabase(options.database);
+  // Raw SQLite parameters need a scalar timestamp rather than a Date object.
+  const seenAt = options.now.toISOString();
   let refreshed = 0;
   const changedIds: string[] = [];
   for (const batch of chunked(ids, ID_BATCH_SIZE)) {
@@ -138,8 +140,8 @@ export async function refreshSeenOpportunities(options: {
               updated_at = CURRENT_TIMESTAMP
         WHERE id IN (${batch.map(() => '?').join(', ')})
           AND status IN (${statusPlaceholders()})
-        RETURNING id::text AS id`,
-      [options.now, ...batch, ...RECONCILABLE_OPPORTUNITY_STATUSES],
+        RETURNING CAST(id AS TEXT) AS id`,
+      [seenAt, ...batch, ...RECONCILABLE_OPPORTUNITY_STATUSES],
     );
     refreshed += rowCount(result);
     changedIds.push(...returnedIds(result));
@@ -162,8 +164,8 @@ export async function refreshSeenOpportunities(options: {
         WHERE id IN (${batch.map(() => '?').join(', ')})
           AND status = 'archived'
           AND archive_reason = ?
-        RETURNING id::text AS id`,
-      [options.now, ...batch, BOARD_ABSENCE_ARCHIVE_REASON],
+        RETURNING CAST(id AS TEXT) AS id`,
+      [seenAt, ...batch, BOARD_ABSENCE_ARCHIVE_REASON],
     );
     refreshed += rowCount(revived);
     changedIds.push(...returnedIds(revived));
@@ -191,9 +193,9 @@ async function markAbsentOpportunities(options: {
       WHERE source_id = ?
         AND status IN (${statusPlaceholders()})
         ${seen.length ? `AND id NOT IN (${seen.map(() => '?').join(', ')})` : ''}
-      RETURNING id::text AS id, missed_crawls AS "missedCrawls"`,
+      RETURNING CAST(id AS TEXT) AS id, missed_crawls AS "missedCrawls"`,
     [
-      options.now,
+      options.now.toISOString(),
       options.sourceId,
       ...RECONCILABLE_OPPORTUNITY_STATUSES,
       ...seen,

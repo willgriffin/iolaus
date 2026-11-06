@@ -1,3 +1,7 @@
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BOARD_ABSENCE_ARCHIVE_REASON,
@@ -25,6 +29,7 @@ vi.mock('./application-workflow.js', () => ({
 }));
 
 const RECONCILABLE = ['found', 'recommended'];
+const postgresUrl = process.env.TRIAGE_TEST_POSTGRES_URL?.trim();
 
 interface Row extends Record<string, unknown> {
   archiveReason?: string;
@@ -84,7 +89,7 @@ function fakeDatabase(rows: Row[]): ReconciliationDatabase & {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       statements.push(sql);
       if (sql.includes("status = 'archived'")) {
-        const now = params[0] as Date;
+        const now = new Date(params[0] as string);
         const reason = params[params.length - 1] as string;
         const ids = params.slice(1, -1) as string[];
         const matched = rows.filter(
@@ -105,7 +110,7 @@ function fakeDatabase(rows: Row[]): ReconciliationDatabase & {
         return { rows: matched.map((record) => ({ id: record.id })) };
       }
       if (sql.includes("freshness = 'fresh'")) {
-        const now = params[0] as Date;
+        const now = new Date(params[0] as string);
         const statuses = params.slice(-RECONCILABLE.length) as string[];
         const ids = params.slice(1, -RECONCILABLE.length) as string[];
         const matched = rows.filter(
@@ -120,7 +125,7 @@ function fakeDatabase(rows: Row[]): ReconciliationDatabase & {
         }
         return { rows: matched.map((record) => ({ id: record.id })) };
       }
-      const now = params[0] as Date;
+      const now = new Date(params[0] as string);
       const sourceId = params[1] as string;
       const statuses = params.slice(2, 2 + RECONCILABLE.length) as string[];
       const seen = params.slice(2 + RECONCILABLE.length) as string[];
@@ -587,4 +592,130 @@ describe('reconcileSourceBoard', () => {
     expect(counts).toEqual({ archived: 0, missed: 0, refreshed: 0, seen: 0 });
     expect(database.statements).toEqual([]);
   });
+});
+
+describe.each([
+  'sqlite',
+  'postgres',
+] as const)('board reconciliation SQL on %s', (dialect) => {
+  it.skipIf(dialect === 'postgres' && !postgresUrl).each([false, true])(
+    'refreshes, revives, and counts misses (audit failure: %s)',
+    async (failAudit) => {
+      const directory = await mkdtemp(
+        join(await realpath(tmpdir()), 'iolaus-board-'),
+      );
+      const db = await getDatabase(
+        dialect === 'sqlite'
+          ? {
+              cache: false,
+              type: 'sqlite',
+              url: `file:${join(directory, 'board.sqlite')}`,
+              secureFile: {
+                custody: 'trusted-parent',
+                driver: 'node:sqlite',
+                root: directory,
+              },
+            }
+          : { cache: false, type: 'postgres', url: postgresUrl ?? '' },
+      );
+      try {
+        if (!db.transaction) throw new Error('Expected native transactions.');
+        await db.transaction(async (tx) => {
+          await tx.query(`CREATE TEMP TABLE opportunities (
+              id ${dialect === 'postgres' ? 'UUID' : 'TEXT'} PRIMARY KEY,
+              source_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              freshness TEXT NOT NULL DEFAULT 'stale',
+              missed_crawls INTEGER NOT NULL,
+              last_seen_at TEXT,
+              last_missed_at TEXT,
+              archive_reason TEXT NOT NULL,
+              human_review_status TEXT,
+              updated_at TEXT
+            )`);
+          const ids = [1, 2, 3, 4, 5].map(
+            (index) => `00000000-0000-4000-8000-00000000000${index}`,
+          );
+          const [seen, revived, absent, ownerArchived] = ids;
+          await tx.query(
+            `INSERT INTO opportunities
+                (id, source_id, status, missed_crawls, archive_reason) VALUES
+                (?, 'board', 'found', 2, ''),
+                (?, 'board', 'archived', 3, 'not_listed'),
+                (?, 'board', 'recommended', 0, ''),
+                (?, 'board', 'archived', 0, 'owner'),
+                (?, 'other', 'found', 0, '')`,
+            ids,
+          );
+          const readRows = async () =>
+            (
+              await tx.query(`SELECT CAST(id AS TEXT) AS id, status, freshness,
+                  missed_crawls, archive_reason, last_seen_at, last_missed_at
+                  FROM opportunities ORDER BY id`)
+            ).rows;
+          const before = await readRows();
+          const reconciliation = {
+            database: tx as unknown as ReconciliationDatabase,
+            now: new Date('2026-09-02T00:00:00.000Z'),
+            sourceId: 'board',
+            seenOpportunityIds: [seen, revived, ownerArchived],
+          };
+
+          if (failAudit) {
+            recordAgentAudit.mockRejectedValueOnce(new Error('audit failed'));
+            await expect(reconcileSourceBoard(reconciliation)).rejects.toThrow(
+              'audit failed',
+            );
+            expect(await readRows()).toEqual(before);
+            expect(recordAgentAudit).toHaveBeenLastCalledWith(
+              expect.objectContaining({ status: 'failed' }),
+            );
+            return;
+          }
+
+          await expect(reconcileSourceBoard(reconciliation)).resolves.toEqual({
+            archived: 0,
+            missed: 1,
+            refreshed: 2,
+            seen: 3,
+          });
+          const after = await readRows();
+          expect(after).toEqual([
+            {
+              ...before[0],
+              freshness: 'fresh',
+              last_seen_at: reconciliation.now.toISOString(),
+              missed_crawls: 0,
+            },
+            {
+              ...before[1],
+              archive_reason: '',
+              freshness: 'fresh',
+              last_seen_at: reconciliation.now.toISOString(),
+              missed_crawls: 0,
+              status: 'found',
+            },
+            {
+              ...before[2],
+              last_missed_at: reconciliation.now.toISOString(),
+              missed_crawls: 1,
+            },
+            before[3],
+            before[4],
+          ]);
+          expect(bumpOpportunityChangeFeed).toHaveBeenCalledWith(
+            expect.anything(),
+            [seen, revived],
+          );
+          expect(bumpOpportunityChangeFeed).toHaveBeenCalledWith(
+            expect.anything(),
+            [absent],
+          );
+        });
+      } finally {
+        await db.close?.();
+        await rm(directory, { force: true, recursive: true });
+      }
+    },
+  );
 });
