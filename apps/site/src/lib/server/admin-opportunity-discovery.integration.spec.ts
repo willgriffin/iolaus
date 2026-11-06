@@ -474,6 +474,82 @@ for (const dialect of ['sqlite', 'postgres'] as const) {
             )
           ).get(unresolved);
           expect(staleDetail?.evidence).toEqual(listMatch?.evidence);
+          const publicQuote =
+            'Experience operating production systems at scale.';
+          const sourceLocator = {
+            field: 'description',
+            start: 10,
+            end: 10 + publicQuote.length,
+          };
+          await db.query(
+            `INSERT INTO matching_source_facts (
+              opportunity_id, source_revision, source_listing_revision, vocabulary_revision,
+              policy_version, facts_json, work_revision
+            ) SELECT opportunity_id, source_revision, source_listing_revision, vocabulary_revision,
+              policy_version, ?, 4 FROM matching_results WHERE opportunity_id = ?`,
+            [
+              JSON.stringify({
+                sourceCapabilityGaps: [
+                  {
+                    qualifier: 'scale',
+                    conceptIds: [],
+                    citation: { ...sourceLocator, text: publicQuote },
+                  },
+                ],
+              }),
+              unresolved,
+            ],
+          );
+          await db.query(
+            'UPDATE matching_results SET reasons_json = ? WHERE opportunity_id = ?',
+            [
+              JSON.stringify([
+                {
+                  code: 'posting-capability-gap',
+                  outcome: 'unknown',
+                  message: 'Verified posting condition needs evidence',
+                  citations: [sourceLocator],
+                },
+              ]),
+              unresolved,
+            ],
+          );
+          expect(
+            (await listCurrentDiscoveryMatches([unresolved], owner)).get(
+              unresolved,
+            )?.evidence.gaps,
+          ).toEqual([{ message: 'Verified posting condition needs evidence' }]);
+          expect(
+            (
+              await listCurrentDiscoveryMatches(
+                [unresolved],
+                owner,
+                detailOptions,
+              )
+            ).get(unresolved)?.evidence.gaps,
+          ).toEqual([
+            {
+              message: 'Verified posting condition needs evidence',
+              excerpts: [publicQuote],
+            },
+          ]);
+          await db.query(
+            'UPDATE matching_source_facts SET source_revision = source_revision + 1 WHERE opportunity_id = ?',
+            [unresolved],
+          );
+          expect(
+            (
+              await listCurrentDiscoveryMatches(
+                [unresolved],
+                owner,
+                detailOptions,
+              )
+            ).get(unresolved)?.evidence.gaps,
+          ).toEqual([{ message: 'Verified posting condition needs evidence' }]);
+          await db.query(
+            'DELETE FROM matching_source_facts WHERE opportunity_id = ?',
+            [unresolved],
+          );
           const [screened] = await listOpportunityRevisionsByIds(
             [unresolved],
             owner,

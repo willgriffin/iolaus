@@ -8,21 +8,28 @@ import {
   type MatchingSourceText,
   matchingSourceInputDigest,
 } from './matching-source-extraction-contract.js';
+import { matchingSourceJevBlocks } from './matching-source-jev-blocks.js';
 import { draftJevSourceRole } from './matching-source-jev-role.js';
 import {
   matchingSourceStructureMatches,
   matchingSourceStructures,
 } from './matching-source-jev-structure.js';
 import {
+  type MatchingSourceDecisionBlock,
+  type MatchingSourceDecisionCapabilityGap,
   type MatchingSourceSemanticProof,
   type MatchingSourceSemanticProposal,
   matchingSourceSemanticProposalDigest,
   parseMatchingSourceSemanticProposal,
   verifyMatchingSourceSemanticProposal,
 } from './matching-source-semantics.js';
-import { matchingSourceSemanticUnits } from './matching-source-units.js';
+import {
+  hasAnalysisPII,
+  matchingSourceSemanticUnits,
+} from './matching-source-units.js';
 import {
   compileMatchingVocabulary,
+  matchingSourceCapabilityGapAllowed,
   matchingSourceContextLabel,
   matchingSourceContextLines,
   matchingSourceExactLocation,
@@ -30,7 +37,6 @@ import {
   matchingSourceSectionHints,
   normalizeMatchingPosting,
 } from './normalized-matching.js';
-import { hasAnalysisPII } from './opportunity-analysis-source.js';
 import { SKILL_VOCABULARY_SEED_TERMS } from './skill-vocabulary.js';
 
 type LedgerUnit = MatchingSourceSemanticProposal['ledger'][number];
@@ -41,9 +47,17 @@ type SectionHint =
     ? Hint
     : never;
 export const MATCHING_SOURCE_JEV_PREPARATION_VERSION =
-  'matching-source-jev/v11';
+  'matching-source-jev/v16';
+export type MatchingSourceJevAssessments = {
+  assessmentVersion: 1;
+  blocks: MatchingSourceDecisionBlock[];
+  capabilityGaps: MatchingSourceDecisionCapabilityGap[];
+};
 export type MatchingSourceJevDiagnostics = {
   draftCalls: number;
+  draftFailures?: number;
+  assessedGaps?: number;
+  verifiedBlocks?: number;
   verificationCalls: number;
   unasked: number;
   declined: number;
@@ -176,6 +190,136 @@ type ClassificationPlan = BatchEntry & {
   classify(answers: Answers): DraftedUnit | DraftPlan;
 };
 
+function assessedGapDraft(
+  id: string,
+  kind: 'requirement' | 'preferred',
+): DraftedUnit {
+  return {
+    id,
+    kind,
+    groups: [
+      {
+        alternatives: [
+          {
+            conceptId: null,
+            years: null,
+            context: null,
+            unsupportedQualifier: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function proposedGap(
+  unit: SourceUnit,
+  draft: LedgerUnit,
+): MatchingSourceDecisionCapabilityGap | undefined {
+  if (draft.kind !== 'requirement' && draft.kind !== 'preferred')
+    return undefined;
+  if (
+    /\bone or more of\s*[:：]?\s*$|\b(?:all|any|each) of the following\s*[:：]?\s*$|\band\b.*\bor\b|\bor\b.*\band\b/iu.test(
+      unit.quote,
+    )
+  )
+    return undefined;
+  const atoms = draft.groups.flatMap(({ alternatives }) => alternatives);
+  const noMapping = atoms.some(
+    ({ conceptId, unsupportedQualifier }) => !conceptId || unsupportedQualifier,
+  );
+  const qualifier = matchingSourceCapabilityGapAllowed(unit.quote, 'scope')
+    ? 'scope'
+    : /\b(?:large[- ]scale|at scale|high[- ]throughput|enterprise[- ]scale)\b/iu.test(
+          unit.quote,
+        )
+      ? 'scale'
+      : /\b(?:deep|extensive|advanced|substantial) (?:expertise|knowledge|experience)\b/iu.test(
+            unit.quote,
+          )
+        ? 'depth'
+        : /\b(?:such as|for example|including)\b/iu.test(unit.quote)
+          ? 'illustrative'
+          : /\bproduction\b/iu.test(unit.quote) &&
+              !atoms.every(({ context }) => context === 'production')
+            ? 'production'
+            : noMapping
+              ? 'unmapped'
+              : undefined;
+  if (!qualifier || !matchingSourceCapabilityGapAllowed(unit.quote, qualifier))
+    return undefined;
+  return {
+    unitId: unit.id,
+    qualifier,
+    conceptIds: [
+      ...new Set(
+        atoms.flatMap(({ conceptId }) => (conceptId ? [conceptId] : [])),
+      ),
+    ],
+  };
+}
+
+function draftBlockMember(
+  unit: SourceUnit,
+  block: MatchingSourceDecisionBlock,
+): DraftedUnit | DraftPlan {
+  const { id, quote } = unit;
+  const exact = alias(quote);
+  const candidates = exact ? [] : candidateConcepts(quote);
+  const key = `${id}_block_concept`;
+  const resolve = (answers: Answers): DraftedUnit => {
+    const chosen = choice(answers[key]);
+    const conceptId = exact ?? candidates.find(({ id }) => id === chosen)?.id;
+    if (!conceptId) return assessedGapDraft(id, block.kind);
+    return {
+      id,
+      kind: block.kind,
+      groups: [
+        {
+          alternatives: [
+            {
+              conceptId,
+              years: null,
+              context: null,
+              unsupportedQualifier: false,
+            },
+          ],
+        },
+      ],
+    };
+  };
+  // A multi-line alternative may be a noun phrase. Do not reinterpret its
+  // internal punctuation as the inherited top-level Boolean operator.
+  if (
+    /\b(?:years?|months?|production|at scale|large[- ]scale|deep|including|such as)\b/iu.test(
+      quote,
+    )
+  )
+    return assessedGapDraft(id, block.kind);
+  return candidates.length
+    ? {
+        id,
+        state: null,
+        questions: {
+          [key]: {
+            type: 'choice',
+            instructions: `Which concept describes the exact advertised alternative ${JSON.stringify(quote)}? Related or broader is none.`,
+            criteria: {
+              ...Object.fromEntries(
+                candidates.map(({ id, label, definition }) => [
+                  id,
+                  definition ?? label,
+                ]),
+              ),
+              none: 'No equivalent capability.',
+            },
+          },
+        },
+        resolve,
+      }
+    : resolve({});
+}
+
 function draftUnit(
   unit: SourceUnit,
   baseline: ReturnType<typeof normalizeMatchingPosting>,
@@ -253,10 +397,13 @@ function draftUnit(
         if (kind === 'context') return { id, kind, groups: [] };
         if (
           (kind !== 'requirement' && kind !== 'preferred') ||
-          !structures.length ||
           (optional && hard)
         )
           return undecided(id);
+        if (!structures.length) {
+          const gapDraft = assessedGapDraft(id, hintedKind ?? kind);
+          return proposedGap(unit, gapDraft) ? gapDraft : undecided(id);
+        }
         const next = draftUnit(unit, baseline, hint, hintedKind ?? kind);
         return 'classify' in next ? undecided(id) : next;
       },
@@ -400,6 +547,7 @@ type ReviewEntry = BatchEntry & {
   qualifiers: string[];
   negatives: string[];
   scopeChecks: string[];
+  gap?: MatchingSourceDecisionCapabilityGap;
 };
 
 const contextCategories = {
@@ -420,6 +568,10 @@ function reviewEntry(
   proposal: MatchingSourceSemanticProposal,
   workplaceType: string | undefined,
   structureKey: string | undefined,
+  block: MatchingSourceDecisionBlock | undefined,
+  blockEvidence:
+    | { anchor: string; alternatives: string[]; next: string | null }
+    | undefined,
 ): ReviewEntry | null {
   const { id, quote } = unit;
   const role = proposal.role?.unitId === id ? proposal.role : null;
@@ -454,6 +606,7 @@ function reviewEntry(
   const qualifiers: string[] = [];
   const negatives: string[] = [];
   const scopeChecks: string[] = [];
+  const gap = proposedGap(unit, draft);
   const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
   const scope = proposal.geography;
   const level = proposal.role?.level;
@@ -535,6 +688,26 @@ function reviewEntry(
       ),
     );
   }
+  if (block?.anchorId === id) {
+    if (!blockEvidence || !hint?.governingHeading) return null;
+    const items = blockEvidence.alternatives
+      .map((quote) => JSON.stringify(quote))
+      .join(' ');
+    scopeChecks.push(
+      add(
+        'block_boundary',
+        blockEvidence.next
+          ? `The section heading is ${JSON.stringify(hint.governingHeading.quote)}. These bullet items follow: ${items} Then another bullet begins: ${JSON.stringify(blockEvidence.next)}. Does the last bullet start a new qualification separate from the preceding options?`
+          : `These exact items follow: ${items}. Are all given items governed by this list heading?`,
+      ),
+    );
+    negatives.push(
+      add(
+        'block_extra',
+        'Does the list introduction also independently demand a location, legal eligibility, credential, clearance, attendance or schedule?',
+      ),
+    );
+  }
   if (context && !contextLabel && !scopeChecks.length)
     questions[`${id}_context`] = {
       type: 'choice',
@@ -542,15 +715,45 @@ function reviewEntry(
       criteria: contextCategories,
     };
   if (!context) {
+    if (block && !blockEvidence) return null;
+    const explicitTrait = Boolean(gap && /^passion\b/iu.test(quote));
     const section = hint?.governingHeading
       ? `This exact clause appears under the posting heading ${JSON.stringify(hint.governingHeading.quote)}.`
       : '';
-    add(
-      'classification',
-      draft.kind === 'requirement'
-        ? `${section} Does the quoted clause state a capability or condition the applicant should bring or satisfy, rather than a task assigned after joining or an explicitly optional skill?`
-        : `${section} Does the quoted clause state a desirable but optional applicant qualification?`,
-    );
+    const inherited =
+      blockEvidence && block
+        ? `The enclosing list is introduced by ${JSON.stringify(blockEvidence.anchor)}. `
+        : '';
+    if (block && blockEvidence)
+      questions[`${id}_classification`] = {
+        type: 'choice',
+        instructions: `${literal} This is one bullet under ${JSON.stringify(blockEvidence.anchor)}. What does the bullet name?`,
+        criteria: {
+          capability: 'An area of technology, expertise or engineering work.',
+          eligibility:
+            'A legal, location, work authorization or credential condition.',
+          other: 'A duty, benefit or other kind of text.',
+          unclear: 'Mixed or unclear.',
+        },
+      };
+    else if (explicitTrait)
+      questions[`${id}_classification`] = {
+        type: 'choice',
+        instructions: `${literal} ${section} What kind of condition does this clause describe?`,
+        criteria: {
+          capability:
+            'An applicant work practice, capability or trait expected in this posting.',
+          other:
+            'An explicitly optional preference, employer context, duty, non-capability restriction, or unclear text.',
+        },
+      };
+    else
+      add(
+        'classification',
+        draft.kind === 'requirement'
+          ? `${section} Does the quoted clause state a capability or condition the applicant should bring or satisfy, rather than a task assigned after joining or an explicitly optional skill?`
+          : `${section} Does the quoted clause state a desirable but optional applicant qualification?`,
+      );
     const labels = draft.groups.map(({ alternatives }) =>
       alternatives.map(({ conceptId, years, context }) => {
         const label =
@@ -563,12 +766,32 @@ function reviewEntry(
         ].join(', ');
       }),
     );
-    negatives.push(
-      add(
-        'coverage',
-        `Does the quote name any other applicant qualification beyond these capabilities and their stated qualifiers: ${JSON.stringify(labels)}? Look for a separate capability, credential, language, eligibility or location restriction.`,
-      ),
+    const blockAtom = block && draft.groups[0]?.alternatives[0];
+    const exactBlockAlias = Boolean(
+      blockAtom?.conceptId &&
+        !blockAtom.unsupportedQualifier &&
+        alias(quote) === blockAtom.conceptId,
     );
+    const nonCapability = `${inherited} Does the clause state a legal or licensing restriction, work authorization, location or work arrangement, credential, or another non-capability hiring condition?`;
+    if (gap || exactBlockAlias) {
+      if (gap && !block && !explicitTrait)
+        capabilities.push(
+          add(
+            'gap_capability',
+            gap.qualifier === 'scope'
+              ? 'Does this requirement describe prior leadership capability while describing the scope of people management?'
+              : 'Does the quoted condition concern an applicant capability or prior work experience?',
+          ),
+        );
+      negatives.push(add('gap_eligibility', nonCapability));
+    } else {
+      negatives.push(
+        add(
+          'coverage',
+          `Does the quote name any other applicant qualification beyond these capabilities and their stated qualifiers: ${JSON.stringify(labels)}? Look for a separate capability, credential, language, eligibility or location restriction.`,
+        ),
+      );
+    }
     const structures = matchingSourceStructures(quote);
     const exactStructure =
       structureKey &&
@@ -577,6 +800,8 @@ function reviewEntry(
         ? structures[0]
         : undefined;
     if (
+      !gap &&
+      !exactBlockAlias &&
       !exactStructure &&
       (draft.groups.length > 1 ||
         draft.groups.some(({ alternatives }) => alternatives.length > 1))
@@ -587,7 +812,10 @@ function reviewEntry(
           `Does the applicant have to satisfy each group, with any one capability sufficient within a group? Groups: ${JSON.stringify(labels)}.`,
         ),
       );
-    for (const [groupIndex, { alternatives }] of draft.groups.entries())
+    for (const [groupIndex, { alternatives }] of (gap || exactBlockAlias
+      ? []
+      : draft.groups
+    ).entries())
       for (const [alternativeIndex, atom] of alternatives.entries()) {
         if (!atom.conceptId || atom.unsupportedQualifier) continue;
         const suffix = `${groupIndex}_${alternativeIndex}`;
@@ -692,6 +920,7 @@ function reviewEntry(
     qualifiers,
     negatives,
     scopeChecks,
+    gap,
   };
 }
 
@@ -753,6 +982,7 @@ export async function prepareJevMatchingSource(
   options: {
     onDiagnostics?: (summary: MatchingSourceJevDiagnostics) => void;
     onStructures?: (structures: Record<string, string>) => void;
+    onAssessments?: (value: MatchingSourceJevAssessments) => void;
   } = {},
 ): Promise<MatchingSourceSemanticProof> {
   const source = {
@@ -763,6 +993,7 @@ export async function prepareJevMatchingSource(
   if (source.title.length > 300 || source.location.length > 600)
     throw new Error('JEV matching requires a bounded public posting.');
   const units = matchingSourceSemanticUnits(source);
+  const unitsById = new Map(units.map((unit) => [unit.id, unit]));
   const safeDescription = !/<(?:script|style|template)\b|<!--/iu.test(
     source.description,
   );
@@ -802,6 +1033,10 @@ export async function prepareJevMatchingSource(
     vocabulary,
   );
   const hints = matchingSourceSectionHints(source.description);
+  const blocks = matchingSourceJevBlocks(source, hints);
+  const byBlockUnit = new Map(
+    blocks.flatMap((block) => block.unitIds.map((id) => [id, block] as const)),
+  );
   const roleUnit = baseline.role && citationUnit(units, baseline.role.citation);
   const geoUnit =
     baseline.geography && citationUnit(units, baseline.geography.citation);
@@ -880,6 +1115,11 @@ export async function prepareJevMatchingSource(
     if (!reviewed) return undecided(unit.id);
     if (reviewed !== unit)
       return { id: unit.id, kind: 'context', groups: [] } satisfies DraftedUnit;
+    const block = byBlockUnit.get(unit.id);
+    if (block)
+      return block.anchorId === unit.id
+        ? ({ id: unit.id, kind: 'context', groups: [] } satisfies DraftedUnit)
+        : draftBlockMember(unit, block);
     return draftUnit(unit, baseline, hints.get(unit.start));
   });
   const classifiers = planned.filter(
@@ -895,6 +1135,8 @@ export async function prepareJevMatchingSource(
     if (diagnostics.draftCalls >= draftLimit) break;
     diagnostics.draftCalls += 1;
     const outcome = await provider.decide(request);
+    if (outcome.status !== 'ok')
+      diagnostics.draftFailures = (diagnostics.draftFailures ?? 0) + 1;
     const answers = outcome.status === 'ok' ? outcome.result.answers : {};
     for (const plan of batch)
       classifiedUnits.set(plan.id, plan.classify(answers));
@@ -916,6 +1158,8 @@ export async function prepareJevMatchingSource(
     if (diagnostics.draftCalls >= draftLimit) break;
     diagnostics.draftCalls += 1;
     const outcome = await provider.decide(request);
+    if (outcome.status !== 'ok')
+      diagnostics.draftFailures = (diagnostics.draftFailures ?? 0) + 1;
     const answers = outcome.status === 'ok' ? outcome.result.answers : {};
     for (const plan of batch) draftedUnits.set(plan.id, plan.resolve(answers));
   }
@@ -970,6 +1214,7 @@ export async function prepareJevMatchingSource(
     string,
     MatchingSourceSemanticProof['verification']['units'][number]
   >();
+  const acceptedGaps: MatchingSourceDecisionCapabilityGap[] = [];
   async function verifyBatch(batch: ReviewEntry[], request: DecisionRequest) {
     if (
       !batch.length ||
@@ -1000,19 +1245,34 @@ export async function prepareJevMatchingSource(
           ['heading', 'employer', 'duty', 'procedure'].includes(
             choice(answers[`${id}_context`]) ?? '',
           ));
+      const classification =
+        entry.questions[`${id}_classification`]?.type === 'choice'
+          ? choice(answers[`${id}_classification`]) === 'capability'
+          : confirms(answers[`${id}_classification`]);
+      const verifiedGap = Boolean(
+        entry.gap &&
+          classification &&
+          noExtra &&
+          allConfirm(entry.capabilities),
+      );
+      if (verifiedGap && entry.gap) acceptedGaps.push(entry.gap);
       const judgment = {
         id,
-        classificationCorrect: context
-          ? noCondition
-          : confirms(answers[`${id}_classification`]),
+        classificationCorrect: context ? noCondition : classification,
         allConditionsRepresented: context
           ? noCondition
-          : supported && noExtra && allConfirm(entry.capabilities),
+          : verifiedGap ||
+            (supported &&
+              !entry.gap &&
+              noExtra &&
+              allConfirm(entry.capabilities)),
         logicAndQualifiersPreserved: context
           ? noCondition
-          : outcome.status === 'ok' &&
-            supported &&
-            allConfirm(entry.qualifiers),
+          : verifiedGap ||
+            (outcome.status === 'ok' &&
+              supported &&
+              !entry.gap &&
+              allConfirm(entry.qualifiers)),
       };
       judgments.set(id, judgment);
       const roleCorrect = allConfirm(entry.roleChecks);
@@ -1055,6 +1315,27 @@ export async function prepareJevMatchingSource(
     const draft = proposal.ledger[index];
     const reviewed = reviewUnits[index];
     if (!draft || !reviewed || draft.kind === 'unresolved') return [];
+    const block = byBlockUnit.get(unit.id);
+    const blockEvidence = (() => {
+      if (!block) return undefined;
+      const anchor = unitsById.get(block.anchorId);
+      if (!anchor || !safe(anchor)) return undefined;
+      if (block.anchorId !== unit.id)
+        return { anchor: anchor.quote, alternatives: [], next: null };
+      const children = units.slice(index + 1, index + block.unitIds.length);
+      const next = units[index + block.unitIds.length];
+      if (
+        children.length !== block.unitIds.length - 1 ||
+        children.some((child) => !safe(child)) ||
+        (next && !safe(next))
+      )
+        return undefined;
+      return {
+        anchor: anchor.quote,
+        alternatives: children.map(({ quote }) => quote),
+        next: next?.quote ?? null,
+      };
+    })();
     const entry = reviewEntry(
       reviewed,
       draft,
@@ -1062,6 +1343,8 @@ export async function prepareJevMatchingSource(
       proposal,
       workplaceType,
       structureKeys[unit.id],
+      block,
+      blockEvidence,
     );
     if (!entry) return [];
     if (entry.contextLabel && !Object.keys(entry.questions).length) {
@@ -1133,6 +1416,30 @@ export async function prepareJevMatchingSource(
         logicAndQualifiersPreserved: false,
       },
   );
+  const fullyReviewed = new Set(
+    review.units
+      .filter(
+        ({
+          classificationCorrect,
+          allConditionsRepresented,
+          logicAndQualifiersPreserved,
+        }) =>
+          classificationCorrect &&
+          allConditionsRepresented &&
+          logicAndQualifiersPreserved,
+      )
+      .map(({ id }) => id),
+  );
+  const acceptedBlocks = blocks
+    .filter(({ unitIds }) => unitIds.every((id) => fullyReviewed.has(id)))
+    .slice(0, 16);
+  if (acceptedGaps.length) diagnostics.assessedGaps = acceptedGaps.length;
+  if (acceptedBlocks.length) diagnostics.verifiedBlocks = acceptedBlocks.length;
+  options.onAssessments?.({
+    assessmentVersion: 1,
+    blocks: acceptedBlocks,
+    capabilityGaps: acceptedGaps,
+  });
   options.onStructures?.(structureKeys);
   options.onDiagnostics?.(diagnostics);
   return verifyMatchingSourceSemanticProposal(review, source, proposal);

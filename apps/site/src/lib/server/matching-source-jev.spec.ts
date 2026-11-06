@@ -4,7 +4,11 @@ import type {
   MatchingSourceDecisionOutcome,
   MatchingSourceDecisionProvider,
 } from './matching-source-decision-provider.js';
-import { prepareJevMatchingSource } from './matching-source-jev.js';
+import {
+  MATCHING_SOURCE_JEV_PREPARATION_VERSION,
+  type MatchingSourceJevAssessments,
+  prepareJevMatchingSource,
+} from './matching-source-jev.js';
 import { parseMatchingSourceSemanticProof } from './matching-source-semantics.js';
 import { matchingSourceSemanticUnits } from './matching-source-units.js';
 import {
@@ -536,7 +540,7 @@ describe('JEV matching source preparation', () => {
       ok(
         Object.fromEntries(
           Object.entries(questions).map(([key, question]) => {
-            const instructions = question.instructions ?? '';
+            const instructions = String(question.instructions ?? '');
             if (question.type === 'choice') return [key, choose('mixed')];
             if (key.endsWith('_scope_country_CA'))
               return [
@@ -727,6 +731,142 @@ describe('JEV matching source preparation', () => {
         );
       }
     }
+  });
+
+  it('binds an independently verified inherited OR to exact source and preserves an assessed unmapped branch', async () => {
+    const input = {
+      ...source,
+      description: [
+        'Qualifications:',
+        'Expertise in one or more of:',
+        '- TypeScript',
+        '- Novel telemetry protocol design',
+        'Experience with PostgreSQL',
+        'Track record of technical leadership without formal people management.',
+      ].join('\n'),
+    };
+    const adapter = provider(({ questions }) =>
+      ok(
+        Object.fromEntries(
+          Object.entries(questions).map(([key, question]) => [
+            key,
+            question.type === 'choice'
+              ? choose(
+                  key.endsWith('_classification')
+                    ? 'capability'
+                    : key.endsWith('_kind')
+                      ? 'requirement'
+                      : 'none',
+                )
+              : judge(
+                  /_(?:block_extra|coverage|gap_eligibility)$/u.test(key)
+                    ? 0
+                    : 1,
+                ),
+          ]),
+        ),
+      ),
+    );
+    let assessments: MatchingSourceJevAssessments | undefined;
+    const semantic = await prepareJevMatchingSource(input, adapter, {
+      onAssessments(value) {
+        assessments = value;
+      },
+    });
+    expect(assessments).toMatchObject({
+      assessmentVersion: 1,
+      blocks: [
+        {
+          anchorId: 'd2',
+          unitIds: ['d2', 'd3', 'd4'],
+          kind: 'requirement',
+          operator: 'any',
+        },
+      ],
+      capabilityGaps: expect.arrayContaining([
+        { unitId: 'd4', qualifier: 'unmapped', conceptIds: [] },
+        expect.objectContaining({ unitId: 'd6', qualifier: 'scope' }),
+      ]),
+    });
+    const proof = {
+      ...semantic,
+      decision: {
+        provider: 'typesafe' as const,
+        transport: 'direct' as const,
+        model: 'fixture',
+        revision: 'fixture',
+        maxInputBytes: 8192,
+        preparationVersion: MATCHING_SOURCE_JEV_PREPARATION_VERSION,
+        observedModels: ['fixture'],
+        ...assessments,
+      },
+    };
+    const exactAliasAudit = adapter.decide.mock.calls.find(
+      ([{ questions }]) => questions.d3_classification,
+    )?.[0];
+    expect(Object.keys(exactAliasAudit?.questions ?? {})).toEqual([
+      'd3_classification',
+      'd3_gap_eligibility',
+    ]);
+    const childAudit = adapter.decide.mock.calls.find(
+      ([{ questions }]) => questions.d4_classification,
+    )?.[0];
+    expect(childAudit?.questions.d4_classification?.instructions).toContain(
+      'Expertise in one or more of:',
+    );
+    const anchorAudit = adapter.decide.mock.calls.find(
+      ([{ questions }]) => questions.d2_block_boundary,
+    )?.[0];
+    expect(anchorAudit?.questions.d2_block_boundary?.instructions).toContain(
+      'Experience with PostgreSQL',
+    );
+    const checked = parseMatchingSourceSemanticProof(proof, input);
+    const posting = normalizeMatchingPosting(input, vocabulary, {
+      coverage: 'partial',
+      role: null,
+      geography: null,
+      noRequirements: null,
+      required: [],
+      preferred: [],
+      unresolved: [],
+      semantic: checked,
+    });
+    const block = posting.required.find(({ citation }) =>
+      citation.text.startsWith('Expertise in one or more of:'),
+    );
+    expect(block?.alternatives).toEqual([
+      expect.objectContaining({ slug: 'typescript' }),
+      expect.objectContaining({
+        sourceGap: expect.objectContaining({
+          citation: expect.objectContaining({
+            text: expect.stringContaining('Novel telemetry protocol design'),
+          }),
+        }),
+      }),
+    ]);
+    expect(
+      posting.required.some(({ citation }) => citation.text === 'TypeScript'),
+    ).toBe(false);
+    expect(() =>
+      parseMatchingSourceSemanticProof(proof, {
+        ...input,
+        description: input.description.replace('one or more of', 'all of'),
+      }),
+    ).toThrow();
+    expect(() =>
+      parseMatchingSourceSemanticProof(
+        {
+          ...proof,
+          decision: {
+            ...proof.decision,
+            blocks: [
+              { ...proof.decision.blocks?.[0], unitIds: ['d2', 'd4', 'd3'] },
+            ],
+          },
+        },
+        input,
+      ),
+    ).toThrow();
   });
 
   it('redacts a mailbox only for the independent context audit while retaining exact source binding', async () => {

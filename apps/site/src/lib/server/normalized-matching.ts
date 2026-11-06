@@ -24,11 +24,13 @@ import type {
   MatchingSourceExtraction,
   MatchingSourceSpan,
 } from './matching-source-extraction-contract.js';
+import { matchingSourceJevBlocks } from './matching-source-jev-blocks.js';
 import {
   matchingSourceStructureMatches,
   matchingSourceStructures,
 } from './matching-source-jev-structure.js';
 import {
+  hasAnalysisPII,
   MATCHING_SOURCE_DESCRIPTION_LIMIT,
   matchingDescriptionUnits,
   matchingSourceSemanticUnits,
@@ -1197,6 +1199,7 @@ export function matchingSourceExactLocation(
 
 interface Qualification {
   slug: string;
+  sourceGap?: SourceCapabilityGap;
   qualitative?: true;
   /** Explicit illustrative tools can support a gap result, never full proof. */
   examples?: readonly string[];
@@ -1265,6 +1268,19 @@ interface MatchingQuestion {
   query?: { type: 'mode'; value: Mode } | { type: 'country'; value: string };
 }
 
+type SourceCapabilityGap = {
+  qualifier:
+    | 'scale'
+    | 'depth'
+    | 'production'
+    | 'illustrative'
+    | 'unmapped'
+    | 'scope';
+  verifiedConceptId?: string;
+  conceptIds: readonly string[];
+  citation: Citation;
+};
+
 export interface NormalizedMatchingPosting {
   role?: Role;
   geography?: Geography;
@@ -1272,6 +1288,7 @@ export interface NormalizedMatchingPosting {
   preferred: readonly Group[];
   preferredUncertainties: readonly MatchingReason[];
   uncertainties: readonly MatchingReason[];
+  sourceCapabilityGaps?: readonly SourceCapabilityGap[];
 }
 
 export interface NormalizedMatchingCandidate {
@@ -1938,6 +1955,7 @@ function sameGroup(
     context,
     examples,
     partialCapabilities,
+    sourceGap,
   }: Qualification) =>
     JSON.stringify([
       slug || phrase(label ?? ''),
@@ -1945,6 +1963,11 @@ function sameGroup(
       context,
       examples,
       partialCapabilities,
+      sourceGap && [
+        sourceGap.qualifier,
+        sourceGap.conceptIds,
+        sourceGap.citation,
+      ],
     ]);
   return (
     JSON.stringify(left.map(key).sort()) ===
@@ -2430,6 +2453,47 @@ function independentApplicantCondition(text: string) {
     essentialCondition.test(text) ||
     requiredInAdministrativeText.test(text) ||
     mixedCandidateCondition(text)
+  );
+}
+
+const separateEligibilityRestriction =
+  /\b(?:certifications?|certified|licen[cs](?:e|es|ed|ure)|(?:security |government )?clearance|background checks?|criminal records?|drug tests?|degrees?|diplomas?|bachelor(?:['’]s)?|master(?:['’]s)? (?:degree|in)|ph\.?d\.?|university education|citizens?(?:hip)?|permanent resident|residency|visas?|sponsor(?:ship|ed)?|right to work|work permits?|(?:work|employment) authori[sz]ation|authori[sz]ed to work|time[ -]?zones?|business hours|working hours|on[- ]call|shifts?|weekends?|travel|relocat\w*|office attendance|in[- ]office|on[- ]site|onsite|hybrid|remote|based in|located in|resid(?:e|ing) in|live in|valid passport|age requirements?|fluency|fluent|native speaker|language proficiency)\b/iu;
+const qualificationRefusal =
+  /\b(?:no|not|never|without|unless|except|excluding|instead of|conditional on|contingent on|subject to|provided that|at least (?:two|three|four|[2-9]) of)\b|\band\s*\/\s*or\b/iu;
+
+const boundedLeadershipScope =
+  /\b(?:lead\w*|influenc\w*|coordinat\w*)\b[^.;]*\bwithout (?:formal )?(?:people management|line management|direct reports|reporting authority)[.!]?$/iu;
+
+/** Host veto only. The independent reader must establish the actual requirement. */
+export function matchingSourceCapabilityGapAllowed(
+  quote: string,
+  qualifier: SourceCapabilityGap['qualifier'],
+): boolean {
+  const scope = boundedLeadershipScope.test(quote);
+  const remaining = scope
+    ? quote.replace(
+        /\bwithout (?:formal )?(?:people management|line management|direct reports|reporting authority)[.!]?$/iu,
+        '',
+      )
+    : quote;
+  return (
+    (qualifier === 'scope'
+      ? scope
+      : ['scale', 'depth', 'production', 'illustrative', 'unmapped'].includes(
+          qualifier,
+        )) &&
+    !!quote.trim() &&
+    !/[<>\r\n]/u.test(quote) &&
+    !hasAnalysisPII(quote) &&
+    !separateEligibilityRestriction.test(quote) &&
+    !(
+      /\b(?:must|required|mandatory)\b/iu.test(quote) &&
+      /\b(?:preferred|optional|nice[- ]to[- ]have)\b/iu.test(quote)
+    ) &&
+    !qualificationRefusal.test(remaining) &&
+    !roleStatement.test(quote) &&
+    !geographicLine.test(quote) &&
+    !directWorkLocation(quote)
   );
 }
 
@@ -2957,8 +3021,11 @@ function semanticGeography(
 // that same unit, including a condition attached to an administrative sentence.
 const employerDisclosure =
   /\b(?:salary range disclosure|equal (?:employment )?opportunity employer|inclusive hiring|use of (?:artificial intelligence|ai) in (?:recruitment|hiring)|recruitment process|compensation (?:bands|philosophy)|the salary range listed)\b/iu;
+const employerSalarySetting =
+  /^(?:for (?:base )?(?:salary|pay|compensation),?\s+)?we set (?:standard )?(?:salary |pay |compensation )?ranges for\b/iu;
 function safeEmployerDisclosure(text: string): boolean {
-  if (!employerDisclosure.test(text)) return false;
+  if (!employerDisclosure.test(text) && !employerSalarySetting.test(text))
+    return false;
   const applicant = text
     .replace(
       /\b(?:if|should) you (?:require|need) (?:any |a reasonable )?accommodations?\b/giu,
@@ -2967,6 +3034,8 @@ function safeEmployerDisclosure(text: string): boolean {
     .replace(/\b(?:which )?depends on experience and skills\b/giu, '');
   return !(
     employmentCondition.test(applicant) ||
+    (employerSalarySetting.test(text) &&
+      separateEligibilityRestriction.test(applicant)) ||
     essentialCondition.test(applicant) ||
     requiredInAdministrativeText.test(applicant) ||
     independentHardCue.test(applicant) ||
@@ -2994,6 +3063,10 @@ export function matchingSourceContextLines(raw: MatchingPostingInput) {
         safe.add(citation.start);
         continue;
       }
+    }
+    if (employerSalarySetting.test(text) && safeEmployerDisclosure(text)) {
+      safe.add(citation.start);
+      continue;
     }
     if (
       matchingSourceContextLabel(citation) ||
@@ -3075,14 +3148,124 @@ function mergeSemanticExtraction(
   );
   const required = [...posting.required];
   const preferred = [...posting.preferred];
+  const sourceCapabilityGaps = [...(posting.sourceCapabilityGaps ?? [])];
   const preferredUncertainties = [...posting.preferredUncertainties];
   const coveredHard: Citation[] = [];
   const verifiedDisclosures: Citation[] = [];
   const unresolved: MatchingReason[] = [];
   const contextLines = matchingSourceContextLines(raw);
+  const assessedGaps = new Map(
+    (proof.decision?.capabilityGaps ?? []).map((gap) => [gap.unitId, gap]),
+  );
+  const scopedUnits = new Set<string>();
+  const scopedBlocks = proof.decision?.blocks
+    ? matchingSourceJevBlocks(raw, matchingSourceSectionHints(raw.description))
+    : [];
+  const verifiedBlocks = new Set(
+    proof.decision?.blocks?.map(({ anchorId }) => anchorId),
+  );
+  const ledger = new Map(
+    proof.proposal.ledger.map((entry) => [entry.id, entry]),
+  );
+  function removeGroupsAt(citation: Citation) {
+    for (const destination of [required, preferred])
+      for (let index = destination.length - 1; index >= 0; index -= 1) {
+        const group = destination[index];
+        if (group && sameSourceLine(group.citation, citation))
+          destination.splice(index, 1);
+      }
+  }
+  for (const block of scopedBlocks) {
+    const anchor = citeUnit(block.anchorId);
+    const last = citeUnit(block.unitIds.at(-1) ?? '');
+    if (!anchor || !last) continue;
+    const citation = cite(
+      'description',
+      raw.description,
+      anchor.start,
+      last.end,
+    );
+    for (const id of block.unitIds) {
+      scopedUnits.add(id);
+      const member = citeUnit(id);
+      if (member) removeGroupsAt(member);
+    }
+    if (!verifiedBlocks.has(block.anchorId)) {
+      unresolved.push(
+        reason(
+          'posting-requirement-unknown',
+          'unknown',
+          'Source review could not verify the full scope of this grouped condition.',
+          citation,
+        ),
+      );
+      continue;
+    }
+    const sharedDepth =
+      /\b(?:deep|advanced|substantial|extensive)\s+(?:expertise|experience|knowledge)\b/iu.test(
+        anchor.text,
+      );
+    const alternatives: Qualification[] = block.unitIds.slice(1).map((id) => {
+      const member = citeUnit(id) ?? citation;
+      const atom = ledger.get(id)?.groups[0]?.alternatives[0];
+      const gap = assessedGaps.get(id);
+      if (gap || sharedDepth) {
+        return {
+          slug: '',
+          sourceGap: {
+            qualifier: sharedDepth ? 'depth' : (gap?.qualifier ?? 'unmapped'),
+            conceptIds:
+              gap?.conceptIds ?? (atom?.conceptId ? [atom.conceptId] : []),
+            citation: sharedDepth ? citation : member,
+            ...(sharedDepth &&
+              !gap &&
+              atom?.conceptId && { verifiedConceptId: atom.conceptId }),
+          },
+        };
+      }
+      return {
+        slug: atom?.conceptId ?? '',
+        years: atom?.years ?? undefined,
+        context: atom?.context ?? undefined,
+      };
+    });
+    const destination = block.kind === 'requirement' ? required : preferred;
+    if (block.operator === 'any') destination.push({ alternatives, citation });
+    else
+      for (const alternative of alternatives)
+        destination.push({ alternatives: [alternative], citation });
+    if (block.kind === 'requirement')
+      for (const id of block.unitIds) {
+        const member = citeUnit(id);
+        if (member) coveredHard.push(member);
+      }
+  }
   for (const unit of proof.proposal.ledger) {
     const citation = citeUnit(unit.id);
-    if (!citation) continue;
+    if (!citation || scopedUnits.has(unit.id)) continue;
+    const gap = assessedGaps.get(unit.id);
+    if (gap && verifiedUnits.has(unit.id)) {
+      if (unit.kind === 'requirement') {
+        removeGroupsAt(citation);
+        coveredHard.push(citation);
+        sourceCapabilityGaps.push({
+          qualifier: gap.qualifier,
+          conceptIds: gap.conceptIds,
+          citation,
+        });
+      } else if (unit.kind === 'preferred') {
+        removeGroupsAt(citation);
+        preferredUncertainties.push(
+          reason(
+            'posting-preference-unknown',
+            'unknown',
+            'The posting states this preference, but matching cannot establish its full capability scope.',
+            citation,
+          ),
+        );
+      }
+      continue;
+    }
     const knownRequired = posting.required.filter((group) =>
       sameSourceLine(group.citation, citation),
     );
@@ -3206,6 +3389,37 @@ function mergeSemanticExtraction(
       vocabulary,
       proof.decision?.structures?.[unit.id],
     );
+    if (
+      !groups &&
+      isRequired &&
+      proof.decision?.assessmentVersion === 1 &&
+      matchingSourceStructureMatches(
+        citation.text,
+        proof.decision.structures?.[unit.id] ?? '',
+        unit.groups,
+      ) &&
+      /\b(?:ambiguity|ambiguous)\b[^.;]*\bclarity where none exists[.!]?$/iu.test(
+        citation.text,
+      ) &&
+      matchingSourceCapabilityGapAllowed(citation.text, 'unmapped')
+    ) {
+      const concepts = unit.groups.flatMap(({ alternatives }) =>
+        alternatives.flatMap(({ conceptId }) => (conceptId ? [conceptId] : [])),
+      );
+      if (
+        concepts.length === 2 &&
+        concepts.includes('working-through-ambiguity') &&
+        concepts.includes('clarifying-ambiguous-work')
+      ) {
+        coveredHard.push(citation);
+        sourceCapabilityGaps.push({
+          qualifier: 'scope',
+          conceptIds: concepts,
+          citation,
+        });
+        continue;
+      }
+    }
     if (!groups) {
       if (isRequired)
         unresolved.push(
@@ -3305,6 +3519,7 @@ function mergeSemanticExtraction(
     geography,
     required,
     preferred,
+    ...(sourceCapabilityGaps.length > 0 && { sourceCapabilityGaps }),
     preferredUncertainties,
     uncertainties: [...uncertainties, ...unresolved],
   };
@@ -4770,14 +4985,29 @@ function groupFit(
   candidate: NormalizedMatchingCandidate,
   required: boolean,
 ): MatchingReason & { directPartial?: boolean } {
-  const evaluated = group.alternatives.map((atom) =>
-    evidenceFit(atom, candidate),
-  );
+  const evaluated = group.alternatives.map((atom): EvidenceFit => {
+    const gap = atom.sourceGap;
+    if (!gap) return evidenceFit(atom, candidate);
+    const verifiedConcept = gap.verifiedConceptId;
+    if (verifiedConcept) {
+      const base = evidenceFit({ slug: verifiedConcept }, candidate);
+      if (base.outcome === 'supported')
+        return {
+          outcome: 'unknown',
+          directPartial: true,
+          recognizedAtoms: [verifiedConcept],
+          citations: [gap.citation, ...base.citations],
+        };
+    }
+    return { outcome: 'unknown', citations: [gap.citation] };
+  });
+  const hasSourceGap = group.alternatives.some(({ sourceGap }) => sourceGap);
   const supportedIndex = evaluated.findIndex(
     ({ outcome }) => outcome === 'supported',
   );
   const kind = required ? 'required' : 'preferred';
   const name = (atom: Qualification) => {
+    if (atom.sourceGap) return 'an unverified capability qualification';
     const capability = atom.label || atom.slug.replace(/-/gu, ' ');
     if (atom.years)
       return `${atom.years}+ years of ${atom.context ? `${atom.context} ` : ''}experience with ${capability}`;
@@ -4803,14 +5033,14 @@ function groupFit(
   }
   const conflict = evaluated.every(({ outcome }) => outcome === 'conflict');
   const coverage = group.alternatives.map((atom) =>
-    requirementCoverageIssues(atom, candidate),
+    atom.sourceGap ? [] : requirementCoverageIssues(atom, candidate),
   );
   const issues = coverage.flat();
   const evidenceGaps = evaluated.flatMap(({ gap }, index) =>
     gap && (gap.missing === 'related' || !coverage[index]?.length) ? [gap] : [],
   );
   const options = group.alternatives.map(name).join(' or ');
-  if (group.alternatives.some(({ slug }) => !slug))
+  if (group.alternatives.some(({ slug, sourceGap }) => !slug && !sourceGap))
     return reason(
       `${kind}-capability-unsupported`,
       'unknown',
@@ -4880,28 +5110,46 @@ function groupFit(
         return [];
     }
   });
-  const opening = explanations.length
-    ? explanations
-    : evaluated.some(({ directPartial }) => directPartial)
-      ? [
-          `Your evidence provides partial support for ${options}. Matching still needs confirmation of the full requirement.`,
-        ]
-      : [
-          issues.length ||
-          (candidate.interpretationIssue &&
-            (!candidate.coverageIssues ||
-              candidate.interpretationIssue.code ===
-                'candidate-interpretation-failed'))
-            ? `Matching has not yet verified ${options} from your evidence.`
-            : `Your evidence does not establish ${options}.`,
-        ];
+  const confirmedSourceGapBases = evaluated.flatMap(
+    ({ recognizedAtoms, directPartial }, index) =>
+      group.alternatives[index]?.sourceGap && directPartial
+        ? (recognizedAtoms ?? [])
+        : [],
+  );
+  const opening = confirmedSourceGapBases.length
+    ? [
+        `Your evidence shows ${capabilityList.format(confirmedSourceGapBases.map((slug) => capabilityLabels.get(slug) ?? slug.replace(/-/gu, ' ')))}. Matching still needs proof of the full qualification quoted below.`,
+      ]
+    : explanations.length
+      ? explanations
+      : evaluated.some(({ directPartial }) => directPartial)
+        ? [
+            `Your evidence provides partial support for ${options}. Matching still needs confirmation of the full requirement.`,
+          ]
+        : [
+            issues.length ||
+            (candidate.interpretationIssue &&
+              (!candidate.coverageIssues ||
+                candidate.interpretationIssue.code ===
+                  'candidate-interpretation-failed'))
+              ? `Matching has not yet verified ${options} from your evidence.`
+              : `Your evidence does not establish ${options}.`,
+          ];
   return {
     ...reason(
       `${kind}-capability`,
       conflict ? 'conflict' : 'unknown',
       conflict
         ? `Your evidence rules out ${options}.`
-        : [...opening, ...coverageExplanations(issues)].join(' '),
+        : [
+            ...(hasSourceGap
+              ? [
+                  'The posting specifies a capability qualification that matching could not establish.',
+                ]
+              : []),
+            ...opening,
+            ...coverageExplanations(issues),
+          ].join(' '),
       group.citation,
       ...distinctCitations([
         ...(!conflict
@@ -4968,7 +5216,20 @@ export function evaluateNormalizedMatch(
   posting: NormalizedMatchingPosting,
   candidate: NormalizedMatchingCandidate,
 ): NormalizedMatchDecision {
+  const sourceGapReasons = new Set(
+    posting.sourceCapabilityGaps?.map(({ qualifier, citation }) =>
+      reason(
+        'posting-capability-gap',
+        'unknown',
+        qualifier === 'unmapped'
+          ? 'The posting requires a capability that matching could not map.'
+          : 'The posting specifies a capability qualification that matching could not establish.',
+        citation,
+      ),
+    ),
+  );
   const hard = [
+    ...sourceGapReasons,
     ...posting.uncertainties,
     ...candidate.uncertainties.filter(
       ({ code }) =>
@@ -5031,13 +5292,16 @@ export function evaluateNormalizedMatch(
           code === 'work-location' && outcome === 'supported',
       ) &&
       posting.required.every(({ alternatives }) =>
-        alternatives.every(({ slug }) => Boolean(slug)),
+        alternatives.every(({ slug, sourceGap }) => Boolean(slug || sourceGap)),
       ) &&
       supportedRequirements + partialRequirements > 0 &&
       gaps.every(
         (gap) =>
-          gap.code === 'required-capability' || gap === interpretationGap,
+          gap.code === 'required-capability' ||
+          gap === interpretationGap ||
+          sourceGapReasons.has(gap),
       );
+    const totalRequirements = posting.required.length + sourceGapReasons.size;
     return screened
       ? {
           status: 'insufficient-evidence',
@@ -5048,13 +5312,11 @@ export function evaluateNormalizedMatch(
             ? 35 +
               Math.floor(
                 (34 * (supportedRequirements + partialRequirements / 2)) /
-                  posting.required.length,
+                  totalRequirements,
               )
             : Math.max(
                 1,
-                Math.floor(
-                  (34 * partialRequirements) / posting.required.length,
-                ),
+                Math.floor((34 * partialRequirements) / totalRequirements),
               ),
           reasons,
         }
@@ -5069,11 +5331,13 @@ export function evaluateNormalizedMatch(
   const related = posting.preferred.filter(
     (group, index) =>
       soft[index]?.outcome === 'unknown' &&
-      group.alternatives.some(({ slug }) =>
-        candidate.evidence.some(
-          (proof) =>
-            proof.polarity === 'positive' && proof.related.includes(slug),
-        ),
+      group.alternatives.some(
+        ({ slug, sourceGap }) =>
+          !sourceGap &&
+          candidate.evidence.some(
+            (proof) =>
+              proof.polarity === 'positive' && proof.related.includes(slug),
+          ),
       ),
   ).length;
   const score =

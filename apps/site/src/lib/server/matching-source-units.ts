@@ -2,6 +2,9 @@ import type { MatchingSourceText } from './matching-source-extraction-contract.j
 
 export const MATCHING_SOURCE_DESCRIPTION_LIMIT = 40_000;
 
+export const hasAnalysisPII = (text: string): boolean =>
+  /[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:\+?\d[\s().-]*){9,}/i.test(text);
+
 /** Segment captured text without changing offsets into its raw source. */
 export function matchingDescriptionUnits(raw: string) {
   const masked = raw

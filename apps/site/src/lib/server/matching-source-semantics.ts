@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { onboardingCountryCodes } from './country-reference.js';
 import type { MatchingSourceText } from './matching-source-extraction-contract.js';
+import { matchingSourceJevBlocks } from './matching-source-jev-blocks.js';
 import { matchingSourceStructureMatches } from './matching-source-jev-structure.js';
 import {
   MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT,
@@ -9,6 +10,7 @@ import {
 } from './matching-source-units.js';
 import {
   compileMatchingVocabulary,
+  matchingSourceCapabilityGapAllowed,
   matchingSourceRoleInventory,
   matchingSourceSectionHints,
 } from './normalized-matching.js';
@@ -93,8 +95,31 @@ const decisionProfile = z.strictObject({
   preparationVersion: decisionIdentifier,
 });
 export type MatchingSourceDecisionProfile = z.infer<typeof decisionProfile>;
+const capabilityGap = z.strictObject({
+  unitId,
+  qualifier: z.enum([
+    'scale',
+    'depth',
+    'production',
+    'illustrative',
+    'unmapped',
+    'scope',
+  ]),
+  conceptIds: z.array(z.string().min(1).max(100)).max(8),
+});
+export type MatchingSourceDecisionCapabilityGap = z.infer<typeof capabilityGap>;
+const sourceBlock = z.strictObject({
+  anchorId: unitId,
+  unitIds: z.array(unitId).min(3).max(9),
+  kind: z.enum(['requirement', 'preferred']),
+  operator: z.enum(['all', 'any']),
+});
+export type MatchingSourceDecisionBlock = z.infer<typeof sourceBlock>;
 const decisionProvenance = decisionProfile.extend({
   observedModels: z.array(decisionIdentifier).min(1).max(16),
+  assessmentVersion: z.literal(1).optional(),
+  blocks: z.array(sourceBlock).max(16).optional(),
+  capabilityGaps: z.array(capabilityGap).max(MAX_ATOMS).optional(),
   structures: z
     .record(
       z.string().regex(/^d[1-9]\d{0,2}$/u),
@@ -104,6 +129,9 @@ const decisionProvenance = decisionProfile.extend({
   diagnostics: z
     .strictObject({
       draftCalls: z.number().int().min(0).max(100),
+      draftFailures: z.number().int().min(1).max(100).optional(),
+      assessedGaps: z.number().int().min(1).max(MAX_ATOMS).optional(),
+      verifiedBlocks: z.number().int().min(1).max(16).optional(),
       verificationCalls: z.number().int().min(0).max(100),
       unasked: z.number().int().min(0).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
       declined: z
@@ -398,15 +426,90 @@ export function parseMatchingSourceSemanticProof(
     source,
     parsed.proposal,
   );
-  if (parsed.decision?.structures) {
-    const units = new Map(
-      matchingSourceSemanticUnits(source).map((unit) => [unit.id, unit]),
+  const units = new Map(
+    matchingSourceSemanticUnits(source).map((unit) => [unit.id, unit]),
+  );
+  const ledger = new Map(
+    verified.proposal.ledger.map((unit) => [unit.id, unit]),
+  );
+  const reviewed = new Set(
+    verified.verification.units
+      .filter(
+        (unit) =>
+          unit.classificationCorrect &&
+          unit.allConditionsRepresented &&
+          unit.logicAndQualifiersPreserved,
+      )
+      .map(({ id }) => id),
+  );
+  if (
+    parsed.decision &&
+    (Boolean(parsed.decision.assessmentVersion) !==
+      Boolean(parsed.decision.blocks) ||
+      Boolean(parsed.decision.assessmentVersion) !==
+        Boolean(parsed.decision.capabilityGaps))
+  )
+    throw new MatchingSourceSemanticError('predicate');
+  const gapIds = new Set<string>();
+  for (const gap of parsed.decision?.capabilityGaps ?? []) {
+    const unit = units.get(gap.unitId);
+    const entry = ledger.get(gap.unitId);
+    const known = new Set(
+      entry?.groups.flatMap(({ alternatives }) =>
+        alternatives.flatMap(({ conceptId }) => (conceptId ? [conceptId] : [])),
+      ),
     );
+    if (
+      unit?.field !== 'description' ||
+      !entry ||
+      !reviewed.has(gap.unitId) ||
+      (entry.kind !== 'requirement' && entry.kind !== 'preferred') ||
+      gapIds.has(gap.unitId) ||
+      !matchingSourceCapabilityGapAllowed(unit.quote, gap.qualifier) ||
+      gap.conceptIds.length !== new Set(gap.conceptIds).size ||
+      gap.conceptIds.some((conceptId) => !known.has(conceptId))
+    )
+      throw new MatchingSourceSemanticError('predicate');
+    gapIds.add(gap.unitId);
+  }
+  if (parsed.decision?.blocks) {
+    const expected = new Map(
+      matchingSourceJevBlocks(
+        source,
+        matchingSourceSectionHints(source.description),
+      ).map((block) => [block.anchorId, block]),
+    );
+    const claimed = new Set<string>();
+    for (const block of parsed.decision.blocks) {
+      const original = expected.get(block.anchorId);
+      if (
+        !original ||
+        original.kind !== block.kind ||
+        original.operator !== block.operator ||
+        original.unitIds.join(',') !== block.unitIds.join(',') ||
+        ledger.get(block.anchorId)?.kind !== 'context' ||
+        block.unitIds.some((id) => !reviewed.has(id) || claimed.has(id)) ||
+        block.unitIds.slice(1).some((id) => {
+          const entry = ledger.get(id);
+          const atom = entry?.groups[0]?.alternatives[0];
+          return (
+            entry?.kind !== block.kind ||
+            (!gapIds.has(id) &&
+              (entry.groups.length !== 1 ||
+                entry.groups[0]?.alternatives.length !== 1 ||
+                !atom?.conceptId ||
+                atom.unsupportedQualifier))
+          );
+        })
+      )
+        throw new MatchingSourceSemanticError('predicate');
+      for (const id of block.unitIds) claimed.add(id);
+    }
+  }
+  if (parsed.decision?.structures) {
     for (const [id, structure] of Object.entries(parsed.decision.structures)) {
       const unit = units.get(id);
-      const entry = verified.proposal.ledger.find(
-        (candidate) => candidate.id === id,
-      );
+      const entry = ledger.get(id);
       if (
         unit?.field !== 'description' ||
         !entry ||

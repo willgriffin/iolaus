@@ -16,6 +16,7 @@ import {
 import { runMatchingSourceExtraction } from '../src/lib/server/matching-source-extraction-worker.js';
 import {
   MATCHING_SOURCE_JEV_PREPARATION_VERSION,
+  type MatchingSourceJevAssessments,
   type MatchingSourceJevDiagnostics,
   prepareJevMatchingSource,
 } from '../src/lib/server/matching-source-jev.js';
@@ -185,6 +186,7 @@ async function runLocalJevQa(
       let failure: string | undefined;
       let diagnostics: MatchingSourceJevDiagnostics | undefined;
       let structures: Record<string, string> | undefined;
+      let assessments: MatchingSourceJevAssessments | undefined;
       const result = await runMatchingSourceExtraction(
         database,
         'postgres',
@@ -200,6 +202,9 @@ async function runLocalJevQa(
             const semantic = await prepareJevMatchingSource(input, bounded, {
               onDiagnostics(summary) {
                 diagnostics = summary;
+              },
+              onAssessments(value) {
+                assessments = value;
               },
               onStructures(value) {
                 structures = value;
@@ -226,6 +231,7 @@ async function runLocalJevQa(
                     observedModels: [...observedModels].sort(),
                     diagnostics,
                     structures,
+                    ...assessments,
                   },
                 },
               },

@@ -41,7 +41,7 @@ The publisher does not select any other route on failure.
 
 ```sh
 pnpm --silent --filter @willgriffin/iolaus-site matching:source-jev-publish \
-  --cohort /private/path/ids.json --apply --max-calls 1300 --max-cost-micros 480000
+  --cohort /private/path/ids.json --apply --max-calls 250 --max-cost-micros 50000
 ```
 
 The command writes only selected current source interpretations and invalidates
@@ -74,27 +74,45 @@ mailbox placeholder. The proof and citations remain bound to the unmodified
 capture. Residual personal contact details and unclear restrictions leave the
 unit unresolved.
 
+## Multiline scope and assessed gaps
+
+A verified block binds an exact anchor and adjacent source unit IDs from the
+current capture. The host derives explicit AND or OR wording and inherited
+strength from the exact source. Flattened lists need a clear next boundary,
+and the independent audit verifies that boundary against the actual
+neighboring units. Exact known branch identity can come from a closed
+vocabulary alias. Unknown branches remain unknown. A supported OR branch
+can satisfy the group if it carries no unresolved inherited qualifier.
+A shared depth qualifier applies to every branch. Direct evidence for a
+known branch may support a screened result while depth stays unproven.
+
+An assessed capability gap preserves the exact requirement and qualifier
+when the matcher cannot verify its full scope. It needs positive independent
+classification and a separate non-capability restriction check. An unread
+unit, failed audit, or unresolved eligibility clause still blocks screening.
+The detail route resolves cited source gaps from the current source snapshot.
+List responses carry summaries and matching reads remain provider-free.
+
 ## Local quality status
 
-The fixed 33-posting cohort left 33 current local projections. The matching
-list showed two screened results, including one new result prepared by Jev
-and one prior control. Three postings had conflicts, 28 remained unflagged,
-and none qualified. Across the stored mixed-version proofs, 1,267 of 1,865
-source units had complete verification. Repeated preparation and targeted
-diagnostics cost $0.072797 using the configured input-token rate and per-call
-rounding. They made 1,719 calls with 1,712,710 input and 312,548 output
-tokens, with no SDK retries or unknown usage.
+The fixed 33-posting cohort left 33 current local projections. The opening
+list had two screened results. The final list had three, including one prior
+control and two Jev-prepared proofs. One of those restored a previously visible
+posting after a controlled comparison. The Staff Software Engineer result is
+the net addition. Three postings had conflicts, 27 remained unflagged, and
+none qualified. Across stored mixed-version proofs, 1,283 of 1,865 units had
+complete verification.
 
-On the newly visible 39-unit posting, 35 units had complete verification.
-Every unit had an established classification. Exact deterministic
-requirement facts and independent classification preserved the remaining
-conditions, including the original illustrative tool examples. The matcher
-showed recognized support and candidate evidence gaps separately. Its
-three-year requirement retained the original qualification and citation.
+The two Jev-prepared results accounted for the original three-year requirement
+on one posting and the exact four-branch OR with inherited depth on the other.
+Staff had 53 of 53 verified source units. Its recognized distributed-systems
+evidence counts as partial while the depth and remaining conditions stay
+open. The Backend control remained unflagged because work arrangement and
+an export-license clause were unresolved. These cases do not establish
+catalogue-wide coverage.
 
-The cohort still contains compatible postings held back by source
-interpretation. Examples include a multi-line “one or more of” alternatives
-list and combined scale, production use, and tenure requirements.
-Those clauses stay unresolved when the exact full condition cannot be
-represented and assessed. This run establishes one end-to-end Jev result
-and does not establish broad catalogue coverage.
+Repeated preparation and targeted diagnostics made 1,959 calls with
+1,919,743 input and 349,975 output tokens. The configured input-token
+rate and per-call rounding totalled $0.081606, with no SDK retries or unknown
+usage. The final cached Staff reprojection used zero provider calls.
+The actual profile and preferences were unchanged throughout.

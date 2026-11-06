@@ -10,6 +10,7 @@ import {
 import {
   compileMatchingVocabulary,
   evaluateNormalizedMatch,
+  matchingSourceCapabilityGapAllowed,
   normalizeMatchingCandidate,
   normalizeMatchingPosting,
 } from './normalized-matching.js';
@@ -117,6 +118,64 @@ function decision(
 }
 
 describe('verified public semantic source interpretation', () => {
+  it('retains an exact scoped trait as an assessed gap and clears only pure salary context', () => {
+    const scoped =
+      'Comfortable operating in ambiguity and driving clarity where none exists';
+    const salary =
+      'For base compensation, we set standard ranges for all roles based on function and level.';
+    for (const [salaryLine, allowed] of [
+      [salary, true],
+      [`${salary} Applicants must already have work authorization.`, false],
+    ] as const) {
+      const source = {
+        ...raw,
+        description: ['Qualifications:', scoped, salaryLine].join('\n'),
+      };
+      const proposed = draft(source);
+      const line = proposed.ledger.find(({ id }) => id === 'd2');
+      if (!line) throw new Error('Missing scoped requirement');
+      line.groups = [
+        { alternatives: [atom('working-through-ambiguity')] },
+        { alternatives: [atom('clarifying-ambiguous-work')] },
+      ];
+      const proof = payload(source, proposed);
+      const extraction = parseMatchingSourceExtraction(
+        {
+          ...proof,
+          semantic: {
+            ...proof.semantic,
+            decision: {
+              provider: 'typesafe',
+              transport: 'direct',
+              model: 'fixture',
+              revision: 'fixture',
+              maxInputBytes: 8192,
+              preparationVersion: 'fixture',
+              observedModels: ['fixture'],
+              assessmentVersion: 1,
+              blocks: [],
+              capabilityGaps: [],
+              structures: { d2: 'explicit' },
+            },
+          },
+        },
+        source,
+      );
+      const posting = normalizeMatchingPosting(source, vocabulary, extraction);
+      expect(posting.sourceCapabilityGaps).toEqual([
+        expect.objectContaining({
+          qualifier: 'scope',
+          citation: expect.objectContaining({ text: scoped }),
+        }),
+      ]);
+      expect(
+        posting.uncertainties.some(({ code }) =>
+          code.startsWith('posting-requirement'),
+        ),
+      ).toBe(!allowed);
+    }
+  });
+
   it('covers an implied lexical parent only inside one verified exact capability span', () => {
     const governed = compileMatchingVocabulary([
       { slug: 'nodejs', label: 'Node.js', related: ['typescript'] },
@@ -750,5 +809,286 @@ describe('verified public semantic source interpretation', () => {
     line.kind = 'requirement';
     line.groups = [{ alternatives: [atom(null)] }];
     expect(decision(both, proposal).status).toBe('insufficient-evidence');
+  });
+});
+
+describe('independently verified source capability gaps', () => {
+  const source = {
+    ...raw,
+    description: 'Qualifications:\nNode.js\nDeep TypeScript expertise.',
+  };
+  const text = 'Deep TypeScript expertise.';
+  const citation = {
+    field: 'description' as const,
+    start: source.description.indexOf(text),
+    end: source.description.indexOf(text) + text.length,
+    text,
+  };
+  const exactPosting = normalizeMatchingPosting(
+    { ...source, description: 'Qualifications:\nNode.js' },
+    vocabulary,
+  );
+  // The semantic proof parser and merge are responsible for attesting this
+  // field. These cases isolate the matcher from proof transport.
+  const posting = {
+    ...exactPosting,
+    sourceCapabilityGaps: [
+      { qualifier: 'depth' as const, conceptIds: ['typescript'], citation },
+    ],
+  };
+
+  it('retains the exact cited unknown and screens on other direct support without qualifying', () => {
+    const result = evaluateNormalizedMatch(posting, candidate);
+    expect(result).toMatchObject({
+      status: 'insufficient-evidence',
+      screenedWithGaps: true,
+      score: 52,
+      reasons: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'posting-capability-gap',
+          outcome: 'unknown',
+          citations: [citation],
+        }),
+        expect.objectContaining({
+          code: 'required-capability',
+          outcome: 'supported',
+        }),
+      ]),
+    });
+  });
+
+  it('requires separate support even when candidate evidence names the unresolved concept', () => {
+    const gapOnly = normalizeMatchingCandidate(
+      {
+        targetRoles: ['Software engineering'],
+        locations: ['Canada'],
+        evidence: [{ id: '1', text: 'TypeScript', kind: 'skill' }],
+      },
+      vocabulary,
+    );
+    expect(evaluateNormalizedMatch(posting, gapOnly)).toMatchObject({
+      status: 'insufficient-evidence',
+      score: 0,
+    });
+  });
+
+  it.each([
+    'posting-requirement-unknown',
+    'posting-requirement-unsupported',
+  ])('keeps an unrelated source blocker %s', (code) => {
+    const result = evaluateNormalizedMatch(
+      {
+        ...posting,
+        uncertainties: [
+          {
+            code,
+            outcome: 'unknown',
+            message: 'A separate restriction is unresolved.',
+            citations: [],
+          },
+        ],
+      },
+      candidate,
+    );
+    expect(result.status).toBe('insufficient-evidence');
+    expect(result.screenedWithGaps).toBeUndefined();
+  });
+
+  it('can screen on separate direct partial support while retaining the AND gap', () => {
+    const required = exactPosting.required.map((group) => ({
+      ...group,
+      alternatives: group.alternatives.map((atom) => ({
+        ...atom,
+        context: 'production' as const,
+      })),
+    }));
+    expect(
+      evaluateNormalizedMatch({ ...posting, required }, candidate),
+    ).toMatchObject({
+      status: 'insufficient-evidence',
+      screenedWithGaps: true,
+      score: 17,
+    });
+  });
+
+  it('does not screen through a geography conflict', () => {
+    const incompatibleCandidate = normalizeMatchingCandidate(
+      {
+        targetRoles: ['Software engineering'],
+        locations: ['United States'],
+        evidence: [{ id: '1', text: 'Node.js', kind: 'skill' }],
+      },
+      vocabulary,
+    );
+    expect(
+      evaluateNormalizedMatch(posting, incompatibleCandidate),
+    ).toMatchObject({
+      status: 'conflict',
+      score: 0,
+    });
+  });
+
+  it('satisfies a known OR branch without evaluating the unverified branch as evidence', () => {
+    const required = exactPosting.required.map((group) => ({
+      ...group,
+      alternatives: [
+        ...group.alternatives,
+        { slug: '', sourceGap: posting.sourceCapabilityGaps[0] },
+      ],
+    }));
+    const result = evaluateNormalizedMatch(
+      { ...exactPosting, required },
+      candidate,
+    );
+    expect(result.status).toBe('qualified');
+    expect(
+      result.reasons.filter(({ outcome }) => outcome === 'unknown'),
+    ).toEqual([]);
+  });
+
+  it('leaves a gap-only branch unknown even when a candidate has the named base skill', () => {
+    const required = exactPosting.required.map((group) => ({
+      ...group,
+      alternatives: [
+        { slug: 'nodejs', sourceGap: posting.sourceCapabilityGaps[0] },
+      ],
+    }));
+    const result = evaluateNormalizedMatch(
+      { ...exactPosting, required },
+      candidate,
+    );
+    expect(result.status).toBe('insufficient-evidence');
+    expect(result.screenedWithGaps).toBeUndefined();
+    expect(result.reasons).toContainEqual(
+      expect.objectContaining({
+        code: 'required-capability',
+        outcome: 'unknown',
+        citations: expect.arrayContaining([citation]),
+      }),
+    );
+  });
+
+  it('screens only on direct evidence for an independently verified branch, with inherited depth still unresolved', () => {
+    const base = posting.sourceCapabilityGaps[0];
+    const required = [
+      {
+        citation,
+        alternatives: [
+          {
+            slug: '',
+            sourceGap: {
+              ...base,
+              conceptIds: ['nodejs'],
+              verifiedConceptId: 'nodejs',
+            },
+          },
+          { slug: '', sourceGap: { ...base, conceptIds: ['typescript'] } },
+        ],
+      },
+    ];
+    const grouped = { ...exactPosting, required };
+    const direct = evaluateNormalizedMatch(grouped, candidate);
+    expect(direct).toMatchObject({
+      status: 'insufficient-evidence',
+      screenedWithGaps: true,
+    });
+    expect(direct.reasons).toContainEqual(
+      expect.objectContaining({
+        code: 'required-capability',
+        outcome: 'unknown',
+        message: expect.stringContaining('Your evidence shows'),
+        citations: expect.arrayContaining([citation]),
+      }),
+    );
+    const adjacent = compileMatchingVocabulary([
+      { slug: 'nodejs', label: 'Node.js', related: ['typescript'] },
+      { slug: 'typescript', label: 'TypeScript' },
+    ]);
+    const changedEvidence = normalizeMatchingCandidate(
+      {
+        targetRoles: ['Software engineering'],
+        locations: ['Canada'],
+        evidence: [{ id: 'replacement', text: 'TypeScript', kind: 'skill' }],
+      },
+      adjacent,
+    );
+    expect(evaluateNormalizedMatch(grouped, changedEvidence)).toMatchObject({
+      status: 'insufficient-evidence',
+      score: 0,
+    });
+    expect(
+      evaluateNormalizedMatch(grouped, changedEvidence).screenedWithGaps,
+    ).toBeUndefined();
+  });
+
+  it('keeps a known negative OR an unresolved branch unknown and does not infer a conflict', () => {
+    const negative = normalizeMatchingCandidate(
+      {
+        targetRoles: ['Software engineering'],
+        locations: ['Canada'],
+        evidence: [
+          { id: 'negative', text: 'I have never used Node.js.', kind: 'fact' },
+        ],
+      },
+      vocabulary,
+    );
+    const required = exactPosting.required.map((group) => ({
+      ...group,
+      alternatives: [
+        ...group.alternatives,
+        { slug: '', sourceGap: posting.sourceCapabilityGaps[0] },
+      ],
+    }));
+    expect(
+      evaluateNormalizedMatch({ ...exactPosting, required }, negative).status,
+    ).toBe('insufficient-evidence');
+  });
+
+  it('does not turn related-only evidence into direct support for an unresolved group', () => {
+    const related = compileMatchingVocabulary([
+      { slug: 'nodejs', label: 'Node.js', related: ['typescript'] },
+      { slug: 'typescript', label: 'TypeScript' },
+    ]);
+    const adjacentCandidate = normalizeMatchingCandidate(
+      {
+        targetRoles: ['Software engineering'],
+        locations: ['Canada'],
+        evidence: [{ id: 'related', text: 'TypeScript', kind: 'skill' }],
+      },
+      related,
+    );
+    expect(
+      evaluateNormalizedMatch(posting, adjacentCandidate).screenedWithGaps,
+    ).toBeUndefined();
+  });
+
+  it('keeps a narrow leadership scope, but not an appended eligibility condition', () => {
+    expect(
+      matchingSourceCapabilityGapAllowed(
+        'Track record of technical leadership across teams without formal people management',
+        'scope',
+      ),
+    ).toBe(true);
+    expect(
+      matchingSourceCapabilityGapAllowed(
+        'Applicants must have work authorization and show leadership without formal people management',
+        'scope',
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['Must have experience with high-throughput systems.', true],
+    ['Deep TypeScript expertise, plus current work authorization.', false],
+    [
+      'Production Node.js experience; applicants must be based in Canada.',
+      false,
+    ],
+    ['Deep TypeScript expertise and a valid professional license.', false],
+    ['TypeScript experience or a security clearance.', false],
+    ['Experience with Kubernetes, unless another condition applies.', false],
+    ['Deep Node.js expertise preferred.', true],
+  ])('uses the host veto for %s', (quote, allowed) => {
+    expect(matchingSourceCapabilityGapAllowed(quote, 'unmapped')).toBe(allowed);
   });
 });

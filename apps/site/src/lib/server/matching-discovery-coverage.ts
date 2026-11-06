@@ -46,7 +46,7 @@ export async function readMatchingDiscoveryCoverage(
     ), categorized AS (
       SELECT r.opportunity_id, r.status,
         ${unknown('posting-source-interpretation-missing')} AS missing_source,
-        ${unknown('posting-requirement-unsupported', 'required-capability-unsupported')} AS unsupported,
+        ${unknown('posting-requirement-unsupported', 'required-capability-unsupported', 'posting-capability-gap')} AS unsupported,
         ${unknown('posting-requirement-unknown', 'posting-requirements-incomplete', 'posting-role-unknown', 'posting-role-ambiguous', 'posting-geography-unknown', 'posting-geography-ambiguous')} AS unresolved_source,
         ${unknown('required-capability')} AS unresolved_capability,
         ${unknown('screening-question')} AS unresolved_screening,

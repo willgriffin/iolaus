@@ -1995,6 +1995,53 @@ function matchingEvidenceExcerpts(facts: unknown): Map<string, string> {
   return excerpts;
 }
 
+function sourceGapLocator(value: unknown): string | undefined {
+  const citation = matchingObject(value);
+  const { field, start, end } = citation ?? {};
+  if (
+    field === 'description' &&
+    typeof start === 'number' &&
+    typeof end === 'number' &&
+    Number.isSafeInteger(start) &&
+    Number.isSafeInteger(end) &&
+    start >= 0 &&
+    end > start
+  )
+    return JSON.stringify([field, start, end]);
+}
+
+function matchingSourceGapExcerpts(facts: unknown): Map<string, string> {
+  const source = matchingObject(readMatchingJson(facts));
+  const gaps = Array.isArray(source?.sourceCapabilityGaps)
+    ? [...source.sourceCapabilityGaps]
+    : [];
+  for (const group of Array.isArray(source?.required) ? source.required : []) {
+    const alternatives = matchingObject(group)?.alternatives;
+    if (Array.isArray(alternatives))
+      for (const atom of alternatives)
+        gaps.push(matchingObject(atom)?.sourceGap);
+  }
+  const excerpts = new Map<string, string>();
+  for (const gap of gaps) {
+    const citation = matchingObject(matchingObject(gap)?.citation);
+    const key = sourceGapLocator(citation);
+    const { text, start, end } = citation ?? {};
+    if (
+      key &&
+      typeof text === 'string' &&
+      typeof start === 'number' &&
+      typeof end === 'number' &&
+      text.length === end - start &&
+      text.trim()
+    ) {
+      if (excerpts.has(key) && excerpts.get(key) !== text)
+        excerpts.set(key, '');
+      else excerpts.set(key, text);
+    }
+  }
+  return excerpts;
+}
+
 const INTERPRETATION_NOTES = new Map([
   [
     'candidate-interpretation-pending',
@@ -2014,6 +2061,7 @@ function explainDiscoveryMatch(
   rawReasons: unknown,
   status: DiscoveryMatchStatus,
   facts: unknown,
+  sourceFacts?: unknown,
 ): Pick<DiscoveryMatch, 'reasons' | 'evidence'> {
   const reasons: string[] = [];
   const evidence: DiscoveryEvidenceExplanation = { supported: [], gaps: [] };
@@ -2021,12 +2069,15 @@ function explainDiscoveryMatch(
   if (!Array.isArray(parsed)) return { reasons, evidence };
 
   const privateExcerpts = matchingEvidenceExcerpts(facts);
+  const sourceExcerpts = matchingSourceGapExcerpts(sourceFacts);
   const excerpted: { item: DiscoveryEvidenceItem; excerpts: string[] }[] = [];
   for (const value of parsed) {
     const reason = matchingObject(value);
     if (!reason || typeof reason.message !== 'string') continue;
     const { code, outcome, message, citations } = reason;
-    const gap = code === 'required-capability' && outcome === 'unknown';
+    const gap =
+      (code === 'required-capability' || code === 'posting-capability-gap') &&
+      outcome === 'unknown';
     if (status === 'qualified' || gap) reasons.push(message);
     if (outcome === 'unknown' && typeof code === 'string') {
       const note = INTERPRETATION_NOTES.get(code);
@@ -2038,10 +2089,16 @@ function explainDiscoveryMatch(
     if (!gap && !support) continue;
 
     const excerpts = new Set<string>();
-    if (privateExcerpts.size && Array.isArray(citations)) {
+    if (
+      (privateExcerpts.size || (gap && sourceExcerpts.size)) &&
+      Array.isArray(citations)
+    ) {
       for (const citation of citations) {
         const key = matchingEvidenceLocator(citation);
-        const excerpt = key && privateExcerpts.get(key);
+        const publicKey = gap && sourceGapLocator(citation);
+        const excerpt =
+          (key && privateExcerpts.get(key)) ||
+          (publicKey && sourceExcerpts.get(publicKey));
         if (!excerpt) continue;
         excerpts.add(
           excerpt.length > 240 ? `${excerpt.slice(0, 240)}…` : excerpt,
@@ -2102,7 +2159,13 @@ export async function listCurrentDiscoveryMatches(
         AND candidate_facts.user_id = current_match.user_id
         AND candidate_facts.profile_revision = current_match.profile_revision
         AND candidate_facts.vocabulary_revision = current_match.vocabulary_revision
-        AND candidate_facts.policy_version = current_match.policy_version`
+        AND candidate_facts.policy_version = current_match.policy_version
+      LEFT JOIN matching_source_facts source_facts
+        ON source_facts.opportunity_id = current_match.opportunity_id
+        AND source_facts.source_revision = current_match.source_revision
+        AND source_facts.source_listing_revision = current_match.source_listing_revision
+        AND source_facts.vocabulary_revision = current_match.vocabulary_revision
+        AND source_facts.policy_version = current_match.policy_version`
     : '';
   const result = await queryOpportunitySql(
     db,
@@ -2110,7 +2173,7 @@ export async function listCurrentDiscoveryMatches(
     `SELECT o.id, o.source_content_fingerprint AS "sourceFingerprint",
     o.source_content_version AS "sourceVersion",
     current_match.score, ${DISCOVERY_MATCH_STATUS_SQL} AS "matchingStatus", current_match.reasons_json AS reasons
-    ${includePrivateEvidence ? ', candidate_facts.facts_json AS "candidateFacts"' : ''}
+    ${includePrivateEvidence ? ', candidate_facts.facts_json AS "candidateFacts", source_facts.facts_json AS "sourceFacts"' : ''}
     FROM opportunities o ${join} ${evidenceJoin}
     WHERE ${idsSql}`,
     values,
@@ -2128,6 +2191,7 @@ export async function listCurrentDiscoveryMatches(
         row.reasons,
         status,
         includePrivateEvidence ? row.candidateFacts : undefined,
+        includePrivateEvidence ? row.sourceFacts : undefined,
       ),
       sourceFingerprint: String(row.sourceFingerprint ?? ''),
       sourceVersion: Number(row.sourceVersion ?? 0),
