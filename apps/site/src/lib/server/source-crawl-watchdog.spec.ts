@@ -98,7 +98,10 @@ describe('source crawl watchdog', () => {
       jobId: '',
       status: 'running',
     };
-    const finalizeQuery = vi.fn(async () => ({ rowCount: 1, rows: [] }));
+    const finalizeQuery = vi.fn(async () => ({
+      rowCount: 1,
+      rows: [{ id: 'crawl-manual' }],
+    }));
     const finalizableCrawl = { ...manualCrawl, db: { query: finalizeQuery } };
 
     await expect(
