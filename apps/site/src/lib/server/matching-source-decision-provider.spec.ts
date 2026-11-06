@@ -287,6 +287,40 @@ describe('matching source decision provider', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('routes TypeSafe through native Bifrost without using direct credentials', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      Response.json({
+        model: 'jev-1.13.0',
+        answers: answer.answers,
+        usage: { input_tokens: 24, output_tokens: 0 },
+      }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const client = await createMatchingSourceDecisionProvider(
+      resolveMatchingSourceDecisionConfig({
+        ...gatewayConfig,
+        IOLAUS_SOURCE_DECISION_PROVIDER: 'typesafe',
+        IOLAUS_SOURCE_DECISION_MODEL: 'typesafe/jev-1.13.0',
+        TYPESAFE_API_KEY: 'fixture-direct-key',
+      }),
+    );
+    expect(await client.decide(request)).toMatchObject({
+      status: 'ok',
+      result: { usage: { promptTokens: 24, completionTokens: 0 } },
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      'https://gateway.example/prefix/typesafe/v1/systemone',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer fixture-gateway-key',
+        }),
+      }),
+    );
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'typesafe/jev-1.13.0',
+    });
+  });
+
   it('uses distinct TypeSafe provenance and keeps unreported usage unknown', async () => {
     const fetch = vi
       .fn()

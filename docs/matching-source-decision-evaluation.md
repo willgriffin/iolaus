@@ -60,7 +60,7 @@ The cap is an integer from 1 to 99. It covers all candidate attempts across both
 splits, including attempts skipped by host request preflight. The synthetic
 split runs first. Check `fullRunWithinBudget` and the per-split
 `budgetBlockedRequests` before comparing results. An exhausted budget leaves
-the remaining attempted units unresolved. The evaluator selects Laya only.
+the remaining attempted units unresolved.
 Use a normal System One endpoint that reports `usage.truncated` explicitly.
 Strict JEV mode strips this metadata, and answers without an explicit
 non-truncation signal are rejected.
@@ -118,15 +118,95 @@ concepts. The advisory scorecard compares the suggested canonical concept ID
 and exact source span with the review. It counts successful checks in each
 category, missed or wrong equivalents, suggestions on negative spans, and
 suggestions outside the reviewed spans. A skipped or failed check contributes
-no successful check. These are advisory outputs and remain unresolved in the
-matcher. This benchmark does not publish them to the catalogue.
+no successful check. The concept question is independent of whether a unit
+describes an applicant obligation or a duty. Advisory results remain separate
+from the matcher. This benchmark does not publish them to the catalogue.
+Confirmation asks whether the quote describes doing the selected capability.
+The full citation still carries tenure and scope. Neither the selection nor
+confirmation establishes that an applicant meets the posting's conditions.
+`advisoryStages` counts normalized selection and confirmation outcomes by
+reviewed category, including abstentions, declines, unavailable, and
+not attempted. It includes no source text, concept IDs, or provider scores.
 
 After measuring quality, a persistence follow-on can pair a canonical concept
 ID with its exact cited source in provider-neutral prepared evidence. It must
 preserve unknowns and the existing independent proof requirement for
 matcher-consumable evidence.
 
-The shared adapter also supports explicit hosted configuration with
-`IOLAUS_SOURCE_DECISION_PROVIDER=typesafe`, `IOLAUS_SOURCE_DECISION_MODEL`,
-`IOLAUS_SOURCE_DECISION_REVISION`, and `TYPESAFE_API_KEY`. The evaluator CLI
-rejects hosted mode.
+## Bounded hosted Jev run
+
+Use approved source excerpts and an explicit paid run. Set
+`IOLAUS_SOURCE_DECISION_PROVIDER=typesafe`,
+`IOLAUS_SOURCE_DECISION_TRANSPORT=direct`, a pinned model
+(`jev-1.13.0` or `jev-1.14.0`), the deployment revision, and
+`TYPESAFE_API_KEY` in the operator environment. To use Bifrost instead, set
+`IOLAUS_SOURCE_DECISION_TRANSPORT=bifrost`, the gateway root and virtual key
+above, and the gateway's namespaced model. The gateway must preserve native
+TypeSafe metering. Use a dedicated route with no retries, paid fallback, or
+long-context override, and confirm the applicable gateway rate and budget.
+The adapter uses only the selected route.
+
+Set `IOLAUS_SOURCE_DECISION_JEV_INPUT_COST_MICROS_PER_MILLION` to a verified
+upper input rate. TypeSafe publishes 42,000 microdollars per million input tokens
+with free output. Verify any gateway markup separately.
+[TypeSafe pricing](https://help.typesafe.ai/articles/5187202169-how-much-does-jev-cost)
+
+```sh
+pnpm --silent --filter @willgriffin/iolaus-site matching:source-decision-evaluate \
+  --mode jev --allow-live-jev --max-calls 24 --max-cost-micros 50000
+```
+
+The CLI limits submitted request bytes and reserves the provider's full normal
+request context ceiling of 65,536 input tokens before each attempt. At the
+published rate that holds 2,753 microdollars. It settles a successful receipt
+using reported input tokens, rounded up per request, and releases the unused
+reserve. A missing, invalid, or over-limit receipt halts further calls and
+retains the unsettled reserve. The report separates the configured cap,
+receipt-based cost and unsettled reserve. Provider invoices and gateway-side
+retry counts are outside the client report.
+[TypeSafe model limits](https://docs.typesafe.ai/models)
+
+### First Jev diagnostic
+
+A direct `jev-1.14.0` run on the eight built-in examples identified 3 of 7
+reviewed required groups, compared with 2 of 7 in the code-path abstention
+control. Both identified all three preferred groups. The run skipped both
+positive concept examples because obligation classification gated the
+separate concept question.
+
+After separating the questions, a bounded diagnostic reused both positive
+quotes and one related-only control. Jev checked both positives and produced
+zero correct concept suggestions. The call cap blocked completion of the
+related-only control. These reused examples establish that the gate opens
+and the two positive mappings still fail on this diagnostic. They do not
+qualify Jev to replace posting interpretation or measure held-out quality.
+The historical aggregates could not distinguish selection from confirmation.
+A separate synthetic batch gave the leadership choice a score of 0.94 and
+the earlier entire-condition predicate a score of 0.34 on the same text.
+Questions about performing the defined activity scored 0.98 and 0.96 on the
+two positive paraphrases and 0.04 on observing only. This isolated a prompt
+failure in the diagnostic. It does not measure the corrected evaluator's
+quality on new postings.
+
+The initial two runs and the prompt batch used 25 calls, reported 9,877 input
+and 1,319 output tokens, and recorded zero client retries or provider errors.
+At the configured TypeSafe input rate the receipt-based total was 427
+microdollars, rounded up per request.
+
+### Corrected excerpt diagnostic
+
+The corrected evaluator checked three excerpts: one reused synthetic positive,
+one previously unseen public posting excerpt, and one reused observing-only
+control. It confirmed the two positive concepts and declined the observing
+example at confirmation. All citations were exact. The reviewed three-year
+requirement was still missing from matcher facts because the concept result
+is advisory. One reviewed role was also missed. This is an excerpt diagnostic,
+and publication still requires reviewed full-posting evidence.
+
+The corrected run used 8 calls, 3,018 input tokens, 361 output tokens,
+and 723 ms of measured provider wall time. Median provider latency was
+74 ms and p95 was 183 ms. Receipt-based cost was 130 microdollars.
+Across the four diagnostic runs, 33 calls reported 12,895 input tokens and
+1,680 output tokens. The receipt-based total was 557 microdollars, with zero
+client retries, provider errors, or unknown usage. Live Laya evaluation
+remains pending.

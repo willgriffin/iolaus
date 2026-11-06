@@ -10,15 +10,10 @@ type DecisionProviderConfig = {
   model: string;
   revision: string;
   timeoutMs: number;
+  transport: 'direct' | 'bifrost';
 } & (
-  | {
-      provider: 'laya';
-      transport: 'direct' | 'bifrost';
-      baseUrl: string;
-      apiKey?: string;
-      maxLen: number;
-    }
-  | { provider: 'typesafe'; transport: 'direct'; apiKey: string }
+  | { provider: 'laya'; baseUrl: string; apiKey?: string; maxLen: number }
+  | { provider: 'typesafe'; baseUrl?: string; apiKey: string }
 );
 
 type FailureStatus =
@@ -81,6 +76,21 @@ function serverUrl(env: NodeJS.ProcessEnv, name: string): URL {
   return url;
 }
 
+function bifrostRoute(env: NodeJS.ProcessEnv, model: string) {
+  const gateway = serverUrl(env, 'IOLAUS_SOURCE_DECISION_BIFROST_BASE_URL');
+  const path = gateway.pathname.replace(/\/+$/u, '');
+  if (/\/(?:openai|v1|typesafe|systemone)$/iu.test(path))
+    throw new Error('Configure the Bifrost root before any API route.');
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9]/u.test(model))
+    throw new Error('A Bifrost decision model must be provider/model.');
+  const apiKey = env.IOLAUS_SOURCE_DECISION_BIFROST_API_KEY?.trim();
+  if (!apiKey)
+    throw new Error('Configure IOLAUS_SOURCE_DECISION_BIFROST_API_KEY.');
+  // Native TypeSafe ingress preserves provider-specific usage metadata.
+  gateway.pathname = `${path}/typesafe`;
+  return { baseUrl: gateway.href, apiKey };
+}
+
 export function resolveMatchingSourceDecisionConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): DecisionProviderConfig {
@@ -106,35 +116,24 @@ export function resolveMatchingSourceDecisionConfig(
   const transport = env.IOLAUS_SOURCE_DECISION_TRANSPORT ?? 'direct';
   if (transport !== 'direct' && transport !== 'bifrost')
     throw new Error('Select direct or bifrost for the decision transport.');
+  const route = transport === 'bifrost' ? bifrostRoute(env, model) : undefined;
   if (provider === 'typesafe') {
-    if (transport !== 'direct')
-      throw new Error('The Bifrost decision transport is configured for Laya.');
-    const apiKey = env.TYPESAFE_API_KEY?.trim();
+    const apiKey = route?.apiKey ?? env.TYPESAFE_API_KEY?.trim();
     if (!apiKey) throw new Error('Configure TYPESAFE_API_KEY.');
-    return { provider, transport, model, revision, timeoutMs, apiKey };
+    return {
+      provider,
+      transport,
+      model,
+      revision,
+      timeoutMs,
+      apiKey,
+      baseUrl: route && `${route.baseUrl}/v1`,
+    };
   }
 
-  let baseUrl: string;
-  let apiKey: string | undefined;
-  let checkpoint = model;
-  if (transport === 'bifrost') {
-    const gateway = serverUrl(env, 'IOLAUS_SOURCE_DECISION_BIFROST_BASE_URL');
-    const path = gateway.pathname.replace(/\/+$/u, '');
-    if (/\/(?:openai|v1|typesafe|systemone)$/iu.test(path))
-      throw new Error('Configure the Bifrost root before any API route.');
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9]/u.test(model))
-      throw new Error('A Bifrost decision model must be provider/model.');
-    checkpoint = model.slice(model.indexOf('/') + 1);
-    apiKey = env.IOLAUS_SOURCE_DECISION_BIFROST_API_KEY?.trim();
-    if (!apiKey)
-      throw new Error('Configure IOLAUS_SOURCE_DECISION_BIFROST_API_KEY.');
-    // Bifrost's native TypeSafe ingress preserves the Laya wire metadata.
-    gateway.pathname = `${path}/typesafe`;
-    baseUrl = gateway.href;
-  } else {
-    baseUrl = serverUrl(env, 'LAYA_BASE_URL').href;
-    apiKey = env.LAYA_API_KEY?.trim() || undefined;
-  }
+  const checkpoint = route ? model.slice(model.indexOf('/') + 1) : model;
+  const baseUrl = route?.baseUrl ?? serverUrl(env, 'LAYA_BASE_URL').href;
+  const apiKey = route?.apiKey ?? (env.LAYA_API_KEY?.trim() || undefined);
   return {
     provider,
     transport,
@@ -207,7 +206,7 @@ export async function createMatchingSourceDecisionProvider(
           baseUrl: config.baseUrl,
           maxLen: config.maxLen,
         }
-      : { ...common, type: 'typesafe' },
+      : { ...common, type: 'typesafe', baseUrl: config.baseUrl },
   );
   if (!(await client.getCapabilities()).decisions || !client.decide)
     throw new Error('Configured provider does not support typed decisions.');

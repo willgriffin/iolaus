@@ -45,25 +45,22 @@ const attemptStatuses = [
 ] as const;
 
 export function parseArguments(args: string[]) {
-  let mode: 'mock' | 'laya' = 'mock';
-  let allowLive = false;
+  let mode: 'mock' | 'laya' | 'jev' = 'mock';
   let maxCalls: number | undefined;
+  let maxCostMicros: number | undefined;
   let fixture: string | undefined;
   const seen = new Set<string>();
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (seen.has(flag)) throw new Error('Duplicate option.');
     seen.add(flag);
-    if (flag === '--allow-live-laya') {
-      allowLive = true;
-      continue;
-    }
+    if (flag === '--allow-live-laya' || flag === '--allow-live-jev') continue;
     const value = args[++index];
     if (!value || value.startsWith('--'))
       throw new Error('Missing option value.');
     switch (flag) {
       case '--mode':
-        if (value !== 'mock' && value !== 'laya')
+        if (value !== 'mock' && value !== 'laya' && value !== 'jev')
           throw new Error('Unsupported mode.');
         mode = value;
         break;
@@ -74,17 +71,86 @@ export function parseArguments(args: string[]) {
         if (!/^[1-9]\d?$/u.test(value)) throw new Error('Invalid call cap.');
         maxCalls = Number(value);
         break;
+      case '--max-cost-micros':
+        if (!/^[1-9]\d{0,8}$/u.test(value))
+          throw new Error('Invalid cost cap.');
+        maxCostMicros = Number(value);
+        break;
       default:
         throw new Error('Unknown option.');
     }
   }
   if (
-    mode === 'laya'
-      ? !allowLive || maxCalls === undefined
-      : allowLive || maxCalls !== undefined
+    seen.has('--allow-live-laya') !== (mode === 'laya') ||
+    seen.has('--allow-live-jev') !== (mode === 'jev') ||
+    (maxCalls !== undefined) !== (mode !== 'mock') ||
+    (maxCostMicros !== undefined) !== (mode === 'jev')
   )
-    throw new Error('Live Laya requires an explicit opt-in and call cap.');
-  return { mode, maxCalls, fixture };
+    throw new Error('Live evaluation requires a matching opt-in and limits.');
+  return { mode, maxCalls, maxCostMicros, fixture };
+}
+
+const jevInputTokenCeiling = 65_536;
+
+function jevBudget(
+  model: string,
+  maxCostMicros: number | undefined,
+  env: NodeJS.ProcessEnv,
+) {
+  if (!/^jev-1\.(?:13|14)\.0$/u.test(model))
+    throw new Error('Jev evaluation requires a supported pinned checkpoint.');
+  const rate = env.IOLAUS_SOURCE_DECISION_JEV_INPUT_COST_MICROS_PER_MILLION;
+  if (
+    !rate ||
+    !/^[1-9]\d{0,8}$/u.test(rate) ||
+    maxCostMicros === undefined ||
+    !Number.isSafeInteger(maxCostMicros) ||
+    maxCostMicros < 1 ||
+    maxCostMicros > 999_999_999
+  )
+    throw new Error('Jev evaluation requires a positive rate and spend cap.');
+  const inputMicrosPerMillion = Number(rate);
+  const maxPerCallMicros = Math.ceil(
+    (jevInputTokenCeiling * inputMicrosPerMillion) / 1_000_000,
+  );
+  return {
+    maxCostMicros,
+    maxPerCallMicros,
+    inputMicrosPerMillion,
+    reportedCostMicros: 0,
+    settledCalls: 0,
+    unsettledReservedMicros: 0,
+    stopReason: null as 'cost-cap' | 'unverified-usage' | null,
+  };
+}
+
+function settleJevAttempt(
+  budget: ReturnType<typeof jevBudget>,
+  attempt: MatchingSourceDecisionAttempt | undefined,
+): boolean {
+  if (attempt?.calls === 0) {
+    budget.unsettledReservedMicros = 0;
+    return true;
+  }
+  const usage = attempt?.usage;
+  if (
+    attempt?.status !== 'ok' ||
+    !usage ||
+    usageFields.some(
+      (field) => !Number.isSafeInteger(usage[field]) || usage[field] < 0,
+    ) ||
+    usage.totalTokens !== usage.promptTokens + usage.completionTokens ||
+    usage.promptTokens > jevInputTokenCeiling
+  ) {
+    budget.stopReason = 'unverified-usage';
+    return false;
+  }
+  budget.reportedCostMicros += Math.ceil(
+    (usage.promptTokens * budget.inputMicrosPerMillion) / 1_000_000,
+  );
+  budget.settledCalls++;
+  budget.unsettledReservedMicros = 0;
+  return true;
 }
 
 function digest(value: unknown) {
@@ -134,13 +200,21 @@ function observedView(prepared: Prepared) {
   return {
     ...prepared.posting,
     concepts: prepared.units.flatMap(
-      ({ citation, conceptSuggestion, conceptDecisionStatus }) =>
+      ({
+        citation,
+        conceptSuggestion,
+        conceptDecisionStatus,
+        conceptSelection,
+        conceptConfirmation,
+      }) =>
         conceptDecisionStatus
           ? [
               {
                 citation: { ...citation, text: citation.quote },
                 slug: conceptSuggestion,
                 status: conceptDecisionStatus,
+                selection: conceptSelection,
+                confirmation: conceptConfirmation,
               },
             ]
           : [],
@@ -165,6 +239,8 @@ type Observed = Pick<
     citation: Span;
     slug?: string;
     status: MatchingSourceDecisionAttempt['status'];
+    selection: Prepared['units'][number]['conceptSelection'];
+    confirmation: Prepared['units'][number]['conceptConfirmation'];
   }[];
 };
 
@@ -256,8 +332,13 @@ function scoreConcepts(
       ({ citation, slug }) => slug && !reviewed.has(citationKey(citation)),
     ).length,
   };
+  const stages: Record<string, number> = {};
   for (const item of expected) {
     const prediction = predicted.get(citationKey(item.citation));
+    const selection = `${item.kind}.selection.${prediction?.selection ?? 'not-attempted'}`;
+    const confirmation = `${item.kind}.confirmation.${prediction?.confirmation ?? 'not-attempted'}`;
+    stages[selection] = (stages[selection] ?? 0) + 1;
+    stages[confirmation] = (stages[confirmation] ?? 0) + 1;
     const suggestion = prediction?.slug;
     const checked = Number(prediction?.status === 'ok');
     if (item.kind === 'equivalent') {
@@ -276,7 +357,7 @@ function scoreConcepts(
       counts.noFitSuggested += Number(suggestion !== undefined);
     }
   }
-  return counts;
+  return { counts, stages };
 }
 
 function scoreClaims(
@@ -285,6 +366,7 @@ function scoreClaims(
   fixture: BenchmarkCase,
 ) {
   const { source } = fixture;
+  const advisory = scoreConcepts(expected.concepts, observed.concepts);
   const expectedUnresolved = new Set(expected.unresolved.map(citationKey));
   const unresolved = new Set(observed.unresolved.map(citationKey));
   const spans = [
@@ -366,7 +448,8 @@ function scoreClaims(
       geographyKey,
     ),
     citations: { exact: spans.length - invalid, invalid },
-    advisoryConcepts: scoreConcepts(expected.concepts, observed.concepts),
+    advisoryConcepts: advisory.counts,
+    advisoryStages: advisory.stages,
     unresolved: {
       observed: unresolved.size,
       expected: expectedUnresolved.size,
@@ -475,7 +558,7 @@ function sumScores(scores: ReturnType<typeof scoreClaims>[]) {
     for (const metric of Object.keys(totals) as (keyof typeof totals)[]) {
       const total = totals[metric] as Record<string, number>;
       for (const [label, count] of Object.entries(score[metric]))
-        total[label] += count;
+        total[label] = (total[label] ?? 0) + count;
     }
   }
   return totals;
@@ -564,24 +647,38 @@ export async function evaluate(
   args: ReturnType<typeof parseArguments>,
   env: NodeJS.ProcessEnv,
 ) {
-  const live = args.mode === 'laya';
+  const live = args.mode !== 'mock';
+  const expectedProvider = args.mode === 'jev' ? 'typesafe' : 'laya';
   if (
     live &&
-    (env.IOLAUS_SOURCE_DECISION_PROVIDER !== 'laya' || !args.maxCalls)
+    (env.IOLAUS_SOURCE_DECISION_PROVIDER !== expectedProvider ||
+      args.maxCalls === undefined ||
+      !Number.isSafeInteger(args.maxCalls) ||
+      args.maxCalls < 1 ||
+      args.maxCalls > 99)
   )
-    throw new Error('Explicit Laya configuration required.');
+    throw new Error(
+      args.mode === 'jev'
+        ? 'Explicit TypeSafe configuration required.'
+        : 'Explicit Laya configuration required.',
+    );
+  const config = live ? resolveMatchingSourceDecisionConfig(env) : undefined;
+  const expectedCheckpoint =
+    config && config.transport === 'bifrost'
+      ? config.model.slice(config.model.indexOf('/') + 1)
+      : (config?.model ?? 'scripted');
+  const spend =
+    args.mode === 'jev'
+      ? jevBudget(expectedCheckpoint, args.maxCostMicros, env)
+      : undefined;
   const fixture = await readFixture(args.fixture ?? builtInFixture);
   const attempts: MatchingSourceDecisionAttempt[] = [];
-  const config = live ? resolveMatchingSourceDecisionConfig(env) : undefined;
-  const provider =
-    config?.provider === 'laya'
-      ? await createMatchingSourceDecisionProvider(config, {
-          onAttempt: (attempt) => attempts.push(attempt),
-        })
-      : fixtureProvider(false);
-  const { model, transport } = provider.provenance;
-  const expectedCheckpoint =
-    transport === 'bifrost' ? model.slice(model.indexOf('/') + 1) : model;
+  const provider = config
+    ? await createMatchingSourceDecisionProvider(config, {
+        onAttempt: (attempt) => attempts.push(attempt),
+      })
+    : fixtureProvider(false);
+  const { transport } = provider.provenance;
   const codeOnly = fixtureProvider(true);
   let attemptsBudgeted = 0;
   let preparationVersion: string | undefined;
@@ -609,8 +706,25 @@ export async function evaluate(
             budgetBlockedRequests++;
             return { status: 'failed' };
           }
+          if (spend) {
+            if (
+              !spend.stopReason &&
+              spend.reportedCostMicros + spend.maxPerCallMicros >
+                spend.maxCostMicros
+            )
+              spend.stopReason = 'cost-cap';
+            if (spend.stopReason) {
+              budgetBlockedRequests++;
+              return { status: 'failed' };
+            }
+            spend.unsettledReservedMicros = spend.maxPerCallMicros;
+          }
           attemptsBudgeted++;
-          return provider.decide(request);
+          const before = attempts.length;
+          const outcome = await provider.decide(request);
+          if (spend && !settleJevAttempt(spend, attempts[before]))
+            return { status: 'invalid' };
+          return outcome;
         },
       });
       times.push(performance.now() - started);
@@ -642,8 +756,8 @@ export async function evaluate(
   const synthetic = await evaluateSplit(fixture.synthetic);
   const heldOut = await evaluateSplit(fixture.heldOut);
   return {
-    reportVersion: 1,
-    evidence: live ? 'live-laya' : 'scripted-plumbing-only',
+    reportVersion: 2,
+    evidence: live ? `live-${args.mode}` : 'scripted-plumbing-only',
     fixture: args.fixture
       ? { version: fixture.version, origin: 'external' }
       : {
@@ -659,6 +773,15 @@ export async function evaluate(
     maxInputBytes: provider.provenance.maxInputBytes,
     timeoutMs: config?.timeoutMs ?? null,
     callCap: args.maxCalls ?? 0,
+    cost: spend
+      ? {
+          ...spend,
+          inputTokenCeilingPerCall: jevInputTokenCeiling,
+          reportedCostMicros: spend.settledCalls
+            ? spend.reportedCostMicros
+            : null,
+        }
+      : null,
     fullRunWithinBudget:
       synthetic.budgetBlockedRequests + heldOut.budgetBlockedRequests === 0,
     synthetic,
@@ -678,7 +801,7 @@ if (
     );
   } catch {
     process.stderr.write(
-      'Source decision evaluation failed. Use --mode mock or --mode laya --allow-live-laya --max-calls N. Check fixture and provider configuration.\n',
+      'Source decision evaluation failed. Check the fixture, provider, opt-in flag, and required call and cost caps.\n',
     );
     process.exitCode = 1;
   }

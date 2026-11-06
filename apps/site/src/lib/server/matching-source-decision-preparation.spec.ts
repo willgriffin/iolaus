@@ -60,10 +60,11 @@ const equivalentLeadership = `equivalent_${leadership}`;
 function advisoryFixture(
   choice: string,
   probability: number | 'truncated' | 'failed' = 1,
+  classification = 'requirement',
 ) {
   const provider = fixture();
   provider.decide.mockImplementation(async ({ questions }) => {
-    if (questions.classification) return answer('requirement');
+    if (questions.classification) return answer(classification);
     if (questions.concept) return answer(choice, 'fixture-observed', 'concept');
     if (typeof probability === 'string') return { status: probability };
     return {
@@ -339,13 +340,89 @@ describe('matching source decision preparation', () => {
     expect(provider.decide).toHaveBeenCalledTimes(3);
   });
 
-  it('limits semantic work to a single applicant condition and the shared request budget', async () => {
+  it.each([
+    ['Experience leading a group of engineers.', 'context'],
+    ['Experience supervising a squad of software engineers.', 'unresolved'],
+    ['You will lead a group of engineers.', 'context'],
+  ])('checks capability independently of obligation for %s', async (description, classification) => {
+    const provider = advisoryFixture(leadership, 1, classification);
+    const result = await prepareMatchingSourceDecision(
+      { ...source, description },
+      provider,
+    );
+    expect(result.units.at(-1)).toMatchObject({
+      citation: {
+        field: 'description',
+        start: 0,
+        end: description.length,
+        quote: description,
+      },
+      conceptDecisionStatus: 'ok',
+      conceptSuggestion: leadership,
+    });
+    expect(result.posting.required).toEqual([]);
+    expect(result.posting.preferred).toEqual([]);
+    expect(result.extraction.semantic).toBeUndefined();
+    expect(
+      provider.decide.mock.calls.some(([request]) => request.questions.concept),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['Experience leading a group of engineers.', 0.34, 'declined'],
+    ['Experience leading a group of engineers.', 0.98, 'confirmed'],
+    [
+      'Experience supervising a squad of software engineers.',
+      0.96,
+      'confirmed',
+    ],
+    [
+      'Experience observing engineers lead retrospective meetings.',
+      0.04,
+      'declined',
+    ],
+    ['Have 3+ years managing remote engineering teams.', 0.96, 'confirmed'],
+  ] as const)('replays capability confirmation for %s at %s', async (description, probability, confirmation) => {
+    const provider = advisoryFixture(leadership, probability, 'context');
+    const result = await prepareMatchingSourceDecision(
+      { ...source, description },
+      provider,
+    );
+    const unit = result.units.at(-1);
+    expect(unit).toMatchObject({
+      citation: {
+        field: 'description',
+        start: 0,
+        end: description.length,
+        quote: description,
+      },
+      conceptDecisionStatus: 'ok',
+      conceptSelection: 'candidate',
+      conceptConfirmation: confirmation,
+    });
+    expect(unit?.conceptSuggestion).toBe(
+      confirmation === 'confirmed' ? leadership : undefined,
+    );
+    const confirmationRequest = provider.decide.mock.calls.at(-1)?.[0];
+    expect(confirmationRequest?.state).toEqual({
+      quote: description,
+      concept: expect.any(String),
+    });
+    expect(confirmationRequest?.questions[equivalentLeadership]?.type).toBe(
+      'predicate',
+    );
+    expect(result.posting.required).toEqual([]);
+    expect(result.posting.preferred).toEqual([]);
+    expect(result.extraction.semantic).toBeUndefined();
+  });
+
+  it('limits semantic work to a single capability and the shared request budget', async () => {
     const provider = advisoryFixture(leadership);
     const result = await prepareMatchingSourceDecision(
       {
         ...source,
         description: [
-          'You will lead engineering teams.',
+          'Our team leads engineering projects.',
           'Experience leading a group of engineers and work authorization.',
           ...Array.from(
             { length: 12 },

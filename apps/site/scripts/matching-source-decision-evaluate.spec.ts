@@ -19,6 +19,32 @@ const liveEnv = {
   IOLAUS_SOURCE_DECISION_BIFROST_API_KEY: 'private-fixture-key',
 };
 
+const jevEnv = {
+  IOLAUS_SOURCE_DECISION_PROVIDER: 'typesafe',
+  IOLAUS_SOURCE_DECISION_TRANSPORT: 'direct',
+  IOLAUS_SOURCE_DECISION_MODEL: 'jev-1.13.0',
+  IOLAUS_SOURCE_DECISION_REVISION: 'test-jev-revision',
+  IOLAUS_SOURCE_DECISION_JEV_INPUT_COST_MICROS_PER_MILLION: '42000',
+  TYPESAFE_API_KEY: 'test-fixture-key',
+};
+const jevArgs = ['--mode', 'jev', '--allow-live-jev', '--max-calls', '2'];
+const jevResponse = {
+  model: 'jev-1.13.0',
+  answers: {
+    classification: {
+      type: 'choice',
+      choice: 'unresolved',
+      confidence: 1,
+      probabilities: {
+        requirement: 0,
+        preferred: 0,
+        context: 0,
+        unresolved: 1,
+      },
+    },
+  },
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('matching source decision evaluation', () => {
@@ -81,9 +107,26 @@ describe('matching source decision evaluation', () => {
         noFitChecked: 1,
         noFitSuggested: 0,
       });
+      expect(split.candidate.advisoryStages).toEqual({
+        'equivalent.selection.candidate': 1,
+        'equivalent.confirmation.confirmed': 1,
+        'related-only.selection.related': 1,
+        'related-only.confirmation.not-attempted': 1,
+        'no-fit.selection.no-fit': 1,
+        'no-fit.confirmation.not-attempted': 1,
+      });
+      expect(split.controls.frozenAbstentionV1.advisoryStages).toMatchObject({
+        'equivalent.selection.not-attempted': 1,
+        'equivalent.confirmation.not-attempted': 1,
+      });
       expect(
         split.controls.codePathWithAbstention.advisoryConcepts,
       ).toMatchObject({
+        equivalentChecked: 1,
+        equivalentCorrect: 0,
+        equivalentMissed: 1,
+      });
+      expect(split.controls.frozenAbstentionV1.advisoryConcepts).toMatchObject({
         equivalentChecked: 0,
         equivalentMissed: 1,
       });
@@ -183,6 +226,98 @@ describe('matching source decision evaluation', () => {
     });
     expect(result.usage.observedModel.matched).toBe(1);
     expect(JSON.stringify(result)).not.toContain('private-');
+  });
+
+  it('requires an explicit Jev opt-in, pinned model, and cost rate before inference', async () => {
+    expect(() => parseArguments(jevArgs)).toThrow();
+    expect(() =>
+      parseArguments([
+        '--mode',
+        'jev',
+        '--max-calls',
+        '2',
+        '--max-cost-micros',
+        '50000',
+      ]),
+    ).toThrow();
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const args = parseArguments([...jevArgs, '--max-cost-micros', '50000']);
+    await expect(
+      evaluate(args, {
+        ...jevEnv,
+        IOLAUS_SOURCE_DECISION_MODEL: 'jev-latest',
+      }),
+    ).rejects.toThrow('pinned checkpoint');
+    await expect(
+      evaluate(args, {
+        ...jevEnv,
+        IOLAUS_SOURCE_DECISION_JEV_INPUT_COST_MICROS_PER_MILLION: undefined,
+      }),
+    ).rejects.toThrow('positive rate');
+    await expect(
+      evaluate({ ...args, maxCostMicros: Infinity }, jevEnv),
+    ).rejects.toThrow('positive rate');
+    await expect(evaluate({ ...args, maxCalls: 100 }, jevEnv)).rejects.toThrow(
+      'Explicit TypeSafe configuration required.',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reserves each Jev call, reconciles measured usage, and refuses to exceed cost cap', async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({
+        ...jevResponse,
+        usage: { input_tokens: 24, output_tokens: 0 },
+      }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const result = await evaluate(
+      parseArguments([...jevArgs, '--max-cost-micros', '2754']),
+      jevEnv,
+    );
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      'https://api.typesafe.ai/v1/systemone',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-fixture-key',
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      evidence: 'live-jev',
+      fullRunWithinBudget: false,
+      cost: {
+        maxCostMicros: 2754,
+        maxPerCallMicros: 2753,
+        reportedCostMicros: 2,
+        settledCalls: 1,
+        unsettledReservedMicros: 0,
+        stopReason: 'cost-cap',
+      },
+      usage: { providerCalls: 1, retries: 0 },
+    });
+  });
+
+  it.each([
+    undefined,
+    { input_tokens: 10 },
+    { input_tokens: 65_537, output_tokens: 0 },
+  ])('halts Jev and keeps the reserve for unverifiable metering %o', async (usage) => {
+    const fetch = vi.fn(async () => Response.json({ ...jevResponse, usage }));
+    vi.stubGlobal('fetch', fetch);
+    const result = await evaluate(
+      parseArguments([...jevArgs, '--max-cost-micros', '50000']),
+      jevEnv,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.cost).toMatchObject({
+      reportedCostMicros: null,
+      settledCalls: 0,
+      unsettledReservedMicros: 2753,
+      stopReason: 'unverified-usage',
+    });
+    expect(result.usage.retries).toBe(0);
   });
 
   it('keeps missing call usage separate from reported zero and from host preflight skips', () => {
