@@ -117,7 +117,7 @@ for (const dialect of dialects) {
           preparationVersion: 'matching-source-jev/v24',
         };
         const material = matchingSourceSemanticMaterial(source);
-        const run = (corrected: boolean) =>
+        const run = (corrected: boolean, regress = false) =>
           runMatchingSourceExtraction(db, dialect, 1000, {
             opportunityId: postingId,
             decisionProfile: corrected ? latest : profile,
@@ -147,7 +147,9 @@ for (const dialect of dialects) {
                       : {
                           id,
                           kind:
-                            corrected && id === 'd4' ? 'unresolved' : 'context',
+                            id === 'd4' || (regress && id === 'd6')
+                              ? 'unresolved'
+                              : 'context',
                           groups: [],
                         },
                   ),
@@ -162,7 +164,7 @@ for (const dialect of dialects) {
                   roleCorrect: false,
                   geographyCorrect: false,
                   units: material.units.map(({ id }) => {
-                    const pass = !corrected || id !== 'd4';
+                    const pass = id !== 'd4' && !(regress && id === 'd6');
                     return {
                       id,
                       classificationCorrect: pass,
@@ -210,6 +212,7 @@ for (const dialect of dialects) {
           });
         await expect(run(false)).resolves.toBe('published');
         await runMatchingTick(db, dialect);
+        await expect(run(true, true)).resolves.toBe('idle');
         await expect(run(true)).resolves.toBe('published');
         await runMatchingTick(db, dialect);
         await expect(run(true)).resolves.toBe('idle');

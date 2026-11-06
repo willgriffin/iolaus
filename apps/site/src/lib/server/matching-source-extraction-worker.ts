@@ -335,7 +335,8 @@ export async function runMatchingSourceExtraction(
             )
             .map(({ id }) => id);
         const previousVerified = new Set(verifiedIds(previous));
-        const correctedExercise = [
+        const incomingVerified = new Set(verifiedIds(incoming));
+        const correctsPriorClassification = [
           ...(provenance.hiringExercises ?? []).flatMap(
             ({ assessedUnitIds }) => assessedUnitIds,
           ),
@@ -346,17 +347,22 @@ export async function runMatchingSourceExtraction(
           const kind = priorKinds.get(id);
           return (
             previousVerified.has(id) &&
+            incomingVerified.has(id) &&
             (kind === 'requirement' || kind === 'preferred')
           );
         });
+        const losesVerifiedUnits = correctsPriorClassification
+          ? [...previousVerified].some((id) => !incomingVerified.has(id))
+          : previousVerified.size > incomingVerified.size;
         if (
-          !correctedExercise &&
-          (previous.coverage === 'complete' ||
-            previousVerified.size > verifiedIds(incoming).length ||
-            (previous.semantic?.verification.roleCorrect &&
-              !incoming.semantic?.verification.roleCorrect) ||
-            (previous.semantic?.verification.geographyCorrect &&
-              !incoming.semantic?.verification.geographyCorrect))
+          (previous.coverage === 'complete' &&
+            (!correctsPriorClassification ||
+              incoming.coverage !== 'complete')) ||
+          losesVerifiedUnits ||
+          (previous.semantic?.verification.roleCorrect &&
+            !incoming.semantic?.verification.roleCorrect) ||
+          (previous.semantic?.verification.geographyCorrect &&
+            !incoming.semantic?.verification.geographyCorrect)
         ) {
           options.onFailure?.('PriorEvidenceRetained');
           return (await retainPrior()) ? 'idle' : 'obsolete';
