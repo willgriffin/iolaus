@@ -9,9 +9,14 @@ import { advanceMatchingSourceRevision } from './matching-projection-schema.js';
 import {
   extractMatchingSource,
   MATCHING_SOURCE_EXTRACTION_VERSION,
+  parseMatchingSourceExtraction,
 } from './matching-source-extraction.js';
 import { MatchingSourceExtractionError } from './matching-source-extraction-contract.js';
-import { matchingSourceCaptureDigest } from './matching-source-identity.js';
+import {
+  matchingSourceCaptureDigest,
+  matchingSourceDecisionRequestId,
+} from './matching-source-identity.js';
+import type { MatchingSourceDecisionProfile } from './matching-source-semantics.js';
 import { MATCHING_POLICY_VERSION } from './normalized-matching.js';
 import { OpportunityIntelligenceGovernanceError } from './opportunity-intelligence-governance.js';
 
@@ -19,7 +24,12 @@ const SCAN_BATCH = 24;
 const LEASE_MS = 180_000;
 const MAX_ATTEMPTS = 3;
 type Row = Record<string, unknown>;
-type Provider = typeof extractMatchingSource;
+type Provider = (
+  input: Parameters<typeof extractMatchingSource>[0] & {
+    workplaceType?: string;
+  },
+  options: Parameters<typeof extractMatchingSource>[1],
+) => ReturnType<typeof extractMatchingSource>;
 
 function text(value: unknown) {
   return typeof value === 'string' ? value : String(value ?? '');
@@ -40,6 +50,7 @@ async function claimSourceExtraction(
   database: DatabaseInterface,
   dialect: MatchingDialect,
   opportunityId?: string,
+  decisionRequestId?: string,
 ) {
   if (!database.transaction)
     throw new Error('Source extraction requires native transactions.');
@@ -66,7 +77,7 @@ async function claimSourceExtraction(
           AND sv.revision = f.source_revision AND sl.revision = f.source_listing_revision
           AND s.is_active = TRUE AND s.public_listing = TRUE AND ${liveMatchingOpportunitySql('o', dialect)}
         THEN 1 ELSE 0 END AS eligible,
-        x.attempts AS previous_attempts, x.state AS previous_state, x.next_run_at, x.input_digest
+        x.attempts AS previous_attempts, x.state AS previous_state, x.next_run_at, x.input_digest, x.request_id AS previous_request_id
       FROM page f
       JOIN matching_vocabulary_version vv ON vv.id=1
       JOIN matching_source_versions sv ON sv.opportunity_id=f.opportunity_id
@@ -86,13 +97,19 @@ async function claimSourceExtraction(
     );
     const now = Date.now();
     const sameCapture = (row: Row) =>
-      row.input_digest === matchingSourceCaptureDigest(row.source_content_json);
+      row.input_digest ===
+        matchingSourceCaptureDigest(row.source_content_json) &&
+      (decisionRequestId === undefined ||
+        row.previous_request_id === decisionRequestId);
     const selected = candidates.find(
       (row) =>
         Number(row.eligible) === 1 &&
         /^[a-f0-9]{64}$/u.test(text(row.source_content_fingerprint)) &&
         Number(row.source_content_version) > 0 &&
         (opportunityId !== undefined || needsInterpretation(row)) &&
+        (!decisionRequestId ||
+          row.previous_state !== 'running' ||
+          Number(row.next_run_at) <= now) &&
         (!sameCapture(row) ||
           (!['complete', 'failed'].includes(text(row.previous_state)) &&
             Number(row.previous_attempts ?? 0) < MAX_ATTEMPTS &&
@@ -142,17 +159,19 @@ async function claimSourceExtraction(
       title: posting.title,
       description: posting.description,
       location: posting.location,
+      ...(decisionRequestId &&
+        posting.workplaceType && { workplaceType: posting.workplaceType }),
     };
     await db.query(
       `
       INSERT INTO matching_source_interpretations(
         opportunity_id, source_fingerprint, source_content_version, contract_version, input_digest,
         state, lease, next_run_at, attempts, payload_json, request_id
-      ) VALUES (?, ?, CAST(? AS BIGINT), ?, ?, 'running', ?, CAST(? AS BIGINT), ?, '', '')
+      ) VALUES (?, ?, CAST(? AS BIGINT), ?, ?, 'running', ?, CAST(? AS BIGINT), ?, '', ?)
       ON CONFLICT(opportunity_id) DO UPDATE SET
         source_fingerprint=excluded.source_fingerprint, source_content_version=excluded.source_content_version,
         contract_version=excluded.contract_version, input_digest=excluded.input_digest, state=excluded.state, lease=excluded.lease,
-        next_run_at=excluded.next_run_at, attempts=excluded.attempts, payload_json='', request_id=''
+        next_run_at=excluded.next_run_at, attempts=excluded.attempts, payload_json='', request_id=excluded.request_id
     `,
       [
         input.opportunityId,
@@ -163,6 +182,7 @@ async function claimSourceExtraction(
         lease,
         now + LEASE_MS,
         attempt,
+        decisionRequestId ?? '',
       ],
     );
     return {
@@ -189,6 +209,7 @@ export async function runMatchingSourceExtraction(
     opportunityId?: string;
     windowId?: string;
     provider?: Provider;
+    decisionProfile?: MatchingSourceDecisionProfile;
     onFailure?: (kind: string) => void;
     onDiagnostic?: (kind: string) => void;
   } = {},
@@ -197,10 +218,18 @@ export async function runMatchingSourceExtraction(
     throw new Error('Source extraction requires native transactions.');
   if (!Number.isSafeInteger(budgetMicros) || budgetMicros <= 0)
     throw new Error('Source extraction requires a positive integer budget.');
+  if (options.decisionProfile && (!options.provider || !options.opportunityId))
+    throw new Error(
+      'Decision publication requires an explicit provider and posting.',
+    );
+  const decisionRequestId =
+    options.decisionProfile &&
+    matchingSourceDecisionRequestId(options.decisionProfile);
   const claimed = await claimSourceExtraction(
     database,
     dialect,
     options.opportunityId,
+    decisionRequestId,
   );
   if (!claimed) return 'idle';
   const { input, lease, attempt, capture, sourceRevision, listingRevision } =
@@ -211,6 +240,15 @@ export async function runMatchingSourceExtraction(
       budgetMicros,
       ...(options.windowId === undefined ? {} : { windowId: options.windowId }),
     });
+    if (decisionRequestId) {
+      const provenance = parseMatchingSourceExtraction(output.extraction, input)
+        .semantic?.decision;
+      if (
+        !provenance ||
+        matchingSourceDecisionRequestId(provenance) !== decisionRequestId
+      )
+        throw new MatchingSourceExtractionError('matching_extraction_coverage');
+    }
     for (const diagnostic of output.diagnostics ?? [])
       options.onDiagnostic?.(diagnostic);
     for (const { field, issue } of output.schemaDiagnostics ?? [])
@@ -264,7 +302,7 @@ export async function runMatchingSourceExtraction(
       `,
         [
           JSON.stringify(output.extraction),
-          output.requestId ?? '',
+          decisionRequestId ?? output.requestId ?? '',
           input.opportunityId,
           lease,
         ],

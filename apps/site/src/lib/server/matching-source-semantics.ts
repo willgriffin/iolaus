@@ -80,11 +80,65 @@ const verification = z
       .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
   })
   .strict();
+const decisionIdentifier = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,127}$/u);
+const decisionProfile = z.strictObject({
+  provider: z.enum(['typesafe', 'laya']),
+  transport: z.enum(['direct', 'bifrost']),
+  model: decisionIdentifier,
+  revision: decisionIdentifier,
+  maxInputBytes: z.number().int().min(256).max(8192),
+  preparationVersion: decisionIdentifier,
+});
+export type MatchingSourceDecisionProfile = z.infer<typeof decisionProfile>;
+const decisionProvenance = decisionProfile.extend({
+  observedModels: z.array(decisionIdentifier).min(1).max(16),
+  diagnostics: z
+    .strictObject({
+      draftCalls: z.number().int().min(0).max(100),
+      verificationCalls: z.number().int().min(0).max(100),
+      unasked: z.number().int().min(0).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+      declined: z
+        .number()
+        .int()
+        .min(0)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+      failed: z.number().int().min(0).max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+      verified: z
+        .number()
+        .int()
+        .min(0)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT),
+      classificationPasses: z
+        .number()
+        .int()
+        .min(0)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT)
+        .optional(),
+      coveragePasses: z
+        .number()
+        .int()
+        .min(0)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT)
+        .optional(),
+      logicPasses: z
+        .number()
+        .int()
+        .min(0)
+        .max(MATCHING_SOURCE_SEMANTIC_UNIT_LIMIT)
+        .optional(),
+      rolePasses: z.number().int().min(0).max(1).optional(),
+      geographyPasses: z.number().int().min(0).max(1).optional(),
+    })
+    .optional(),
+});
 const proof = z
   .object({
     sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
     proposal,
     verification,
+    decision: decisionProvenance.optional(),
   })
   .strict();
 
@@ -339,5 +393,7 @@ export function parseMatchingSourceSemanticProof(
   );
   if (parsed.sourceDigest !== verified.sourceDigest)
     throw new MatchingSourceSemanticError('digest');
-  return verified;
+  return parsed.decision
+    ? { ...verified, decision: parsed.decision }
+    : verified;
 }

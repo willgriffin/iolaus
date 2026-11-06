@@ -18,7 +18,10 @@ import {
   MATCHING_SOURCE_EXTRACTION_VERSION,
   parseMatchingSourceExtraction,
 } from './matching-source-extraction-contract.js';
-import { matchingSourceCaptureDigest } from './matching-source-identity.js';
+import {
+  matchingSourceCaptureDigest,
+  matchingSourceDecisionRequestId,
+} from './matching-source-identity.js';
 import {
   evaluateNormalizedMatch,
   MATCHING_POLICY_VERSION,
@@ -215,7 +218,14 @@ function normalizeSourceSnapshot(
         JSON.parse(text(row.interpretation_json)),
         raw,
       );
-      return normalizeMatchingPosting(raw, vocabulary, interpretation);
+      const decision = interpretation.semantic?.decision;
+      const requestId = text(row.interpretation_request_id);
+      if (
+        decision
+          ? matchingSourceDecisionRequestId(decision) === requestId
+          : !requestId.startsWith('decision:')
+      )
+        return normalizeMatchingPosting(raw, vocabulary, interpretation);
     } catch {
       // Invalid or mismatched derived data cannot replace raw hard evidence.
     }
@@ -258,7 +268,7 @@ async function sourceWork(
       SELECT sv.opportunity_id, sv.revision AS source_revision,
         sl.revision AS listing_revision, o.title, o.description_raw, o.locations,
         o.location_notes, o.work_mode, o.source_content_json, o.source_content_version, o.source_content_fingerprint,
-        x.input_digest, x.payload_json AS interpretation_json
+        x.input_digest, x.request_id AS interpretation_request_id, x.payload_json AS interpretation_json
       FROM matching_source_versions sv
       JOIN opportunities o ON CAST(o.id AS TEXT) = sv.opportunity_id
       JOIN sources s ON s.id = o.source_id AND s.is_active = TRUE AND s.public_listing = TRUE

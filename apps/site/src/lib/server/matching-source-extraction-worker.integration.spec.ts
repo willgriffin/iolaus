@@ -6,6 +6,14 @@ import { ensureMatchingProjectionSchema } from './matching-projection-schema.js'
 import { runMatchingTick } from './matching-projection-worker.js';
 import { parseMatchingSourceExtraction } from './matching-source-extraction-contract.js';
 import { runMatchingSourceExtraction } from './matching-source-extraction-worker.js';
+import { matchingSourceDecisionRequestId } from './matching-source-identity.js';
+import {
+  type MatchingSourceDecisionProfile,
+  matchingSourceSemanticMaterial,
+  matchingSourceSemanticProposalDigest,
+  parseMatchingSourceSemanticProposal,
+  verifyMatchingSourceSemanticProposal,
+} from './matching-source-semantics.js';
 import { OpportunityIntelligenceGovernanceError } from './opportunity-intelligence-governance.js';
 import { fingerprintOpportunitySourceContent } from './opportunity-source-content.js';
 
@@ -76,6 +84,141 @@ async function seed(db: DatabaseInterface) {
 
 for (const dialect of dialects) {
   describe(`governed shared interpretation publication on ${dialect}`, () => {
+    it('pins decision strategy, refuses a concurrent replacement, and reuses only the same completed strategy', async () => {
+      const { database: db, close } = await createMatchingProjectionFixture(
+        dialect,
+        postgresUrl,
+      );
+      try {
+        await seed(db);
+        await ensureMatchingProjectionSchema(db, dialect);
+        await runMatchingTick(db, dialect);
+        const profile: MatchingSourceDecisionProfile = {
+          provider: 'typesafe',
+          transport: 'direct',
+          model: 'jev-1.14.0',
+          revision: 'test-r1',
+          maxInputBytes: 8192,
+          preparationVersion: 'test/v1',
+        };
+        const next = { ...profile, revision: 'test-r2' };
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let calls = 0;
+        const provider: NonNullable<
+          Parameters<typeof runMatchingSourceExtraction>[3]
+        >['provider'] = async (source) => {
+          calls++;
+          entered.resolve();
+          await release.promise;
+          const material = matchingSourceSemanticMaterial(source);
+          const proposal = parseMatchingSourceSemanticProposal(
+            {
+              role: null,
+              geography: null,
+              ledger: material.units.map(({ id }) =>
+                id === 'd1'
+                  ? {
+                      id,
+                      kind: 'requirement',
+                      groups: [
+                        {
+                          alternatives: [
+                            {
+                              conceptId: 'nodejs',
+                              years: null,
+                              context: null,
+                              unsupportedQualifier: false,
+                            },
+                          ],
+                        },
+                      ],
+                    }
+                  : { id, kind: 'context', groups: [] },
+              ),
+            },
+            source,
+          );
+          const proof = verifyMatchingSourceSemanticProposal(
+            {
+              sourceDigest: material.sourceDigest,
+              proposalDigest: matchingSourceSemanticProposalDigest(proposal),
+              roleCorrect: false,
+              geographyCorrect: false,
+              units: material.units.map(({ id }) => ({
+                id,
+                classificationCorrect: true,
+                allConditionsRepresented: true,
+                logicAndQualifiersPreserved: true,
+              })),
+            },
+            source,
+            proposal,
+          );
+          return {
+            requestId: 'ignored',
+            extraction: {
+              coverage: 'partial',
+              role: null,
+              geography: null,
+              noRequirements: null,
+              required: [],
+              preferred: [],
+              unresolved: [],
+              semantic: {
+                ...proof,
+                decision: { ...profile, observedModels: [profile.model] },
+              },
+            },
+          };
+        };
+        const first = runMatchingSourceExtraction(db, dialect, 1000, {
+          opportunityId: postingId,
+          decisionProfile: profile,
+          provider,
+        });
+        await entered.promise;
+        try {
+          await expect(
+            runMatchingSourceExtraction(db, dialect, 1000, {
+              opportunityId: postingId,
+              decisionProfile: next,
+              provider,
+            }),
+          ).resolves.toBe('idle');
+        } finally {
+          release.resolve();
+        }
+        await expect(first).resolves.toBe('published');
+        await runMatchingTick(db, dialect);
+        await expect(
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            opportunityId: postingId,
+            decisionProfile: profile,
+            provider,
+          }),
+        ).resolves.toBe('idle');
+        const stored = await db.query(
+          'SELECT request_id, state FROM matching_source_interpretations WHERE opportunity_id=?',
+          [postingId],
+        );
+        expect(stored.rows[0]).toMatchObject({
+          state: 'complete',
+          request_id: matchingSourceDecisionRequestId(profile),
+        });
+        await expect(
+          runMatchingSourceExtraction(db, dialect, 1000, {
+            opportunityId: postingId,
+            decisionProfile: next,
+            provider,
+          }),
+        ).resolves.toBe('retry');
+        expect(calls).toBe(2);
+      } finally {
+        await close();
+      }
+    });
+
     it('does not hold a transaction during extraction; stale captures cannot publish, fresh exact evidence updates the same cheap feed once', async () => {
       const { database: db, close } = await createMatchingProjectionFixture(
         dialect,
