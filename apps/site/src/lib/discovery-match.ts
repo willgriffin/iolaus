@@ -8,6 +8,7 @@ export type DiscoveryEvidenceItem = {
 export type DiscoveryEvidenceExplanation = {
   supported: DiscoveryEvidenceItem[];
   gaps: DiscoveryEvidenceItem[];
+  applicationSteps?: DiscoveryEvidenceItem[];
   interpretation?: string;
 };
 

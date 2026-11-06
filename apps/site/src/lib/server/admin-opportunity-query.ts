@@ -1995,7 +1995,7 @@ function matchingEvidenceExcerpts(facts: unknown): Map<string, string> {
   return excerpts;
 }
 
-function sourceGapLocator(value: unknown): string | undefined {
+function matchingSourceLocator(value: unknown): string | undefined {
   const citation = matchingObject(value);
   const { field, start, end } = citation ?? {};
   if (
@@ -2010,8 +2010,9 @@ function sourceGapLocator(value: unknown): string | undefined {
     return JSON.stringify([field, start, end]);
 }
 
-function matchingSourceGapExcerpts(facts: unknown): Map<string, string> {
-  const source = matchingObject(readMatchingJson(facts));
+function matchingSourceGaps(
+  source: Record<string, unknown> | undefined,
+): unknown[] {
   const gaps = Array.isArray(source?.sourceCapabilityGaps)
     ? [...source.sourceCapabilityGaps]
     : [];
@@ -2021,10 +2022,16 @@ function matchingSourceGapExcerpts(facts: unknown): Map<string, string> {
       for (const atom of alternatives)
         gaps.push(matchingObject(atom)?.sourceGap);
   }
+  return gaps;
+}
+
+function matchingSourceExcerpts(
+  entries: readonly unknown[],
+): Map<string, string> {
   const excerpts = new Map<string, string>();
-  for (const gap of gaps) {
-    const citation = matchingObject(matchingObject(gap)?.citation);
-    const key = sourceGapLocator(citation);
+  for (const entry of entries) {
+    const citation = matchingObject(matchingObject(entry)?.citation);
+    const key = matchingSourceLocator(citation);
     const { text, start, end } = citation ?? {};
     if (
       key &&
@@ -2069,8 +2076,13 @@ function explainDiscoveryMatch(
   if (!Array.isArray(parsed)) return { reasons, evidence };
 
   const privateExcerpts = matchingEvidenceExcerpts(facts);
-  const sourceExcerpts = matchingSourceGapExcerpts(sourceFacts);
+  const source = matchingObject(readMatchingJson(sourceFacts));
+  const sourceExcerpts = matchingSourceExcerpts(matchingSourceGaps(source));
+  const stepExcerpts = matchingSourceExcerpts(
+    Array.isArray(source?.applicationSteps) ? source.applicationSteps : [],
+  );
   const excerpted: { item: DiscoveryEvidenceItem; excerpts: string[] }[] = [];
+  const firstStepExcerpts: typeof excerpted = [];
   for (const value of parsed) {
     const reason = matchingObject(value);
     if (!reason || typeof reason.message !== 'string') continue;
@@ -2078,7 +2090,10 @@ function explainDiscoveryMatch(
     const gap =
       (code === 'required-capability' || code === 'posting-capability-gap') &&
       outcome === 'unknown';
-    if (status === 'qualified' || gap) reasons.push(message);
+    const applicationStep =
+      code === 'posting-application-step' && outcome === 'unknown';
+    if (!applicationStep && (status === 'qualified' || gap))
+      reasons.push(message);
     if (outcome === 'unknown' && typeof code === 'string') {
       const note = INTERPRETATION_NOTES.get(code);
       if (note) evidence.interpretation = note;
@@ -2086,19 +2101,24 @@ function explainDiscoveryMatch(
     const support =
       (code === 'required-capability' || code === 'preferred-capability') &&
       outcome === 'supported';
-    if (!gap && !support) continue;
+    if (!gap && !support && !applicationStep) continue;
 
+    const publicExcerpts = applicationStep
+      ? stepExcerpts
+      : gap
+        ? sourceExcerpts
+        : undefined;
     const excerpts = new Set<string>();
     if (
-      (privateExcerpts.size || (gap && sourceExcerpts.size)) &&
+      ((!applicationStep && privateExcerpts.size) || publicExcerpts?.size) &&
       Array.isArray(citations)
     ) {
       for (const citation of citations) {
-        const key = matchingEvidenceLocator(citation);
-        const publicKey = gap && sourceGapLocator(citation);
+        const key = !applicationStep && matchingEvidenceLocator(citation);
+        const publicKey = publicExcerpts && matchingSourceLocator(citation);
         const excerpt =
           (key && privateExcerpts.get(key)) ||
-          (publicKey && sourceExcerpts.get(publicKey));
+          (publicKey && publicExcerpts?.get(publicKey));
         if (!excerpt) continue;
         excerpts.add(
           excerpt.length > 240 ? `${excerpt.slice(0, 240)}…` : excerpt,
@@ -2107,14 +2127,23 @@ function explainDiscoveryMatch(
       }
     }
     const item: DiscoveryEvidenceItem = { message };
-    if (excerpts.size) excerpted.push({ item, excerpts: [...excerpts] });
-    (support ? evidence.supported : evidence.gaps).push(item);
+    if (excerpts.size) {
+      const entry = { item, excerpts: [...excerpts] };
+      if (applicationStep && firstStepExcerpts.length < 3)
+        firstStepExcerpts.push(entry);
+      else excerpted.push(entry);
+    }
+    if (applicationStep) {
+      evidence.applicationSteps ??= [];
+      evidence.applicationSteps.push(item);
+    } else (support ? evidence.supported : evidence.gaps).push(item);
   }
-  // Give each evidence-bearing requirement a first excerpt before spending
-  // the shared allowance on additional citations for any one item.
+  // Reserve one exact citation for up to three process notes within the same
+  // budget, then give other evidence-bearing items their first citation.
+  const allExcerpts = [...firstStepExcerpts, ...excerpted];
   let excerptBudget = 12;
   for (let index = 0; index < 3 && excerptBudget; index++) {
-    for (const { item, excerpts } of excerpted) {
+    for (const { item, excerpts } of allExcerpts) {
       const excerpt = excerpts[index];
       if (!excerpt) continue;
       item.excerpts ??= [];

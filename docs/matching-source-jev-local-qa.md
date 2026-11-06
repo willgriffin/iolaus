@@ -224,3 +224,52 @@ last reader replay reprojected 44 selected typed captures with zero
 provider calls. The final two list views streamed their shell before
 results and had warm p95 of 259 ms and 252 ms. The 33 source captures and
 12 profile and preference input sets were byte-identical.
+
+## Application assessments and mixed clauses
+
+The typed reader can account for an exact take-home exercise without treating
+the sample product's requirements as applicant qualifications. A closed
+opening, completion statement, and subsequent hiring boundary establish
+the outer exercise. Ambiguous boundaries still need independent review.
+Subsections preserve exact source order and neighboring boundaries. The
+audit verifies their purpose and checks each substantive member for actual
+applicant conditions. Confirmed child sections can account for adjacent
+structural labels containing no conditions of their own.
+
+Application steps are separate from matching evidence. The detail view can
+show exact citations for required or optional assessment participation,
+application disclosures, and submission materials. These steps do not affect
+the score, establish candidate support, or imply completion. The provider
+receives a mailbox placeholder for audited submission directions. The detail
+citation stops before the contact address.
+
+When one source unit mixes duties and applicant expectations, a bounded split
+keeps exact offsets without changing the original unit IDs. The audit checks
+whether conditions cross clause boundaries, then checks each clause for its
+phase, strength, and any separate eligibility conditions. Incomplete coverage
+keeps the original unit unresolved. The reader preserves illustrative examples
+and literal alternatives. A verified descriptive trait or unfamiliar
+capability can remain an evidence gap without granting support.
+
+### Pinned local result
+
+A previously withheld full-stack posting became the eighth screened listing
+in the original 33-posting cohort. The seven prior listings and three
+known conflicts were preserved, and none qualified. The exact capture
+accounted for 159 audited source units and four structural labels. It has
+one directly supported required group and a separately cited unproved
+qualitative trait gap. No exercise item became an applicant capability.
+The detail view shows the three application steps separately.
+
+The final pinned preparation used 37 Jev calls and $0.001339 at the
+configured rates. Development and diagnostics for this change used 351
+metered calls and $0.013738 in total. An initial attempt stopped after one
+request without a usage receipt, with $0.002753 conservatively reserved
+and its prior proof retained. Several subsequent audited attempts also
+retained the previous proof when coverage regressed. The final proof comes
+from a single complete attempt. Reader replay used zero provider calls.
+
+Five independently authored fictional postings exercised the source
+boundaries with a scripted adapter. Their exact citations and actual
+eligibility conditions remained intact. This is contract evidence. The
+single live pinned posting does not measure general extraction accuracy.

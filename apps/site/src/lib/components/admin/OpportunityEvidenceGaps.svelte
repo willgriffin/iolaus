@@ -61,6 +61,10 @@ const gaps = $derived(
       <p>Check the posting’s requirements before applying.</p>
     {/if}
   {/if}
+  {#if evidence?.applicationSteps?.length}
+    <h3>Application steps</h3>
+    {@render evidenceList(evidence.applicationSteps)}
+  {/if}
 {/snippet}
 
 {#if compact}
