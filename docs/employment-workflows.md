@@ -107,6 +107,9 @@ or source jobs:
   `attemptCount = terminalCount + pendingCount` and `terminalCount` equal to
   the sum of the six terminal outcome counters. See
   [Source crawl accounting](./source-crawl-accounting.md).
+- Local crawl completion, failure, and interrupted attempt recovery write
+  terminal timestamps as epoch milliseconds on both SQLite drivers. The
+  accounting transaction still determines which attempt and crawl can close.
 - Source crawling ends after deterministic fetch, normalization, persistence,
   eligibility evaluation, and a bounded queue insert. It never waits for
   opportunity extraction or scoring. Eligible new or materially changed source

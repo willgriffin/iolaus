@@ -155,6 +155,69 @@ describe.runIf(runPostgresCoverage)(
       }
     });
 
+    it('persists terminal timestamps with the current PostgreSQL crawl fence', async () => {
+      if (!primary) throw new Error('Missing primary session.');
+      const database = transactionalSession(primary);
+      const completed = {
+        finishedAt: null as Date | null,
+        id: randomUUID(),
+        jobAttempt: 0,
+        jobId: '',
+        status: 'running',
+      };
+      const failed = { ...completed, id: randomUUID() };
+      await primary.query(`ALTER TABLE source_crawls
+        ADD COLUMN job_id TEXT NOT NULL DEFAULT '',
+        ADD COLUMN job_attempt INTEGER NOT NULL DEFAULT 0`);
+      await primary.query('INSERT INTO source_crawls (id) VALUES (?), (?)', [
+        completed.id,
+        failed.id,
+      ]);
+      await createSourceCrawlAttempt(database, {
+        attemptKey: 'skip',
+        sourceCrawlId: failed.id,
+      });
+      await recordSourceCrawlAttemptTerminalIntent(database, {
+        attemptKey: 'skip',
+        outcome: 'skipped',
+        sourceCrawlId: failed.id,
+        status: 'filtered',
+      });
+      await expect(
+        completeSourceCrawl(
+          completed,
+          { error: '', status: 'completed' },
+          database,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        failSourceCrawl(failed, 'interrupted', database),
+      ).resolves.toBe(true);
+      const result = await primary.query(`SELECT
+          crawl.id, crawl.status, crawl.finished_at AS "finishedAt",
+          item.outcome, item.terminal_at AS "terminalAt"
+        FROM source_crawls AS crawl
+        LEFT JOIN source_crawl_items AS item ON item.source_crawl_id = CAST(crawl.id AS TEXT)`);
+      expect(result.rows).toEqual(
+        expect.arrayContaining([
+          {
+            id: completed.id,
+            status: 'completed',
+            finishedAt: completed.finishedAt,
+            outcome: null,
+            terminalAt: null,
+          },
+          {
+            id: failed.id,
+            status: 'failed',
+            finishedAt: failed.finishedAt,
+            outcome: 'skipped',
+            terminalAt: failed.finishedAt,
+          },
+        ]),
+      );
+    });
+
     it('deduplicates concurrent attempt creation by crawl and attempt key', async () => {
       if (!primary || !concurrent) throw new Error('Missing sessions.');
       const crawlId = randomUUID();
