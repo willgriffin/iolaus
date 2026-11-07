@@ -1,0 +1,1662 @@
+{
+  "concepts": [
+    {
+      "id": "nodejs",
+      "aliases": [
+        "Node.js",
+        "Node"
+      ]
+    },
+    {
+      "id": "typescript",
+      "aliases": [
+        "TypeScript",
+        "TS"
+      ]
+    },
+    {
+      "id": "javascript",
+      "aliases": [
+        "JavaScript",
+        "JS"
+      ]
+    },
+    {
+      "id": "postgresql",
+      "aliases": [
+        "PostgreSQL",
+        "Postgres"
+      ]
+    },
+    {
+      "id": "sqlite",
+      "aliases": [
+        "SQLite"
+      ]
+    },
+    {
+      "id": "relational-databases",
+      "aliases": [
+        "relational databases",
+        "SQL databases"
+      ]
+    },
+    {
+      "id": "linux",
+      "aliases": [
+        "Linux"
+      ]
+    },
+    {
+      "id": "on-call",
+      "aliases": [
+        "on-call"
+      ]
+    },
+    {
+      "id": "mentoring",
+      "aliases": [
+        "mentoring"
+      ]
+    },
+    {
+      "id": "people-management",
+      "aliases": [
+        "people management",
+        "line management"
+      ]
+    },
+    {
+      "id": "accessibility-audits",
+      "aliases": [
+        "accessibility audits"
+      ]
+    },
+    {
+      "id": "us-work-authorization",
+      "aliases": [
+        "U.S. work authorization"
+      ]
+    },
+    {
+      "id": "spanish",
+      "aliases": [
+        "Spanish"
+      ]
+    },
+    {
+      "id": "editorial-review",
+      "aliases": [
+        "editorial review"
+      ]
+    },
+    {
+      "id": "caption-editing",
+      "aliases": [
+        "caption editing"
+      ]
+    },
+    {
+      "id": "video-editing",
+      "aliases": [
+        "video editing"
+      ]
+    },
+    {
+      "id": "technical-writing",
+      "aliases": [
+        "technical writing"
+      ]
+    },
+    {
+      "id": "incident-command",
+      "aliases": [
+        "incident command"
+      ]
+    },
+    {
+      "id": "capacity-planning",
+      "aliases": [
+        "capacity planning"
+      ]
+    },
+    {
+      "id": "kubernetes",
+      "aliases": [
+        "Kubernetes"
+      ]
+    },
+    {
+      "id": "docker",
+      "aliases": [
+        "Docker"
+      ]
+    },
+    {
+      "id": "terraform",
+      "aliases": [
+        "Terraform"
+      ]
+    },
+    {
+      "id": "networking",
+      "aliases": [
+        "networking"
+      ]
+    },
+    {
+      "id": "routing",
+      "aliases": [
+        "IP routing"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "nodejs",
+      "to": "typescript",
+      "kind": "related"
+    },
+    {
+      "from": "nodejs",
+      "to": "javascript",
+      "kind": "related"
+    },
+    {
+      "from": "typescript",
+      "to": "javascript",
+      "kind": "related"
+    },
+    {
+      "from": "sqlite",
+      "to": "relational-databases",
+      "kind": "narrower"
+    },
+    {
+      "from": "postgresql",
+      "to": "relational-databases",
+      "kind": "narrower"
+    },
+    {
+      "from": "mentoring",
+      "to": "people-management",
+      "kind": "related"
+    },
+    {
+      "from": "caption-editing",
+      "to": "video-editing",
+      "kind": "related"
+    },
+    {
+      "from": "docker",
+      "to": "kubernetes",
+      "kind": "related"
+    },
+    {
+      "from": "routing",
+      "to": "networking",
+      "kind": "narrower"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "orchard",
+      "family": "runtime-vs-language",
+      "split": "development",
+      "candidate": {
+        "id": "orchard-candidate",
+        "text": "I build HTTP services using Node.js and maintain their Postgres databases. I write plain JavaScript and have never used TypeScript. Seeking backend engineering.",
+        "concepts": [
+          {
+            "value": "Node.js",
+            "state": "supported",
+            "evidence": "I build HTTP services using Node.js"
+          },
+          {
+            "value": "Postgres",
+            "state": "supported",
+            "evidence": "maintain their Postgres databases"
+          },
+          {
+            "value": "JavaScript",
+            "state": "supported",
+            "evidence": "I write plain JavaScript"
+          },
+          {
+            "value": "TypeScript",
+            "state": "absent",
+            "evidence": "have never used TypeScript"
+          }
+        ],
+        "targetRole": "backend-engineer",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "orchard-1",
+          "text": "Orchard Parcel needs a backend engineer to build Node APIs with PostgreSQL.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Node"
+            ],
+            [
+              "PostgreSQL"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:orchard-1",
+          "version": "1"
+        },
+        {
+          "id": "orchard-2",
+          "text": "Copper Shed needs a backend engineer for TypeScript and Node.js services.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "TypeScript"
+            ],
+            [
+              "Node.js"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:orchard-2",
+          "version": "1"
+        },
+        {
+          "id": "orchard-3",
+          "text": "Brook Relay needs a backend engineer to support a Postgres-backed Node.js API. TypeScript is preferred.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Postgres"
+            ],
+            [
+              "Node.js"
+            ]
+          ],
+          "preferred": [
+            [
+              "TypeScript"
+            ]
+          ],
+          "source": "urn:fictional:posting:orchard-3",
+          "version": "1"
+        },
+        {
+          "id": "orchard-4",
+          "text": "Fern Cart needs a backend engineer to maintain SQLite and JavaScript services.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "SQLite"
+            ],
+            [
+              "JavaScript"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:orchard-4",
+          "version": "1"
+        },
+        {
+          "id": "orchard-5",
+          "text": "Dust Frame seeks a backend engineer with TypeScript and prior on-call experience.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "TypeScript"
+            ],
+            [
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:orchard-5",
+          "version": "1"
+        },
+        {
+          "id": "orchard-6",
+          "text": "Elm Forms needs a JavaScript frontend engineer to build form components.",
+          "role": "frontend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "JavaScript"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:orchard-6",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "orchard-1",
+          "outcome": "eligible",
+          "reason": "Node.js and Postgres are exact aliases of the two requirements. The work directly combines both technologies used together in the candidate\u2019s services.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "orchard-2",
+          "outcome": "ineligible",
+          "reason": "The candidate explicitly lacks TypeScript.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "orchard-3",
+          "outcome": "eligible",
+          "reason": "Both requirements are met. TypeScript is optional.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "orchard-4",
+          "outcome": "unknown",
+          "reason": "There is no evidence for SQLite.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "orchard-5",
+          "outcome": "ineligible",
+          "reason": "Explicit absence of TypeScript resolves the gate despite unknown on-call experience.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "orchard-6",
+          "outcome": "ineligible",
+          "reason": "The candidate targets backend engineering.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "spur",
+      "family": "runtime-vs-language",
+      "split": "development",
+      "candidate": {
+        "id": "spur-candidate",
+        "text": "I maintain message queues and HTTP workers in Node. The handover notes do not identify which language the workers use. I am looking for backend engineering.",
+        "concepts": [
+          {
+            "value": "Node",
+            "state": "supported",
+            "evidence": "I maintain message queues and HTTP workers in Node"
+          },
+          {
+            "value": "TypeScript",
+            "state": "unknown",
+            "evidence": "The handover notes do not identify which language the workers use"
+          }
+        ],
+        "targetRole": "backend-engineer",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "spur-1",
+          "text": "Spur Wire seeks a backend engineer to operate HTTP workers in Node.js.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Node.js"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spur-1",
+          "version": "1"
+        },
+        {
+          "id": "spur-2",
+          "text": "Hollow Bead seeks a backend engineer to maintain TypeScript services.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "TypeScript"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spur-2",
+          "version": "1"
+        },
+        {
+          "id": "spur-3",
+          "text": "Quartz Latch seeks a backend engineer to maintain Node.js services and prefers TypeScript.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Node.js"
+            ]
+          ],
+          "preferred": [
+            [
+              "TypeScript"
+            ]
+          ],
+          "source": "urn:fictional:posting:spur-3",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "spur-1",
+          "outcome": "eligible",
+          "reason": "Node is an exact alias of Node.js and the work mirrors the candidate\u2019s experience.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "spur-2",
+          "outcome": "unknown",
+          "reason": "The use of Node alone leaves TypeScript unresolved.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "spur-3",
+          "outcome": "eligible",
+          "reason": "Node.js is supported and TypeScript is optional and unknown.",
+          "relevance": 1
+        }
+      ]
+    },
+    {
+      "id": "cove",
+      "family": "conjunction-and-alternatives",
+      "split": "development",
+      "candidate": {
+        "id": "cove-candidate",
+        "text": "I maintain Linux services backed by SQLite. I have never operated a PostgreSQL instance. I am looking for a site reliability role in Canada.",
+        "concepts": [
+          {
+            "value": "Linux",
+            "state": "supported",
+            "evidence": "I maintain Linux services"
+          },
+          {
+            "value": "SQLite",
+            "state": "supported",
+            "evidence": "backed by SQLite"
+          },
+          {
+            "value": "PostgreSQL",
+            "state": "absent",
+            "evidence": "I have never operated a PostgreSQL instance"
+          }
+        ],
+        "targetRole": "site-reliability-engineer",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "cove-1",
+          "text": "Cove Inventory seeks a site reliability engineer with Linux and either SQLite or PostgreSQL.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "SQLite",
+              "PostgreSQL"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:cove-1",
+          "version": "1"
+        },
+        {
+          "id": "cove-2",
+          "text": "Lock Glass needs a site reliability engineer with Linux and PostgreSQL.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "PostgreSQL"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:cove-2",
+          "version": "1"
+        },
+        {
+          "id": "cove-3",
+          "text": "Finch Supply needs a site reliability engineer with either SQLite or PostgreSQL plus on-call experience.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "SQLite",
+              "PostgreSQL"
+            ],
+            [
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:cove-3",
+          "version": "1"
+        },
+        {
+          "id": "cove-4",
+          "text": "Tile Ferry seeks a site reliability engineer with Linux and relational database experience.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "relational databases"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:cove-4",
+          "version": "1"
+        },
+        {
+          "id": "cove-5",
+          "text": "Drift Spool seeks a site reliability engineer with Linux and either PostgreSQL or Kubernetes.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "PostgreSQL",
+              "Kubernetes"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:cove-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "cove-1",
+          "outcome": "eligible",
+          "reason": "Linux plus SQLite satisfies both groups. The specific SQLite and Linux combination mirrors the candidate\u2019s current work.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "cove-2",
+          "outcome": "ineligible",
+          "reason": "PostgreSQL is required and explicitly absent.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "cove-3",
+          "outcome": "unknown",
+          "reason": "SQLite meets the database group. On-call evidence is missing.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "cove-4",
+          "outcome": "eligible",
+          "reason": "SQLite is a relational database, and Linux is supported.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "cove-5",
+          "outcome": "unknown",
+          "reason": "One alternative is absent and the other is unknown.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "reed",
+      "family": "ambiguous-title-and-mentoring",
+      "split": "development",
+      "candidate": {
+        "id": "reed-candidate",
+        "text": "My title was Platform Lead. I wrote JavaScript tools and mentored two engineers. I have never had direct reports or carried out performance reviews. I want an individual-contributor platform engineering role.",
+        "concepts": [
+          {
+            "value": "JavaScript",
+            "state": "supported",
+            "evidence": "I wrote JavaScript tools"
+          },
+          {
+            "value": "mentoring",
+            "state": "supported",
+            "evidence": "mentored two engineers"
+          },
+          {
+            "value": "people-management",
+            "state": "absent",
+            "evidence": "I have never had direct reports or carried out performance reviews"
+          }
+        ],
+        "targetRole": "platform-engineer",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "reed-1",
+          "text": "Platform Lead at Reed Lantern builds JavaScript tooling and mentors engineers. This is an individual-contributor platform engineering role.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "JavaScript"
+            ],
+            [
+              "mentoring"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:reed-1",
+          "version": "1"
+        },
+        {
+          "id": "reed-2",
+          "text": "Platform Lead at Slate Lamp owns hiring and performance reviews as an engineering manager.",
+          "role": "engineering-manager",
+          "regions": [],
+          "must": [
+            [
+              "people management"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:reed-2",
+          "version": "1"
+        },
+        {
+          "id": "reed-3",
+          "text": "Platform Engineer at Moss Ring builds JavaScript tooling. The role requires prior line management.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "JavaScript"
+            ],
+            [
+              "line management"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:reed-3",
+          "version": "1"
+        },
+        {
+          "id": "reed-4",
+          "text": "Platform Engineer at Orchard Lamp maintains JavaScript tooling and prefers accessibility audits.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "JavaScript"
+            ]
+          ],
+          "preferred": [
+            [
+              "accessibility audits"
+            ]
+          ],
+          "source": "urn:fictional:posting:reed-4",
+          "version": "1"
+        },
+        {
+          "id": "reed-5",
+          "text": "Platform Lead at Brass Tool maintains JavaScript tooling and coordinates projects. The posting does not describe whether the role has line reports.",
+          "role": null,
+          "regions": [],
+          "must": [
+            [
+              "JavaScript"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:reed-5",
+          "version": "1"
+        },
+        {
+          "id": "reed-6",
+          "text": "Platform Lead at Dust Loom is an individual-contributor engineering role requiring TypeScript.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "TypeScript"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:reed-6",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "reed-1",
+          "outcome": "eligible",
+          "reason": "Both hands-on engineering and mentoring are supported. JavaScript tooling and mentoring mirror the candidate\u2019s prior role.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "reed-2",
+          "outcome": "ineligible",
+          "reason": "The target role differs and the candidate explicitly lacks line management.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "reed-3",
+          "outcome": "ineligible",
+          "reason": "Mentoring does not establish line management, which the candidate explicitly lacks.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "reed-4",
+          "outcome": "eligible",
+          "reason": "JavaScript is supported and the unknown audit preference cannot gate admission.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "reed-5",
+          "outcome": "unknown",
+          "reason": "JavaScript is supported but the ambiguous lead role is unresolved.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "reed-6",
+          "outcome": "unknown",
+          "reason": "The title fits this listing, but TypeScript evidence is missing.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "maple",
+      "family": "remote-geographic-constraints",
+      "split": "development",
+      "candidate": {
+        "id": "maple-candidate",
+        "text": "I am based in Canada and seeking remote backend engineering. I maintain Linux services and PostgreSQL databases. I do not have U.S. work authorization.",
+        "concepts": [
+          {
+            "value": "Linux",
+            "state": "supported",
+            "evidence": "I maintain Linux services"
+          },
+          {
+            "value": "PostgreSQL",
+            "state": "supported",
+            "evidence": "PostgreSQL databases"
+          },
+          {
+            "value": "U.S. work authorization",
+            "state": "absent",
+            "evidence": "I do not have U.S. work authorization"
+          }
+        ],
+        "targetRole": "backend-engineer",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "maple-1",
+          "text": "Maple Plane hires remote backend engineers based in Canada to maintain Postgres.",
+          "role": "backend-engineer",
+          "regions": [
+            "CA"
+          ],
+          "must": [
+            [
+              "Postgres"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-1",
+          "version": "1"
+        },
+        {
+          "id": "maple-2",
+          "text": "Soft Kite hires remote backend engineers based in the United States to maintain Postgres.",
+          "role": "backend-engineer",
+          "regions": [
+            "US"
+          ],
+          "must": [
+            [
+              "Postgres"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-2",
+          "version": "1"
+        },
+        {
+          "id": "maple-3",
+          "text": "Pear Blot hires remote backend engineers in the United States or Canada with Linux experience.",
+          "role": "backend-engineer",
+          "regions": [
+            "US",
+            "CA"
+          ],
+          "must": [
+            [
+              "Linux"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-3",
+          "version": "1"
+        },
+        {
+          "id": "maple-4",
+          "text": "Dew Barge hires remote backend engineers worldwide with Linux and prior on-call experience.",
+          "role": "backend-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-4",
+          "version": "1"
+        },
+        {
+          "id": "maple-5",
+          "text": "Cliff Sorter hires remote backend engineers with Linux experience. Ask the recruiter about supported hiring locations.",
+          "role": "backend-engineer",
+          "regions": null,
+          "must": [
+            [
+              "Linux"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-5",
+          "version": "1"
+        },
+        {
+          "id": "maple-6",
+          "text": "Iron Press hires remote backend engineers across North America to maintain Linux services. U.S. work authorization is mandatory.",
+          "role": "backend-engineer",
+          "regions": [
+            "CA",
+            "US",
+            "MX"
+          ],
+          "must": [
+            [
+              "Linux"
+            ],
+            [
+              "U.S. work authorization"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:maple-6",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "maple-1",
+          "outcome": "eligible",
+          "reason": "Canada is allowed and Postgres is supported. The role explicitly hires in Canada and matches the candidate\u2019s database work.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "maple-2",
+          "outcome": "ineligible",
+          "reason": "The candidate is outside the allowed region.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "maple-3",
+          "outcome": "eligible",
+          "reason": "Canada is one of the allowed regions and Linux is supported.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "maple-4",
+          "outcome": "unknown",
+          "reason": "Geography is unrestricted. On-call experience is unknown.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "maple-5",
+          "outcome": "unknown",
+          "reason": "The source does not establish where the company hires.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "maple-6",
+          "outcome": "ineligible",
+          "reason": "Location qualifies, but the candidate explicitly lacks the required authorization.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "lilac",
+      "family": "required-vs-preferred-evidence",
+      "split": "held-out",
+      "candidate": {
+        "id": "lilac-candidate",
+        "text": "I review instruction manuals for publication. I edit subtitles for short training clips. My earlier title was Editor. I am looking for documentation editor work.",
+        "concepts": [
+          {
+            "value": "editorial review",
+            "state": "supported",
+            "evidence": "I review instruction manuals for publication"
+          },
+          {
+            "value": "caption editing",
+            "state": "supported",
+            "evidence": "I edit subtitles for short training clips"
+          }
+        ],
+        "targetRole": "documentation-editor",
+        "region": "CA"
+      },
+      "opportunities": [
+        {
+          "id": "lilac-1",
+          "text": "Lilac Register needs a documentation editor to review manuals before publication. Spanish is a plus.",
+          "role": "documentation-editor",
+          "regions": [],
+          "must": [
+            [
+              "editorial review"
+            ]
+          ],
+          "preferred": [
+            [
+              "Spanish"
+            ]
+          ],
+          "source": "urn:fictional:posting:lilac-1",
+          "version": "1"
+        },
+        {
+          "id": "lilac-2",
+          "text": "Birch Wheel needs a documentation editor to review manuals and read Spanish copy independently.",
+          "role": "documentation-editor",
+          "regions": [],
+          "must": [
+            [
+              "editorial review"
+            ],
+            [
+              "Spanish"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:lilac-2",
+          "version": "1"
+        },
+        {
+          "id": "lilac-3",
+          "text": "Umber Boat needs a video editor who can edit captions for instructional videos.",
+          "role": "video-editor",
+          "regions": [],
+          "must": [
+            [
+              "caption editing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:lilac-3",
+          "version": "1"
+        },
+        {
+          "id": "lilac-4",
+          "text": "Sable Bell needs a documentation editor for editorial review and caption editing.",
+          "role": "documentation-editor",
+          "regions": [],
+          "must": [
+            [
+              "editorial review"
+            ],
+            [
+              "caption editing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:lilac-4",
+          "version": "1"
+        },
+        {
+          "id": "lilac-5",
+          "text": "Pine Lantern needs a documentation editor with video editing experience to assemble training footage.",
+          "role": "documentation-editor",
+          "regions": [],
+          "must": [
+            [
+              "video editing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:lilac-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "lilac-1",
+          "outcome": "eligible",
+          "reason": "Editorial review is supported. Spanish is optional and unknown.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "lilac-2",
+          "outcome": "unknown",
+          "reason": "Spanish is required and unknown.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "lilac-3",
+          "outcome": "ineligible",
+          "reason": "Caption editing is supported, but the target role differs.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "lilac-4",
+          "outcome": "eligible",
+          "reason": "Both editorial review and caption editing are supported. The work uses both demonstrated editorial specialties.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "lilac-5",
+          "outcome": "unknown",
+          "reason": "Editing captions alone does not establish broader video editing experience.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "silt",
+      "family": "incident-role-versus-career-intent",
+      "split": "held-out",
+      "candidate": {
+        "id": "silt-candidate",
+        "text": "I spent six years in site reliability. I directed incident response and wrote operator guides. I am now looking only for technical writer jobs.",
+        "concepts": [
+          {
+            "value": "incident command",
+            "state": "supported",
+            "evidence": "I directed incident response"
+          },
+          {
+            "value": "technical writing",
+            "state": "supported",
+            "evidence": "wrote operator guides"
+          }
+        ],
+        "targetRole": "technical-writer",
+        "region": "US"
+      },
+      "opportunities": [
+        {
+          "id": "silt-1",
+          "text": "Silt Atlas seeks a technical writer to write operator guides. Prior incident command is useful.",
+          "role": "technical-writer",
+          "regions": [],
+          "must": [
+            [
+              "technical writing"
+            ]
+          ],
+          "preferred": [
+            [
+              "incident command"
+            ]
+          ],
+          "source": "urn:fictional:posting:silt-1",
+          "version": "1"
+        },
+        {
+          "id": "silt-2",
+          "text": "Kelp Loop seeks an SRE to direct incident response and write operator guides.",
+          "role": "site-reliability-engineer",
+          "regions": [],
+          "must": [
+            [
+              "incident command"
+            ],
+            [
+              "technical writing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:silt-2",
+          "version": "1"
+        },
+        {
+          "id": "silt-3",
+          "text": "Lichen Valve seeks a technical writer who has led incident response and can document runbooks.",
+          "role": "technical-writer",
+          "regions": [],
+          "must": [
+            [
+              "incident command"
+            ],
+            [
+              "technical writing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:silt-3",
+          "version": "1"
+        },
+        {
+          "id": "silt-4",
+          "text": "Tin Kite seeks a technical writer who has performed capacity planning and written operator guides.",
+          "role": "technical-writer",
+          "regions": [],
+          "must": [
+            [
+              "capacity planning"
+            ],
+            [
+              "technical writing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:silt-4",
+          "version": "1"
+        },
+        {
+          "id": "silt-5",
+          "text": "Bramble Gauge seeks a technical writer with technical writing and on-call experience.",
+          "role": "technical-writer",
+          "regions": [],
+          "must": [
+            [
+              "technical writing"
+            ],
+            [
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:silt-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "silt-1",
+          "outcome": "eligible",
+          "reason": "The role fits the stated intent and both skills are supported. The posting emphasizes operator guides and values the candidate\u2019s incident background.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "silt-2",
+          "outcome": "ineligible",
+          "reason": "Historical SRE work does not override the technical writing target.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "silt-3",
+          "outcome": "eligible",
+          "reason": "The stated target, incident experience, and operator-guide writing fit. Runbook writing and incident response directly match both demonstrated capabilities.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "silt-4",
+          "outcome": "unknown",
+          "reason": "Prior SRE work alone does not establish capacity planning.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "silt-5",
+          "outcome": "unknown",
+          "reason": "Directing response does not establish participation in an on-call rotation.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "ash",
+      "family": "container-and-or-negative-alternatives",
+      "split": "held-out",
+      "candidate": {
+        "id": "ash-candidate",
+        "text": "I package services with Docker and provision environments with Terraform. I have never administered Kubernetes or joined an on-call rotation. I seek platform engineering work.",
+        "concepts": [
+          {
+            "value": "Docker",
+            "state": "supported",
+            "evidence": "I package services with Docker"
+          },
+          {
+            "value": "Terraform",
+            "state": "supported",
+            "evidence": "provision environments with Terraform"
+          },
+          {
+            "value": "Kubernetes",
+            "state": "absent",
+            "evidence": "I have never administered Kubernetes"
+          },
+          {
+            "value": "on-call",
+            "state": "absent",
+            "evidence": "or joined an on-call rotation"
+          }
+        ],
+        "targetRole": "platform-engineer",
+        "region": "GB"
+      },
+      "opportunities": [
+        {
+          "id": "ash-1",
+          "text": "Ash Mill seeks a platform engineer with Terraform plus Docker or Kubernetes.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Terraform"
+            ],
+            [
+              "Docker",
+              "Kubernetes"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:ash-1",
+          "version": "1"
+        },
+        {
+          "id": "ash-2",
+          "text": "Quill Pot seeks a platform engineer with Terraform plus prior Kubernetes administration or on-call experience.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Terraform"
+            ],
+            [
+              "Kubernetes",
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:ash-2",
+          "version": "1"
+        },
+        {
+          "id": "ash-3",
+          "text": "Rope Pearl seeks a platform engineer with Docker plus Linux administration or Kubernetes administration.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Docker"
+            ],
+            [
+              "Linux",
+              "Kubernetes"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:ash-3",
+          "version": "1"
+        },
+        {
+          "id": "ash-4",
+          "text": "Wick Silo seeks a platform engineer with Docker and Terraform. Incident command is helpful.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Docker"
+            ],
+            [
+              "Terraform"
+            ]
+          ],
+          "preferred": [
+            [
+              "incident command"
+            ]
+          ],
+          "source": "urn:fictional:posting:ash-4",
+          "version": "1"
+        },
+        {
+          "id": "ash-5",
+          "text": "Gorse Grid seeks a platform engineer to administer Kubernetes.",
+          "role": "platform-engineer",
+          "regions": [],
+          "must": [
+            [
+              "Kubernetes"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:ash-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "ash-1",
+          "outcome": "eligible",
+          "reason": "Terraform and Docker meet the two groups.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "ash-2",
+          "outcome": "ineligible",
+          "reason": "The candidate explicitly lacks both alternatives.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "ash-3",
+          "outcome": "unknown",
+          "reason": "Docker is supported, Linux is unknown, and Kubernetes is absent.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "ash-4",
+          "outcome": "eligible",
+          "reason": "The known requirements are met and incident command is optional. Both named technologies match the candidate\u2019s daily work.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "ash-5",
+          "outcome": "ineligible",
+          "reason": "Docker experience does not substitute for the explicitly absent Kubernetes administration.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "marl",
+      "family": "directional-networking",
+      "split": "held-out",
+      "candidate": {
+        "id": "marl-candidate",
+        "text": "I design and troubleshoot IP routing for branch offices. I have never joined a formal on-call rotation. I want a network engineering role based in Ireland.",
+        "concepts": [
+          {
+            "value": "IP routing",
+            "state": "supported",
+            "evidence": "I design and troubleshoot IP routing for branch offices"
+          },
+          {
+            "value": "on-call",
+            "state": "absent",
+            "evidence": "I have never joined a formal on-call rotation"
+          }
+        ],
+        "targetRole": "network-engineer",
+        "region": "IE"
+      },
+      "opportunities": [
+        {
+          "id": "marl-1",
+          "text": "Marl Span hires an Ireland-based network engineer with networking experience.",
+          "role": "network-engineer",
+          "regions": [
+            "IE"
+          ],
+          "must": [
+            [
+              "networking"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:marl-1",
+          "version": "1"
+        },
+        {
+          "id": "marl-2",
+          "text": "Flint Comb hires a network engineer with IP routing experience and prior on-call work.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "IP routing"
+            ],
+            [
+              "on-call"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:marl-2",
+          "version": "1"
+        },
+        {
+          "id": "marl-3",
+          "text": "Tansy Arch hires network engineers based in the United Kingdom for branch routing.",
+          "role": "network-engineer",
+          "regions": [
+            "GB"
+          ],
+          "must": [
+            [
+              "IP routing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:marl-3",
+          "version": "1"
+        },
+        {
+          "id": "marl-4",
+          "text": "Loom Harbor hires network engineers with networking experience and prefers incident command.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ]
+          ],
+          "preferred": [
+            [
+              "incident command"
+            ]
+          ],
+          "source": "urn:fictional:posting:marl-4",
+          "version": "1"
+        },
+        {
+          "id": "marl-5",
+          "text": "Firth Pedal hires network engineers with networking and capacity planning experience.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ],
+            [
+              "capacity planning"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:marl-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "marl-1",
+          "outcome": "eligible",
+          "reason": "IP routing is a specific networking capability and Ireland is allowed. The role explicitly hires in Ireland and accepts the candidate\u2019s branch networking experience.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "marl-2",
+          "outcome": "ineligible",
+          "reason": "Routing is supported, but the candidate explicitly lacks the required on-call experience.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "marl-3",
+          "outcome": "ineligible",
+          "reason": "The posting restricts hiring to the United Kingdom.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "marl-4",
+          "outcome": "eligible",
+          "reason": "Routing establishes networking, and incident command is optional.",
+          "relevance": 1
+        },
+        {
+          "opportunityId": "marl-5",
+          "outcome": "unknown",
+          "reason": "Routing establishes networking, but capacity planning is unknown.",
+          "relevance": 0
+        }
+      ]
+    },
+    {
+      "id": "spindle",
+      "family": "directional-networking",
+      "split": "held-out",
+      "candidate": {
+        "id": "spindle-candidate",
+        "text": "I designed office networks and managed cabling projects. I only want network engineering jobs. I have never led incident response.",
+        "concepts": [
+          {
+            "value": "networking",
+            "state": "supported",
+            "evidence": "I designed office networks and managed cabling projects"
+          },
+          {
+            "value": "incident command",
+            "state": "absent",
+            "evidence": "I have never led incident response"
+          }
+        ],
+        "targetRole": "network-engineer",
+        "region": "US"
+      },
+      "opportunities": [
+        {
+          "id": "spindle-1",
+          "text": "Spindle Fen needs a network engineer with IP routing experience.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "IP routing"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spindle-1",
+          "version": "1"
+        },
+        {
+          "id": "spindle-2",
+          "text": "Cinder Arc needs a network engineer with networking experience.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spindle-2",
+          "version": "1"
+        },
+        {
+          "id": "spindle-3",
+          "text": "Dune Socket needs a network engineer with networking and incident command experience.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ],
+            [
+              "incident command"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spindle-3",
+          "version": "1"
+        },
+        {
+          "id": "spindle-4",
+          "text": "Juniper Crate needs a network engineer with networking and either IP routing or incident command.",
+          "role": "network-engineer",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ],
+            [
+              "IP routing",
+              "incident command"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spindle-4",
+          "version": "1"
+        },
+        {
+          "id": "spindle-5",
+          "text": "Glass Rail needs a network engineering manager with networking experience.",
+          "role": "engineering-manager",
+          "regions": [],
+          "must": [
+            [
+              "networking"
+            ]
+          ],
+          "preferred": [],
+          "source": "urn:fictional:posting:spindle-5",
+          "version": "1"
+        }
+      ],
+      "judgments": [
+        {
+          "opportunityId": "spindle-1",
+          "outcome": "unknown",
+          "reason": "General network design evidence does not establish routing.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "spindle-2",
+          "outcome": "eligible",
+          "reason": "Network design establishes the broad networking capability. The role directly calls for the candidate\u2019s demonstrated networking work.",
+          "relevance": 2
+        },
+        {
+          "opportunityId": "spindle-3",
+          "outcome": "ineligible",
+          "reason": "Incident command is explicitly absent.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "spindle-4",
+          "outcome": "unknown",
+          "reason": "Routing is unknown and incident command is absent, so that group is unresolved.",
+          "relevance": 0
+        },
+        {
+          "opportunityId": "spindle-5",
+          "outcome": "ineligible",
+          "reason": "The candidate wants network engineering, and this listing is a management role.",
+          "relevance": 0
+        }
+      ]
+    }
+  ]
+}

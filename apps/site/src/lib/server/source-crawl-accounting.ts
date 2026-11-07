@@ -449,6 +449,7 @@ export async function recoverPendingSourceCrawlAttempts(
 ): Promise<number> {
   const id = requiredText(sourceCrawlId, 'sourceCrawlId');
   const sqlite = usesSqlite();
+  const terminalAtParameter = sqlite ? terminalAt.getTime() : terminalAt;
   const trimmed = (expression: string): string =>
     sqlite ? `TRIM(${expression})` : `BTRIM(${expression})`;
   const normalizedUrl = (expression: string): string =>
@@ -553,7 +554,13 @@ export async function recoverPendingSourceCrawlAttempts(
              reason = 'Recovered intended terminal outcome after interrupted accounting.',
              terminal_at = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ? AND source_crawl_id = ? AND outcome = 'pending'`,
-        [outcome, intendedOpportunityId || outcome, terminalAt, itemId, id],
+        [
+          outcome,
+          intendedOpportunityId || outcome,
+          terminalAtParameter,
+          itemId,
+          id,
+        ],
       );
       if (updated.rowCount === 1) recovered += 1;
       continue;
@@ -587,7 +594,7 @@ export async function recoverPendingSourceCrawlAttempts(
         outcome as SourceCrawlTerminalOutcome,
         opportunityId,
         outcome === 'created' ? 'created_opportunity' : 'duplicate',
-        terminalAt,
+        terminalAtParameter,
         itemId,
         id,
       ],

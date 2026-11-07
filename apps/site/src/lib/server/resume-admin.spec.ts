@@ -77,7 +77,8 @@ const mocks = vi.hoisted(() => ({
       textPath: 'generated-resumes/created-2/resume.txt',
     }),
   ),
-  getDefaultPuppeteerExecutablePath: vi.fn(async () => undefined),
+  getDefaultPuppeteerExecutablePath: vi.fn<() => Promise<string | undefined>>(),
+  runtimeProfile: 'local',
   getResumeFilesystem: vi.fn(async () => ({})),
   getResumeTailoringConfig: vi.fn(),
   loadPublishedResumeSource: vi.fn(),
@@ -153,6 +154,17 @@ vi.mock('@willgriffin/iolaus-resume', async (importOriginal) => {
   };
 });
 
+vi.mock('./app-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./app-config.js')>();
+  return {
+    ...actual,
+    getAppConfig: () => ({
+      ...actual.getAppConfig(),
+      runtimeProfile: mocks.runtimeProfile,
+    }),
+  };
+});
+
 vi.mock('./resume-files.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./resume-files.js')>();
   return { ...actual, getResumeFilesystem: mocks.getResumeFilesystem };
@@ -171,7 +183,11 @@ beforeEach(() => {
     source: {},
     textPath: 'generated-resumes/created-2/resume.txt',
   });
-  mocks.getDefaultPuppeteerExecutablePath.mockClear();
+  mocks.getDefaultPuppeteerExecutablePath.mockReset();
+  mocks.getDefaultPuppeteerExecutablePath.mockResolvedValue(
+    '/fixture/chromium',
+  );
+  mocks.runtimeProfile = 'local';
   mocks.getResumeFilesystem.mockClear();
   mocks.getResumeFilesystem.mockResolvedValue({});
   mocks.getResumeTailoringConfig.mockClear();
@@ -796,6 +812,44 @@ describe('regenerateResumeAsset', () => {
 });
 
 describe('generateResumeAsset', () => {
+  it('gives the local owner recovery guidance when the SDK finds no PDF browser', async () => {
+    const resumeAssets = collection();
+    mocks.collections.set('ResumeAsset', resumeAssets);
+    mocks.collections.set('ResumeTailoringConfig', collection());
+    mocks.getDefaultPuppeteerExecutablePath.mockResolvedValueOnce(undefined);
+
+    await expect(generateResumeAsset()).rejects.toMatchObject({
+      status: 503,
+      body: { message: expect.stringContaining('Install Chrome or Chromium') },
+    });
+    expect(mocks.generateResumeArtifacts).not.toHaveBeenCalled();
+    expect(resumeAssets.records[0]).toMatchObject({ status: 'failed' });
+  });
+
+  it('passes the discovered browser to the SDK renderer', async () => {
+    mocks.collections.set('ResumeAsset', collection());
+    mocks.collections.set('ResumeTailoringConfig', collection());
+
+    await generateResumeAsset();
+
+    expect(mocks.generateResumeArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({ executablePath: '/fixture/chromium' }),
+    );
+  });
+
+  it('keeps hosted rendering on its existing path when discovery returns no browser', async () => {
+    mocks.runtimeProfile = 'self-hosted';
+    mocks.collections.set('ResumeAsset', collection());
+    mocks.collections.set('ResumeTailoringConfig', collection());
+    mocks.getDefaultPuppeteerExecutablePath.mockResolvedValueOnce(undefined);
+
+    await generateResumeAsset();
+
+    expect(mocks.generateResumeArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({ executablePath: undefined }),
+    );
+  });
+
   it('compensates a generated resume if its lifecycle lock is lost during save', async () => {
     const resumeAssets = collection();
     resumeAssets.create.mockImplementationOnce(async (payload) => {

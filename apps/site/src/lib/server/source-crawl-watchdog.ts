@@ -19,6 +19,12 @@ function usesSqlite(): boolean {
   return getDbConfig().type === 'sqlite';
 }
 
+function crawlTimestampParameter(timestamp: Date): Date | number {
+  // libSQL stores Date bindings as epoch milliseconds. Bind the same scalar
+  // explicitly so the native SQLite driver can use the same representation.
+  return usesSqlite() ? timestamp.getTime() : timestamp;
+}
+
 export const SOURCE_CRAWL_TIMEOUT_STATUS = 'timed_out';
 export const SOURCE_CRAWL_TIMEOUT_ERROR =
   'Source crawl exceeded its configured execution timeout and was stopped by the watchdog.';
@@ -46,7 +52,15 @@ export interface SourceCrawlTerminalUpdate {
 }
 
 type SourceCrawlRecord = Record<string, unknown> & {
-  db?: { query?: (...args: unknown[]) => Promise<{ rowCount?: number }> };
+  db?: {
+    query?: (
+      sql: string,
+      params?: unknown[],
+    ) => Promise<{
+      rowCount?: number;
+      rows?: unknown[];
+    }>;
+  };
   finishedAt?: Date | null;
   id?: unknown;
   jobAttempt?: unknown;
@@ -86,14 +100,12 @@ function hasExactManualCrawlBinding(crawl: SourceCrawlRecord): boolean {
   return crawl.jobId === '' && crawl.jobAttempt === 0;
 }
 
-function recordDatabase(
-  crawl: SourceCrawlRecord,
-): { query?: (...args: unknown[]) => Promise<{ rowCount?: number }> } | null {
+function recordDatabase(crawl: SourceCrawlRecord): SourceCrawlRecord['db'] {
   try {
-    return crawl.db ?? null;
+    return crawl.db;
   } catch {
     // Test doubles and non-persisted records do not expose a SMRT database.
-    return null;
+    return undefined;
   }
 }
 
@@ -157,7 +169,7 @@ export async function finalizeSourceCrawl(
       `,
       [
         update.status,
-        finishedAt,
+        crawlTimestampParameter(finishedAt),
         update.error,
         fields.resultCount ?? null,
         fields.newOpportunityCount ?? null,
@@ -170,7 +182,8 @@ export async function finalizeSourceCrawl(
         ...ownershipParameters,
       ],
     );
-    if ((result.rowCount ?? 0) <= 0) return false;
+    // libSQL can report zero affected rows for UPDATE ... RETURNING.
+    if ((result.rows?.length ?? result.rowCount ?? 0) <= 0) return false;
   } else {
     // Retain the in-memory fallback used by crawler unit tests and dry local
     // harnesses. Production-backed crawls always use the fenced UPDATE above.
@@ -238,7 +251,7 @@ export async function completeSourceCrawl(
        WHERE id = ?`,
       [
         update.status,
-        finishedAt,
+        crawlTimestampParameter(finishedAt),
         update.error,
         fields.intelligenceEnqueuedCount ?? null,
         fields.intelligenceDuplicateCount ?? null,
@@ -258,11 +271,15 @@ export async function completeSourceCrawl(
     if (state) {
       crawl.status = String(state.status ?? crawl.status);
       const actualFinishedAt = state.finishedAt;
-      crawl.finishedAt = actualFinishedAt
-        ? actualFinishedAt instanceof Date
-          ? actualFinishedAt
-          : new Date(String(actualFinishedAt))
-        : null;
+      if (typeof actualFinishedAt === 'number') {
+        crawl.finishedAt = new Date(actualFinishedAt);
+      } else {
+        crawl.finishedAt = actualFinishedAt
+          ? actualFinishedAt instanceof Date
+            ? actualFinishedAt
+            : new Date(String(actualFinishedAt))
+          : null;
+      }
       crawl.error = String(state.error ?? crawl.error ?? '');
     }
     return false;
@@ -297,6 +314,7 @@ export async function failSourceCrawl(
   const reason = boundedErrorContext(error);
   const owner = sourceCrawlOwner(crawl);
   if (!owner && !hasExactManualCrawlBinding(crawl)) return false;
+  const finishedAtParameter = crawlTimestampParameter(finishedAt);
   const ownershipClause = owner
     ? 'AND job_id = ? AND job_attempt = ?'
     : "AND job_id = '' AND job_attempt = 0";
@@ -318,14 +336,14 @@ export async function failSourceCrawl(
            terminal_at = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE source_crawl_id = ? AND outcome = 'pending'`,
-      [reason, finishedAt, id],
+      [reason, finishedAtParameter, id],
     );
     await transaction.query(
       `UPDATE source_crawls
        SET status = 'failed', finished_at = ?, error = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [finishedAt, reason, id],
+      [finishedAtParameter, reason, id],
     );
     await reconcileSourceCrawlAccountingTransaction(transaction, id);
     return true;

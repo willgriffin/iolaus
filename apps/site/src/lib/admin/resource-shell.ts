@@ -25,6 +25,29 @@ export const DEFAULT_ADMIN_RECORD_PAGE_SIZE = 250;
 export const OPPORTUNITY_TABLE_PAGE_SIZE = 100;
 export const OPPORTUNITY_DEFAULT_REVIEW_FILTER = 'unsorted';
 
+export interface MatchingDiscoveryCoverage {
+  conflicts: number;
+  missingSource: number;
+  unsupported: number;
+  unresolvedSource: number;
+  unresolvedEvidence: number;
+  pendingInterpretation: number;
+  failedInterpretation: number;
+  partialInterpretation: number;
+}
+
+export type MatchingDiscoveryProgress = {
+  status:
+    | 'pending'
+    | 'ready'
+    | 'missing-preferences'
+    | 'unsupported-target-roles'
+    | 'needs-evidence'
+    | 'failed';
+  hasUnsupportedRoleChoices?: boolean;
+  coverage?: MatchingDiscoveryCoverage;
+};
+
 export interface AdminResourcePageData {
   activeReviewFilter: string;
   activeTaskOwnerFilter: string;
@@ -33,6 +56,7 @@ export interface AdminResourcePageData {
   comboOptions: Record<string, Array<{ label: string; value: string }>>;
   error?: string | null;
   loading?: boolean;
+  matchingProgress?: MatchingDiscoveryProgress;
   opportunityFilterOptions: OpportunityFilterOptions;
   /**
    * Digest of the filter state this page was resolved under (opportunities

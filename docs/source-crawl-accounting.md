@@ -87,7 +87,9 @@ pnpm --filter @willgriffin/iolaus-site db:status
 
 A crawl of a listable board is the only trustworthy signal that a posting is
 still listed, so freshness is derived from the crawl rather than from first
-discovery.
+discovery. Local SQLite and hosted PostgreSQL both support re-stamping,
+revival, and absence accounting. The reconciliation queries return posting
+IDs as text for the change feed on both databases.
 
 - Every opportunity a crawl matched or created is re-stamped in one batched
   update: `last_seen_at = now`, `freshness = 'fresh'`, `missed_crawls = 0`,

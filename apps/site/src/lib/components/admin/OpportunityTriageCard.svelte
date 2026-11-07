@@ -11,6 +11,7 @@ import {
   type TriageShortcutAction,
 } from '$lib/admin/triage-shortcuts';
 import OpportunityQuestionScreening from '$lib/components/admin/OpportunityQuestionScreening.svelte';
+import { DISCOVERY_EVIDENCE_GAPS_LABEL } from '$lib/discovery-match';
 import {
   assessmentCoverageMessages,
   assessmentEligibilityLabels,
@@ -29,6 +30,7 @@ import {
   getCurrentQuestionScreeningProjection,
   questionScreeningLabel,
 } from '$lib/question-screening-projection';
+import OpportunityEvidenceGaps from './OpportunityEvidenceGaps.svelte';
 import OpportunityResumeFitReview from './OpportunityResumeFitReview.svelte';
 import OpportunityScreeningSummary from './OpportunityScreeningSummary.svelte';
 import OpportunityVideoRequirements from './OpportunityVideoRequirements.svelte';
@@ -124,11 +126,13 @@ const hasCurrentPartialAssessment = $derived(
     ),
 );
 const score = $derived(
-  !unavailableCompleteReview &&
-    !completeReview &&
-    assessment.matchReadiness === 'assessable'
-    ? assessment.fitScore
-    : null,
+  typeof record.discoveryMatchScore === 'number'
+    ? record.discoveryMatchScore
+    : !unavailableCompleteReview &&
+        !completeReview &&
+        assessment.matchReadiness === 'assessable'
+      ? assessment.fitScore
+      : null,
 );
 const summary = $derived(str('descriptionSummary'));
 function skillEvidence(
@@ -219,7 +223,9 @@ const facts = $derived(
         <span><Building2 size={14} strokeWidth={2.2} /> {company || 'Unknown company'}</span>
         <span><MapPin size={14} strokeWidth={2.2} /> {locations || 'Location not stated'}</span>
         {#if !readOnly}
-        {#if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
+        {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+          <span class="badge muted">{DISCOVERY_EVIDENCE_GAPS_LABEL}</span>
+        {:else if questionRank.enabled}<span class="badge muted">{questionReview ? questionScreeningLabel(questionReview) : record.questionScreeningStatus === 'unknown' ? 'Screening needs refresh' : 'Recommendation unknown'}</span>
         {:else if score !== null}
           <span class="badge"><Sparkles size={12} strokeWidth={2.4} /> {score}/100</span>
         {:else}
@@ -246,10 +252,24 @@ const facts = $derived(
 
   <aside class="card-aside" aria-label={readOnly ? 'Posting facts' : 'Decision'}>
     {#if !readOnly}
+    {#if record.discoveryMatchStatus === 'screened-with-gaps'}
+      <OpportunityEvidenceGaps reasons={record.discoveryMatchReasons} explanation={record.discoveryMatchEvidence} />
+      {#if opportunityId}<p><a href={`/admin/opportunities/${encodeURIComponent(opportunityId)}`}>Open full review</a></p>{/if}
+    {:else if typeof record.discoveryMatchScore === 'number'}
+      <section class="panel" aria-label="Why this opportunity matches">
+        <h3>Why it matches</h3>
+        {#each (Array.isArray(record.discoveryMatchReasons) ? record.discoveryMatchReasons.slice(0, 5) : []) as reason}
+          <p>{reason}</p>
+        {:else}
+          <p>Matches your preferences and the posting’s requirements.</p>
+        {/each}
+        {#if opportunityId}<p><a href={`/admin/opportunities/${encodeURIComponent(opportunityId)}`}>Open full review</a></p>{/if}
+      </section>
+    {:else}
     <OpportunityScreeningSummary {record} />
     <section class="panel" aria-label="Your opportunity assessment">
       <h3>Your opportunity assessment</h3>
-      <p>Eligibility: {assessmentEligibilityLabels[getOpportunityEligibilityProjection(record.sourceEligibilityProjection, record.assessmentProjection).buckets[0]]}</p>
+      <p>Eligibility: {typeof record.discoveryMatchScore === 'number' ? 'Qualified' : assessmentEligibilityLabels[getOpportunityEligibilityProjection(record.sourceEligibilityProjection, record.assessmentProjection).buckets[0]]}</p>
       {#if questionRank.enabled}<p>{questionReview ? questionScreeningLabel(questionReview) : 'Recommendation unknown'}</p>
       {:else if completeReview?.evidenceFit}
         <p>{completeReviewLabel(completeReview)}</p>
@@ -270,6 +290,7 @@ const facts = $derived(
       <OpportunityResumeFitReview projection={record.resumeFitReviewProjection} />
       <OpportunityVideoRequirements requirements={record.videoRequirements} />
     </section>
+    {/if}
     {/if}
     <section class="panel" aria-label="Facts">
       <h3>Facts</h3>
@@ -365,6 +386,7 @@ const facts = $derived(
     grid-template-columns: minmax(0, 1fr) minmax(0, 24rem);
     align-items: start;
     gap: 16px;
+    overflow-wrap: anywhere;
   }
 
   .main {
@@ -418,7 +440,7 @@ const facts = $derived(
   h4 {
     margin: 6px 0 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -429,7 +451,7 @@ const facts = $derived(
     gap: 10px;
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   .meta span {
@@ -455,7 +477,7 @@ const facts = $derived(
     align-items: center;
     gap: 5px;
     color: var(--smrt-color-primary);
-    font-size: 13px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-decoration: none;
   }
@@ -475,7 +497,7 @@ const facts = $derived(
   ul {
     margin: 0;
     color: var(--smrt-color-on-surface);
-    font-size: 13px;
+    font-size: var(--text-body);
     line-height: 1.5;
   }
 
@@ -486,7 +508,7 @@ const facts = $derived(
   .muted {
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 13px;
+    font-size: var(--text-secondary);
   }
 
   /* The description is the body of the card: no cap, the dialog scrolls. */
@@ -496,7 +518,7 @@ const facts = $derived(
     overflow-wrap: anywhere;
     color: var(--smrt-color-on-surface);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     line-height: 1.55;
   }
 
@@ -510,7 +532,7 @@ const facts = $derived(
     padding: 1px 8px;
     border: 1px solid var(--smrt-color-outline-variant);
     border-radius: 999px;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 700;
   }
 
@@ -535,7 +557,7 @@ const facts = $derived(
     display: flex;
     gap: 8px;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: var(--text-secondary);
   }
 
   dt {
@@ -554,7 +576,7 @@ const facts = $derived(
     display: grid;
     gap: 4px;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -567,7 +589,7 @@ const facts = $derived(
     background: var(--smrt-color-surface);
     color: var(--smrt-color-on-surface);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--text-body);
     text-transform: none;
   }
 
@@ -604,7 +626,7 @@ const facts = $derived(
   .undo-note {
     margin: 0;
     color: var(--smrt-color-on-surface-variant);
-    font-size: 11px;
+    font-size: var(--text-secondary);
     line-height: 1.45;
   }
 

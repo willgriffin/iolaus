@@ -144,6 +144,7 @@ export interface AiSpendSnapshot extends AiSpendCaps {
 
 export type AiSpendReserveResult =
   | { entryId: string; kind: 'reserved'; snapshot: AiSpendSnapshot }
+  | { kind: 'limit_required' }
   | {
       kind: 'exhausted';
       limit: 'lifetime' | 'monthly';
@@ -279,6 +280,7 @@ export function createAiUserSpendStore(database: SmrtDatabase) {
       micros: number;
       period: string;
       requestId?: string;
+      requireBudgetLimit?: boolean;
       scope: AiSpendScope;
     }): Promise<AiSpendReserveResult> {
       if (!Number.isSafeInteger(options.micros) || options.micros <= 0) {
@@ -290,6 +292,12 @@ export function createAiUserSpendStore(database: SmrtDatabase) {
           options.scope,
           options.defaults,
         );
+        if (
+          options.requireBudgetLimit &&
+          caps.lifetimeCapMicros === 0 &&
+          caps.monthlyCapMicros === 0
+        )
+          return { kind: 'limit_required' };
         const spend = await readSpend(
           transaction,
           options.scope,
@@ -577,6 +585,8 @@ async function defaultStore(): Promise<AiUserSpendStore> {
 export interface ReserveAiUserSpendOptions {
   environment?: Environment;
   feature: string;
+  /** Require at least one effective owner cap before any provider call. */
+  requireBudgetLimit?: boolean;
   /** Worst-case cost of the provider call, in micro-dollars. */
   micros: number;
   now?: Date;
@@ -587,18 +597,25 @@ export interface ReserveAiUserSpendOptions {
 
 /**
  * Refuse a model call when AI is switched off, or reserve it against the
- * user's budget. Returns null when no user is billed (no workspace subject, or
- * private mode with no explicit cap). Fails closed if the ledger is
- * unreachable while accounting is active.
+ * user's budget. Returns null when no user is billed. Fails closed when
+ * accounting is active and the ledger is unreachable, or when the feature
+ * requires an effective limit and the owner has none.
  */
 export async function reserveAiUserSpend(
   options: ReserveAiUserSpendOptions,
 ): Promise<AiUserSpendReservation | null> {
   const environment = options.environment ?? process.env;
   assertAiEnabled(environment);
-  if (!options.subject) return null;
+  if (!options.subject) {
+    if (options.requireBudgetLimit)
+      throw new AiUsageRefusedError(
+        'user_budget_unavailable',
+        'An attributable workspace user is required for this AI request.',
+      );
+    return null;
+  }
   const policy = resolveAiUsagePolicy(environment);
-  if (!policy.accounting) return null;
+  if (!policy.accounting && !options.requireBudgetLimit) return null;
 
   const scope = {
     tenantId: options.subject.tenantId,
@@ -618,12 +635,19 @@ export async function reserveAiUserSpend(
       micros: options.micros,
       period,
       requestId: options.requestId,
+      requireBudgetLimit: options.requireBudgetLimit,
       scope,
     });
   } catch {
     throw new AiUsageRefusedError(
       'user_budget_unavailable',
       'AI usage could not be checked right now, so no AI request was made. Try again shortly.',
+    );
+  }
+  if (outcome.kind === 'limit_required') {
+    throw new AiUsageRefusedError(
+      'user_budget_unavailable',
+      'An effective AI spend limit is required. No AI request was made.',
     );
   }
   if (outcome.kind === 'exhausted') {

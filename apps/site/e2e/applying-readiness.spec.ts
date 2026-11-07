@@ -243,12 +243,47 @@ test('owner prepares a draft with a selected resume and a tailored reviewable pa
   await expect(page.getByText(/Saved private onboarding data/)).toBeVisible();
   await screenshot(page, testInfo, '01-selected-fictional-resume');
 
+  await page.goto('/admin/preferences/matching');
+  const extraRole = {
+    'android-portrait': 'Platform Engineer',
+    'android-landscape': 'Data Engineer',
+    'android-narrow': 'Network Engineer',
+    'desktop-control': 'Frontend Engineer',
+  }[testInfo.project.name];
+  if (!extraRole) throw new Error('Matching preferences fixture role missing');
+  await page.getByLabel('Target roles').fill(`Backend Engineer\n${extraRole}`);
+  await page.getByRole('button', { name: 'Save matching preferences' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Matching preferences saved.' }),
+  ).toBeVisible();
+
   const params = new URLSearchParams({
     q: title,
     review: 'unsorted',
     sort: 'salary',
     sortDirection: 'asc',
   });
+  const stale = await page.request.get(
+    `/api/admin-resources/opportunities?${params}`,
+  );
+  expect(stale.status()).toBe(200);
+  expect((await stale.json()).records).toEqual([]);
+  const environmentPath = process.env.IOLAUS_E2E_RUNTIME_ENVIRONMENT;
+  if (!environmentPath) throw new Error('Isolated runtime environment missing');
+  await promisify(execFile)(
+    process.execPath,
+    [
+      resolve('node_modules/tsx/dist/cli.mjs'),
+      resolve('e2e/matching-runtime.ts'),
+      '--refresh',
+    ],
+    {
+      env: JSON.parse(
+        readFileSync(environmentPath, 'utf8'),
+      ) as NodeJS.ProcessEnv,
+      timeout: 30_000,
+    },
+  );
   const list = await page.goto(`/admin/opportunities?${params}`);
   expect(list?.status()).toBe(200);
   const listedOpportunity = page.getByRole('button', {
@@ -678,7 +713,7 @@ test('row review closes only after a successful decision and preserves sequentia
   await expect(dialog).toHaveCount(0);
 });
 
-test('Overview separates pending matches from scores and keeps private tasks in their owner workspace', async ({
+test('Overview shows qualified matches and keeps private tasks in their owner workspace', async ({
   page,
   browser,
   baseURL,
@@ -688,6 +723,8 @@ test('Overview separates pending matches from scores and keeps private tasks in 
   ) as {
     opportunityId: string;
     applyingOpportunities: Record<string, string>;
+    homeMatchId: string;
+    excludedMatchId: string;
   };
   await page.goto('/admin');
   await expect(page.getByTestId('admin-overview')).toBeVisible();
@@ -704,35 +741,42 @@ test('Overview separates pending matches from scores and keeps private tasks in 
   const opportunities = page.getByRole('region', {
     name: 'Best new opportunities',
   });
-  // No current scored assessments are manufactured in this bounded fixture.
-  await expect(opportunities.locator('.opportunity-list li')).toHaveCount(0);
   await expect(
-    opportunities.getByText('No new assessed matches to show yet.', {
-      exact: false,
-    }),
-  ).toBeVisible();
-  await expect(
-    opportunities.getByRole('heading', {
-      name: 'Awaiting assessment or eligibility',
-    }),
-  ).toBeVisible();
-  await expect(
-    opportunities.getByText(/Score unavailable/).first(),
+    opportunities.locator(
+      `a[href="/admin/opportunities/${fixture.homeMatchId}"]`,
+    ),
   ).toBeVisible();
   for (const id of [
     fixture.opportunityId,
     fixture.applyingOpportunities[testInfo.project.name],
+    fixture.excludedMatchId,
   ]) {
     await expect(
       opportunities.locator(`a[href="/admin/opportunities/${id}"]`),
     ).toHaveCount(0);
+  }
+  for (const sort of ['newest', 'best']) {
+    const params = new URLSearchParams({
+      q: 'Fictional Home',
+      review: 'unsorted',
+      sort,
+    });
+    const response = await page.request.get(
+      `/api/admin-resources/opportunities?${params}`,
+    );
+    expect(response.status()).toBe(200);
+    const list = await response.json();
+    expect(list.records.map(({ id }: { id: string }) => id)).toEqual([
+      fixture.homeMatchId,
+    ]);
+    expect(list.pagination.totalRecords).toBe(1);
   }
   const width = await page.evaluate(() => ({
     content: document.documentElement.scrollWidth,
     viewport: window.innerWidth,
   }));
   expect(width.content).toBeLessThanOrEqual(width.viewport + 1);
-  await screenshot(page, testInfo, '11-owner-overview-pending-private-tasks');
+  await screenshot(page, testInfo, '11-owner-overview-qualified-private-tasks');
   const storageState = process.env.IOLAUS_E2E_FOREIGN_AUTH;
   if (!storageState) throw new Error('Foreign native session missing');
   const foreign = await browser.newContext({ baseURL, storageState });

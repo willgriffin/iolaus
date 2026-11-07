@@ -6,6 +6,7 @@ import {
   assertRuntimeDatabaseRole,
   assertRuntimeStaticAgreement,
 } from '../../../../../../scripts/smrt-deployment-schema.mjs';
+import { matchingProjectionSchemaReady } from '../matching-projection-schema.js';
 import { readApplicationDeploymentSchemas } from './static-schemas.js';
 
 export async function assertDeployedSchemaReady(
@@ -33,4 +34,7 @@ export async function assertDeployedSchemaReady(
     db,
     Object.values(ObjectRegistry.getAllSchemasAsDefinitions()),
   );
+  if (!(await matchingProjectionSchemaReady(db, 'postgres'))) {
+    throw new Error('Matching projection schema requires migration.');
+  }
 }

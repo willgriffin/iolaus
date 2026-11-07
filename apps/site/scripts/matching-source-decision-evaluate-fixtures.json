@@ -1,0 +1,528 @@
+{
+  "version": 1,
+  "synthetic": [
+    {
+      "source": {
+        "title": "Backend Engineer",
+        "location": "Remote (Canada)",
+        "description": "Required: PostgreSQL or SQLite\nPreferred: Kubernetes"
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Required: PostgreSQL or SQLite"
+            },
+            "alternatives": [
+              {
+                "slug": "postgresql"
+              },
+              {
+                "slug": "sqlite"
+              }
+            ]
+          }
+        ],
+        "preferred": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Preferred: Kubernetes"
+            },
+            "alternatives": [
+              {
+                "slug": "kubernetes"
+              }
+            ]
+          }
+        ],
+        "unresolved": [],
+        "role": {
+          "family": "software-engineering",
+          "specialty": "backend",
+          "citation": {
+            "field": "title",
+            "text": "Backend Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [
+            {
+              "country": "CA"
+            }
+          ],
+          "worldwide": false,
+          "citation": {
+            "field": "location",
+            "text": "Remote (Canada)"
+          }
+        }
+      },
+      "probes": [
+        {
+          "targetRole": "Backend Engineer",
+          "remoteCountry": "CA",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Senior Backend Engineer",
+        "location": "Remote (Canada)",
+        "description": "Required: 3 years of production experience with Node.js and TypeScript"
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Required: 3 years of production experience with Node.js and TypeScript"
+            },
+            "alternatives": [
+              {
+                "slug": "nodejs",
+                "years": 3,
+                "context": "production"
+              }
+            ]
+          },
+          {
+            "citation": {
+              "field": "description",
+              "text": "Required: 3 years of production experience with Node.js and TypeScript"
+            },
+            "alternatives": [
+              {
+                "slug": "typescript",
+                "years": 3,
+                "context": "production"
+              }
+            ]
+          }
+        ],
+        "preferred": [],
+        "unresolved": [],
+        "role": {
+          "family": "software-engineering",
+          "specialty": "backend",
+          "level": "senior",
+          "citation": {
+            "field": "title",
+            "text": "Senior Backend Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [
+            {
+              "country": "CA"
+            }
+          ],
+          "worldwide": false,
+          "citation": {
+            "field": "location",
+            "text": "Remote (Canada)"
+          }
+        }
+      },
+      "probes": [
+        {
+          "targetRole": "Senior Backend Engineer",
+          "remoteCountry": "US",
+          "workMode": "remote",
+          "conflict": true
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Platform Engineer",
+        "location": "Remote",
+        "description": "You will deploy services on Kubernetes\nKubernetes is not required\nMust hold a valid security clearance\nExperience leading a group of engineers.\nExperience shadowing a lead engineer during planning."
+      },
+      "gold": {
+        "required": [],
+        "preferred": [],
+        "unresolved": [
+          {
+            "field": "description",
+            "text": "Must hold a valid security clearance"
+          },
+          {
+            "field": "description",
+            "text": "Experience leading a group of engineers."
+          },
+          {
+            "field": "description",
+            "text": "Experience shadowing a lead engineer during planning."
+          }
+        ],
+        "role": {
+          "family": "platform-engineering",
+          "citation": {
+            "field": "title",
+            "text": "Platform Engineer"
+          }
+        },
+        "geography": null,
+        "concepts": [
+          {
+            "kind": "equivalent",
+            "citation": {
+              "field": "description",
+              "text": "Experience leading a group of engineers."
+            },
+            "slug": "engineering-team-leadership"
+          },
+          {
+            "kind": "related-only",
+            "citation": {
+              "field": "description",
+              "text": "Experience shadowing a lead engineer during planning."
+            }
+          }
+        ]
+      },
+      "probes": [
+        {
+          "targetRole": "Platform Engineer",
+          "remoteCountry": "CA",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Data Engineer",
+        "location": "Remote (Worldwide)",
+        "description": "The role calls for experience with PostgreSQL\nExperience ordering lunches for engineers who lead teams."
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "The role calls for experience with PostgreSQL"
+            },
+            "alternatives": [
+              {
+                "slug": "postgresql"
+              }
+            ]
+          }
+        ],
+        "preferred": [],
+        "unresolved": [
+          {
+            "field": "description",
+            "text": "Experience ordering lunches for engineers who lead teams."
+          }
+        ],
+        "role": {
+          "family": "data-engineering",
+          "citation": {
+            "field": "title",
+            "text": "Data Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [],
+          "worldwide": true,
+          "citation": {
+            "field": "location",
+            "text": "Remote (Worldwide)"
+          }
+        },
+        "concepts": [
+          {
+            "kind": "no-fit",
+            "citation": {
+              "field": "description",
+              "text": "Experience ordering lunches for engineers who lead teams."
+            }
+          }
+        ]
+      },
+      "probes": [
+        {
+          "targetRole": "Data Engineer",
+          "remoteCountry": "DE",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    }
+  ],
+  "heldOut": [
+    {
+      "source": {
+        "title": "Data Engineer",
+        "location": "Remote (United Kingdom)",
+        "description": "Minimum 4 years of professional experience with Python or Go\nReact is a plus"
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Minimum 4 years of professional experience with Python or Go"
+            },
+            "alternatives": [
+              {
+                "slug": "python",
+                "years": 4,
+                "context": "professional"
+              },
+              {
+                "slug": "go",
+                "years": 4,
+                "context": "professional"
+              }
+            ]
+          }
+        ],
+        "preferred": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "React is a plus"
+            },
+            "alternatives": [
+              {
+                "slug": "react"
+              }
+            ]
+          }
+        ],
+        "unresolved": [],
+        "role": {
+          "family": "data-engineering",
+          "citation": {
+            "field": "title",
+            "text": "Data Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [
+            {
+              "country": "GB"
+            }
+          ],
+          "worldwide": false,
+          "citation": {
+            "field": "location",
+            "text": "Remote (United Kingdom)"
+          }
+        }
+      },
+      "probes": [
+        {
+          "targetRole": "Data Engineer",
+          "remoteCountry": "GB",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Platform Engineer",
+        "location": "Remote (Canada)",
+        "description": "Experience with Docker is required\nExperience with Kubernetes is preferred"
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Experience with Docker is required"
+            },
+            "alternatives": [
+              {
+                "slug": "docker"
+              }
+            ]
+          }
+        ],
+        "preferred": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Experience with Kubernetes is preferred"
+            },
+            "alternatives": [
+              {
+                "slug": "kubernetes"
+              }
+            ]
+          }
+        ],
+        "unresolved": [],
+        "role": {
+          "family": "platform-engineering",
+          "citation": {
+            "field": "title",
+            "text": "Platform Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [
+            {
+              "country": "CA"
+            }
+          ],
+          "worldwide": false,
+          "citation": {
+            "field": "location",
+            "text": "Remote (Canada)"
+          }
+        }
+      },
+      "probes": [
+        {
+          "targetRole": "Platform Engineer",
+          "remoteCountry": "CA",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Frontend Engineer",
+        "location": "Remote (EMEA)",
+        "description": "Must have 2–4 years of React experience\nWe offer education assistance\nExperience supervising a squad of software engineers."
+      },
+      "gold": {
+        "required": [],
+        "preferred": [],
+        "unresolved": [
+          {
+            "field": "description",
+            "text": "Must have 2–4 years of React experience"
+          },
+          {
+            "field": "description",
+            "text": "Experience supervising a squad of software engineers."
+          }
+        ],
+        "role": {
+          "family": "software-engineering",
+          "specialty": "frontend",
+          "citation": {
+            "field": "title",
+            "text": "Frontend Engineer"
+          }
+        },
+        "geography": null,
+        "concepts": [
+          {
+            "kind": "equivalent",
+            "citation": {
+              "field": "description",
+              "text": "Experience supervising a squad of software engineers."
+            },
+            "slug": "engineering-team-leadership"
+          }
+        ]
+      },
+      "probes": [
+        {
+          "targetRole": "Frontend Engineer",
+          "remoteCountry": "GB",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "title": "Security Engineer",
+        "location": "Remote (United States)",
+        "description": "Your team monitors application traffic\nRequired: AWS\nMandatory: available every other weekend\nExperience observing engineers lead retrospective meetings.\nExperience drawing portraits of lead engineers."
+      },
+      "gold": {
+        "required": [
+          {
+            "citation": {
+              "field": "description",
+              "text": "Required: AWS"
+            },
+            "alternatives": [
+              {
+                "slug": "aws"
+              }
+            ]
+          }
+        ],
+        "preferred": [],
+        "unresolved": [
+          {
+            "field": "description",
+            "text": "Mandatory: available every other weekend"
+          },
+          {
+            "field": "description",
+            "text": "Experience observing engineers lead retrospective meetings."
+          },
+          {
+            "field": "description",
+            "text": "Experience drawing portraits of lead engineers."
+          }
+        ],
+        "role": {
+          "family": "security-engineering",
+          "citation": {
+            "field": "title",
+            "text": "Security Engineer"
+          }
+        },
+        "geography": {
+          "mode": "remote",
+          "regions": [
+            {
+              "country": "US"
+            }
+          ],
+          "worldwide": false,
+          "citation": {
+            "field": "location",
+            "text": "Remote (United States)"
+          }
+        },
+        "concepts": [
+          {
+            "kind": "related-only",
+            "citation": {
+              "field": "description",
+              "text": "Experience observing engineers lead retrospective meetings."
+            }
+          },
+          {
+            "kind": "no-fit",
+            "citation": {
+              "field": "description",
+              "text": "Experience drawing portraits of lead engineers."
+            }
+          }
+        ]
+      },
+      "probes": [
+        {
+          "targetRole": "Security Engineer",
+          "remoteCountry": "US",
+          "workMode": "remote",
+          "conflict": false
+        }
+      ]
+    }
+  ]
+}

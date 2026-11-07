@@ -18,6 +18,11 @@ Local Iolaus does not need an OIDC provider. Browser sign-in is available only
 from `localhost`, `127.0.0.1`, or `::1`; a remote host cannot turn the local
 owner path into a public login endpoint.
 
+Set `SMRT_BACKGROUND_JOBS=true` to start the local source crawl worker when
+Iolaus starts. It resumes crawls already queued in SQLite, including after an
+app restart. The setting defaults to off. You can still request a crawl
+manually and start the same source worker from the app.
+
 Do not place a reverse proxy, tunnel, or public ingress in front of the local
 profile. Local owner sign-in rejects forwarded requests, and a proxy that hides
 its forwarding metadata cannot safely provide public authentication. Use the
@@ -35,6 +40,21 @@ in again: existing sessions retain their original tenant binding.
 tenant, cookies, terminal authorization code prefix, audit agent class, and
 CLI configuration directory. The `iolaus` default is reserved for the local
 profile; every public deployment must choose a unique non-default identifier.
+
+### Local schema setup and status
+
+From the repository root with the local profile, run setup to apply SQLite
+migrations and use the SMRT CLI to inspect the same database:
+
+```sh
+pnpm app:setup
+pnpm --filter @willgriffin/iolaus-site exec smrt db:status
+```
+
+For validation, set `SMRT_DATA_DIR` to the same disposable absolute path for
+both commands. Use `mktemp -d` to create a private directory. The site package
+scripts `db:migrate` and `db:status` are for hosted PostgreSQL deployments and
+include PostgreSQL-specific migration and integrity checks.
 
 ## Public installation
 
@@ -193,7 +213,9 @@ and the admin sidebar footer. Terms and privacy must be `https:` URLs; support
 may also be an email address (rendered as `mailto:`). Unset or invalid values
 are ignored and the link is hidden. Nothing product-specific is built in. These
 variables have no effect in private or local mode, where the root continues to
-render the published resume.
+render the published resume. When using SQLite, the root reads the current
+resume for each request and uses a digest of the content as its HTTP cache
+validator.
 
 ### Account export and deletion
 

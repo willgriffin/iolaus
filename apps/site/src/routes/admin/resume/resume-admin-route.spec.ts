@@ -1,3 +1,4 @@
+import { error } from '@sveltejs/kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const SUBJECT = {
@@ -269,6 +270,33 @@ describe('private resume route scope', () => {
 });
 
 describe('resume mutation write guard wiring', () => {
+  it.each([
+    'generate',
+    'regenerate',
+  ] as const)('returns a local PDF browser diagnostic from the %s form', async (action) => {
+    const message = 'Install Chrome or Chromium to generate resume PDFs.';
+    const render =
+      action === 'generate'
+        ? mocks.generateResumeAsset
+        : mocks.regenerateResumeAsset;
+    render.mockImplementationOnce(async () => error(503, message));
+    await expect(
+      actions[action]({
+        locals: LOCALS,
+        request: new Request(
+          `https://iolaus.localhost/admin/resume?/${action}`,
+          {
+            method: 'POST',
+            body: new FormData(),
+          },
+        ),
+      } as never),
+    ).resolves.toMatchObject({
+      status: 503,
+      data: { error: message, ok: false },
+    });
+  });
+
   it('supplies generation with a fresh native capability and subject guard', async () => {
     mocks.generateResumeAsset.mockImplementationOnce(async (options) => {
       await options.assertWriteAllowed();

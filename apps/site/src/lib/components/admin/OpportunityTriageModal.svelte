@@ -124,7 +124,7 @@ let {
   candidateSkills?: string[];
   /** The list's current filter query string; the queue is seeded from it. */
   search?: string;
-  /** A server-loaded list record reviewed alone, without reading the queue. */
+  /** A selected list record reviewed alone, without reading the queue. */
   singleOpportunity?: AdminRecord | null;
   /** Display a captured posting without triage reads or writes. */
   readOnly?: boolean;
@@ -339,7 +339,9 @@ function startSession(): void {
   // replaces, and releasing the latch lets this session issue its own.
   sessionToken += 1;
   refilling = false;
-  queue = singleOpportunity ? [singleOpportunity] : [];
+  const shouldHydrate =
+    !readOnly && typeof singleOpportunity?.discoveryMatchScore === 'number';
+  queue = singleOpportunity && !shouldHydrate ? [singleOpportunity] : [];
   busy = false;
   loading = false;
   skipped = 0;
@@ -354,7 +356,37 @@ function startSession(): void {
   atEnd = singleOpportunity !== null;
   refillTick = 0;
   lastRefillKey = '0:0:0';
-  if (!singleOpportunity && !readOnly) void refill();
+  if (shouldHydrate && singleOpportunity)
+    void loadSingleOpportunity(str(singleOpportunity, 'id'));
+  else if (!singleOpportunity && !readOnly) void refill();
+}
+
+async function loadSingleOpportunity(id: string): Promise<void> {
+  const token = sessionToken;
+  const isCurrent = () => open && token === sessionToken;
+  loading = true;
+  try {
+    const body = new FormData();
+    body.set('opportunityId', id);
+    const response = await fetch(`${LIST_PATH}?/triageOpportunity`, {
+      body,
+      headers: { 'x-sveltekit-action': 'true' },
+      method: 'POST',
+    });
+    const result = deserialize(await response.text());
+    if (!isCurrent()) return;
+    if (result.type !== 'success') throw new Error('Posting read failed.');
+    const record = result.data?.record as AdminRecord | null | undefined;
+    if (!record || record.id !== id) {
+      loadError = 'This posting is no longer a current match.';
+      return;
+    }
+    queue = [record];
+  } catch {
+    if (isCurrent()) loadError = 'The posting could not be loaded.';
+  } finally {
+    if (isCurrent()) loading = false;
+  }
 }
 
 /**
@@ -443,6 +475,10 @@ async function retryOnceWritesLand(
 function retryQueue(): void {
   if (loading) return;
   loadError = '';
+  if (singleOpportunity) {
+    void loadSingleOpportunity(str(singleOpportunity, 'id'));
+    return;
+  }
   lastRefillKey = refillKey();
   void refill();
 }
@@ -935,7 +971,7 @@ const shortlistHref = $derived.by(() => {
       />
     </div>
   {:else if loading}
-    <p class="muted loading">Loading the queue…</p>
+    <p class="muted loading">{singleOpportunity ? 'Loading the posting…' : 'Loading the queue…'}</p>
   {:else if exhausted}
     <div class="empty">
       <h2>Nothing left to look at</h2>

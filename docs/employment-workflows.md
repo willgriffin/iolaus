@@ -107,6 +107,9 @@ or source jobs:
   `attemptCount = terminalCount + pendingCount` and `terminalCount` equal to
   the sum of the six terminal outcome counters. See
   [Source crawl accounting](./source-crawl-accounting.md).
+- Local crawl completion, failure, and interrupted attempt recovery write
+  terminal timestamps as epoch milliseconds on both SQLite drivers. The
+  accounting transaction still determines which attempt and crawl can close.
 - Source crawling ends after deterministic fetch, normalization, persistence,
   eligibility evaluation, and a bounded queue insert. It never waits for
   opportunity extraction or scoring. Eligible new or materially changed source
@@ -196,6 +199,9 @@ These are explicit operations an agent or Will can request:
   tailoring config/overrides as resume generator input, and writes generated
   Markdown, text, HTML, and PDF paths back to the variant. The generated variant
   remains preparation material; it does not approve or submit the application.
+- Local resume PDF generation uses an installed Chrome or Chromium. For a
+  custom browser location, set `PUPPETEER_EXECUTABLE_PATH` to its executable
+  path and restart Iolaus.
 - Submission and blocker actions record the outcome in `Application`, `Task`,
   and `AgentRun` without bypassing final application approval.
 - Posting preflight fetches a known ATS posting without credentials, classifies

@@ -85,7 +85,7 @@ describe.each([
     await db.query(
       'CREATE TABLE requirement_evidence_decisions (requirement_hash TEXT)',
     );
-    await db.query(`CREATE TABLE agent_runs (id ${key} PRIMARY KEY,slug TEXT,context TEXT,tenant_id TEXT,owner_user_id TEXT,candidate_profile_id TEXT,run_type TEXT,status TEXT,
+    await db.query(`CREATE TABLE agent_runs (id ${key} PRIMARY KEY,slug TEXT,context TEXT,tenant_id ${key} NOT NULL,owner_user_id TEXT,candidate_profile_id TEXT,run_type TEXT,status TEXT,
       intelligence_call_limit INTEGER,intelligence_input_token_limit INTEGER,intelligence_spend_limit_micros INTEGER,
       intelligence_reserved_calls INTEGER,intelligence_reserved_input_tokens INTEGER,intelligence_reserved_spend_micros INTEGER,
       intelligence_actual_calls INTEGER,intelligence_actual_input_tokens INTEGER,intelligence_actual_output_tokens INTEGER,intelligence_actual_spend_micros INTEGER,

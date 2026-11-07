@@ -1,6 +1,18 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { request } from 'node:https';
+import {
+  type ContinuousStaticWorkload,
+  continuousStaticUids,
+  validateContinuousStaticPolicies,
+} from './continuous-static.js';
+import {
+  validateWriterFenceLeasePolicy,
+  verifyWriterFenceLease,
+  WriterFenceEnrollmentPending,
+  type WriterFenceLeasePolicy,
+  writerFenceProducerPodName,
+} from './writer-fence.js';
 
 const projection = '/var/run/secrets/kubernetes.io/serviceaccount';
 const labelPrefix = 'smrt.happyvertical.com/';
@@ -42,10 +54,12 @@ interface KubeObject {
     deletionTimestamp?: string;
     labels?: Record<string, string>;
     ownerReferences?: {
+      apiVersion?: string;
       kind: string;
       uid: string;
       name: string;
       controller?: boolean;
+      blockOwnerDeletion?: boolean;
     }[];
   };
   spec?: {
@@ -67,6 +81,8 @@ interface KubeObject {
     active?: number;
     conditions?: { type: string; status: string }[];
     readyReplicas?: number;
+    availableReplicas?: number;
+    fullyLabeledReplicas?: number;
   };
 }
 
@@ -84,6 +100,8 @@ export interface MaintenanceObserverPolicy {
   configSha256: string;
   serviceAccountName: string;
   migrationServiceAccountName: string;
+  continuousStaticWorkloads?: ContinuousStaticWorkload[];
+  writerFenceLease?: WriterFenceLeasePolicy;
 }
 export function maintenanceObserverPolicy(
   raw = process.env.IOLAUS_MAINTENANCE_OBSERVER_POLICY,
@@ -103,7 +121,13 @@ export function maintenanceObserverPolicy(
   ];
   if (
     !value ||
-    Object.keys(value).length !== keys.length ||
+    Object.keys(value).some(
+      (key) =>
+        ![...keys, 'continuousStaticWorkloads', 'writerFenceLease'].includes(
+          key,
+        ),
+    ) ||
+    Object.keys(value).length < keys.length ||
     keys.some(
       (key) =>
         typeof value[key as keyof MaintenanceObserverPolicy] !== 'string',
@@ -116,6 +140,20 @@ export function maintenanceObserverPolicy(
     )
   )
     throw new Error('Maintenance observer policy is missing or invalid.');
+  if (value.continuousStaticWorkloads !== undefined) {
+    try {
+      validateContinuousStaticPolicies(value.continuousStaticWorkloads);
+    } catch {
+      throw new Error('Maintenance observer policy is missing or invalid.');
+    }
+  }
+  if (value.writerFenceLease !== undefined) {
+    try {
+      validateWriterFenceLeasePolicy(value.writerFenceLease);
+    } catch {
+      throw new Error('Maintenance observer policy is missing or invalid.');
+    }
+  }
   return value;
 }
 function assertMaintenanceSpec(
@@ -228,6 +266,94 @@ export interface ObserverSnapshot {
   podUid: string;
   objects: KubeObject[];
   maintenanceConfig?: KubeObject;
+  continuousConfigMaps?: unknown[];
+  networkPolicies?: unknown[];
+}
+
+/** Retained old children are not relabelled when Helm adopts their parent. */
+function dormantLegacyReplicaSet(
+  object: KubeObject,
+  snapshot: ObserverSnapshot,
+  instance: string,
+): boolean {
+  const meta = object.metadata,
+    labels = meta.labels;
+  const validName = (value: unknown): value is string =>
+    typeof value === 'string' &&
+    value.length <= 253 &&
+    value
+      .split('.')
+      .every((part) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part));
+  const validUid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[a-zA-Z0-9.-]{1,253}$/.test(value);
+  if (
+    object.kind !== 'ReplicaSet' ||
+    object.apiVersion !== 'apps/v1' ||
+    !validName(meta.name) ||
+    !validUid(meta.uid) ||
+    meta.namespace !== snapshot.namespace ||
+    meta.deletionTimestamp != null ||
+    (labels !== undefined &&
+      (labels === null ||
+        typeof labels !== 'object' ||
+        Array.isArray(labels))) ||
+    Object.hasOwn(labels ?? {}, 'app.kubernetes.io/instance') ||
+    !object.spec ||
+    typeof object.spec !== 'object' ||
+    Array.isArray(object.spec) ||
+    !object.status ||
+    typeof object.status !== 'object' ||
+    Array.isArray(object.status) ||
+    object.spec.replicas !== 0 ||
+    object.status.replicas !== 0 ||
+    [
+      object.status.readyReplicas,
+      object.status.availableReplicas,
+      object.status.fullyLabeledReplicas,
+    ].some((count) => count !== undefined && count !== 0)
+  )
+    return false;
+  const owners = meta.ownerReferences;
+  if (!Array.isArray(owners) || owners.length !== 1) return false;
+  const owner = owners[0];
+  if (
+    !owner ||
+    typeof owner !== 'object' ||
+    Array.isArray(owner) ||
+    owner.apiVersion !== 'apps/v1' ||
+    owner.kind !== 'Deployment' ||
+    owner.controller !== true ||
+    !validName(owner.name) ||
+    !validUid(owner.uid) ||
+    owner.uid === meta.uid ||
+    Object.keys(owner).some(
+      (key) =>
+        ![
+          'apiVersion',
+          'kind',
+          'name',
+          'uid',
+          'controller',
+          'blockOwnerDeletion',
+        ].includes(key),
+    ) ||
+    ('blockOwnerDeletion' in owner &&
+      typeof owner.blockOwnerDeletion !== 'boolean')
+  )
+    return false;
+  const parents = snapshot.objects.filter(
+    (parent) =>
+      parent.kind === 'Deployment' &&
+      parent.apiVersion === 'apps/v1' &&
+      parent.metadata.name === owner.name &&
+      parent.metadata.uid === owner.uid &&
+      parent.metadata.namespace === snapshot.namespace,
+  );
+  return (
+    parents.length === 1 &&
+    parents[0].metadata.deletionTimestamp == null &&
+    parents[0].metadata.labels?.['app.kubernetes.io/instance'] === instance
+  );
 }
 
 /** Dedicated namespace: unknown controllers and terminating writers fail closed. */
@@ -285,11 +411,18 @@ export function assertWriterExclusion(
   const nonwriters = policy
     ? maintenanceUids(snapshot, identity, policy)
     : new Set<string>();
+  if (policy?.continuousStaticWorkloads)
+    for (const uid of continuousStaticUids(
+      snapshot,
+      policy.continuousStaticWorkloads,
+    ))
+      nonwriters.add(uid);
   for (const object of snapshot.objects) {
     if (
       !object.metadata.uid ||
       object.metadata.namespace !== snapshot.namespace ||
-      object.metadata.labels?.['app.kubernetes.io/instance'] !== instance
+      (object.metadata.labels?.['app.kubernetes.io/instance'] !== instance &&
+        !dormantLegacyReplicaSet(object, snapshot, instance))
     )
       throw new Error('Unknown workload in migration namespace.');
     if (object.metadata.deletionTimestamp)
@@ -324,14 +457,117 @@ export function assertWriterExclusion(
   }
 }
 
+interface NativeInventory {
+  items?: KubeObject[];
+  metadata?: { continue?: string };
+  kind?: string;
+  apiVersion?: string;
+}
+async function readNativeInventory({
+  api,
+  resource,
+  namespace,
+  host,
+  port,
+  ca,
+  deadline,
+}: {
+  api: string;
+  resource: string;
+  namespace: string;
+  host: string;
+  port: string;
+  ca: string;
+  deadline?: number;
+}): Promise<NativeInventory> {
+  // A projected token may rotate during a bounded inventory poll.
+  const requestToken = (
+    await readFile(`${projection}/token`, 'utf8').catch(() => {
+      throw new Error('Migration observer projection is incomplete.');
+    })
+  ).trim();
+  if (!/^[a-zA-Z0-9._-]{1,65536}$/.test(requestToken))
+    throw new Error('Migration observer projection is incomplete.');
+  const remaining =
+    deadline === undefined
+      ? 5000
+      : Math.min(5000, Math.ceil(deadline - performance.now()));
+  if (remaining <= 0)
+    throw new Error('Writer-fence startup enrollment timed out.');
+  return await new Promise<NativeInventory>((resolve, reject) => {
+    const req = request(
+      {
+        hostname: host,
+        port,
+        method: 'GET',
+        path: `/${api}/namespaces/${encodeURIComponent(namespace)}/${resource}`,
+        ca,
+        rejectUnauthorized: true,
+        headers: { authorization: `Bearer ${requestToken}` },
+        timeout: 5000,
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          body += chunk;
+          if (body.length > 4 * 1024 * 1024)
+            req.destroy(
+              new Error('Observer response exceeds bounded inventory.'),
+            );
+        });
+        response.on('end', () => {
+          clearTimeout(timer);
+          if (response.statusCode !== 200)
+            return reject(
+              new Error('Kubernetes observer inventory read refused.'),
+            );
+          try {
+            const parsed: unknown = JSON.parse(body);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+              throw new Error('Invalid inventory');
+            resolve(parsed as NativeInventory);
+          } catch {
+            reject(new Error('Kubernetes observer inventory is invalid.'));
+          }
+        });
+        response.on('error', () =>
+          reject(new Error('Kubernetes observer TLS/read failed.')),
+        );
+      },
+    );
+    req.on('timeout', () =>
+      req.destroy(new Error('Kubernetes observer read timed out.')),
+    );
+    req.on('error', () =>
+      reject(new Error('Kubernetes observer TLS/read failed.')),
+    );
+    const timer = setTimeout(
+      () => req.destroy(new Error('Observer request deadline exceeded.')),
+      remaining,
+    );
+    req.on('close', () => clearTimeout(timer));
+    req.on('error', () => clearTimeout(timer));
+    req.end();
+  }).catch(() => {
+    throw new Error('Kubernetes observer inventory read failed.');
+  });
+}
+
 /** Fresh TLS-verified API reads; credentials are reread for native token rotation. */
-export async function observeWriterExclusion(
+async function observeWriterExclusionOnce(
   identity: ReleaseIdentity,
+  allowPending = false,
+  deadline?: number,
 ): Promise<void> {
   const policy = maintenanceObserverPolicy();
   const [token, ca, namespace, podName, podUid] = await Promise.all(
     ['token', 'ca.crt', 'namespace', 'pod-name', 'pod-uid'].map(async (file) =>
-      (await readFile(`${projection}/${file}`, 'utf8')).trim(),
+      (
+        await readFile(`${projection}/${file}`, 'utf8').catch(() => {
+          throw new Error('Migration observer projection is incomplete.');
+        })
+      ).trim(),
     ),
   );
   if (
@@ -348,6 +584,8 @@ export async function observeWriterExclusion(
     throw new Error('Kubernetes service endpoint is unavailable.');
   const objects: KubeObject[] = [];
   let maintenanceConfig: KubeObject | undefined;
+  const continuousConfigMaps: KubeObject[] = [];
+  const networkPolicies: KubeObject[] = [];
   for (const [api, resource, kind, apiVersion] of [
     ['api/v1', 'pods', 'Pod', 'v1'],
     ['apis/apps/v1', 'deployments', 'Deployment', 'apps/v1'],
@@ -368,59 +606,41 @@ export async function observeWriterExclusion(
       'ConfigMap',
       'v1',
     ],
+    ...(policy.continuousStaticWorkloads
+      ? [
+          [
+            'apis/networking.k8s.io/v1',
+            'networkpolicies',
+            'NetworkPolicy',
+            'networking.k8s.io/v1',
+          ],
+          ...[
+            ...new Set(
+              policy.continuousStaticWorkloads.flatMap((workload) =>
+                workload.readOnlyConfigMaps.map(
+                  (config) => config.configMapName,
+                ),
+              ),
+            ),
+          ].map((name) => ['api/v1', `configmaps/${name}`, 'ConfigMap', 'v1']),
+        ]
+      : []),
   ]) {
-    const result = await new Promise<{
-      items?: KubeObject[];
-      metadata?: { continue?: string };
-      kind?: string;
-      apiVersion?: string;
-    }>((resolve, reject) => {
-      const req = request(
-        {
-          hostname: host,
-          port,
-          path: `/${api}/namespaces/${encodeURIComponent(namespace)}/${resource}`,
-          ca,
-          rejectUnauthorized: true,
-          headers: { authorization: `Bearer ${token}` },
-          timeout: 5000,
-        },
-        (response) => {
-          let body = '';
-          response.setEncoding('utf8');
-          response.on('data', (chunk: string) => {
-            body += chunk;
-            if (body.length > 4 * 1024 * 1024)
-              req.destroy(
-                new Error('Observer response exceeds bounded inventory.'),
-              );
-          });
-          response.on('end', () => {
-            if (response.statusCode !== 200)
-              return reject(
-                new Error('Kubernetes observer inventory read refused.'),
-              );
-            try {
-              resolve(JSON.parse(body));
-            } catch {
-              reject(new Error('Kubernetes observer inventory is invalid.'));
-            }
-          });
-          response.on('error', reject);
-        },
-      );
-      req.on('timeout', () =>
-        req.destroy(new Error('Kubernetes observer read timed out.')),
-      );
-      req.on('error', () =>
-        reject(new Error('Kubernetes observer TLS/read failed.')),
-      );
-      req.end();
+    const result = await readNativeInventory({
+      api,
+      resource,
+      namespace,
+      host,
+      port,
+      ca,
+      deadline,
     });
     if (resource.startsWith('configmaps/')) {
       if (result.kind !== kind || result.apiVersion !== apiVersion)
         throw new Error('Maintenance ConfigMap inventory is invalid.');
-      maintenanceConfig = result as KubeObject;
+      if (resource === `configmaps/${policy.releaseName}-maintenance`)
+        maintenanceConfig = result as KubeObject;
+      else continuousConfigMaps.push(result as KubeObject);
       continue;
     }
     if (
@@ -444,12 +664,118 @@ export async function observeWriterExclusion(
         throw new Error(
           'Kubernetes observer item type conflicts with requested inventory.',
         );
-      objects.push({ ...item, kind, apiVersion });
+      if (kind === 'NetworkPolicy')
+        networkPolicies.push({ ...item, kind, apiVersion });
+      else objects.push({ ...item, kind, apiVersion });
     }
   }
   assertWriterExclusion(
-    { namespace, podName, podUid, objects, maintenanceConfig },
+    {
+      namespace,
+      podName,
+      podUid,
+      objects,
+      maintenanceConfig,
+      continuousConfigMaps,
+      networkPolicies,
+    },
     identity,
     policy,
   );
+  if (policy.writerFenceLease) {
+    const migrationPod = objects.find(
+      (object) =>
+        object.kind === 'Pod' &&
+        object.metadata.name === podName &&
+        object.metadata.uid === podUid,
+    );
+    const job = migrationPod?.metadata.ownerReferences?.find(
+      (owner) => owner.kind === 'Job' && owner.controller === true,
+    );
+    if (!job) throw new Error('Fresh native writer-fence lease is unverified.');
+    // Separate GET after workload proof: never reuse a lease from an earlier phase.
+    const lease = await readNativeInventory({
+      api: 'api/v1',
+      resource: `configmaps/${policy.writerFenceLease.configMapName}`,
+      namespace,
+      host,
+      port,
+      ca,
+      deadline,
+    });
+    const p = policy.writerFenceLease;
+    const producerPodName = writerFenceProducerPodName(lease, p, namespace);
+    const get = (api: string, resource: string) =>
+      readNativeInventory({
+        api,
+        resource,
+        namespace: p.producer.namespace,
+        host,
+        port,
+        ca,
+        deadline,
+      });
+    const producerPod = await get('api/v1', `pods/${producerPodName}`);
+    const controller = await get(
+      p.producer.controller.kind === 'Job' ? 'apis/batch/v1' : 'apis/apps/v1',
+      `${p.producer.controller.kind === 'Job' ? 'jobs' : 'deployments'}/${p.producer.controller.name}`,
+    );
+    const program = await get(
+      'api/v1',
+      `configmaps/${p.producer.program.name}`,
+    );
+    const producerObjects: unknown[] = [producerPod, controller, program];
+    if (p.producer.controller.kind === 'Deployment') {
+      const refs = (producerPod as KubeObject).metadata?.ownerReferences;
+      const rs = refs?.find(
+        (r) => r.kind === 'ReplicaSet' && r.controller === true,
+      );
+      if (!rs || !/^[a-z0-9][a-z0-9.-]{0,252}$/.test(rs.name))
+        throw new Error('Fresh native writer-fence lease is unverified.');
+      producerObjects.push(await get('apis/apps/v1', `replicasets/${rs.name}`));
+    }
+    verifyWriterFenceLease(
+      lease,
+      p,
+      {
+        namespace,
+        release: identity.release,
+        attempt: identity.attempt,
+        migrationJobUid: job.uid,
+        migrationPodUid: podUid,
+        objects,
+        producerObjects,
+      },
+      Date.now(),
+      allowPending,
+    );
+  }
+}
+
+/** Mutation callbacks never retry an expired, changed or missing lease. */
+export async function observeWriterExclusion(
+  identity: ReleaseIdentity,
+): Promise<void> {
+  await observeWriterExclusionOnce(identity);
+}
+/** Run before database modules/factories: only authenticated null enrollment is retried. */
+export async function waitForWriterFenceEnrollment(
+  identity: ReleaseIdentity,
+): Promise<void> {
+  if (!maintenanceObserverPolicy().writerFenceLease) return;
+  const deadline = performance.now() + 30_000;
+  for (;;) {
+    try {
+      await observeWriterExclusionOnce(identity, true, deadline);
+      return;
+    } catch (error) {
+      if (!(error instanceof WriterFenceEnrollmentPending)) throw error;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0)
+        throw new Error('Writer-fence startup enrollment timed out.');
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(250, remaining)),
+      );
+    }
+  }
 }

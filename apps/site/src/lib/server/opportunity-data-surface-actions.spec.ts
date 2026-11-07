@@ -18,6 +18,20 @@ const mocks = vi.hoisted(() => ({
   revisionsByIds: vi.fn(),
   reviewOverlays: vi.fn(async () => new Map()),
   updateReview: vi.fn(),
+  withMatchingWriteRevision: vi.fn(),
+  createJobCollection: vi.fn(),
+}));
+
+const writeTransaction = { transactionFixture: true };
+const pinnedJobs = { enqueueJob: vi.fn(), list: vi.fn() };
+
+vi.mock('./matching-projection-read.js', () => ({
+  withMatchingWriteRevision: mocks.withMatchingWriteRevision,
+}));
+vi.mock('./db.js', () => ({ getSmrtOptions: () => ({}) }));
+vi.mock('@happyvertical/smrt-jobs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@happyvertical/smrt-jobs')>()),
+  SmrtJobCollection: { create: mocks.createJobCollection },
 }));
 
 vi.mock('./admin-opportunity-query.js', () => ({
@@ -153,9 +167,20 @@ describe('opportunity data-surface actions', () => {
     mocks.fingerprint.mockReturnValue(QUERY_FINGERPRINT);
     mocks.reviewOverlays.mockResolvedValue(new Map());
     mocks.revisionsByIds.mockResolvedValue([
-      { id: 'opp-1', updatedAt: '2026-09-02T08:00:00.000Z' },
+      {
+        id: 'opp-1',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+      },
     ]);
     mocks.getOpportunity.mockResolvedValue(openRow());
+    mocks.withMatchingWriteRevision.mockImplementation(
+      async (_subject, _expected, write) => ({
+        current: true,
+        result: await write(writeTransaction),
+      }),
+    );
+    mocks.createJobCollection.mockResolvedValue(pinnedJobs);
     mocks.updateReview.mockResolvedValue({ humanReviewStatus: 'apply' });
     mocks.enqueue.mockResolvedValue({ enqueued: true, job: {} });
   });
@@ -163,6 +188,97 @@ describe('opportunity data-surface actions', () => {
   // A selection the server will not resolve is not an action outcome -- there
   // is no set to report per-row results for -- so it is raised out of
   // resolveSelection and mapped to a refusal by the transport.
+  it.each([
+    OPPORTUNITY_BULK_WORKFLOW_IDS.review,
+    OPPORTUNITY_BULK_WORKFLOW_IDS.processWithLlm,
+  ])('refuses %s if the match changes after apply selection', async (actionId) => {
+    const adapter = await createAdapter();
+    const payload =
+      actionId === OPPORTUNITY_BULK_WORKFLOW_IDS.review
+        ? { humanReviewStatus: 'apply' }
+        : undefined;
+    const preview = await adapter.preview(request({ actionId, payload }), {
+      principal,
+    });
+    const token = preview.confirmationToken;
+    expect(token).toBeTruthy();
+    mocks.withMatchingWriteRevision.mockResolvedValue({ current: false });
+    const applied = await adapter.apply(
+      request({
+        actionId,
+        payload,
+        phase: 'apply',
+        confirmationToken: token,
+        idempotencyKey: 'fence-apply',
+      }),
+      { principal },
+    );
+    expect(applied.ok).toBe(true);
+    expect(applied.details).toMatchObject({ accepted: 0, failed: 1 });
+    expect(JSON.stringify(applied.details)).toContain('row_revision_drifted');
+    expect(mocks.withMatchingWriteRevision).toHaveBeenCalledWith(
+      { profileId: 'profile-1', tenantId: 'tenant-1', userId: 'user-1' },
+      {
+        opportunityId: 'opp-1',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+      },
+      expect.any(Function),
+    );
+    expect(mocks.updateReview).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('permits guarded manual rejection of a screened match but excludes Apply and LLM processing', async () => {
+    mocks.revisionsByIds.mockResolvedValue([
+      {
+        id: 'opp-1',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+        matchingStatus: 'screened-with-gaps',
+      },
+    ]);
+    const adapter = await createAdapter();
+    const blockedReview = await adapter.preview(request(), { principal });
+    expect(JSON.stringify(blockedReview.details)).toContain(
+      'qualification_required',
+    );
+    const blockedLlm = await adapter.preview(
+      request({
+        actionId: OPPORTUNITY_BULK_WORKFLOW_IDS.processWithLlm,
+        payload: undefined,
+      }),
+      { principal },
+    );
+    expect(JSON.stringify(blockedLlm.details)).toContain(
+      'qualification_required',
+    );
+    expect(mocks.withMatchingWriteRevision).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    const payload = { humanReviewStatus: 'reject' };
+    const preview = await adapter.preview(request({ payload }), { principal });
+    expect(preview.confirmationToken).toBeTruthy();
+    const applied = await adapter.apply(
+      request({
+        phase: 'apply',
+        payload,
+        confirmationToken: preview.confirmationToken,
+        idempotencyKey: 'screened-reject',
+      }),
+      { principal },
+    );
+    expect(applied.details).toMatchObject({ accepted: 1, failed: 0 });
+    expect(mocks.withMatchingWriteRevision).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ matchingRevision: 'generation-1' }),
+      expect.any(Function),
+      { allowScreened: true },
+    );
+    expect(mocks.updateReview).toHaveBeenCalledWith(
+      expect.objectContaining({ humanReviewStatus: 'reject' }),
+    );
+  });
+
   it('refuses an all-matching selection whose filters have drifted', async () => {
     const { OpportunitySelectionError } = await import(
       './opportunity-data-surface-actions.js'
@@ -207,8 +323,16 @@ describe('opportunity data-surface actions', () => {
   it('refuses when the matching set changes between count and listing', async () => {
     mocks.count.mockResolvedValue(3);
     mocks.matchingIds.mockResolvedValue([
-      { id: 'opp-1', updatedAt: '2026-09-02T08:00:00.000Z' },
-      { id: 'opp-2', updatedAt: '2026-09-02T08:00:00.000Z' },
+      {
+        id: 'opp-1',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+      },
+      {
+        id: 'opp-2',
+        updatedAt: '2026-09-02T08:00:00.000Z',
+        matchingRevision: 'generation-1',
+      },
     ]);
     const adapter = await createAdapter();
 
@@ -231,14 +355,43 @@ describe('opportunity data-surface actions', () => {
     const result = await adapter.preview(request(), { principal });
 
     expect(result.ok).toBe(true);
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
-      profileId: 'profile-1',
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(
+      ['opp-1'],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
+      'unsorted',
+    );
     // An explicit selection must not be bounded by how many rows the current
     // filter happens to match.
     expect(mocks.matchingIds).not.toHaveBeenCalled();
+  });
+
+  it('invalidates a preview when a match was replaced for the same posting', async () => {
+    const prior = {
+      id: 'opp-1',
+      updatedAt: '2026-09-02T08:00:00.000Z',
+      matchingRevision: 'prior',
+    };
+    mocks.revisionsByIds.mockResolvedValue([prior]);
+    const adapter = await createAdapter();
+    const preview = await adapter.preview(request(), { principal });
+    expect(preview.ok).toBe(true);
+    mocks.revisionsByIds.mockResolvedValue([
+      { ...prior, matchingRevision: 'new' },
+    ]);
+    const applied = await adapter.apply(
+      request({
+        phase: 'apply',
+        confirmationToken: preview.confirmationToken,
+        idempotencyKey: 'matching-replaced',
+      }),
+      { principal },
+    );
+    expect(applied).toMatchObject({ ok: false, reason: 'stale_preview' });
+    expect(mocks.updateReview).not.toHaveBeenCalled();
   });
 
   it('reports an explicit id that no longer exists as not_found', async () => {
@@ -266,11 +419,15 @@ describe('opportunity data-surface actions', () => {
     expect(mocks.pageIds).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 100, offset: 0 }),
     );
-    expect(mocks.revisionsByIds).toHaveBeenCalledWith(['opp-1'], {
-      profileId: 'profile-1',
-      tenantId: 'tenant-1',
-      userId: 'user-1',
-    });
+    expect(mocks.revisionsByIds).toHaveBeenCalledWith(
+      ['opp-1'],
+      {
+        profileId: 'profile-1',
+        tenantId: 'tenant-1',
+        userId: 'user-1',
+      },
+      'unsorted',
+    );
   });
 
   it('rejects a review payload with an unknown disposition', async () => {
@@ -412,6 +569,18 @@ describe('opportunity data-surface actions', () => {
       { principal },
     );
 
-    expect(mocks.enqueue).toHaveBeenCalledWith(expect.any(String), {}, {});
+    expect(mocks.createJobCollection).toHaveBeenCalledWith({
+      db: writeTransaction,
+    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      expect.any(String),
+      {},
+      {
+        collection: expect.objectContaining({
+          enqueueJob: expect.any(Function),
+          list: expect.any(Function),
+        }),
+      },
+    );
   });
 });

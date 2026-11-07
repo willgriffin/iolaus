@@ -81,6 +81,39 @@ function renderOpportunity(
 }
 
 describe('AdminRecordViewPage opportunity workflow panels', () => {
+  it('explains supported and unresolved requirements with owner detail excerpts', () => {
+    const { body } = renderOpportunity({
+      id: 'opp-1',
+      title: 'API engineer',
+      discoveryMatchStatus: 'screened-with-gaps',
+      discoveryMatchEvidence: {
+        supported: [
+          {
+            message: 'Your evidence supports API design.',
+            excerpts: ['Designed the fictional Citrus API.'],
+          },
+        ],
+        gaps: [
+          {
+            message:
+              'Still needed in the same activity: production monitoring.',
+          },
+        ],
+        interpretation: 'Matching could not interpret some of your evidence.',
+      },
+    });
+    expect(body).toContain('Recognized support');
+    expect(body).toMatch(
+      /<blockquote[^>]*>Designed the fictional Citrus API\.<\/blockquote>/u,
+    );
+    expect(body).toContain(
+      'Still needed in the same activity: production monitoring.',
+    );
+    expect(body).toContain(
+      'Matching could not interpret some of your evidence.',
+    );
+  });
+
   it('uses current user-question recommendation as primary without a legacy numeric score', async () => {
     const { body } = renderOpportunity({
       id: 'question-result',

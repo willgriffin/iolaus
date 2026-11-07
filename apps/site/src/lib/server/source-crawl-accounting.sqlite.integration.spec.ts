@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type DatabaseInterface, getDatabase } from '@happyvertical/sql';
@@ -6,22 +6,36 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createSourceCrawlAttempt,
   finalizeSourceCrawlAttempt,
+  recordSourceCrawlAttemptPersistenceIntent,
+  recordSourceCrawlAttemptTerminalIntent,
 } from './source-crawl-accounting.js';
 import {
   completeSourceCrawl,
   failSourceCrawl,
+  finalizeSourceCrawl,
 } from './source-crawl-watchdog.js';
 
-describe('source crawl accounting on SQLite', () => {
+describe.each([false, true])('native crawl accounting: %s', (native) => {
   let database: DatabaseInterface;
   let directory: string;
 
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), 'iolaus-crawl-accounting-'));
+    directory = await mkdtemp(
+      join(await realpath(tmpdir()), 'iolaus-crawl-accounting-'),
+    );
     database = await getDatabase({
       cache: false,
       type: 'sqlite',
       url: join(directory, 'accounting.sqlite'),
+      ...(native
+        ? {
+            secureFile: {
+              custody: 'trusted-parent' as const,
+              driver: 'node:sqlite' as const,
+              root: directory,
+            },
+          }
+        : {}),
     });
     await database.query(`
       CREATE TABLE source_crawls (
@@ -114,7 +128,7 @@ describe('source crawl accounting on SQLite', () => {
       sourceCrawlId: 'crawl-complete',
     });
     const crawl = {
-      finishedAt: null,
+      finishedAt: null as Date | null,
       id: 'crawl-complete',
       jobAttempt: 0,
       jobId: '',
@@ -129,17 +143,27 @@ describe('source crawl accounting on SQLite', () => {
     ).resolves.toBe(true);
 
     const result = await database.query(
-      `SELECT status, attempt_count AS "attemptCount",
+      `SELECT status, finished_at AS "finishedAt", attempt_count AS "attemptCount",
               terminal_count AS "terminalCount", reused_count AS "reusedCount"
        FROM source_crawls WHERE id = ?`,
       ['crawl-complete'],
     );
     expect(result.rows[0]).toMatchObject({
       attemptCount: 1,
+      finishedAt: crawl.finishedAt?.getTime(),
       reusedCount: 1,
       status: 'completed',
       terminalCount: 1,
     });
+    const finishedAt = crawl.finishedAt;
+    await expect(
+      completeSourceCrawl(
+        crawl,
+        { error: 'late result', status: 'completed_with_errors' },
+        database as never,
+      ),
+    ).resolves.toBe(false);
+    expect(crawl.finishedAt).toEqual(finishedAt);
   });
 
   it('terminalizes pending attempts when a local crawl fails', async () => {
@@ -153,7 +177,7 @@ describe('source crawl accounting on SQLite', () => {
       title: 'Unavailable role',
     });
     const crawl = {
-      finishedAt: null,
+      finishedAt: null as Date | null,
       id: 'crawl-failed',
       jobAttempt: 0,
       jobId: '',
@@ -165,9 +189,9 @@ describe('source crawl accounting on SQLite', () => {
     ).resolves.toBe(true);
 
     const result = await database.query(
-      `SELECT crawl.status,
+      `SELECT crawl.status, crawl.finished_at AS "finishedAt",
               crawl.failed_persistence_count AS "failedPersistenceCount",
-              item.outcome, item.status AS "itemStatus"
+              item.outcome, item.status AS "itemStatus", item.terminal_at AS "terminalAt"
        FROM source_crawls AS crawl
        JOIN source_crawl_items AS item ON item.source_crawl_id = crawl.id
        WHERE crawl.id = ?`,
@@ -175,9 +199,113 @@ describe('source crawl accounting on SQLite', () => {
     );
     expect(result.rows[0]).toMatchObject({
       failedPersistenceCount: 1,
+      finishedAt: crawl.finishedAt?.getTime(),
       itemStatus: 'persistence_error',
       outcome: 'failed_persistence',
       status: 'failed',
+      terminalAt: crawl.finishedAt?.getTime(),
     });
+  });
+
+  it('recovers recorded intents before failing an interrupted local crawl', async () => {
+    const sourceCrawlId = 'crawl-interrupted';
+    await database.query(
+      `INSERT INTO source_crawls (id, source_id) VALUES (?, 'source-1')`,
+      [sourceCrawlId],
+    );
+    await database.query(
+      `INSERT INTO opportunities (id, source_id, external_id)
+       VALUES ('persisted', 'source-1', 'external-1')`,
+    );
+    await createSourceCrawlAttempt(database as never, {
+      attemptKey: 'attributed',
+      externalId: 'external-1',
+      sourceCrawlId,
+    });
+    await recordSourceCrawlAttemptPersistenceIntent(database as never, {
+      attemptKey: 'attributed',
+      intent: 'created',
+      opportunityId: 'persisted',
+      sourceCrawlId,
+    });
+    await createSourceCrawlAttempt(database as never, {
+      attemptKey: 'skip',
+      sourceCrawlId,
+    });
+    await recordSourceCrawlAttemptTerminalIntent(database as never, {
+      attemptKey: 'skip',
+      outcome: 'skipped',
+      sourceCrawlId,
+      status: 'filtered',
+    });
+    const crawl = {
+      finishedAt: null as Date | null,
+      id: sourceCrawlId,
+      jobAttempt: 0,
+      jobId: '',
+      status: 'running',
+    };
+    await expect(
+      failSourceCrawl(crawl, 'provider interrupted', database as never),
+    ).resolves.toBe(true);
+    await expect(
+      failSourceCrawl(crawl, 'late retry', database as never),
+    ).resolves.toBe(false);
+
+    const result = await database.query(
+      `SELECT crawl.status AS "crawlStatus", crawl.pending_count AS "pendingCount",
+              crawl.terminal_count AS "terminalCount", item.outcome, item.status,
+              item.opportunity_id AS "opportunityId", item.terminal_at AS "terminalAt"
+       FROM source_crawl_items AS item
+       JOIN source_crawls AS crawl ON item.source_crawl_id = crawl.id
+       WHERE crawl.id = ? ORDER BY item.attempt_key`,
+      [sourceCrawlId],
+    );
+    const terminal = {
+      crawlStatus: 'failed',
+      pendingCount: 0,
+      terminalAt: crawl.finishedAt?.getTime(),
+      terminalCount: 2,
+    };
+    expect(result.rows).toEqual([
+      {
+        ...terminal,
+        opportunityId: 'persisted',
+        outcome: 'created',
+        status: 'created_opportunity',
+      },
+      {
+        ...terminal,
+        opportunityId: null,
+        outcome: 'skipped',
+        status: 'filtered',
+      },
+    ]);
+  });
+
+  it('uses the exact attempt fence for direct terminal writes', async () => {
+    await database.query(
+      `INSERT INTO source_crawls (id, source_id, job_id, job_attempt)
+       VALUES ('crawl-owned', 'source-1', 'job-1', 2)`,
+    );
+    const crawl = {
+      db: database,
+      finishedAt: null as Date | null,
+      id: 'crawl-owned',
+      jobAttempt: 2,
+      jobId: 'job-1',
+      status: 'running',
+    };
+    const update = { error: '', status: 'completed' } as const;
+    await expect(
+      finalizeSourceCrawl({ ...crawl, jobAttempt: 1 }, update),
+    ).resolves.toBe(false);
+    await expect(finalizeSourceCrawl(crawl, update)).resolves.toBe(true);
+    const result = await database.query(
+      `SELECT status, finished_at AS "finishedAt" FROM source_crawls`,
+    );
+    expect(result.rows).toEqual([
+      { finishedAt: crawl.finishedAt?.getTime(), status: 'completed' },
+    ]);
   });
 });

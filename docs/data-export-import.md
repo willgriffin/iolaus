@@ -136,7 +136,9 @@ run.
 Run the integration suites with `pnpm --filter @willgriffin/iolaus-site exec
 vitest run src/lib/server/account-deletion.integration.spec.ts` (SQLite) and set
 `ACCOUNT_DELETION_POSTGRES_TEST_DATABASE_URL` to a disposable PostgreSQL server
-to add the PostgreSQL run.
+to add the PostgreSQL run. The PostgreSQL suite builds the empty schema once
+and clones it into a fresh database for each test. Use a test role that can
+create and drop those databases.
 
 ## Moving a private workspace into a hosted account
 

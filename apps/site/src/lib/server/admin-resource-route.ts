@@ -18,6 +18,7 @@ import { getOpportunityEligibility } from '$lib/opportunity-eligibility';
 import {
   EMPTY_OPPORTUNITY_FILTER_OPTIONS,
   filterStateFromSearchParams,
+  isOpportunityDiscovery,
   type OpportunityFilterOptions,
 } from '$lib/opportunity-filters';
 import { opportunityPostingSupport } from '$lib/opportunity-posting-support';
@@ -40,6 +41,8 @@ import {
 import {
   countOpportunityRecords,
   createOpportunityQueryFingerprint,
+  discoveryMatchForRecord,
+  listCurrentDiscoveryMatches,
   listOpportunityFilterOptions,
   listOpportunityPageIds,
   loadOpportunityScreeningProjectionPages,
@@ -53,6 +56,7 @@ import {
   syncRecommendedOpportunityDecisionTasks,
 } from './application-workflow';
 import { acceptFactCandidate, createFactIntakeFromText } from './fact-workflow';
+import { getMatchingDiscoveryProgress } from './matching-projection-read.js';
 import { loadCurrentPartialOpportunityAssessmentProjections } from './opportunity-assessment-partial-projection';
 import {
   loadCurrentOpportunityAssessmentProjections,
@@ -335,6 +339,79 @@ export interface OpportunityContextOptions {
    * assessment projection.
    */
   workspaceSubject?: WorkspaceSubject;
+}
+
+/** Candidate discovery never hydrates legacy assessments or activity trails. */
+export async function attachOpportunityDiscoveryContext(
+  records: AdminRecord[],
+  subject: ReturnType<typeof requireCandidateWorkspaceSubject>,
+): Promise<AdminRecord[]> {
+  const ids = opportunityIdsFrom(records);
+  if (!ids.length) return [];
+  const companyIds = [
+    ...new Set(
+      records.flatMap((record) =>
+        typeof record.companyId === 'string' && record.companyId
+          ? [record.companyId]
+          : [],
+      ),
+    ),
+  ];
+  const [companies, applications, reviewOverlays] = await Promise.all([
+    companyIds.length
+      ? listAdminRecords(requireAdminResource('companies'), {
+          where: { 'id in': companyIds },
+          limit: companyIds.length,
+          select: ['id', 'name'],
+        })
+      : [],
+    listPrivateRecords('Application', subject, {
+      where: { 'opportunityId in': ids },
+      orderBy: 'updated_at DESC',
+    }),
+    loadCurrentOpportunityReviewOverlays({ opportunityIds: ids, subject }),
+  ]);
+  const names = new Map(companies.map((company) => [company.id, company.name]));
+  const byOpportunity = new Map<string, AdminRecord>();
+  for (const application of applications) {
+    const record = serializeRecord(application);
+    const id = record.opportunityId;
+    if (typeof id === 'string' && !byOpportunity.has(id))
+      byOpportunity.set(id, record);
+  }
+  // A posting/profile/source can change between page selection and hydration.
+  // Recheck the current gate before returning hydrated rows.
+  const matches = await listCurrentDiscoveryMatches(ids, subject);
+  return records.flatMap((record) => {
+    const match = discoveryMatchForRecord(matches, record);
+    if (!match || !record.id) return [];
+    const application = byOpportunity.get(record.id);
+    return [
+      {
+        ...record,
+        discoveryMatchStatus: match.status,
+        discoveryMatchScore: match.score,
+        discoveryMatchReasons: match.reasons,
+        discoveryMatchEvidence: match.evidence,
+        companyName: names.get(String(record.companyId)) ?? '',
+        reviewOverlay: reviewOverlays.get(record.id) ?? null,
+        ...(application
+          ? {
+              application,
+              applicationApplyMethod: application.applyMethod ?? '',
+              applicationCoverLetterMode: application.coverLetterMode ?? '',
+              applicationDueAt: application.dueAt ?? '',
+              applicationId: application.id ?? '',
+              applicationInstructions:
+                application.applicationInstructions ?? '',
+              applicationRequiredAnswers: application.requiredAnswers ?? '',
+              applicationResumeMode: application.resumeMode ?? '',
+              applicationStatus: application.status ?? '',
+            }
+          : {}),
+      },
+    ];
+  });
 }
 
 export async function attachOpportunityContext(
@@ -1025,6 +1102,28 @@ export function safeAdminReturnTo(value: string | null | undefined): string {
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
+// The detail route fetches full source material independently. The list needs
+// only display fields and the posting revision used by the final match fence.
+const discoveryListFields = [
+  'id',
+  'title',
+  'sourceContentFingerprint',
+  'sourceContentVersion',
+  'companyId',
+  'locations',
+  'locationNotes',
+  'postingUrl',
+  'canonicalUrl',
+  'status',
+  'currency',
+  'salaryMin',
+  'salaryMax',
+  'hourlyMin',
+  'hourlyMax',
+  'workMode',
+  'employmentType',
+] as const;
+
 export async function loadAdminResourcePageData(
   resourceSlug: string,
   url: URL,
@@ -1046,19 +1145,22 @@ export async function loadAdminResourcePageData(
       : 'all';
   if (resource.slug === 'opportunities') {
     const opportunityFilters = filterStateFromSearchParams(url.searchParams);
-    const candidateSkills = candidateSkillSlugs();
+    const currentQualified = isOpportunityDiscovery(reviewFilter);
+    const candidateSkills = currentQualified ? [] : candidateSkillSlugs();
     const shouldLoadFacetOptions = url.searchParams.has('facets');
     const subject = workspaceSubject?.profileId
       ? requireCandidateWorkspaceSubject(workspaceSubject)
       : null;
-    const assessmentContext = subject
-      ? await loadOpportunityAssessmentQueryContext(subject)
-      : null;
+    const assessmentContext =
+      subject && !currentQualified
+        ? await loadOpportunityAssessmentQueryContext(subject)
+        : null;
     // Fingerprint exactly the query the count and page listing run, so the
     // digest the browser receives describes the rows the operator is shown.
     const opportunityQuery = {
       ...assessmentContext,
       candidateSkills,
+      ...(currentQualified ? { currentQualified } : {}),
       filters: opportunityFilters,
       reviewFilter,
       search: (url.searchParams.get('q') ?? '').trim().slice(0, 200),
@@ -1067,35 +1169,45 @@ export async function loadAdminResourcePageData(
     const opportunityQueryFingerprint =
       createOpportunityQueryFingerprint(opportunityQuery);
     const [totalRecords, opportunityFilterOptions] = await Promise.all([
-      subject && assessmentContext
+      subject
         ? countOpportunityRecords(
             opportunityQuery as Parameters<typeof countOpportunityRecords>[0],
           )
         : Promise.resolve(0),
       shouldLoadFacetOptions
         ? subject
-          ? listOpportunityFilterOptions(reviewFilter, subject)
+          ? listOpportunityFilterOptions(
+              reviewFilter,
+              subject,
+              currentQualified,
+            )
           : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS)
         : Promise.resolve(EMPTY_OPPORTUNITY_FILTER_OPTIONS),
     ]);
+    const matchingProgress =
+      subject && currentQualified
+        ? await getMatchingDiscoveryProgress(subject, {
+            coverage: totalRecords === 0,
+          })
+        : undefined;
     const pagination = createAdminListPagination(
       totalRecords,
       requestedPage,
       OPPORTUNITY_TABLE_PAGE_SIZE,
     );
-    const pageIds =
-      subject && assessmentContext
-        ? await listOpportunityPageIds({
-            ...opportunityQuery,
-            limit: pagination.pageSize,
-            offset: pagination.offset,
-          } as Parameters<typeof listOpportunityPageIds>[0])
-        : [];
+    const pageIds = subject
+      ? await listOpportunityPageIds({
+          ...opportunityQuery,
+          limit: pagination.pageSize,
+          offset: pagination.offset,
+        } as Parameters<typeof listOpportunityPageIds>[0])
+      : [];
     const rawRecords =
       pageIds.length > 0
         ? await listAdminRecords(resource, {
             limit: pageIds.length,
             where: { 'id in': pageIds },
+            ...(currentQualified ? { select: discoveryListFields } : {}),
           })
         : [];
     const recordById = new Map(
@@ -1106,12 +1218,16 @@ export async function loadAdminResourcePageData(
             typeof entry[0] === 'string',
         ),
     );
-    const records = await attachOpportunityContext(
-      pageIds
-        .map((id) => recordById.get(id))
-        .filter((record): record is AdminRecord => Boolean(record)),
-      workspaceSubject ? { workspaceSubject } : {},
-    );
+    const ordered = pageIds
+      .map((id) => recordById.get(id))
+      .filter((record): record is AdminRecord => Boolean(record));
+    const records =
+      subject && currentQualified
+        ? await attachOpportunityDiscoveryContext(ordered, subject)
+        : await attachOpportunityContext(
+            ordered,
+            workspaceSubject ? { workspaceSubject } : {},
+          );
 
     return {
       activeReviewFilter: reviewFilter,
@@ -1120,6 +1236,7 @@ export async function loadAdminResourcePageData(
       candidateSkills,
       comboOptions: {},
       opportunityFilterOptions,
+      matchingProgress,
       opportunityQueryFingerprint,
       pagination: createAdminListPagination(
         totalRecords,
@@ -1221,6 +1338,7 @@ export async function loadAdminRecordPageData(
   recordId: string,
   options: {
     includeOpportunityRelations?: boolean;
+    includePrivateMatchingEvidence?: boolean;
     includeRelatedProjects?: boolean;
     returnTo?: string;
     workspaceSubject?: WorkspaceSubject;
@@ -1253,7 +1371,7 @@ export async function loadAdminRecordPageData(
   if (resource.slug === 'opportunities') {
     const companyId =
       typeof records[0]?.companyId === 'string' ? records[0].companyId : '';
-    const [foundCompany, relations] = await Promise.all([
+    const [foundCompany, relations, currentMatches] = await Promise.all([
       companyId
         ? (async () => {
             try {
@@ -1269,9 +1387,32 @@ export async function loadAdminRecordPageData(
       options.includeOpportunityRelations
         ? listOpportunityRelationEditors(recordId)
         : Promise.resolve([]),
+      options.workspaceSubject?.profileId
+        ? listCurrentDiscoveryMatches(
+            [recordId],
+            requireCandidateWorkspaceSubject(options.workspaceSubject),
+            options.includePrivateMatchingEvidence
+              ? { includePrivateEvidence: true }
+              : undefined,
+          )
+        : undefined,
     ]);
     company = foundCompany;
     opportunityRelations = relations;
+    const hydrated = records[0];
+    const match =
+      hydrated &&
+      currentMatches &&
+      discoveryMatchForRecord(currentMatches, hydrated);
+    if (match) {
+      records[0] = {
+        ...hydrated,
+        discoveryMatchStatus: match.status,
+        discoveryMatchScore: match.score,
+        discoveryMatchReasons: match.reasons,
+        discoveryMatchEvidence: match.evidence,
+      };
+    }
   }
 
   let relatedProjectEditor: RelatedProjectEditorData | null = null;
@@ -1953,6 +2094,30 @@ export async function verifyOpportunityPostingAction(
       return await verifyJobPosting({ opportunityId }, user);
     },
   );
+}
+
+/** Read the full posting for one compact discovery card, with a fresh match check. */
+export async function triageOpportunityAction(
+  request: Request,
+  workspaceSubject?: WorkspaceSubject,
+) {
+  const form = await request.formData();
+  const opportunityId = stringValue(form.get('opportunityId')).trim();
+  if (!opportunityId || opportunityId.length > 200)
+    error(400, 'Invalid posting.');
+  const subject = requireCandidateWorkspaceSubject(workspaceSubject);
+  const [record] = await listAdminRecords(
+    requireAdminResource('opportunities'),
+    {
+      limit: 1,
+      where: { id: opportunityId },
+    },
+  );
+  if (!record || record.id !== opportunityId) return { record: null };
+  const [current] = await attachOpportunityDiscoveryContext([record], subject);
+  if (!current) return { record: null };
+  const captured = opportunityWithSourceContent(current);
+  return { record: { ...current, descriptionRaw: captured.descriptionRaw } };
 }
 
 /**

@@ -1020,6 +1020,9 @@ function publishedResumeCacheContext():
   // share a value with another handle unless its stable endpoint is known.
   if (!url || !type) return undefined;
 
+  // SQLite reads through the scoped loader without the PostgreSQL xmin stamp.
+  if (type === 'sqlite') return undefined;
+
   // A live database handle carries context an endpoint cannot reproduce — an
   // open transaction, session variables, an RLS tenant scope. Caching here would
   // stamp through a freshly reconstructed connection while the payload loaded

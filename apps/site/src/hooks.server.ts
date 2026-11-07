@@ -3,10 +3,15 @@ import { type Handle, redirect, type ServerInit } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { building } from '$app/environment';
 import { administrativeSessionFailure } from '$lib/server/administrative-auth';
-import { ensureApplicationRuntimeReady } from '$lib/server/application-runtime';
+import {
+  applicationRuntime,
+  ensureApplicationRuntimeReady,
+  getLocalApplicationRuntime,
+} from '$lib/server/application-runtime';
 import { sessionCookieName } from '$lib/server/auth';
 import { getSmrtOptions } from '$lib/server/db';
 import { getLocalOAuth } from '$lib/server/local-oauth';
+import { ensureLocalSourceCrawlWorker } from '$lib/server/local-source-crawl-worker';
 import {
   isPublicProfileApiPath,
   isPublicProfileAssistantPath,
@@ -35,6 +40,10 @@ export const init: ServerInit = async () => {
       await ensureApplicationRuntimeReady();
       await getLocalOAuth();
       await refreshSkillVocabularyLookup();
+      if (applicationRuntime.profile === 'local') {
+        const runtime = await getLocalApplicationRuntime();
+        if (runtime.backgroundJobsEnabled) await ensureLocalSourceCrawlWorker();
+      }
     },
     prime: startPublishedResumePrime,
   });

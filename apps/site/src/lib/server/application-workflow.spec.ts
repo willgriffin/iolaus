@@ -1,3 +1,7 @@
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getDatabase } from '@happyvertical/sql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   archiveApplicationForCleanup,
@@ -198,10 +202,11 @@ vi.mock('@happyvertical/smrt-core', async (importOriginal) => ({
 }));
 
 const bumpTaskChangeFeed = vi.hoisted(() => vi.fn(async () => 0));
+const getDbConfig = vi.hoisted(() =>
+  vi.fn(() => ({ type: 'postgres', url: 'postgresql://example/test' })),
+);
 
-vi.mock('./db.js', () => ({
-  getDbConfig: () => ({ type: 'postgres', url: 'postgresql://example/test' }),
-}));
+vi.mock('./db.js', () => ({ getDbConfig }));
 
 vi.mock('./change-feed.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -3389,6 +3394,61 @@ describe('closeReviewTasksForArchivedOpportunities', () => {
   beforeEach(() => {
     bumpTaskChangeFeed.mockClear();
     bumpTaskChangeFeed.mockResolvedValue(0);
+  });
+
+  it('closes the matching review task on native SQLite', async () => {
+    const directory = await mkdtemp(
+      join(await realpath(tmpdir()), 'iolaus-task-close-'),
+    );
+    const config = {
+      cache: false,
+      type: 'sqlite' as const,
+      url: `file:${join(directory, 'tasks.sqlite')}`,
+      secureFile: {
+        custody: 'trusted-parent' as const,
+        driver: 'node:sqlite' as const,
+        root: directory,
+      },
+    };
+    const db = await getDatabase(config);
+    try {
+      if (!db.transaction) throw new Error('Expected native transactions.');
+      await db.transaction(async (tx) => {
+        await tx.query(`CREATE TEMP TABLE tasks (
+          id TEXT PRIMARY KEY, opportunity_id TEXT, task_type TEXT, status TEXT,
+          completed_at TEXT, kanban_column TEXT, blocker_owner_role TEXT,
+          blocker_reason TEXT, description TEXT, updated_at TEXT
+        )`);
+        await tx.query(`INSERT INTO tasks (id, opportunity_id, task_type, status)
+          VALUES ('matched', 'archived', 'review_recommendation', 'open'),
+                 ('other', 'listed', 'review_recommendation', 'open')`);
+        getDbConfig.mockReturnValueOnce(config);
+        const now = new Date('2026-09-03T00:00:00.000Z');
+        await expect(
+          closeReviewTasksForArchivedOpportunities({
+            archiveReason: 'not_listed',
+            database: tx,
+            now,
+            opportunityIds: ['archived'],
+          }),
+        ).resolves.toBe(1);
+        const result = await tx.query(
+          'SELECT id, status, completed_at FROM tasks ORDER BY id',
+        );
+        expect(result.rows).toEqual([
+          {
+            id: 'matched',
+            status: 'canceled',
+            completed_at: now.toISOString(),
+          },
+          { id: 'other', status: 'open', completed_at: null },
+        ]);
+        expect(bumpTaskChangeFeed).toHaveBeenCalledWith(tx, ['matched']);
+      });
+    } finally {
+      await db.close?.();
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   /**

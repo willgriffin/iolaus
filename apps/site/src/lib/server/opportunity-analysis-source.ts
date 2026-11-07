@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { OpportunityAnalysisSnapshot } from '$lib/opportunity-analysis-contract.js';
 import { OPPORTUNITY_ANALYSIS_VERSION } from '$lib/opportunity-analysis-contract.js';
+import { hasAnalysisPII } from './matching-source-units.js';
 import {
   fingerprintOpportunitySourceContent,
   parseOpportunitySourceContent,
@@ -10,6 +11,8 @@ import {
   SKILL_VOCABULARY_SEED_TERMS,
   skillLabelFromSlug,
 } from './skill-vocabulary.js';
+
+export { hasAnalysisPII } from './matching-source-units.js';
 
 /** Bumped independently from the pinned public analysis contract when the
  * deterministic extractor changes. This makes incomplete snapshots refresh
@@ -182,8 +185,6 @@ export function verifiedAnalysisSource(row: AnalysisSourceIdentity) {
 }
 export const sourceText = (value: unknown): string =>
   typeof value === 'string' ? value : '';
-export const hasAnalysisPII = (text: string): boolean =>
-  /[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:\+?\d[\s().-]*){9,}/i.test(text);
 export function negatedSkillEvidence(
   text: string,
   start: number,

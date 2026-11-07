@@ -49,6 +49,7 @@ export interface CreatePrivateDecisionTagInput {
 }
 
 export interface RecordPrivateOpportunityReviewInput {
+  database?: unknown;
   humanRating?: number | null;
   humanReviewNotes?: string;
   humanReviewStatus: 'apply' | 'archived' | 'maybe' | 'needs_input' | 'reject';
@@ -240,6 +241,7 @@ export async function recordPrivateOpportunityReview(
     );
   }
   return await createPrivateDecision({
+    database: input.database,
     decision: decisionForReviewStatus(status),
     humanRating: input.humanRating ?? null,
     opportunityId: input.opportunityId,

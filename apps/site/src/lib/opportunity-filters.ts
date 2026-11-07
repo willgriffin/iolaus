@@ -41,6 +41,18 @@ export const DECISION_REVIEW_STATUSES = ['apply', 'maybe', 'reject'] as const;
 /** A separate coarse-screen view; it is independent of human dispositions. */
 export const OPPORTUNITY_SCREENED_OUT_REVIEW_FILTER = 'screened_out';
 
+/** Named review filters read deliberate private history. Everything else is discovery. */
+export function isOpportunityDiscovery(review: string): boolean {
+  return ![
+    'apply',
+    'maybe',
+    'reject',
+    'archived',
+    'needs_input',
+    'missing_application_planning',
+  ].includes(review.trim());
+}
+
 export function opportunityScreeningReviewMode(
   reviewFilter: string,
 ): 'exclude' | 'only' | null {

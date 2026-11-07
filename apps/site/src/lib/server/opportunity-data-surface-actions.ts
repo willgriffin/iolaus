@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { PrincipalRun } from '@happyvertical/smrt-agents';
 import {
   createDataSurfaceActionAdapter,
@@ -10,6 +11,9 @@ import {
   type ResolvedDataSurfaceActions,
   type ResolvedDataSurfaceSelection,
 } from '@happyvertical/smrt-agents/server';
+import type { SmrtJob } from '@happyvertical/smrt-jobs';
+import type { DatabaseInterface } from '@happyvertical/sql';
+import { isOpportunityDiscovery } from '$lib/opportunity-filters';
 
 /**
  * The adapter passes an invocation to every action callback but does not
@@ -47,6 +51,8 @@ import {
   type WorkspaceOpportunityQuery,
 } from './admin-opportunity-query.js';
 import { updateOpportunityReview } from './application-package.js';
+import { getSmrtOptions } from './db.js';
+import { withMatchingWriteRevision } from './matching-projection-read.js';
 import {
   enqueueOpportunityIntelligenceWithStatus,
   OpportunityIntelligenceEnqueueError,
@@ -102,7 +108,12 @@ function toQuery(
   workspaceSubject: OpportunityDataSurfaceOptions['workspaceSubject'],
 ): WorkspaceOpportunityQuery {
   return {
-    candidateSkills: target.candidateSkills,
+    candidateSkills: isOpportunityDiscovery(target.reviewFilter)
+      ? []
+      : target.candidateSkills,
+    ...(isOpportunityDiscovery(target.reviewFilter)
+      ? { currentQualified: true }
+      : {}),
     filters: target.filters,
     reviewFilter: target.reviewFilter,
     search: target.search,
@@ -138,7 +149,7 @@ const rowCaches = new WeakMap<
 >();
 const revisionByRequest = new WeakMap<
   DataSurfaceServerActionRequest,
-  Map<string, string>
+  Map<string, OpportunityMatchingRow>
 >();
 
 function stringOf(value: unknown): string {
@@ -159,6 +170,7 @@ async function loadRow(
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
+  if (!revisionByRequest.get(request)?.get(key)?.updatedAt) return null;
   const collection = await getCollection('Opportunity');
   const row = (await collection.get(key)) as Record<string, unknown> | null;
   const overlays = row
@@ -175,7 +187,7 @@ async function loadRow(
         humanReviewStatus: review?.humanReviewStatus ?? '',
         sourceContentFingerprint: stringOf(row.sourceContentFingerprint),
         status: stringOf(row.status),
-        updatedAt: revisionByRequest.get(request)?.get(key),
+        updatedAt: revisionByRequest.get(request)?.get(key)?.updatedAt,
       }
     : null;
   cache.set(key, snapshot);
@@ -342,6 +354,50 @@ function opportunityDescriptor(): DataSurfaceDescriptor {
 export function createOpportunityDataSurfaceAdapter(
   options: OpportunityDataSurfaceOptions,
 ): DataSurfaceActionAdapter {
+  function screenedSelection(
+    invocation: DataSurfaceActionInvocation,
+    rowId: DataSurfaceRowId,
+  ) {
+    return (
+      revisionByRequest.get(invocation.request)?.get(String(rowId))
+        ?.matchingStatus === 'screened-with-gaps'
+    );
+  }
+
+  async function writeAtResolvedRevision<T>(
+    invocation: DataSurfaceActionInvocation,
+    rowId: DataSurfaceRowId,
+    write: (database?: DatabaseInterface) => Promise<T>,
+    allowScreened = false,
+  ): Promise<T> {
+    const row = revisionByRequest.get(invocation.request)?.get(String(rowId));
+    if (!row?.updatedAt)
+      throw new OpportunitySelectionError('row_revision_drifted');
+    const target = options.resolveQueryTarget(invocation.request);
+    // Deliberate history remains writable independent of discovery.
+    if (!isOpportunityDiscovery(target.reviewFilter)) return write();
+    const matchingRevision = row.matchingRevision;
+    if (!matchingRevision)
+      throw new OpportunitySelectionError('row_revision_drifted');
+    return withVerifiedWorkspaceSubject(options.workspaceSubject, async () => {
+      const guarded = await withMatchingWriteRevision(
+        options.workspaceSubject,
+        {
+          opportunityId: row.id,
+          updatedAt: row.updatedAt,
+          matchingRevision,
+        },
+        write,
+        ...(allowScreened && screenedSelection(invocation, rowId)
+          ? [{ allowScreened: true }]
+          : []),
+      );
+      if (!guarded.current)
+        throw new OpportunitySelectionError('row_revision_drifted');
+      return guarded.result;
+    });
+  }
+
   const reviewAction: DataSurfaceServerActionDefinition = {
     descriptor: opportunityDescriptor().actions[0],
     inputSchema: REVIEW_INPUT_SCHEMA as never,
@@ -375,23 +431,28 @@ export function createOpportunityDataSurfaceAdapter(
       if (row && !row.updatedAt) {
         throw new OpportunitySelectionError('row_revision_drifted');
       }
-      const record = await updateOpportunityReview({
-        // Pin the write to the revision the selection resolved at, so a row
-        // edited since then fails rather than losing the newer value.
-        expectedUpdatedAt: row?.updatedAt,
-        // Rating, notes, and reviewer carry over when the caller omits them:
-        // a bulk disposition change must not silently erase an existing
-        // rating or note that the operator never mentioned.
-        humanRating:
-          payload.humanRating === undefined
-            ? row?.humanRating
-            : payload.humanRating,
-        humanReviewNotes: payload.humanReviewNotes ?? row?.humanReviewNotes,
-        humanReviewStatus: payload.humanReviewStatus,
-        opportunityId: String(rowId),
-        subject: options.workspaceSubject,
-        user: { id: invocation.run.context.userId ?? undefined },
-      });
+      const record = await writeAtResolvedRevision(
+        invocation,
+        rowId,
+        (database) =>
+          updateOpportunityReview({
+            ...(database ? { database } : {}),
+            expectedUpdatedAt: row?.updatedAt,
+            // Rating, notes, and reviewer carry over when the caller omits them:
+            // a bulk disposition change must not silently erase an existing
+            // rating or note that the operator never mentioned.
+            humanRating:
+              payload.humanRating === undefined
+                ? row?.humanRating
+                : payload.humanRating,
+            humanReviewNotes: payload.humanReviewNotes ?? row?.humanReviewNotes,
+            humanReviewStatus: payload.humanReviewStatus,
+            opportunityId: String(rowId),
+            subject: options.workspaceSubject,
+            user: { id: invocation.run.context.userId ?? undefined },
+          }),
+        payload.humanReviewStatus !== 'apply',
+      );
       return {
         humanReviewStatus: stringOf(
           (record as Record<string, unknown>).humanReviewStatus,
@@ -416,6 +477,8 @@ export function createOpportunityDataSurfaceAdapter(
     },
     authorize: () => true,
     eligible: async (invocation, rowId) => {
+      if (screenedSelection(invocation, rowId))
+        return { eligible: false, reason: 'qualification_required' };
       const row = await loadRow(
         invocation.request,
         rowId,
@@ -436,18 +499,44 @@ export function createOpportunityDataSurfaceAdapter(
     // inserts durable, idempotent intelligence jobs. The analysis itself
     // already runs in the jobs worker, so there is nothing left to defer.
     apply: async (invocation, rowId) => {
-      const result = await withVerifiedWorkspaceSubject(
-        options.workspaceSubject,
-        async () =>
-          await enqueueOpportunityIntelligenceWithStatus(
-            String(rowId),
-            {},
-            // The form action this replaces attributed each job to the operator.
-            // Without it every bulk-queued job records an empty
-            // `initiatedByUserId`, and the batch's own audit line cannot restore
-            // per-job attribution after the fact.
-            {},
-          ),
+      const result = await writeAtResolvedRevision(
+        invocation,
+        rowId,
+        async (database) => {
+          if (database) {
+            const { SmrtJobCollection } = await import(
+              '@happyvertical/smrt-jobs'
+            );
+            const collection = await SmrtJobCollection.create({
+              ...getSmrtOptions(),
+              db: database,
+            });
+            return enqueueOpportunityIntelligenceWithStatus(
+              String(rowId),
+              {},
+              {
+                collection: {
+                  enqueueJob: collection.enqueueJob.bind(collection),
+                  // Native SmrtJobCollection hydrates SmrtJob instances
+                  // when no select projection is requested.
+                  list: async (options) =>
+                    (await collection.list(options)) as SmrtJob[],
+                  // Bulk always uses native enqueue on the pinned executor.
+                  create: async () => {
+                    throw new Error(
+                      'A bulk queue cannot use legacy job creation.',
+                    );
+                  },
+                },
+              },
+            );
+          }
+          return withVerifiedWorkspaceSubject(
+            options.workspaceSubject,
+            async () =>
+              enqueueOpportunityIntelligenceWithStatus(String(rowId), {}, {}),
+          );
+        },
       );
       // A row that already has an active job queued nothing. The adapter
       // classifies every normal return as `accepted`, so reporting this as a
@@ -472,6 +561,11 @@ export function createOpportunityDataSurfaceAdapter(
     invocation: DataSurfaceActionInvocation,
     rowId: DataSurfaceRowId,
   ): Promise<DataSurfaceActionEligibility> {
+    if (
+      screenedSelection(invocation, rowId) &&
+      reviewPayload(invocation.request.payload)?.humanReviewStatus === 'apply'
+    )
+      return { eligible: false, reason: 'qualification_required' };
     const row = await loadRow(
       invocation.request,
       rowId,
@@ -507,14 +601,30 @@ export function createOpportunityDataSurfaceAdapter(
     const rows = await resolveRows(selection, target, query, queryFingerprint);
     // Remember each row's revision for this request so apply() can pin its
     // write to the row as it was when the selection was resolved.
-    const revisions = new Map<string, string>();
-    for (const row of rows) revisions.set(row.id, row.updatedAt);
+    const revisions = new Map(rows.map((row) => [row.id, row]));
     revisionByRequest.set(invocation.request, revisions);
     rowCaches.delete(invocation.request);
 
     return {
       revision: 0,
-      queryFingerprint,
+      queryFingerprint: query.currentQualified
+        ? createHash('sha256')
+            .update(queryFingerprint)
+            .update(
+              JSON.stringify(
+                rows
+                  .map((row) => [
+                    row.id,
+                    row.updatedAt,
+                    row.matchingRevision ?? null,
+                  ])
+                  .sort(([left], [right]) =>
+                    String(left).localeCompare(String(right)),
+                  ),
+              ),
+            )
+            .digest('hex')
+        : queryFingerprint,
       rowIds: rowIdList(rows),
     };
   }
@@ -541,15 +651,19 @@ export function createOpportunityDataSurfaceAdapter(
       // than the cap.
       const known = new Map(
         (
-          await listOpportunityRevisionsByIds(ids, options.workspaceSubject)
-        ).map((row) => [row.id, row.updatedAt]),
+          await listOpportunityRevisionsByIds(
+            ids,
+            options.workspaceSubject,
+            query.reviewFilter,
+          )
+        ).map((row) => [row.id, row]),
       );
       // Keep an id the lookup did not find. Dropping it here would shrink the
       // batch silently, because the adapter only reports outcomes for rows the
       // selection resolved; carried through, `eligible()` fails to load it and
       // reports `not_found`, which is the documented per-row outcome. It
       // carries no revision, so it can never be written unguarded.
-      return ids.map((id) => ({ id, updatedAt: known.get(id) ?? '' }));
+      return ids.map((id) => known.get(id) ?? { id, updatedAt: '' });
     }
 
     if (selection.scope === 'current-page') {
@@ -564,6 +678,7 @@ export function createOpportunityDataSurfaceAdapter(
       return await listOpportunityRevisionsByIds(
         pageIds,
         options.workspaceSubject,
+        query.reviewFilter,
       );
     }
 

@@ -33,7 +33,7 @@ it('keeps workspace links available while overview data streams', async () => {
   resolve({ tasks: [], opportunities: [], pendingOpportunities: [] });
   await vi.waitFor(() => {
     expect(target.textContent).toContain('No active tasks');
-    expect(target.textContent).toContain('No new assessed matches');
+    expect(target.textContent).toContain('No new matches');
     expect(target.textContent).not.toContain('Loading opportunities');
   });
 });
@@ -50,4 +50,52 @@ it('keeps navigation available when overview data fails', async () => {
   });
   expect(target.querySelector('a[href="/admin/tasks"]')).not.toBeNull();
   expect(target.textContent).not.toContain('private database details');
+});
+
+it('highlights existing positive evidence and keeps a neutral fallback on Home', async () => {
+  const screening: Overview['opportunities'][number] = {
+    id: 'screened',
+    title: 'Screened listing',
+    company: '',
+    location: '',
+    eligibility: 'Screened · evidence gaps',
+    readiness: 'Some requirements still need evidence',
+    discoveryStatus: 'screened-with-gaps',
+    fitScore: null,
+    href: '/admin/opportunities/screened',
+  };
+  component = mount(AdminOverview, {
+    target,
+    props: {
+      overview: Promise.resolve({
+        tasks: [],
+        opportunities: [
+          {
+            ...screening,
+            matchHighlight: 'Partial support for REST API design.',
+          },
+          {
+            ...screening,
+            id: 'fallback',
+            href: '/admin/opportunities/fallback',
+          },
+        ],
+        pendingOpportunities: [],
+      }),
+    },
+  });
+  await vi.waitFor(() => {
+    const highlighted = target.querySelector(
+      '[href="/admin/opportunities/screened"]',
+    );
+    expect(highlighted?.querySelector('.match-highlight')?.textContent).toBe(
+      'Partial support for REST API design.',
+    );
+    expect(highlighted?.textContent).toContain(screening.eligibility);
+    expect(highlighted?.textContent).not.toContain(screening.readiness);
+    expect(
+      target.querySelector('[href="/admin/opportunities/fallback"]')
+        ?.textContent,
+    ).toContain(screening.readiness);
+  });
 });

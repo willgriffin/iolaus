@@ -3,8 +3,10 @@ vi.mock('./opportunity-matching.js', () => ({
 }));
 
 import { getDatabase } from '@happyvertical/sql';
+import { render } from 'svelte/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_OPPORTUNITY_FILTERS } from '$lib/opportunity-filters';
+import OpportunityEvidenceGaps from '../components/admin/OpportunityEvidenceGaps.svelte';
 import { currentCitedSupport } from '../opportunity-resume-fit-review-projection.js';
 import { completeReviewFixture } from '../opportunity-resume-fit-review-projection.test-support.js';
 import { aggregateScreeningQuestionAnswers } from '../opportunity-screening-questions.js';
@@ -144,6 +146,237 @@ describe('admin-opportunity-query', () => {
     mocks.requestDatabase.mockReturnValue(undefined);
     mocks.scopedQuery.mockReset();
     mocks.scopedQuery.mockResolvedValue({ rows: [] });
+  });
+
+  it('reserves exact process citations without expanding a dense detail excerpt budget', async () => {
+    const { listCurrentDiscoveryMatches } = await import(
+      './admin-opportunity-query.js'
+    );
+    const citation = (text: string, index: number) => ({
+      field: 'description',
+      start: index * 100,
+      end: index * 100 + text.length,
+      text,
+    });
+    const gaps = Array.from({ length: 12 }, (_, index) => ({
+      citation: citation(`Required capability ${index}`, index),
+    }));
+    const applicationSteps = [
+      'Complete the sample assessment.',
+      'Disclose AI use.',
+      'Send the application portfolio.',
+    ].map((text, index) => ({
+      citation: citation(text, 12 + index),
+    }));
+    const reasons = [
+      ...gaps.map(({ citation }) => ({
+        code: 'posting-capability-gap',
+        outcome: 'unknown',
+        message: 'Capability gap',
+        citations: [citation],
+      })),
+      ...applicationSteps.map(({ citation }) => ({
+        code: 'posting-application-step',
+        outcome: 'unknown',
+        message: 'Application step',
+        citations: [citation],
+      })),
+    ];
+    mocks.query.mockResolvedValue({
+      rows: [
+        {
+          id: 'posting-a',
+          score: 55,
+          matchingStatus: 'screened-with-gaps',
+          reasons: JSON.stringify(reasons),
+          sourceFacts: JSON.stringify({
+            sourceCapabilityGaps: gaps,
+            applicationSteps,
+          }),
+        },
+      ],
+    });
+    const result = await listCurrentDiscoveryMatches(
+      ['posting-a'],
+      WORKSPACE_SUBJECT,
+      { includePrivateEvidence: true },
+    );
+    const evidence = result.get('posting-a')?.evidence;
+    expect(
+      evidence?.applicationSteps?.map(({ excerpts }) => excerpts?.[0]),
+    ).toEqual(applicationSteps.map(({ citation }) => citation.text));
+    expect(
+      [
+        ...(evidence?.applicationSteps ?? []),
+        ...(evidence?.gaps ?? []),
+      ].flatMap(({ excerpts }) => excerpts ?? []),
+    ).toHaveLength(12);
+  });
+
+  it('ranks verified highlights and ignores missing or unbounded partial evidence', async () => {
+    const { listCurrentDiscoveryMatches } = await import(
+      './admin-opportunity-query.js'
+    );
+    const preferred = {
+      code: 'preferred-capability',
+      outcome: 'supported',
+      message: 'Your evidence supports Node.js.',
+    };
+    const partial = {
+      code: 'required-capability',
+      outcome: 'unknown',
+      message: 'Production REST API work needs confirmation.',
+      partialSupport: 'REST API design',
+      citations: [
+        {
+          field: 'evidence',
+          id: 'owned',
+          start: 0,
+          end: 10,
+          text: 'Never show this excerpt.',
+        },
+      ],
+    };
+    const required = {
+      code: 'required-capability',
+      outcome: 'supported',
+      message: 'Your evidence supports PostgreSQL.',
+    };
+    const invalid = [
+      { ...partial, citations: [] },
+      { ...partial, partialSupport: ['REST APIs'] },
+      { ...partial, partialSupport: 'x'.repeat(210) },
+      { ...partial, outcome: 'conflict' },
+      { ...partial, code: 'posting-capability-gap' },
+    ];
+    mocks.query.mockResolvedValue({
+      rows: [
+        ['full', [preferred, partial, required]],
+        ['partial', [preferred, partial]],
+        ['gaps', invalid],
+      ].map(([id, reasons]) => ({
+        id,
+        score: 55,
+        matchingStatus: 'screened-with-gaps',
+        reasons: JSON.stringify(reasons),
+      })),
+    });
+    const matches = await listCurrentDiscoveryMatches(
+      ['full', 'partial', 'gaps'],
+      WORKSPACE_SUBJECT,
+    );
+    expect(matches.get('full')?.evidence.highlight).toBe(required.message);
+    expect(matches.get('partial')?.evidence.highlight).toBe(
+      'Partial support for REST API design.',
+    );
+    expect(matches.get('partial')?.evidence.gaps).toEqual([
+      { message: partial.message },
+    ]);
+    expect(matches.get('gaps')?.evidence.highlight).toBeUndefined();
+    expect(JSON.stringify([...matches])).not.toContain(
+      'Never show this excerpt.',
+    );
+  });
+
+  it.each([
+    'qualified',
+    'screened-with-gaps',
+  ] as const)('keeps application steps informational for %s and only resolves source excerpts on owner detail', async (matchingStatus) => {
+    const { listCurrentDiscoveryMatches } = await import(
+      './admin-opportunity-query.js'
+    );
+    const message = 'The posting includes a required application assessment.';
+    const text = 'Complete the application assessment.';
+    const publicCitation = {
+      field: 'description',
+      start: 15,
+      end: 15 + text.length,
+    };
+    const privateText = 'Private candidate evidence.';
+    const privateCitation = {
+      field: 'evidence',
+      id: 'owner-record',
+      start: 0,
+      end: privateText.length,
+    };
+    const row = {
+      id: 'posting-a',
+      score: 75,
+      matchingStatus,
+      reasons: JSON.stringify([
+        {
+          code: 'posting-application-step',
+          outcome: 'unknown',
+          message,
+          citations: [
+            { ...publicCitation, text: 'Untrusted inline excerpt' },
+            privateCitation,
+          ],
+        },
+      ]),
+      candidateFacts: JSON.stringify({
+        evidence: [{ citation: { ...privateCitation, text: privateText } }],
+      }),
+      sourceFacts: JSON.stringify({
+        applicationSteps: [
+          {
+            kind: 'assessment-required',
+            citation: { ...publicCitation, text },
+          },
+        ],
+      }),
+    };
+    mocks.query.mockResolvedValue({ rows: [row] });
+
+    const list = await listCurrentDiscoveryMatches(
+      ['posting-a'],
+      WORKSPACE_SUBJECT,
+    );
+    expect(list.get('posting-a')).toMatchObject({
+      reasons: [],
+      evidence: { supported: [], gaps: [], applicationSteps: [{ message }] },
+    });
+    expect(
+      list.get('posting-a')?.evidence.applicationSteps?.[0],
+    ).not.toHaveProperty('excerpts');
+    expect(mocks.query.mock.lastCall?.[0]).not.toContain(
+      'source_facts.facts_json',
+    );
+
+    const detail = await listCurrentDiscoveryMatches(
+      ['posting-a'],
+      WORKSPACE_SUBJECT,
+      { includePrivateEvidence: true },
+    );
+    expect(detail.get('posting-a')?.evidence.applicationSteps).toEqual([
+      { message, excerpts: [text] },
+    ]);
+    expect(JSON.stringify([...detail.values()])).not.toMatch(
+      /Private candidate evidence|Untrusted inline excerpt/u,
+    );
+    expect(mocks.query.mock.lastCall?.[0]).toContain('source_facts.facts_json');
+
+    const { body } = render(OpportunityEvidenceGaps, {
+      props: {
+        reasons: detail.get('posting-a')?.reasons,
+        explanation: detail.get('posting-a')?.evidence,
+        qualified: matchingStatus === 'qualified',
+        showPrivateExcerpts: true,
+      },
+    });
+    expect(body).toMatch(/<h3[^>]*>Application steps<\/h3>/u);
+    expect(body).toMatch(
+      /<blockquote[^>]*>Complete the application assessment\.<\/blockquote>/u,
+    );
+
+    mocks.query.mockResolvedValue({ rows: [{ ...row, reasons: '[]' }] });
+    const legacy = await listCurrentDiscoveryMatches(
+      ['posting-a'],
+      WORKSPACE_SUBJECT,
+    );
+    expect(legacy.get('posting-a')?.evidence).not.toHaveProperty(
+      'applicationSteps',
+    );
   });
 
   it('joins one current owned recommendation rank and orders it before pagination', async () => {
