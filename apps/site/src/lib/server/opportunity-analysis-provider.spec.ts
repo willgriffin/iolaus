@@ -163,6 +163,60 @@ describe('production analysis provider protocol', () => {
       enrichOpportunityAnalysis(input, { budgetMicros: 1000 }),
     ).rejects.toThrow('Pinned');
   });
+  it('rejects a non-pinned model on the hosted route', async () => {
+    state.profile.mockResolvedValue({
+      model: 'openai/gpt-6.1-sol',
+      provider: 'bifrost',
+      aiClient: { chat: state.chat },
+      timeout: 10_000,
+    });
+    await expect(
+      enrichOpportunityAnalysis(input, { budgetMicros: 1000 }),
+    ).rejects.toThrow('Pinned');
+    expect(state.chat).not.toHaveBeenCalled();
+  });
+  it('uses the local installation model, provider identity and operator pricing', async () => {
+    vi.stubEnv(
+      'OPPORTUNITY_INTELLIGENCE_INPUT_COST_MICROS_PER_MILLION',
+      '1000000',
+    );
+    vi.stubEnv(
+      'OPPORTUNITY_INTELLIGENCE_OUTPUT_COST_MICROS_PER_MILLION',
+      '2000000',
+    );
+    state.profile.mockResolvedValue({
+      model: 'llama3.1',
+      provider: 'ollama',
+      aiClient: { chat: state.chat },
+      timeout: 10_000,
+    });
+    const result = await enrichOpportunityAnalysis(input, {
+      budgetMicros: 1000,
+    });
+    // 100 input at 1.00 + 20 output at 2.00 per million, never hosted rates.
+    expect(result).toMatchObject({ model: 'llama3.1', costMicros: 140 });
+    const request = state.governed.mock.calls[0][0];
+    expect(request.identity).toMatchObject({
+      feature: 'opportunity-analysis',
+      model: 'llama3.1',
+      profile: 'opportunity-intelligence-extraction',
+      provider: 'ollama',
+    });
+    expect(state.chat.mock.calls[0][1]).toMatchObject({ model: 'llama3.1' });
+  });
+  it('never prices a local model that shares a pinned id at hosted rates', async () => {
+    state.profile.mockResolvedValue({
+      model: ANALYSIS_MODEL,
+      provider: 'openai',
+      aiClient: { chat: state.chat },
+      timeout: 10_000,
+    });
+    const result = await enrichOpportunityAnalysis(input, {
+      budgetMicros: 1000,
+    });
+    expect(result.costMicros).toBe(0);
+    expect(state.governed.mock.calls[0][0].identity.provider).toBe('openai');
+  });
   it('refuses arbitrary windows and zero budgets without calling provider', async () => {
     await expect(
       enrichOpportunityAnalysis(input, { budgetMicros: 0 }),

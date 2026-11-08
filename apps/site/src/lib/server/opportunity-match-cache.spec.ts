@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  EVIDENCE_MODEL,
   enrichMatchEvidence,
   MAX_STAGE_THREE_CALLS,
   type MatchEvidenceCacheDependencies,
@@ -134,6 +135,43 @@ describe('governed requirement orchestration', () => {
         candidate.evidence,
       ),
     ).toThrow();
+  });
+  describe('cache identity by route', () => {
+    afterEach(() => vi.unstubAllEnvs());
+    async function keyFor() {
+      const candidate = candidateFixture(),
+        postings = catalog(1),
+        deps = dependencies();
+      await enrichMatchEvidence(
+        candidate.subject,
+        candidate,
+        matchCandidateEvidence(candidate, postings),
+        postings,
+        deps,
+      );
+      return (deps.read as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<
+        string,
+        string
+      >;
+    }
+    it('keeps the hosted pinned model identity unchanged', async () => {
+      expect((await keyFor()).model).toBe(EVIDENCE_MODEL);
+    });
+    it('keeps the hosted identity on a hosted profile despite local settings', async () => {
+      vi.stubEnv('SMRT_RUNTIME_PROFILE', 'cloud');
+      vi.stubEnv('SMRT_APP_ID', 'jobgeni');
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+      vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'llama3.1');
+      expect((await keyFor()).model).toBe(EVIDENCE_MODEL);
+    });
+    it('folds the local provider and model into the identity', async () => {
+      vi.stubEnv('SMRT_RUNTIME_PROFILE', 'local');
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+      vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'llama3.1');
+      expect((await keyFor()).model).toBe('ollama:llama3.1');
+      vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'qwen3:8b');
+      expect((await keyFor()).model).toBe('ollama:qwen3:8b');
+    });
   });
   it('does not call a model for missing evidence and changes cache keys when evidence changes', async () => {
     const candidate = candidateFixture(),

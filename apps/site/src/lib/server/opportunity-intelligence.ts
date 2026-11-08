@@ -55,7 +55,10 @@ import {
   storeOpportunityAssessment,
 } from './opportunity-assessment-store.js';
 import { processOpportunityWithLlm } from './opportunity-details.js';
-import { resolveOpportunityScoringConfig } from './opportunity-intelligence-config.js';
+import {
+  opportunityIntelligenceRouteIsBringYourOwn,
+  resolveOpportunityScoringConfig,
+} from './opportunity-intelligence-config.js';
 import {
   attachOpportunityIntelligenceInvocationMetadata,
   executeGovernedOpportunityIntelligenceRequest,
@@ -1910,6 +1913,13 @@ async function runScore(
                   feature: 'opportunity-score',
                   inputFingerprint: request.input.fingerprint,
                   model: settings.model,
+                  // A user's own provider is part of the request identity and
+                  // pricing; hosted identities carry none.
+                  ...(opportunityIntelligenceRouteIsBringYourOwn(
+                    settings.provider,
+                  )
+                    ? { provider: settings.provider }
+                    : {}),
                   opportunityId,
                   outputSchemaVersion:
                     OPPORTUNITY_SCORING_OUTPUT_SCHEMA_VERSION,

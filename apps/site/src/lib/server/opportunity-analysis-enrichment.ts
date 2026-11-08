@@ -11,7 +11,8 @@ import {
   negatedSkillEvidence,
 } from './opportunity-analysis-source.js';
 import {
-  pricingForOpportunityIntelligenceModel,
+  opportunityIntelligenceRouteIsBringYourOwn,
+  pricingForOpportunityIntelligenceRoute,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
 } from './opportunity-intelligence-config.js';
@@ -232,8 +233,16 @@ export async function enrichOpportunityAnalysis(
     throw new Error('Analysis requires bounded verified source content.');
   const profile =
     await resolveOpportunityIntelligenceExtractionAiProfileClient();
-  if (!profile || profile.model !== ANALYSIS_MODEL)
+  // Hosted keeps the reviewed pinned model. A local installation that brought
+  // its own provider uses the model its settings name.
+  const byoProvider = opportunityIntelligenceRouteIsBringYourOwn(
+    profile?.provider,
+  )
+    ? profile?.provider
+    : undefined;
+  if (!profile || (!byoProvider && profile.model !== ANALYSIS_MODEL))
     throw new Error('Pinned opportunity analysis model is unavailable.');
+  const model = byoProvider ? profile.model : ANALYSIS_MODEL;
   const messages: AIMessage[] = [
     {
       role: 'system',
@@ -250,7 +259,7 @@ export async function enrichOpportunityAnalysis(
   ];
   const inputTokens = await countOpportunityInputTokens(
     messages,
-    ANALYSIS_MODEL,
+    model,
     profile.aiClient.countTokens?.bind(profile.aiClient),
   );
   if (inputTokens > 24_000)
@@ -274,14 +283,15 @@ export async function enrichOpportunityAnalysis(
         ),
         feature: 'opportunity-analysis',
         profile: 'opportunity-intelligence-extraction',
-        model: ANALYSIS_MODEL,
+        model,
+        ...(byoProvider ? { provider: byoProvider } : {}),
         promptVersion: ANALYSIS_PROMPT_VERSION,
         outputSchemaVersion: ANALYSIS_OUTPUT_VERSION,
         preparedPayloadVersion: OPPORTUNITY_ANALYSIS_VERSION,
       },
       invoke: async (requestId) => {
         const response = await profile.aiClient.chat(messages, {
-          model: ANALYSIS_MODEL,
+          model,
           maxTokens: MAX_OUTPUT_TOKENS,
           reasoning: { effort: 'low', maxTokens: 1_024 },
           responseFormat: { type: 'json_object' },
@@ -300,8 +310,10 @@ export async function enrichOpportunityAnalysis(
           );
           if (!response.usage)
             throw new Error('Analysis usage accounting is missing.');
-          const pricing =
-            pricingForOpportunityIntelligenceModel(ANALYSIS_MODEL);
+          const pricing = pricingForOpportunityIntelligenceRoute({
+            model,
+            provider: byoProvider,
+          });
           const inputTokens = response.usage.promptTokens,
             outputTokens = response.usage.completionTokens;
           if (
@@ -353,7 +365,7 @@ export async function enrichOpportunityAnalysis(
       skillSlugs: [...new Set(output.skills.map((skill) => skill.slug))].sort(),
     },
     requestId: governed.requestId,
-    model: ANALYSIS_MODEL,
+    model,
     promptVersion: ANALYSIS_PROMPT_VERSION,
     inputTokens: output.inputTokens,
     outputTokens: output.outputTokens,

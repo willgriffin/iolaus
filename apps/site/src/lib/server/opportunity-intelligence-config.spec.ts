@@ -8,6 +8,7 @@ import {
   opportunityIntelligenceEnabled,
   opportunityIntelligenceProviderVolume,
   pricingForOpportunityIntelligenceModel,
+  pricingForOpportunityIntelligenceRoute,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
   resolveOpportunityIntelligenceEnqueueCap,
@@ -45,6 +46,53 @@ describe('opportunity intelligence enqueue config', () => {
       pricingForOpportunityIntelligenceModel('openai/gpt-6-astra'),
     ).toMatchObject({
       configured: false,
+    });
+  });
+  it('prices a user provider only from operator-set rates, never by model name', () => {
+    const operator = {
+      configured: true,
+      inputMicrosPerMillion: 7,
+      outputMicrosPerMillion: 9,
+    };
+    const unset = {
+      configured: false,
+      inputMicrosPerMillion: 0,
+      outputMicrosPerMillion: 0,
+    };
+    for (const provider of [undefined, 'bifrost'])
+      expect(
+        pricingForOpportunityIntelligenceRoute(
+          { model: 'openai/gpt-6-luna', provider },
+          operator,
+        ),
+      ).toEqual({
+        configured: true,
+        inputMicrosPerMillion: 100_000,
+        outputMicrosPerMillion: 500_000,
+      });
+    expect(
+      pricingForOpportunityIntelligenceRoute(
+        { model: 'openai/gpt-6-luna', provider: 'openai' },
+        operator,
+      ),
+    ).toEqual(operator);
+    expect(
+      pricingForOpportunityIntelligenceRoute(
+        { model: 'llama3.1', provider: 'ollama' },
+        unset,
+      ),
+    ).toEqual(unset);
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_INPUT_COST_MICROS_PER_MILLION', '3');
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_OUTPUT_COST_MICROS_PER_MILLION', '4');
+    expect(
+      pricingForOpportunityIntelligenceRoute({
+        model: 'llama3.1',
+        provider: 'ollama',
+      }),
+    ).toEqual({
+      configured: true,
+      inputMicrosPerMillion: 3,
+      outputMicrosPerMillion: 4,
     });
   });
   it('fails closed for missing, malformed, or negative limits', () => {

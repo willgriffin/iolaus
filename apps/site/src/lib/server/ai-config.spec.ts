@@ -857,30 +857,14 @@ describe('local bring-your-own AI providers', () => {
     expect(getAI).not.toHaveBeenCalled();
   });
 
-  it('leaves the pinned intelligence, owned review and dedicated-credential routes on Bifrost', async () => {
+  it('leaves the owned review and dedicated-credential routes on Bifrost', async () => {
     vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'openai');
     vi.stubEnv('IOLAUS_LOCAL_AI_API_KEY', 'byo-secret-key');
-    vi.stubEnv(
-      'IOLAUS_LOCAL_AI_OPPORTUNITY_INTELLIGENCE_SCORING_API_KEY',
-      'byo-scoring-key',
-    );
-    const {
-      resolveOpportunityIntelligenceExtractionAiProfileClient,
-      resolveOpportunityIntelligenceScoringAiProfileClient,
-    } = await import('./ai-config');
-    await expect(
-      resolveOpportunityIntelligenceExtractionAiProfileClient(),
-    ).resolves.toBeNull();
-    await expect(
-      resolveOpportunityIntelligenceScoringAiProfileClient(),
-    ).resolves.toBeNull();
-    const { resolveMatchingCandidateAiProfileClient } = await import(
-      './ai-config'
-    );
+    const { resolveMatchingCandidateAiProfileClient, resolveAiProfileClient } =
+      await import('./ai-config');
     await expect(
       resolveMatchingCandidateAiProfileClient(4096),
     ).resolves.toBeNull();
-    const { resolveAiProfileClient } = await import('./ai-config');
     expect(getAI).not.toHaveBeenCalled();
     await expect(
       resolveAiProfileClient('admin-assistant', {
@@ -891,6 +875,198 @@ describe('local bring-your-own AI providers', () => {
     expect(getAI).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'assistant-key', type: 'bifrost' }),
     );
+  });
+
+  describe('opportunity-intelligence routes', () => {
+    it('stay on the pinned Bifrost route when no provider is brought', async () => {
+      vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'dedicated-key');
+      const {
+        resolveOpportunityIntelligenceExtractionAiProfileClient,
+        resolveOpportunityIntelligenceScoringAiProfileClient,
+        resolveOpportunityIntelligenceRoute,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).resolves.toMatchObject({
+        model: 'openai/gpt-6-luna',
+        provider: 'bifrost',
+      });
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).resolves.toMatchObject({
+        model: 'openai/gpt-6.1-sol',
+        provider: 'bifrost',
+      });
+      await expect(
+        resolveOpportunityIntelligenceRoute('scoring'),
+      ).resolves.toEqual({ model: 'openai/gpt-6.1-sol', provider: 'bifrost' });
+    });
+
+    it('stay off with no provider and no dedicated key', async () => {
+      const {
+        resolveOpportunityIntelligenceExtractionAiProfileClient,
+        resolveOpportunityIntelligenceScoringAiProfileClient,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).resolves.toBeNull();
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).resolves.toBeNull();
+      expect(getAI).not.toHaveBeenCalled();
+    });
+
+    it('use the local provider with routine and higher tier defaults', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'openai');
+      vi.stubEnv('IOLAUS_LOCAL_AI_API_KEY', 'byo-secret-key');
+      const {
+        resolveOpportunityIntelligenceExtractionAiProfileClient,
+        resolveOpportunityIntelligenceScoringAiProfileClient,
+        resolveOpportunityIntelligenceRoute,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).resolves.toMatchObject({
+        model: 'gpt-4o-mini',
+        profile: 'opportunity-intelligence-extraction',
+        provider: 'openai',
+      });
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).resolves.toMatchObject({
+        model: 'gpt-4o',
+        profile: 'opportunity-intelligence-scoring',
+        provider: 'openai',
+      });
+      expect(getAI).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          apiKey: 'byo-secret-key',
+          defaultModel: 'gpt-4o',
+          type: 'openai',
+          usageTags: expect.objectContaining({
+            profile: 'opportunity-intelligence-scoring',
+          }),
+        }),
+      );
+      await expect(
+        resolveOpportunityIntelligenceRoute('extraction'),
+      ).resolves.toEqual({ model: 'gpt-4o-mini', provider: 'openai' });
+      await expect(
+        resolveOpportunityIntelligenceRoute('scoring'),
+      ).resolves.toEqual({ model: 'gpt-4o', provider: 'openai' });
+    });
+
+    it('take the user model override per route, tier or installation', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+      vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'llama3.1');
+      vi.stubEnv('IOLAUS_LOCAL_AI_GOOD_MODEL', 'qwen3:32b');
+      vi.stubEnv(
+        'IOLAUS_LOCAL_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_MODEL',
+        'llama3.2:3b',
+      );
+      const {
+        resolveOpportunityIntelligenceExtractionAiProfileClient,
+        resolveOpportunityIntelligenceScoringAiProfileClient,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).resolves.toMatchObject({ model: 'llama3.2:3b', provider: 'ollama' });
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).resolves.toMatchObject({ model: 'qwen3:32b', provider: 'ollama' });
+    });
+
+    it('fail before inference when ollama has no model, on the route lookup too', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+      const {
+        resolveOpportunityIntelligenceScoringAiProfileClient,
+        resolveOpportunityIntelligenceRoute,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).rejects.toMatchObject({ code: 'ai_provider_invalid' });
+      await expect(
+        resolveOpportunityIntelligenceRoute('scoring'),
+      ).rejects.toMatchObject({ code: 'ai_provider_invalid' });
+      expect(getAI).not.toHaveBeenCalled();
+    });
+
+    it('never send a Bifrost key or a caller key, URL, model or timeout to the user provider', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'openai');
+      vi.stubEnv('IOLAUS_LOCAL_AI_API_KEY', 'byo-secret-key');
+      vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'dedicated-key');
+      vi.stubEnv('BIFROST_API_KEY', 'gateway-key');
+      const { resolveOpportunityIntelligenceScoringAiProfileClient } =
+        await import('./ai-config');
+      await resolveOpportunityIntelligenceScoringAiProfileClient({
+        apiKey: 'caller-key',
+        baseUrl: 'https://caller.example',
+        model: 'openai/gpt-6.1-sol',
+        timeout: 1,
+      });
+      const options = getAI.mock.calls.at(-1)?.[0];
+      expect(options).toMatchObject({
+        apiKey: 'byo-secret-key',
+        defaultModel: 'gpt-4o',
+        type: 'openai',
+      });
+      expect(options).not.toHaveProperty('baseUrl');
+      expect(options.timeout).toBeGreaterThan(1);
+      expect(JSON.stringify(options)).not.toMatch(
+        /dedicated-key|gateway-key|caller-key|caller\.example/,
+      );
+    });
+
+    it('leave the provider key off when a keyed provider has none', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'anthropic');
+      vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'dedicated-key');
+      const { resolveOpportunityIntelligenceExtractionAiProfileClient } =
+        await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).resolves.toBeNull();
+      expect(getAI).not.toHaveBeenCalled();
+    });
+
+    it('reject an unsupported provider instead of falling back to Bifrost', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'mystery');
+      vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'dedicated-key');
+      const {
+        resolveOpportunityIntelligenceExtractionAiProfileClient,
+        resolveOpportunityIntelligenceRoute,
+      } = await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceExtractionAiProfileClient(),
+      ).rejects.toThrow('Unsupported AI provider');
+      await expect(
+        resolveOpportunityIntelligenceRoute('extraction'),
+      ).rejects.toMatchObject({ code: 'ai_provider_invalid' });
+      expect(getAI).not.toHaveBeenCalled();
+    });
+
+    it('honour the kill switch before any client is built', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'openai');
+      vi.stubEnv('IOLAUS_LOCAL_AI_API_KEY', 'byo-secret-key');
+      vi.stubEnv('IOLAUS_AI_DISABLED', 'true');
+      const { resolveOpportunityIntelligenceScoringAiProfileClient } =
+        await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient(),
+      ).rejects.toMatchObject({ code: 'ai_disabled' });
+      expect(getAI).not.toHaveBeenCalled();
+    });
+
+    it('keep the injected-client test-only guard', async () => {
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'openai');
+      vi.stubEnv('NODE_ENV', 'production');
+      const { resolveOpportunityIntelligenceScoringAiProfileClient } =
+        await import('./ai-config');
+      await expect(
+        resolveOpportunityIntelligenceScoringAiProfileClient({
+          aiClient: { chat: vi.fn() },
+        }),
+      ).rejects.toThrow('test-only');
+    });
   });
 
   it('keeps a dedicated-credential route on Bifrost even when config names a bring-your-own provider', async () => {
@@ -964,6 +1140,46 @@ describe('hosted profiles keep the reviewed Bifrost route', () => {
       'Unsupported AI provider for profile "cheap".',
     );
     expect(getAI).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'cloud',
+    'self-hosted',
+  ])('keeps both intelligence routes on the pinned models on the %s profile despite bring-your-own settings', async (runtimeProfile) => {
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', runtimeProfile);
+    vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+    vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'llama3.1');
+    vi.stubEnv(
+      'IOLAUS_LOCAL_AI_OPPORTUNITY_INTELLIGENCE_SCORING_PROVIDER',
+      'openai',
+    );
+    vi.stubEnv('BIFROST_OPPORTUNITY_INTELLIGENCE_API_KEY', 'dedicated-key');
+    const {
+      resolveOpportunityIntelligenceExtractionAiProfileClient,
+      resolveOpportunityIntelligenceScoringAiProfileClient,
+      resolveOpportunityIntelligenceRoute,
+    } = await import('./ai-config');
+    await expect(
+      resolveOpportunityIntelligenceExtractionAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6-luna',
+      provider: 'bifrost',
+    });
+    await expect(
+      resolveOpportunityIntelligenceScoringAiProfileClient(),
+    ).resolves.toMatchObject({
+      model: 'openai/gpt-6.1-sol',
+      provider: 'bifrost',
+    });
+    expect(getAI).toHaveBeenCalledTimes(2);
+    for (const [options] of getAI.mock.calls)
+      expect(options).toMatchObject({
+        apiKey: 'dedicated-key',
+        type: 'bifrost',
+      });
+    await expect(
+      resolveOpportunityIntelligenceRoute('scoring'),
+    ).resolves.toEqual({ model: 'openai/gpt-6.1-sol', provider: 'bifrost' });
   });
 
   it('keeps the pinned intelligence models and dedicated key requirement', async () => {

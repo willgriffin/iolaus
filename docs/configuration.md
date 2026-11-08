@@ -92,11 +92,43 @@ IOLAUS_LOCAL_AI_GOOD_MODEL=       # cover letters and application writing
   provider. `BIFROST_*` and `HAVE_AI_*` values and credentials supplied by
   calling code are never sent to your provider. Prompts and resume text go to
   the provider you chose; use `ollama` to keep them on your machine.
-- **Still hosted-only.** The pinned opportunity-intelligence routes
-  (extraction, scoring), the owned resume-fit review and the admin assistant
+- **Still hosted-only.** The owned resume-fit review and the admin assistant
   keep their dedicated Bifrost credentials and reviewed models, so they stay
-  off on a local install that only sets a bring-your-own provider. Opportunity
-  scoring on your own key is tracked separately.
+  off on a local install that only sets a bring-your-own provider.
+
+### Score opportunities on your own provider (local profile only)
+
+Opportunity intelligence has two routes: `extraction` (routine reading of a
+posting) and `scoring` (borderline fit decisions). On the `local` profile, a
+bring-your-own provider set as above also serves these routes. `extraction`
+takes the routine tier model (`IOLAUS_LOCAL_AI_CHEAP_MODEL`) and `scoring`
+the higher tier model (`IOLAUS_LOCAL_AI_GOOD_MODEL`). Override either route
+alone with `IOLAUS_LOCAL_AI_OPPORTUNITY_INTELLIGENCE_EXTRACTION_*` or
+`IOLAUS_LOCAL_AI_OPPORTUNITY_INTELLIGENCE_SCORING_*`, using the same
+precedence and checks as above. `cloud` and `self-hosted` keep the reviewed
+pinned models and the dedicated Bifrost key; nothing here applies to them. A
+local install with no bring-your-own provider is unchanged.
+
+- **Off by default.** Setting a provider does not turn intelligence on. It
+  still needs `OPPORTUNITY_INTELLIGENCE_ENABLED=true`, a crawl enqueue cap and
+  run limits, and scoring also needs
+  `OPPORTUNITY_INTELLIGENCE_MODEL_SCORING_ENABLED=true`.
+- **You set the price.** Only the pinned hosted models have built-in rates. A
+  model on your own provider is unpriced, even if its name matches a pinned
+  one, until you set both
+  `OPPORTUNITY_INTELLIGENCE_INPUT_COST_MICROS_PER_MILLION` and
+  `OPPORTUNITY_INTELLIGENCE_OUTPUT_COST_MICROS_PER_MILLION`. Without them every
+  call is refused before it reaches the provider. The rates drive the run and
+  crawl spend limits and the per-user cap. A free local model needs a small
+  positive rate (for example `1`) because spend reservation refuses zero.
+- **Provider usage is required.** Each call must report token usage; a
+  provider that does not is treated as a failed attempt charged at the full
+  reservation.
+- **Identity.** Results and cached decisions record your provider and model, so
+  changing either never reuses an earlier answer.
+- **Not covered.** The requirement-coverage extraction and audit pipeline for
+  captured postings depends on a separate hosted audit provider and is not part
+  of this route.
 
 ## Public installation
 

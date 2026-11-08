@@ -25,6 +25,7 @@ import {
   ANALYSIS_MODEL,
   ensureAnalysisBudgetWindow,
 } from './opportunity-analysis-enrichment.js';
+import { opportunityIntelligenceRouteIsBringYourOwn } from './opportunity-intelligence-config.js';
 import {
   attachOpportunityIntelligenceInvocationMetadata,
   executeGovernedOpportunityIntelligenceRequest,
@@ -97,7 +98,13 @@ export async function extractMatchingSource(
       maxOutputTokens: MAX_OUTPUT_TOKENS,
     },
   );
-  if (!profile || profile.model !== ANALYSIS_MODEL)
+  // Hosted keeps the reviewed pinned model; a local installation's own
+  // provider uses the model its settings name.
+  if (
+    !profile ||
+    (!opportunityIntelligenceRouteIsBringYourOwn(profile.provider) &&
+      profile.model !== ANALYSIS_MODEL)
+  )
     throw new Error('Pinned matching extraction model is unavailable.');
   // Select explicit public fields at the provider boundary.
   const source = { title, description, location };
@@ -237,9 +244,15 @@ async function invokeMatchingSourceStage<T>({
   responseFormat: AIResponseFormat;
   parse: (decoded: unknown) => T;
 }): Promise<{ output: T; requestId: string; reused: boolean }> {
+  const byoProvider = opportunityIntelligenceRouteIsBringYourOwn(
+    profile.provider,
+  )
+    ? profile.provider
+    : undefined;
+  const model = byoProvider ? profile.model : ANALYSIS_MODEL;
   const inputTokens = await countOpportunityInputTokens(
     [{ role: 'system', content: JSON.stringify(responseFormat) }, ...messages],
-    ANALYSIS_MODEL,
+    model,
   );
   if (
     !Number.isSafeInteger(inputTokens) ||
@@ -273,7 +286,8 @@ async function invokeMatchingSourceStage<T>({
         .digest('hex'),
       feature: 'opportunity-analysis',
       profile: 'opportunity-intelligence-extraction',
-      model: ANALYSIS_MODEL,
+      model,
+      ...(byoProvider ? { provider: byoProvider } : {}),
       promptVersion: stage,
       outputSchemaVersion: stage,
       preparedPayloadVersion: MATCHING_SOURCE_EXTRACTION_VERSION,
@@ -281,7 +295,7 @@ async function invokeMatchingSourceStage<T>({
     invoke: async (requestId) => {
       const completion = await profile.aiClient
         .chat(messages, {
-          model: ANALYSIS_MODEL,
+          model,
           maxTokens: MAX_OUTPUT_TOKENS,
           reasoning: { effort: 'low', maxTokens: 1_024 },
           responseFormat,

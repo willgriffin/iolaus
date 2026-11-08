@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { resolveOpportunityIntelligenceExtractionAiProfileClient } from './ai-config.js';
+import {
+  resolveOpportunityIntelligenceExtractionAiProfileClient,
+  resolveOpportunityIntelligenceRoute,
+} from './ai-config.js';
+import { opportunityIntelligenceRouteIsBringYourOwn } from './opportunity-intelligence-config.js';
 import {
   attachOpportunityIntelligenceInvocationMetadata,
   executeGovernedOpportunityIntelligenceRequest,
@@ -32,6 +36,20 @@ import {
 export const MAX_STAGE_THREE_POSTINGS = 25;
 export const MAX_STAGE_THREE_CALLS = 75;
 export const EVIDENCE_MODEL = 'openai/gpt-6-luna';
+/**
+ * The model identity stored with a cached decision. The table has no provider
+ * column, so a user's own provider is folded into the model identity
+ * (`ollama:llama3.1`); a changed provider or model never reuses an old row.
+ * Hosted identities are the bare pinned model and are unchanged.
+ */
+function evidenceCacheModelId(route: {
+  model: string;
+  provider?: string;
+}): string {
+  return opportunityIntelligenceRouteIsBringYourOwn(route.provider)
+    ? `${route.provider}:${route.model}`
+    : route.model;
+}
 export const EVIDENCE_CONTRACT = 'requirement-evidence-decision/v2';
 export const evidenceDecisionSchema = z
   .object({
@@ -132,7 +150,23 @@ export const matchEvidenceCache: MatchEvidenceCacheDependencies = {
       await resolveOpportunityIntelligenceExtractionAiProfileClient({
         usageTags: { feature: 'requirement-evidence' },
       });
-    if (!settings || settings.model !== EVIDENCE_MODEL)
+    // Hosted keeps the reviewed pinned model. A local installation decides
+    // with its own provider and model, and only under the identity its cache
+    // key recorded, so a changed model or provider never reuses an old row.
+    const byoProvider = opportunityIntelligenceRouteIsBringYourOwn(
+      settings?.provider,
+    )
+      ? settings?.provider
+      : undefined;
+    if (
+      !settings ||
+      (byoProvider
+        ? evidenceCacheModelId({
+            model: settings.model,
+            provider: byoProvider,
+          }) !== key.model
+        : settings.model !== EVIDENCE_MODEL)
+    )
       throw new Error('Pinned requirement evidence provider unavailable.');
     const messages = [
       {
@@ -162,7 +196,8 @@ export const matchEvidenceCache: MatchEvidenceCacheDependencies = {
         contentFingerprint: key.requirementHash,
         inputFingerprint: contentHash(key),
         feature: 'requirement-evidence',
-        model: EVIDENCE_MODEL,
+        model: settings.model,
+        ...(byoProvider ? { provider: byoProvider } : {}),
         outputSchemaVersion: EVIDENCE_CONTRACT,
         preparedPayloadVersion: EVIDENCE_CONTRACT,
         profile: 'extraction',
@@ -170,7 +205,7 @@ export const matchEvidenceCache: MatchEvidenceCacheDependencies = {
       },
       invoke: async (requestId) => {
         const response = await settings.aiClient.chat(messages, {
-          model: EVIDENCE_MODEL,
+          model: settings.model,
           maxTokens: 512,
           timeout: settings.timeout,
           responseFormat: { type: 'json_object' },
@@ -223,6 +258,12 @@ export async function enrichMatchEvidence(
     failures: 0,
   };
   const local = new Map<string, EvidenceDecision>();
+  // The model and provider this stage will use; an unresolvable local route
+  // falls back to the pinned identity so lookups miss and the decision itself
+  // fails closed with its own error.
+  const route = await resolveOpportunityIntelligenceRoute('extraction').catch(
+    () => ({ model: EVIDENCE_MODEL, provider: 'bifrost' as const }),
+  );
   for (const match of matches.slice(0, MAX_STAGE_THREE_POSTINGS)) {
     stats.postings++;
     for (const row of match.explanation.requirements) {
@@ -252,7 +293,7 @@ export async function enrichMatchEvidence(
         .map(({ item }) => ({ ...item, text: item.text.slice(0, 1800) }));
       // No evidence cannot establish a contradiction and merits no paid call.
       if (!evidence.length) continue;
-      const key = {
+      const key: Record<string, string> = {
         requirementHash: contentHash({
           text: row.requirement,
           kind: row.kind,
@@ -262,7 +303,7 @@ export async function enrichMatchEvidence(
         evidenceHash: contentHash(evidence),
         candidateMaterialFingerprint: contentHash(evidence),
         decisionVersion: EVIDENCE_CONTRACT,
-        model: EVIDENCE_MODEL,
+        model: evidenceCacheModelId(route),
       };
       const cacheKey = contentHash(key);
       try {

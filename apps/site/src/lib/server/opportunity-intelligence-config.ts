@@ -210,6 +210,31 @@ export function pricingForOpportunityIntelligenceModel(
       };
 }
 
+/**
+ * Pricing for the route that actually served a request. The reviewed rate
+ * table prices the pinned hosted models only. A user's own provider and model
+ * are unpriced until the operator sets both
+ * `OPPORTUNITY_INTELLIGENCE_{INPUT,OUTPUT}_COST_MICROS_PER_MILLION`, so a model
+ * that merely shares a pinned id never inherits hosted rates and spend
+ * reservation refuses (pricing_missing) without operator-set rates.
+ */
+export function pricingForOpportunityIntelligenceRoute(
+  route: { model: string; provider?: string },
+  operatorPricing: OpportunityIntelligenceBudgetConfig['pricing'] = resolveOpportunityIntelligenceBudgetConfig()
+    .pricing,
+): OpportunityIntelligenceBudgetConfig['pricing'] {
+  return opportunityIntelligenceRouteIsBringYourOwn(route.provider)
+    ? operatorPricing
+    : pricingForOpportunityIntelligenceModel(route.model);
+}
+
+/** Hosted routes name no provider or the reviewed `bifrost` gateway. */
+export function opportunityIntelligenceRouteIsBringYourOwn(
+  provider: string | undefined,
+): boolean {
+  return Boolean(provider) && provider !== 'bifrost';
+}
+
 export interface OpportunityScoringConfig {
   clearAcceptMinRequired: number;
   clearRejectMinGaps: number;

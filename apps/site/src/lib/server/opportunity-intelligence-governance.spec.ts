@@ -182,6 +182,87 @@ describe('opportunity intelligence governance', () => {
     ).not.toBe(baseline);
   });
 
+  it('keeps hosted keys unchanged and separates a user provider by name', () => {
+    const baseline = opportunityIntelligenceIdempotencyKey(identity);
+    expect(
+      opportunityIntelligenceIdempotencyKey({
+        ...identity,
+        provider: 'bifrost',
+      }),
+    ).toBe(baseline);
+    const ollama = opportunityIntelligenceIdempotencyKey({
+      ...identity,
+      provider: 'ollama',
+    });
+    const openai = opportunityIntelligenceIdempotencyKey({
+      ...identity,
+      provider: 'openai',
+    });
+    expect(new Set([baseline, ollama, openai]).size).toBe(3);
+  });
+
+  describe('pricing by route', () => {
+    const pinned = {
+      ...identity,
+      feature: 'opportunity-analysis',
+      model: 'openai/gpt-6-luna',
+      profile: 'opportunity-intelligence-extraction',
+    };
+    const unpriced = {
+      configured: false,
+      inputMicrosPerMillion: 0,
+      outputMicrosPerMillion: 0,
+    };
+    const run = (
+      store: MemoryStore,
+      overrides: Record<string, unknown>,
+      pricing = unpriced,
+    ) =>
+      executeGovernedOpportunityIntelligenceRequest({
+        config: { ...config, pricing },
+        estimatedInputTokens: 900,
+        identity: { ...pinned, ...overrides },
+        inputTokenCeiling: 1_000,
+        invoke: async () => ({
+          output: {},
+          usage: { completionTokens: 20, promptTokens: 900, totalTokens: 920 },
+        }),
+        maxOutputTokens: 2_048,
+        store,
+      });
+
+    it('prices the reviewed hosted model from the pinned table', async () => {
+      const store = new MemoryStore();
+      await run(store, {});
+      // 1000 in at 0.10 + 2048 out at 0.50 per million.
+      expect(store.results.values().next().value?.reservation).toMatchObject({
+        reservedSpendMicros: 1_124,
+      });
+    });
+
+    it('refuses a user provider without operator pricing, even on a pinned model name', async () => {
+      const store = new MemoryStore();
+      await expect(run(store, { provider: 'openai' })).rejects.toMatchObject({
+        code: 'pricing_missing',
+      });
+      expect(store.results.size).toBe(0);
+    });
+
+    it('prices a user provider only from operator-set rates', async () => {
+      const store = new MemoryStore();
+      await run(
+        store,
+        { provider: 'ollama', model: 'llama3.1' },
+        config.pricing,
+      );
+      // The operator rates (0.10 / 0.40), not the Luna table (0.10 / 0.50).
+      expect(store.results.values().next().value?.reservation).toMatchObject({
+        provider: 'ollama',
+        reservedSpendMicros: 920,
+      });
+    });
+  });
+
   it('suppresses concurrent duplicate delivery before a second paid call', async () => {
     const store = new MemoryStore();
     let release!: () => void;

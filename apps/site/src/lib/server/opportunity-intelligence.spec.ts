@@ -699,6 +699,65 @@ describe('processOpportunityIntelligence', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it("scores with a local installation's own provider and model instead of the pinned Sol model", async () => {
+    vi.stubEnv('SMRT_RUNTIME_PROFILE', 'local');
+    vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+    vi.stubEnv('IOLAUS_LOCAL_AI_GOOD_MODEL', 'qwen3:32b');
+    const opportunities = collection([
+      record({
+        descriptionRaw: 'Build agent workflow products. Requires TypeScript.',
+        id: 'opp-1',
+        requiredSkills: 'TypeScript',
+        status: 'found',
+        title: 'AI Platform Engineer',
+      }),
+    ]);
+    const scores = collection();
+    mocks.collections.set('Opportunity', opportunities);
+    mocks.collections.set('EvaluationScore', scores);
+    mocks.collections.set(
+      'ResumeSkill',
+      collection([record({ id: 'skill-1', label: 'TypeScript' })]),
+    );
+    const aiClient = {
+      chat: vi.fn(async (_messages: unknown, _options: unknown) => ({
+        content: JSON.stringify({
+          confidence: 0.91,
+          fitReasons: ['TypeScript platform fit'],
+          recommendation: 'recommend',
+          score: 92,
+          summary: 'Strong fit.',
+        }),
+      })),
+    };
+
+    const result = await processOpportunityIntelligence({
+      aiClient,
+      modes: ['score', 'evidence', 'quality'],
+      opportunityId: 'opp-1',
+    });
+
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(aiClient.chat.mock.calls[0]?.[1]).toMatchObject({
+      model: 'qwen3:32b',
+    });
+    expect(
+      parseOpportunityReasonJson(scores.records[0].reasonJson).scoring,
+    ).toMatchObject({ model: 'qwen3:32b', modelInvoked: true });
+    expect(
+      (
+        mocks.recordAgentAudit.mock.calls as unknown as Array<
+          [{ input?: Record<string, unknown> }]
+        >
+      ).some(
+        ([audit]) =>
+          audit?.input?.provider === 'ollama' &&
+          audit.input.model === 'qwen3:32b' &&
+          audit.input.profile === 'opportunity-intelligence-scoring',
+      ),
+    ).toBe(true);
+  });
+
   it('stores score provenance for the exact queued source version', async () => {
     const opportunities = collection([
       record({
