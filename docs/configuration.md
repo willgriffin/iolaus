@@ -124,8 +124,19 @@ local install with no bring-your-own provider is unchanged.
 - **Provider usage is required.** Each call must report token usage; a
   provider that does not is treated as a failed attempt charged at the full
   reservation.
-- **Identity.** Results and cached decisions record your provider and model, so
-  changing either never reuses an earlier answer.
+- **One rate pair.** The two price settings apply to both routes. If you run
+  different models for `extraction` and `scoring`, set the higher rates so
+  spend limits stay conservative.
+- **Context size.** Extraction can send a posting of up to about 24,000 tokens.
+  Pick a model with enough context; a smaller one fails at the provider and the
+  attempt is recorded as failed.
+- **Request limits.** Calls on your own provider count toward the same bounded
+  request and token window as other non-native intelligence calls
+  (`OPPORTUNITY_INTELLIGENCE_CIRCUIT_*` thresholds, at most 100 requests and 1M
+  input tokens per window).
+- **Identity.** Governance records and the evidence cache keep your provider
+  and model, so changing either never reuses an earlier request or cached
+  decision. A stored posting analysis or score compares the model name only.
 - **Not covered.** The requirement-coverage extraction and audit pipeline for
   captured postings depends on a separate hosted audit provider and is not part
   of this route.

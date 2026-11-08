@@ -82,6 +82,54 @@ describe('source extraction reservation admission', () => {
       vi.unstubAllEnvs();
     }
   });
+  it('prices extraction for a local provider only from operator rates, even on a pinned model name', async () => {
+    vi.stubEnv('OPPORTUNITY_INTELLIGENCE_MAX_INPUT_TOKENS', '6000');
+    try {
+      const opportunity = {
+        descriptionRaw:
+          'Requirements\nMust improve reliability using Kubernetes.',
+        sourceContentFingerprint: 'current-source',
+        sourceContentVersion: 1,
+      };
+      const posting = prepareOpportunityPosting(opportunity);
+      const options = {
+        model: 'openai/gpt-6-luna',
+        counter: async () => 100,
+        sourceExtractionStage: 'extract-only' as const,
+      };
+      const hosted = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        posting,
+        options,
+      );
+      expect(hosted.reservedSpendMicros).toBeGreaterThan(0);
+      const unpriced = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        posting,
+        { ...options, provider: 'openai' },
+      );
+      expect(unpriced.reservedSpendMicros).toBeNull();
+      expect(unpriced.spendFits).toBe(false);
+      vi.stubEnv(
+        'OPPORTUNITY_INTELLIGENCE_INPUT_COST_MICROS_PER_MILLION',
+        '5000000',
+      );
+      vi.stubEnv(
+        'OPPORTUNITY_INTELLIGENCE_OUTPUT_COST_MICROS_PER_MILLION',
+        '5000000',
+      );
+      const priced = await preflightOpportunityRequirementCoverageExtraction(
+        opportunity,
+        posting,
+        { ...options, provider: 'openai' },
+      );
+      expect(priced.reservedSpendMicros).toBeGreaterThan(
+        hosted.reservedSpendMicros ?? 0,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it('persists a native extraction receipt locator and unverified ledger without any audit or new run', async () => {
     const opportunity = {
       id: 'staged-source',

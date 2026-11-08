@@ -258,12 +258,16 @@ export async function enrichMatchEvidence(
     failures: 0,
   };
   const local = new Map<string, EvidenceDecision>();
-  // The model and provider this stage will use; an unresolvable local route
-  // falls back to the pinned identity so lookups miss and the decision itself
-  // fails closed with its own error.
-  const route = await resolveOpportunityIntelligenceRoute('extraction').catch(
-    () => ({ model: EVIDENCE_MODEL, provider: 'bifrost' as const }),
-  );
+  // The model and provider this stage will use. A local route that cannot be
+  // resolved reads no cache and makes no call: the deterministic evidence
+  // stands and nothing is served under another route's identity.
+  let route: Awaited<ReturnType<typeof resolveOpportunityIntelligenceRoute>>;
+  try {
+    route = await resolveOpportunityIntelligenceRoute('extraction');
+  } catch {
+    stats.failures++;
+    return stats;
+  }
   for (const match of matches.slice(0, MAX_STAGE_THREE_POSTINGS)) {
     stats.postings++;
     for (const row of match.explanation.requirements) {

@@ -164,6 +164,26 @@ describe('governed requirement orchestration', () => {
       vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', 'llama3.1');
       expect((await keyFor()).model).toBe(EVIDENCE_MODEL);
     });
+    it('reads no cache and makes no call when the local route cannot be resolved', async () => {
+      vi.stubEnv('SMRT_RUNTIME_PROFILE', 'local');
+      vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');
+      vi.stubEnv('IOLAUS_LOCAL_AI_MODEL', '');
+      vi.stubEnv('IOLAUS_LOCAL_AI_GOOD_MODEL', '');
+      vi.stubEnv('IOLAUS_LOCAL_AI_CHEAP_MODEL', '');
+      const candidate = candidateFixture(),
+        postings = catalog(1),
+        deps = dependencies();
+      const stats = await enrichMatchEvidence(
+        candidate.subject,
+        candidate,
+        matchCandidateEvidence(candidate, postings),
+        postings,
+        deps,
+      );
+      expect(stats).toMatchObject({ calls: 0, cacheLookups: 0, failures: 1 });
+      expect(deps.read).not.toHaveBeenCalled();
+      expect(deps.decide).not.toHaveBeenCalled();
+    });
     it('folds the local provider and model into the identity', async () => {
       vi.stubEnv('SMRT_RUNTIME_PROFILE', 'local');
       vi.stubEnv('IOLAUS_LOCAL_AI_PROVIDER', 'ollama');

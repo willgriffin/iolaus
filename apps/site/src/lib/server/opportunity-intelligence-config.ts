@@ -220,11 +220,10 @@ export function pricingForOpportunityIntelligenceModel(
  */
 export function pricingForOpportunityIntelligenceRoute(
   route: { model: string; provider?: string },
-  operatorPricing: OpportunityIntelligenceBudgetConfig['pricing'] = resolveOpportunityIntelligenceBudgetConfig()
-    .pricing,
+  operatorPricing?: OpportunityIntelligenceBudgetConfig['pricing'],
 ): OpportunityIntelligenceBudgetConfig['pricing'] {
   return opportunityIntelligenceRouteIsBringYourOwn(route.provider)
-    ? operatorPricing
+    ? (operatorPricing ?? resolveOpportunityIntelligenceBudgetConfig().pricing)
     : pricingForOpportunityIntelligenceModel(route.model);
 }
 

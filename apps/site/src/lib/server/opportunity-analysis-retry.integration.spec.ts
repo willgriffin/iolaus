@@ -311,6 +311,7 @@ describe.each([
       { feature: 'other' },
       { sourceCrawlId: 'crawl-1' },
       { provider: undefined, model: 'other' },
+      { profile: 'opportunity-intelligence-scoring' },
     ])
       expect(await store.reserve(local('denied', overrides))).toMatchObject({
         kind: 'blocked',
