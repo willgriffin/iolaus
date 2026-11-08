@@ -56,6 +56,48 @@ both commands. Use `mktemp -d` to create a private directory. The site package
 scripts `db:migrate` and `db:status` are for hosted PostgreSQL deployments and
 include PostgreSQL-specific migration and integrity checks.
 
+### Bring your own AI provider (local profile only)
+
+The local profile runs with no AI. To use your own key or model, set a
+provider in a private environment file. The `local` profile accepts `openai`
+(optionally with a base URL for an OpenAI-compatible server), `anthropic`,
+`gemini`, and `ollama`. `cloud` and `self-hosted` ignore these variables and
+keep the reviewed hosted model route.
+
+```sh
+IOLAUS_LOCAL_AI_PROVIDER=openai   # openai | anthropic | gemini | ollama
+IOLAUS_LOCAL_AI_API_KEY=          # not needed for ollama
+IOLAUS_LOCAL_AI_BASE_URL=         # optional; for a compatible or remote host
+IOLAUS_LOCAL_AI_CHEAP_MODEL=      # resume import extraction and routine calls
+IOLAUS_LOCAL_AI_GOOD_MODEL=       # cover letters and application writing
+```
+
+- **Defaults.** Without a model setting, `cheap` and `good` use these defaults:
+  `gpt-4o-mini` / `gpt-4o` (openai), `claude-haiku-4-5` / `claude-sonnet-4-5`
+  (anthropic), `gemini-2.5-flash` / `gemini-2.5-pro` (gemini). `ollama` has no
+  default: set a model you have installed.
+- **Override precedence** (first match wins) for key, base URL, model and
+  timeout: `IOLAUS_LOCAL_AI_<PROFILE>_*`, then the tier (`IOLAUS_LOCAL_AI_CHEAP_*`
+  or `IOLAUS_LOCAL_AI_GOOD_*`), then `IOLAUS_LOCAL_AI_*`, then the matching
+  `packages.ai` profile in `smrt.config.js`, then the default. A model passed by
+  calling code beats all of them. A provider set for one profile or tier reads
+  only that level and more specific ones, so a key or URL for your default
+  provider is never reused for another.
+- **Checked before any inference.** An unknown provider, a malformed base URL,
+  a URL with embedded credentials, an API key over plain `http` to a non-loopback
+  host, a missing ollama model, or a provider that lacks a required capability
+  stops with a clear error that never contains the key or URL. A keyed
+  provider with no key leaves AI off.
+- **No fallback, no shared credentials.** A failure never retries on another
+  provider. `BIFROST_*` and `HAVE_AI_*` values and credentials supplied by
+  calling code are never sent to your provider. Prompts and resume text go to
+  the provider you chose; use `ollama` to keep them on your machine.
+- **Still hosted-only.** The pinned opportunity-intelligence routes
+  (extraction, scoring), the owned resume-fit review and the admin assistant
+  keep their dedicated Bifrost credentials and reviewed models, so they stay
+  off on a local install that only sets a bring-your-own provider. Opportunity
+  scoring on your own key is tracked separately.
+
 ## Public installation
 
 Set `SMRT_RUNTIME_PROFILE=self-hosted` (or `cloud` for a managed deployment)
