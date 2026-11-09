@@ -1,6 +1,11 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { AIInterface, BifrostOptions } from '@happyvertical/ai';
+import type {
+  AICapabilities,
+  AIInterface,
+  BifrostOptions,
+  GetAIOptions,
+} from '@happyvertical/ai';
 import { getAI } from '@happyvertical/ai';
 import {
   getConfig,
@@ -56,12 +61,60 @@ export const MATCHING_CANDIDATE_AI_FEATURE =
 export const MATCHING_CANDIDATE_AI_MODEL = 'openai/gpt-6-luna';
 export const MATCHING_CANDIDATE_VERIFICATION_AI_MODEL = 'openai/gpt-6.1-sol';
 
+/**
+ * Providers a local installation may bring itself. Hosted profiles keep the
+ * reviewed Bifrost route only.
+ */
+export const LOCAL_BYO_AI_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'gemini',
+  'ollama',
+] as const;
+export type LocalByoAiProvider = (typeof LOCAL_BYO_AI_PROVIDERS)[number];
+export type AiProviderName = 'bifrost' | LocalByoAiProvider;
+
+/**
+ * Per-provider defaults for the two quality tiers. They apply only when the
+ * user sets no model; any model setting wins. Ollama has no default because
+ * the installed models are the user's choice.
+ */
+export const LOCAL_BYO_AI_MODEL_DEFAULTS: Record<
+  LocalByoAiProvider,
+  Partial<Record<AiProfileTier, string>>
+> = {
+  anthropic: { cheap: 'claude-haiku-4-5', good: 'claude-sonnet-4-5' },
+  gemini: { cheap: 'gemini-2.5-flash', good: 'gemini-2.5-pro' },
+  ollama: {},
+  openai: { cheap: 'gpt-4o-mini', good: 'gpt-4o' },
+};
+
+export type AiProfileTier = 'cheap' | 'good';
+
+export class AiProviderConfigurationError extends Error {
+  readonly code: 'ai_provider_invalid' | 'ai_capability_missing';
+
+  constructor(
+    code: 'ai_provider_invalid' | 'ai_capability_missing',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AiProviderConfigurationError';
+    this.code = code;
+  }
+}
+
+export type AiRequiredCapability = keyof Pick<
+  AICapabilities,
+  'chat' | 'embeddings' | 'functions' | 'streaming' | 'vision'
+>;
+
 export interface AiProfileClient {
   aiClient: Pick<AIInterface, 'chat'> &
     Partial<Pick<AIInterface, 'countTokens'>>;
   model: string;
   profile: string;
-  provider: 'bifrost';
+  provider: AiProviderName;
   maxOutputTokens?: number;
   timeout?: number;
 }
@@ -77,6 +130,11 @@ export interface AiProfileClientOptions {
   usageTags?: Record<string, string>;
   requireProfileApiKey?: boolean;
   suppressContentLogging?: boolean;
+  /**
+   * Capabilities the caller needs from a bring-your-own provider; checked
+   * before any inference. Defaults to chat. Hosted Bifrost is unaffected.
+   */
+  requiredCapabilities?: AiRequiredCapability[];
 }
 
 function boundedMaxOutputTokens(value: number | undefined) {
@@ -234,7 +292,7 @@ function configNumber(
 }
 
 function profileEnvName(
-  prefix: 'BIFROST' | 'HAVE_AI',
+  prefix: 'BIFROST' | 'HAVE_AI' | 'IOLAUS_LOCAL_AI',
   profile: string,
   suffix: string,
 ): string {
@@ -298,12 +356,86 @@ function usageTagsForProfile(
   ) as Record<(typeof AI_USAGE_TAG_KEYS)[number], string>;
 }
 
-export async function resolveAiProfileClient(
+function profileTier(profile: string): AiProfileTier {
+  return profile === 'good' ? 'good' : 'cheap';
+}
+
+/**
+ * Bring-your-own settings use their own `IOLAUS_LOCAL_AI_` namespace, read
+ * from the profile, then the tier, then the whole installation. Neither
+ * Bifrost nor `HAVE_AI_` names are consulted, so a gateway credential cannot
+ * be sent to another provider. `through` limits the walk to the level that
+ * selected the provider and the levels more specific than it, so a key or URL
+ * set for one provider is not applied to a different provider chosen for a
+ * single profile or tier.
+ */
+const BYO_ENV_LEVELS = ['profile', 'tier', 'installation'] as const;
+type ByoEnvLevel = (typeof BYO_ENV_LEVELS)[number];
+
+function byoEnvName(
+  profile: string,
+  suffix: string,
+  level: ByoEnvLevel,
+): string {
+  if (level === 'profile')
+    return profileEnvName('IOLAUS_LOCAL_AI', profile, suffix);
+  if (level === 'tier')
+    return profileEnvName('IOLAUS_LOCAL_AI', profileTier(profile), suffix);
+  return `IOLAUS_LOCAL_AI_${suffix}`;
+}
+
+function byoEnvNames(
+  profile: string,
+  suffix: string,
+  through: ByoEnvLevel = 'installation',
+): string[] {
+  return [
+    ...new Set(
+      BYO_ENV_LEVELS.slice(0, BYO_ENV_LEVELS.indexOf(through) + 1).map(
+        (level) => byoEnvName(profile, suffix, level),
+      ),
+    ),
+  ];
+}
+
+function byoProviderEnv(profile: string): {
+  level: ByoEnvLevel;
+  provider: string;
+} {
+  for (const level of BYO_ENV_LEVELS) {
+    const provider = envValue(byoEnvName(profile, 'PROVIDER', level));
+    if (provider) return { level, provider: provider.toLowerCase() };
+  }
+  return { level: 'installation', provider: '' };
+}
+
+/** Fails closed to hosted when the runtime profile cannot be resolved. */
+function isLocalRuntime(): boolean {
+  try {
+    return getAppConfig().runtimeProfile === 'local';
+  } catch {
+    return false;
+  }
+}
+
+function isLocalByoProvider(value: string): value is LocalByoAiProvider {
+  return (LOCAL_BYO_AI_PROVIDERS as readonly string[]).includes(value);
+}
+
+interface ResolvedProfileProvider {
+  /** Deepest environment level that chose the provider; settings never come from a broader one. */
+  byoLevel: ByoEnvLevel;
+  effectiveProfileName: string;
+  local: boolean;
+  packageConfig: AiPackageConfig;
+  profileConfig: AiProfileConfig;
+  provider: string;
+}
+
+async function resolveProfileProvider(
   profileName: AiProfileName,
-  options: AiProfileClientOptions = {},
-): Promise<AiProfileClient | null> {
-  // Global kill switch: no provider client is ever constructed while engaged.
-  assertAiEnabled();
+  pinnedCredential = false,
+): Promise<ResolvedProfileProvider> {
   await ensureSmrtConfigLoaded();
   const packageConfig = getPackageConfig<AiPackageConfig>(
     'ai',
@@ -317,10 +449,211 @@ export async function resolveAiProfileClient(
     ...(defaultAiPackageConfig.profiles?.[effectiveProfileName] ?? {}),
     ...(packageConfig.profiles?.[effectiveProfileName] ?? {}),
   };
-  const provider = stringValue(
-    profileConfig.provider ?? packageConfig.defaultProvider ?? 'bifrost',
+  // Only a local installation may choose its own provider from the
+  // environment; hosted profiles ignore it and keep the configured route. A
+  // call that requires the profile's own dedicated credential (the owned
+  // review and assistant routes) is a reviewed Bifrost route and never
+  // takes the bring-your-own provider.
+  const envProvider = byoProviderEnv(effectiveProfileName);
+  const local = isLocalRuntime();
+  const provider =
+    (local && !pinnedCredential ? envProvider.provider : '') ||
+    stringValue(
+      profileConfig.provider ?? packageConfig.defaultProvider ?? 'bifrost',
+    );
+  return {
+    byoLevel: envProvider.provider ? envProvider.level : 'installation',
+    effectiveProfileName,
+    local,
+    packageConfig,
+    profileConfig,
+    provider,
+  };
+}
+
+function invalidProvider(profile: string, reason: string): never {
+  throw new AiProviderConfigurationError(
+    'ai_provider_invalid',
+    `Invalid AI settings for profile "${profile}": ${reason}`,
   );
+}
+
+const BYO_MODEL_PATTERN = /^[A-Za-z0-9][\w.:/@+-]{0,199}$/;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function validatedByoBaseUrl(
+  profile: string,
+  baseUrl: string,
+  hasApiKey: boolean,
+): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return invalidProvider(profile, 'the base URL is not a valid URL.');
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:')
+    return invalidProvider(profile, 'the base URL must be http or https.');
+  if (url.username || url.password)
+    return invalidProvider(
+      profile,
+      'the base URL must not embed credentials; set the API key separately.',
+    );
+  if (
+    url.protocol === 'http:' &&
+    hasApiKey &&
+    !LOOPBACK_HOSTS.has(url.hostname)
+  )
+    return invalidProvider(
+      profile,
+      'an API key is never sent over plain http to a non-loopback host; use https.',
+    );
+  return baseUrl.replace(/\/+$/, '');
+}
+
+async function assertByoCapabilities(
+  client: AIInterface,
+  profile: string,
+  provider: LocalByoAiProvider,
+  required: readonly AiRequiredCapability[],
+): Promise<void> {
+  const capabilities =
+    typeof client.getCapabilities === 'function'
+      ? await client.getCapabilities()
+      : undefined;
+  const missing = required.filter((name) => capabilities?.[name] !== true);
+  if (missing.length)
+    throw new AiProviderConfigurationError(
+      'ai_capability_missing',
+      `The ${provider} provider for profile "${profile}" does not support: ${missing.join(', ')}.`,
+    );
+}
+
+/**
+ * Bring-your-own provider route for local installations. Never falls back to
+ * another provider, never uses Bifrost settings, and never reports a key.
+ * Request-supplied `apiKey` and `baseUrl` are ignored: they belong to hosted
+ * callers and must not be forwarded to a user-chosen endpoint.
+ */
+async function resolveLocalByoProfileClient(
+  resolved: ResolvedProfileProvider,
+  provider: LocalByoAiProvider,
+  options: AiProfileClientOptions,
+): Promise<AiProfileClient | null> {
+  const { effectiveProfileName: profile, packageConfig } = resolved;
+  const configured = [
+    resolved.profileConfig.provider === provider
+      ? resolved.profileConfig
+      : undefined,
+    packageConfig.defaultProvider === provider ? packageConfig : undefined,
+  ].filter((value): value is AiProfileConfig | AiPackageConfig => !!value);
+  const fromConfig = (
+    read: (value: AiProfileConfig & AiPackageConfig) => unknown,
+  ) =>
+    configured
+      .map((value) =>
+        stringValue(read(value as AiProfileConfig & AiPackageConfig)),
+      )
+      .find(Boolean) ?? '';
+
+  const apiKey = configString(
+    undefined,
+    byoEnvNames(profile, 'API_KEY', resolved.byoLevel),
+    fromConfig((value) => value.apiKey),
+  );
+  const rawBaseUrl = configString(
+    undefined,
+    byoEnvNames(profile, 'BASE_URL', resolved.byoLevel),
+    fromConfig((value) => value.baseUrl),
+  );
+  const baseUrl = rawBaseUrl
+    ? validatedByoBaseUrl(profile, rawBaseUrl, !!apiKey)
+    : '';
+  const model =
+    configString(
+      options.model,
+      byoEnvNames(profile, 'MODEL', resolved.byoLevel),
+      '',
+    ) ||
+    fromConfig((value) => value.model ?? value.defaultModel) ||
+    LOCAL_BYO_AI_MODEL_DEFAULTS[provider][profileTier(profile)] ||
+    '';
+  if (!model)
+    return invalidProvider(
+      profile,
+      `the ${provider} provider needs a model; set IOLAUS_LOCAL_AI_${profileTier(profile).toUpperCase()}_MODEL or IOLAUS_LOCAL_AI_MODEL.`,
+    );
+  if (!BYO_MODEL_PATTERN.test(model))
+    return invalidProvider(profile, 'the model name is not valid.');
+  const requiredCapabilities = options.requiredCapabilities ?? ['chat'];
+  const timeout = Math.min(
+    configNumber(
+      options.timeout,
+      byoEnvNames(profile, 'TIMEOUT', resolved.byoLevel),
+      fromConfig((value) => value.timeout),
+    ) ?? MAX_AI_REQUEST_TIMEOUT_MS,
+    MAX_AI_REQUEST_TIMEOUT_MS,
+  );
+  const maxOutputTokens = boundedMaxOutputTokens(options.maxOutputTokens);
+
+  let aiClient = options.aiClient;
+  if (!aiClient) {
+    // A keyed provider without a credential is simply not configured: AI
+    // stays off rather than failing the page.
+    if (provider !== 'ollama' && !apiKey) return null;
+    const aiOptions = {
+      ...(apiKey ? { apiKey } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
+      defaultModel: model,
+      generationLimits: {
+        maxImagesPerRequest: 1,
+        maxOutputTokens,
+        maxReasoningTokens: 1_024,
+        onExceeded: 'error',
+      },
+      maxRetries: 0,
+      rateLimit: { maxAttempts: 1 },
+      timeout,
+      type: provider,
+      usageTags: usageTagsForProfile(
+        packageConfig,
+        resolved.profileConfig,
+        profile,
+        options.usageTags,
+      ),
+    } as GetAIOptions;
+    const client = await getAI(aiOptions);
+    await assertByoCapabilities(
+      client,
+      profile,
+      provider,
+      requiredCapabilities,
+    );
+    aiClient = client;
+  }
+
+  return { aiClient, model, profile, provider, maxOutputTokens, timeout };
+}
+
+export async function resolveAiProfileClient(
+  profileName: AiProfileName,
+  options: AiProfileClientOptions = {},
+): Promise<AiProfileClient | null> {
+  // Global kill switch: no provider client is ever constructed while engaged.
+  assertAiEnabled();
+  const resolved = await resolveProfileProvider(
+    profileName,
+    options.requireProfileApiKey === true,
+  );
+  const { effectiveProfileName, packageConfig, profileConfig, provider } =
+    resolved;
   if (provider !== 'bifrost') {
+    if (
+      resolved.local &&
+      options.requireProfileApiKey !== true &&
+      isLocalByoProvider(provider)
+    )
+      return await resolveLocalByoProfileClient(resolved, provider, options);
     throw new Error(`Unsupported AI provider for profile "${profileName}".`);
   }
 
