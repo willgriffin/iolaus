@@ -193,6 +193,43 @@ describe('shared matching source provider', () => {
     });
   });
 
+  it('rejects a non-pinned model on the hosted route', async () => {
+    mocks.resolveProfile.mockResolvedValue({
+      model: 'openai/gpt-6.1-sol',
+      provider: 'bifrost',
+      aiClient: { chat: mocks.chat },
+    });
+    await expect(extractMatchingSource(input, options)).rejects.toThrow(
+      'Pinned matching extraction model is unavailable.',
+    );
+    expect(mocks.reserve).not.toHaveBeenCalled();
+    expect(mocks.chat).not.toHaveBeenCalled();
+  });
+
+  it("runs both stages on a local installation's own provider and model", async () => {
+    mocks.resolveProfile.mockResolvedValue({
+      model: 'llama3.1',
+      provider: 'ollama',
+      aiClient: { chat: mocks.chat },
+    });
+    await expect(extractMatchingSource(input, options)).resolves.toMatchObject({
+      requestId: 'request-2',
+    });
+    for (const [request] of mocks.reserve.mock.calls)
+      expect(request.identity).toMatchObject({
+        feature: 'opportunity-analysis',
+        model: 'llama3.1',
+        profile: 'opportunity-intelligence-extraction',
+        provider: 'ollama',
+      });
+    for (const [, settings] of mocks.chat.mock.calls)
+      expect(settings.model).toBe('llama3.1');
+    expect(mocks.tokenCount).toHaveBeenCalledWith(
+      expect.anything(),
+      'llama3.1',
+    );
+  });
+
   it('does not reserve the verifier against an elapsed UTC window', async () => {
     const time = vi
       .spyOn(Date, 'now')

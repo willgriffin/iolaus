@@ -22,7 +22,9 @@ import {
 } from './llm-json.js';
 import {
   type OpportunityIntelligenceBudgetConfig,
+  opportunityIntelligenceRouteIsBringYourOwn,
   pricingForOpportunityIntelligenceModel,
+  pricingForOpportunityIntelligenceRoute,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
 } from './opportunity-intelligence-config.js';
@@ -358,6 +360,13 @@ export interface OpportunityLlmExtractionOptions {
 }
 
 type OpportunityLlmSettings = AiProfileClient;
+
+/** A user's own provider is part of the request identity; hosted adds none. */
+function byoIdentity(settings: OpportunityLlmSettings) {
+  return opportunityIntelligenceRouteIsBringYourOwn(settings.provider)
+    ? { provider: settings.provider }
+    : {};
+}
 
 type OpportunityLlmProcessStatus = 'error' | 'processed' | 'skipped';
 type OpportunityLlmResult = {
@@ -2650,6 +2659,8 @@ export async function preflightOpportunityRequirementCoverageRepair(
   prepared: PreparedRequirementCoverageRepair,
   options: {
     model: string;
+    /** Set for a local installation's own provider; unset is the hosted route. */
+    provider?: string;
     counter?: (text: string) => Promise<number>;
     baseReservation: {
       calls: number;
@@ -2706,7 +2717,7 @@ export async function preflightOpportunityRequirementCoverageRepair(
       inputTokens: Math.min(80_000, limits.inputTokens),
     },
   );
-  const pricing = pricingForOpportunityIntelligenceModel(options.model);
+  const pricing = pricingForOpportunityIntelligenceRoute(options);
   const reservedSpendMicros =
     pricing.configured && options.auditPricing?.configured
       ? Math.max(
@@ -2855,6 +2866,7 @@ export async function processOpportunityRequirementCoverageRepair(
     preparedRepair,
     {
       model: settings.model,
+      provider: settings.provider,
       counter: settings.aiClient.countTokens?.bind(settings.aiClient),
       baseReservation: options.baseReservation,
       limits: resolveOpportunityIntelligenceBudgetConfig().run,
@@ -2876,6 +2888,7 @@ export async function processOpportunityRequirementCoverageRepair(
       feature: 'opportunity-source-requirement-repair',
       inputFingerprint: preparedRepair.provenance.inputFingerprint,
       model: settings.model,
+      ...byoIdentity(settings),
       opportunityId,
       outputSchemaVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
       promptVersion: REQUIREMENT_COVERAGE_REPAIR_VERSION,
@@ -3301,6 +3314,8 @@ export async function preflightOpportunityRequirementCoverageExtraction(
   prepared: PreparedPosting,
   options: {
     model: string;
+    /** Set for a local installation's own provider; unset is the hosted route. */
+    provider?: string;
     counter?: (text: string) => Promise<number>;
     limits?: OpportunityIntelligenceBudgetConfig['run'];
     auditPricing?: OpportunityIntelligenceBudgetConfig['pricing'];
@@ -3348,9 +3363,7 @@ export async function preflightOpportunityRequirementCoverageExtraction(
       inputTokens: Math.min(80_000, limits.inputTokens),
     },
   );
-  const extractionPricing = pricingForOpportunityIntelligenceModel(
-    options.model,
-  );
+  const extractionPricing = pricingForOpportunityIntelligenceRoute(options);
   const reservedSpendMicros =
     extractionPricing.configured &&
     (options.sourceExtractionStage === 'extract-only' ||
@@ -3448,6 +3461,7 @@ async function requestOpportunityLlmExtraction(
     prepared,
     {
       model: settings.model,
+      provider: settings.provider,
       counter: settings.aiClient.countTokens?.bind(settings.aiClient),
       auditPricing,
       limits: resolveOpportunityIntelligenceBudgetConfig().run,
@@ -3544,6 +3558,7 @@ async function requestOpportunityLlmExtraction(
               feature: `opportunity-extraction-chunk-${chunk.chunkIndex + 1}`,
               inputFingerprint: coverageContext.extractionFingerprint,
               model: settings.model,
+              ...byoIdentity(settings),
               opportunityId: stringValue(opportunity.id),
               outputSchemaVersion:
                 REQUIREMENT_COVERAGE_EXTRACTION_SCHEMA_VERSION,

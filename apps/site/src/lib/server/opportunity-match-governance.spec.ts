@@ -6,6 +6,10 @@ const calls = vi.hoisted(() => ({
     requestId: 'ledger-request',
     reused: false,
   })),
+  profile: { model: 'openai/gpt-6-luna', provider: 'bifrost' } as {
+    model: string;
+    provider?: string;
+  },
   chat: vi.fn(async () => ({
     content: JSON.stringify({
       decision: 'partial',
@@ -22,7 +26,7 @@ vi.mock('./opportunity-intelligence-governance.js', () => ({
 }));
 vi.mock('./ai-config.js', () => ({
   resolveOpportunityIntelligenceExtractionAiProfileClient: async () => ({
-    model: 'openai/gpt-6-luna',
+    ...calls.profile,
     aiClient: { chat: calls.chat },
     timeout: 1000,
   }),
@@ -70,5 +74,68 @@ describe('Stage3 native governance boundary', () => {
       ),
     ).rejects.toThrow('user_budget_exceeded');
     expect(calls.chat).not.toHaveBeenCalled();
+  });
+
+  describe('local installation provider', () => {
+    const owner = { tenantId: 'tenant', userId: 'user', profileId: 'profile' };
+    const evidence = [
+      { id: 'skill', kind: 'skill' as const, title: 'TS', text: 'TypeScript' },
+    ];
+    it('decides under its own provider and model identity', async () => {
+      calls.profile = { model: 'llama3.1', provider: 'ollama' };
+      calls.chat.mockClear();
+      calls.govern.mockClear();
+      try {
+        await matchEvidenceCache.decide(owner, 'TypeScript', evidence, {
+          requirementHash: 'requirement',
+          model: 'ollama:llama3.1',
+        });
+        expect(calls.govern).toHaveBeenCalledWith(
+          expect.objectContaining({
+            identity: expect.objectContaining({
+              model: 'llama3.1',
+              provider: 'ollama',
+              feature: 'requirement-evidence',
+            }),
+          }),
+        );
+        expect(calls.chat).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ model: 'llama3.1' }),
+        );
+      } finally {
+        calls.profile = { model: 'openai/gpt-6-luna', provider: 'bifrost' };
+      }
+    });
+    it('refuses to decide for a cache key recorded under another model or provider', async () => {
+      calls.profile = { model: 'llama3.1', provider: 'ollama' };
+      calls.chat.mockClear();
+      try {
+        for (const model of ['ollama:other', 'openai:llama3.1', undefined])
+          await expect(
+            matchEvidenceCache.decide(owner, 'TypeScript', evidence, {
+              requirementHash: 'requirement',
+              ...(model ? { model } : {}),
+            }),
+          ).rejects.toThrow('unavailable');
+        expect(calls.chat).not.toHaveBeenCalled();
+      } finally {
+        calls.profile = { model: 'openai/gpt-6-luna', provider: 'bifrost' };
+      }
+    });
+    it('does not accept the hosted pin for a hosted-route key mismatch', async () => {
+      calls.profile = { model: 'openai/gpt-6.1-sol', provider: 'bifrost' };
+      calls.chat.mockClear();
+      try {
+        await expect(
+          matchEvidenceCache.decide(owner, 'TypeScript', evidence, {
+            requirementHash: 'requirement',
+          }),
+        ).rejects.toThrow('unavailable');
+        expect(calls.chat).not.toHaveBeenCalled();
+      } finally {
+        calls.profile = { model: 'openai/gpt-6-luna', provider: 'bifrost' };
+      }
+    });
   });
 });

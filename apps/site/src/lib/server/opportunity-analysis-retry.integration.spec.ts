@@ -290,6 +290,41 @@ describe.each([
       ).rows,
     ).toHaveLength(1);
   });
+  it('admits the same bounded retry for a local installation provider, under its own ledger identity', async () => {
+    await expandLimits();
+    const local = (id: string, overrides = {}) =>
+      analysis(id, {
+        model: 'llama3.1',
+        provider: 'ollama',
+        idempotencyKey: 'local-key',
+        ...overrides,
+      });
+    const first = local('first');
+    expect(await store.reserve(first)).toMatchObject({ kind: 'owner' });
+    await store.complete(first, failure);
+    const second = local('second');
+    expect(await store.reserve(second)).toMatchObject({ kind: 'owner' });
+    await store.complete(second, failure);
+    // The retry stays bounded and stays inside the extraction contract.
+    for (const overrides of [
+      { analysisRetry: false },
+      { feature: 'other' },
+      { sourceCrawlId: 'crawl-1' },
+      { provider: undefined, model: 'other' },
+      { profile: 'opportunity-intelligence-scoring' },
+    ])
+      expect(await store.reserve(local('denied', overrides))).toMatchObject({
+        kind: 'blocked',
+        code: 'prior_attempt_failed',
+      });
+    expect(
+      (
+        await db.query(
+          'SELECT DISTINCT provider FROM opportunity_intelligence_requests',
+        )
+      ).rows,
+    ).toEqual([{ provider: 'ollama' }]);
+  });
   it('rolls failed-result handover back when run or global provider budgets refuse', async () => {
     await expandLimits();
     const first = analysis('first');

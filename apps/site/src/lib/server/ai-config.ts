@@ -356,8 +356,18 @@ function usageTagsForProfile(
   ) as Record<(typeof AI_USAGE_TAG_KEYS)[number], string>;
 }
 
+/**
+ * Quality tier a profile draws its bring-your-own defaults from. Scoring is
+ * the higher tier; every other profile, including the extraction route, is
+ * the routine tier.
+ */
+const GOOD_TIER_PROFILES: ReadonlySet<string> = new Set([
+  'good',
+  OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES.scoring.profile,
+]);
+
 function profileTier(profile: string): AiProfileTier {
-  return profile === 'good' ? 'good' : 'cheap';
+  return GOOD_TIER_PROFILES.has(profile) ? 'good' : 'cheap';
 }
 
 /**
@@ -529,6 +539,52 @@ async function assertByoCapabilities(
     );
 }
 
+function configuredByoValues(
+  resolved: ResolvedProfileProvider,
+  provider: LocalByoAiProvider,
+) {
+  const configured = [
+    resolved.profileConfig.provider === provider
+      ? resolved.profileConfig
+      : undefined,
+    resolved.packageConfig.defaultProvider === provider
+      ? resolved.packageConfig
+      : undefined,
+  ].filter((value): value is AiProfileConfig | AiPackageConfig => !!value);
+  return (read: (value: AiProfileConfig & AiPackageConfig) => unknown) =>
+    configured
+      .map((value) =>
+        stringValue(read(value as AiProfileConfig & AiPackageConfig)),
+      )
+      .find(Boolean) ?? '';
+}
+
+function resolveByoModel(
+  resolved: ResolvedProfileProvider,
+  provider: LocalByoAiProvider,
+  callSiteModel: string | undefined,
+): string {
+  const profile = resolved.effectiveProfileName;
+  const fromConfig = configuredByoValues(resolved, provider);
+  const model =
+    configString(
+      callSiteModel,
+      byoEnvNames(profile, 'MODEL', resolved.byoLevel),
+      '',
+    ) ||
+    fromConfig((value) => value.model ?? value.defaultModel) ||
+    LOCAL_BYO_AI_MODEL_DEFAULTS[provider][profileTier(profile)] ||
+    '';
+  if (!model)
+    return invalidProvider(
+      profile,
+      `the ${provider} provider needs a model; set IOLAUS_LOCAL_AI_${profileTier(profile).toUpperCase()}_MODEL or IOLAUS_LOCAL_AI_MODEL.`,
+    );
+  if (!BYO_MODEL_PATTERN.test(model))
+    return invalidProvider(profile, 'the model name is not valid.');
+  return model;
+}
+
 /**
  * Bring-your-own provider route for local installations. Never falls back to
  * another provider, never uses Bifrost settings, and never reports a key.
@@ -541,20 +597,7 @@ async function resolveLocalByoProfileClient(
   options: AiProfileClientOptions,
 ): Promise<AiProfileClient | null> {
   const { effectiveProfileName: profile, packageConfig } = resolved;
-  const configured = [
-    resolved.profileConfig.provider === provider
-      ? resolved.profileConfig
-      : undefined,
-    packageConfig.defaultProvider === provider ? packageConfig : undefined,
-  ].filter((value): value is AiProfileConfig | AiPackageConfig => !!value);
-  const fromConfig = (
-    read: (value: AiProfileConfig & AiPackageConfig) => unknown,
-  ) =>
-    configured
-      .map((value) =>
-        stringValue(read(value as AiProfileConfig & AiPackageConfig)),
-      )
-      .find(Boolean) ?? '';
+  const fromConfig = configuredByoValues(resolved, provider);
 
   const apiKey = configString(
     undefined,
@@ -569,22 +612,7 @@ async function resolveLocalByoProfileClient(
   const baseUrl = rawBaseUrl
     ? validatedByoBaseUrl(profile, rawBaseUrl, !!apiKey)
     : '';
-  const model =
-    configString(
-      options.model,
-      byoEnvNames(profile, 'MODEL', resolved.byoLevel),
-      '',
-    ) ||
-    fromConfig((value) => value.model ?? value.defaultModel) ||
-    LOCAL_BYO_AI_MODEL_DEFAULTS[provider][profileTier(profile)] ||
-    '';
-  if (!model)
-    return invalidProvider(
-      profile,
-      `the ${provider} provider needs a model; set IOLAUS_LOCAL_AI_${profileTier(profile).toUpperCase()}_MODEL or IOLAUS_LOCAL_AI_MODEL.`,
-    );
-  if (!BYO_MODEL_PATTERN.test(model))
-    return invalidProvider(profile, 'the model name is not valid.');
+  const model = resolveByoModel(resolved, provider, options.model);
   const requiredCapabilities = options.requiredCapabilities ?? ['chat'];
   const timeout = Math.min(
     configNumber(
@@ -789,6 +817,65 @@ export async function resolveWritingAiProfileClient(
   return await resolveAiProfileClient('good', options);
 }
 
+export interface OpportunityIntelligenceRoute {
+  model: string;
+  provider: AiProviderName;
+}
+
+/**
+ * The model and provider an opportunity-intelligence route will use, resolved
+ * without constructing a client or sending anything. Hosted profiles always
+ * report the reviewed pinned model on Bifrost; a local installation that
+ * brought its own provider reports that provider and its configured model.
+ */
+export async function resolveOpportunityIntelligenceRoute(
+  kind: keyof typeof OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES,
+): Promise<OpportunityIntelligenceRoute> {
+  const selected = OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES[kind];
+  const hosted: OpportunityIntelligenceRoute = {
+    model: selected.model,
+    provider: 'bifrost',
+  };
+  if (!isLocalRuntime()) return hosted;
+  const resolved = await resolveProfileProvider(selected.profile);
+  if (resolved.provider === 'bifrost') return hosted;
+  if (!isLocalByoProvider(resolved.provider))
+    return invalidProvider(
+      resolved.effectiveProfileName,
+      'the provider is not supported.',
+    );
+  return {
+    model: resolveByoModel(resolved, resolved.provider, undefined),
+    provider: resolved.provider,
+  };
+}
+
+/**
+ * A local installation that brought its own provider for an intelligence
+ * route uses it: the pinned model and dedicated credential belong to the
+ * hosted route only. Returns undefined when the route is hosted so the
+ * reviewed Bifrost path runs unchanged. The user's provider settings decide
+ * the model; call-site model, key, URL and timeout are hosted concerns and
+ * are not forwarded.
+ */
+async function resolveLocalOpportunityIntelligenceClient(
+  selected: (typeof OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES)[keyof typeof OPPORTUNITY_INTELLIGENCE_GPT6_PROFILES],
+  options: AiProfileClientOptions,
+): Promise<AiProfileClient | null | undefined> {
+  if (!isLocalRuntime()) return undefined;
+  const resolved = await resolveProfileProvider(selected.profile);
+  if (resolved.provider === 'bifrost') return undefined;
+  const {
+    apiKey: _apiKey,
+    baseUrl: _baseUrl,
+    model: _model,
+    timeout: _timeout,
+    requireProfileApiKey: _requireProfileApiKey,
+    ...profileOptions
+  } = options;
+  return await resolveAiProfileClient(selected.profile, profileOptions);
+}
+
 async function resolveDedicatedOpportunityIntelligenceAiProfileClient(
   selected: ReturnType<typeof resolveOpportunityIntelligenceProfile>,
   options: AiProfileClientOptions = {},
@@ -842,6 +929,11 @@ async function resolvePinnedGpt6OpportunityIntelligenceProfile(
       'Injected opportunity-intelligence clients are test-only; production must use the dedicated Bifrost profile.',
     );
   }
+  const local = await resolveLocalOpportunityIntelligenceClient(
+    selected,
+    options,
+  );
+  if (local !== undefined) return local;
   const configuredModel = envValue(selected.modelEnv) || selected.model;
   if (configuredModel !== selected.model) {
     throw new Error(

@@ -9,6 +9,7 @@ import {
   OPPORTUNITY_INTELLIGENCE_TYPESAFE_VOLUME_CONTRACTS,
   type OpportunityIntelligenceBudgetConfig,
   opportunityIntelligenceProviderVolume,
+  opportunityIntelligenceRouteIsBringYourOwn,
   pricingForOpportunityIntelligenceModel,
   reservedRequestSpendMicros,
   resolveOpportunityIntelligenceBudgetConfig,
@@ -79,6 +80,12 @@ export interface OpportunityIntelligenceRequestIdentity {
   preparedPayloadVersion: string;
   profile: string;
   promptVersion: string;
+  /**
+   * Set only when a local installation's own provider served the request.
+   * Absent for every hosted route, which keeps hosted keys, rates and ledger
+   * rows byte-for-byte unchanged.
+   */
+  provider?: string;
   sourceCrawlId?: string;
   sourceCrawlItemId?: string;
 }
@@ -270,6 +277,11 @@ export function opportunityIntelligenceIdempotencyKey(
   }
   if (stringValue(identity.inputFingerprint)) {
     values.push(stringValue(identity.inputFingerprint));
+  }
+  // A model name is only meaningful per provider: the same name on another
+  // user-chosen provider is a different request. Hosted keys are unchanged.
+  if (opportunityIntelligenceRouteIsBringYourOwn(identity.provider)) {
+    values.push(`provider:${stringValue(identity.provider)}`);
   }
   return createHash('sha256').update(JSON.stringify(values)).digest('hex');
 }
@@ -738,7 +750,10 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               reservation.analysisRetry === true &&
               reservation.feature === 'opportunity-analysis' &&
               reservation.profile === 'opportunity-intelligence-extraction' &&
-              reservation.model === 'openai/gpt-6-luna' &&
+              (reservation.model === 'openai/gpt-6-luna' ||
+                opportunityIntelligenceRouteIsBringYourOwn(
+                  reservation.provider,
+                )) &&
               !reservation.workspaceSubject &&
               !reservation.sourceCrawlId;
             const attempts = retryAllowed
@@ -925,7 +940,13 @@ export class DatabaseOpportunityIntelligenceGovernanceStore
               reservation.inputFingerprint ?? '',
               reservation.profile,
               reservation.model,
-              volume.provider === 'typesafe' ? 'typesafe' : 'bifrost',
+              volume.provider === 'typesafe'
+                ? 'typesafe'
+                : opportunityIntelligenceRouteIsBringYourOwn(
+                      reservation.provider,
+                    )
+                  ? stringValue(reservation.provider)
+                  : 'bifrost',
               reservation.estimatedInputTokens,
               reservation.inputTokenCeiling,
               reservation.maxOutputTokens,
@@ -1161,9 +1182,18 @@ export async function executeGovernedOpportunityIntelligenceRequest<
     );
   }
   const config = options.config ?? resolveOpportunityIntelligenceBudgetConfig();
-  const modelPricing = pricingForOpportunityIntelligenceModel(
-    options.identity.model,
-  );
+  // The route that actually served the request is priced: the reviewed table
+  // for hosted pinned models, and operator-set rates only for a user's own
+  // provider. A bring-your-own model never inherits hosted rates by name.
+  const modelPricing = opportunityIntelligenceRouteIsBringYourOwn(
+    options.identity.provider,
+  )
+    ? ({
+        configured: false,
+        inputMicrosPerMillion: 0,
+        outputMicrosPerMillion: 0,
+      } as const)
+    : pricingForOpportunityIntelligenceModel(options.identity.model);
   // GPT-6 production traffic always uses the pinned per-model rates. Retain
   // injectable legacy pricing only for isolated compatibility tests.
   const pricing = modelPricing.configured ? modelPricing : config.pricing;

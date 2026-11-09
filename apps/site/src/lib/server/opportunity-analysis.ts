@@ -6,9 +6,9 @@ import {
   OPPORTUNITY_ANALYSIS_VERSION,
   type OpportunityAnalysisSnapshot,
 } from '$lib/opportunity-analysis-contract.js';
+import { resolveOpportunityIntelligenceRoute } from './ai-config.js';
 import { getDbConfig } from './db.js';
 import {
-  ANALYSIS_MODEL,
   ANALYSIS_OUTPUT_VERSION,
   ANALYSIS_PROMPT_VERSION,
   enrichOpportunityAnalysis,
@@ -244,8 +244,15 @@ export async function ensureOpportunityAnalysis(
         [current.id],
       )
     ).rows[0];
+    // The stored model is current when it is the model the extraction route
+    // would use now: the pinned model when hosted, the user's own configured
+    // model on a local installation. An unresolvable route never matches.
+    const route = await resolveOpportunityIntelligenceRoute('extraction').catch(
+      () => null,
+    );
     if (
-      identityRow?.model === ANALYSIS_MODEL &&
+      route &&
+      identityRow?.model === route.model &&
       identityRow.prompt_version === ANALYSIS_PROMPT_VERSION &&
       identityRow.output_schema_version === ANALYSIS_OUTPUT_VERSION
     )
