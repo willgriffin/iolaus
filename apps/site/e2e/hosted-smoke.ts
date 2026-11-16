@@ -329,10 +329,33 @@ try {
           .getByRole('list', { name: 'Opportunity results' })
           .getByRole('listitem');
         const before = await rows.count();
-        await faultPage
-          .getByRole('button', { name: 'Load more opportunities' })
-          .click();
+        const [more] = await Promise.all([
+          faultPage.waitForResponse(
+            (candidate) =>
+              new URL(candidate.url()).pathname === '/opportunities/results',
+          ),
+          faultPage
+            .getByRole('button', { name: 'Load more opportunities' })
+            .click(),
+        ]);
+        assert.equal(more.status(), 200);
+        assert.equal(more.headers()['x-ratelimit-limit'], '600');
+        const boundedPage = await more.json();
+        assert.ok(boundedPage.items.length > 0);
+        assert.deepEqual(Object.keys(boundedPage).sort(), [
+          'items',
+          'next_cursor',
+        ]);
         await rows.nth(before).waitFor();
+        assert.equal(
+          (
+            await guest.request.get(
+              `${origin}/opportunities/results?cursor=tampered`,
+            )
+          ).status(),
+          400,
+          'Browser pagination must reject a tampered cursor.',
+        );
         const exact = await guest.request.get(
           `${origin}/api/public/v1/opportunities`,
         );
