@@ -17,13 +17,14 @@ import {
   canonicalSkillSlug,
   SKILL_CANONICAL_ALIASES,
 } from '../../skill-canonical.js';
-import {
-  applicationRuntime,
-  hostedDatabasePoolMax,
-} from '../application-runtime.js';
+import { applicationRuntime } from '../application-runtime.js';
 import { getDbConfig } from '../db.js';
 import { sanitizePublicOpportunityText } from './content.js';
 import { matchPublicSkills as matchSkills } from './match.js';
+// Cold catalog statements share a tight database deadline. Queue them in
+// the existing restricted pool instead of running competing catalog scans.
+export const PUBLIC_SEARCH_POOL_MAX = 1;
+
 export type Row = Record<string, unknown>;
 export type PublicDatabase = {
   query(
@@ -724,7 +725,7 @@ async function connection() {
     db: (await resolveDatabase({
       type: 'postgres',
       url: publicUrl.href,
-      max: Math.min(5, hostedDatabasePoolMax()),
+      max: PUBLIC_SEARCH_POOL_MAX,
     })) as unknown as PublicDatabase,
     dialect: 'postgres' as const,
   };
