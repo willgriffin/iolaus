@@ -6,7 +6,7 @@ import List from '@lucide/svelte/icons/list';
 import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
 import Undo2 from '@lucide/svelte/icons/undo-2';
 import X from '@lucide/svelte/icons/x';
-import { onMount, tick } from 'svelte';
+import { onMount, tick, untrack } from 'svelte';
 import { replaceState } from '$app/navigation';
 import { page as routePage } from '$app/state';
 import AdminWorkspaceShell from '$lib/components/admin/AdminWorkspaceShell.svelte';
@@ -15,11 +15,14 @@ import PublicOpportunitySearch from '$lib/components/PublicOpportunitySearch.sve
 import PublicOpportunityTriageCard from '$lib/components/PublicOpportunityTriageCard.svelte';
 import PublicSiteHeader from '$lib/components/PublicSiteHeader.svelte';
 import {
+  type PublicFacets,
   type PublicOpportunity,
   type PublicOpportunityDetail,
   type PublicSearchInput,
+  type PublicSearchResults,
+  publicFacetsSchema,
   publicOpportunityDetailSchema,
-  publicSearchPageSchema,
+  publicSearchResultsSchema,
 } from '$lib/public-opportunity-contract.js';
 import type { loadAdminShellData } from '$lib/server/admin-shell-data';
 import { createShortlistClient } from '$lib/shortlist-client.js';
@@ -28,13 +31,6 @@ import type {
   ShortlistEntry,
 } from '$lib/shortlist-contract.js';
 
-type Facet = { value: string; label: string; count: number };
-type SearchPage = {
-  items: PublicOpportunity[];
-  next_cursor: string | null;
-  total_estimate: number;
-  facets: Record<string, Facet[]>;
-};
 type Interpretation = {
   originalQuery: string;
   chips: { kind: string; value: string; label: string }[];
@@ -50,7 +46,7 @@ let {
   workspace = null,
 }: {
   input: PublicSearchInput;
-  page: SearchPage;
+  page: PublicSearchResults;
   interpretation: Interpretation;
   signedIn: boolean;
   submitted: boolean;
@@ -64,20 +60,46 @@ let entries = $state<ShortlistEntry[]>([]),
   ready = $state(false),
   failure = $state(''),
   warning = $state(''),
-  items = $state<PublicOpportunity[]>([]),
-  nextCursor = $state<string | null>(null),
+  items = $state(untrack(() => [...page.items])),
+  nextCursor = $state(untrack(() => page.next_cursor)),
   showFilters = $state(false),
   activeSignedIn = $state<boolean | null>(null);
 let detail = $state<PublicOpportunityDetail | null>(null),
   detailState = $state<'loading' | 'ready' | 'error'>('loading'),
   detailRetry = $state(0);
 let filterDialog: HTMLDialogElement;
+let facetValues = $state<PublicFacets | null>(null);
+let facetStatus = $state<'idle' | 'loading' | 'available' | 'unavailable'>(
+  'idle',
+);
+let facetRequest: AbortController | null = null;
+async function loadFacets() {
+  if (facetStatus === 'loading') return;
+  const controller = new AbortController();
+  facetRequest = controller;
+  facetStatus = 'loading';
+  try {
+    const query = entriesForInput({ ...input, cursor: undefined });
+    const response = await fetch(`/api/public/v1/facets?${query}`, {
+      signal: controller.signal,
+    });
+    const result = response.ok
+      ? publicFacetsSchema.parse(await response.json())
+      : null;
+    if (controller.signal.aborted) return;
+    facetValues = result;
+    facetStatus = result ? 'available' : 'unavailable';
+  } catch {
+    if (!controller.signal.aborted) facetStatus = 'unavailable';
+  }
+}
 async function openFilters() {
   showFilters = true;
+  if (facetStatus === 'idle') void loadFacets();
   await tick();
   filterDialog.showModal();
 }
-let view = $state<'triage' | 'list'>('triage');
+let view = $state(untrack(() => initialView));
 let listOrigin = $state<{ id: string; scrollY: number } | null>(null);
 const selectedView = $derived(listOrigin ? 'list' : view);
 $effect(() => {
@@ -181,6 +203,9 @@ $effect(() => {
   lastUndo = null;
   failure = '';
   showFilters = false;
+  facetRequest?.abort();
+  facetValues = null;
+  facetStatus = 'idle';
   filterDialog?.close();
 });
 $effect(() => {
@@ -250,7 +275,10 @@ onMount(() => {
   client = makeClient();
   activeSignedIn = signedIn;
   void loadClient(client);
-  return () => client?.destroy();
+  return () => {
+    client?.destroy();
+    facetRequest?.abort();
+  };
 });
 $effect(() => {
   if (!client || activeSignedIn === signedIn) return;
@@ -380,14 +408,14 @@ async function getNext() {
   failure = '';
   try {
     const response = await fetch(
-      `/api/public/v1/opportunities?${entriesForInput({ ...input, cursor })}`,
+      `/opportunities/results?${entriesForInput({ ...input, cursor })}`,
       { headers: { accept: 'application/json' } },
     );
     if (!response.ok)
       throw new Error(
         `Could not load more opportunities (${response.status}).`,
       );
-    const next = publicSearchPageSchema.parse(await response.json());
+    const next = publicSearchResultsSchema.parse(await response.json());
     if (generation !== deckGeneration) return;
     const known = new Set(items.map((item) => item.id));
     items = [...items, ...next.items.filter((item) => !known.has(item.id))];
@@ -442,10 +470,12 @@ function retryDetails() {
 {/if}
 <dialog class="filter-dialog" bind:this={filterDialog} aria-labelledby="filters-title" onclose={() => showFilters = false}>
   <header class="filter-heading"><div><h2 id="filters-title">Refine your search</h2><p>Choose what matters for your next opportunity.</p></div><button type="button" aria-label="Close filters" onclick={() => filterDialog.close()}><X size={22} aria-hidden="true" /></button></header>
-  {#if showFilters}<PublicOpportunitySearch filterMode q={input.q} skills={page.facets.skills ?? []} selectedSkills={input.skills}>
+  {#if showFilters}
+    {#if facetStatus === 'loading'}<p role="status">Loading filter options…</p>{:else if facetStatus === 'unavailable'}<p role="status">Filter options are temporarily unavailable. <button type="button" onclick={loadFacets}>Retry filter options</button></p>{/if}
+    <PublicOpportunitySearch filterMode q={input.q} skills={facetValues?.skills ?? []} selectedSkills={input.skills}>
     <input type="hidden" name="start" value="1"/><input type="hidden" name="view" value="list"/>
     <fieldset><legend>Location &amp; work</legend><div class="filter-grid"><label>Location<input name="location" maxlength="120" value={input.location ?? ''} placeholder="Anywhere"/></label>
-    {#each filters as [name, label]}<label>{label}<select name={name} value={input[name]?.[0] ?? ''}><option value="">Any</option>{#if input[name]?.[0] && !(page.facets[name] ?? []).some((facet) => facet.value === input[name][0])}<option value={input[name][0]}>{optionLabel(input[name][0])}</option>{/if}{#each page.facets[name] ?? [] as facet}<option value={facet.value}>{facet.label} ({facet.count})</option>{/each}</select></label>{/each}</div></fieldset>
+    {#each filters as [name, label]}<label>{label}<select name={name} value={input[name]?.[0] ?? ''}><option value="">Any</option>{#if input[name]?.[0] && !(facetValues?.[name] ?? []).some((facet) => facet.value === input[name][0])}<option value={input[name][0]}>{optionLabel(input[name][0])}</option>{/if}{#each facetValues?.[name] ?? [] as facet}<option value={facet.value}>{facet.label} ({facet.count})</option>{/each}</select></label>{/each}</div></fieldset>
     <fieldset><legend>Compensation</legend><div class="filter-grid"><label>Minimum pay<input name="salary_min" type="number" min="0" value={input.salary_min ?? ''} placeholder="No minimum"/></label><label>Currency<input name="salary_currency" maxlength="3" value={input.salary_currency ?? ''} placeholder="e.g. CAD"/></label><label>Pay period<select name="salary_period"><option value="">Any</option>{#each ['hour','day','week','month','year'] as period}<option value={period} selected={input.salary_period === period}>{optionLabel(period)}</option>{/each}</select></label></div></fieldset>
     <fieldset><legend>Display</legend><label>Sort results<select name="sort" value={input.sort}><option value="relevance">Relevance</option><option value="newest">Newest first</option></select></label></fieldset>
   </PublicOpportunitySearch>{/if}

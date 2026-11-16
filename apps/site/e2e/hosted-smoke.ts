@@ -227,6 +227,9 @@ try {
     FROM generate_series(1,13000) AS n`);
   await db.query(`UPDATE opportunities SET current_analysis_id=md5('browse-analysis-' || split_part(slug,'-',3))::uuid
     WHERE slug LIKE 'browse-job-%'`);
+  await db.query(
+    "UPDATE opportunity_analyses SET work_mode='remote' WHERE slug='smoke-analysis'",
+  );
   await db.query('ANALYZE');
 
   const server = spawn(process.execPath, ['build/index.js'], {
@@ -270,6 +273,89 @@ try {
         ).status(),
         401,
       );
+      // Slow only the facet projection. Bounded page selection and canonical
+      // hydration do not read this browse column on the unfiltered route.
+      const browseDefinition = await db.query(
+        "SELECT pg_get_viewdef('public.jobgeni_public_browse_v1'::regclass) AS definition",
+      );
+      const browseSql = String(browseDefinition.rows[0]?.definition)
+        .trim()
+        .replace(/;$/u, '');
+      const browseColumns = await db.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='jobgeni_public_browse_v1' ORDER BY ordinal_position",
+      );
+      const browseProjection = browseColumns.rows.map(
+        ({ column_name: name }) =>
+          name === 'seniority'
+            ? 'public.smoke_slow_facet(p.seniority) AS seniority'
+            : `p."${name}"`,
+      );
+      await db.query(`CREATE FUNCTION public.smoke_slow_facet(value text)
+        RETURNS text LANGUAGE plpgsql STABLE AS $$ BEGIN PERFORM pg_sleep(0.65); RETURN value; END $$`);
+      const faultPage = await guest.newPage();
+      let facetRequests = 0;
+      faultPage.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/public/v1/facets')
+          facetRequests += 1;
+      });
+      try {
+        await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_browse_v1 WITH (security_barrier=true)
+          AS SELECT ${browseProjection.join(', ')} FROM (${browseSql}) p`);
+        const response = await faultPage.goto(
+          `${origin}/opportunities/?start=1&view=list`,
+          { waitUntil: 'commit' },
+        );
+        assert.equal(
+          response?.status(),
+          200,
+          'Metadata timeout must not fail the browser document.',
+        );
+        await faultPage
+          .getByRole('list', { name: 'Opportunity results' })
+          .getByText('Synthetic platform engineer', { exact: true })
+          .first()
+          .waitFor();
+        assert.equal(
+          facetRequests,
+          0,
+          'The browser page must not request facets before Filters opens.',
+        );
+        await faultPage.getByRole('button', { name: 'Filters' }).click();
+        await faultPage
+          .getByText('Filter options are temporarily unavailable.')
+          .waitFor();
+        await faultPage.getByRole('button', { name: 'Close filters' }).click();
+        const rows = faultPage
+          .getByRole('list', { name: 'Opportunity results' })
+          .getByRole('listitem');
+        const before = await rows.count();
+        await faultPage
+          .getByRole('button', { name: 'Load more opportunities' })
+          .click();
+        await rows.nth(before).waitFor();
+        const exact = await guest.request.get(
+          `${origin}/api/public/v1/opportunities`,
+        );
+        assert.equal(
+          exact.status(),
+          503,
+          'Exact REST metadata continues to report its database timeout.',
+        );
+      } finally {
+        await db.query(
+          `CREATE OR REPLACE VIEW public.jobgeni_public_browse_v1 WITH (security_barrier=true) AS ${browseSql}`,
+        );
+        await db.query('DROP FUNCTION public.smoke_slow_facet(text)');
+      }
+      await faultPage.getByRole('button', { name: 'Filters' }).click();
+      await faultPage
+        .getByRole('button', { name: 'Retry filter options' })
+        .click();
+      await faultPage
+        .getByRole('option', { name: 'remote (1)' })
+        .waitFor({ state: 'attached' });
+      await faultPage.close();
+
       const publicSearch = await guest.request.get(
         `${origin}/api/public/v1/opportunities?q=postgresql`,
       );
