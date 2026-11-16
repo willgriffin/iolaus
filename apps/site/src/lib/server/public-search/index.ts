@@ -346,11 +346,9 @@ export function createPublicSearchReader(
           )
           .join(' && ');
 
-        // Keep a hashed membership subplan: cross-table version predicates can
-        // underestimate the barrier view and otherwise choose a quadratic semi-join.
-        parts.push(
-          `(CAST(c.id AS TEXT) IN (SELECT id FROM public.search_public_catalog((${tsquery})))) IS TRUE`,
-        );
+        // The candidate set already proves live membership. Filtering its
+        // vector here avoids building the same set a second time.
+        parts.push(`c.search_vector @@ (${tsquery})`);
         rank = `ts_rank_cd(c.search_vector,(${tsquery}))`;
       }
     }

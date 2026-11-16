@@ -303,12 +303,14 @@ export async function ensurePublicSearchSchema(
     await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_search_state_v1 WITH (security_barrier=true) AS
       SELECT g.generation, (
         SELECT CAST(EXTRACT(EPOCH FROM o.expires_at) AS TEXT) FROM public.opportunities o
-        JOIN public.sources s ON s.id=o.source_id
-        JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
-        JOIN public.public_opportunity_search_documents d ON d.id=CAST(o.id AS TEXT)
-        WHERE o.expires_at>CURRENT_TIMESTAMP AND ${publicOpportunityVisibility}
-          AND ${currentBrowseDocument}
-        ORDER BY o.expires_at LIMIT 1
+        CROSS JOIN LATERAL (
+          SELECT 1 FROM public.sources s
+          JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
+          JOIN public.public_opportunity_search_documents d ON d.id=CAST(o.id AS TEXT)
+          WHERE s.id=o.source_id AND ${publicOpportunityVisibility} AND ${currentBrowseDocument}
+          LIMIT 1
+        ) visible
+        WHERE o.expires_at>CURRENT_TIMESTAMP ORDER BY o.expires_at LIMIT 1
       ) AS next_expiry
       FROM public.public_search_generation g WHERE g.id=1 AND ${publicSearchReader}`);
     // Mirror only the pre-existing SELECT readers, never add ambient privileges.
