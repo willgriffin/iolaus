@@ -300,7 +300,9 @@ export async function ensurePublicSearchSchema(
     );
     await db.query(`CREATE OR REPLACE FUNCTION public.search_public_catalog(search_query tsquery) RETURNS TABLE(id text) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
       SELECT d.id FROM public.public_opportunity_search_documents d
-      WHERE d.search_vector @@ search_query AND EXISTS(SELECT 1 FROM public.jobgeni_public_browse_v1 c WHERE c.id=CAST(d.id AS UUID))
+      WHERE d.search_vector @@ search_query
+      INTERSECT
+      SELECT CAST(c.id AS TEXT) FROM public.jobgeni_public_browse_v1 c
     $$`);
     await db.query(
       `REVOKE ALL ON FUNCTION public.search_public_catalog(tsquery) FROM PUBLIC`,
