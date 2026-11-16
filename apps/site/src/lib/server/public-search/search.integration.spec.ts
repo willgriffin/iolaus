@@ -979,7 +979,7 @@ it.runIf(Boolean(pgUrl))(
   END $$`);
     await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
     await db.query(
-      'GRANT SELECT ON jobgeni_public_search_v1, jobgeni_public_browse_v1 TO search_test_public',
+      'GRANT SELECT ON jobgeni_public_search_v1 TO search_test_public',
     );
     await db.query(
       'GRANT EXECUTE ON FUNCTION search_public_catalog(tsquery) TO search_test_public',
@@ -987,6 +987,7 @@ it.runIf(Boolean(pgUrl))(
     await db.query(
       "ALTER ROLE search_test_public SET statement_timeout='500ms'",
     );
+    await ensurePublicSearchSchema(db, 'postgres');
     const roleUrl = new URL(pgUrl!);
     roleUrl.username = 'search_test_public';
     roleUrl.password = '';
@@ -1010,6 +1011,13 @@ it.runIf(Boolean(pgUrl))(
       'postgres',
       secret,
     );
+    // The baseline full catalog state ran before cache lookup. Verify that
+    // broad statements physically avoid analysis and company lookups, even
+    // when a fast test host happens to execute the old plan under 500ms.
+    const plan = await restricted.query(
+      'EXPLAIN (FORMAT JSON) SELECT max(generation),count(*) FROM jobgeni_public_browse_v1',
+    );
+    expect(JSON.stringify(plan)).not.toMatch(/opportunity_analyses|companies/);
     const browse = await reader.search({ limit: 20 });
     expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
@@ -1017,6 +1025,49 @@ it.runIf(Boolean(pgUrl))(
     const filtered = await reader.search({ q: 'postgresql', limit: 20 });
     expect(filtered.total_estimate).toBe(1300);
     expect(filtered.items).toHaveLength(20);
+
+    const scalar = async (sql: string) => {
+      const result = await restricted.query(sql);
+      return Number(Object.values(result.rows[0])[0]);
+    };
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      await scalar('SELECT count(*) FROM jobgeni_public_search_v1'),
+    );
+    await expect(
+      restricted.query(
+        'SELECT browse_projection FROM public_opportunity_search_documents LIMIT 1',
+      ),
+    ).rejects.toThrow(/permission denied/u);
+    await db.query(
+      'REVOKE SELECT ON jobgeni_public_search_v1 FROM search_test_public',
+    );
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      0,
+    );
+    await db.query(
+      'GRANT SELECT ON jobgeni_public_search_v1 TO search_test_public',
+    );
+
+    // A legacy writer does not provide browse_projection. The document
+    // trigger reconstructs it from the approved view, never writer input.
+    await db.query(`UPDATE public_opportunity_search_documents SET
+      content_hash='legacy-writer-stamp',browse_projection=NULL
+      WHERE id=md5('job-1')::uuid::text`);
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      13000,
+    );
+    // Stale current-analysis identity must hide a retained document even
+    // when it still carries previous public projection data.
+    await db.query(`UPDATE public_opportunity_search_documents
+      SET browse_projection=browse_projection || '{"analysis_id":"stale"}'::jsonb
+      WHERE id=md5('job-1')::uuid::text`);
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      12999,
+    );
+    await db.query("UPDATE sources SET public_listing=FALSE WHERE id='source'");
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      0,
+    );
   },
   30_000,
 );
