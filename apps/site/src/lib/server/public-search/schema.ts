@@ -1,3 +1,8 @@
+import {
+  publicOpportunityAnalysis,
+  publicOpportunityVisibility,
+} from '../opportunity-analysis-schema.js';
+
 /** Only the current, sanitized public view can supply index content. */
 type Database = {
   query(statement: string, ...values: unknown[]): Promise<unknown>;
@@ -60,6 +65,24 @@ function contentHash(dialect: 'postgres' | 'sqlite'): string {
     ? `md5(json_build_array(${columns})::text)`
     : `json_array(${columns})`;
 }
+// Compact public filter fields are written by the same trigger and diff as the
+// text vector. Preserve the current analysis stamp for an independent read fence.
+const browseColumns = [
+  'analysis_id',
+  'source_content_fingerprint',
+  'source_content_version',
+  'seniority',
+  'function',
+  'work_mode',
+  'employment_type',
+  'locations',
+  'skill_slugs_json',
+  'countries_json',
+  'eligibility_json',
+  'compensation_json',
+] as const;
+const browseProjection = `jsonb_build_object(${browseColumns.map((column) => `'${column}',c.${column}`).join(',')})`;
+
 export async function ensurePublicSearchSchema(
   db: Database,
   dialect: 'postgres' | 'sqlite',
@@ -94,6 +117,15 @@ export async function ensurePublicSearchSchema(
     await db.query(
       'ALTER TABLE public_opportunity_search_documents ADD COLUMN content_hash TEXT',
     );
+  if (dialect === 'postgres') {
+    const projectionColumn = await db.query(
+      "SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='public_opportunity_search_documents' AND column_name='browse_projection'",
+    );
+    if (returnedRows(projectionColumn) === 0)
+      await db.query(
+        'ALTER TABLE public_opportunity_search_documents ADD COLUMN browse_projection JSONB',
+      );
+  }
   if (dialect === 'sqlite') {
     await db.query('DROP TRIGGER IF EXISTS public_search_opportunity_refresh');
     await db.query(
@@ -156,7 +188,7 @@ export async function ensurePublicSearchSchema(
       "SELECT gin_clean_pending_list('idx_public_opportunity_search_vector')",
     );
     await db.query(`CREATE OR REPLACE FUNCTION refresh_public_opportunity_search_document() RETURNS trigger LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
-   DECLARE keys text[]; k text; entity text; doc text; hash text; n integer; changed integer:=0;
+   DECLARE keys text[]; k text; entity text; doc text; hash text; browse jsonb; n integer; changed integer:=0;
    BEGIN
     entity:=CASE WHEN TG_OP='DELETE' THEN OLD.id ELSE NEW.id END;
     IF TG_TABLE_NAME='opportunities' THEN keys:=ARRAY[entity];
@@ -168,12 +200,12 @@ export async function ensurePublicSearchSchema(
     -- row), and the generation only moves when some document actually changed.
     FOREACH k IN ARRAY coalesce(keys,ARRAY[]::text[]) LOOP
      n:=0;
-     SELECT c.search_document,${contentHash('postgres')} INTO doc,hash FROM jobgeni_public_catalog_v1 c WHERE c.id=CAST(k AS UUID);
+     SELECT c.search_document,${contentHash('postgres')},${browseProjection} INTO doc,hash,browse FROM jobgeni_public_catalog_v1 c WHERE c.id=CAST(k AS UUID);
      IF FOUND THEN
-      IF NOT EXISTS (SELECT 1 FROM public_opportunity_search_documents WHERE id=k AND content_hash IS NOT DISTINCT FROM hash) THEN
-       INSERT INTO public_opportunity_search_documents(id,search_document,content_hash) VALUES(k,doc,hash)
-        ON CONFLICT (id) DO UPDATE SET search_document=EXCLUDED.search_document,content_hash=EXCLUDED.content_hash
-        WHERE public_opportunity_search_documents.content_hash IS DISTINCT FROM EXCLUDED.content_hash;
+      IF NOT EXISTS (SELECT 1 FROM public_opportunity_search_documents WHERE id=k AND content_hash IS NOT DISTINCT FROM hash AND browse_projection IS NOT NULL) THEN
+       INSERT INTO public_opportunity_search_documents(id,search_document,content_hash,browse_projection) VALUES(k,doc,hash,browse)
+        ON CONFLICT (id) DO UPDATE SET search_document=EXCLUDED.search_document,content_hash=EXCLUDED.content_hash,browse_projection=EXCLUDED.browse_projection
+        WHERE public_opportunity_search_documents.content_hash IS DISTINCT FROM EXCLUDED.content_hash OR public_opportunity_search_documents.browse_projection IS NULL;
        GET DIAGNOSTICS n = ROW_COUNT;
       END IF;
      ELSE
@@ -202,6 +234,57 @@ export async function ensurePublicSearchSchema(
     await db.query(
       `CREATE OR REPLACE VIEW public.jobgeni_public_search_v1 WITH (security_barrier=true) AS SELECT ${searchCatalogColumns.join(',')},d.search_vector,g.generation,c.description_text,c.qualifications_text FROM public.jobgeni_public_catalog_v1 c JOIN public.public_opportunity_search_documents d ON d.id=CAST(c.id AS TEXT) CROSS JOIN public.public_search_generation g WHERE g.id=1`,
     );
+    // An older migration job may still write documents during a rolling
+    // upgrade or rollback. Fill the projection for that writer as well.
+    await db.query(`CREATE OR REPLACE FUNCTION public.refresh_public_browse_projection() RETURNS trigger
+      LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
+      BEGIN
+        IF NEW.browse_projection IS NULL OR (TG_OP='UPDATE'
+          AND NEW.content_hash IS DISTINCT FROM OLD.content_hash
+          AND NEW.browse_projection IS NOT DISTINCT FROM OLD.browse_projection)
+        THEN
+          SELECT ${browseProjection} INTO NEW.browse_projection
+          FROM public.jobgeni_public_catalog_v1 c WHERE c.id=CASE
+            WHEN NEW.id ~ '^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$' THEN CAST(NEW.id AS UUID) END;
+        END IF;
+        RETURN NEW;
+      END $$`);
+    await db.query(
+      'DROP TRIGGER IF EXISTS public_search_legacy_browse_projection ON public.public_opportunity_search_documents',
+    );
+    await db.query(`CREATE TRIGGER public_search_legacy_browse_projection
+      BEFORE INSERT OR UPDATE OF content_hash ON public.public_opportunity_search_documents
+      FOR EACH ROW EXECUTE FUNCTION public.refresh_public_browse_projection()`);
+    // Keep the existing detail view and privilege bindings for old readers.
+    // The browse view exposes just the fields needed for counts, ranking and facets.
+    await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_browse_v1 WITH (security_barrier=true) AS
+      SELECT o.id,o.source_id,o.company_id,o.posted_at,d.search_vector,g.generation,
+        ${browseColumns
+          .slice(3)
+          .map((column) => `d.browse_projection->>'${column}' AS "${column}"`)
+          .join(',')}
+      FROM public.public_opportunity_search_documents d
+      JOIN public.opportunities o ON CAST(o.id AS TEXT)=d.id
+      JOIN public.sources s ON s.id=o.source_id
+      JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
+      CROSS JOIN public.public_search_generation g
+      WHERE g.id=1 AND ${publicOpportunityVisibility}
+        AND has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT')
+        AND d.browse_projection IS NOT NULL
+        AND CAST(o.current_analysis_id AS TEXT)=d.browse_projection->>'analysis_id'
+        AND o.source_content_fingerprint=d.browse_projection->>'source_content_fingerprint'
+        AND CAST(o.source_content_version AS TEXT)=d.browse_projection->>'source_content_version'`);
+    // Mirror only the pre-existing SELECT readers, never add ambient privileges.
+    await db.query(`DO $$ DECLARE reader record; BEGIN
+      FOR reader IN
+        SELECT DISTINCT r.rolname FROM pg_class c
+        CROSS JOIN LATERAL aclexplode(c.relacl) a
+        JOIN pg_roles r ON r.oid=a.grantee
+        WHERE c.oid='public.jobgeni_public_search_v1'::regclass AND a.privilege_type='SELECT'
+      LOOP
+        EXECUTE format('GRANT SELECT ON public.jobgeni_public_browse_v1 TO %I',reader.rolname);
+      END LOOP;
+    END $$`);
     await db.query(`CREATE OR REPLACE FUNCTION public.consume_public_search_quota(cost integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
    DECLARE spent_now integer; epoch bigint:=floor(extract(epoch from clock_timestamp())/60);
    BEGIN
@@ -221,7 +304,9 @@ export async function ensurePublicSearchSchema(
     );
     await db.query(`CREATE OR REPLACE FUNCTION public.search_public_catalog(search_query tsquery) RETURNS TABLE(id text) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $$
       SELECT d.id FROM public.public_opportunity_search_documents d
-      WHERE d.search_vector @@ search_query AND EXISTS(SELECT 1 FROM public.jobgeni_public_catalog_v1 c WHERE c.id=CAST(d.id AS UUID))
+      WHERE d.search_vector @@ search_query
+      INTERSECT
+      SELECT CAST(c.id AS TEXT) FROM public.jobgeni_public_browse_v1 c
     $$`);
     await db.query(
       `REVOKE ALL ON FUNCTION public.search_public_catalog(tsquery) FROM PUBLIC`,
@@ -248,12 +333,29 @@ function upsertChangedDocuments(
 ): string {
   const id = dialect === 'postgres' ? 'CAST(c.id AS TEXT)' : 'c.id';
   const distinct = dialect === 'postgres' ? 'IS DISTINCT FROM' : 'IS NOT';
-  return `INSERT INTO public_opportunity_search_documents(id,search_document,content_hash)
-     SELECT x.id,x.search_document,x.content_hash FROM (SELECT ${id} AS id,c.search_document,${contentHash(dialect)} AS content_hash FROM jobgeni_public_catalog_v1 c WHERE ${where}) x
+  const postgres = dialect === 'postgres';
+  const projection = postgres ? ',browse_projection' : '';
+  const deriveProjection = postgres
+    ? `,${browseProjection} AS browse_projection`
+    : '';
+  const selectProjection = postgres ? ',x.browse_projection' : '';
+  const updateProjection = postgres
+    ? ',browse_projection=excluded.browse_projection'
+    : '';
+  const missingProjection = (alias: string) =>
+    postgres ? ` OR ${alias}.browse_projection IS NULL` : '';
+  // A concurrent publisher can change the conflict row after this statement
+  // takes its snapshot. Keep the publisher's newer version in that case.
+  const currentSnapshot = postgres
+    ? ` AND EXISTS (SELECT 1 FROM public_opportunity_search_documents snapshot
+      WHERE snapshot.id=excluded.id AND snapshot.xmin=public_opportunity_search_documents.xmin)`
+    : '';
+  return `INSERT INTO public_opportunity_search_documents(id,search_document,content_hash${projection})
+     SELECT x.id,x.search_document,x.content_hash${selectProjection} FROM (SELECT ${id} AS id,c.search_document,${contentHash(dialect)} AS content_hash${deriveProjection} FROM jobgeni_public_catalog_v1 c WHERE ${where}) x
      LEFT JOIN public_opportunity_search_documents d ON d.id=x.id
-     WHERE d.id IS NULL OR d.content_hash ${distinct} x.content_hash
-     ON CONFLICT(id) DO UPDATE SET search_document=excluded.search_document,content_hash=excluded.content_hash
-     WHERE public_opportunity_search_documents.content_hash ${distinct} excluded.content_hash`;
+     WHERE d.id IS NULL OR d.content_hash ${distinct} x.content_hash${missingProjection('d')}
+     ON CONFLICT(id) DO UPDATE SET search_document=excluded.search_document,content_hash=excluded.content_hash${updateProjection}
+     WHERE (public_opportunity_search_documents.content_hash ${distinct} excluded.content_hash${missingProjection('public_opportunity_search_documents')})${currentSnapshot}`;
 }
 
 /**

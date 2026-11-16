@@ -307,6 +307,10 @@ export function createPublicSearchReader(
   dialect: 'sqlite' | 'postgres',
   secret: string,
 ) {
+  const browseView =
+    dialect === 'postgres'
+      ? 'jobgeni_public_browse_v1'
+      : 'jobgeni_public_search_v1';
   const query = async (sql: string, values: unknown[] = []) =>
     rows(await db.query(sql, ...values));
   function predicate(input: PublicSearchInput, includeSkillRank = true) {
@@ -417,7 +421,7 @@ export function createPublicSearchReader(
   async function state() {
     const r = (
       await query(
-        'SELECT coalesce(max(generation),0) AS generation,count(*) AS visible FROM jobgeni_public_search_v1',
+        `SELECT coalesce(max(generation),0) AS generation,count(*) AS visible FROM ${browseView}`,
       )
     )[0];
     return `${r?.generation ?? 0}:${r?.visible ?? 0}`;
@@ -459,7 +463,7 @@ export function createPublicSearchReader(
       const val = source ? 'j.value' : `c.${col}`;
       out[col] = (
         await query(
-          `SELECT ${val} AS value,count(DISTINCT c.id) AS count FROM jobgeni_public_search_v1 c ${source ? `CROSS JOIN ${source}` : ''} WHERE ${p.where} AND ${val} IS NOT NULL AND ${val} <> '' GROUP BY ${val} ORDER BY count DESC,value ASC LIMIT 50`,
+          `SELECT ${val} AS value,count(DISTINCT c.id) AS count FROM ${browseView} c ${source ? `CROSS JOIN ${source}` : ''} WHERE ${p.where} AND ${val} IS NOT NULL AND ${val} <> '' GROUP BY ${val} ORDER BY count DESC,value ASC LIMIT 50`,
           p.values,
         )
       ).map((r) => ({
@@ -507,7 +511,7 @@ export function createPublicSearchReader(
       ? `WHERE (skill_rank<${add(cur.skill_rank)} OR (skill_rank=${add(cur.skill_rank)} AND (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))))`
       : '';
     let result = await query(
-      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT c.id,${p.skillRank} AS skill_rank,${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : 'jobgeni_public_search_v1 c'} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
+      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT c.id,${p.skillRank} AS skill_rank,${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : `${browseView} c`} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
       p.values,
     );
     if (result.length) {
@@ -526,7 +530,7 @@ export function createPublicSearchReader(
     const last = page.at(-1);
     const countPredicate = predicate(input, false);
     const count = await query(
-      `SELECT count(*) AS total FROM jobgeni_public_search_v1 c WHERE ${countPredicate.where}`,
+      `SELECT count(*) AS total FROM ${browseView} c WHERE ${countPredicate.where}`,
       countPredicate.values,
     );
     const pageResult = publicSearchPageSchema.parse({
