@@ -801,7 +801,7 @@ for (const dialect of ['sqlite', 'postgres'] as const)
           );
           await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
           await db.query(
-            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1 TO search_test_public',
+            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1,jobgeni_public_browse_v1 TO search_test_public',
           );
           await db.query(
             'GRANT EXECUTE ON FUNCTION consume_public_search_quota(integer),search_public_catalog(tsquery) TO search_test_public',
@@ -943,7 +943,7 @@ for (const dialect of ['sqlite', 'postgres'] as const)
     },
   );
 it.runIf(Boolean(pgUrl))(
-  'searches 6,400 public jobs under the PostgreSQL reader timeout',
+  'searches 13,000 public jobs under the PostgreSQL reader timeout',
   async () => {
     const { db } = await fixture('postgres');
     await db.query(
@@ -962,14 +962,14 @@ it.runIf(Boolean(pgUrl))(
       'opportunity-analysis/v1', 'deterministic',
       CASE WHEN n % 10 = 0 THEN 'PostgreSQL Engineer' ELSE 'Platform Engineer' END,
       '[]', '[]'
-    FROM generate_series(1,6400) n`);
+    FROM generate_series(1,13000) n`);
     await db.query(`INSERT INTO opportunities
     (id,source_id,company_id,title,posting_url,status,posted_at,current_analysis_id,source_content_fingerprint,source_content_version)
     SELECT md5('job-' || n)::uuid, 'source',
       CASE WHEN n % 20 = 0 THEN 'legacy-company' ELSE md5('company-' || (1 + n % 825))::uuid::text END,
       'PostgreSQL Engineer', 'https://example.test/job/' || n, 'active',
       '2026-10-07T00:00:00Z', md5('analysis-' || n)::uuid, 'fp', 1
-    FROM generate_series(1,6400) n`);
+    FROM generate_series(1,13000) n`);
     await db.query('ANALYZE');
 
     await db.query(`DO $$ BEGIN
@@ -979,7 +979,7 @@ it.runIf(Boolean(pgUrl))(
   END $$`);
     await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
     await db.query(
-      'GRANT SELECT ON jobgeni_public_search_v1 TO search_test_public',
+      'GRANT SELECT ON jobgeni_public_search_v1, jobgeni_public_browse_v1 TO search_test_public',
     );
     await db.query(
       'GRANT EXECUTE ON FUNCTION search_public_catalog(tsquery) TO search_test_public',
@@ -1011,11 +1011,11 @@ it.runIf(Boolean(pgUrl))(
       secret,
     );
     const browse = await reader.search({ limit: 20 });
-    expect(browse.total_estimate).toBe(6400);
+    expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
 
     const filtered = await reader.search({ q: 'postgresql', limit: 20 });
-    expect(filtered.total_estimate).toBe(640);
+    expect(filtered.total_estimate).toBe(1300);
     expect(filtered.items).toHaveLength(20);
   },
   30_000,

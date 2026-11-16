@@ -4,8 +4,12 @@ type Database = Awaited<ReturnType<typeof resolveDatabase>>;
 
 export { pruneExpiredOpportunityAnalyses } from './opportunity-analysis-maintenance.js';
 
-/** Supplemental indexes and the least-privilege public projection.
- * Tables and foreign keys are owned by the SMRT object migration. */
+// The live catalog and PostgreSQL browse view use the same visibility fence.
+export const publicOpportunityVisibility = `s.public_listing = TRUE AND s.is_active = TRUE
+  AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')
+  AND (o.expires_at IS NULL OR o.expires_at > CURRENT_TIMESTAMP)`;
+
+/** Supplemental indexes and the public projection. The SMRT migration owns tables and foreign keys. */
 export async function ensureOpportunityAnalysisSchema(
   db: Database,
 ): Promise<void> {
@@ -75,9 +79,7 @@ export async function ensureOpportunityAnalysisSchema(
     LOWER(COALESCE(a.normalized_title, '') || ' ' || COALESCE(c.name, '') || ' ' || COALESCE(a.summary_json, '') || ' ' || COALESCE(a.skill_slugs_json, '') || ' ' || COALESCE(a.countries_json, '')) AS search_document, ${requirements} AS requirements_json,
     ${sourceExcerpt('descriptionRaw', 30_000)} AS description_text, ${sourceExcerpt('qualifications', 12_000)} AS qualifications_text
     FROM opportunities o JOIN sources s ON s.id = o.source_id LEFT JOIN companies c ON CAST(c.id AS TEXT) = o.company_id JOIN opportunity_analyses a ON a.id = o.current_analysis_id AND a.opportunity_id = o.id AND a.source_content_fingerprint = o.source_content_fingerprint AND a.source_content_version = o.source_content_version AND a.analysis_version = 'opportunity-analysis/v1'
-    WHERE s.public_listing = TRUE AND s.is_active = TRUE
-      AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')
-      AND (o.expires_at IS NULL OR o.expires_at > CURRENT_TIMESTAMP)
+    WHERE ${publicOpportunityVisibility}
       AND a.status IN ('deterministic', 'enriched')`;
   if (sqlite) {
     await db.query('DROP VIEW IF EXISTS jobgeni_public_catalog_v1');

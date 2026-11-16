@@ -85,7 +85,7 @@ try {
   readerCreated = true;
   await db.query(`GRANT USAGE ON SCHEMA public TO ${readerRole}`);
   await db.query(
-    `GRANT SELECT ON jobgeni_public_catalog_v1, jobgeni_public_search_v1 TO ${readerRole}`,
+    `GRANT SELECT ON jobgeni_public_catalog_v1, jobgeni_public_search_v1, jobgeni_public_browse_v1 TO ${readerRole}`,
   );
   await db.query(
     `GRANT EXECUTE ON FUNCTION consume_public_search_quota(integer), search_public_catalog(tsquery) TO ${readerRole}`,
@@ -207,6 +207,26 @@ try {
   await db.query(
     `UPDATE opportunities SET current_analysis_id = md5('hosted-smoke-analysis')::uuid WHERE slug = 'smoke-1'`,
   );
+  // Fully analyzed records drive the public browse, without altering the
+  // separate private matching fixture above.
+  await db.query(`INSERT INTO sources (id,slug,source_role,is_active,public_listing)
+    SELECT 'browse-source-' || n,'browse-source-' || n,'root',TRUE,TRUE
+    FROM generate_series(1,106) AS n`);
+  await db.query(`INSERT INTO opportunities
+    (id,slug,title,source_id,status,posted_at,first_seen_at,last_seen_at,posting_url,
+     source_content_fingerprint,source_content_version)
+    SELECT md5('browse-job-' || n)::uuid,'browse-job-' || n,'Account Executive',
+      'browse-source-' || (1 + n % 106),'found',NOW(),NOW(),NOW(),
+      'https://example.invalid/browse/' || n,'browse-content',1
+    FROM generate_series(1,13000) AS n`);
+  await db.query(`INSERT INTO opportunity_analyses
+    (id,slug,opportunity_id,source_content_fingerprint,source_content_version,analysis_version,status,normalized_title,skills_json,requirements_json)
+    SELECT md5('browse-analysis-' || n)::uuid, 'browse-analysis-' || n,
+      md5('browse-job-' || n)::uuid, 'browse-content', 1,
+      'opportunity-analysis/v1', 'deterministic','Synthetic platform engineer','[]','[]'
+    FROM generate_series(1,13000) AS n`);
+  await db.query(`UPDATE opportunities SET current_analysis_id=md5('browse-analysis-' || split_part(slug,'-',3))::uuid
+    WHERE slug LIKE 'browse-job-%'`);
   await db.query('ANALYZE');
 
   const server = spawn(process.execPath, ['build/index.js'], {
@@ -259,6 +279,25 @@ try {
         'Public search must work through the restricted reader.',
       );
       assert.equal((await publicSearch.json()).items.length, 1);
+      const publicBrowse = await guest.request.get(
+        `${origin}/api/public/v1/opportunities`,
+      );
+      assert.equal(publicBrowse.status(), 200);
+      const browsePage = await publicBrowse.json();
+      assert.equal(browsePage.total_estimate, 13001);
+      assert.ok(browsePage.items.length > 0);
+      const publicPage = await guest.newPage();
+      assert.equal(
+        (
+          await publicPage.goto(`${origin}/opportunities/?start=1&view=list`)
+        )?.status(),
+        200,
+      );
+      await publicPage
+        .getByText('Synthetic platform engineer', { exact: true })
+        .first()
+        .waitFor();
+      await publicPage.close();
       await guest.close();
 
       const operatorContext = await browser.newContext();
