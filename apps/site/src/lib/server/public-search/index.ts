@@ -566,8 +566,36 @@ export function createPublicSearchReader(
     const tail = cur
       ? `WHERE (skill_rank<${add(cur.skill_rank)} OR (skill_rank=${add(cur.skill_rank)} AND (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))))`
       : '';
+    const sqliteTextSearch = Boolean(input.q && dialect === 'sqlite');
+    const source = sqliteTextSearch
+      ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id'
+      : `${browseView} c`;
+    const matchingRows = `FROM ${source} WHERE ${p.where}`;
+    const rankColumns = `c.id,${p.skillRank} AS skill_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date`;
+    // Cover density ranking for multiple terms is expensive. Equal vectors
+    // have exactly the same score for the same tsquery, regardless of the
+    // posting's independent skill rank, date, and ID tie breakers.
+    const sharedTextRanks =
+      dialect === 'postgres' &&
+      input.sort === 'relevance' &&
+      input.q &&
+      input.q.split(/\s+/u).length > 1;
+    const matches = sharedTextRanks
+      ? `matching_vectors AS MATERIALIZED (
+          SELECT ${rankColumns},c.search_vector ${matchingRows}
+        ), ranked_vectors AS MATERIALIZED (
+          SELECT c.search_vector,${p.rank} AS sort_rank
+          FROM (SELECT DISTINCT search_vector FROM matching_vectors) c
+        ), matches AS (
+          SELECT m.id,m.skill_rank,m.sort_date,r.sort_rank FROM matching_vectors m
+          JOIN ranked_vectors r USING(search_vector)
+        )`
+      : `matches AS (SELECT ${rankColumns},${p.rank} AS sort_rank ${matchingRows})`;
+    const fts = sqliteTextSearch
+      ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),'
+      : '';
     let result = await query(
-      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT c.id,${p.skillRank} AS skill_rank,${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : `${browseView} c`} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
+      `WITH ${fts}${matches} SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
       p.values,
     );
     if (result.length) {

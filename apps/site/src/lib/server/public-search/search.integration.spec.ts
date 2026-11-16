@@ -1099,9 +1099,25 @@ it.runIf(Boolean(pgUrl))(
       'Simulated metadata query failure',
     );
     rejectMetadata = false;
+    const ranked = await reader.search({ q: 'platform engineer', limit: 20 });
+    expect(ranked.total_estimate).toBe(11700);
+    expect(ranked.next_cursor).not.toBeNull();
+    const nextRanked = await reader.search({
+      q: 'platform engineer',
+      limit: 20,
+      cursor: ranked.next_cursor,
+    });
+    // All matching postings have equal cover density and posted date in
+    // this fixture. Preserve the existing ID tie break across both pages.
+    const expectedRanks =
+      await db.query(`SELECT CAST(md5('job-' || n)::uuid AS TEXT) AS id
+      FROM generate_series(1,13000) n WHERE n % 10 <> 0 ORDER BY id DESC LIMIT 40`);
+    const expectedRows = Array.isArray(expectedRanks)
+      ? expectedRanks
+      : expectedRanks.rows;
     expect(
-      (await reader.search({ q: 'platform engineer' })).total_estimate,
-    ).toBe(11700);
+      [...ranked.items, ...nextRanked.items].map((item) => item.id),
+    ).toEqual(expectedRows?.map((item) => item.id));
 
     const stateQuery =
       'SELECT generation,next_expiry FROM jobgeni_public_search_state_v1';
