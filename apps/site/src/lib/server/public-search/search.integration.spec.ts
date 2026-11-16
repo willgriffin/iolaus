@@ -804,7 +804,7 @@ for (const dialect of ['sqlite', 'postgres'] as const)
           );
           await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
           await db.query(
-            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1,jobgeni_public_browse_v1 TO search_test_public',
+            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1,jobgeni_public_browse_v1,jobgeni_public_search_state_v1 TO search_test_public',
           );
           await db.query(
             'GRANT EXECUTE ON FUNCTION consume_public_search_quota(integer),search_public_catalog(tsquery) TO search_test_public',
@@ -1009,27 +1009,47 @@ it.runIf(Boolean(pgUrl))(
       "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_companies_id_text'",
     );
     expect(JSON.stringify(index)).toContain('(id)::text');
+    const statements: string[] = [];
     const reader = createPublicSearchReader(
-      restricted as unknown as PublicDatabase,
+      {
+        query: async (sql, ...values) => {
+          statements.push(sql);
+          return restricted.query(sql, ...values);
+        },
+      },
       'postgres',
       secret,
     );
-    // The baseline full catalog state ran before cache lookup. Verify that
-    // broad statements avoid the company join on the wide catalog, even
-    // when a fast test host happens to execute the old plan under 500ms.
     const plan = await restricted.query(
-      'EXPLAIN (FORMAT JSON) SELECT max(generation),count(*) FROM jobgeni_public_browse_v1',
+      'EXPLAIN (FORMAT JSON) SELECT count(*) FROM jobgeni_public_browse_v1',
     );
     expect(JSON.stringify(plan)).not.toMatch(
       /companies|jobgeni_public_catalog_v1/,
     );
+    expect(JSON.stringify(plan).match(/"Join Type":"Full"/gu)).toHaveLength(2);
     const browse = await reader.search({ limit: 20 });
     expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
+    expect(
+      statements.filter((sql) => sql.includes('candidates AS MATERIALIZED')),
+    ).toHaveLength(1);
+    statements.length = 0;
+    expect(await reader.search({ limit: 20 })).toEqual(browse);
+    expect(statements).toEqual([
+      'SELECT generation, next_expiry FROM jobgeni_public_search_state_v1',
+    ]);
 
     const filtered = await reader.search({ q: 'postgresql', limit: 20 });
     expect(filtered.total_estimate).toBe(1300);
     expect(filtered.items).toHaveLength(20);
+    const concurrent = await Promise.all([
+      reader.search({ limit: 19, q: 'platform' }),
+      reader.search({ limit: 18, q: 'engineer' }),
+      reader.search({ limit: 17, q: 'synthetic' }),
+    ]);
+    expect(concurrent.map((page) => page.total_estimate)).toEqual([
+      11700, 13000, 12350,
+    ]);
 
     const scalar = async (sql: string) => {
       const result = await restricted.query(sql);
@@ -1154,6 +1174,43 @@ it.runIf(Boolean(pgUrl))(
       await publisher.release();
       await backfill.release();
     }
+  },
+);
+
+it.runIf(Boolean(pgUrl))(
+  'invalidates cached PostgreSQL pages, facets and cursors at expiry without a writer',
+  async () => {
+    const { db, seed, reader } = await fixture('postgres');
+    await seed(3);
+    const expiring = jobId(2, 'postgres');
+    await db.query(
+      "UPDATE opportunities SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1",
+      expiring,
+    );
+    const first = await reader.search({ limit: 2 });
+    expect(first.items[0]?.id).toBe(expiring);
+    expect(first.total_estimate).toBe(3);
+    expect(first.facets.skills[0]?.count).toBe(3);
+    expect(first.next_cursor).not.toBeNull();
+    const generation = await db.query(
+      'SELECT generation FROM public_search_generation',
+    );
+    await vi.waitFor(
+      async () => {
+        const page = await reader.search({ limit: 2 });
+        expect(page.total_estimate).toBe(2);
+        expect(page.items.some((item) => item.id === expiring)).toBe(false);
+        expect(page.facets.skills[0]?.count).toBe(2);
+      },
+      { timeout: 5000 },
+    );
+    expect(
+      await db.query('SELECT generation FROM public_search_generation'),
+    ).toEqual(generation);
+    expect(await reader.get(expiring)).toBeNull();
+    await expect(
+      reader.search({ limit: 2, cursor: first.next_cursor }),
+    ).rejects.toThrow('Expired cursor');
   },
 );
 
