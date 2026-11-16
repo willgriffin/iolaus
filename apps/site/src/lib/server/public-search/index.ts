@@ -6,12 +6,14 @@ import {
   type PublicOpportunityDetail,
   type PublicSearchInput,
   type PublicSearchPage,
+  type PublicSearchResults,
   publicMatchInputSchema,
   publicMatchResultSchema,
   publicOpportunityDetailSchema,
   publicOpportunitySchema,
   publicSearchInputSchema,
   publicSearchPageSchema,
+  publicSearchResultsSchema,
 } from '$lib/public-opportunity-contract.js';
 import {
   canonicalSkillSlug,
@@ -300,10 +302,12 @@ function key(input: PublicSearchInput) {
     rest[k] = [...rest[k]].sort();
   return createHash('sha256').update(JSON.stringify(rest)).digest('hex');
 }
-const searchCaches = new WeakMap<
-  PublicDatabase,
-  Map<string, { at: number; value: PublicSearchPage }>
->();
+type CachedResults = {
+  at: number;
+  value: PublicSearchResults;
+  exact?: PublicSearchPage;
+};
+const searchCaches = new WeakMap<PublicDatabase, Map<string, CachedResults>>();
 type CatalogMetadata = { facets: PublicFacets; total: number | null };
 const facetCaches = new WeakMap<
   PublicDatabase,
@@ -532,7 +536,7 @@ export function createPublicSearchReader(
     }
     return { facets: out, total };
   }
-  async function search(raw: unknown) {
+  async function readResults(raw: unknown) {
     const input = publicSearchInputSchema.parse(raw);
     const p = predicate(input);
     const generation = await state();
@@ -558,7 +562,8 @@ export function createPublicSearchReader(
         'Expired cursor or changed search. Restart pagination.',
       );
     const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.at < 60000) return cached.value;
+    if (cached && Date.now() - cached.at < 60000)
+      return { input, generation, cached };
     const add = (v: unknown) => {
       p.values.push(v);
       return `$${p.values.length}`;
@@ -612,17 +617,7 @@ export function createPublicSearchReader(
     const more = result.length > input.limit;
     const page = result.slice(0, input.limit);
     const last = page.at(-1);
-    const metadata = await catalogMetadata(input, generation);
-    let total = metadata.total;
-    if (total === null) {
-      const countPredicate = predicate(input, false);
-      const [count] = await query(
-        `SELECT count(*) AS total FROM ${browseView} c WHERE ${countPredicate.where}`,
-        countPredicate.values,
-      );
-      total = Number(count?.total ?? 0);
-    }
-    const pageResult = publicSearchPageSchema.parse({
+    const value = publicSearchResultsSchema.parse({
       items: page.map((r) => projectPublicOpportunity(r)).filter(Boolean),
       next_cursor:
         more && last
@@ -640,12 +635,32 @@ export function createPublicSearchReader(
               secret,
             )
           : null,
+    });
+    const entry: CachedResults = { at: Date.now(), value };
+    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
+    cache.set(cacheKey, entry);
+    return { input, generation, cached: entry };
+  }
+  async function search(raw: unknown) {
+    const { input, generation, cached } = await readResults(raw);
+    if (cached.exact) return cached.exact;
+    const metadata = await catalogMetadata(input, generation);
+    let total = metadata.total;
+    if (total === null) {
+      const countPredicate = predicate(input, false);
+      const [count] = await query(
+        `SELECT count(*) AS total FROM ${browseView} c WHERE ${countPredicate.where}`,
+        countPredicate.values,
+      );
+      total = Number(count?.total ?? 0);
+    }
+    const exact = publicSearchPageSchema.parse({
+      ...cached.value,
       total_estimate: total,
       facets: metadata.facets,
     });
-    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
-    cache.set(cacheKey, { at: Date.now(), value: pageResult });
-    return pageResult;
+    cached.exact = exact;
+    return exact;
   }
   async function get(id: string) {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) return null;
@@ -732,6 +747,7 @@ export function createPublicSearchReader(
   }
   return {
     search,
+    results: async (raw: unknown) => (await readResults(raw)).cached.value,
     get,
     sitemap,
     getMany,
@@ -768,6 +784,9 @@ async function reader() {
 }
 export async function searchPublicOpportunities(input: unknown) {
   return (await reader()).search(input);
+}
+export async function searchPublicOpportunityResults(input: unknown) {
+  return (await reader()).results(input);
 }
 export async function getPublicOpportunity(id: string) {
   return (await reader()).get(id);

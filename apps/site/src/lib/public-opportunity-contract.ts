@@ -139,9 +139,11 @@ export const publicFacetsSchema = z.object({
   employment_type: facet,
   country: facet,
 });
-export const publicSearchPageSchema = z.object({
+export const publicSearchResultsSchema = z.object({
   items: z.array(publicOpportunitySchema),
   next_cursor: z.string().nullable(),
+});
+export const publicSearchPageSchema = publicSearchResultsSchema.extend({
   total_estimate: z.number().int().nonnegative(),
   facets: publicFacetsSchema,
 });
@@ -182,6 +184,7 @@ export type PublicOpportunityDetail = z.infer<
   typeof publicOpportunityDetailSchema
 >;
 export type PublicFacets = z.infer<typeof publicFacetsSchema>;
+export type PublicSearchResults = z.infer<typeof publicSearchResultsSchema>;
 export type PublicSearchPage = z.infer<typeof publicSearchPageSchema>;
 export type PublicMatchInput = z.infer<typeof publicMatchInputSchema>;
 export type PublicMatchResult = z.infer<typeof publicMatchResultSchema>;
