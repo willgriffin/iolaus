@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../application-runtime.js', () => ({
   applicationRuntime: { profile: 'local' },
-  hostedDatabasePoolMax: () => 5,
 }));
 vi.mock('../db.js', () => ({
   getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),

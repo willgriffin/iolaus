@@ -17,7 +17,10 @@ import {
   canonicalSkillSlug,
   SKILL_CANONICAL_ALIASES,
 } from '../../skill-canonical.js';
-import { applicationRuntime } from '../application-runtime.js';
+import {
+  applicationRuntime,
+  databaseConnectionTimeoutMillis,
+} from '../application-runtime.js';
 import { getDbConfig } from '../db.js';
 import { sanitizePublicOpportunityText } from './content.js';
 import { matchPublicSkills as matchSkills } from './match.js';
@@ -726,6 +729,7 @@ async function connection() {
       type: 'postgres',
       url: publicUrl.href,
       max: PUBLIC_SEARCH_POOL_MAX,
+      connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     })) as unknown as PublicDatabase,
     dialect: 'postgres' as const,
   };

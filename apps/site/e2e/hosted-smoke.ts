@@ -298,6 +298,15 @@ try {
         .getByText('Synthetic platform engineer', { exact: true })
         .first()
         .waitFor();
+      const publicConnections = await db.query(
+        'SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=current_database() AND usename=$1',
+        [readerRole],
+      );
+      assert.equal(
+        publicConnections.rows[0]?.count,
+        1,
+        'Overlapping public requests must use the single restricted connection.',
+      );
       await publicPage.close();
       await guest.close();
 
