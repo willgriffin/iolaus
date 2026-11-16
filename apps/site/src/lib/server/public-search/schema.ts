@@ -90,6 +90,7 @@ const currentBrowseDocument = `d.browse_projection IS NOT NULL
   AND o.source_content_fingerprint=d.browse_projection->>'source_content_fingerprint'
   AND CAST(o.source_content_version AS TEXT)=d.browse_projection->>'source_content_version'`;
 const publicSearchReader = `(SELECT has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT'))`;
+const expiryProbeLimit = 128;
 
 export async function ensurePublicSearchSchema(
   db: Database,
@@ -300,9 +301,16 @@ export async function ensurePublicSearchSchema(
     // no writer, so include the next live expiry in the cache and cursor key.
     await db.query(`CREATE INDEX IF NOT EXISTS public_search_opportunity_expiry
       ON opportunities(expires_at) WHERE expires_at IS NOT NULL`);
+    // The ordered probe must not walk and join an arbitrarily long prefix
+    // of private or stale rows. If the prefix is exhausted, the fenced
+    // browse set can supply the exact expiry in one set-based pass.
     await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_search_state_v1 WITH (security_barrier=true) AS
-      SELECT g.generation, (
-        SELECT CAST(EXTRACT(EPOCH FROM o.expires_at) AS TEXT) FROM public.opportunities o
+      SELECT g.generation, CAST(EXTRACT(EPOCH FROM COALESCE((
+        SELECT o.expires_at FROM (
+          SELECT id,source_id,current_analysis_id,source_content_fingerprint,source_content_version,status,expires_at
+          FROM public.opportunities WHERE expires_at>CURRENT_TIMESTAMP
+          ORDER BY expires_at LIMIT ${expiryProbeLimit}
+        ) o
         CROSS JOIN LATERAL (
           SELECT 1 FROM public.sources s
           JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
@@ -310,8 +318,15 @@ export async function ensurePublicSearchSchema(
           WHERE s.id=o.source_id AND ${publicOpportunityVisibility} AND ${currentBrowseDocument}
           LIMIT 1
         ) visible
-        WHERE o.expires_at>CURRENT_TIMESTAMP ORDER BY o.expires_at LIMIT 1
-      ) AS next_expiry
+        ORDER BY o.expires_at LIMIT 1
+      ), CASE WHEN EXISTS (
+        SELECT 1 FROM public.opportunities WHERE expires_at>CURRENT_TIMESTAMP
+        ORDER BY expires_at OFFSET ${expiryProbeLimit} LIMIT 1
+      ) THEN (
+        SELECT min(o.expires_at) FROM public.opportunities o
+        WHERE o.expires_at>CURRENT_TIMESTAMP
+          AND (o.id IN (SELECT id FROM public.jobgeni_public_browse_v1)) IS TRUE
+      ) END)) AS TEXT) AS next_expiry
       FROM public.public_search_generation g WHERE g.id=1 AND ${publicSearchReader}`);
     // Mirror only the pre-existing SELECT readers, never add ambient privileges.
     await db.query(`DO $$ DECLARE reader record; BEGIN

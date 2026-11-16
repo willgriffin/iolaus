@@ -1077,6 +1077,22 @@ it.runIf(Boolean(pgUrl))(
       (await reader.search({ q: 'platform engineer' })).total_estimate,
     ).toBe(11700);
 
+    const stateQuery =
+      'SELECT generation,next_expiry FROM jobgeni_public_search_state_v1';
+    const visibleExpiry = await restricted.query(stateQuery);
+    // Enough earlier hidden rows to exhaust the indexed prefix. None may
+    // become the public deadline, and the later public deadline isn't lost.
+    await db.query(
+      "INSERT INTO sources(id,public_listing,is_active) VALUES('hidden-expiries',FALSE,TRUE)",
+    );
+    await db.query(`INSERT INTO opportunities(id,source_id,status,expires_at)
+      SELECT md5('hidden-expiry-' || n)::uuid,'hidden-expiries','active',
+        CURRENT_TIMESTAMP+interval '1 hour' FROM generate_series(1,160) n`);
+    await db.query('ANALYZE opportunities');
+    expect((await restricted.query(stateQuery)).rows).toEqual(
+      visibleExpiry.rows,
+    );
+
     const scalar = async (sql: string) => {
       const result = await restricted.query(sql);
       return Number(Object.values(result.rows[0])[0]);
