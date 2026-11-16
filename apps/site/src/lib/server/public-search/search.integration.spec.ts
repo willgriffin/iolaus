@@ -973,6 +973,8 @@ it.runIf(Boolean(pgUrl))(
       'PostgreSQL Engineer', 'https://example.test/job/' || n, 'active',
       '2026-10-07T00:00:00Z', md5('analysis-' || n)::uuid, 'fp', 1
     FROM generate_series(1,13000) n`);
+    await db.query(`UPDATE opportunities SET expires_at=CURRENT_TIMESTAMP+interval '1 day'
+      WHERE id IN (SELECT id FROM opportunities ORDER BY id LIMIT 619)`);
     await db.query('ANALYZE');
 
     await db.query(`DO $$ BEGIN
@@ -1027,6 +1029,12 @@ it.runIf(Boolean(pgUrl))(
       /companies|jobgeni_public_catalog_v1/,
     );
     expect(JSON.stringify(plan).match(/"Join Type":"Full"/gu)).toHaveLength(2);
+    const statePlan = await restricted.query(
+      'EXPLAIN (FORMAT JSON) SELECT generation,next_expiry FROM jobgeni_public_search_state_v1',
+    );
+    expect(JSON.stringify(statePlan)).toContain(
+      'public_search_opportunity_expiry',
+    );
     const browse = await reader.search({ limit: 20 });
     expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
