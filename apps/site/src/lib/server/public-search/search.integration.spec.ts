@@ -997,11 +997,10 @@ it.runIf(Boolean(pgUrl))(
     roleUrl.username = 'search_test_public';
     roleUrl.password = '';
     roleUrl.searchParams.set('statement_timeout', '500');
-    const restricted = await resolveDatabase({
-      type: 'postgres',
-      url: roleUrl.href,
-      max: 1,
-    });
+    const restricted = await resolveDatabase(
+      { type: 'postgres', url: roleUrl.href, max: 4 },
+      { dbid: 'public-search-362-cold-concurrency' },
+    );
     expect(
       JSON.stringify(await restricted.query('SHOW statement_timeout')),
     ).toContain('500ms');
@@ -1012,10 +1011,14 @@ it.runIf(Boolean(pgUrl))(
     );
     expect(JSON.stringify(index)).toContain('(id)::text');
     const statements: string[] = [];
+    let rejectMetadata = false;
     const reader = createPublicSearchReader(
       {
         query: async (sql, ...values) => {
           statements.push(sql);
+          if (rejectMetadata && sql.includes('candidates AS MATERIALIZED')) {
+            throw new Error('Simulated metadata query failure');
+          }
           return restricted.query(sql, ...values);
         },
       },
@@ -1050,14 +1053,29 @@ it.runIf(Boolean(pgUrl))(
     const filtered = await reader.search({ q: 'postgresql', limit: 20 });
     expect(filtered.total_estimate).toBe(1300);
     expect(filtered.items).toHaveLength(20);
+    statements.length = 0;
     const concurrent = await Promise.all([
       reader.search({ limit: 19, q: 'platform' }),
       reader.search({ limit: 18, q: 'engineer' }),
       reader.search({ limit: 17, q: 'synthetic' }),
+      reader.search({ limit: 16, q: 'platform' }),
     ]);
     expect(concurrent.map((page) => page.total_estimate)).toEqual([
-      11700, 13000, 12350,
+      11700, 13000, 12350, 11700,
     ]);
+    expect(
+      statements.filter((sql) => sql.includes('candidates AS MATERIALIZED')),
+    ).toHaveLength(3);
+
+    // Failure rejects and leaves the equivalent cold query retryable.
+    rejectMetadata = true;
+    await expect(reader.facets({ q: 'platform engineer' })).rejects.toThrow(
+      'Simulated metadata query failure',
+    );
+    rejectMetadata = false;
+    expect(
+      (await reader.search({ q: 'platform engineer' })).total_estimate,
+    ).toBe(11700);
 
     const scalar = async (sql: string) => {
       const result = await restricted.query(sql);

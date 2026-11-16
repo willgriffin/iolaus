@@ -300,12 +300,10 @@ const searchCaches = new WeakMap<
   PublicDatabase,
   Map<string, { at: number; value: PublicSearchPage }>
 >();
+type CatalogMetadata = { facets: PublicFacets; total: number | null };
 const facetCaches = new WeakMap<
   PublicDatabase,
-  Map<
-    string,
-    { at: number; value: { facets: PublicFacets; total: number | null } }
-  >
+  Map<string, { at: number; value: Promise<CatalogMetadata> }>
 >();
 export function createPublicSearchReader(
   db: PublicDatabase,
@@ -346,10 +344,11 @@ export function createPublicSearchReader(
           )
           .join(' && ');
 
-        // The candidate set already proves live membership. Filtering its
-        // vector here avoids building the same set a second time.
-        parts.push(`c.search_vector @@ (${tsquery})`);
-        rank = `ts_rank_cd(c.search_vector,(${tsquery}))`;
+        // Filter the already fenced vector. The uncorrelated subquery also
+        // avoids reparsing terms per candidate under a generic prepared plan.
+        const searchTerms = `(SELECT (${tsquery}))`;
+        parts.push(`c.search_vector @@ ${searchTerms}`);
+        rank = `ts_rank_cd(c.search_vector,${searchTerms})`;
       }
     }
     for (const col of [
@@ -436,17 +435,33 @@ export function createPublicSearchReader(
   async function catalogMetadata(
     input: PublicSearchInput,
     visibility?: string,
-  ): Promise<{ facets: PublicFacets; total: number | null }> {
+  ): Promise<CatalogMetadata> {
     let cache = facetCaches.get(db);
     if (!cache) {
       cache = new Map();
       facetCaches.set(db, cache);
     }
-    const cacheKey = `${visibility ?? (await state())}:${key({ ...input, cursor: undefined, limit: 20 })}`;
+    const p = predicate(input, false);
+    const revision = visibility ?? (await state());
+    const cacheKey = JSON.stringify([revision, p.where, p.values]);
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.at < 300000) return cached.value;
 
-    const p = predicate(input, false);
+    // Share an in-flight count/facet query only for the same reader, visibility
+    // revision and exact filters. A failed query must be retryable.
+    const value = collectCatalogMetadata(p);
+    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
+    cache.set(cacheKey, { at: Date.now(), value });
+    try {
+      return await value;
+    } catch (error) {
+      if (cache.get(cacheKey)?.value === value) cache.delete(cacheKey);
+      throw error;
+    }
+  }
+  async function collectCatalogMetadata(
+    p: ReturnType<typeof predicate>,
+  ): Promise<CatalogMetadata> {
     const out = emptyFacets();
     let total: number | null = null;
     if (dialect === 'postgres') {
@@ -511,10 +526,7 @@ export function createPublicSearchReader(
         }));
       }
     }
-    const metadata = { facets: out, total };
-    if (cache.size >= 100) cache.delete(cache.keys().next().value!);
-    cache.set(cacheKey, { at: Date.now(), value: metadata });
-    return metadata;
+    return { facets: out, total };
   }
   async function search(raw: unknown) {
     const input = publicSearchInputSchema.parse(raw);
