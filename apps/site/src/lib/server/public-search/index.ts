@@ -19,11 +19,15 @@ import {
 } from '../../skill-canonical.js';
 import {
   applicationRuntime,
-  hostedDatabasePoolMax,
+  databaseConnectionTimeoutMillis,
 } from '../application-runtime.js';
 import { getDbConfig } from '../db.js';
 import { sanitizePublicOpportunityText } from './content.js';
 import { matchPublicSkills as matchSkills } from './match.js';
+// Cold catalog statements share a tight database deadline. Queue them in
+// the existing restricted pool instead of running competing catalog scans.
+export const PUBLIC_SEARCH_POOL_MAX = 1;
+
 export type Row = Record<string, unknown>;
 export type PublicDatabase = {
   query(
@@ -203,14 +207,16 @@ export function projectPublicOpportunity(row: Row, detail = false) {
     }).data ?? null
   );
 }
-const EMPTY: PublicFacets = {
-  skills: [],
-  seniority: [],
-  function: [],
-  work_mode: [],
-  employment_type: [],
-  country: [],
-};
+function emptyFacets(): PublicFacets {
+  return {
+    skills: [],
+    seniority: [],
+    function: [],
+    work_mode: [],
+    employment_type: [],
+    country: [],
+  };
+}
 function expandedSkill(value: string): string[] {
   const canonical = canonicalSkillSlug(value);
   return [
@@ -298,9 +304,10 @@ const searchCaches = new WeakMap<
   PublicDatabase,
   Map<string, { at: number; value: PublicSearchPage }>
 >();
+type CatalogMetadata = { facets: PublicFacets; total: number | null };
 const facetCaches = new WeakMap<
   PublicDatabase,
-  Map<string, { at: number; value: PublicFacets }>
+  Map<string, { at: number; value: Promise<CatalogMetadata> }>
 >();
 export function createPublicSearchReader(
   db: PublicDatabase,
@@ -341,12 +348,11 @@ export function createPublicSearchReader(
           )
           .join(' && ');
 
-        // Keep a hashed membership subplan: cross-table version predicates can
-        // underestimate the barrier view and otherwise choose a quadratic semi-join.
-        parts.push(
-          `(CAST(c.id AS TEXT) IN (SELECT id FROM public.search_public_catalog((${tsquery})))) IS TRUE`,
-        );
-        rank = `ts_rank_cd(c.search_vector,(${tsquery}))`;
+        // Filter the already fenced vector. The uncorrelated subquery also
+        // avoids reparsing terms per candidate under a generic prepared plan.
+        const searchTerms = `(SELECT (${tsquery}))`;
+        parts.push(`c.search_vector @@ ${searchTerms}`);
+        rank = `ts_rank_cd(c.search_vector,${searchTerms})`;
       }
     }
     for (const col of [
@@ -419,62 +425,112 @@ export function createPublicSearchReader(
     return { values, where: parts.join(' AND '), rank, skillRank };
   }
   async function state() {
-    const r = (
-      await query(
-        `SELECT coalesce(max(generation),0) AS generation,count(*) AS visible FROM ${browseView}`,
-      )
-    )[0];
+    if (dialect === 'postgres') {
+      const [r] = await query(
+        'SELECT generation, next_expiry FROM jobgeni_public_search_state_v1',
+      );
+      return r ? `pg:${r.generation}:${r.next_expiry ?? ''}` : 'pg:hidden';
+    }
+    const [r] = await query(
+      'SELECT coalesce(max(generation),0) AS generation,count(*) AS visible FROM jobgeni_public_search_v1',
+    );
     return `${r?.generation ?? 0}:${r?.visible ?? 0}`;
   }
-  async function facets(
+  async function catalogMetadata(
     input: PublicSearchInput,
     visibility?: string,
-  ): Promise<PublicFacets> {
+  ): Promise<CatalogMetadata> {
     let cache = facetCaches.get(db);
     if (!cache) {
       cache = new Map();
       facetCaches.set(db, cache);
     }
-    const cacheKey = `${visibility ?? (await state())}:${key({ ...input, cursor: undefined, limit: 20 })}`;
+    const p = predicate(input, false);
+    const revision = visibility ?? (await state());
+    const cacheKey = JSON.stringify([revision, p.where, p.values]);
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.at < 300000) return cached.value;
 
-    const p = predicate(input, false);
-    const out: PublicFacets = { ...EMPTY };
-    for (const col of [
-      'skills',
-      'seniority',
-      'function',
-      'work_mode',
-      'employment_type',
-      'country',
-    ] as const) {
-      const jsonCol =
-        col === 'skills'
-          ? 'skill_slugs_json'
-          : col === 'country'
-            ? 'countries_json'
-            : null;
-      const source = jsonCol
-        ? dialect === 'sqlite'
-          ? `json_each(c.${jsonCol}) j`
-          : `jsonb_array_elements_text(c.${jsonCol}::jsonb) j(value)`
-        : null;
-      const val = source ? 'j.value' : `c.${col}`;
-      out[col] = (
-        await query(
-          `SELECT ${val} AS value,count(DISTINCT c.id) AS count FROM ${browseView} c ${source ? `CROSS JOIN ${source}` : ''} WHERE ${p.where} AND ${val} IS NOT NULL AND ${val} <> '' GROUP BY ${val} ORDER BY count DESC,value ASC LIMIT 50`,
-          p.values,
-        )
-      ).map((r) => ({
-        value: text(r.value),
-        label: text(r.value),
-        count: Number(r.count),
-      }));
-    }
+    // Share an in-flight count/facet query only for the same reader, visibility
+    // revision and exact filters. A failed query must be retryable.
+    const value = collectCatalogMetadata(p);
     if (cache.size >= 100) cache.delete(cache.keys().next().value!);
-    cache.set(cacheKey, { at: Date.now(), value: out });
-    return out;
+    cache.set(cacheKey, { at: Date.now(), value });
+    try {
+      return await value;
+    } catch (error) {
+      if (cache.get(cacheKey)?.value === value) cache.delete(cacheKey);
+      throw error;
+    }
+  }
+  async function collectCatalogMetadata(
+    p: ReturnType<typeof predicate>,
+  ): Promise<CatalogMetadata> {
+    const out = emptyFacets();
+    let total: number | null = null;
+    if (dialect === 'postgres') {
+      // Count and facet the same exact visible matches. Each candidate belongs
+      // to a scalar bucket once, and each text-array value is deduplicated
+      // within its candidate before grouping.
+      const [metadata] = await query(
+        `WITH candidates AS MATERIALIZED (
+          SELECT c.seniority,c.function,c.work_mode,c.employment_type,c.skill_slugs_json,c.countries_json
+          FROM ${browseView} c WHERE ${p.where}
+        ), facet_counts AS (
+          SELECT facet.kind,facet.value,count(*) AS count FROM candidates c
+          CROSS JOIN LATERAL (
+            VALUES ('seniority',c.seniority),('function',c.function),('work_mode',c.work_mode),('employment_type',c.employment_type)
+            UNION ALL
+            SELECT 'skills',v.value FROM (SELECT DISTINCT value FROM jsonb_array_elements_text(c.skill_slugs_json::jsonb)) v
+            UNION ALL
+            SELECT 'country',v.value FROM (SELECT DISTINCT value FROM jsonb_array_elements_text(c.countries_json::jsonb)) v
+          ) facet(kind,value)
+          WHERE facet.value IS NOT NULL AND facet.value<>''
+          GROUP BY facet.kind,facet.value
+        ), ranked AS (
+          SELECT *,row_number() OVER(PARTITION BY kind ORDER BY count DESC,value ASC) AS position FROM facet_counts
+        )
+        SELECT (SELECT count(*) FROM candidates) AS total,
+          COALESCE(jsonb_agg(jsonb_build_object('kind',kind,'value',value,'count',count) ORDER BY kind,position),'[]'::jsonb) AS facets
+        FROM ranked WHERE position<=50`,
+        p.values,
+      );
+      if (!metadata) throw new Error('Missing public catalog metadata.');
+      total = Number(metadata.total);
+      for (const entry of array(metadata.facets)) {
+        const row = object(entry);
+        const kind = text(row.kind);
+        if (!Object.hasOwn(out, kind)) continue;
+        const value = text(row.value);
+        out[kind as keyof PublicFacets].push({
+          value,
+          label: value,
+          count: Number(row.count),
+        });
+      }
+    } else {
+      for (const col of Object.keys(out) as (keyof PublicFacets)[]) {
+        const jsonCol =
+          col === 'skills'
+            ? 'skill_slugs_json'
+            : col === 'country'
+              ? 'countries_json'
+              : null;
+        const source = jsonCol ? `json_each(c.${jsonCol}) j` : null;
+        const val = source ? 'j.value' : `c.${col}`;
+        out[col] = (
+          await query(
+            `SELECT ${val} AS value,count(DISTINCT c.id) AS count FROM ${browseView} c ${source ? `CROSS JOIN ${source}` : ''} WHERE ${p.where} AND ${val} IS NOT NULL AND ${val} <> '' GROUP BY ${val} ORDER BY count DESC,value ASC LIMIT 50`,
+            p.values,
+          )
+        ).map((r) => ({
+          value: text(r.value),
+          label: text(r.value),
+          count: Number(r.count),
+        }));
+      }
+    }
+    return { facets: out, total };
   }
   async function search(raw: unknown) {
     const input = publicSearchInputSchema.parse(raw);
@@ -510,8 +566,36 @@ export function createPublicSearchReader(
     const tail = cur
       ? `WHERE (skill_rank<${add(cur.skill_rank)} OR (skill_rank=${add(cur.skill_rank)} AND (sort_rank<${add(cur.rank)} OR (sort_rank=${add(cur.rank)} AND (sort_date<${add(cur.date)} OR (sort_date=${add(cur.date)} AND id<${add(cur.id)}))))))`
       : '';
+    const sqliteTextSearch = Boolean(input.q && dialect === 'sqlite');
+    const source = sqliteTextSearch
+      ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id'
+      : `${browseView} c`;
+    const matchingRows = `FROM ${source} WHERE ${p.where}`;
+    const rankColumns = `c.id,${p.skillRank} AS skill_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date`;
+    // Cover density ranking for multiple terms is expensive. Equal vectors
+    // have exactly the same score for the same tsquery, regardless of the
+    // posting's independent skill rank, date, and ID tie breakers.
+    const sharedTextRanks =
+      dialect === 'postgres' &&
+      input.sort === 'relevance' &&
+      input.q &&
+      input.q.split(/\s+/u).length > 1;
+    const matches = sharedTextRanks
+      ? `matching_vectors AS MATERIALIZED (
+          SELECT ${rankColumns},c.search_vector ${matchingRows}
+        ), ranked_vectors AS MATERIALIZED (
+          SELECT c.search_vector,${p.rank} AS sort_rank
+          FROM (SELECT DISTINCT search_vector FROM matching_vectors) c
+        ), matches AS (
+          SELECT m.id,m.skill_rank,m.sort_date,r.sort_rank FROM matching_vectors m
+          JOIN ranked_vectors r USING(search_vector)
+        )`
+      : `matches AS (SELECT ${rankColumns},${p.rank} AS sort_rank ${matchingRows})`;
+    const fts = sqliteTextSearch
+      ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),'
+      : '';
     let result = await query(
-      `WITH ${input.q && dialect === 'sqlite' ? 'fts AS MATERIALIZED (SELECT id,-bm25(jobgeni_public_catalog_fts) AS fts_rank FROM jobgeni_public_catalog_fts WHERE jobgeni_public_catalog_fts MATCH $1),' : ''} matches AS (SELECT c.id,${p.skillRank} AS skill_rank,${p.rank} AS sort_rank,coalesce(c.posted_at,'1970-01-01') AS sort_date FROM ${input.q && dialect === 'sqlite' ? 'fts CROSS JOIN jobgeni_public_search_v1 c ON c.id=fts.id' : `${browseView} c`} WHERE ${p.where}) SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
+      `WITH ${fts}${matches} SELECT * FROM matches ${tail} ORDER BY skill_rank DESC,sort_rank DESC,sort_date DESC,id DESC LIMIT ${add(input.limit + 1)}`,
       p.values,
     );
     if (result.length) {
@@ -528,11 +612,16 @@ export function createPublicSearchReader(
     const more = result.length > input.limit;
     const page = result.slice(0, input.limit);
     const last = page.at(-1);
-    const countPredicate = predicate(input, false);
-    const count = await query(
-      `SELECT count(*) AS total FROM ${browseView} c WHERE ${countPredicate.where}`,
-      countPredicate.values,
-    );
+    const metadata = await catalogMetadata(input, generation);
+    let total = metadata.total;
+    if (total === null) {
+      const countPredicate = predicate(input, false);
+      const [count] = await query(
+        `SELECT count(*) AS total FROM ${browseView} c WHERE ${countPredicate.where}`,
+        countPredicate.values,
+      );
+      total = Number(count?.total ?? 0);
+    }
     const pageResult = publicSearchPageSchema.parse({
       items: page.map((r) => projectPublicOpportunity(r)).filter(Boolean),
       next_cursor:
@@ -551,8 +640,8 @@ export function createPublicSearchReader(
               secret,
             )
           : null,
-      total_estimate: Number(count[0]?.total ?? 0),
-      facets: await facets(input, generation),
+      total_estimate: total,
+      facets: metadata.facets,
     });
     if (cache.size >= 100) cache.delete(cache.keys().next().value!);
     cache.set(cacheKey, { at: Date.now(), value: pageResult });
@@ -646,7 +735,8 @@ export function createPublicSearchReader(
     get,
     sitemap,
     getMany,
-    facets: (raw: unknown) => facets(publicSearchInputSchema.parse(raw)),
+    facets: async (raw: unknown) =>
+      (await catalogMetadata(publicSearchInputSchema.parse(raw))).facets,
     match,
   };
 }
@@ -666,7 +756,8 @@ async function connection() {
     db: (await resolveDatabase({
       type: 'postgres',
       url: publicUrl.href,
-      max: Math.min(5, hostedDatabasePoolMax()),
+      max: PUBLIC_SEARCH_POOL_MAX,
+      connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     })) as unknown as PublicDatabase,
     dialect: 'postgres' as const,
   };

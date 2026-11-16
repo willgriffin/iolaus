@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../application-runtime.js', () => ({
   applicationRuntime: { profile: 'local' },
-  hostedDatabasePoolMax: () => 5,
 }));
 vi.mock('../db.js', () => ({
   getDbConfig: () => ({ type: 'sqlite', url: ':memory:' }),
@@ -19,7 +18,11 @@ import { ensureOpportunityAnalysisSchema } from '../opportunity-analysis-schema.
 import { deterministicOpportunityAnalysis } from '../opportunity-analysis-source.js';
 import { publishOpportunityAnalysis } from '../opportunity-analysis-store.js';
 import { fingerprintOpportunitySourceContent } from '../opportunity-source-content.js';
-import { createPublicSearchReader, type PublicDatabase } from './index.js';
+import {
+  createPublicSearchReader,
+  PUBLIC_SEARCH_POOL_MAX,
+  type PublicDatabase,
+} from './index.js';
 import {
   ensurePublicSearchSchema,
   reconcilePublicSearchDocuments,
@@ -804,7 +807,7 @@ for (const dialect of ['sqlite', 'postgres'] as const)
           );
           await db.query('GRANT USAGE ON SCHEMA public TO search_test_public');
           await db.query(
-            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1,jobgeni_public_browse_v1 TO search_test_public',
+            'GRANT SELECT ON jobgeni_public_catalog_v1,jobgeni_public_search_v1,jobgeni_public_browse_v1,jobgeni_public_search_state_v1 TO search_test_public',
           );
           await db.query(
             'GRANT EXECUTE ON FUNCTION consume_public_search_quota(integer),search_public_catalog(tsquery) TO search_test_public',
@@ -973,6 +976,8 @@ it.runIf(Boolean(pgUrl))(
       'PostgreSQL Engineer', 'https://example.test/job/' || n, 'active',
       '2026-10-07T00:00:00Z', md5('analysis-' || n)::uuid, 'fp', 1
     FROM generate_series(1,13000) n`);
+    await db.query(`UPDATE opportunities SET expires_at=CURRENT_TIMESTAMP+interval '1 day'
+      WHERE id IN (SELECT id FROM opportunities ORDER BY id LIMIT 619)`);
     await db.query('ANALYZE');
 
     await db.query(`DO $$ BEGIN
@@ -995,11 +1000,10 @@ it.runIf(Boolean(pgUrl))(
     roleUrl.username = 'search_test_public';
     roleUrl.password = '';
     roleUrl.searchParams.set('statement_timeout', '500');
-    const restricted = await resolveDatabase({
-      type: 'postgres',
-      url: roleUrl.href,
-      max: 1,
-    });
+    const restricted = await resolveDatabase(
+      { type: 'postgres', url: roleUrl.href, max: PUBLIC_SEARCH_POOL_MAX },
+      { dbid: 'public-search-362-cold-concurrency' },
+    );
     expect(
       JSON.stringify(await restricted.query('SHOW statement_timeout')),
     ).toContain('500ms');
@@ -1009,27 +1013,104 @@ it.runIf(Boolean(pgUrl))(
       "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_companies_id_text'",
     );
     expect(JSON.stringify(index)).toContain('(id)::text');
+    const statements: string[] = [];
+    let rejectMetadata = false;
     const reader = createPublicSearchReader(
-      restricted as unknown as PublicDatabase,
+      {
+        query: async (sql, ...values) => {
+          statements.push(sql);
+          if (rejectMetadata && sql.includes('candidates AS MATERIALIZED')) {
+            throw new Error('Simulated metadata query failure');
+          }
+          return restricted.query(sql, ...values);
+        },
+      },
       'postgres',
       secret,
     );
-    // The baseline full catalog state ran before cache lookup. Verify that
-    // broad statements avoid the company join on the wide catalog, even
-    // when a fast test host happens to execute the old plan under 500ms.
     const plan = await restricted.query(
-      'EXPLAIN (FORMAT JSON) SELECT max(generation),count(*) FROM jobgeni_public_browse_v1',
+      'EXPLAIN (FORMAT JSON) SELECT count(*) FROM jobgeni_public_browse_v1',
     );
     expect(JSON.stringify(plan)).not.toMatch(
       /companies|jobgeni_public_catalog_v1/,
     );
+    expect(JSON.stringify(plan).match(/"Join Type":"Full"/gu)).toHaveLength(2);
+    const statePlan = await restricted.query(
+      'EXPLAIN (FORMAT JSON) SELECT generation,next_expiry FROM jobgeni_public_search_state_v1',
+    );
+    expect(JSON.stringify(statePlan)).toContain(
+      'public_search_opportunity_expiry',
+    );
     const browse = await reader.search({ limit: 20 });
     expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
+    expect(
+      statements.filter((sql) => sql.includes('candidates AS MATERIALIZED')),
+    ).toHaveLength(1);
+    statements.length = 0;
+    expect(await reader.search({ limit: 20 })).toEqual(browse);
+    expect(statements).toEqual([
+      'SELECT generation, next_expiry FROM jobgeni_public_search_state_v1',
+    ]);
 
     const filtered = await reader.search({ q: 'postgresql', limit: 20 });
     expect(filtered.total_estimate).toBe(1300);
     expect(filtered.items).toHaveLength(20);
+    statements.length = 0;
+    const concurrent = await Promise.all([
+      reader.search({ limit: 19, q: 'platform' }),
+      reader.search({ limit: 18, q: 'engineer' }),
+      reader.search({ limit: 17, q: 'synthetic' }),
+      reader.search({ limit: 16, q: 'platform' }),
+    ]);
+    expect(concurrent.map((page) => page.total_estimate)).toEqual([
+      11700, 13000, 12350, 11700,
+    ]);
+    expect(
+      statements.filter((sql) => sql.includes('candidates AS MATERIALIZED')),
+    ).toHaveLength(3);
+
+    // Failure rejects and leaves the equivalent cold query retryable.
+    rejectMetadata = true;
+    await expect(reader.facets({ q: 'platform engineer' })).rejects.toThrow(
+      'Simulated metadata query failure',
+    );
+    rejectMetadata = false;
+    const ranked = await reader.search({ q: 'platform engineer', limit: 20 });
+    expect(ranked.total_estimate).toBe(11700);
+    expect(ranked.next_cursor).not.toBeNull();
+    const nextRanked = await reader.search({
+      q: 'platform engineer',
+      limit: 20,
+      cursor: ranked.next_cursor,
+    });
+    // All matching postings have equal cover density and posted date in
+    // this fixture. Preserve the existing ID tie break across both pages.
+    const expectedRanks =
+      await db.query(`SELECT CAST(md5('job-' || n)::uuid AS TEXT) AS id
+      FROM generate_series(1,13000) n WHERE n % 10 <> 0 ORDER BY id DESC LIMIT 40`);
+    const expectedRows = Array.isArray(expectedRanks)
+      ? expectedRanks
+      : expectedRanks.rows;
+    expect(
+      [...ranked.items, ...nextRanked.items].map((item) => item.id),
+    ).toEqual(expectedRows?.map((item) => item.id));
+
+    const stateQuery =
+      'SELECT generation,next_expiry FROM jobgeni_public_search_state_v1';
+    const visibleExpiry = await restricted.query(stateQuery);
+    // Enough earlier hidden rows to exhaust the indexed prefix. None may
+    // become the public deadline, and the later public deadline isn't lost.
+    await db.query(
+      "INSERT INTO sources(id,public_listing,is_active) VALUES('hidden-expiries',FALSE,TRUE)",
+    );
+    await db.query(`INSERT INTO opportunities(id,source_id,status,expires_at)
+      SELECT md5('hidden-expiry-' || n)::uuid,'hidden-expiries','active',
+        CURRENT_TIMESTAMP+interval '1 hour' FROM generate_series(1,160) n`);
+    await db.query('ANALYZE opportunities');
+    expect((await restricted.query(stateQuery)).rows).toEqual(
+      visibleExpiry.rows,
+    );
 
     const scalar = async (sql: string) => {
       const result = await restricted.query(sql);
@@ -1154,6 +1235,43 @@ it.runIf(Boolean(pgUrl))(
       await publisher.release();
       await backfill.release();
     }
+  },
+);
+
+it.runIf(Boolean(pgUrl))(
+  'invalidates cached PostgreSQL pages, facets and cursors at expiry without a writer',
+  async () => {
+    const { db, seed, reader } = await fixture('postgres');
+    await seed(3);
+    const expiring = jobId(2, 'postgres');
+    await db.query(
+      "UPDATE opportunities SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1",
+      expiring,
+    );
+    const first = await reader.search({ limit: 2 });
+    expect(first.items[0]?.id).toBe(expiring);
+    expect(first.total_estimate).toBe(3);
+    expect(first.facets.skills[0]?.count).toBe(3);
+    expect(first.next_cursor).not.toBeNull();
+    const generation = await db.query(
+      'SELECT generation FROM public_search_generation',
+    );
+    await vi.waitFor(
+      async () => {
+        const page = await reader.search({ limit: 2 });
+        expect(page.total_estimate).toBe(2);
+        expect(page.items.some((item) => item.id === expiring)).toBe(false);
+        expect(page.facets.skills[0]?.count).toBe(2);
+      },
+      { timeout: 5000 },
+    );
+    expect(
+      await db.query('SELECT generation FROM public_search_generation'),
+    ).toEqual(generation);
+    expect(await reader.get(expiring)).toBeNull();
+    await expect(
+      reader.search({ limit: 2, cursor: first.next_cursor }),
+    ).rejects.toThrow('Expired cursor');
   },
 );
 

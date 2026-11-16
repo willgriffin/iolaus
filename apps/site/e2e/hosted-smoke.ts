@@ -85,7 +85,7 @@ try {
   readerCreated = true;
   await db.query(`GRANT USAGE ON SCHEMA public TO ${readerRole}`);
   await db.query(
-    `GRANT SELECT ON jobgeni_public_catalog_v1, jobgeni_public_search_v1, jobgeni_public_browse_v1 TO ${readerRole}`,
+    `GRANT SELECT ON jobgeni_public_catalog_v1, jobgeni_public_search_v1, jobgeni_public_browse_v1, jobgeni_public_search_state_v1 TO ${readerRole}`,
   );
   await db.query(
     `GRANT EXECUTE ON FUNCTION consume_public_search_quota(integer), search_public_catalog(tsquery) TO ${readerRole}`,
@@ -312,24 +312,34 @@ try {
         'Public search must work through the restricted reader.',
       );
       assert.equal((await publicSearch.json()).items.length, 1);
-      const publicBrowse = await guest.request.get(
-        `${origin}/api/public/v1/opportunities`,
-      );
-      assert.equal(publicBrowse.status(), 200);
-      const browsePage = await publicBrowse.json();
-      assert.equal(browsePage.total_estimate, 13001);
-      assert.ok(browsePage.items.length > 0);
       const publicPage = await guest.newPage();
-      assert.equal(
-        (
-          await publicPage.goto(`${origin}/opportunities/?start=1&view=list`)
-        )?.status(),
-        200,
-      );
+      const [browserBrowse, ...restBrowses] = await Promise.all([
+        publicPage.goto(`${origin}/opportunities/?start=1&view=list`),
+        guest.request.get(`${origin}/api/public/v1/opportunities`),
+        guest.request.get(
+          `${origin}/api/public/v1/opportunities?sort=newest&limit=15`,
+        ),
+      ]);
+      assert.equal(browserBrowse?.status(), 200);
+      for (const browseResponse of restBrowses) {
+        assert.equal(browseResponse?.status(), 200);
+        const browsePage = await browseResponse?.json();
+        assert.equal(browsePage.total_estimate, 13001);
+        assert.ok(browsePage.items.length > 0);
+      }
       await publicPage
         .getByText('Synthetic platform engineer', { exact: true })
         .first()
         .waitFor();
+      const publicConnections = await db.query(
+        'SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=current_database() AND usename=$1',
+        [readerRole],
+      );
+      assert.equal(
+        publicConnections.rows[0]?.count,
+        1,
+        'Overlapping public requests must use the single restricted connection.',
+      );
       await publicPage.close();
       await guest.close();
 
