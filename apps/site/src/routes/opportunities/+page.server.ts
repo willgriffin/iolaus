@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { opportunitySearchRequest } from '$lib/opportunity-search-request.js';
 import { loadAdminShellData } from '$lib/server/admin-shell-data';
 import { getAppConfig } from '$lib/server/app-config';
-import { searchPublicOpportunities } from '$lib/server/public-search/index.js';
+import { searchPublicOpportunityResults } from '$lib/server/public-search/index.js';
 import { preparePublicPage } from '$lib/server/public-search/page.js';
 import type { PageServerLoad } from './$types';
 
@@ -21,7 +21,9 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
         ? await loadAdminShellData(locals)
         : null,
     appName: getAppConfig().appName,
-    page: await searchPublicOpportunities(parsed.input),
+    page: parsed.submitted
+      ? await searchPublicOpportunityResults(parsed.input)
+      : null,
     accountKey:
       locals.user && locals.workspaceSubject
         ? `${locals.workspaceSubject.tenantId}:${locals.workspaceSubject.userId}`
