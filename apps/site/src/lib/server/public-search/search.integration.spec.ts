@@ -19,7 +19,11 @@ import { ensureOpportunityAnalysisSchema } from '../opportunity-analysis-schema.
 import { deterministicOpportunityAnalysis } from '../opportunity-analysis-source.js';
 import { publishOpportunityAnalysis } from '../opportunity-analysis-store.js';
 import { fingerprintOpportunitySourceContent } from '../opportunity-source-content.js';
-import { createPublicSearchReader, type PublicDatabase } from './index.js';
+import {
+  createPublicSearchReader,
+  PUBLIC_SEARCH_POOL_MAX,
+  type PublicDatabase,
+} from './index.js';
 import {
   ensurePublicSearchSchema,
   reconcilePublicSearchDocuments,
@@ -998,7 +1002,7 @@ it.runIf(Boolean(pgUrl))(
     roleUrl.password = '';
     roleUrl.searchParams.set('statement_timeout', '500');
     const restricted = await resolveDatabase(
-      { type: 'postgres', url: roleUrl.href, max: 4 },
+      { type: 'postgres', url: roleUrl.href, max: PUBLIC_SEARCH_POOL_MAX },
       { dbid: 'public-search-362-cold-concurrency' },
     );
     expect(
