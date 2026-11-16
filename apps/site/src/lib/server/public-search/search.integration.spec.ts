@@ -1007,6 +1007,29 @@ it.runIf(Boolean(pgUrl))(
     expect(
       JSON.stringify(await restricted.query('SHOW statement_timeout')),
     ).toContain('500ms');
+    // This older SMRT line resolves its acquisition timeout from the nested
+    // options, independently of the PostgreSQL statement timeout.
+    const contention = await resolveDatabase(
+      {
+        type: 'postgres',
+        url: roleUrl.href,
+        max: PUBLIC_SEARCH_POOL_MAX,
+        timeouts: { connectionTimeout: 200 },
+      },
+      { dbid: 'public-search-363-acquisition' },
+    );
+    const pinned = await contention.acquireSession?.();
+    if (!pinned) throw new Error('Native PostgreSQL session required');
+    try {
+      const started = performance.now();
+      await expect(contention.query('SELECT 1')).rejects.toThrow(
+        'timeout exceeded when trying to connect',
+      );
+      expect(performance.now() - started).toBeLessThan(2_000);
+    } finally {
+      await pinned.release();
+      await contention.close?.();
+    }
     // Also verify the release installed the index: a different plan on a fast
     // test machine could otherwise hide the regression.
     const index = await db.query(

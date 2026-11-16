@@ -729,7 +729,7 @@ async function connection() {
       type: 'postgres',
       url: publicUrl.href,
       max: PUBLIC_SEARCH_POOL_MAX,
-      connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
+      timeouts: { connectionTimeout: databaseConnectionTimeoutMillis() },
     })) as unknown as PublicDatabase,
     dialect: 'postgres' as const,
   };
