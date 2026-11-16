@@ -8,12 +8,13 @@ export { pruneExpiredOpportunityAnalyses } from './opportunity-analysis-maintena
 export const publicOpportunityVisibility = `s.public_listing = TRUE AND s.is_active = TRUE
   AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')
   AND (o.expires_at IS NULL OR o.expires_at > CURRENT_TIMESTAMP)`;
-export const publicOpportunityAnalysis = `a.id = o.current_analysis_id
-  AND a.opportunity_id = o.id
+export const publicOpportunityAnalysisStamp = `a.opportunity_id = o.id
   AND a.source_content_fingerprint = o.source_content_fingerprint
-  AND a.source_content_version = o.source_content_version
-  AND a.analysis_version = 'opportunity-analysis/v1'
+  AND a.source_content_version = o.source_content_version`;
+export const publicOpportunityAnalysisStatus = `a.analysis_version = 'opportunity-analysis/v1'
   AND a.status IN ('deterministic', 'enriched')`;
+export const publicOpportunityAnalysis = `a.id = o.current_analysis_id
+  AND ${publicOpportunityAnalysisStamp} AND ${publicOpportunityAnalysisStatus}`;
 
 /** Supplemental indexes and the public projection. The SMRT migration owns tables and foreign keys. */
 export async function ensureOpportunityAnalysisSchema(

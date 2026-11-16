@@ -1,5 +1,7 @@
 import {
   publicOpportunityAnalysis,
+  publicOpportunityAnalysisStamp,
+  publicOpportunityAnalysisStatus,
   publicOpportunityVisibility,
 } from '../opportunity-analysis-schema.js';
 
@@ -82,6 +84,12 @@ const browseColumns = [
   'compensation_json',
 ] as const;
 const browseProjection = `jsonb_build_object(${browseColumns.map((column) => `'${column}',c.${column}`).join(',')})`;
+
+const currentBrowseDocument = `d.browse_projection IS NOT NULL
+  AND CAST(o.current_analysis_id AS TEXT)=d.browse_projection->>'analysis_id'
+  AND o.source_content_fingerprint=d.browse_projection->>'source_content_fingerprint'
+  AND CAST(o.source_content_version AS TEXT)=d.browse_projection->>'source_content_version'`;
+const publicSearchReader = `(SELECT has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT'))`;
 
 export async function ensurePublicSearchSchema(
   db: Database,
@@ -255,25 +263,54 @@ export async function ensurePublicSearchSchema(
     await db.query(`CREATE TRIGGER public_search_legacy_browse_projection
       BEFORE INSERT OR UPDATE OF content_hash ON public.public_opportunity_search_documents
       FOR EACH ROW EXECUTE FUNCTION public.refresh_public_browse_projection()`);
-    // Keep the existing detail view and privilege bindings for old readers.
-    // The browse view exposes just the fields needed for counts, ranking and facets.
+    // The stamp columns are correlated. Estimating each stamp equality
+    // separately produced an estimated one row, then thousands of index
+    // probes under load. FULL joins must use a hash or merge on the identity
+    // keys. The CASE checks reject unmatched rows and enforce the exact
+    // stamps after the joins, without letting the planner collapse them.
     await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_browse_v1 WITH (security_barrier=true) AS
-      SELECT o.id,o.source_id,o.company_id,o.posted_at,d.search_vector,g.generation,
+      WITH eligible AS MATERIALIZED (
+        SELECT o.id,o.source_id,o.company_id,o.posted_at,o.current_analysis_id,
+          o.source_content_fingerprint,o.source_content_version
+        FROM (
+          SELECT o.id,o.source_id,o.company_id,o.posted_at,o.current_analysis_id,
+            o.source_content_fingerprint,o.source_content_version
+          FROM public.opportunities o JOIN public.sources s ON s.id=o.source_id
+          WHERE ${publicOpportunityVisibility}
+        ) o
+        FULL JOIN (
+          SELECT a.id,a.opportunity_id,a.source_content_fingerprint,a.source_content_version
+          FROM public.opportunity_analyses a WHERE ${publicOpportunityAnalysisStatus}
+        ) a ON a.id=o.current_analysis_id
+        WHERE CASE WHEN ${publicOpportunityAnalysisStamp} THEN TRUE ELSE FALSE END
+      ), search_state AS MATERIALIZED (
+        SELECT generation FROM public.public_search_generation WHERE id=1
+      )
+      SELECT o.id,o.source_id,o.company_id,o.posted_at,d.search_vector,
+        (SELECT generation FROM search_state) AS generation,
         ${browseColumns
           .slice(3)
           .map((column) => `d.browse_projection->>'${column}' AS "${column}"`)
           .join(',')}
-      FROM public.public_opportunity_search_documents d
-      JOIN public.opportunities o ON CAST(o.id AS TEXT)=d.id
-      JOIN public.sources s ON s.id=o.source_id
-      JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
-      CROSS JOIN public.public_search_generation g
-      WHERE g.id=1 AND ${publicOpportunityVisibility}
-        AND has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT')
-        AND d.browse_projection IS NOT NULL
-        AND CAST(o.current_analysis_id AS TEXT)=d.browse_projection->>'analysis_id'
-        AND o.source_content_fingerprint=d.browse_projection->>'source_content_fingerprint'
-        AND CAST(o.source_content_version AS TEXT)=d.browse_projection->>'source_content_version'`);
+      FROM eligible o FULL JOIN public.public_opportunity_search_documents d ON d.id=CAST(o.id AS TEXT)
+      WHERE ${publicSearchReader}
+        AND (SELECT generation IS NOT NULL FROM search_state)
+        AND CASE WHEN ${currentBrowseDocument} THEN TRUE ELSE FALSE END`);
+    // A generation change catches publisher writes. Clock-driven expiry has
+    // no writer, so include the next live expiry in the cache and cursor key.
+    await db.query(`CREATE INDEX IF NOT EXISTS public_search_opportunity_expiry
+      ON opportunities(expires_at) WHERE expires_at IS NOT NULL`);
+    await db.query(`CREATE OR REPLACE VIEW public.jobgeni_public_search_state_v1 WITH (security_barrier=true) AS
+      SELECT g.generation, (
+        SELECT CAST(EXTRACT(EPOCH FROM o.expires_at) AS TEXT) FROM public.opportunities o
+        JOIN public.sources s ON s.id=o.source_id
+        JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
+        JOIN public.public_opportunity_search_documents d ON d.id=CAST(o.id AS TEXT)
+        WHERE o.expires_at>CURRENT_TIMESTAMP AND ${publicOpportunityVisibility}
+          AND ${currentBrowseDocument}
+        ORDER BY o.expires_at LIMIT 1
+      ) AS next_expiry
+      FROM public.public_search_generation g WHERE g.id=1 AND ${publicSearchReader}`);
     // Mirror only the pre-existing SELECT readers, never add ambient privileges.
     await db.query(`DO $$ DECLARE reader record; BEGIN
       FOR reader IN
@@ -282,7 +319,7 @@ export async function ensurePublicSearchSchema(
         JOIN pg_roles r ON r.oid=a.grantee
         WHERE c.oid='public.jobgeni_public_search_v1'::regclass AND a.privilege_type='SELECT'
       LOOP
-        EXECUTE format('GRANT SELECT ON public.jobgeni_public_browse_v1 TO %I',reader.rolname);
+        EXECUTE format('GRANT SELECT ON public.jobgeni_public_browse_v1, public.jobgeni_public_search_state_v1 TO %I',reader.rolname);
       END LOOP;
     END $$`);
     await db.query(`CREATE OR REPLACE FUNCTION public.consume_public_search_quota(cost integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
