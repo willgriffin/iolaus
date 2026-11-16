@@ -8,6 +8,12 @@ export { pruneExpiredOpportunityAnalyses } from './opportunity-analysis-maintena
 export const publicOpportunityVisibility = `s.public_listing = TRUE AND s.is_active = TRUE
   AND o.status IN ('found', 'recommended', 'apply', 'applied', 'interviewing', 'offer', 'maybe', 'needs_input', 'active', 'new')
   AND (o.expires_at IS NULL OR o.expires_at > CURRENT_TIMESTAMP)`;
+export const publicOpportunityAnalysis = `a.id = o.current_analysis_id
+  AND a.opportunity_id = o.id
+  AND a.source_content_fingerprint = o.source_content_fingerprint
+  AND a.source_content_version = o.source_content_version
+  AND a.analysis_version = 'opportunity-analysis/v1'
+  AND a.status IN ('deterministic', 'enriched')`;
 
 /** Supplemental indexes and the public projection. The SMRT migration owns tables and foreign keys. */
 export async function ensureOpportunityAnalysisSchema(
@@ -78,9 +84,8 @@ export async function ensureOpportunityAnalysisSchema(
     ${skills} AS skills_json, a.eligibility_json, a.compensation_json, a.summary_json, a.countries_json, a.skill_slugs_json,
     LOWER(COALESCE(a.normalized_title, '') || ' ' || COALESCE(c.name, '') || ' ' || COALESCE(a.summary_json, '') || ' ' || COALESCE(a.skill_slugs_json, '') || ' ' || COALESCE(a.countries_json, '')) AS search_document, ${requirements} AS requirements_json,
     ${sourceExcerpt('descriptionRaw', 30_000)} AS description_text, ${sourceExcerpt('qualifications', 12_000)} AS qualifications_text
-    FROM opportunities o JOIN sources s ON s.id = o.source_id LEFT JOIN companies c ON CAST(c.id AS TEXT) = o.company_id JOIN opportunity_analyses a ON a.id = o.current_analysis_id AND a.opportunity_id = o.id AND a.source_content_fingerprint = o.source_content_fingerprint AND a.source_content_version = o.source_content_version AND a.analysis_version = 'opportunity-analysis/v1'
-    WHERE ${publicOpportunityVisibility}
-      AND a.status IN ('deterministic', 'enriched')`;
+    FROM opportunities o JOIN sources s ON s.id = o.source_id LEFT JOIN companies c ON CAST(c.id AS TEXT) = o.company_id JOIN opportunity_analyses a ON ${publicOpportunityAnalysis}
+    WHERE ${publicOpportunityVisibility}`;
   if (sqlite) {
     await db.query('DROP VIEW IF EXISTS jobgeni_public_catalog_v1');
     await db.query(`CREATE VIEW jobgeni_public_catalog_v1 AS ${view}`);

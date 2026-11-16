@@ -20,7 +20,10 @@ import { deterministicOpportunityAnalysis } from '../opportunity-analysis-source
 import { publishOpportunityAnalysis } from '../opportunity-analysis-store.js';
 import { fingerprintOpportunitySourceContent } from '../opportunity-source-content.js';
 import { createPublicSearchReader, type PublicDatabase } from './index.js';
-import { ensurePublicSearchSchema } from './schema.js';
+import {
+  ensurePublicSearchSchema,
+  reconcilePublicSearchDocuments,
+} from './schema.js';
 
 const jobId = (n: number, dialect: string) =>
   dialect === 'postgres'
@@ -1012,12 +1015,14 @@ it.runIf(Boolean(pgUrl))(
       secret,
     );
     // The baseline full catalog state ran before cache lookup. Verify that
-    // broad statements physically avoid analysis and company lookups, even
+    // broad statements avoid the company join on the wide catalog, even
     // when a fast test host happens to execute the old plan under 500ms.
     const plan = await restricted.query(
       'EXPLAIN (FORMAT JSON) SELECT max(generation),count(*) FROM jobgeni_public_browse_v1',
     );
-    expect(JSON.stringify(plan)).not.toMatch(/opportunity_analyses|companies/);
+    expect(JSON.stringify(plan)).not.toMatch(
+      /companies|jobgeni_public_catalog_v1/,
+    );
     const browse = await reader.search({ limit: 20 });
     expect(browse.total_estimate).toBe(13000);
     expect(browse.items).toHaveLength(20);
@@ -1056,13 +1061,30 @@ it.runIf(Boolean(pgUrl))(
     expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
       13000,
     );
+    // A concurrent legacy refresh can leave a document for a withdrawn analysis.
+    // The live analysis gate must reject it even with matching identity stamps.
+    await db.query(`CREATE TEMP TABLE old_search_doc AS SELECT id,search_document,content_hash,browse_projection
+      FROM public_opportunity_search_documents WHERE id=md5('job-10')::uuid::text`);
+    await db.query(
+      "UPDATE opportunity_analyses SET status='failed' WHERE opportunity_id=md5('job-10')::uuid",
+    );
+    await db.query(`INSERT INTO public_opportunity_search_documents(id,search_document,content_hash,browse_projection)
+      SELECT * FROM old_search_doc`);
+    expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
+      12999,
+    );
+    expect(
+      await scalar(
+        "SELECT count(*) FROM search_public_catalog(plainto_tsquery('english','postgresql'))",
+      ),
+    ).toBe(1299);
     // Stale current-analysis identity must hide a retained document even
     // when it still carries previous public projection data.
     await db.query(`UPDATE public_opportunity_search_documents
       SET browse_projection=browse_projection || '{"analysis_id":"stale"}'::jsonb
       WHERE id=md5('job-1')::uuid::text`);
     expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
-      12999,
+      12998,
     );
     await db.query("UPDATE sources SET public_listing=FALSE WHERE id='source'");
     expect(await scalar('SELECT count(*) FROM jobgeni_public_browse_v1')).toBe(
@@ -1070,6 +1092,69 @@ it.runIf(Boolean(pgUrl))(
     );
   },
   30_000,
+);
+
+it.runIf(Boolean(pgUrl))(
+  'retains newer indexed content when PostgreSQL reconciliation races an analysis update',
+  async () => {
+    const { db, seed } = await fixture('postgres');
+    await seed(1);
+    const id = jobId(0, 'postgres');
+    const database = await resolveDatabase(
+      { type: 'postgres', url: pgUrl!, max: 2 },
+      { dbid: 'public-search-backfill-race' },
+    );
+    if (!database.acquireSession) throw new Error('Pinned sessions required');
+    const publisher = await database.acquireSession();
+    const backfill = await database.acquireSession();
+    // Force reconciliation to rebuild a row while the publisher holds its lock.
+    await db.query(
+      'UPDATE public_opportunity_search_documents SET browse_projection=NULL WHERE id=$1',
+      id,
+    );
+    let reconciliation: Promise<number> | undefined;
+    try {
+      await publisher.query('BEGIN');
+      await publisher.query(
+        'SELECT id FROM public_opportunity_search_documents WHERE id=$1 FOR UPDATE',
+        [id],
+      );
+      const backend = await backfill.query('SELECT pg_backend_pid() AS pid');
+      reconciliation = reconcilePublicSearchDocuments(
+        {
+          query: async (sql) => backfill.query(sql),
+        },
+        'postgres',
+      );
+      // Wait for the backfill to read its old snapshot and block on the lock.
+      await vi.waitFor(
+        async () => {
+          const activity = await publisher.query(
+            'SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS waiting',
+            [backend.rows[0]?.pid],
+          );
+          expect(activity.rows[0]?.waiting).toBe(true);
+        },
+        { timeout: 3000 },
+      );
+      await publisher.query(
+        "UPDATE opportunity_analyses SET work_mode='onsite' WHERE opportunity_id=$1",
+        [id],
+      );
+      await publisher.query('COMMIT');
+      expect(await reconciliation).toBe(0);
+      const browse = await publisher.query(
+        'SELECT work_mode FROM jobgeni_public_browse_v1 WHERE id=$1',
+        [id],
+      );
+      expect(browse.rows[0]?.work_mode).toBe('onsite');
+    } finally {
+      await publisher.query('ROLLBACK');
+      await reconciliation?.catch(() => undefined);
+      await publisher.release();
+      await backfill.release();
+    }
+  },
 );
 
 it('public modules do not import private services or raw private objects', () => {

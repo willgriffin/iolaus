@@ -1,4 +1,7 @@
-import { publicOpportunityVisibility } from '../opportunity-analysis-schema.js';
+import {
+  publicOpportunityAnalysis,
+  publicOpportunityVisibility,
+} from '../opportunity-analysis-schema.js';
 
 /** Only the current, sanitized public view can supply index content. */
 type Database = {
@@ -263,6 +266,7 @@ export async function ensurePublicSearchSchema(
       FROM public.public_opportunity_search_documents d
       JOIN public.opportunities o ON CAST(o.id AS TEXT)=d.id
       JOIN public.sources s ON s.id=o.source_id
+      JOIN public.opportunity_analyses a ON ${publicOpportunityAnalysis}
       CROSS JOIN public.public_search_generation g
       WHERE g.id=1 AND ${publicOpportunityVisibility}
         AND has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT')
@@ -340,12 +344,18 @@ function upsertChangedDocuments(
     : '';
   const missingProjection = (alias: string) =>
     postgres ? ` OR ${alias}.browse_projection IS NULL` : '';
+  // A concurrent publisher can change the conflict row after this statement
+  // takes its snapshot. Keep the publisher's newer version in that case.
+  const currentSnapshot = postgres
+    ? ` AND EXISTS (SELECT 1 FROM public_opportunity_search_documents snapshot
+      WHERE snapshot.id=excluded.id AND snapshot.xmin=public_opportunity_search_documents.xmin)`
+    : '';
   return `INSERT INTO public_opportunity_search_documents(id,search_document,content_hash${projection})
      SELECT x.id,x.search_document,x.content_hash${selectProjection} FROM (SELECT ${id} AS id,c.search_document,${contentHash(dialect)} AS content_hash${deriveProjection} FROM jobgeni_public_catalog_v1 c WHERE ${where}) x
      LEFT JOIN public_opportunity_search_documents d ON d.id=x.id
      WHERE d.id IS NULL OR d.content_hash ${distinct} x.content_hash${missingProjection('d')}
      ON CONFLICT(id) DO UPDATE SET search_document=excluded.search_document,content_hash=excluded.content_hash${updateProjection}
-     WHERE public_opportunity_search_documents.content_hash ${distinct} excluded.content_hash${missingProjection('public_opportunity_search_documents')}`;
+     WHERE (public_opportunity_search_documents.content_hash ${distinct} excluded.content_hash${missingProjection('public_opportunity_search_documents')})${currentSnapshot}`;
 }
 
 /**
