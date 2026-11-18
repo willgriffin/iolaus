@@ -1,3 +1,5 @@
+import { existsSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { getDatabaseUrl } from '../src/lib/server/db.js';
 import { matchingProjectionSchemaReady } from '../src/lib/server/matching-projection-schema.js';
 import { publicSearchSchemaReady } from '../src/lib/server/public-search/schema.js';
@@ -30,95 +32,107 @@ function redactDatabaseUrl(databaseUrl: string): string {
   }
 }
 
-const pending = await getPendingSchemaStatements();
-const tagIntegrityGuards = await getTagIntegrityGuardStatus(pending.db);
-const sourceCrawlOpportunityGuard = await getSourceCrawlOpportunityGuardStatus(
-  pending.db,
-);
-const sourceCrawlAccountingSchema = await getSourceCrawlAccountingSchemaStatus(
-  pending.db,
-);
-const sourceCrawlJobDedupe = await getSourceCrawlJobDedupeStatus(pending.db);
-const sourceProvenance = await getSourceProvenanceSchemaStatus(pending.db);
-const sourceProviders = await getSourceProviderSchemaStatus(pending.db);
-const resumeImportSchema = await getResumeImportSchemaStatus(pending.db);
-const matchingSchemaReady = await matchingProjectionSchemaReady(pending.db);
-const publicSearchReady = await publicSearchSchemaReady(pending.db);
+/** Monitor admission tolerates the same pending legacy validation as migration.
+ * Required constraints, indexes, columns and triggers must still be present.
+ */
+export async function checkDatabaseStatus({ schemaOnly = false } = {}) {
+  const pending = await getPendingSchemaStatements();
+  const tagIntegrityGuards = await getTagIntegrityGuardStatus(pending.db);
+  const sourceCrawlOpportunityGuard =
+    await getSourceCrawlOpportunityGuardStatus(pending.db);
+  const sourceCrawlAccountingSchema =
+    await getSourceCrawlAccountingSchemaStatus(pending.db);
+  const sourceCrawlJobDedupe = await getSourceCrawlJobDedupeStatus(pending.db);
+  const sourceProvenance = await getSourceProvenanceSchemaStatus(pending.db);
+  const sourceProviders = await getSourceProviderSchemaStatus(pending.db);
+  const resumeImportSchema = await getResumeImportSchemaStatus(pending.db);
+  const matchingSchemaReady = await matchingProjectionSchemaReady(pending.db);
+  const publicSearchReady = await publicSearchSchemaReady(pending.db);
 
-console.log('Database:', redactDatabaseUrl(getDatabaseUrl()));
-console.log(
-  `Public search schema: ${publicSearchReady ? 'ready' : 'needs migration'}.`,
-);
-console.log(`SMRT schemas registered: ${pending.schemaCount}`);
-console.log(`Pending schema statements: ${pending.statements.length}`);
-console.log(
-  `Matching projection schema: ${matchingSchemaReady ? 'ready' : 'needs migration'}.`,
-);
-console.log(
-  `Resume import ingestion: ${resumeImportSchema.present}/${resumeImportSchema.total} private intake tables present.`,
-);
-console.log(
-  `Tag integrity guards: ${tagIntegrityGuards.foreignKeysPresent}/${tagIntegrityGuards.foreignKeysTotal} foreign keys present (${tagIntegrityGuards.foreignKeysValidated} validated), ${tagIntegrityGuards.requiredColumnsNotNull}/${tagIntegrityGuards.requiredColumnsTotal} business-key columns required, ${tagIntegrityGuards.uniqueIndexesPresent}/${tagIntegrityGuards.uniqueIndexesTotal} unique indexes present.`,
-);
-console.log(
-  `Source crawl accounting schema: ${sourceCrawlAccountingSchema.requiredColumnsPresent}/${sourceCrawlAccountingSchema.requiredColumnsTotal} columns present, attempt index ${sourceCrawlAccountingSchema.attemptIndexPresent ? 'present' : 'missing'}, outcome constraint ${sourceCrawlAccountingSchema.outcomeConstraintPresent ? 'present' : 'missing'}.`,
-);
-console.log(
-  `Source crawl jobs: active-job unique index ${sourceCrawlJobDedupe.activeIndexPresent ? 'ready' : sourceCrawlJobDedupe.activeIndexNamed ? 'malformed or not ready' : 'missing'}.`,
-);
-console.log(
-  `Source provenance: source role ${sourceProvenance.sourceRoleRequired ? 'required' : 'nullable'}, role check ${sourceProvenance.sourceRoleCheckPresent ? 'present' : 'missing'} (${sourceProvenance.sourceRoleCheckValidated ? 'validated' : 'not validated'}), parent foreign key ${sourceProvenance.parentForeignKeyPresent ? 'present' : 'missing'} (${sourceProvenance.parentForeignKeyValidated ? 'validated' : 'not validated'}), forward parent guard ${sourceProvenance.parentForwardTriggerPresent ? 'present' : 'missing'}, reverse parent guard ${sourceProvenance.parentReverseTriggerPresent ? 'present' : 'missing'}.`,
-);
-console.log(
-  `Source providers: provider ${sourceProviders.providerRequired ? 'required' : 'nullable'}, adapter check ${sourceProviders.constraintPresent ? 'present' : 'missing'} (${sourceProviders.constraintValidated ? 'validated' : 'not validated'}), ${sourceProviders.invalidProviders} invalid values.`,
-);
-console.log(
-  `Source crawl opportunity guard: foreign key ${sourceCrawlOpportunityGuard.foreignKeyPresent ? 'present' : 'missing'} (${sourceCrawlOpportunityGuard.foreignKeyValidated ? 'validated' : 'not validated'}), ${sourceCrawlOpportunityGuard.totalDangling} dangling references.`,
-);
+  console.log('Database:', redactDatabaseUrl(getDatabaseUrl()));
+  console.log(
+    `Public search schema: ${publicSearchReady ? 'ready' : 'needs migration'}.`,
+  );
+  console.log(`SMRT schemas registered: ${pending.schemaCount}`);
+  console.log(`Pending schema statements: ${pending.statements.length}`);
+  console.log(
+    `Matching projection schema: ${matchingSchemaReady ? 'ready' : 'needs migration'}.`,
+  );
+  console.log(
+    `Resume import ingestion: ${resumeImportSchema.present}/${resumeImportSchema.total} private intake tables present.`,
+  );
+  console.log(
+    `Tag integrity guards: ${tagIntegrityGuards.foreignKeysPresent}/${tagIntegrityGuards.foreignKeysTotal} foreign keys present (${tagIntegrityGuards.foreignKeysValidated} validated), ${tagIntegrityGuards.requiredColumnsNotNull}/${tagIntegrityGuards.requiredColumnsTotal} business-key columns required, ${tagIntegrityGuards.uniqueIndexesPresent}/${tagIntegrityGuards.uniqueIndexesTotal} unique indexes present.`,
+  );
+  console.log(
+    `Source crawl accounting schema: ${sourceCrawlAccountingSchema.requiredColumnsPresent}/${sourceCrawlAccountingSchema.requiredColumnsTotal} columns present, attempt index ${sourceCrawlAccountingSchema.attemptIndexPresent ? 'present' : 'missing'}, outcome constraint ${sourceCrawlAccountingSchema.outcomeConstraintPresent ? 'present' : 'missing'}.`,
+  );
+  console.log(
+    `Source crawl jobs: active-job unique index ${sourceCrawlJobDedupe.activeIndexPresent ? 'ready' : sourceCrawlJobDedupe.activeIndexNamed ? 'malformed or not ready' : 'missing'}.`,
+  );
+  console.log(
+    `Source provenance: source role ${sourceProvenance.sourceRoleRequired ? 'required' : 'nullable'}, role check ${sourceProvenance.sourceRoleCheckPresent ? 'present' : 'missing'} (${sourceProvenance.sourceRoleCheckValidated ? 'validated' : 'not validated'}), parent foreign key ${sourceProvenance.parentForeignKeyPresent ? 'present' : 'missing'} (${sourceProvenance.parentForeignKeyValidated ? 'validated' : 'not validated'}), forward parent guard ${sourceProvenance.parentForwardTriggerPresent ? 'present' : 'missing'}, reverse parent guard ${sourceProvenance.parentReverseTriggerPresent ? 'present' : 'missing'}.`,
+  );
+  console.log(
+    `Source providers: provider ${sourceProviders.providerRequired ? 'required' : 'nullable'}, adapter check ${sourceProviders.constraintPresent ? 'present' : 'missing'} (${sourceProviders.constraintValidated ? 'validated' : 'not validated'}), ${sourceProviders.invalidProviders} invalid values.`,
+  );
+  console.log(
+    `Source crawl opportunity guard: foreign key ${sourceCrawlOpportunityGuard.foreignKeyPresent ? 'present' : 'missing'} (${sourceCrawlOpportunityGuard.foreignKeyValidated ? 'validated' : 'not validated'}), ${sourceCrawlOpportunityGuard.totalDangling} dangling references.`,
+  );
+
+  if (
+    tagIntegrityGuards.foreignKeysPresent !==
+      tagIntegrityGuards.foreignKeysTotal ||
+    (!schemaOnly &&
+      tagIntegrityGuards.foreignKeysValidated !==
+        tagIntegrityGuards.foreignKeysTotal) ||
+    tagIntegrityGuards.requiredColumnsNotNull !==
+      tagIntegrityGuards.requiredColumnsTotal ||
+    tagIntegrityGuards.uniqueIndexesPresent !==
+      tagIntegrityGuards.uniqueIndexesTotal
+  ) {
+    process.exitCode = 1;
+  }
+  if (!sourceCrawlJobDedupe.activeIndexPresent) {
+    process.exitCode = 1;
+  }
+  if (!resumeImportSchemaIsReady(resumeImportSchema)) {
+    process.exitCode = 1;
+  }
+  if (!sourceProvenanceSchemaIsReady(sourceProvenance)) {
+    process.exitCode = 1;
+  }
+  if (!sourceProviderSchemaIsReady(sourceProviders)) {
+    process.exitCode = 1;
+  }
+  if (!sourceCrawlOpportunityGuard.foreignKeyPresent) {
+    process.exitCode = 1;
+  }
+  if (
+    sourceCrawlAccountingSchema.requiredColumnsPresent !==
+      sourceCrawlAccountingSchema.requiredColumnsTotal ||
+    !sourceCrawlAccountingSchema.attemptIndexPresent ||
+    !sourceCrawlAccountingSchema.outcomeConstraintPresent
+  ) {
+    process.exitCode = 1;
+  }
+
+  if (
+    pending.hasChanges ||
+    pending.statements.length > 0 ||
+    !publicSearchReady ||
+    !matchingSchemaReady
+  ) {
+    process.exitCode = 1;
+  }
+
+  await pending.db.close();
+}
 
 if (
-  tagIntegrityGuards.foreignKeysPresent !==
-    tagIntegrityGuards.foreignKeysTotal ||
-  tagIntegrityGuards.foreignKeysValidated !==
-    tagIntegrityGuards.foreignKeysTotal ||
-  tagIntegrityGuards.requiredColumnsNotNull !==
-    tagIntegrityGuards.requiredColumnsTotal ||
-  tagIntegrityGuards.uniqueIndexesPresent !==
-    tagIntegrityGuards.uniqueIndexesTotal
+  process.argv[1] &&
+  existsSync(process.argv[1]) &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  process.exitCode = 1;
+  await checkDatabaseStatus();
 }
-if (!sourceCrawlJobDedupe.activeIndexPresent) {
-  process.exitCode = 1;
-}
-if (!resumeImportSchemaIsReady(resumeImportSchema)) {
-  process.exitCode = 1;
-}
-if (!sourceProvenanceSchemaIsReady(sourceProvenance)) {
-  process.exitCode = 1;
-}
-if (!sourceProviderSchemaIsReady(sourceProviders)) {
-  process.exitCode = 1;
-}
-if (!sourceCrawlOpportunityGuard.foreignKeyPresent) {
-  process.exitCode = 1;
-}
-if (
-  sourceCrawlAccountingSchema.requiredColumnsPresent !==
-    sourceCrawlAccountingSchema.requiredColumnsTotal ||
-  !sourceCrawlAccountingSchema.attemptIndexPresent ||
-  !sourceCrawlAccountingSchema.outcomeConstraintPresent
-) {
-  process.exitCode = 1;
-}
-
-if (
-  pending.hasChanges ||
-  pending.statements.length > 0 ||
-  !publicSearchReady ||
-  !matchingSchemaReady
-) {
-  process.exitCode = 1;
-}
-
-await pending.db.close();

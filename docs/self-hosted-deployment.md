@@ -94,8 +94,14 @@ lock serializes release migrations. The recurring queue/provider monitor uses
 `node --import tsx apps/site/scripts/db-monitor-readiness.mjs` in its existing
 init container with that same scoped credential. PostgreSQL startup options
 force every readiness connection read-only before app configuration loads.
-The command runs native `db:status`, including pending SMRT schema, app guards,
-matching and public-search metadata. It fails closed on drift and leaves repair
+The command runs the native status implementation in schema-only mode, including
+pending SMRT schema, required app guards, matching and public-search metadata.
+It admits installed tag foreign keys awaiting legacy-row validation, the
+specific pending state ordinary migration tolerates. Source provider and
+provenance checks still require validation, as their migrations do. Missing or
+malformed guards still fail. Ordinary `db:status` retains strict data-validation checks. Failures expose
+only phase and SQLSTATE alongside the existing aggregate status output.
+The gate fails closed on schema drift and leaves repair
 to the ordinary migration. The monitor process still uses only
 `iolaus-monitor-runtime` for its aggregate reads.
 

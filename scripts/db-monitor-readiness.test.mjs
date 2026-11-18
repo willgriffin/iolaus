@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   monitorReadinessDatabaseUrl,
+  monitorReadinessFailure,
   runMonitorReadiness,
 } from '../apps/site/scripts/db-monitor-readiness.mjs';
 
@@ -99,4 +100,22 @@ test('can import the URL guard from a native stdin operator probe without starti
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
+});
+
+test('classifies phase and nested SQLSTATE without emitting raw diagnostics', async () => {
+  let failure;
+  try {
+    await runMonitorReadiness({ env: { DATABASE_URL: 'private-invalid' } });
+  } catch (error) {
+    failure = error;
+  }
+  assert.deepEqual(monitorReadinessFailure(failure), { phase: 'configuration', sqlState: 'unknown' });
+  for (const code of ['25006', '28P01', '57014']) {
+    const result = monitorReadinessFailure({ cause: { code, query: 'private SQL', message: 'postgresql://private' } });
+    assert.deepEqual(result, { phase: 'status', sqlState: code });
+    assert.doesNotMatch(JSON.stringify(result), /private/);
+  }
+  for (const code of ['private-token', 'EPERM']) {
+    assert.deepEqual(monitorReadinessFailure({ code }), { phase: 'status', sqlState: 'unknown' });
+  }
 });
