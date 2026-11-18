@@ -34,15 +34,16 @@ spec:
           imagePullSecrets:
             - name: iolaus-registry
           automountServiceAccountToken: false
-          # The monitor must never race a schema rollout. Its database reader
-          # remains separate from this migration writer identity.
+          # Inspect schema under a native read-only session. The dedicated
+          # release migration repairs drift; this recurring gate never issues DDL.
+          # Its existing credential remains separate from the monitor reader.
           initContainers:
             - name: migrate
               image: ghcr.io/willgriffin/iolaus/site@sha256:REPLACE_WITH_RELEASED_IMAGE_DIGEST
               command:
                 - /bin/sh
                 - -ec
-                - cd /app && node --import tsx apps/site/scripts/db-migrate.ts
+                - cd /app && node --import tsx apps/site/scripts/db-monitor-readiness.mjs
               envFrom:
                 - secretRef:
                     name: iolaus-migration-runtime

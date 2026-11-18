@@ -92,6 +92,85 @@ const currentBrowseDocument = `d.browse_projection IS NOT NULL
 const publicSearchReader = `(SELECT has_table_privilege(current_user, 'public.jobgeni_public_search_v1', 'SELECT'))`;
 const expiryProbeLimit = 128;
 
+/**
+ * Inspect the deployed public read surface without running its DDL or scanning
+ * the catalog. Missing objects fail closed so the release migration can repair
+ * them. The monitor keeps its existing connection under PostgreSQL read-only.
+ */
+export async function publicSearchSchemaReady(db: Database): Promise<boolean> {
+  const result = await db.query(`SELECT
+    (SELECT count(*) = 4 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relkind='v' AND c.relname IN (
+        'jobgeni_public_catalog_v1','jobgeni_public_search_v1',
+        'jobgeni_public_browse_v1','jobgeni_public_search_state_v1'))
+    AND (SELECT count(*) = 3 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relname IN (
+        'jobgeni_public_search_v1','jobgeni_public_browse_v1','jobgeni_public_search_state_v1')
+      AND 'security_barrier=true'=ANY(c.reloptions))
+    AND NOT EXISTS (
+      SELECT FROM (VALUES
+        ('public_search_generation','id','int4'),
+        ('public_search_generation','generation','int8'),
+        ('public_search_quotas','bucket','text'),
+        ('public_search_quotas','window_start','int8'),
+        ('public_search_quotas','spent','int4'),
+        ('public_opportunity_search_documents','id','text'),
+        ('public_opportunity_search_documents','search_document','text'),
+        ('public_opportunity_search_documents','browse_projection','jsonb'),
+        ('public_opportunity_search_documents','content_hash','text'),
+        ('public_opportunity_search_documents','search_vector','tsvector'),
+        ('jobgeni_public_search_state_v1','generation','int8'),
+        ('jobgeni_public_search_state_v1','next_expiry','text')
+      ) expected(relation,column_name,type_name)
+      LEFT JOIN pg_attribute a
+        ON a.attrelid=to_regclass('public.'||expected.relation)
+        AND a.attname=expected.column_name AND NOT a.attisdropped
+      LEFT JOIN pg_type t ON t.oid=a.atttypid
+      WHERE t.typname IS DISTINCT FROM expected.type_name)
+    AND (SELECT count(*) = 5
+      FROM (VALUES
+        ('public_search_opportunities_refresh','opportunities','refresh_public_opportunity_search_document'),
+        ('public_search_sources_refresh','sources','refresh_public_opportunity_search_document'),
+        ('public_search_companies_refresh','companies','refresh_public_opportunity_search_document'),
+        ('public_search_opportunity_analyses_refresh','opportunity_analyses','refresh_public_opportunity_search_document'),
+        ('public_search_legacy_browse_projection','public_opportunity_search_documents','refresh_public_browse_projection')
+      ) expected(trigger_name,relation,function_name)
+      JOIN pg_trigger t ON t.tgname=expected.trigger_name
+        AND t.tgrelid=to_regclass('public.'||expected.relation)
+      JOIN pg_proc p ON p.oid=t.tgfoid
+      WHERE t.tgenabled IN ('O','A') AND NOT t.tgisinternal
+        AND p.oid=to_regprocedure('public.'||expected.function_name||'()'))
+    AND (SELECT count(*) = 2
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public' AND p.prosecdef
+        AND (p.oid=to_regprocedure('public.search_public_catalog(tsquery)')
+             AND pg_get_function_result(p.oid)='TABLE(id text)'
+          OR p.oid=to_regprocedure('public.consume_public_search_quota(integer)')
+             AND pg_get_function_result(p.oid)='integer'))
+    AND (SELECT count(*) = 2
+      FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_am am ON am.oid=c.relam
+      WHERE n.nspname='public' AND i.indisvalid AND i.indisready
+        AND (
+          c.relname='idx_public_opportunity_search_vector'
+          AND i.indrelid=to_regclass('public.public_opportunity_search_documents')
+          AND am.amname='gin' AND 'fastupdate=off'=ANY(c.reloptions)
+          AND pg_get_indexdef(i.indexrelid,1,TRUE)='search_vector'
+          AND i.indnatts=1 AND i.indpred IS NULL
+          OR c.relname='public_search_opportunity_expiry'
+          AND i.indrelid=to_regclass('public.opportunities')
+          AND am.amname='btree'
+          AND pg_get_indexdef(i.indexrelid,1,TRUE)='expires_at'
+          AND i.indnatts=1
+          AND pg_get_expr(i.indpred,i.indrelid)='(expires_at IS NOT NULL)'
+        )) AS ready`);
+  const rows = Array.isArray(result)
+    ? result
+    : ((result as { rows?: { ready?: unknown }[] })?.rows ?? []);
+  return rows[0]?.ready === true;
+}
+
 export async function ensurePublicSearchSchema(
   db: Database,
   dialect: 'postgres' | 'sqlite',

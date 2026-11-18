@@ -25,6 +25,7 @@ import {
 } from './index.js';
 import {
   ensurePublicSearchSchema,
+  publicSearchSchemaReady,
   reconcilePublicSearchDocuments,
 } from './schema.js';
 
@@ -1273,6 +1274,127 @@ it.runIf(Boolean(pgUrl))(
       reader.search({ limit: 2, cursor: first.next_cursor }),
     ).rejects.toThrow('Expired cursor');
   },
+);
+
+it.runIf(Boolean(pgUrl))(
+  'keeps the public state query available during read-only monitor readiness while legacy initialization blocks it',
+  async () => {
+    const { seed } = await fixture('postgres');
+    await seed(1);
+    const database = await resolveDatabase(
+      { type: 'postgres', url: pgUrl ?? '', max: 3 },
+      { dbid: 'public-search-monitor-lock-regression' },
+    );
+    if (!database.acquireSession) throw new Error('Pinned sessions required');
+    const blocker = await database.acquireSession();
+    const monitor = await database.acquireSession();
+    const publicReader = await database.acquireSession();
+    const stateQuery =
+      'SELECT generation,next_expiry FROM public.jobgeni_public_search_state_v1';
+    let legacyInitialization: Promise<unknown> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      // A prior public reader holds ACCESS SHARE on the state view.
+      await blocker.query(stateQuery);
+      const definition = await blocker.query(
+        "SELECT pg_get_viewdef('public.jobgeni_public_search_state_v1'::regclass, TRUE) AS body",
+      );
+      const backend = await monitor.query('SELECT pg_backend_pid() AS pid');
+      await monitor.query('BEGIN');
+      // Legacy ensurePublicSearchSchema unconditionally replaces this view.
+      // Even an unchanged definition queues ACCESS EXCLUSIVE and stalls readers.
+      legacyInitialization = monitor
+        .query(
+          `CREATE OR REPLACE VIEW public.jobgeni_public_search_state_v1 WITH (security_barrier=true) AS ${definition.rows[0]?.body}`,
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      await vi.waitFor(
+        async () => {
+          const activity = await blocker.query(
+            'SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS waiting',
+            [backend.rows[0]?.pid],
+          );
+          expect(activity.rows[0]?.waiting).toBe(true);
+        },
+        { timeout: 3000 },
+      );
+      await publicReader.query("SET statement_timeout='500ms'");
+      await expect(publicReader.query(stateQuery)).rejects.toThrow(
+        /statement timeout/,
+      );
+      await blocker.query('SELECT pg_cancel_backend($1)', [
+        backend.rows[0]?.pid,
+      ]);
+      await legacyInitialization;
+      await monitor.query('ROLLBACK');
+
+      // Keep the original blocker in place: only replace migration with the
+      // monitor's catalog/shape checks, with PostgreSQL enforcing no writes.
+      await monitor.query('BEGIN READ ONLY');
+      const monitorDb = {
+        query: (sql: string, ...values: unknown[]) =>
+          monitor.query(sql, values),
+      };
+      expect(await publicSearchSchemaReady(monitorDb)).toBe(true);
+      const state = await publicReader.query(stateQuery);
+      expect(state.rows).toHaveLength(1);
+    } finally {
+      await blocker.query('ROLLBACK');
+      await legacyInitialization;
+      await monitor.query('ROLLBACK');
+      await Promise.all([
+        blocker.release(),
+        monitor.release(),
+        publicReader.release(),
+      ]);
+    }
+  },
+  15_000,
+);
+
+it.runIf(Boolean(pgUrl))(
+  'rejects stale public-search schemas read-only and lets the explicit migration repair them',
+  async () => {
+    const { db } = await fixture('postgres');
+    const database = await resolveDatabase(
+      { type: 'postgres', url: pgUrl ?? '', max: 1 },
+      { dbid: 'public-search-monitor-readiness' },
+    );
+    if (!database.acquireSession) throw new Error('Pinned sessions required');
+    const monitor = await database.acquireSession();
+    const monitorDb = {
+      query: (sql: string, ...values: unknown[]) => monitor.query(sql, values),
+    };
+    try {
+      await monitor.query('SET default_transaction_read_only=on');
+      expect(await publicSearchSchemaReady(monitorDb)).toBe(true);
+      for (const staleSchema of [
+        'DROP VIEW public.jobgeni_public_search_state_v1',
+        'DROP TRIGGER public_search_opportunities_refresh ON public.opportunities',
+        'DROP INDEX public.idx_public_opportunity_search_vector',
+        'DROP FUNCTION public.search_public_catalog(tsquery)',
+      ]) {
+        await db.query(staleSchema);
+        expect(await publicSearchSchemaReady(monitorDb)).toBe(false);
+        await ensurePublicSearchSchema(db, 'postgres');
+        expect(await publicSearchSchemaReady(monitorDb)).toBe(true);
+      }
+      // Existing objects with an obsolete reader shape must also fail closed.
+      await db.query('DROP VIEW public.jobgeni_public_search_state_v1');
+      await db.query(
+        'CREATE VIEW public.jobgeni_public_search_state_v1 AS SELECT generation FROM public.public_search_generation',
+      );
+      expect(await publicSearchSchemaReady(monitorDb)).toBe(false);
+      await ensurePublicSearchSchema(db, 'postgres');
+      expect(await publicSearchSchemaReady(monitorDb)).toBe(true);
+    } finally {
+      await monitor.release();
+    }
+  },
+  15_000,
 );
 
 it('public modules do not import private services or raw private objects', () => {

@@ -131,8 +131,13 @@ if (
   ) || /name: monitor[\s\S]*name: iolaus-runtime/u.test(monitorManifest)
 ) {
   throw new Error(
-    'The queue/provider monitor must migrate with its scoped writer secret and query with its read-only secret.',
+    'The queue/provider monitor must inspect schema with its existing scoped init secret and query with its read-only secret.',
   );
+}
+
+requireText(monitorManifest, 'node --import tsx apps/site/scripts/db-monitor-readiness.mjs');
+if (monitorManifest.includes('apps/site/scripts/db-migrate.ts')) {
+  throw new Error('The recurring monitor must never invoke schema migration.');
 }
 
 requireText(productionRendered, 'kind: Ingress');
