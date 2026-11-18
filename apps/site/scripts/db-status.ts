@@ -1,5 +1,6 @@
 import { getDatabaseUrl } from '../src/lib/server/db.js';
 import { matchingProjectionSchemaReady } from '../src/lib/server/matching-projection-schema.js';
+import { publicSearchSchemaReady } from '../src/lib/server/public-search/schema.js';
 import {
   getResumeImportSchemaStatus,
   resumeImportSchemaIsReady,
@@ -42,8 +43,12 @@ const sourceProvenance = await getSourceProvenanceSchemaStatus(pending.db);
 const sourceProviders = await getSourceProviderSchemaStatus(pending.db);
 const resumeImportSchema = await getResumeImportSchemaStatus(pending.db);
 const matchingSchemaReady = await matchingProjectionSchemaReady(pending.db);
+const publicSearchReady = await publicSearchSchemaReady(pending.db);
 
 console.log('Database:', redactDatabaseUrl(getDatabaseUrl()));
+console.log(
+  `Public search schema: ${publicSearchReady ? 'ready' : 'needs migration'}.`,
+);
 console.log(`SMRT schemas registered: ${pending.schemaCount}`);
 console.log(`Pending schema statements: ${pending.statements.length}`);
 console.log(
@@ -107,4 +112,13 @@ if (
   process.exitCode = 1;
 }
 
-if (!matchingSchemaReady) process.exitCode = 1;
+if (
+  pending.hasChanges ||
+  pending.statements.length > 0 ||
+  !publicSearchReady ||
+  !matchingSchemaReady
+) {
+  process.exitCode = 1;
+}
+
+await pending.db.close();

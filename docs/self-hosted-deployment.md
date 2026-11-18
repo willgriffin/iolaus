@@ -88,12 +88,16 @@ context before enabling a provider fixture.
 | `iolaus-schedule-worker` | Due schedule dispatch; it creates provider-crawl task jobs but does not execute them | Process-local heartbeat probe and 90-second graceful drain |
 | `iolaus-queue-provider-monitor` | Read-only aggregate queue and crawl-watchdog check | CronJob failure plus count-only JSON; independent of web health |
 
-Every web and worker workload, including the queue/provider monitor, runs
-`db:migrate` in an init container using only `iolaus-migration-runtime`. The
-application's PostgreSQL advisory lock serializes that idempotent migration,
-so parallel rollout cannot create concurrent schema writers. A failed
-migration blocks that workload before it serves traffic, executes jobs, or lets
-the read-only monitor query an incompatible schema.
+Web and task/schedule worker rollouts run `db:migrate` in an init container
+using only `iolaus-migration-runtime`. The application's PostgreSQL advisory
+lock serializes release migrations. The recurring queue/provider monitor uses
+`node --import tsx apps/site/scripts/db-monitor-readiness.mjs` in its existing
+init container with that same scoped credential. PostgreSQL startup options
+force every readiness connection read-only before app configuration loads.
+The command runs native `db:status`, including pending SMRT schema, app guards,
+matching and public-search metadata. It fails closed on drift and leaves repair
+to the ordinary migration. The monitor process still uses only
+`iolaus-monitor-runtime` for its aggregate reads.
 
 The image runs entrypoints from `/app` and pins `tsx` to a runtime-only
 TypeScript configuration that resolves deployed `$lib` aliases without relying
@@ -370,8 +374,11 @@ and enables unbound source schedules that fail every run in shared mode. A share
 `db:migrate` disables a score-refresh schedule left over from a private-mode run,
 and leaves the `nextCheckAt` this job writes in place.
 
-`db:migrate` also runs in the monitor CronJob's init container every five minutes,
-so a repeat run must write nothing. The search index is reconciled by diff: a
+The five-minute monitor's schema gate performs only read-only checks, avoiding
+trigger/view/index DDL that can block public requests. Existing pinned deployment
+bases need the monitor init command override when deploying this release; keep
+its existing migration-runtime credential and other workloads' migration commands.
+The normal release migration reconciles the search index by diff: a
 document is rewritten only when the content hash of its public catalog row
 changes, only departed documents are deleted, and the generation moves only
 when one of those wrote. The source-schedule sync and repair passes skip rows

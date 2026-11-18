@@ -399,6 +399,16 @@ try {
       );
       assert.equal((await publicSearch.json()).items.length, 1);
       const publicPage = await guest.newPage();
+      const schemaReadiness = spawn(
+        process.execPath,
+        ['--import', 'tsx', 'scripts/db-monitor-readiness.mjs'],
+        { env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let readinessOutput = '';
+      schemaReadiness.stdout?.on('data', (chunk) => {
+        readinessOutput += chunk.toString();
+      });
+      const readinessComplete = once(schemaReadiness, 'close');
       const [browserBrowse, ...restBrowses] = await Promise.all([
         publicPage.goto(`${origin}/opportunities/?start=1&view=list`),
         guest.request.get(`${origin}/api/public/v1/opportunities`),
@@ -426,6 +436,14 @@ try {
         1,
         'Overlapping public requests must use the single restricted connection.',
       );
+      const [readinessExit] = await readinessComplete;
+      assert.equal(
+        readinessExit,
+        0,
+        'Read-only monitor schema gate must succeed.',
+      );
+      assert.match(readinessOutput, /Public search schema: ready\./u);
+      assert.match(readinessOutput, /Pending schema statements: 0/u);
       await publicPage.close();
       await guest.close();
 
