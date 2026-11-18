@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /** Add the native PostgreSQL session constraint before loading app configuration. */
@@ -24,7 +24,7 @@ export async function runMonitorReadiness({
   await loadStatus();
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     if (process.argv.length !== 2) throw new Error('Monitor readiness accepts no arguments.');
     await runMonitorReadiness();

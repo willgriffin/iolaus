@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -86,4 +87,16 @@ test('never imports status with an invalid database URL and propagates status fa
     }),
     (error) => error === failure,
   );
+});
+
+test('can import the URL guard from a native stdin operator probe without starting status', () => {
+  const moduleUrl = new URL('../apps/site/scripts/db-monitor-readiness.mjs', import.meta.url);
+  const result = spawnSync(process.execPath, ['--input-type=module', '-'], {
+    encoding: 'utf8',
+    input: `import { monitorReadinessDatabaseUrl } from ${JSON.stringify(moduleUrl.href)};
+      if (!monitorReadinessDatabaseUrl('postgresql://localhost/fixture').includes('read_only')) process.exit(2);`,
+    env: { ...process.env, DATABASE_URL: undefined },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
 });
