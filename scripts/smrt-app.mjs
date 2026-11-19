@@ -307,11 +307,19 @@ async function initializeLocal(runtime, env, options = {}) {
       network: runtime.providers.network,
     },
     prepareDatabase: options.prepareDatabase
-      ? async () => {
+      ? async (db) => {
           runSiteSmrt(['db:migrate'], {
             env,
             label: 'pnpm exec smrt db:migrate',
           });
+          // Tooling-only TypeScript loader; use the supplied native executor,
+          // not a second application connection or a request-time DDL fallback.
+          const { tsImport } = await import('tsx/esm/api');
+          const { prepareLocalApplicationSchema } = await tsImport(
+            join(sourceRoot, 'apps/site/src/lib/server/local-application-schema.ts'),
+            import.meta.url,
+          );
+          await prepareLocalApplicationSchema(db);
         }
       : undefined,
     backgroundJobs: process.env.SMRT_BACKGROUND_JOBS === 'true',

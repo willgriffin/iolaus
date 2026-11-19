@@ -22,6 +22,7 @@ import {
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
 import { getAuthConfiguration } from './app-config.js';
 import { assertDeployedSchemaReady } from './deployment/schema.js';
+import { assertLocalApplicationSchemaReady } from './local-application-schema.js';
 import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
   getIolausSmrtConfigPath,
@@ -345,7 +346,15 @@ export function getLocalApplicationRuntime(): Promise<LocalApplicationRuntime> {
     },
     backgroundJobs: process.env.SMRT_BACKGROUND_JOBS === 'true',
   })
-    .then(({ runtime }) => runtime)
+    .then(async ({ runtime }) => {
+      try {
+        await assertLocalApplicationSchemaReady(runtime.db);
+        return runtime;
+      } catch (cause) {
+        await runtime.db.close?.();
+        throw cause;
+      }
+    })
     .catch((error) => {
       localWriterLease?.release();
       localWriterLease = undefined;
