@@ -4,7 +4,7 @@ Session train: willgriffin/iolaus, current main release line, branch
 `codex/iolaus-desktop-mvp`, one ready pull request. Claim: issue #310,
 comment 6961267294. Ordered micro-items, each committed with `Refs #310`:
 
-1. Adopt compatible published SMRT 0.62.1 dependencies.
+1. Adopt compatible published SMRT 0.62.1 and its required SDK 0.113.1 cohort.
 2. Package Iolaus with the published SMRT desktop bundler and Tauri builder.
 3. Verify local resume import, opportunity capture, application preparation,
    tailored PDF export, tracking and persistence.
@@ -25,3 +25,7 @@ Optional external AI requires the owner's explicitly configured provider.
 
 Evidence lives outside the repository under `/tmp/iolaus-desktop-evidence`.
 Full documented validation and one review-cycle run on the integrated branch.
+
+Compatibility probe: SMRT 0.62.1 declares SDK `^0.113.0`. Retaining direct
+SDK 0.111.5 produced incompatible nominal OAuth issuer types; direct SDK
+dependencies therefore align at 0.113.1, preserving PDF/OCR/spider specialty pins.

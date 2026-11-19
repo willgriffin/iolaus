@@ -72,7 +72,7 @@
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/encryption": "0.111.5",
+    "@happyvertical/encryption": "0.113.1",
     "@happyvertical/smrt-cli": "0.62.1",
     "@happyvertical/smrt-dev-mcp": "0.62.1",
     "lefthook": "2.1.10",
@@ -87,8 +87,8 @@
     "@happyvertical/smrt-app-runtime": "0.62.1",
     "@happyvertical/smrt-config": "0.62.1",
     "@happyvertical/smrt-scanner": "0.62.1",
-    "@happyvertical/speech": "0.111.5",
-    "@happyvertical/sql": "0.111.5",
+    "@happyvertical/speech": "0.113.1",
+    "@happyvertical/sql": "0.113.1",
     "tsx": "catalog:"
   },
   "license": "MIT"

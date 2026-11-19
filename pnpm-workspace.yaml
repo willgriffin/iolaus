@@ -108,11 +108,11 @@ minimumReleaseAgeExclude:
   - '@happyvertical/smrt-images@0.60.10'
   - '@happyvertical/smrt-ingestion@0.60.10'
   - '@happyvertical/smrt-personas@0.60.10'
-  - '@happyvertical/email@0.111.5'
-  - '@happyvertical/encryption@0.111.5'
-  - '@happyvertical/images@0.111.5'
-  - '@happyvertical/messages@0.111.5'
-  - '@happyvertical/speech@0.111.5'
+  - '@happyvertical/email@0.111.5 || 0.113.1'
+  - '@happyvertical/encryption@0.111.5 || 0.113.1'
+  - '@happyvertical/images@0.111.5 || 0.113.1'
+  - '@happyvertical/messages@0.111.5 || 0.113.1'
+  - '@happyvertical/speech@0.111.5 || 0.113.1'
 
 catalog:
   '@sveltejs/adapter-node': ^5.5.4
