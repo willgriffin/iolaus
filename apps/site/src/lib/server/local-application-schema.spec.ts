@@ -49,12 +49,12 @@ async function nativeFixture() {
   return {
     database,
     async reopen() {
-      await database.close();
+      await database.close?.();
       database = await getDatabase(options);
       return database;
     },
     async close() {
-      await database.close();
+      await database.close?.();
       await rm(root, { recursive: true, force: true });
     },
   };
