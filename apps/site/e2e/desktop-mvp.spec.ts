@@ -98,6 +98,8 @@ test('local sidecar preserves a private synthetic application across restart', a
       const text = await reader.extractText(new Uint8Array(bytes), {
         skipOCRFallback: true,
       });
+      if (typeof text !== 'string')
+        throw new Error('PDF text extraction returned no text.');
       expect(text.replace(/\s+/g, ' ')).toContain(
         expectedText.replace(/\s+/g, ' '),
       );
