@@ -69,6 +69,7 @@ const authGuard: Handle = async ({ event, resolve }) => {
     pathname === '/api/cli/auth/start' ||
     pathname === '/api/cli/auth/token' ||
     pathname === '/api/_runtime/health' ||
+    pathname === '/api/_runtime/owner-link' ||
     pathname === '/api/mcp' ||
     pathname === '/api/mcp/tools' ||
     pathname === '/api/mcp/call' ||

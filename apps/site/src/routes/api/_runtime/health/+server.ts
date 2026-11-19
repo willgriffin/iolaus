@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import {
   applicationRuntime,
   applicationRuntimeConfiguration,
+  ensureApplicationRuntimeReady,
 } from '$lib/server/application-runtime';
 import {
   getIolausSourceRoot,
@@ -16,6 +17,16 @@ const applicationId = resolveApplicationId({
 });
 
 export const GET: RequestHandler = async () => {
+  if (applicationRuntime.profile === 'local') {
+    try {
+      await ensureApplicationRuntimeReady();
+    } catch {
+      return json(
+        { schemaVersion: 1, status: 'starting', profile: 'local' },
+        { status: 503 },
+      );
+    }
+  }
   const publicHealth = {
     schemaVersion: 1,
     status: 'ready',

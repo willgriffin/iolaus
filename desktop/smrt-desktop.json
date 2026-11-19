@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "productId": "iolaus",
+  "bundleId": "com.willgriffin.iolaus",
+  "displayName": "Iolaus",
+  "icons": [
+    "desktop/icon.png"
+  ],
+  "sidecar": {
+    "workingDirectory": "app",
+    "args": [
+      "desktop/entry.mjs"
+    ],
+    "healthRoute": "/api/_runtime/health",
+    "ownerClaimRoute": "/api/_runtime/owner-link",
+    "dataDirectory": "runtime"
+  },
+  "features": {
+    "default": [
+      "ai-anthropic",
+      "ai-openai",
+      "pdf",
+      "images",
+      "browser",
+      "ocr",
+      "documents"
+    ],
+    "custom": {}
+  },
+  "maxSizeMB": 1500,
+  "acknowledgedDynamicImports": [],
+  "bridge": {
+    "envPrefix": "IOLAUS",
+    "mcpPath": "/api/mcp"
+  }
+}

@@ -50,6 +50,7 @@ for (const packageName of DEPENDENCY_PACKAGES) {
 // generated server directories where runtime inference lacks sync metadata.
 const sourceRoot = getIolausSourceRoot();
 const LOCAL_MANIFEST_CANDIDATES = [
+  resolve(sourceRoot, 'apps/site/manifest.json'),
   resolve(sourceRoot, 'apps/site/.smrt/manifest.json'),
   resolve(sourceRoot, '.smrt/manifest.json'),
 ] as const;

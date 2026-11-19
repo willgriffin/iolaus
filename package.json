@@ -63,7 +63,10 @@
     "test:e2e": "pnpm --filter @willgriffin/iolaus-site exec playwright test",
     "test:e2e:check": "pnpm --filter @willgriffin/iolaus-site exec tsc --noEmit -p tsconfig.e2e.json",
     "matching:evaluate": "node scripts/matching-evaluation/run.mjs",
-    "matching:evaluate:test": "node --test scripts/matching-evaluation.test.mjs"
+    "matching:evaluate:test": "node --test scripts/matching-evaluation.test.mjs",
+    "desktop:bundle": "node scripts/desktop.mjs bundle",
+    "desktop:build": "node scripts/desktop.mjs build",
+    "desktop:install": "node scripts/desktop.mjs install"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
@@ -76,7 +79,9 @@
     "turbo": "2.10.5",
     "typescript": "5.9.3",
     "@happyvertical/smrt-desktop": "0.62.1",
-    "@tauri-apps/cli": "2.12.4"
+    "@tauri-apps/cli": "2.12.4",
+    "@happyvertical/smrt-app-cli": "0.62.1",
+    "esbuild": "0.27.4"
   },
   "dependencies": {
     "@happyvertical/smrt-app-runtime": "0.62.1",

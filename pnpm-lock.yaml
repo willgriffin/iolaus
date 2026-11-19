@@ -67,7 +67,7 @@ importers:
     dependencies:
       '@happyvertical/smrt-app-runtime':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-config':
         specifier: 0.62.1
         version: 0.62.1
@@ -96,18 +96,24 @@ importers:
       '@happyvertical/encryption':
         specifier: 0.111.5
         version: 0.111.5(@types/node@26.1.0)(typescript@5.9.3)
+      '@happyvertical/smrt-app-cli':
+        specifier: 0.62.1
+        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-cli':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-desktop':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-dev-mcp':
         specifier: 0.62.1
         version: 0.62.1
       '@tauri-apps/cli':
         specifier: 2.12.4
         version: 2.12.4
+      esbuild:
+        specifier: 0.27.4
+        version: 0.27.4
       lefthook:
         specifier: 2.1.10
         version: 2.1.10
@@ -149,13 +155,13 @@ importers:
         version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-app-runtime':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-assets':
         specifier: 0.62.1
         version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-chat':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-config':
         specifier: 0.62.1
         version: 0.62.1
@@ -197,7 +203,7 @@ importers:
         version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-svelte':
         specifier: 0.62.1
-        version: 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+        version: 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-tags':
         specifier: 0.62.1
         version: 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
@@ -249,13 +255,13 @@ importers:
         version: 1.61.1
       '@sveltejs/adapter-node':
         specifier: 'catalog:'
-        version: 5.5.7(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))
+        version: 5.5.7(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))
       '@sveltejs/kit':
         specifier: 'catalog:'
-        version: 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+        version: 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@sveltejs/vite-plugin-svelte':
         specifier: 'catalog:'
-        version: 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+        version: 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2
@@ -279,10 +285,10 @@ importers:
         version: 5.9.3
       vite:
         specifier: 'catalog:'
-        version: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+        version: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
       vitest:
         specifier: 'catalog:'
-        version: 4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+        version: 4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
 
   packages/cli:
     dependencies:
@@ -320,7 +326,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
 
@@ -865,8 +871,8 @@ packages:
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
 
-  '@esbuild/aix-ppc64@0.28.1':
-    resolution: {integrity: sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==}
+  '@esbuild/aix-ppc64@0.27.4':
+    resolution: {integrity: sha512-cQPwL2mp2nSmHHJlCyoXgHGhbEPMrEEU5xhkcy3Hs/O7nGZqEpZ2sUtLaL9MORLtDfRvVl2/3PAuEkYZH0Ty8Q==}
     engines: {node: '>=18'}
     cpu: [ppc64]
     os: [aix]
@@ -877,8 +883,8 @@ packages:
     cpu: [ppc64]
     os: [aix]
 
-  '@esbuild/android-arm64@0.28.1':
-    resolution: {integrity: sha512-34EGEbCIAgosYz6goLcopX6Mo7NyGv9tfwEM2/7Ce2VcVRk568iSvniGWcUXIy7wEDR1wzolcxcriFVrWYcwBg==}
+  '@esbuild/android-arm64@0.27.4':
+    resolution: {integrity: sha512-gdLscB7v75wRfu7QSm/zg6Rx29VLdy9eTr2t44sfTW7CxwAtQghZ4ZnqHk3/ogz7xao0QAgrkradbBzcqFPasw==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [android]
@@ -889,8 +895,8 @@ packages:
     cpu: [arm64]
     os: [android]
 
-  '@esbuild/android-arm@0.28.1':
-    resolution: {integrity: sha512-0k2F129Xdio1TdJfzJ8sy1Q47vUD2NnwdhiAf7drUN1EBTfPf4hsFCtmMgu/6m8JSzsBrlmVjudMBQqOfG8usQ==}
+  '@esbuild/android-arm@0.27.4':
+    resolution: {integrity: sha512-X9bUgvxiC8CHAGKYufLIHGXPJWnr0OCdR0anD2e21vdvgCI8lIfqFbnoeOz7lBjdrAGUhqLZLcQo6MLhTO2DKQ==}
     engines: {node: '>=18'}
     cpu: [arm]
     os: [android]
@@ -901,8 +907,8 @@ packages:
     cpu: [arm]
     os: [android]
 
-  '@esbuild/android-x64@0.28.1':
-    resolution: {integrity: sha512-dbwY7ltSMDWsRatcRpCnES4F+im88OCUgGZjy52shC7GqHRE/cYlxNbB4Z4UpJswpcc4Qxd2oE/ufM0p61IKng==}
+  '@esbuild/android-x64@0.27.4':
+    resolution: {integrity: sha512-PzPFnBNVF292sfpfhiyiXCGSn9HZg5BcAz+ivBuSsl6Rk4ga1oEXAamhOXRFyMcjwr2DVtm40G65N3GLeH1Lvw==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [android]
@@ -913,8 +919,8 @@ packages:
     cpu: [x64]
     os: [android]
 
-  '@esbuild/darwin-arm64@0.28.1':
-    resolution: {integrity: sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q==}
+  '@esbuild/darwin-arm64@0.27.4':
+    resolution: {integrity: sha512-b7xaGIwdJlht8ZFCvMkpDN6uiSmnxxK56N2GDTMYPr2/gzvfdQN8rTfBsvVKmIVY/X7EM+/hJKEIbbHs9oA4tQ==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [darwin]
@@ -925,8 +931,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@esbuild/darwin-x64@0.28.1':
-    resolution: {integrity: sha512-zfdzgK9ACBNZLI/CyHTOx81SyNbM6YXn7rxSgX97VjyiPl9W1i4Ka4fgKECEoFCKGpvBj5qArWIGgQjOwkgskQ==}
+  '@esbuild/darwin-x64@0.27.4':
+    resolution: {integrity: sha512-sR+OiKLwd15nmCdqpXMnuJ9W2kpy0KigzqScqHI3Hqwr7IXxBp3Yva+yJwoqh7rE8V77tdoheRYataNKL4QrPw==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [darwin]
@@ -937,8 +943,8 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@esbuild/freebsd-arm64@0.28.1':
-    resolution: {integrity: sha512-wG2EA8ENdEI0qhkSZMjfqrdY+ziCYCPMmtZjjIwOmXFjmyzEHn+UUxk5of+SYsjtfs3VpnlC7QLzSI5hY/rOAw==}
+  '@esbuild/freebsd-arm64@0.27.4':
+    resolution: {integrity: sha512-jnfpKe+p79tCnm4GVav68A7tUFeKQwQyLgESwEAUzyxk/TJr4QdGog9sqWNcUbr/bZt/O/HXouspuQDd9JxFSw==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [freebsd]
@@ -949,8 +955,8 @@ packages:
     cpu: [arm64]
     os: [freebsd]
 
-  '@esbuild/freebsd-x64@0.28.1':
-    resolution: {integrity: sha512-i7dZ9vQgnvSCzi/rYCXNgtF/U+eKZNJBzu3eTQbRgHnM7tNSizLOkRFAl3qzVc/Op/u5YkHHa4pf/3DOYHthLQ==}
+  '@esbuild/freebsd-x64@0.27.4':
+    resolution: {integrity: sha512-2kb4ceA/CpfUrIcTUl1wrP/9ad9Atrp5J94Lq69w7UwOMolPIGrfLSvAKJp0RTvkPPyn6CIWrNy13kyLikZRZQ==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [freebsd]
@@ -961,8 +967,8 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
-  '@esbuild/linux-arm64@0.28.1':
-    resolution: {integrity: sha512-yHs+0uc8+nvEAfAfxrWQKK5peSNzBc4PegcMO0EJ2hT71uA7vB8Ihg2e77R2P7SG5uYjPbHlLLmve4LLLRCf0g==}
+  '@esbuild/linux-arm64@0.27.4':
+    resolution: {integrity: sha512-7nQOttdzVGth1iz57kxg9uCz57dxQLHWxopL6mYuYthohPKEK0vU0C3O21CcBK6KDlkYVcnDXY099HcCDXd9dA==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [linux]
@@ -973,8 +979,8 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@esbuild/linux-arm@0.28.1':
-    resolution: {integrity: sha512-qVXBOHQS+d5Y722GwJzJUtOLlX7km3CraOaGormF1pDtPd2C/l1SHRPgjLunLGe51Sh5YYWKMFDyV4SxgMQYTQ==}
+  '@esbuild/linux-arm@0.27.4':
+    resolution: {integrity: sha512-aBYgcIxX/wd5n2ys0yESGeYMGF+pv6g0DhZr3G1ZG4jMfruU9Tl1i2Z+Wnj9/KjGz1lTLCcorqE2viePZqj4Eg==}
     engines: {node: '>=18'}
     cpu: [arm]
     os: [linux]
@@ -985,8 +991,8 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@esbuild/linux-ia32@0.28.1':
-    resolution: {integrity: sha512-d1z4ZuP0ajrfz/FhGT4vv278rX8KnPPJx8i5+AtK7TYbx9Le9F1hyzurZpkEyjkGa9dUGhQow4C1NmeGvqxN2w==}
+  '@esbuild/linux-ia32@0.27.4':
+    resolution: {integrity: sha512-oPtixtAIzgvzYcKBQM/qZ3R+9TEUd1aNJQu0HhGyqtx6oS7qTpvjheIWBbes4+qu1bNlo2V4cbkISr8q6gRBFA==}
     engines: {node: '>=18'}
     cpu: [ia32]
     os: [linux]
@@ -997,8 +1003,8 @@ packages:
     cpu: [ia32]
     os: [linux]
 
-  '@esbuild/linux-loong64@0.28.1':
-    resolution: {integrity: sha512-M5sRjUVZrkm1OAPR3dlOYzNmN+loZKGVi1VUQGrwuqLcbR6qeAz+famMhjASeH3YVKvZz+zT1jlh/keC3Rj/lg==}
+  '@esbuild/linux-loong64@0.27.4':
+    resolution: {integrity: sha512-8mL/vh8qeCoRcFH2nM8wm5uJP+ZcVYGGayMavi8GmRJjuI3g1v6Z7Ni0JJKAJW+m0EtUuARb6Lmp4hMjzCBWzA==}
     engines: {node: '>=18'}
     cpu: [loong64]
     os: [linux]
@@ -1009,8 +1015,8 @@ packages:
     cpu: [loong64]
     os: [linux]
 
-  '@esbuild/linux-mips64el@0.28.1':
-    resolution: {integrity: sha512-mRObBZeHh2OxcBFPWE/FjylkRgZdYuiTR3vaTozquCGOH14iP9oN4x4Ge81CoIDYQrXmIxpFumJBu5MtZpnQJQ==}
+  '@esbuild/linux-mips64el@0.27.4':
+    resolution: {integrity: sha512-1RdrWFFiiLIW7LQq9Q2NES+HiD4NyT8Itj9AUeCl0IVCA459WnPhREKgwrpaIfTOe+/2rdntisegiPWn/r/aAw==}
     engines: {node: '>=18'}
     cpu: [mips64el]
     os: [linux]
@@ -1021,8 +1027,8 @@ packages:
     cpu: [mips64el]
     os: [linux]
 
-  '@esbuild/linux-ppc64@0.28.1':
-    resolution: {integrity: sha512-slScBsMAb3GFDcdrCgLwZtPYRoH2H/youv10QiZyRjmsP48fznoveWytSgCI/R0ZcUgpc0ZhIUEx6LHts8yrfQ==}
+  '@esbuild/linux-ppc64@0.27.4':
+    resolution: {integrity: sha512-tLCwNG47l3sd9lpfyx9LAGEGItCUeRCWeAx6x2Jmbav65nAwoPXfewtAdtbtit/pJFLUWOhpv0FpS6GQAmPrHA==}
     engines: {node: '>=18'}
     cpu: [ppc64]
     os: [linux]
@@ -1033,8 +1039,8 @@ packages:
     cpu: [ppc64]
     os: [linux]
 
-  '@esbuild/linux-riscv64@0.28.1':
-    resolution: {integrity: sha512-kw0owk1o0GFETUJyW0jc0G4Yzs0BHZn0JDZ8JRT088vjJYX777BAs1fDGxAC+q831qOs2DTC96mNsG2opdfyyQ==}
+  '@esbuild/linux-riscv64@0.27.4':
+    resolution: {integrity: sha512-BnASypppbUWyqjd1KIpU4AUBiIhVr6YlHx/cnPgqEkNoVOhHg+YiSVxM1RLfiy4t9cAulbRGTNCKOcqHrEQLIw==}
     engines: {node: '>=18'}
     cpu: [riscv64]
     os: [linux]
@@ -1045,8 +1051,8 @@ packages:
     cpu: [riscv64]
     os: [linux]
 
-  '@esbuild/linux-s390x@0.28.1':
-    resolution: {integrity: sha512-/lAIjX8aYFRByhh6L5rYtPEDRqa9de/4V/juOXcta5frjvzXO4/sqEtyytse0g3zZFuWu5cDN0MkLz2qRDD2Ag==}
+  '@esbuild/linux-s390x@0.27.4':
+    resolution: {integrity: sha512-+eUqgb/Z7vxVLezG8bVB9SfBie89gMueS+I0xYh2tJdw3vqA/0ImZJ2ROeWwVJN59ihBeZ7Tu92dF/5dy5FttA==}
     engines: {node: '>=18'}
     cpu: [s390x]
     os: [linux]
@@ -1057,8 +1063,8 @@ packages:
     cpu: [s390x]
     os: [linux]
 
-  '@esbuild/linux-x64@0.28.1':
-    resolution: {integrity: sha512-u/anNYF2mmVOEDwLtnQ1wOr3EZ9sTNGLWrsYGYwHWzGA3Si84IOkHXlbWTD1NB+9/1lcnweYKO54uhxZydNzfA==}
+  '@esbuild/linux-x64@0.27.4':
+    resolution: {integrity: sha512-S5qOXrKV8BQEzJPVxAwnryi2+Iq5pB40gTEIT69BQONqR7JH1EPIcQ/Uiv9mCnn05jff9umq/5nqzxlqTOg9NA==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [linux]
@@ -1069,8 +1075,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@esbuild/netbsd-arm64@0.28.1':
-    resolution: {integrity: sha512-oks0DYbLwWMmaakTsCb+zL4E+aHRVLom9IJZOAthMQEPiQmydXHkziYEsGYRx0uNV/IjEKGAV941JzH02pflqw==}
+  '@esbuild/netbsd-arm64@0.27.4':
+    resolution: {integrity: sha512-xHT8X4sb0GS8qTqiwzHqpY00C95DPAq7nAwX35Ie/s+LO9830hrMd3oX0ZMKLvy7vsonee73x0lmcdOVXFzd6Q==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [netbsd]
@@ -1081,8 +1087,8 @@ packages:
     cpu: [arm64]
     os: [netbsd]
 
-  '@esbuild/netbsd-x64@0.28.1':
-    resolution: {integrity: sha512-aeL6lAnN89Hz43Mlh1G8ARasbuoYvSITDEx0tHh5b7jJnHcssqgjy9Yx430GDpmCa6OyrKoS0aNRjKundRizGg==}
+  '@esbuild/netbsd-x64@0.27.4':
+    resolution: {integrity: sha512-RugOvOdXfdyi5Tyv40kgQnI0byv66BFgAqjdgtAKqHoZTbTF2QqfQrFwa7cHEORJf6X2ht+l9ABLMP0dnKYsgg==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [netbsd]
@@ -1093,8 +1099,8 @@ packages:
     cpu: [x64]
     os: [netbsd]
 
-  '@esbuild/openbsd-arm64@0.28.1':
-    resolution: {integrity: sha512-MEFJe5C3R8pwXdZ5Y21oo6m7ePiS0d9pWucn99O/wvyJZChoIQKrQDxKrGeW8F5+T0okTHesAmDeiHDTIq0V/Q==}
+  '@esbuild/openbsd-arm64@0.27.4':
+    resolution: {integrity: sha512-2MyL3IAaTX+1/qP0O1SwskwcwCoOI4kV2IBX1xYnDDqthmq5ArrW94qSIKCAuRraMgPOmG0RDTA74mzYNQA9ow==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [openbsd]
@@ -1105,8 +1111,8 @@ packages:
     cpu: [arm64]
     os: [openbsd]
 
-  '@esbuild/openbsd-x64@0.28.1':
-    resolution: {integrity: sha512-i/ZLIOafE0Z8cI/XANJAixoJL/uRAoS2xOA3rb0xN+KK0K177cMAsQYkzHtBrtMXAKuAc7HGgcWiZ/sRC1Nxgw==}
+  '@esbuild/openbsd-x64@0.27.4':
+    resolution: {integrity: sha512-u8fg/jQ5aQDfsnIV6+KwLOf1CmJnfu1ShpwqdwC0uA7ZPwFws55Ngc12vBdeUdnuWoQYx/SOQLGDcdlfXhYmXQ==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [openbsd]
@@ -1117,8 +1123,8 @@ packages:
     cpu: [x64]
     os: [openbsd]
 
-  '@esbuild/openharmony-arm64@0.28.1':
-    resolution: {integrity: sha512-ge+Z7EXFNt2BO1oAMsVpiQ8EwndV9i1xXerAeTIK7AtPs3bKFXQM7nlRxDSIUIMeueR1CNXxqztLzdNeReKBJg==}
+  '@esbuild/openharmony-arm64@0.27.4':
+    resolution: {integrity: sha512-JkTZrl6VbyO8lDQO3yv26nNr2RM2yZzNrNHEsj9bm6dOwwu9OYN28CjzZkH57bh4w0I2F7IodpQvUAEd1mbWXg==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [openharmony]
@@ -1129,8 +1135,8 @@ packages:
     cpu: [arm64]
     os: [openharmony]
 
-  '@esbuild/sunos-x64@0.28.1':
-    resolution: {integrity: sha512-BEjgtECkL3vY+SaSQ6nzVfiALUeFxpawyp8Jmf5PtYhf1Ug40N1h/hxlhts+f1FvSvarEigdxS3BlSMI2PJLcQ==}
+  '@esbuild/sunos-x64@0.27.4':
+    resolution: {integrity: sha512-/gOzgaewZJfeJTlsWhvUEmUG4tWEY2Spp5M20INYRg2ZKl9QPO3QEEgPeRtLjEWSW8FilRNacPOg8R1uaYkA6g==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [sunos]
@@ -1141,8 +1147,8 @@ packages:
     cpu: [x64]
     os: [sunos]
 
-  '@esbuild/win32-arm64@0.28.1':
-    resolution: {integrity: sha512-lCv9eK/H6ZJWbE7bh2nw54CZ9M2nupBxJcTsdk/QQnWkdSjKGuxmmH8/GWrlT1eMmZfn4dGcCjRte397WqfQXA==}
+  '@esbuild/win32-arm64@0.27.4':
+    resolution: {integrity: sha512-Z9SExBg2y32smoDQdf1HRwHRt6vAHLXcxD2uGgO/v2jK7Y718Ix4ndsbNMU/+1Qiem9OiOdaqitioZwxivhXYg==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [win32]
@@ -1153,8 +1159,8 @@ packages:
     cpu: [arm64]
     os: [win32]
 
-  '@esbuild/win32-ia32@0.28.1':
-    resolution: {integrity: sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg==}
+  '@esbuild/win32-ia32@0.27.4':
+    resolution: {integrity: sha512-DAyGLS0Jz5G5iixEbMHi5KdiApqHBWMGzTtMiJ72ZOLhbu/bzxgAe8Ue8CTS3n3HbIUHQz/L51yMdGMeoxXNJw==}
     engines: {node: '>=18'}
     cpu: [ia32]
     os: [win32]
@@ -1165,8 +1171,8 @@ packages:
     cpu: [ia32]
     os: [win32]
 
-  '@esbuild/win32-x64@0.28.1':
-    resolution: {integrity: sha512-bm4Mowrv+GXMlpWX++EcXw/iLyd1o3+bJkC2DkWXYVvgZCqD/bSj9ctZeAMC3cIxgjRVR2Dufaiu4YPxr5gW1A==}
+  '@esbuild/win32-x64@0.27.4':
+    resolution: {integrity: sha512-+knoa0BDoeXgkNvvV1vvbZX4+hizelrkwmGJBdT17t8FNPwG2lKemmuMZlmaNQ3ws3DKKCxpb4zRZEIp3UxFCg==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
@@ -4343,8 +4349,8 @@ packages:
   es-toolkit@1.49.0:
     resolution: {integrity: sha512-G5iZ6Pc/FNRY/soKZHC+TxGDD83rHUDXxzaWhGCX44vAv/tMs56WMusnm/KMNK+luUPsgA9U28cGr4RDlSzL2g==}
 
-  esbuild@0.28.1:
-    resolution: {integrity: sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==}
+  esbuild@0.27.4:
+    resolution: {integrity: sha512-Rq4vbHnYkK5fws5NF7MYTU68FPRE1ajX7heQ/8QXXWqNgqqJ/GkmmyxIzUnf2Sr/bakf8l54716CcMGHYhMrrQ==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -7622,157 +7628,157 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@esbuild/aix-ppc64@0.28.1':
+  '@esbuild/aix-ppc64@0.27.4':
     optional: true
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
 
-  '@esbuild/android-arm64@0.28.1':
+  '@esbuild/android-arm64@0.27.4':
     optional: true
 
   '@esbuild/android-arm64@0.28.2':
     optional: true
 
-  '@esbuild/android-arm@0.28.1':
+  '@esbuild/android-arm@0.27.4':
     optional: true
 
   '@esbuild/android-arm@0.28.2':
     optional: true
 
-  '@esbuild/android-x64@0.28.1':
+  '@esbuild/android-x64@0.27.4':
     optional: true
 
   '@esbuild/android-x64@0.28.2':
     optional: true
 
-  '@esbuild/darwin-arm64@0.28.1':
+  '@esbuild/darwin-arm64@0.27.4':
     optional: true
 
   '@esbuild/darwin-arm64@0.28.2':
     optional: true
 
-  '@esbuild/darwin-x64@0.28.1':
+  '@esbuild/darwin-x64@0.27.4':
     optional: true
 
   '@esbuild/darwin-x64@0.28.2':
     optional: true
 
-  '@esbuild/freebsd-arm64@0.28.1':
+  '@esbuild/freebsd-arm64@0.27.4':
     optional: true
 
   '@esbuild/freebsd-arm64@0.28.2':
     optional: true
 
-  '@esbuild/freebsd-x64@0.28.1':
+  '@esbuild/freebsd-x64@0.27.4':
     optional: true
 
   '@esbuild/freebsd-x64@0.28.2':
     optional: true
 
-  '@esbuild/linux-arm64@0.28.1':
+  '@esbuild/linux-arm64@0.27.4':
     optional: true
 
   '@esbuild/linux-arm64@0.28.2':
     optional: true
 
-  '@esbuild/linux-arm@0.28.1':
+  '@esbuild/linux-arm@0.27.4':
     optional: true
 
   '@esbuild/linux-arm@0.28.2':
     optional: true
 
-  '@esbuild/linux-ia32@0.28.1':
+  '@esbuild/linux-ia32@0.27.4':
     optional: true
 
   '@esbuild/linux-ia32@0.28.2':
     optional: true
 
-  '@esbuild/linux-loong64@0.28.1':
+  '@esbuild/linux-loong64@0.27.4':
     optional: true
 
   '@esbuild/linux-loong64@0.28.2':
     optional: true
 
-  '@esbuild/linux-mips64el@0.28.1':
+  '@esbuild/linux-mips64el@0.27.4':
     optional: true
 
   '@esbuild/linux-mips64el@0.28.2':
     optional: true
 
-  '@esbuild/linux-ppc64@0.28.1':
+  '@esbuild/linux-ppc64@0.27.4':
     optional: true
 
   '@esbuild/linux-ppc64@0.28.2':
     optional: true
 
-  '@esbuild/linux-riscv64@0.28.1':
+  '@esbuild/linux-riscv64@0.27.4':
     optional: true
 
   '@esbuild/linux-riscv64@0.28.2':
     optional: true
 
-  '@esbuild/linux-s390x@0.28.1':
+  '@esbuild/linux-s390x@0.27.4':
     optional: true
 
   '@esbuild/linux-s390x@0.28.2':
     optional: true
 
-  '@esbuild/linux-x64@0.28.1':
+  '@esbuild/linux-x64@0.27.4':
     optional: true
 
   '@esbuild/linux-x64@0.28.2':
     optional: true
 
-  '@esbuild/netbsd-arm64@0.28.1':
+  '@esbuild/netbsd-arm64@0.27.4':
     optional: true
 
   '@esbuild/netbsd-arm64@0.28.2':
     optional: true
 
-  '@esbuild/netbsd-x64@0.28.1':
+  '@esbuild/netbsd-x64@0.27.4':
     optional: true
 
   '@esbuild/netbsd-x64@0.28.2':
     optional: true
 
-  '@esbuild/openbsd-arm64@0.28.1':
+  '@esbuild/openbsd-arm64@0.27.4':
     optional: true
 
   '@esbuild/openbsd-arm64@0.28.2':
     optional: true
 
-  '@esbuild/openbsd-x64@0.28.1':
+  '@esbuild/openbsd-x64@0.27.4':
     optional: true
 
   '@esbuild/openbsd-x64@0.28.2':
     optional: true
 
-  '@esbuild/openharmony-arm64@0.28.1':
+  '@esbuild/openharmony-arm64@0.27.4':
     optional: true
 
   '@esbuild/openharmony-arm64@0.28.2':
     optional: true
 
-  '@esbuild/sunos-x64@0.28.1':
+  '@esbuild/sunos-x64@0.27.4':
     optional: true
 
   '@esbuild/sunos-x64@0.28.2':
     optional: true
 
-  '@esbuild/win32-arm64@0.28.1':
+  '@esbuild/win32-arm64@0.27.4':
     optional: true
 
   '@esbuild/win32-arm64@0.28.2':
     optional: true
 
-  '@esbuild/win32-ia32@0.28.1':
+  '@esbuild/win32-ia32@0.27.4':
     optional: true
 
   '@esbuild/win32-ia32@0.28.2':
     optional: true
 
-  '@esbuild/win32-x64@0.28.1':
+  '@esbuild/win32-x64@0.27.4':
     optional: true
 
   '@esbuild/win32-x64@0.28.2':
@@ -8269,7 +8275,7 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/encryption': 0.113.1(@types/node@24.13.2)(typescript@5.9.3)
       '@happyvertical/smrt-approvals': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
@@ -8281,7 +8287,7 @@ snapshots:
       '@happyvertical/smrt-users': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/sql': 0.113.1
     optionalDependencies:
-      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@aws-sdk/client-sqs'
       - '@electric-sql/pglite'
@@ -8308,7 +8314,7 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/encryption': 0.113.1(@types/node@26.1.0)(typescript@5.9.3)
       '@happyvertical/smrt-approvals': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
@@ -8320,7 +8326,7 @@ snapshots:
       '@happyvertical/smrt-users': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/sql': 0.113.1
     optionalDependencies:
-      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@aws-sdk/client-sqs'
       - '@electric-sql/pglite'
@@ -8347,7 +8353,7 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-app-runtime@0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/encryption': 0.113.1(@types/node@24.13.2)(typescript@5.9.3)
       '@happyvertical/smrt-approvals': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
@@ -8359,7 +8365,7 @@ snapshots:
       '@happyvertical/smrt-users': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/sql': 0.113.1
     optionalDependencies:
-      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@aws-sdk/client-sqs'
       - '@electric-sql/pglite'
@@ -8506,13 +8512,13 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-chat@0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-chat@0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/ai': 0.113.1(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/animation': 0.5.0(gsap@3.15.0)
       '@happyvertical/images': 0.113.1(jimp@1.6.1(supports-color@7.2.0))(sharp@0.35.5(@types/node@24.13.2))
       '@happyvertical/smrt-agents': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
-      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-assets': 0.62.1(@happyvertical/speech@0.113.1)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-config': 0.62.1
       '@happyvertical/smrt-core': 0.62.1(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)(ws@8.21.3)(zod@4.4.3)
@@ -8560,22 +8566,22 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-cli@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-cli@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/ai': 0.113.1(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/encryption': 0.113.1(@types/node@26.1.0)(typescript@5.9.3)
       '@happyvertical/files': 0.113.1(supports-color@7.2.0)
       '@happyvertical/logger': 0.113.1
       '@happyvertical/smrt-agents': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
-      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-assets': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-config': 0.62.1
       '@happyvertical/smrt-core': 0.62.1(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)(ws@8.21.3)(zod@4.4.3)
-      '@happyvertical/smrt-desktop': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-desktop': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-dev-mcp': 0.62.1
       '@happyvertical/smrt-inference': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-ledgers': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(ws@8.21.3)(zod@4.4.3)
-      '@happyvertical/smrt-playground': 0.62.1(@happyvertical/speech@0.111.5)(pdfjs-dist@6.2.108)(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@happyvertical/smrt-playground': 0.62.1(@happyvertical/speech@0.111.5)(pdfjs-dist@6.2.108)(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@happyvertical/smrt-types': 0.62.1
       '@happyvertical/smrt-users': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/sql': 0.113.1
@@ -8655,9 +8661,9 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-desktop@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-desktop@0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
-      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-app-runtime': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@26.1.0)(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
     transitivePeerDependencies:
       - '@aws-sdk/client-sqs'
       - '@electric-sql/pglite'
@@ -9254,14 +9260,14 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-playground@0.62.1(@happyvertical/speech@0.111.5)(pdfjs-dist@6.2.108)(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@happyvertical/smrt-playground@0.62.1(@happyvertical/speech@0.111.5)(pdfjs-dist@6.2.108)(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       '@happyvertical/smrt-ui': 0.62.1(@happyvertical/speech@0.111.5)(pdfjs-dist@6.2.108)(svelte@5.57.1)
       tinyglobby: 0.2.17
       tsx: 4.23.15
     optionalDependencies:
       svelte: 5.57.1
-      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
     transitivePeerDependencies:
       - '@happyvertical/speech'
       - pdfjs-dist
@@ -9520,10 +9526,10 @@ snapshots:
       - ws
       - zod
 
-  '@happyvertical/smrt-svelte@0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
+  '@happyvertical/smrt-svelte@0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@happyvertical/logger': 0.113.1
-      '@happyvertical/smrt-chat': 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
+      '@happyvertical/smrt-chat': 0.62.1(@happyvertical/encryption@0.111.5(@types/node@24.13.2)(typescript@5.9.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(@types/node@24.13.2)(debug@4.4.3(supports-color@7.2.0))(jimp@1.6.1(supports-color@7.2.0))(pdfjs-dist@6.2.108)(sharp@0.35.5(@types/node@24.13.2))(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-core': 0.62.1(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-fields': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
       '@happyvertical/smrt-inference': 0.62.1(@happyvertical/speech@0.111.5)(@modelcontextprotocol/sdk@1.29.0(supports-color@7.2.0)(zod@4.4.3))(pdfjs-dist@6.2.108)(supports-color@7.2.0)(svelte@5.57.1)(typescript@5.9.3)(ws@8.21.3)(zod@4.4.3)
@@ -11443,20 +11449,20 @@ snapshots:
     dependencies:
       acorn: 8.18.0
 
-  '@sveltejs/adapter-node@5.5.7(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))':
+  '@sveltejs/adapter-node@5.5.7(@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))':
     dependencies:
       '@rollup/plugin-commonjs': 29.0.3(rollup@4.62.2)
       '@rollup/plugin-json': 6.1.0(rollup@4.62.2)
       '@rollup/plugin-node-resolve': 16.0.3(rollup@4.62.2)
       '@rollup/plugin-replace': 6.0.3(rollup@4.62.2)
-      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/kit': 2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       rollup: 4.62.2
 
-  '@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
-      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@types/cookie': 0.6.0
       acorn: 8.18.0
       cookie: 0.6.0
@@ -11468,15 +11474,15 @@ snapshots:
       set-cookie-parser: 3.1.1
       sirv: 3.0.2
       svelte: 5.57.1
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
     optionalDependencies:
       typescript: 5.9.3
 
-  '@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@sveltejs/kit@2.69.3(@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
-      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@sveltejs/vite-plugin-svelte': 7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@types/cookie': 0.6.0
       acorn: 8.18.0
       cookie: 0.6.0
@@ -11488,30 +11494,30 @@ snapshots:
       set-cookie-parser: 3.1.1
       sirv: 3.0.2
       svelte: 5.57.1
-      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
     optionalDependencies:
       typescript: 5.9.3
     optional: true
 
   '@sveltejs/load-config@0.2.0': {}
 
-  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       deepmerge: 4.3.1
       magic-string: 0.30.21
       obug: 2.1.3
       svelte: 5.57.1
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
-      vitefu: 1.1.3(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vitefu: 1.1.3(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
 
-  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@sveltejs/vite-plugin-svelte@7.2.0(svelte@5.57.1)(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       deepmerge: 4.3.1
       magic-string: 0.30.21
       obug: 2.1.3
       svelte: 5.57.1
-      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
-      vitefu: 1.1.3(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vitefu: 1.1.3(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
     optional: true
 
   '@tanstack/db-ivm@1.0.0-rc.1.2(typescript@5.9.3)':
@@ -11688,21 +11694,21 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.0
 
-  '@vitest/mocker@4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
+  '@vitest/mocker@4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))':
     dependencies:
       '@vitest/spy': 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
 
-  '@vitest/mocker@4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
+  '@vitest/mocker@4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@vitest/spy': 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
   '@vitest/pretty-format@4.1.10':
     dependencies:
@@ -12326,34 +12332,34 @@ snapshots:
 
   es-toolkit@1.49.0: {}
 
-  esbuild@0.28.1:
+  esbuild@0.27.4:
     optionalDependencies:
-      '@esbuild/aix-ppc64': 0.28.1
-      '@esbuild/android-arm': 0.28.1
-      '@esbuild/android-arm64': 0.28.1
-      '@esbuild/android-x64': 0.28.1
-      '@esbuild/darwin-arm64': 0.28.1
-      '@esbuild/darwin-x64': 0.28.1
-      '@esbuild/freebsd-arm64': 0.28.1
-      '@esbuild/freebsd-x64': 0.28.1
-      '@esbuild/linux-arm': 0.28.1
-      '@esbuild/linux-arm64': 0.28.1
-      '@esbuild/linux-ia32': 0.28.1
-      '@esbuild/linux-loong64': 0.28.1
-      '@esbuild/linux-mips64el': 0.28.1
-      '@esbuild/linux-ppc64': 0.28.1
-      '@esbuild/linux-riscv64': 0.28.1
-      '@esbuild/linux-s390x': 0.28.1
-      '@esbuild/linux-x64': 0.28.1
-      '@esbuild/netbsd-arm64': 0.28.1
-      '@esbuild/netbsd-x64': 0.28.1
-      '@esbuild/openbsd-arm64': 0.28.1
-      '@esbuild/openbsd-x64': 0.28.1
-      '@esbuild/openharmony-arm64': 0.28.1
-      '@esbuild/sunos-x64': 0.28.1
-      '@esbuild/win32-arm64': 0.28.1
-      '@esbuild/win32-ia32': 0.28.1
-      '@esbuild/win32-x64': 0.28.1
+      '@esbuild/aix-ppc64': 0.27.4
+      '@esbuild/android-arm': 0.27.4
+      '@esbuild/android-arm64': 0.27.4
+      '@esbuild/android-x64': 0.27.4
+      '@esbuild/darwin-arm64': 0.27.4
+      '@esbuild/darwin-x64': 0.27.4
+      '@esbuild/freebsd-arm64': 0.27.4
+      '@esbuild/freebsd-x64': 0.27.4
+      '@esbuild/linux-arm': 0.27.4
+      '@esbuild/linux-arm64': 0.27.4
+      '@esbuild/linux-ia32': 0.27.4
+      '@esbuild/linux-loong64': 0.27.4
+      '@esbuild/linux-mips64el': 0.27.4
+      '@esbuild/linux-ppc64': 0.27.4
+      '@esbuild/linux-riscv64': 0.27.4
+      '@esbuild/linux-s390x': 0.27.4
+      '@esbuild/linux-x64': 0.27.4
+      '@esbuild/netbsd-arm64': 0.27.4
+      '@esbuild/netbsd-x64': 0.27.4
+      '@esbuild/openbsd-arm64': 0.27.4
+      '@esbuild/openbsd-x64': 0.27.4
+      '@esbuild/openharmony-arm64': 0.27.4
+      '@esbuild/sunos-x64': 0.27.4
+      '@esbuild/win32-arm64': 0.27.4
+      '@esbuild/win32-ia32': 0.27.4
+      '@esbuild/win32-x64': 0.27.4
 
   esbuild@0.28.2:
     optionalDependencies:
@@ -14525,7 +14531,7 @@ snapshots:
 
   tsx@4.23.0:
     dependencies:
-      esbuild: 0.28.1
+      esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
 
@@ -14620,7 +14626,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1):
+  vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.5
@@ -14629,13 +14635,13 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 24.13.2
-      esbuild: 0.28.2
+      esbuild: 0.27.4
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.0
       yaml: 2.9.1
 
-  vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1):
+  vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.5
@@ -14644,13 +14650,13 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 24.13.2
-      esbuild: 0.28.2
+      esbuild: 0.27.4
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.15
       yaml: 2.9.1
 
-  vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1):
+  vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.5
@@ -14659,26 +14665,26 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 26.1.0
-      esbuild: 0.28.2
+      esbuild: 0.27.4
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.0
       yaml: 2.9.1
     optional: true
 
-  vitefu@1.1.3(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
+  vitefu@1.1.3(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
     optionalDependencies:
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
 
-  vitefu@1.1.3(vite@8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
+  vitefu@1.1.3(vite@8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
     optionalDependencies:
-      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@26.1.0)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
     optional: true
 
-  vitest@4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
+  vitest@4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.10
-      '@vitest/mocker': 4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
+      '@vitest/mocker': 4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1))
       '@vitest/pretty-format': 4.1.10
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -14695,7 +14701,7 @@ snapshots:
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.1)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 24.13.2
@@ -14704,10 +14710,10 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
+  vitest@4.1.10(@types/node@24.13.2)(happy-dom@20.10.6)(jsdom@26.1.0(supports-color@7.2.0))(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.10
-      '@vitest/mocker': 4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      '@vitest/mocker': 4.1.10(vite@8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       '@vitest/pretty-format': 4.1.10
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -14724,7 +14730,7 @@ snapshots:
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
+      vite: 8.1.6(@types/node@24.13.2)(esbuild@0.27.4)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 24.13.2
