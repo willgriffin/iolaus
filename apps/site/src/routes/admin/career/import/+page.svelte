@@ -9,7 +9,10 @@ import AdminBackLink from '$lib/components/admin/AdminBackLink.svelte';
 import ResumeImport from '$lib/components/admin/ResumeImport.svelte';
 import type { ResumeImportView } from '$lib/resume-import';
 
-let { data }: { data: { import?: ResumeImportView | null } } = $props();
+let {
+  data,
+}: { data: { import?: ResumeImportView | null; localImport?: boolean } } =
+  $props();
 const adminHeader = getContext<AdminHeaderActions | undefined>(
   ADMIN_HEADER_ACTIONS,
 );
@@ -18,4 +21,4 @@ $effect(() => adminHeader?.register(importHeaderActions));
 </script>
 {#snippet importHeaderActions()}<AdminBackLink {...backLink} />{/snippet}
 <svelte:head><title>Import resume — Iolaus</title></svelte:head>
-<ResumeImport initialImport={data.import ?? null} />
+<ResumeImport initialImport={data.import ?? null} localImport={data.localImport ?? false} />

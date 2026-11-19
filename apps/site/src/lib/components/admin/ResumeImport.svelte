@@ -18,7 +18,10 @@ import {
   type ResumeImportSkillEvidence,
 } from '$lib/resume-import-structure';
 
-let { initialImport = null }: { initialImport?: ResumeImportView | null } =
+let {
+  initialImport = null,
+  localImport = false,
+}: { initialImport?: ResumeImportView | null; localImport?: boolean } =
   $props();
 let fileInput = $state<HTMLInputElement>();
 let selectedFile = $state<File | null>(null);
@@ -554,7 +557,7 @@ function update(entry: ResumeImportEntry, key: string, value: string) {
     <div class="dropzone" role="button" tabindex="0" aria-label="Choose a resume PDF" ondrop={(event) => { event.preventDefault(); accept(event.dataTransfer?.files[0]); }} ondragover={(event) => event.preventDefault()} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); fileInput?.click(); } }} onclick={() => fileInput?.click()}>
       <strong>{selectedFile ? selectedFile.name : 'Drop a PDF here or choose a file'}</strong><span>PDF only, up to 10 MiB.</span><input bind:this={fileInput} type="file" accept="application/pdf,.pdf" onchange={(event) => accept(event.currentTarget.files?.[0])} />
     </div>
-    <label class="consent"><input type="checkbox" bind:checked={consent} /> Resume text is sent to our configured AI provider to prepare suggestions. Nothing is added until you review and import.</label>
+    <label class="consent"><input type="checkbox" bind:checked={consent} /> {localImport ? 'Read PDF text locally for an editable summary. No AI or OCR service is contacted. Add experience, education and skills manually in Career. Nothing is added until you review and import.' : 'Resume text is sent to our configured AI provider to prepare suggestions. Nothing is added until you review and import.'}</label>
     <button type="button" onclick={() => upload()} disabled={!selectedFile || !consent || busy}>{busy ? 'Uploading PDF…' : 'Upload and review'}</button>
     {#if selectedFile && !consent && !busy}<p class="upload-hint">Check the consent box above to enable upload.</p>{/if}
     {#if expiredImportRecovery}<button type="button" class="secondary" onclick={startNewImport} disabled={busy || !selectedFile || !consent}>Start a new import</button>{/if}

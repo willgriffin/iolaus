@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import ResumeImport from './ResumeImport.svelte';
 
 describe('ResumeImport', () => {
+  it('explains local text import without implying external AI consent', () => {
+    const { body } = render(ResumeImport, { props: { localImport: true } });
+    expect(body).toContain('No AI or OCR service is contacted.');
+    expect(body).not.toContain(
+      'Resume text is sent to our configured AI provider',
+    );
+  });
+
   it('renders a private upload boundary with a bounded PDF picker', () => {
     const { body } = render(ResumeImport);
     expect(body).toContain('Private resume import');
