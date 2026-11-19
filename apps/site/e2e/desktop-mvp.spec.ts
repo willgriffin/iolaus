@@ -15,7 +15,7 @@ type Checkpoint = {
   instance: string;
   opportunityId: string;
   applicationId: string;
-  pdfs: Array<{ href: string; sha256: string }>;
+  pdfs: Array<{ href: string; sha256: string; expectedText: string }>;
 };
 
 test('installed local sidecar preserves a private synthetic application across restart', async ({
@@ -83,7 +83,11 @@ test('installed local sidecar preserves a private synthetic application across r
       return found as Record<string, unknown>;
     }
 
-    async function inspectPdf(request: APIRequestContext, href: string) {
+    async function inspectPdf(
+      request: APIRequestContext,
+      href: string,
+      expectedText = fixture.name,
+    ) {
       expect(href).toMatch(/^\/admin\/resume-assets\/[^/]+\/pdf$/);
       const response = await request.get(href);
       expect(response.status()).toBe(200);
@@ -94,10 +98,10 @@ test('installed local sidecar preserves a private synthetic application across r
       const text = await reader.extractText(new Uint8Array(bytes), {
         skipOCRFallback: true,
       });
-      expect(text).toContain(fixture.name);
+      expect(text).toContain(expectedText);
       const sha256 = createHash('sha256').update(bytes).digest('hex');
       writeFileSync(join(state, `${sha256}.pdf`), bytes, { mode: 0o600 });
-      return { href, sha256 };
+      return { href, sha256, expectedText };
     }
 
     function expectPrivateDraft(application: Record<string, unknown>) {
@@ -141,7 +145,9 @@ test('installed local sidecar preserves a private synthetic application across r
         page.getByRole('heading', { name: fixture.jobTitle, exact: true }),
       ).toBeVisible();
       for (const pdf of checkpoint.pdfs)
-        expect(await inspectPdf(context.request, pdf.href)).toEqual(pdf);
+        expect(
+          await inspectPdf(context.request, pdf.href, pdf.expectedText),
+        ).toEqual(pdf);
       await page.screenshot({
         path: testInfo.outputPath('after-restart.png'),
         fullPage: true,
@@ -291,6 +297,7 @@ test('installed local sidecar preserves a private synthetic application across r
         await inspectPdf(
           context.request,
           `/admin/resume-assets/${application.packetAssetId}/pdf`,
+          fixture.jobTitle,
         ),
       );
       await page
