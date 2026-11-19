@@ -15,6 +15,8 @@ import {
   resolveExtractionAiProfileClient,
 } from './ai-config.js';
 import { meterAiWritingCall } from './ai-usage-guard.js';
+import { getAppConfig } from './app-config.js';
+import { createLocalResumePdfClient } from './local-resume-pdf.js';
 import {
   createResumeImportPdfClient,
   ResumeImportPdfClientError,
@@ -1719,7 +1721,7 @@ async function dockerPdfText(bytes: Uint8Array): Promise<PdfText> {
   }
 }
 
-/** Extracts native PDF text in an isolated container, then asks the configured AI profile for a reviewable proposal. */
+/** Reads local PDFs in process; hosted extraction remains isolated and AI-assisted. */
 export async function extractResumeImport(
   input: ExtractResumeImportInput,
 ): Promise<ResumeImportExtraction> {
@@ -1736,7 +1738,10 @@ export async function extractResumeImport(
   await input.onProgress?.('reading_pdf');
   let pdf: PdfText;
   try {
-    const client = createResumeImportPdfClient();
+    const client =
+      getAppConfig().runtimeProfile === 'local'
+        ? createLocalResumePdfClient()
+        : createResumeImportPdfClient();
     if (client) {
       const result = await client.extract({
         bytes: input.bytes,
@@ -1755,16 +1760,20 @@ export async function extractResumeImport(
       throw new ResumeImportExtractionError(cause.category);
     throw cause;
   }
-  if (needsStructuredOcr(pdf)) {
+  if (getAppConfig().runtimeProfile !== 'local' && needsStructuredOcr(pdf)) {
     // The Docker fast path remains constrained with `--network none`; the
     // serialization boundary reauthorizes immediately before the host call.
     await input.onProgress?.('reading_scan');
     pdf = await paddlePdfText(input.bytes, pdf.pages, input.authorize);
   }
-  if (!pdf.text.trim())
+  if (!pdf.text.replace(/\[Page \d+\]\n/gu, '').trim())
     return {
       entries: [],
-      warnings: ['No text could be extracted from this PDF.'],
+      warnings: [
+        getAppConfig().runtimeProfile === 'local'
+          ? 'No text could be extracted. For a scanned PDF, enter your profile and career history manually in Career; local import does not contact an OCR service.'
+          : 'No text could be extracted from this PDF.',
+      ],
       provider: 'pdf',
       model: 'unpdf',
       version: VERSION,
@@ -1772,6 +1781,36 @@ export async function extractResumeImport(
   await input.authorize();
   const subject = input.subject;
   if (!subject) throw new ResumeImportExtractionError('authentication');
+  if (getAppConfig().runtimeProfile === 'local') {
+    const summary = pdf.text.replace(/\[Page \d+\]\n/gu, '').trim();
+    return {
+      entries: [
+        {
+          id: 'profile-1',
+          kind: 'profile',
+          fields: { summary: summary.slice(0, 4000) },
+          evidence: evidence(pdf.text, [1], pdf.pages),
+          uncertain: true,
+        },
+      ],
+      warnings: [
+        'Local import reads text only and does not use AI. Edit the proposed summary before applying it, then add experience, education and skills in Career.',
+        ...(summary.length > 4000
+          ? [
+              'Only the first 4,000 characters are proposed; add the remaining facts manually in Career.',
+            ]
+          : []),
+        ...(pdf.needsOcr
+          ? [
+              'Some pages have no readable text. Scanned pages require manual entry.',
+            ]
+          : []),
+      ],
+      provider: 'pdf',
+      model: 'unpdf-local-manual',
+      version: VERSION,
+    };
+  }
   const profile = await resolveExtractionAiProfileClient({
     maxOutputTokens: MAX_EXPERIENCE_OUTPUT_TOKENS,
     usageTags: { feature: 'resume-import' },

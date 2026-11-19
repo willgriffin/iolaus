@@ -20,11 +20,15 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ url, locals }) => {
   if (locals.user) throw redirect(303, '/');
   if (applicationRuntime.profile !== 'local') {
-    return { available: false, token: '' };
+    return { available: false, token: '', desktop: false };
+  }
+  if (process.env.SMRT_DESKTOP_OWNER_LINK_SECRET) {
+    return { available: false, token: '', desktop: true };
   }
   const runtime = await getLocalApplicationRuntime();
   const diagnostics = await runtime.diagnostics();
   return {
+    desktop: false,
     available: diagnostics.bootstrap.status !== 'claimed',
     token: url.searchParams.get('token') || '',
   };
@@ -34,6 +38,9 @@ export const actions: Actions = {
   default: async (event) => {
     if (applicationRuntime.profile !== 'local') {
       return fail(404, { message: 'Local owner setup is disabled.' });
+    }
+    if (process.env.SMRT_DESKTOP_OWNER_LINK_SECRET) {
+      return fail(404, { message: 'Quit and reopen Iolaus to sign in.' });
     }
     const form = await event.request.formData();
     const token = String(form.get('token') || '');

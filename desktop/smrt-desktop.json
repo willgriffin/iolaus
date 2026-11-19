@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "productId": "iolaus",
+  "bundleId": "com.willgriffin.iolaus",
+  "displayName": "Iolaus",
+  "icons": [
+    "desktop/icon.png"
+  ],
+  "sidecar": {
+    "workingDirectory": "app",
+    "args": [
+      "desktop/entry.mjs"
+    ],
+    "healthRoute": "/api/_runtime/health",
+    "ownerClaimRoute": "/api/_runtime/owner-link",
+    "dataDirectory": "runtime"
+  },
+  "features": {
+    "default": [
+      "ai-anthropic",
+      "ai-openai",
+      "pdf",
+      "images",
+      "browser",
+      "documents"
+    ],
+    "custom": {}
+  },
+  "maxSizeMB": 1500,
+  "acknowledgedDynamicImports": [
+    {
+      "from": "@happyvertical/ai",
+      "specifier": "@google/genai"
+    },
+    {
+      "from": "@happyvertical/files",
+      "specifier": "googleapis"
+    },
+    {
+      "from": "@happyvertical/pdf",
+      "specifier": "@happyvertical/ocr"
+    },
+    {
+      "from": "@happyvertical/smrt-core",
+      "specifier": "oxc-transform"
+    },
+    {
+      "from": "@happyvertical/smrt-core",
+      "specifier": "tsx"
+    },
+    {
+      "from": "@happyvertical/sql",
+      "specifier": "@duckdb/node-api"
+    },
+    {
+      "from": "@napi-rs/canvas",
+      "specifier": "./skia.wasi.cjs"
+    }
+  ],
+  "bridge": {
+    "envPrefix": "IOLAUS",
+    "mcpPath": "/api/mcp"
+  }
+}

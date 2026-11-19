@@ -237,6 +237,7 @@ describe('account page deletion action', () => {
 
 describe('account deletion disclosure', () => {
   const data = {
+    externalFontsEnabled: false,
     accountConnectionsEnabled: false,
     inactiveOpportunitySweep: 'disabled',
     activityScopeKey: null,

@@ -1,0 +1,14 @@
+{
+  "name": "Morgan Example",
+  "firstName": "Morgan",
+  "lastName": "Example",
+  "email": "morgan@example.invalid",
+  "location": "Edmonton, Alberta, Canada",
+  "title": "Software Engineer",
+  "summary": "Fictional acceptance candidate. Built a local TypeScript task organizer and wrote SQLite persistence checks. This synthetic profile is for private acceptance testing only.",
+  "jobTitle": "Fictional Local Tools Engineer — Mac acceptance",
+  "postingUrl": "https://jobs.example.invalid/mac-acceptance",
+  "description": "Synthetic posting for an imaginary organization. Build local TypeScript tools and test SQLite persistence. Remote within Canada. No employer exists, no applications are accepted, and no external contact or transmission is authorized.",
+  "instructions": "Prepare local review materials only. No employer contact, final approval, submission, or AI provider use.",
+  "override": "Synthetic acceptance fixture personally reviewed. No real employer or external destination exists; prepare local artifacts only."
+}

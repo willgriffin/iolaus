@@ -63,25 +63,32 @@
     "test:e2e": "pnpm --filter @willgriffin/iolaus-site exec playwright test",
     "test:e2e:check": "pnpm --filter @willgriffin/iolaus-site exec tsc --noEmit -p tsconfig.e2e.json",
     "matching:evaluate": "node scripts/matching-evaluation/run.mjs",
-    "matching:evaluate:test": "node --test scripts/matching-evaluation.test.mjs"
+    "matching:evaluate:test": "node --test scripts/matching-evaluation.test.mjs",
+    "desktop:bundle": "node scripts/desktop.mjs bundle",
+    "desktop:build": "node scripts/desktop.mjs build",
+    "desktop:install": "node scripts/desktop.mjs install"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
-    "@happyvertical/encryption": "0.111.5",
-    "@happyvertical/smrt-cli": "0.60.10",
-    "@happyvertical/smrt-dev-mcp": "0.60.10",
+    "@happyvertical/encryption": "0.113.1",
+    "@happyvertical/smrt-cli": "0.62.1",
+    "@happyvertical/smrt-dev-mcp": "0.62.1",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@happyvertical/smrt-desktop": "0.62.1",
+    "@tauri-apps/cli": "2.12.4",
+    "@happyvertical/smrt-app-cli": "0.62.1",
+    "esbuild": "0.27.4"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-runtime": "0.60.10",
-    "@happyvertical/smrt-config": "0.60.10",
-    "@happyvertical/smrt-scanner": "0.60.10",
-    "@happyvertical/speech": "0.111.5",
-    "@happyvertical/sql": "0.111.5",
+    "@happyvertical/smrt-app-runtime": "0.62.1",
+    "@happyvertical/smrt-config": "0.62.1",
+    "@happyvertical/smrt-scanner": "0.62.1",
+    "@happyvertical/speech": "0.113.1",
+    "@happyvertical/sql": "0.113.1",
     "tsx": "catalog:"
   },
   "license": "MIT"

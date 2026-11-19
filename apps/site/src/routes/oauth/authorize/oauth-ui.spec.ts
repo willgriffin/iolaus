@@ -16,6 +16,7 @@ describe.skipIf(process.env.IOLAUS_OAUTH_BROWSER_TEST !== '1')(
         const consent = render(Consent, {
           props: {
             data: {
+              externalFontsEnabled: false,
               clientId: 'test-client',
               redirectUri: 'https://client.test/callback',
               csrf: 'fixture-nonce',
@@ -60,6 +61,7 @@ describe.skipIf(process.env.IOLAUS_OAUTH_BROWSER_TEST !== '1')(
         const connections = render(Connections, {
           props: {
             data: {
+              externalFontsEnabled: false,
               grants: [
                 {
                   id: 'owned-grant',

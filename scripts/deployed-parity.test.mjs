@@ -164,9 +164,9 @@ test(
     const imported = spawnSync('docker', ['import', '-', image], {
       encoding: 'utf8',
       input: archive,
-      stdio: ['pipe', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    assert.equal(imported.status, 0, imported.stdout);
+    assert.equal(imported.status, 0, imported.stderr || imported.stdout);
     const imageId = imported.stdout.trim();
     try {
       await assert.rejects(
@@ -199,9 +199,9 @@ test(
     const imported = spawnSync('docker', ['import', '-', image], {
       encoding: 'utf8',
       input: archive,
-      stdio: ['pipe', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    assert.equal(imported.status, 0, imported.stdout);
+    assert.equal(imported.status, 0, imported.stderr || imported.stdout);
     const imageId = imported.stdout.trim();
     try {
       const expectedSha256 = sourceFingerprint(repositoryRoot, ['package.json']);
@@ -238,9 +238,9 @@ test(
       const imported = spawnSync('docker', ['import', '-', image], {
         encoding: 'utf8',
         input: archive,
-        stdio: ['pipe', 'pipe', 'ignore'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
-      assert.equal(imported.status, 0, imported.stdout);
+      assert.equal(imported.status, 0, imported.stderr || imported.stdout);
       const imageId = imported.stdout.trim();
       try {
         await assert.rejects(

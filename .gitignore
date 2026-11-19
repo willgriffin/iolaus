@@ -75,3 +75,6 @@ var/
 # Browser E2E artifacts
 apps/site/playwright-report/
 apps/site/test-results/
+
+# Local desktop staging and unsigned installers
+.desktop/

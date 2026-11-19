@@ -11,7 +11,7 @@ import {
   resolveApplicationRuntime,
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
-import { getDatabase } from '@happyvertical/sql';
+import { getDatabase, type SqliteOptions } from '@happyvertical/sql';
 import { releaseDeploymentProtocolEnabled } from '../../../../../scripts/smrt-deployment-schema.mjs';
 import { createProviderReadinessProbe } from '../../../../../scripts/smrt-provider-readiness.mjs';
 import {
@@ -22,6 +22,7 @@ import {
 import { acquireWriterLease } from '../../../../../scripts/smrt-writer-lease.mjs';
 import { getAuthConfiguration } from './app-config.js';
 import { assertDeployedSchemaReady } from './deployment/schema.js';
+import { assertLocalApplicationSchemaReady } from './local-application-schema.js';
 import { assertLocalLoopbackHost } from './runtime-host.js';
 import {
   getIolausSmrtConfigPath,
@@ -68,6 +69,7 @@ export type IolausDatabaseConfig = {
   /** PostgreSQL pool size per process; see {@link hostedDatabasePoolMax}. */
   max?: number;
   connectionTimeoutMillis?: number;
+  secureFile?: SqliteOptions['secureFile'];
 };
 
 /**
@@ -136,7 +138,16 @@ export function validateHostedDatabaseUrl(databaseUrl: string): string {
 export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (applicationRuntime.profile === 'local') {
     const paths = resolveIolausLocalRuntimePaths();
-    return { type: 'sqlite', url: paths.database };
+    return {
+      type: 'sqlite',
+      url: paths.database,
+      // Match the local runtime's custodied executor and shared connection cache.
+      secureFile: {
+        driver: 'node:sqlite',
+        custody: 'trusted-parent',
+        root: paths.root,
+      },
+    };
   }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -345,7 +356,15 @@ export function getLocalApplicationRuntime(): Promise<LocalApplicationRuntime> {
     },
     backgroundJobs: process.env.SMRT_BACKGROUND_JOBS === 'true',
   })
-    .then(({ runtime }) => runtime)
+    .then(async ({ runtime }) => {
+      try {
+        await assertLocalApplicationSchemaReady(runtime.db);
+        return runtime;
+      } catch (cause) {
+        await runtime.db.close?.();
+        throw cause;
+      }
+    })
     .catch((error) => {
       localWriterLease?.release();
       localWriterLease = undefined;

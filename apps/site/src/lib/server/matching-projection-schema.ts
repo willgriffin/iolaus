@@ -1,6 +1,6 @@
 import { detectEngine } from '@happyvertical/smrt-core';
 import type { DatabaseInterface } from '@happyvertical/sql';
-import { liveMatchingOwnerSql } from './matching-projection-read.js';
+import { liveMatchingOwnerSql } from './matching-owner-sql.js';
 
 type Dialect = 'sqlite' | 'postgres';
 type Event = 'INSERT' | 'UPDATE' | 'DELETE';

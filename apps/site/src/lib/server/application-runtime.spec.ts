@@ -17,6 +17,84 @@ const applicationRuntimeModule = pathToFileURL(
   resolve(siteRoot, 'src/lib/server/application-runtime.ts'),
 ).href;
 
+describe('local runtime database affinity', () => {
+  it('shares one executor for concurrent application writes, rollback and restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'iolaus-affinity-'));
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          '--input-type=commonjs',
+          '--eval',
+          `
+          (async () => {
+          const { default: assert } = await import('node:assert/strict');
+          const { realpath } = await import('node:fs/promises');
+          const { initializeLocalApplicationRuntime } = await import('@happyvertical/smrt-app-runtime');
+          const { resolveDatabase } = await import('@happyvertical/smrt-core');
+          const app = await import(${JSON.stringify(applicationRuntimeModule)});
+          const { getSmrtOptions } = await import(${JSON.stringify(pathToFileURL(resolve(siteRoot, 'src/lib/server/db.ts')).href)});
+          const options = {
+            appId: 'iolaus-affinity',
+            createSchema: true,
+            dataDirectory: await realpath(process.env.SMRT_DATA_DIR),
+            sourceRoot: ${JSON.stringify(sourceRoot)},
+            bindHost: '127.0.0.1',
+          };
+          let runtime;
+          try {
+            ({ runtime } = await initializeLocalApplicationRuntime(options));
+            const ordinary = await Promise.all(Array.from({ length: 4 }, () => resolveDatabase(getSmrtOptions().db)));
+            for (const db of ordinary) assert.strictEqual(db, runtime.db);
+            assert.equal(runtime.db.engine, 'node-sqlite');
+            assert.equal(app.getApplicationDatabaseConfig().secureFile.root, runtime.paths.root);
+            await runtime.db.query('CREATE TABLE affinity_records (id TEXT PRIMARY KEY, kind TEXT, revision INTEGER)');
+            await Promise.all(ordinary.map((db, index) => db.transaction(async tx => {
+              await tx.query('INSERT INTO affinity_records VALUES (?, ?, ?)', [String(index), index % 2 ? 'draft' : 'session', 1]);
+              await new Promise(resolve => setTimeout(resolve, 5));
+              await tx.query('UPDATE affinity_records SET revision = revision + 1 WHERE id = ?', [String(index)]);
+            })));
+            await assert.rejects(ordinary[0].transaction(async tx => {
+              await tx.query("UPDATE affinity_records SET revision = 99 WHERE kind = 'draft'");
+              throw new Error('synthetic rollback');
+            }), /synthetic rollback/);
+            assert.equal((await runtime.db.query('SELECT * FROM affinity_records WHERE revision = 2')).rows.length, 4);
+            await runtime.db.close();
+            const previous = runtime.db;
+            ({ runtime } = await initializeLocalApplicationRuntime(options));
+            assert.notStrictEqual(runtime.db, previous);
+            assert.strictEqual(await resolveDatabase(getSmrtOptions().db), runtime.db);
+            assert.equal(runtime.db.engine, 'node-sqlite');
+            assert.equal((await runtime.db.query('SELECT * FROM affinity_records WHERE revision = 2')).rows.length, 4);
+            process.stdout.write('affinity lifecycle passed');
+          } finally {
+            await runtime?.db.close();
+          }
+          })().catch(error => { console.error(error); process.exitCode = 1; });
+        `,
+        ],
+        {
+          cwd: siteRoot,
+          env: {
+            ...process.env,
+            SMRT_APP_ID: 'iolaus-affinity',
+            SMRT_DATA_DIR: directory,
+            SMRT_RUNTIME_PROFILE: 'local',
+            TSX_TSCONFIG_PATH: resolve(siteRoot, 'tsconfig.runtime.json'),
+          },
+          timeout: 20_000,
+        },
+      );
+      expect(stdout).toContain('affinity lifecycle passed');
+      expect(stderr).not.toContain('HV_SQL_SQLITE_ENGINE_MIX');
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  }, 25_000);
+});
+
 async function probeHostedRuntime(
   cwd: string,
   primeLocalConfigCache = false,

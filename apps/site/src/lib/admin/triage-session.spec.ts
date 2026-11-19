@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TRIAGE_QUEUE_SIZE } from '../server/opportunity-triage.js';
 import {
   isTriageDeepLink,
   TRIAGE_DIG_DEEPER_RATING,
@@ -178,11 +179,7 @@ describe('triageSessionKey', () => {
 });
 
 describe('TRIAGE_PREFETCH_SIZE', () => {
-  it('asks for three cards, the size the server serves', async () => {
-    const { TRIAGE_QUEUE_SIZE } = await import(
-      '../server/opportunity-triage.js'
-    );
-
+  it('asks for three cards, the size the server serves', () => {
     expect(TRIAGE_PREFETCH_SIZE).toBe(3);
     // The action clamps the requested limit to the server's window, and the
     // refill reads a short window as end-of-queue, so asking for more than the

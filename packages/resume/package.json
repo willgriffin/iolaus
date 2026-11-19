@@ -16,7 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@happyvertical/files": "0.111.5",
+    "@happyvertical/files": "0.113.1",
     "@happyvertical/pdf": "0.66.0",
     "qrcode-generator": "2.0.4"
   },

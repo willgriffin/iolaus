@@ -184,7 +184,7 @@ describe('OpportunityCardList assessment readiness', () => {
   });
   it('renders the compact card collection instead of a table during SSR', () => {
     const { body } = renderList();
-    expect(body).toContain('collection--list');
+    expect(body).toContain('data-smrt-component="CollectionList"');
     expect(body).not.toContain('<table');
   });
   it('shows the coarse screen and explicit screened-out view without promoting a legacy fit score', () => {

@@ -1,4 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
+import { getAppConfig } from '$lib/server/app-config';
 import { getResumeImportHost } from '$lib/server/resume-import-runtime';
 import { resumeImportTransportError } from '$lib/server/resume-import-transport';
 import {
@@ -10,10 +11,14 @@ export const load: PageServerLoad = async ({ locals, url, setHeaders }) => {
   if (!locals.user) redirect(303, '/login');
   requireCandidateWorkspaceSubject(workspaceSubjectFromLocals(locals));
   setHeaders({ 'cache-control': 'no-store' });
+  const localImport = getAppConfig().runtimeProfile === 'local';
   const id = url.searchParams.get('id');
-  if (!id) return { import: null };
+  if (!id) return { import: null, localImport };
   try {
-    return { import: await (await getResumeImportHost(locals)).get(id) };
+    return {
+      import: await (await getResumeImportHost(locals)).get(id),
+      localImport,
+    };
   } catch (cause) {
     const response = resumeImportTransportError(cause);
     const body = await response.json();

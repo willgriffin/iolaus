@@ -8,7 +8,10 @@ let { data, form }: PageProps = $props();
 
 <main>
   <h1>Welcome to Iolaus</h1>
-  {#if !data.available}
+  {#if data.desktop}
+    <p>Quit and reopen Iolaus to sign in on this computer.</p>
+    <p>Your workspace stays on this computer.</p>
+  {:else if !data.available}
     <p>This app is already set up.</p>
   {:else}
     <p>Enter your name and email to get started.</p>

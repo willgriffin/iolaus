@@ -26,7 +26,7 @@ import {
   assertAiEnabled,
   meterAiWritingCall,
 } from './ai-usage-guard.js';
-import { isSharedHosted } from './app-config.js';
+import { getAppConfig, isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import {
   archiveApplicationsForClosedPosting,
@@ -810,6 +810,49 @@ export async function bulkUpdateOpportunityReviews(options: {
   };
 }
 
+/** Resolve the active private choice before the historical published default. */
+async function resolveDefaultApplicationResume(
+  subject: WorkspaceSubject,
+  collectionOptions: Parameters<typeof getPrivateRecord>[3] = {},
+): Promise<ResumeRecord | null> {
+  const profile = await getPrivateRecord(
+    'CandidateProfile',
+    subject.profileId,
+    subject,
+    collectionOptions,
+  );
+  const selectedId = stringValue(profile?.resumeAssetId);
+  if (selectedId) {
+    const selected = await getPrivateRecord(
+      'ResumeAsset',
+      selectedId,
+      subject,
+      collectionOptions,
+    );
+    if (!selected || stringValue(selected.assetType) !== 'resume') {
+      error(
+        409,
+        'The selected default resume is unavailable in this candidate workspace. Choose a valid resume in private setup.',
+      );
+    }
+    return selected as ResumeRecord;
+  }
+  return (
+    ((
+      await listPrivateRecords(
+        'ResumeAsset',
+        subject,
+        {
+          limit: 1,
+          orderBy: 'updated_at DESC',
+          where: { isPublished: true },
+        },
+        collectionOptions,
+      )
+    )[0] as ResumeRecord | undefined) ?? null
+  );
+}
+
 export async function createDraftApplicationForOpportunity(options: {
   applicationInstructions?: string;
   applyMethod?: string;
@@ -877,19 +920,13 @@ export async function createDraftApplicationForOpportunity(options: {
           ((await applicationCollection.create(
             privateRecordWhere(subject),
           )) as unknown as MutableRecord);
-        const publishedResume =
+        const defaultResume =
           resumeMode === 'default'
-            ? ((
-                await listPrivateRecords('ResumeAsset', subject, {
-                  limit: 1,
-                  orderBy: 'updated_at DESC',
-                  where: { isPublished: true },
-                })
-              )[0] as ResumeRecord | undefined)
+            ? await resolveDefaultApplicationResume(subject, { db: database })
             : null;
         const resumeAssetId =
           resumeMode === 'default'
-            ? (publishedResume?.id ?? stringValue(application.resumeAssetId))
+            ? (defaultResume?.id ?? stringValue(application.resumeAssetId))
             : resumeMode === 'custom'
               ? stringValue(application.resumeAssetId)
               : '';
@@ -1920,31 +1957,34 @@ async function generateApplicationPackageAfterPreflight(options: {
   const existingMaterialAssetIds = materialAssetIdsFrom(application);
 
   assertOpportunityLifecycleLockIsActive();
-  try {
-    const { processOpportunityIntelligence } = await import(
-      './opportunity-intelligence.js'
-    );
-    await processOpportunityIntelligence({
-      applicationId: stringValue(application.id),
-      assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
-      billTo: { tenantId: subject.tenantId, userId: subject.userId },
-      modes: ['plan'],
-      opportunityId,
-      runLifecycleMutation: runOpportunityLifecycleTransaction,
-      signal: options.request.signal,
-    });
-    const plannedApplication = (await getPrivateRecord(
-      'Application',
-      stringValue(application.id),
-      subject,
-    )) as MutableRecord | null;
-    if (plannedApplication) {
-      Object.assign(application, plannedApplication);
-      restoreMaterialAssetIds(application, existingMaterialAssetIds);
+  // Local manual preparation must not invoke an AI planning pass implicitly.
+  if (getAppConfig().runtimeProfile !== 'local') {
+    try {
+      const { processOpportunityIntelligence } = await import(
+        './opportunity-intelligence.js'
+      );
+      await processOpportunityIntelligence({
+        applicationId: stringValue(application.id),
+        assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
+        billTo: { tenantId: subject.tenantId, userId: subject.userId },
+        modes: ['plan'],
+        opportunityId,
+        runLifecycleMutation: runOpportunityLifecycleTransaction,
+        signal: options.request.signal,
+      });
+      const plannedApplication = (await getPrivateRecord(
+        'Application',
+        stringValue(application.id),
+        subject,
+      )) as MutableRecord | null;
+      if (plannedApplication) {
+        Object.assign(application, plannedApplication);
+        restoreMaterialAssetIds(application, existingMaterialAssetIds);
+      }
+    } catch (error) {
+      if (options.request.signal?.aborted) throw error;
+      // Packet generation can proceed with the existing user-visible plan.
     }
-  } catch (error) {
-    if (options.request.signal?.aborted) throw error;
-    // Packet generation can proceed with the existing user-visible plan.
   }
   assertOpportunityLifecycleLockIsActive();
 
@@ -1972,15 +2012,9 @@ async function generateApplicationPackageAfterPreflight(options: {
       stringValue(application.resumeMode) === 'default' &&
       !stringValue(application.resumeAssetId)
     ) {
-      const published = (
-        await listPrivateRecords('ResumeAsset', subject, {
-          limit: 1,
-          orderBy: 'updated_at DESC',
-          where: { isPublished: true },
-        })
-      )[0] as ResumeRecord | undefined;
+      const selected = await resolveDefaultApplicationResume(subject);
       assertOpportunityLifecycleLockIsActive();
-      application.resumeAssetId = published?.id ?? '';
+      application.resumeAssetId = selected?.id ?? '';
     } else if (stringValue(application.resumeMode) === 'generate_tailored') {
       const { generateResumeAsset } = await import('./resume-admin.js');
       const resumeVariant = await getOrCreateResumeVariantForApplication(

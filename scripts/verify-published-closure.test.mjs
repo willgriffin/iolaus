@@ -116,3 +116,9 @@ test('rejects an extra alias beside the real edge under an approved consumer', (
   ));
   assert.throws(() => verifyPublishedClosure(root), /restricted transitive alias/u);
 }));
+
+// Regression: a dependency upgrade must refresh checked-in registry evidence,
+// not only its lock and installed graph. Read-only Node check, no registry I/O.
+test('checked-in published closure matches the active installed release cohort', () => {
+  assert.ok(verifyPublishedClosure() > 0);
+});
