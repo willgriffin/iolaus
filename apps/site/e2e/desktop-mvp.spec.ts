@@ -106,6 +106,20 @@ test('local sidecar preserves a private synthetic application across restart', a
       return { href, sha256, expectedText };
     }
 
+    async function inspectTrackedOpportunity(id: string) {
+      const response = await page.goto(`/admin/opportunities/${id}/edit`);
+      expect(response?.status()).toBe(200);
+      const status = page.getByRole('combobox', {
+        name: 'Status',
+        exact: true,
+      });
+      if (await status.evaluate((control) => control.tagName === 'SELECT')) {
+        await expect(status).toHaveValue('apply');
+      } else {
+        await expect(status).toContainText(/^Apply$/i);
+      }
+    }
+
     function expectPrivateDraft(application: Record<string, unknown>) {
       expect(application.approvedAt || null).toBeNull();
       expect(application.finalApprovalAt || null).toBeNull();
@@ -145,9 +159,7 @@ test('local sidecar preserves a private synthetic application across restart', a
         .locator('#resume-inline-editor')
         .getByRole('button', { name: 'Cancel', exact: true })
         .click();
-      expect(
-        (await record('opportunities', checkpoint.opportunityId)).status,
-      ).toBe('apply');
+      await inspectTrackedOpportunity(checkpoint.opportunityId);
       expectPrivateDraft(
         await record('applications', checkpoint.applicationId),
       );
@@ -163,6 +175,13 @@ test('local sidecar preserves a private synthetic application across restart', a
         path: testInfo.outputPath('after-restart.png'),
         fullPage: true,
       });
+      // Recheck privacy on the create-only screens without mutating data.
+      for (const route of [
+        '/admin/resume?tab=pdf',
+        '/admin/opportunities/new',
+      ]) {
+        expect((await page.goto(route))?.status()).toBe(200);
+      }
     } else {
       const localOnboardingPath = process.env.IOLAUS_LOCAL_ONBOARDING_FILE;
       if (localOnboardingPath && existsSync(localOnboardingPath)) {
@@ -267,9 +286,20 @@ test('local sidecar preserves a private synthetic application across restart', a
         fullPage: true,
       });
       await page.goto('/admin/resume?tab=pdf');
+      const generation = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).searchParams.has('/generate'),
+      );
       await page
         .getByRole('button', { name: 'Canonical resume', exact: true })
         .click();
+      const generationResult = await generation;
+      expect(generationResult.status()).toBe(200);
+      expect((await generationResult.json()).type).toBe('success');
+      // Existing assets are visible while the enhanced action runs. Reload
+      // after its committed response before selecting the newly generated PDF.
+      await page.reload();
       const pdfLink = page
         .getByRole('link', { name: 'Open PDF', exact: true })
         .first();
@@ -358,7 +388,15 @@ test('local sidecar preserves a private synthetic application across restart', a
       ).toBeVisible();
       const application = await record('applications', applicationId);
       expectPrivateDraft(application);
-      expect(application.resumeAssetId).toBe(resumeId);
+      expect(application.resumeAssetId).toBeTruthy();
+      // Packet preparation snapshots the chosen resume into an immutable
+      // application asset. Preserve the selected bytes, not its mutable ID.
+      const applicationResume = await inspectPdf(
+        context.request,
+        `/admin/resume-assets/${application.resumeAssetId}/pdf`,
+      );
+      expect(applicationResume.sha256).toBe(pdfs[0].sha256);
+      pdfs.push(applicationResume);
       expect(application.packetAssetId).toBeTruthy();
       pdfs.push(
         await inspectPdf(
@@ -394,9 +432,7 @@ test('local sidecar preserves a private synthetic application across restart', a
         await page.getByRole('option', { name: /^Apply$/i }).click();
       }
       await page.getByRole('button', { name: 'Save', exact: true }).click();
-      expect((await record('opportunities', opportunityId)).status).toBe(
-        'apply',
-      );
+      await inspectTrackedOpportunity(opportunityId);
       expectPrivateDraft(await record('applications', applicationId));
       const checkpoint: Checkpoint = {
         origin,
