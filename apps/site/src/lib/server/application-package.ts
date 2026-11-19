@@ -26,7 +26,7 @@ import {
   assertAiEnabled,
   meterAiWritingCall,
 } from './ai-usage-guard.js';
-import { isSharedHosted } from './app-config.js';
+import { getAppConfig, isSharedHosted } from './app-config.js';
 import { commitApplicationIfCurrent } from './application-concurrency.js';
 import {
   archiveApplicationsForClosedPosting,
@@ -1920,31 +1920,34 @@ async function generateApplicationPackageAfterPreflight(options: {
   const existingMaterialAssetIds = materialAssetIdsFrom(application);
 
   assertOpportunityLifecycleLockIsActive();
-  try {
-    const { processOpportunityIntelligence } = await import(
-      './opportunity-intelligence.js'
-    );
-    await processOpportunityIntelligence({
-      applicationId: stringValue(application.id),
-      assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
-      billTo: { tenantId: subject.tenantId, userId: subject.userId },
-      modes: ['plan'],
-      opportunityId,
-      runLifecycleMutation: runOpportunityLifecycleTransaction,
-      signal: options.request.signal,
-    });
-    const plannedApplication = (await getPrivateRecord(
-      'Application',
-      stringValue(application.id),
-      subject,
-    )) as MutableRecord | null;
-    if (plannedApplication) {
-      Object.assign(application, plannedApplication);
-      restoreMaterialAssetIds(application, existingMaterialAssetIds);
+  // Local manual preparation must not invoke an AI planning pass implicitly.
+  if (getAppConfig().runtimeProfile !== 'local') {
+    try {
+      const { processOpportunityIntelligence } = await import(
+        './opportunity-intelligence.js'
+      );
+      await processOpportunityIntelligence({
+        applicationId: stringValue(application.id),
+        assertWriteAllowed: assertOpportunityLifecycleLockIsActive,
+        billTo: { tenantId: subject.tenantId, userId: subject.userId },
+        modes: ['plan'],
+        opportunityId,
+        runLifecycleMutation: runOpportunityLifecycleTransaction,
+        signal: options.request.signal,
+      });
+      const plannedApplication = (await getPrivateRecord(
+        'Application',
+        stringValue(application.id),
+        subject,
+      )) as MutableRecord | null;
+      if (plannedApplication) {
+        Object.assign(application, plannedApplication);
+        restoreMaterialAssetIds(application, existingMaterialAssetIds);
+      }
+    } catch (error) {
+      if (options.request.signal?.aborted) throw error;
+      // Packet generation can proceed with the existing user-visible plan.
     }
-  } catch (error) {
-    if (options.request.signal?.aborted) throw error;
-    // Packet generation can proceed with the existing user-visible plan.
   }
   assertOpportunityLifecycleLockIsActive();
 

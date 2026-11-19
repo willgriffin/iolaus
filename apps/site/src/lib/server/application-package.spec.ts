@@ -106,6 +106,7 @@ async function expectHttpError(
 }
 
 const mocks = vi.hoisted(() => ({
+  localRuntime: false,
   assertOpportunityLifecycleLockIsActive: vi.fn(() => {}),
   archiveApplicationsForClosedPosting: vi.fn(async (opportunityId: string) => {
     const applications = mocks.collections.get('Application')?.records ?? [];
@@ -214,6 +215,13 @@ const mocks = vi.hoisted(() => ({
   syncApplicationWorkflowTasks: vi.fn(
     async (_application?: Record<string, unknown>) => ({ created: 0 }),
   ),
+}));
+
+vi.mock('./app-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./app-config.js')>()),
+  getAppConfig: () => ({
+    runtimeProfile: mocks.localRuntime ? 'local' : 'self-hosted',
+  }),
 }));
 
 vi.mock('./smrt.js', () => ({
@@ -741,6 +749,7 @@ describe('opportunity review and draft applications', () => {
 
 describe('generateApplicationPackage', () => {
   beforeEach(() => {
+    mocks.localRuntime = false;
     mocks.collections.clear();
     mocks.collections.set(
       'Opportunity',
@@ -784,6 +793,29 @@ describe('generateApplicationPackage', () => {
     mocks.syncApplicationWorkflowTasks.mockClear();
     mocks.assertOpportunityLifecycleLockIsActive.mockReset();
     mocks.assertOpportunityLifecycleLockIsActive.mockImplementation(() => {});
+  });
+
+  it('prepares local manual materials without implicit AI planning or writing', async () => {
+    mocks.localRuntime = true;
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'app-local',
+          opportunityId: 'opp-1',
+          resumeMode: 'default',
+          coverLetterMode: 'none',
+        }),
+      ]),
+    );
+    const result = await generateApplicationPackage('app-local');
+    expect(result).toMatchObject({
+      status: 'awaiting_user',
+      packetAssetId: expect.any(String),
+    });
+    expect(mocks.processOpportunityIntelligence).not.toHaveBeenCalled();
+    expect(mocks.resolveWritingAiProfileClient).not.toHaveBeenCalled();
+    expect(mocks.renderHtmlToPdf).toHaveBeenCalled();
   });
 
   it.each([
