@@ -97,6 +97,7 @@ describe('published deployment schema authority', () => {
       expect(new Set(result.tables).size).toBe(result.tables.length);
       expect(result.tables).toEqual(
         expect.arrayContaining([
+          'approval_events',
           '_smrt_prompt_overrides',
           'secrets',
           '_smrt_playbook_overrides',

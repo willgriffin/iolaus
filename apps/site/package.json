@@ -75,6 +75,7 @@
     "@happyvertical/smrt-agents": "0.62.1",
     "@happyvertical/smrt-app-mcp": "0.62.1",
     "@happyvertical/smrt-app-runtime": "0.62.1",
+    "@happyvertical/smrt-approvals": "0.62.1",
     "@happyvertical/smrt-assets": "0.62.1",
     "@happyvertical/smrt-chat": "0.62.1",
     "@happyvertical/smrt-config": "0.62.1",

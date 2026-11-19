@@ -29,3 +29,7 @@ Full documented validation and one review-cycle run on the integrated branch.
 Compatibility probe: SMRT 0.62.1 declares SDK `^0.113.0`. Retaining direct
 SDK 0.111.5 produced incompatible nominal OAuth issuer types; direct SDK
 dependencies therefore align at 0.113.1, preserving PDF/OCR/spider specialty pins.
+
+SMRT 0.62.1 app-runtime imports approval models. The site declares
+`smrt-approvals` directly so the build-time consumer includes their immutable
+schemas; static/runtime schema agreement must include `approval_events`.
