@@ -11,7 +11,7 @@ import {
   resolveApplicationRuntime,
   resolveConfiguredApplicationRuntime,
 } from '@happyvertical/smrt-config';
-import { getDatabase } from '@happyvertical/sql';
+import { getDatabase, type SqliteOptions } from '@happyvertical/sql';
 import { releaseDeploymentProtocolEnabled } from '../../../../../scripts/smrt-deployment-schema.mjs';
 import { createProviderReadinessProbe } from '../../../../../scripts/smrt-provider-readiness.mjs';
 import {
@@ -69,6 +69,7 @@ export type IolausDatabaseConfig = {
   /** PostgreSQL pool size per process; see {@link hostedDatabasePoolMax}. */
   max?: number;
   connectionTimeoutMillis?: number;
+  secureFile?: SqliteOptions['secureFile'];
 };
 
 /**
@@ -137,7 +138,16 @@ export function validateHostedDatabaseUrl(databaseUrl: string): string {
 export function getApplicationDatabaseConfig(): IolausDatabaseConfig {
   if (applicationRuntime.profile === 'local') {
     const paths = resolveIolausLocalRuntimePaths();
-    return { type: 'sqlite', url: paths.database };
+    return {
+      type: 'sqlite',
+      url: paths.database,
+      // Match the local runtime's custodied executor and shared connection cache.
+      secureFile: {
+        driver: 'node:sqlite',
+        custody: 'trusted-parent',
+        root: paths.root,
+      },
+    };
   }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
