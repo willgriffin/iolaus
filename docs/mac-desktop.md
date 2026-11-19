@@ -146,3 +146,19 @@ SDK proof/origin validation, all session cookies, response body/status and
 no-store headers remain intact. Other redirect destinations and denial responses
 are returned unchanged. The public resume remains available when explicitly
 visited; it is not the native application's initial workspace.
+
+## Qualified native behavior and remaining document action
+
+The local unsigned release-candidate build has passed full bundle/native checks,
+the published wrapper launch smoke, and installed-app profile/opportunity/draft/
+tracking/restart checks. The actual native window opens the private workspace,
+opens the prepared application, and renders the private resume inside its iframe.
+Private asset checks preserve the three PDF byte hashes and deny anonymous access.
+
+The separate **Open PDF** link requests a new window, which the current shared
+wrapper does not handle. An actual native click produced no new window or save
+dialog. Native file export is not qualified. The owning host-policy gap is
+[SMRT #5273](https://github.com/happyvertical/smrt/issues/5273); it requires a
+supported authenticated document-window/save policy and release. The lack of a
+download handler is a separate save capability gap, not the cause attributed to
+this inline-PDF new-window action. No wrapper patch or gate exemption is used.
