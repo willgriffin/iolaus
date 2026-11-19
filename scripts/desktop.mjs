@@ -65,8 +65,8 @@ if (command === 'bundle') {
   await build({entryPoints: [fileURLToPath(new URL('./bin/smrt-mcp-bridge.js', import.meta.resolve('@happyvertical/smrt-app-cli')))], outfile: bridgeFile, bundle: true, platform: 'node', format: 'esm'});
   const frameworkPath = candidate || dirname(fileURLToPath(import.meta.resolve('@happyvertical/smrt-desktop/package.json')));
   const framework = JSON.parse(readFileSync(join(frameworkPath, 'package.json'), 'utf8'));
-  writeFileSync(join(work, 'framework-provenance.json'), `${JSON.stringify({ name: framework.name, version: framework.version, localReleaseCandidate: Boolean(candidate), nodeVersion: '26.12.1' }, null, 2)}\n`);
-  const plan = await createBundlePlan({ appDir: stage, outDir: bundle, force: true, bridgeFile, nodeVersion: '26.12.1' });
+  writeFileSync(join(work, 'framework-provenance.json'), `${JSON.stringify({ name: framework.name, version: framework.version, localReleaseCandidate: Boolean(candidate), nodeVersion: '26.12.1', requireVerifiedPins: true }, null, 2)}\n`);
+  const plan = await createBundlePlan({ appDir: stage, outDir: bundle, force: true, bridgeFile, nodeVersion: '26.12.1', requireVerifiedPins: true });
   console.log(JSON.stringify(await runBundle(plan, await createBundleSeams({ onStage: (value) => console.log(`bundle: ${value}`) })), null, 2));
 } else if (command === 'build') {
   const plan = createBuildPlan({ appDir: stage, bundleDir: bundle, outDir: installers, smoke: process.argv.includes('--smoke') }, { platform: process.platform, arch: process.arch, cwd: root });
