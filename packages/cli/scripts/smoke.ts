@@ -9,7 +9,6 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RequestJsonResult } from '@happyvertical/smrt-app-cli';
 import { getCliConfigDirectory, getCliServerUrl } from '../src/app-config.js';
 
 interface CliSmokeOptions {
@@ -45,6 +44,7 @@ interface ResourceListResponse {
 }
 
 interface McpCallResult {
+  isError?: boolean;
   content: Array<{
     text?: string;
     type: string;
@@ -151,12 +151,33 @@ function parseOptions(argv: string[]): CliSmokeOptions {
   return options;
 }
 
+// Test design: synthetic owner + real CLI/stdio bridge -> authenticated HTTP.
+// Positive: modern discovery/list/call preserves arguments and bounded schemas.
+// Negative: missing/wrong bearer, unknown methods and changed inputs fail closed.
+// Executor: in-memory fixture only, no database writer; Node26, SQL N/A.
+// Command: node --import tsx scripts/smoke.ts (from packages/cli).
+const rpcResponses = new WeakMap<ServerResponse, string | number>();
+
 function jsonResponse(
   response: ServerResponse,
   status: number,
   payload: unknown,
 ) {
-  const body = JSON.stringify(payload);
+  const rpcId = rpcResponses.get(response);
+  const body = JSON.stringify(
+    rpcId === undefined
+      ? payload
+      : {
+          jsonrpc: '2.0',
+          id: rpcId,
+          result: {
+            ...(payload as Record<string, unknown>),
+            resultType: 'complete',
+            ttlMs: 0,
+            cacheScope: 'private',
+          },
+        },
+  );
   response.writeHead(status, {
     'content-length': Buffer.byteLength(body),
     'content-type': 'application/json',
@@ -276,6 +297,43 @@ async function startFakeServer(): Promise<FakeServer> {
       const auth = request.headers.authorization;
       if (url.pathname !== '/api/cli/auth/session') {
         assert(auth === 'Bearer smoke-token', 'CLI did not send bearer token.');
+      }
+
+      let rpcArguments: Record<string, unknown> | undefined;
+      if (request.method === 'POST' && url.pathname === '/api/mcp') {
+        const rpc = (await readJsonBody(request)) as {
+          jsonrpc: string;
+          id: string | number;
+          method: string;
+          params?: Record<string, unknown>;
+        };
+        assert(
+          rpc.jsonrpc === '2.0' && rpc.id !== undefined,
+          'Invalid modern MCP request envelope.',
+        );
+        rpcResponses.set(response, rpc.id);
+        if (rpc.method === 'server/discover') {
+          jsonResponse(response, 200, {
+            supportedVersions: ['2026-07-28'],
+            capabilities: { tools: {} },
+          });
+          return;
+        }
+        assert(
+          request.headers['mcp-protocol-version'] === '2026-07-28',
+          'Modern MCP protocol version was not pinned.',
+        );
+        if (rpc.method === 'tools/list') {
+          request.method = 'GET';
+          url.pathname = '/api/mcp/tools';
+        } else if (rpc.method === 'tools/call') {
+          url.pathname = '/api/mcp/call';
+          rpcArguments = rpc.params ?? {};
+        } else {
+          throw new Error(
+            `Unsupported modern MCP fixture method: ${rpc.method}`,
+          );
+        }
       }
 
       if (
@@ -439,7 +497,9 @@ async function startFakeServer(): Promise<FakeServer> {
       }
 
       if (request.method === 'POST' && url.pathname === '/api/mcp/call') {
-        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const body =
+          rpcArguments ??
+          ((await readJsonBody(request)) as Record<string, unknown>);
         if (body.name === 'job_search_list_source_health') {
           assert(
             JSON.stringify(body.arguments) ===
@@ -648,11 +708,15 @@ async function runCli(
   args: string[],
   env: Record<string, string>,
 ): Promise<RunResult> {
-  const child = spawn('pnpm', ['exec', 'tsx', 'src/data-cli.ts', ...args], {
-    cwd: packageRoot,
-    env: { ...process.env, ...env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    process.execPath,
+    ['--import', 'tsx', 'src/data-cli.ts', ...args],
+    {
+      cwd: packageRoot,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
@@ -668,6 +732,124 @@ async function runCli(
     );
   }
   return result;
+}
+
+async function runStdioSmoke(env: Record<string, string>): Promise<void> {
+  const child = spawn(
+    process.execPath,
+    ['--import', 'tsx', 'src/mcp-server.ts'],
+    {
+      cwd: packageRoot,
+      env: { ...process.env, ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
+  let buffer = '';
+  let stderr = '';
+  let nextId = 0;
+  const pending = new Map<
+    number,
+    {
+      resolve: (value: Record<string, unknown>) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+  child.stdout.on('data', (chunk) => {
+    buffer += String(chunk);
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      try {
+        const message = JSON.parse(line) as {
+          id?: number;
+          error?: unknown;
+          result: Record<string, unknown>;
+        };
+        if (message.id === undefined) continue;
+        const request = pending.get(message.id);
+        pending.delete(message.id);
+        if (message.error)
+          request?.reject(new Error(JSON.stringify(message.error)));
+        else request?.resolve(message.result);
+      } catch (cause) {
+        for (const request of pending.values())
+          request.reject(new Error(`Invalid stdio JSON: ${String(cause)}`));
+        pending.clear();
+      }
+    }
+  });
+  const request = (method: string, args: Record<string, unknown> = {}) =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      const id = ++nextId;
+      pending.set(id, { resolve, reject });
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id, method, params: { ...args, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } })}\n`,
+      );
+    });
+  const timeout = setTimeout(() => {
+    for (const request of pending.values())
+      request.reject(new Error(`Stdio bridge timed out: ${stderr}`));
+    pending.clear();
+  }, 20_000);
+  child.once('error', (cause) => {
+    for (const request of pending.values()) request.reject(cause);
+  });
+  try {
+    const discovery = await request('server/discover');
+    assert(
+      Array.isArray(discovery.supportedVersions) &&
+        discovery.supportedVersions.includes('2026-07-28'),
+      'Stdio discovery omitted the supported protocol.',
+    );
+    const listed = await request('tools/list');
+    const tools = listed.tools as Array<{ name: string }>;
+    assert(
+      tools.some((tool) => tool.name === 'job_search_list_source_health'),
+      'Real stdio bridge did not forward the authenticated catalog.',
+    );
+    const called = await request('tools/call', {
+      name: 'job_search_list_source_health',
+      arguments: { historyLimit: 20, limit: 25, query: 'greenhouse' },
+    });
+    assert(
+      called.isError !== true,
+      'Real stdio bridge tool call returned an error.',
+    );
+    const text = (
+      called.content as Array<{ type: string; text?: string }>
+    ).find((item) => item.type === 'text')?.text;
+    assert(
+      text && JSON.parse(text).items[0]?.id === 'source-1',
+      'Real stdio bridge did not return the authenticated fixture operation result.',
+    );
+    let unknownToolRejected = false;
+    try {
+      await request('tools/call', {
+        name: 'unknown_smoke_tool',
+        arguments: {},
+      });
+    } catch {
+      unknownToolRejected = true;
+    }
+    assert(
+      unknownToolRejected,
+      'Real stdio bridge accepted an unknown fixture tool.',
+    );
+    console.log(
+      'Real stdio bridge discovery/list/call passed against authenticated synthetic HTTP fixture.',
+    );
+  } finally {
+    clearTimeout(timeout);
+    const exited = once(child, 'close');
+    child.stdin.end();
+    child.kill('SIGTERM');
+    await exited;
+  }
 }
 
 function parseJson<T>(result: RunResult): T {
@@ -705,6 +887,26 @@ async function runSmoke(options: CliSmokeOptions) {
         // Prove IOLAUS_* credentials and destination survive generic identity.
         ['SMRT_APP_ID', 'career-hub'],
       ]);
+
+      if (fakeServer) {
+        const denied = await fetch(`${server}/api/mcp`, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer wrong-synthetic-token',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'denied',
+            method: 'server/discover',
+          }),
+        });
+        assert(
+          !denied.ok,
+          'Synthetic MCP fixture accepted an incorrect bearer.',
+        );
+        await denied.text();
+      }
 
       const status = parseJson<{ authenticated: boolean }>(
         await runCli(['auth', 'status'], env),
@@ -767,32 +969,26 @@ async function runSmoke(options: CliSmokeOptions) {
         'update did not return the changed description.',
       );
 
-      const toolsResponse = parseJson<RequestJsonResult<McpToolsResult>>(
+      const toolsResponse = parseJson<McpToolsResult>(
         await runCli(['mcp', 'tools'], env),
       );
-      assert(toolsResponse.ok, 'MCP tools returned a failed CLI result.');
       assert(
-        toolsResponse.metadata.code === 'ok',
-        'MCP tools result metadata was not successful.',
-      );
-      assert(
-        Array.isArray(toolsResponse.result.tools),
+        Array.isArray(toolsResponse.tools),
         'MCP tools result did not contain a tools array.',
       );
-      const listTool = toolsResponse.result.tools.find(
+      const listTool = toolsResponse.tools.find(
         (tool) =>
           tool.name.endsWith('_list') && tool.name.includes('preferencerule'),
       );
       assert(listTool, 'PreferenceRule MCP list tool was not discovered.');
-      const callResponse = parseJson<RequestJsonResult<McpCallResult>>(
+      const callResponse = parseJson<McpCallResult>(
         await runCli(['mcp', 'call', listTool.name, '{}'], env),
       );
-      assert(callResponse.ok, 'MCP call returned a failed CLI result.');
       assert(
-        callResponse.metadata.code === 'ok',
-        'MCP call result metadata was not successful.',
+        callResponse.isError !== true,
+        'MCP call returned an error result.',
       );
-      const callContent = callResponse.result.content.find(
+      const callContent = callResponse.content.find(
         (entry) => entry.type === 'text' && entry.text,
       );
       assert(callContent?.text, 'MCP call did not return text content.');
@@ -802,7 +998,7 @@ async function runSmoke(options: CliSmokeOptions) {
         'MCP call did not return the expected preference-rule count.',
       );
 
-      const sourceHealthTool = toolsResponse.result.tools.find(
+      const sourceHealthTool = toolsResponse.tools.find(
         (tool) => tool.name === 'job_search_list_source_health',
       );
       assert(sourceHealthTool, 'Source health MCP tool was not discovered.');
@@ -822,7 +1018,7 @@ async function runSmoke(options: CliSmokeOptions) {
           ).historyLimit?.maximum === 20,
         'Source health MCP tool did not preserve bounded caps.',
       );
-      const sourceHealthResponse = parseJson<RequestJsonResult<McpCallResult>>(
+      const sourceHealthResponse = parseJson<McpCallResult>(
         await runCli(
           [
             'mcp',
@@ -837,9 +1033,12 @@ async function runSmoke(options: CliSmokeOptions) {
           env,
         ),
       );
-      assert(sourceHealthResponse.ok, 'Source health MCP call failed.');
+      assert(
+        sourceHealthResponse.isError !== true,
+        'Source health MCP call failed.',
+      );
 
-      const sourceCrawlStatusTool = toolsResponse.result.tools.find(
+      const sourceCrawlStatusTool = toolsResponse.tools.find(
         (tool) => tool.name === 'job_search_source_crawl_status',
       );
       assert(
@@ -856,9 +1055,7 @@ async function runSmoke(options: CliSmokeOptions) {
           ).limit?.maximum === 20,
         'Source crawl status MCP tool did not preserve selector and cap contracts.',
       );
-      const sourceCrawlStatusResponse = parseJson<
-        RequestJsonResult<McpCallResult>
-      >(
+      const sourceCrawlStatusResponse = parseJson<McpCallResult>(
         await runCli(
           [
             'mcp',
@@ -873,15 +1070,15 @@ async function runSmoke(options: CliSmokeOptions) {
         ),
       );
       assert(
-        sourceCrawlStatusResponse.ok,
+        sourceCrawlStatusResponse.isError !== true,
         'Source crawl status MCP call failed.',
       );
       const sourceCrawlText =
-        sourceCrawlStatusResponse.result.content.find(
+        sourceCrawlStatusResponse.content.find(
           (entry) => entry.type === 'text' && entry.text,
         )?.text ?? '';
       assert(
-        sourceCrawlText.includes('authorization=[redacted]') &&
+        sourceCrawlText.includes('authorization=[REDACTED]') &&
           !sourceCrawlText.includes('super-secret'),
         'Source crawl status MCP call did not preserve sanitized errors.',
       );
@@ -936,25 +1133,25 @@ async function runSmoke(options: CliSmokeOptions) {
         );
 
         // Workflow tools (job_search_* bridge and owner tools) ride `mcp call`.
-        const browseTool = toolsResponse.result.tools.find(
+        const browseTool = toolsResponse.tools.find(
           (tool) => tool.name === 'job_search_browse_opportunities',
         );
         assert(
           browseTool,
           'job_search_browse_opportunities was not discovered.',
         );
-        const browseResponse = parseJson<RequestJsonResult<McpCallResult>>(
+        const browseResponse = parseJson<McpCallResult>(
           await runCli(['mcp', 'call', browseTool.name, '{"limit":2}'], env),
         );
         assert(
-          browseResponse.ok,
+          browseResponse.isError !== true,
           'job_search_browse_opportunities call failed.',
         );
-        const reviewTool = toolsResponse.result.tools.find(
+        const reviewTool = toolsResponse.tools.find(
           (tool) => tool.name === 'opportunity_review',
         );
         assert(reviewTool, 'opportunity_review was not discovered.');
-        const reviewResponse = parseJson<RequestJsonResult<McpCallResult>>(
+        const reviewResponse = parseJson<McpCallResult>(
           await runCli(
             [
               'mcp',
@@ -968,18 +1165,24 @@ async function runSmoke(options: CliSmokeOptions) {
             env,
           ),
         );
-        assert(reviewResponse.ok, 'opportunity_review call failed.');
+        assert(
+          reviewResponse.isError !== true,
+          'opportunity_review call failed.',
+        );
 
         // Public profile lifecycle tools ride the same `mcp call` path.
-        const statusTool = toolsResponse.result.tools.find(
+        const statusTool = toolsResponse.tools.find(
           (tool) => tool.name === 'public_profile_status',
         );
         assert(statusTool, 'public_profile_status tool was not discovered.');
-        const statusResponse = parseJson<RequestJsonResult<McpCallResult>>(
+        const statusResponse = parseJson<McpCallResult>(
           await runCli(['mcp', 'call', statusTool.name, '{}'], env),
         );
-        assert(statusResponse.ok, 'public_profile_status call failed.');
-        const publishTool = toolsResponse.result.tools.find(
+        assert(
+          statusResponse.isError !== true,
+          'public_profile_status call failed.',
+        );
+        const publishTool = toolsResponse.tools.find(
           (tool) => tool.name === 'public_profile_publish',
         );
         assert(publishTool, 'public_profile_publish tool was not discovered.');
@@ -988,7 +1191,7 @@ async function runSmoke(options: CliSmokeOptions) {
             publishTool.inputSchema.required.includes('expectedRevision'),
           'public_profile_publish did not preserve its revision fence.',
         );
-        const publishResponse = parseJson<RequestJsonResult<McpCallResult>>(
+        const publishResponse = parseJson<McpCallResult>(
           await runCli(
             [
               'mcp',
@@ -1002,8 +1205,13 @@ async function runSmoke(options: CliSmokeOptions) {
             env,
           ),
         );
-        assert(publishResponse.ok, 'public_profile_publish call failed.');
+        assert(
+          publishResponse.isError !== true,
+          'public_profile_publish call failed.',
+        );
       }
+
+      if (fakeServer) await runStdioSmoke(env);
 
       successMessage = `CLI smoke passed against ${
         fakeServer ? 'fake local API' : server
