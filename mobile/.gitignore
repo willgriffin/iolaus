@@ -11,3 +11,5 @@ ios/App/App/capacitor.config.json
 ios/App/App/Debug.xcconfig
 android/app/src/main/assets/public/
 android/app/src/main/assets/capacitor.config.json
+android/app/src/qa/
+android/local.properties

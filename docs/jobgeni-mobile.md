@@ -31,8 +31,11 @@ open -a Simulator
 Bundle ID `us.jobgeni.app`, version 1.0 (1). `pnpm --dir mobile open:ios` opens
 Xcode for device builds. Physical iPhones require a developer team, signing and
 provisioning configured outside source control. No App Store release is included.
-The Android project is generated for the same hosted UI; building it requires
-JDK 21 and an Android SDK, which were unavailable for this verification.
+Android is now the primary verified phone client. The Android native same-WebView
+link control and synthetic hosted-mode workflow are verified on a Pixel 7 /
+Android 16 (API 36) emulator. See [Android acceptance and APK install](jobgeni-android-acceptance.md).
+Builds need JDK 21 and the Android SDK; both were recovered from existing
+user-local installations without sudo or replacing tools.
 
 For an isolated test server, set an explicit origin for the synced build:
 
@@ -69,8 +72,8 @@ denied. See [the acceptance report](jobgeni-mobile-acceptance.md).
 
 Debug builds validate links against the exact configured server origin so an
 isolated HTTPS test instance can be used. Release builds pin link entry to
-`https://jobgeni.us`. Android has no paste-link control yet and is not an accepted
-sign-in client. No universal-link association or automatic native bootstrap is
+`https://jobgeni.us`. Android now has the equivalent explicit paste-link control and verified
+synthetic sign-in/resume/publication flow. No universal-link association or automatic native bootstrap is
 mounted by this product.
 The shared `createMobileAuthHandlers` contract currently brokers OIDC/PKCE
 (`smrt/packages/users/agents/mobile-auth.md`); copying it does not establish
@@ -84,7 +87,7 @@ The isolated test stack used actual PostgreSQL, Garage S3, the product SMTP mail
 and MagicLinkService; it did not mock auth or manufacture sessions. No platform
 model spend or agent runs occurred during the exercised workflow.
 
-Network loss/retry, Android, physical-device signing, export/deletion UI, and
+Network loss/retry, physical-device/store signing, export/deletion UI, and
 production rollout acceptance remain pending in #372. The app does not queue or
 replay writes. Offline remote-load failure presents a static retry page; native
 offline transition remains unverified. This PR does not establish free

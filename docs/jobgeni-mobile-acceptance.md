@@ -56,7 +56,8 @@ bundles, mail contents and fixture credentials are not retained for handoff.
 
 This proves the exercised flow on the real isolated hosted-mode product, not a
 production login or deployed free-cloud rollout. No personal account was needed.
-Network-loss retry, expired-token timing, Android, physical-device signing,
+Android acceptance is recorded separately in `docs/jobgeni-android-acceptance.md`.
+Network-loss retry, expired-token timing, physical-device/store signing,
 export/deletion UI and production rollout acceptance remain pending in #372.
 There was no production deploy, merge, App Store action, real email or employer
 submission. Full review/mergeability remains a separate delivery gate; the

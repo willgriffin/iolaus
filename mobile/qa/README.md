@@ -52,3 +52,26 @@ Resync the shell without the override before any production-target build.
 The executed 2026-11-19 fixture used PostgreSQL 18.6, Garage 1.0.1 and the actual
 product SMTP mailer/MagicLinkService. See `docs/jobgeni-mobile-acceptance.md` for
 observed outcomes and remaining limits.
+
+## Android
+
+The Android equivalent lives in `android/app/src/androidTest/.../HostedPhoneTest.java`
+(relative to `mobile/`). Use an isolated emulator and the same real fixture.
+Create ignored `android/app/src/qa/AndroidManifest.xml` and matching resources
+that trust only that fixture's localhost certificate. Do not add the CA to main
+or release resources, or bypass SSL errors. The QA build has its own `.qa` ID.
+
+```sh
+JOBGENI_MOBILE_SERVER_URL=https://localhost:34472 pnpm --dir mobile sync
+adb -s <QA-emulator> reverse tcp:34472 tcp:34472
+hv-heavy -- ./mobile/android/gradlew -p mobile/android -PtestBuildType=qa :app:assembleQa :app:assembleQaAndroidTest
+```
+
+Install the QA and QA-test APKs. Run `HostedPhoneTest#signupCreateAndEdit`, then
+force-stop only `us.jobgeni.app.qa` and run
+`HostedPhoneTest#relaunchPublishPrivateEditAndWithdraw` in a new instrumentation
+process. The controlled SMTP sink exposes its newest delivered link at the
+loopback HTTPS fixture-only `/__qa_link` endpoint; it must never be a production
+route. HTTP reads use the normal TLS trust configuration and no app cookies.
+Resync without the override and verify the production APK contains neither
+`qa_ca` nor `qa_network_security` before handing it to a person.

@@ -3,6 +3,7 @@ apply plugin: 'com.android.application'
 android {
     namespace = "us.jobgeni.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    testBuildType = project.findProperty("testBuildType") ?: "debug"
     defaultConfig {
         applicationId "us.jobgeni.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -16,7 +17,13 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    buildFeatures { buildConfig true }
     buildTypes {
+        qa {
+            initWith debug
+            applicationIdSuffix ".qa"
+            matchingFallbacks = ["debug"]
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -39,6 +46,8 @@ dependencies {
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    androidTestImplementation "androidx.test.uiautomator:uiautomator:2.3.0"
+    androidTestImplementation "androidx.test.espresso:espresso-web:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
 }
 
