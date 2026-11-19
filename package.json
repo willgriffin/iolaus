@@ -70,16 +70,18 @@
     "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.5.0",
     "@happyvertical/encryption": "0.111.5",
-    "@happyvertical/smrt-cli": "0.60.10",
-    "@happyvertical/smrt-dev-mcp": "0.60.10",
+    "@happyvertical/smrt-cli": "0.62.1",
+    "@happyvertical/smrt-dev-mcp": "0.62.1",
     "lefthook": "2.1.10",
     "turbo": "2.10.5",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@happyvertical/smrt-desktop": "0.62.1",
+    "@tauri-apps/cli": "2.12.4"
   },
   "dependencies": {
-    "@happyvertical/smrt-app-runtime": "0.60.10",
-    "@happyvertical/smrt-config": "0.60.10",
-    "@happyvertical/smrt-scanner": "0.60.10",
+    "@happyvertical/smrt-app-runtime": "0.62.1",
+    "@happyvertical/smrt-config": "0.62.1",
+    "@happyvertical/smrt-scanner": "0.62.1",
     "@happyvertical/speech": "0.111.5",
     "@happyvertical/sql": "0.111.5",
     "tsx": "catalog:"
