@@ -139,3 +139,10 @@ sign in. It exposes no owner form or bootstrap token. Native mode comes only
 from the supervisor's server-side environment; request parameters cannot enable
 it. The route accepts either slash form without a canonical redirect. Browser
 installations retain their existing token-guarded setup form.
+
+After native owner sign-in, Iolaus opens `/admin/`, its application-preparation
+workspace. The product adapter changes only the SDK's successful root redirect;
+SDK proof/origin validation, all session cookies, response body/status and
+no-store headers remain intact. Other redirect destinations and denial responses
+are returned unchanged. The public resume remains available when explicitly
+visited; it is not the native application's initial workspace.

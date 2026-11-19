@@ -27,8 +27,11 @@ describe('desktop owner link', () => {
     signInOwner.mockReset();
   });
   it('denies missing or incorrect launch proof before accessing owner state', async () => {
-    for (const query of ['', '?launch=incorrect'])
-      expect((await GET(event(query))).status).toBe(403);
+    for (const query of ['', '?launch=incorrect']) {
+      const response = await GET(event(query));
+      expect(response.status).toBe(403);
+      expect(response.headers.get('location')).toBeNull();
+    }
     expect(signInOwner).not.toHaveBeenCalled();
   });
   it('denies cross-origin requests with otherwise valid launch proof', async () => {
@@ -48,7 +51,7 @@ describe('desktop owner link', () => {
     const request = event('?launch=test-desktop-launch-secret');
     const response = await GET(request);
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('/');
+    expect(response.headers.get('location')).toBe('/admin/');
     expect(request.cookies.set).toHaveBeenCalledWith(
       'iolaus-session',
       'session-test',

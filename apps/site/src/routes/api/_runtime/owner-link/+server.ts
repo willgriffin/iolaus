@@ -7,7 +7,7 @@ import { sessionCookieName } from '$lib/server/auth';
 
 // The published handler validates the wrapper's per-launch secret and origin
 // before invoking the local runtime's native owner/session transaction.
-export const GET = createOwnerLinkHandler(
+const ownerLink = createOwnerLinkHandler(
   {
     ownerSetupLocation: async () => '/',
     signInLocalOwner: async (input) => {
@@ -25,3 +25,12 @@ export const GET = createOwnerLinkHandler(
   },
   { autoClaim: true },
 );
+
+// The SDK owns proof validation and session cookies; Iolaus opens its workspace.
+export const GET: typeof ownerLink = async (event) => {
+  const response = await ownerLink(event);
+  if (response.status === 302 && response.headers.get('location') === '/') {
+    response.headers.set('location', '/admin/');
+  }
+  return response;
+};
