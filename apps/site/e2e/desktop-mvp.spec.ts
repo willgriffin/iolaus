@@ -49,9 +49,12 @@ test('local sidecar preserves a private synthetic application across restart', a
   mkdirSync(state, { recursive: true, mode: 0o700 });
   const sessionPath = join(state, 'owner-session.json');
   const checkpointPath = join(state, 'checkpoint.json');
+  const nativeOwnerLinkFile = process.env.IOLAUS_DESKTOP_OWNER_LINK_FILE;
   const context = await browser.newContext({
     baseURL: origin,
-    ...(phase === 'verify' ? { storageState: sessionPath } : {}),
+    ...(phase === 'verify' && !nativeOwnerLinkFile
+      ? { storageState: sessionPath }
+      : {}),
   });
   const blocked: string[] = [];
   await context.route('**/*', (route) => {
@@ -132,7 +135,39 @@ test('local sidecar preserves a private synthetic application across restart', a
       );
     }
 
+    async function nativeOwnerHandoff(handoffPath: string) {
+      const handoff = JSON.parse(readFileSync(handoffPath, 'utf8')) as {
+        url: string;
+      };
+      const ownerLink = new URL(handoff.url);
+      expect(ownerLink.origin).toBe(origin);
+      expect(ownerLink.pathname).toBe('/api/_runtime/owner-link');
+      expect(Boolean(ownerLink.searchParams.get('launch'))).toBe(true);
+      // Exercise the same native owner transaction as the installed WebView.
+      // Fetch keeps the per-launch credential out of browser URLs/failure logs.
+      await page.goto('/');
+      const status = await page.evaluate(async (launch) => {
+        const response = await fetch(
+          `/api/_runtime/owner-link?launch=${encodeURIComponent(launch)}`,
+        );
+        return response.status;
+      }, ownerLink.searchParams.get('launch') as string);
+      expect(status).toBe(200);
+    }
+
     if (phase === 'verify') {
+      if (nativeOwnerLinkFile) {
+        // Native origin/port rotates on launch. Repeat the wrapper's native
+        // owner handoff rather than relying on a previous origin's cookie.
+        await nativeOwnerHandoff(nativeOwnerLinkFile);
+        writeFileSync(
+          sessionPath,
+          JSON.stringify(await context.storageState()),
+          {
+            mode: 0o600,
+          },
+        );
+      }
       const checkpoint = JSON.parse(
         readFileSync(checkpointPath, 'utf8'),
       ) as Checkpoint;
@@ -214,28 +249,11 @@ test('local sidecar preserves a private synthetic application across restart', a
           .getByRole('button', { name: 'Continue locally', exact: true })
           .click();
       } else {
-        const handoffPath = process.env.IOLAUS_DESKTOP_OWNER_LINK_FILE;
-        if (!handoffPath)
+        if (!nativeOwnerLinkFile)
           throw new Error(
             'Set IOLAUS_DESKTOP_OWNER_LINK_FILE using desktop-mvp-owner-link.mjs.',
           );
-        const handoff = JSON.parse(readFileSync(handoffPath, 'utf8')) as {
-          url: string;
-        };
-        const ownerLink = new URL(handoff.url);
-        expect(ownerLink.origin).toBe(origin);
-        expect(ownerLink.pathname).toBe('/api/_runtime/owner-link');
-        expect(Boolean(ownerLink.searchParams.get('launch'))).toBe(true);
-        // Exercise the same native owner transaction as the installed WebView.
-        // Fetch keeps the per-launch credential out of browser URLs/failure logs.
-        await page.goto('/');
-        const status = await page.evaluate(async (launch) => {
-          const response = await fetch(
-            `/api/_runtime/owner-link?launch=${encodeURIComponent(launch)}`,
-          );
-          return response.status;
-        }, ownerLink.searchParams.get('launch') as string);
-        expect(status).toBe(200);
+        await nativeOwnerHandoff(nativeOwnerLinkFile);
       }
       await page.goto('/admin/onboarding');
       await expect(
