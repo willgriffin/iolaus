@@ -98,7 +98,9 @@ test('local sidecar preserves a private synthetic application across restart', a
       const text = await reader.extractText(new Uint8Array(bytes), {
         skipOCRFallback: true,
       });
-      expect(text).toContain(expectedText);
+      expect(text.replace(/\s+/g, ' ')).toContain(
+        expectedText.replace(/\s+/g, ' '),
+      );
       const sha256 = createHash('sha256').update(bytes).digest('hex');
       writeFileSync(join(state, `${sha256}.pdf`), bytes, { mode: 0o600 });
       return { href, sha256, expectedText };
@@ -299,7 +301,10 @@ test('local sidecar preserves a private synthetic application across restart', a
         .fill(fixture.jobTitle);
       await page
         .getByRole('textbox', { name: 'Posting URL', exact: true })
-        .fill(new URL('/__synthetic_acceptance_posting', origin).href);
+        .fill(
+          new URL(`/__synthetic_acceptance_posting/${health.instance}`, origin)
+            .href,
+        );
       await page
         .getByRole('textbox', { name: 'Description', exact: true })
         .fill(fixture.description);
