@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPDFReader } from '@happyvertical/pdf';
@@ -18,7 +18,7 @@ type Checkpoint = {
   pdfs: Array<{ href: string; sha256: string; expectedText: string }>;
 };
 
-test('installed local sidecar preserves a private synthetic application across restart', async ({
+test('local sidecar preserves a private synthetic application across restart', async ({
   browser,
 }, testInfo) => {
   test.skip(
@@ -131,9 +131,18 @@ test('installed local sidecar preserves a private synthetic application across r
         fixture.email,
       );
       await page.goto('/admin/career');
+      await page
+        .getByRole('button', { name: `Edit ${fixture.name}`, exact: true })
+        .click();
       await expect(
-        page.getByText(fixture.summary, { exact: false }).first(),
-      ).toBeVisible();
+        page
+          .locator('#resume-inline-editor')
+          .getByLabel('Summary', { exact: true }),
+      ).toHaveValue(fixture.summary);
+      await page
+        .locator('#resume-inline-editor')
+        .getByRole('button', { name: 'Cancel', exact: true })
+        .click();
       expect(
         (await record('opportunities', checkpoint.opportunityId)).status,
       ).toBe('apply');
@@ -153,32 +162,65 @@ test('installed local sidecar preserves a private synthetic application across r
         fullPage: true,
       });
     } else {
-      const handoffPath = process.env.IOLAUS_DESKTOP_OWNER_LINK_FILE;
-      if (!handoffPath)
-        throw new Error(
-          'Set IOLAUS_DESKTOP_OWNER_LINK_FILE using desktop-mvp-owner-link.mjs.',
-        );
-      const handoff = JSON.parse(readFileSync(handoffPath, 'utf8')) as {
-        url: string;
-      };
-      const ownerLink = new URL(handoff.url);
-      expect(ownerLink.origin).toBe(origin);
-      expect(ownerLink.pathname).toBe('/api/_runtime/owner-link');
-      expect(Boolean(ownerLink.searchParams.get('launch'))).toBe(true);
-      // Exercise the same native owner transaction as the installed WebView.
-      // Fetch keeps the per-launch credential out of browser URLs/failure logs.
-      await page.goto('/');
-      const status = await page.evaluate(async (launch) => {
-        const response = await fetch(
-          `/api/_runtime/owner-link?launch=${encodeURIComponent(launch)}`,
-        );
-        return response.status;
-      }, ownerLink.searchParams.get('launch') as string);
-      expect(status).toBe(200);
+      const localOnboardingPath = process.env.IOLAUS_LOCAL_ONBOARDING_FILE;
+      if (localOnboardingPath && existsSync(localOnboardingPath)) {
+        // Supported browser runtime: consume app:setup's native bootstrap form.
+        const handoff = JSON.parse(
+          readFileSync(localOnboardingPath, 'utf8'),
+        ) as { url: string };
+        const setup = new URL(handoff.url);
+        expect(setup.origin).toBe(origin);
+        expect(setup.pathname).toBe('/setup');
+        expect(Boolean(setup.searchParams.get('token'))).toBe(true);
+        await page.goto('/setup');
+        await page.locator('input[name="token"]').evaluate((input, token) => {
+          (input as HTMLInputElement).value = token;
+        }, setup.searchParams.get('token') as string);
+        await page.getByLabel('Name', { exact: true }).fill(fixture.name);
+        await page
+          .getByLabel('Email address', { exact: true })
+          .fill(fixture.email);
+        await page
+          .getByRole('button', { name: 'Get started', exact: true })
+          .click();
+        await expect(page).toHaveURL(/\/admin\/onboarding\/?$/);
+      } else if (localOnboardingPath) {
+        // A claimed browser workspace uses the normal loopback-only sign-in.
+        await page.goto('/login');
+        await page
+          .getByRole('button', { name: 'Continue locally', exact: true })
+          .click();
+      } else {
+        const handoffPath = process.env.IOLAUS_DESKTOP_OWNER_LINK_FILE;
+        if (!handoffPath)
+          throw new Error(
+            'Set IOLAUS_DESKTOP_OWNER_LINK_FILE using desktop-mvp-owner-link.mjs.',
+          );
+        const handoff = JSON.parse(readFileSync(handoffPath, 'utf8')) as {
+          url: string;
+        };
+        const ownerLink = new URL(handoff.url);
+        expect(ownerLink.origin).toBe(origin);
+        expect(ownerLink.pathname).toBe('/api/_runtime/owner-link');
+        expect(Boolean(ownerLink.searchParams.get('launch'))).toBe(true);
+        // Exercise the same native owner transaction as the installed WebView.
+        // Fetch keeps the per-launch credential out of browser URLs/failure logs.
+        await page.goto('/');
+        const status = await page.evaluate(async (launch) => {
+          const response = await fetch(
+            `/api/_runtime/owner-link?launch=${encodeURIComponent(launch)}`,
+          );
+          return response.status;
+        }, ownerLink.searchParams.get('launch') as string);
+        expect(status).toBe(200);
+      }
       await page.goto('/admin/onboarding');
       await expect(
         page.getByLabel('Display name', { exact: true }),
       ).toBeVisible();
+      writeFileSync(sessionPath, JSON.stringify(await context.storageState()), {
+        mode: 0o600,
+      });
       for (const [label, value] of [
         ['Display name', fixture.name],
         ['First name', fixture.firstName],
@@ -206,9 +248,22 @@ test('installed local sidecar preserves a private synthetic application across r
       await editor.getByLabel('Summary', { exact: true }).fill(fixture.summary);
       await editor.getByRole('button', { name: 'Save', exact: true }).click();
       await expect(editor).toHaveCount(0);
+      await page
+        .getByRole('button', { name: `Edit ${fixture.name}`, exact: true })
+        .click();
       await expect(
-        page.getByText(fixture.summary, { exact: false }).first(),
-      ).toBeVisible();
+        page
+          .locator('#resume-inline-editor')
+          .getByLabel('Summary', { exact: true }),
+      ).toHaveValue(fixture.summary);
+      await page
+        .locator('#resume-inline-editor')
+        .getByRole('button', { name: 'Cancel', exact: true })
+        .click();
+      await page.screenshot({
+        path: testInfo.outputPath('saved-profile.png'),
+        fullPage: true,
+      });
       await page.goto('/admin/resume?tab=pdf');
       await page
         .getByRole('button', { name: 'Canonical resume', exact: true })
@@ -220,6 +275,10 @@ test('installed local sidecar preserves a private synthetic application across r
       const resumePdf = await pdfLink.getAttribute('href');
       if (!resumePdf) throw new Error('Canonical PDF link missing.');
       const pdfs = [await inspectPdf(context.request, resumePdf)];
+      await page.screenshot({
+        path: testInfo.outputPath('canonical-resume.png'),
+        fullPage: true,
+      });
       const resumeId = resumePdf.split('/')[3];
       await page.goto('/admin/onboarding');
       await page
@@ -233,13 +292,16 @@ test('installed local sidecar preserves a private synthetic application across r
           .getByRole('status')
           .filter({ hasText: 'Saved private onboarding data' }),
       ).toBeVisible();
-      await page.goto('/admin/opportunities/new');
-      await page.getByLabel('Title', { exact: true }).fill(fixture.jobTitle);
+      const capture = await page.goto('/admin/opportunities/new');
+      expect(capture?.status(), 'Synthetic opportunity capture page').toBe(200);
       await page
-        .getByLabel('Posting URL', { exact: true })
-        .fill(fixture.postingUrl);
+        .getByRole('textbox', { name: 'Title', exact: true })
+        .fill(fixture.jobTitle);
       await page
-        .getByLabel('Description', { exact: true })
+        .getByRole('textbox', { name: 'Posting URL', exact: true })
+        .fill(new URL('/__synthetic_acceptance_posting', origin).href);
+      await page
+        .getByRole('textbox', { name: 'Description', exact: true })
         .fill(fixture.description);
       await page.getByRole('button', { name: 'Create', exact: true }).click();
       await expect(page).toHaveURL(/\/admin\/opportunities\/[^/]+\/?$/);
@@ -314,7 +376,18 @@ test('installed local sidecar preserves a private synthetic application across r
         fullPage: true,
       });
       await page.goto(`/admin/opportunities/${opportunityId}/edit`);
-      await page.getByLabel('Status', { exact: true }).selectOption('apply');
+      const statusControl = page.getByRole('combobox', {
+        name: 'Status',
+        exact: true,
+      });
+      if (
+        await statusControl.evaluate((control) => control.tagName === 'SELECT')
+      ) {
+        await statusControl.selectOption('apply');
+      } else {
+        await statusControl.click();
+        await page.getByRole('option', { name: /^Apply$/i }).click();
+      }
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       expect((await record('opportunities', opportunityId)).status).toBe(
         'apply',

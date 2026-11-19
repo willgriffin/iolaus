@@ -1,4 +1,12 @@
-# Installed Mac MVP acceptance (#310)
+# Local browser runtime acceptance
+
+The same harness can validate the supported `app:setup` / `app:start` / `app:open` browser runtime independently of pending native packaging. Use a fresh absolute `SMRT_DATA_DIR`, a unique `SMRT_APP_ID`, `SMRT_RUNTIME_PROFILE=local`, an unused loopback `PORT`, and no configured AI providers or keys. Run the documented commands from the repository root, using the Node and pnpm versions in `package.json`. `app:setup` runs the full build and must run through `hv-heavy --` when available. Keep these exact environment settings for every subsequent app command; the default personal workspace must remain untouched.
+
+Run `app:setup`, `app:start`, and `app:open`. For the create phase, set `IOLAUS_LOCAL_ONBOARDING_FILE` to this workspace's private `onboarding.json` created by setup instead of using `IOLAUS_DESKTOP_OWNER_LINK_FILE`. Its location is the state root returned by `resolveApplicationStateRoot()` in `scripts/smrt-runtime-identity.mjs`. The harness consumes the normal bootstrap token through the real setup form without printing it. Once claimed, an absent onboarding file selects the normal `Continue locally` login form, allowing a failed test to retry without resetting the workspace. The harness saves its native session immediately after authentication.
+
+Run the documented `app:stop` and `app:start` commands with the same workspace environment, then the verify phase below. This proves the browser runtime and local persistence; it does **not** prove an installed native `.app`. The synthetic posting URL is mapped to a loopback-only nonexistent fixture route, with the explicit synthetic preflight override, so server posting checks cannot contact an external employer.
+
+# Native packaging acceptance procedure (#310)
 
 This harness connects to the **installed Iolaus.app sidecar**, without starting a source server, invoking demo fixtures, seeding a database, building, or contacting an employer. All candidate/job content comes from `fixtures/desktop-mvp.json`. It uses no AI provider and selects the canonical resume rather than AI tailoring. Run the installed artifact with no AI/provider credentials configured.
 

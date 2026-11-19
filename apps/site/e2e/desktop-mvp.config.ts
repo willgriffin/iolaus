@@ -12,6 +12,7 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     browserName: 'chromium',
+    actionTimeout: 15_000,
     viewport: { width: 1280, height: 900 },
     serviceWorkers: 'block',
     // Bootstrap URL and owner cookie are credentials. Capture only deliberate
