@@ -84,7 +84,12 @@ class JobGeniusViewController: CAPBridgeViewController {
         prompt.addAction(UIAlertAction(title: "Open", style: .default) { [weak self, weak prompt] _ in
             let input = prompt?.textFields?.first?.text ?? ""
             prompt?.textFields?.first?.text = ""
-            guard let url = SignInLink.destination(input) else {
+            #if DEBUG
+            let origin = self?.bridge?.config.serverURL ?? URL(string: "https://jobgeni.us")!
+            #else
+            let origin = URL(string: "https://jobgeni.us")!
+            #endif
+            guard let url = SignInLink.destination(input, origin: origin) else {
                 let error = UIAlertController(title: "Use a JobGenius sign-in link", message: "Paste the HTTPS sign-in link from your JobGenius email.", preferredStyle: .alert)
                 error.addAction(UIAlertAction(title: "OK", style: .default))
                 self?.present(error, animated: true)

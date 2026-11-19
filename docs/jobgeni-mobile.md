@@ -59,28 +59,36 @@ transfer cookies, or persist/log the pasted URL. It accepts only the exact
 HTTPS jobgeni.us magic-link path with one nonempty token; other origins,
 credentials, ports, fragments, paths and extra query parameters are refused.
 
-**Authenticated acceptance remains unverified:** no isolated hosted test account
-was available, and the computer-use surface does not expose Simulator for
-interaction. The button and hosted form are visible in the simulator and its
-actual Swift URL validator passes 17 cases. Android has no paste-link control
-yet and is not an accepted sign-in client. An email link opened in Safari uses
-a different cookie jar; use the explicit iOS paste flow instead. No universal-link
-association or automatic native bootstrap is mounted by this product.
+**Authenticated simulator acceptance is verified against a disposable real
+hosted-mode instance**, separately from production smoke. XCTest drove the
+native control and actual web UI through email challenge/confirmation, fictional
+resume creation/editing, app relaunch persistence, PDF preview, explicit
+publication, anonymous snapshot/privacy checks, withdrawal, and revoked-session
+return to sign-in. A second real account's foreign reads/edits/publication were
+denied. See [the acceptance report](jobgeni-mobile-acceptance.md).
 
+Debug builds validate links against the exact configured server origin so an
+isolated HTTPS test instance can be used. Release builds pin link entry to
+`https://jobgeni.us`. Android has no paste-link control yet and is not an accepted
+sign-in client. No universal-link association or automatic native bootstrap is
+mounted by this product.
 The shared `createMobileAuthHandlers` contract currently brokers OIDC/PKCE
 (`smrt/packages/users/agents/mobile-auth.md`); copying it does not establish
 magic-link compatibility. Framework session/callback support must be coordinated
 with its existing owner, rather than adding an app-owned token bridge. The
 Hearth PR also deferred its bearer bootstrap (happyvertical/smrt#4588).
 
-The simulator build and hosted sign-in screen establish launch and HTTPS entry
-only. Synthetic authenticated create/edit/relaunch, selected publication and
-withdrawal, second-account denial, revoked sessions, and loss/retry remain
-pending in #372. The app does not queue or replay writes. Offline remote-load
-failure presents a static retry page; native offline transition is unverified.
-No production candidate record or user session was accessed. This PR does not
-complete #372 or establish a free self-service signup rollout.
+Production `jobgeni.us` evidence remains HTTPS/sign-in-screen smoke only. No
+personal account, production invitation, session or candidate record was used.
+The isolated test stack used actual PostgreSQL, Garage S3, the product SMTP mailer
+and MagicLinkService; it did not mock auth or manufacture sessions. No platform
+model spend or agent runs occurred during the exercised workflow.
 
+Network loss/retry, Android, physical-device signing, export/deletion UI, and
+production rollout acceptance remain pending in #372. The app does not queue or
+replay writes. Offline remote-load failure presents a static retry page; native
+offline transition remains unverified. This PR does not establish free
+self-service signup or complete the entire rollout issue.
 ## Evidence
 
 2026-11-19: unsigned Debug build succeeded on Xcode, iPhone 18 Pro / iOS 27.0
