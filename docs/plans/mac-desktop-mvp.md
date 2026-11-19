@@ -48,3 +48,11 @@ checks remain enabled. Native preparation must run explicitly before serving,
 under writer custody with the supplied framework executor; ordinary requests
 remain read-only schema checks. An explicit existing-build provenance option
 preserves the running personal service while staging for native packaging.
+
+Native recovery regression design: public wrapper smoke requests `/setup`
+without following redirects and requires recovery content without owner forms.
+Route-only slash handling and the server-owned wrapper environment select that
+native recovery page. Focused cases cover native token suppression/form refusal,
+hosted denial, request-flag spoofing denial, and unchanged browser bootstrap
+availability/validation. New site builds run in an isolated source snapshot so
+the live personal production output remains unchanged.

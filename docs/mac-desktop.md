@@ -133,3 +133,9 @@ to the exact installed versions used by the validated site build; development
 packages are not relied on to supply runtime peers. The wrapper smoke verifies
 that an unauthenticated owner-link request returns403, rather than allowing a
 missing runtime dependency to surface after installation.
+
+In the native wrapper, `/setup` is a recovery page: quit and reopen Iolaus to
+sign in. It exposes no owner form or bootstrap token. Native mode comes only
+from the supervisor's server-side environment; request parameters cannot enable
+it. The route accepts either slash form without a canonical redirect. Browser
+installations retain their existing token-guarded setup form.
