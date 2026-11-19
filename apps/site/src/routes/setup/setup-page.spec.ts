@@ -8,6 +8,7 @@ describe('local setup page', () => {
       props: {
         data: {
           externalFontsEnabled: false,
+          desktop: false,
           available: true,
           token: 'setup-token',
         },
@@ -41,7 +42,12 @@ describe('local setup page', () => {
   it('explains when setup is no longer available without exposing implementation details', () => {
     const { body } = render(SetupPage, {
       props: {
-        data: { externalFontsEnabled: false, available: false, token: '' },
+        data: {
+          externalFontsEnabled: false,
+          desktop: false,
+          available: false,
+          token: '',
+        },
         form: null,
         params: {},
       },
@@ -57,6 +63,7 @@ describe('local setup page', () => {
       props: {
         data: {
           externalFontsEnabled: false,
+          desktop: false,
           available: true,
           token: 'setup-token',
         },
@@ -69,5 +76,24 @@ describe('local setup page', () => {
       '<p role="alert">Please enter your name and a valid email address.</p>',
     );
     expect(body).not.toContain('setup token');
+  });
+  it('shows native reopen guidance without an owner form or token', () => {
+    const { body } = render(SetupPage, {
+      props: {
+        data: {
+          externalFontsEnabled: false,
+          desktop: true,
+          available: false,
+          token: '',
+        },
+        form: null,
+        params: {},
+      },
+    });
+    expect(body).toContain('Quit and reopen Iolaus');
+    expect(body).not.toContain('<form');
+    expect(body).not.toContain('name="email"');
+    expect(body).not.toContain('name="token"');
+    expect(body).not.toContain('pnpm ');
   });
 });
