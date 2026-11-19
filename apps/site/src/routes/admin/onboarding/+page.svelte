@@ -357,6 +357,7 @@ function addRole() {
   .two { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
   label { display: grid; gap: 6px; font-size: 14px; font-weight: 650; }
   input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid var(--smrt-color-outline-variant); border-radius: 5px; background: var(--smrt-color-surface-container-lowest); color: var(--smrt-color-on-surface); font: inherit; padding: 9px 10px; }
+  @media (max-width: 600px) { input, textarea, select { font-size: 16px; } }
   input::placeholder, textarea::placeholder { color: var(--smrt-color-on-surface-variant); opacity: 1; }
   input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--smrt-color-primary); outline-offset: 2px; }
   textarea { resize: vertical; }
