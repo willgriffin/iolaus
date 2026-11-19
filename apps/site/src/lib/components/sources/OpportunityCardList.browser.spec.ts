@@ -109,7 +109,9 @@ describe('Opportunity card list interaction', () => {
   it('uses one card collection and preserves off-page IDs during select-all', () => {
     const view = setup();
     expect(view.target.querySelector('table')).toBeNull();
-    expect(view.target.querySelector('.collection--list')).not.toBeNull();
+    expect(
+      view.target.querySelector('[data-smrt-component="CollectionList"]'),
+    ).not.toBeNull();
     view.check('Select Staff engineer');
     expect(view.selected()).toBe('opp-1');
     expect(view.target.querySelector('[role=dialog]')).toBeNull();
