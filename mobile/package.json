@@ -1,0 +1,19 @@
+{
+  "name": "@willgriffin/jobgeni-mobile",
+  "version": "0.0.1",
+  "private": true,
+  "description": "JobGenius cloud client for iOS and Android",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "validate": "node --test scripts/shell.test.cjs",
+    "sync": "cap sync",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": { "@capacitor/cli": "8.5.3" }
+}
