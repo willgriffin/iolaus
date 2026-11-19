@@ -415,6 +415,7 @@ describe('opportunity review and draft applications', () => {
     );
     mocks.collections.set('Application', collection());
     mocks.collections.set('Decision', collection());
+    mocks.collections.set('CandidateProfile', collection());
     mocks.collections.set('ResumeAsset', collection());
     mocks.commitApplicationIfCurrent.mockReset();
     mocks.commitApplicationIfCurrent.mockImplementation(
@@ -551,6 +552,67 @@ describe('opportunity review and draft applications', () => {
         id: 'opp-2',
       }),
     ]);
+  });
+
+  it('attaches the current profile selected private resume ahead of a published fallback', async () => {
+    mocks.collections.set(
+      'CandidateProfile',
+      collection([
+        record({ id: subject.profileId, resumeAssetId: 'private-selected' }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([
+        record({
+          id: 'published-fallback',
+          assetType: 'resume',
+          isPublished: true,
+        }),
+        record({
+          id: 'private-selected',
+          assetType: 'resume',
+          isPublished: false,
+        }),
+      ]),
+    );
+    const result = await createDraftApplicationForOpportunity({
+      opportunityId: 'opp-1',
+      resumeMode: 'default',
+      coverLetterMode: 'none',
+    });
+    expect(result.resumeAssetId).toBe('private-selected');
+  });
+
+  it.each([
+    { candidateProfileId: 'other-profile' },
+    { ownerUserId: 'other-user' },
+    { tenantId: 'other-tenant' },
+    { assetType: 'application_packet' },
+  ])('refuses an invalid selected resume without substituting a published fallback: %j', async (foreign) => {
+    mocks.collections.set(
+      'CandidateProfile',
+      collection([
+        record({ id: subject.profileId, resumeAssetId: 'invalid-selected' }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([
+        record({
+          id: 'published-fallback',
+          assetType: 'resume',
+          isPublished: true,
+        }),
+        record({ id: 'invalid-selected', assetType: 'resume', ...foreign }),
+      ]),
+    );
+    await expect(
+      createDraftApplicationForOpportunity({
+        opportunityId: 'opp-1',
+        resumeMode: 'default',
+      }),
+    ).rejects.toMatchObject({ status: 409 });
   });
 
   it('creates a draft application with default resume and no generated cover letter', async () => {
@@ -920,6 +982,44 @@ describe('generateApplicationPackage', () => {
     expect(markdown).toContain('- Relocation supported: Unknown');
     expect(markdown).not.toContain('- Visa/EOR possible: no');
     expect(markdown).not.toContain('- Relocation supported: no');
+  });
+
+  it('uses the active profile selected private resume when preparing an existing default draft', async () => {
+    mocks.localRuntime = true;
+    mocks.collections.set(
+      'CandidateProfile',
+      collection([
+        record({ id: subject.profileId, resumeAssetId: 'private-selected' }),
+      ]),
+    );
+    mocks.collections.set(
+      'ResumeAsset',
+      collection([
+        record({
+          id: 'private-selected',
+          assetType: 'resume',
+          isPublished: false,
+        }),
+      ]),
+    );
+    mocks.collections.set(
+      'Application',
+      collection([
+        record({
+          id: 'private-default-app',
+          opportunityId: 'opp-1',
+          resumeMode: 'default',
+          coverLetterMode: 'none',
+          resumeAssetId: '',
+        }),
+      ]),
+    );
+    const result = await generateApplicationPackage('private-default-app');
+    expect(result).toMatchObject({
+      resumeAssetId: 'private-selected',
+      status: 'awaiting_user',
+    });
+    expect(mocks.processOpportunityIntelligence).not.toHaveBeenCalled();
   });
 
   it('auto-fills the published resume for a default-resume application', async () => {

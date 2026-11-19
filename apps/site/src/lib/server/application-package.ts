@@ -810,6 +810,49 @@ export async function bulkUpdateOpportunityReviews(options: {
   };
 }
 
+/** Resolve the active private choice before the historical published default. */
+async function resolveDefaultApplicationResume(
+  subject: WorkspaceSubject,
+  collectionOptions: Parameters<typeof getPrivateRecord>[3] = {},
+): Promise<ResumeRecord | null> {
+  const profile = await getPrivateRecord(
+    'CandidateProfile',
+    subject.profileId,
+    subject,
+    collectionOptions,
+  );
+  const selectedId = stringValue(profile?.resumeAssetId);
+  if (selectedId) {
+    const selected = await getPrivateRecord(
+      'ResumeAsset',
+      selectedId,
+      subject,
+      collectionOptions,
+    );
+    if (!selected || stringValue(selected.assetType) !== 'resume') {
+      error(
+        409,
+        'The selected default resume is unavailable in this candidate workspace. Choose a valid resume in private setup.',
+      );
+    }
+    return selected as ResumeRecord;
+  }
+  return (
+    ((
+      await listPrivateRecords(
+        'ResumeAsset',
+        subject,
+        {
+          limit: 1,
+          orderBy: 'updated_at DESC',
+          where: { isPublished: true },
+        },
+        collectionOptions,
+      )
+    )[0] as ResumeRecord | undefined) ?? null
+  );
+}
+
 export async function createDraftApplicationForOpportunity(options: {
   applicationInstructions?: string;
   applyMethod?: string;
@@ -877,19 +920,13 @@ export async function createDraftApplicationForOpportunity(options: {
           ((await applicationCollection.create(
             privateRecordWhere(subject),
           )) as unknown as MutableRecord);
-        const publishedResume =
+        const defaultResume =
           resumeMode === 'default'
-            ? ((
-                await listPrivateRecords('ResumeAsset', subject, {
-                  limit: 1,
-                  orderBy: 'updated_at DESC',
-                  where: { isPublished: true },
-                })
-              )[0] as ResumeRecord | undefined)
+            ? await resolveDefaultApplicationResume(subject, { db: database })
             : null;
         const resumeAssetId =
           resumeMode === 'default'
-            ? (publishedResume?.id ?? stringValue(application.resumeAssetId))
+            ? (defaultResume?.id ?? stringValue(application.resumeAssetId))
             : resumeMode === 'custom'
               ? stringValue(application.resumeAssetId)
               : '';
@@ -1975,15 +2012,9 @@ async function generateApplicationPackageAfterPreflight(options: {
       stringValue(application.resumeMode) === 'default' &&
       !stringValue(application.resumeAssetId)
     ) {
-      const published = (
-        await listPrivateRecords('ResumeAsset', subject, {
-          limit: 1,
-          orderBy: 'updated_at DESC',
-          where: { isPublished: true },
-        })
-      )[0] as ResumeRecord | undefined;
+      const selected = await resolveDefaultApplicationResume(subject);
       assertOpportunityLifecycleLockIsActive();
-      application.resumeAssetId = published?.id ?? '';
+      application.resumeAssetId = selected?.id ?? '';
     } else if (stringValue(application.resumeMode) === 'generate_tailored') {
       const { generateResumeAsset } = await import('./resume-admin.js');
       const resumeVariant = await getOrCreateResumeVariantForApplication(
