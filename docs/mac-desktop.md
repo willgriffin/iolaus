@@ -126,3 +126,10 @@ node --test desktop/setup.test.mjs scripts/desktop.test.mjs
 
 These fresh-root/rollback/restart tests precede the published wrapper smoke and
 installed native acceptance; they do not replace either gate.
+
+SvelteKit is a production dependency because the external SMRT SvelteKit owner
+handler imports its runtime helpers. Standalone staging resolves catalog entries
+to the exact installed versions used by the validated site build; development
+packages are not relied on to supply runtime peers. The wrapper smoke verifies
+that an unauthenticated owner-link request returns403, rather than allowing a
+missing runtime dependency to surface after installation.

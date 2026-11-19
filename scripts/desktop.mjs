@@ -97,6 +97,17 @@ async function prepare() {
   const dependencies = { ...site.dependencies };
   // The workspace resume package is compiled into the Vite server output.
   delete dependencies['@willgriffin/iolaus-resume'];
+  // Freeze catalog references to the installed versions used by this site build.
+  for (const [name, specifier] of Object.entries(dependencies)) {
+    if (specifier.startsWith('catalog:')) {
+      dependencies[name] = JSON.parse(
+        readFileSync(
+          join(root, 'apps/site/node_modules', name, 'package.json'),
+          'utf8',
+        ),
+      ).version;
+    }
+  }
   writeFileSync(
     join(stage, 'package.json'),
     `${JSON.stringify({ name: 'iolaus', version: '0.1.0', type: 'module', private: true, dependencies }, null, 2)}\n`,

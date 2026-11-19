@@ -106,12 +106,12 @@
     "jose": "^6.2.12",
     "nodemailer": "^10.0.14",
     "sharp": "0.35.5",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@sveltejs/kit": "catalog:"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@sveltejs/adapter-node": "catalog:",
-    "@sveltejs/kit": "catalog:",
     "@sveltejs/vite-plugin-svelte": "catalog:",
     "@types/node": "catalog:",
     "@types/nodemailer": "^8.0.2",
