@@ -11,7 +11,7 @@ import {
 } from '$lib/webmcp';
 import '../lib/styles.css';
 
-let { children } = $props();
+let { children, data } = $props();
 
 // The studio ThemeProvider persists the user's scheme to localStorage, but its
 // prop-sync effect re-asserts the `colorScheme` prop on every mount — so a
@@ -58,6 +58,17 @@ const webmcp = $derived(
   ),
 );
 </script>
+
+<svelte:head>
+  {#if data.externalFontsEnabled}
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  {/if}
+</svelte:head>
 
 {#if isNavigating}
   <!-- Decorative only: routes announce their own loading states. -->
