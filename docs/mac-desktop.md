@@ -50,8 +50,10 @@ launch's native owner handoff.
 
 The app starts in the local profile with background crawls disabled. AI import,
 analysis and tailoring require the user's configured provider; unconfigured
-providers produce actionable errors. Optional extraction/OCR or browser PDF
-printing retain their documented provider/browser prerequisites. Installing or
+providers produce actionable errors. This MVP imports text PDFs and renders PDFs; local OCR is excluded through
+SMRT's supported feature configuration. Enter scanned resumes manually or
+provide a text PDF. Browser PDF printing retains its documented installed-
+browser prerequisite. Installing or
 opening Iolaus does not send applications to employers.
 
 For a failed launch, quit Iolaus, inspect the wrapper's private logs and verify
@@ -76,3 +78,9 @@ repository dependency pins. `.desktop/framework-provenance.json` records the
 actual version and whether it is a local release candidate; such a build is not
 published-dependency release validation. Remove that override and rebuild after
 the corrected upstream version is published and adopted.
+
+The product uses SQLite and local files. Its bundle explicitly acknowledges lazy
+imports for disabled OCR, Gemini SDK, Google Drive files, DuckDB, and framework
+build-time generators; these capabilities are not included. The framework still
+refuses any missing load-time import. Supported AI defaults retain Anthropic and
+OpenAI-compatible adapters, with no implicit inference during manual preparation.

@@ -33,3 +33,9 @@ dependencies therefore align at 0.113.1, preserving PDF/OCR/spider specialty pin
 SMRT 0.62.1 app-runtime imports approval models. The site declares
 `smrt-approvals` directly so the build-time consumer includes their immutable
 schemas; static/runtime schema agreement must include `approval_events`.
+
+Text-PDF product boundary: retain the public `pdf` feature, exclude public `ocr`
+feature, and explicitly acknowledge lazy imports for unsupported OCR, Gemini,
+Google files, DuckDB and build-time tooling. Scanned resumes use manual entry.
+The scanner still enforces all load-time imports and native verification. This
+avoids shipping unused OCR engines; no gate or dependency is patched around.
