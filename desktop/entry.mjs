@@ -12,6 +12,17 @@ process.env.SMRT_RUNTIME_PROFILE = 'local';
 process.env.SMRT_BACKGROUND_JOBS = 'false';
 process.env.SMRT_PROCESS_INSTANCE = randomUUID();
 process.env.NODE_ENV = 'production';
+if (!process.env.SMRT_DATA_DIR || !process.env.HOST) {
+  throw new Error('Native launch requires supervisor data directory and host.');
+}
+const { prepareNativeInstallation } = await import('./setup.mjs');
+await prepareNativeInstallation({
+  appId: 'iolaus',
+  dataDirectory: process.env.SMRT_DATA_DIR,
+  sourceRoot: process.cwd(),
+  bindHost: process.env.HOST,
+  operationInstance: process.env.SMRT_PROCESS_INSTANCE,
+});
 await import('../build/index.js');
 
 // Read-only assistant discovery uses the framework's private origin record;

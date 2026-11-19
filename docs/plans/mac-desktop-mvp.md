@@ -39,3 +39,12 @@ feature, and explicitly acknowledge lazy imports for unsupported OCR, Gemini,
 Google files, DuckDB and build-time tooling. Scanned resumes use manual entry.
 The scanner still enforces all load-time imports and native verification. This
 avoids shipping unused OCR engines; no gate or dependency is patched around.
+
+Native resume correction: the existing public relative-import acknowledgment
+contract covers canvas's guarded WASI fallback. A Darwin-arm64/Node26.12.1 probe
+loaded both native canvas versions and rendered PNGs with no WASI file present.
+The product acknowledges that exact optional fallback; scanner and native/digest
+checks remain enabled. Native preparation must run explicitly before serving,
+under writer custody with the supplied framework executor; ordinary requests
+remain read-only schema checks. An explicit existing-build provenance option
+preserves the running personal service while staging for native packaging.

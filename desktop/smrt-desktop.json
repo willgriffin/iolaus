@@ -51,6 +51,10 @@
     {
       "from": "@happyvertical/sql",
       "specifier": "@duckdb/node-api"
+    },
+    {
+      "from": "@napi-rs/canvas",
+      "specifier": "./skia.wasi.cjs"
     }
   ],
   "bridge": {

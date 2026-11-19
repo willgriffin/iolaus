@@ -84,3 +84,45 @@ imports for disabled OCR, Gemini SDK, Google Drive files, DuckDB, and framework
 build-time generators; these capabilities are not included. The framework still
 refuses any missing load-time import. Supported AI defaults retain Anthropic and
 OpenAI-compatible adapters, with no implicit inference during manual preparation.
+
+## Guarded native canvas fallback
+
+The public `acknowledgedDynamicImports` configuration includes
+`{ "from": "@napi-rs/canvas", "specifier": "./skia.wasi.cjs" }`.
+Canvas's generated loader guards that optional WASI fallback in `try/catch`
+after selecting the Darwin native implementation. SMRT explicitly documents
+acknowledgments for guarded/lazy relative imports and records them in its
+bundle report. The earlier diagnosis that this required a new scanner feature
+was incorrect. Native canvas loading/rendering must pass on the target, and all
+other scanner, native verification, digest and launch checks remain enabled.
+
+To preserve a running application that uses the checkout's production build,
+stage an already validated build without regenerating shared SvelteKit files:
+
+```sh
+IOLAUS_DESKTOP_OUTPUT=/absolute/isolated/build-directory \
+IOLAUS_DESKTOP_BUILD_REVISION=<full-40-hex-compiled-site-commit> \
+pnpm desktop:bundle -- --use-existing-build
+```
+
+The explicit revision is required; missing/malformed provenance fails before
+staging. `build-inputs.json` records the site revision and build-entry digest.
+This option copies existing output into a separate immutable stage; it does not
+qualify stale output or replace native launch/restart acceptance. Never modify
+or replace files under a running personal service's data directory.
+
+Native launch runs the bundled `desktop/setup.mjs` installation/upgrade phase
+before importing the HTTP server. It registers the packaged schema metadata,
+uses the framework's supplied secure SQLite executor for native and matching
+schema preparation, and closes/releases setup custody before normal serving.
+Ordinary runtime readiness still checks schema without creating it. The setup
+module's migration graph contains no server, model-constructor or Svelte imports.
+After staging, validate the exact staged manifest explicitly:
+
+```sh
+IOLAUS_NATIVE_TEST_MANIFEST=/absolute/build-directory/stage/apps/site/manifest.json \
+node --test desktop/setup.test.mjs scripts/desktop.test.mjs
+```
+
+These fresh-root/rollback/restart tests precede the published wrapper smoke and
+installed native acceptance; they do not replace either gate.
